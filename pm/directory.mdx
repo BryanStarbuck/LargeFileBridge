@@ -53,6 +53,21 @@ directories — at **one** level of the directory hierarchy.
 Each row shows, left to right: an (optional) folder/file glyph, the **entry name** (middle-truncated
 if long), a flexible spacer, and then the **code badges** pinned to the **far right** (§3).
 
+### 1.1 Row actions — the entity menu (right-click + `⋯`)
+
+Even though this page is a *browser*, not a TanStack table, its file/dir rows carry the same **entity
+action menu** as everywhere else ([menus.mdx](./menus.mdx)):
+
+* **Right-clicking** a row opens the **file** or **directory** action catalog
+  ([menus.mdx §3.1 / §5.2 / §5.3](./menus.mdx#31-right-click-opens-the-same-menu-locked)) — Open /
+  Track-Sync / Rescan / Compress… / Convert… / Git-ignore… / View on IPFS / Copy path, with
+  compress/convert/ignore as **explicit-click confirm offers** and no action ever deleting local bytes.
+* Hovering a row reveals a small trailing **`⋯`** affordance that opens the same menu (the
+  discoverable companion to right-click).
+* Opening the dedicated **View one file** ([files.mdx](./files.mdx)) or **View one directory**
+  ([directories.mdx](./directories.mdx)) page gives that entity's menu as the top-right `⋯`
+  ([menus.mdx §4](./menus.mdx#4-the-entity--more-menu--single-entity-pages)).
+
 ---
 
 ## 2. Cross-platform
@@ -254,6 +269,11 @@ so the array is already sorted `[repo, sync, compress, ipfs]` per §3.5.
 8. Each badge has a **hover tooltip** naming it. Dotfiles are hidden by default with a toggle;
    `.git`/`node_modules`/caches never expand.
 9. No shell (`find`/`du`) is used; the listing is Node `fs`, metadata-only for the walk.
+10. **Right-clicking** a file/dir row (and a hover **`⋯`** affordance) opens that entity's action menu
+    ([menus.mdx §3.1/§5](./menus.mdx#31-right-click-opens-the-same-menu-locked)); compress/convert/ignore
+    are explicit-click confirm offers and no action deletes local bytes. Opening
+    [View one file](./files.mdx) / [View one directory](./directories.mdx) gives the same catalog as a
+    top-right `⋯` more-menu.
 
 <!--
   This file is the File System (column browser) product spec. LOCKED: the badge vocabulary

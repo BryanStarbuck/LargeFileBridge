@@ -1,0 +1,184 @@
+---
+title: LargeFileBridge — CLI Tools & the Install-Tools Preflight
+description: The spec for the external command-line tools LargeFileBridge depends on (IPFS/Kubo, ffmpeg/ffprobe, image tooling) and the PREFLIGHT page that appears when any REQUIRED tool is missing. Before a scan/scheduleTask (or any action that shells out to one of these tools) runs, LFB checks whether the tools it needs are present on PATH; if a required one is missing it routes the user to this page instead of failing silently. The page lists each tool with its live status (installed + version, or missing), what LFB uses it for, the exact install command, and a one-click Install that runs the package-manager install (Homebrew on Mac — `brew install <formula>` — primary; apt/dnf/pacman on Linux, winget/choco on Windows) with progress shown in the dock. Homebrew itself may be absent — LFB detects that and shows the official install instructions rather than auto-installing a system package manager. Nothing is installed without an explicit click (charter consent posture). Cross-links scan.mdx (the preflight gates the scan), ipfs.mdx (needs the ipfs CLI), the charter's compression value (needs ffmpeg/ffprobe for the duration×resolution size baselines), webapp.mdx §11 (the `install` progress op), menus.mdx, and settings.mdx.
+---
+
+# LargeFileBridge — CLI Tools & the Install-Tools Preflight
+
+LargeFileBridge (LFB) is TypeScript-on-Node, but some of its work is done by **external command-line
+tools**: IPFS itself is the **Kubo** CLI, video/image compression and the size baselines are **ffmpeg /
+ffprobe**, and so on. When a tool LFB needs isn't installed, the honest thing to do is **not** fail
+mid-scan with a cryptic error — it is to **notice first and offer to install it**. This spec defines
+the tool set and the **install-tools preflight** page that does exactly that.
+
+The charter is explicit that the scan *"can and will use brew-install tools … Before it does a scan,
+see if there are any missing and go show that page to ask the user to install them."* So the preflight
+is a **gate in front of the scan/[scheduleTask](./scan.mdx)** (and in front of any action that shells
+out to one of these tools): **check presence → if a required tool is missing, show this page.**
+
+Homebrew is the **primary** installer (Mac is LFB's primary platform), with Linux/Windows package
+managers supported by the same page. And — per the charter's consent posture everywhere — **nothing is
+installed without an explicit user click.**
+
+Siblings this spec builds on and does not repeat:
+
+* [scan.mdx](./scan.mdx) — the scan / scheduleTask this preflight gates; it must not run without its
+  required tools.
+* [ipfs.mdx](./ipfs.mdx) — the IPFS page that needs the **`ipfs` (Kubo)** CLI to read the pinset.
+* [knowledge/ipfs.mdx §1](../knowledge/ipfs.mdx#1-what-ipfs-is) — Kubo is the IPFS node implementation.
+* [webapp.mdx §11](./webapp.mdx#11-what-shows-up-in-the-dock--the-lfbridge-operation-taxonomy) — an
+  install runs as an **`install`** op in the progress dock.
+* [menus.mdx](./menus.mdx) — the table conventions this page reuses.
+* [settings.mdx](./settings.mdx) — where a "Tools" status summary also links from.
+
+---
+
+## 1. Vocabulary — Tool / Required / Optional / Preflight (LOCKED)
+
+| Term | Definition |
+| --- | --- |
+| **Tool** | An external CLI LFB invokes (never via a bundled copy — the user's own installed binary on `PATH`). |
+| **Required tool** | A tool without which a core capability **cannot run**. Its absence **blocks** the dependent action and triggers the preflight. `ipfs` (Kubo) is required. |
+| **Optional tool** | A tool that enables a **secondary** capability; its absence **degrades** (that feature is offered as "install to enable") but never blocks the core scan. `ffmpeg`/`ffprobe`, image tooling. |
+| **Package manager** | How the tool gets installed: **Homebrew** (`brew`, Mac — primary), **apt/dnf/pacman** (Linux), **winget/choco** (Windows). |
+| **Preflight** | The check LFB runs **before** a scan/scheduleTask or a tool-using action: are the tools it needs present on `PATH`? If a **required** one is missing, LFB shows this page instead of proceeding. |
+
+---
+
+## 2. The tools LFB depends on
+
+| Tool | Level | LFB uses it for | Homebrew formula | Check |
+| --- | --- | --- | --- | --- |
+| **`ipfs`** (Kubo) | **Required** | The IPFS node itself — pinning, `pin ls`, add/get, the pinset the [IPFS page](./ipfs.mdx) reads and the [scheduleTask](./scan.mdx) reconciles. Without it there is no bridge. | `ipfs` (Kubo) | `ipfs --version` |
+| **`ffprobe`** | Optional | Read a video's **duration + resolution** — the inputs to the compression **size baselines** (charter: duration × pixel-size → expected compressed/uncompressed size). Drives the File-System `C`/`c` badge accuracy. | `ffmpeg` | `ffprobe -version` |
+| **`ffmpeg`** | Optional | Actually **compress** a video when the user asks (charter: video 1st). The `compress` op. | `ffmpeg` | `ffmpeg -version` |
+| **image tooling** (e.g. `magick`/`cjpeg`) | Optional | Compress images (charter: image 2nd) and **convert PNG→compressible** after the alpha/functionality safety checks (charter). | `imagemagick` (or `mozjpeg`) | `magick -version` |
+
+* **Not listed = not needed.** `git` is assumed present (LFB manages git repos); hashing/fingerprinting
+  is **in-process Node**, not a CLI (and is **local-only** — charter). No tool here ever phones home
+  beyond IPFS's own peer traffic.
+* The exact optional-image formula is a settings-time choice; the page shows whatever LFB is configured
+  to look for. `ffmpeg` provides **both** `ffmpeg` and `ffprobe`, so one install satisfies two rows.
+
+---
+
+## 3. The preflight — check before you scan (LOCKED)
+
+Before running a scan/scheduleTask, or any action that shells out to a tool, LFB **probes** for the
+tools that action needs (`<tool> --version` on `PATH`, cached briefly):
+
+* **All required tools present** → proceed normally. Optional-tool gaps do **not** block; they just
+  mean the dependent secondary feature shows an "install to enable" affordance.
+* **A required tool is missing** → **do not run**. Route to this **install-tools page**, explaining what
+  is missing and why the pending action needs it, with the pending action **remembered** so it resumes
+  after install ("Install `ipfs`, then continue the scan").
+
+The preflight is also reachable **any time** from a **Tools** status link (Settings / the IPFS card)
+so the user can install optional tools proactively, not only when blocked.
+
+> The scheduled (`launchd`) [scheduleTask](./scan.mdx) can't show a page to a human at 2am. When it hits
+> a missing **required** tool it **records the gap** (a `needs_tool` status the web app surfaces as a
+> banner + a dock/notification) and **skips** that run rather than erroring in a loop — the user installs
+> the tool next time they open the app, then the scan resumes on schedule.
+
+---
+
+## 4. The page
+
+```
+┌────────────┬───────────────────────────────────────────────────────────────────────────┐
+│            │  Install required tools                                                    │
+│  LEFT BAR  │  LargeFileBridge needs a few command-line tools to scan and sync.          │
+│            ├───────────────────────────────────────────────────────────────────────────┤
+│            │  Package manager: Homebrew  ● found (/opt/homebrew/bin/brew)               │
+│            ├───────────────────────────────────────────────────────────────────────────┤
+│            │  Tool       Status        Used for                    Action               │
+│            │  ipfs       ✗ missing     IPFS node (required)        [ Install ]  brew…    │
+│            │  ffmpeg     ✗ missing     Compress video / baselines  [ Install ]  brew…    │
+│            │  ffprobe    (via ffmpeg)  Read duration + resolution  —                     │
+│            │  magick     ● v7.1        Image compress / convert    —                     │
+│            ├───────────────────────────────────────────────────────────────────────────┤
+│            │  [ Install all required ]        then ▸ continue the scan                   │
+│  [account] │  Or run manually:  brew install ipfs ffmpeg                                 │
+└────────────┴───────────────────────────────────────────────────────────────────────────┘
+```
+
+* **Package-manager row.** Detect the platform's manager (`brew` on Mac). Show found + path, or **not
+  found** with the **official install instructions** — LFB **does not auto-install Homebrew** (it is a
+  system-level change; show the command, let the user run it). Once brew exists, the tool rows enable.
+* **One row per tool** — status (`● v<ver>` installed / `✗ missing` / `(via <formula>)` when provided by
+  another), what LFB uses it for + level (required/optional), the **exact install command** shown as
+  copy-able text, and a **Install** button that runs it.
+* **Install all required** — installs every missing **required** tool, then offers to **resume the
+  pending action** ("continue the scan").
+* **Manual escape hatch.** The full command (`brew install ipfs ffmpeg`) is always shown copy-able, so a
+  user who prefers their terminal never needs the button.
+
+### 4.1 Running an install (LOCKED)
+
+* **Explicit click only.** LFB installs a tool **only** when the user clicks Install (or Install all) —
+  never automatically, never as a side effect of a scan (charter consent posture). The scheduleTask
+  never installs; it only reports the gap (§3).
+* **Runs as a dock op.** An install is an **`install`** operation in the progress dock
+  ([webapp.mdx §11](./webapp.mdx#11-what-shows-up-in-the-dock--the-lfbridge-operation-taxonomy)) —
+  "Installing ipfs" with a spinner, ffmpeg/brew output streamed to a detail/log line; success re-probes
+  and flips the row to `● v<ver>`, failure raises an error toast with the captured stderr.
+* **After Kubo installs**, LFB may offer the first-run **`ipfs init`** and starting the daemon (the
+  same steps the real `get_videos.sh` installers do, [ipfs_share_files.mdx §3.3](./ipfs_share_files.mdx#33-the-ipfs-list-artifact--three-learned-shapes)),
+  each as its own explicit step — still never turning on a public/recursive gateway
+  ([knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule)).
+
+---
+
+## 5. Cross-platform
+
+Mac/Homebrew is primary; the same page serves Linux and Windows by swapping the manager and command:
+
+| OS | Manager | Example command | Primary? |
+| --- | --- | --- | --- |
+| **macOS** | **Homebrew** | `brew install ipfs ffmpeg` | **Yes** |
+| **Linux** | apt / dnf / pacman | `sudo apt install ffmpeg` (+ Kubo per its docs) | secondary |
+| **Windows** | winget / choco | `winget install ffmpeg` / `choco install kubo` | secondary |
+
+Detection and the probe (`<tool> --version`) are identical across platforms; only the manager name and
+install command branch per OS (same discipline as the [scan's per-OS scheduler](./scan.mdx#3-cross-platform--runs-on-mac-windows-and-linux)).
+Where a manager needs elevation (`sudo`) LFB shows the command for the user to run rather than
+prompting for a password.
+
+---
+
+## 6. Acceptance criteria
+
+1. LFB defines a **tool set** (§2): **`ipfs` (Kubo) required**; `ffmpeg`/`ffprobe` and image tooling
+   **optional**, each with what LFB uses it for and its install formula.
+2. **Before a scan/scheduleTask** (or any tool-using action) LFB runs a **preflight** probing the needed
+   tools on `PATH`; **all required present → proceed**; a **missing required tool → route to this page**
+   with the pending action remembered to resume after install (§3).
+3. The page lists the **package manager** (Homebrew on Mac) with found/not-found status; when the manager
+   itself is missing it shows the **official install instructions** and does **not** auto-install it.
+4. Each tool row shows **live status** (installed + version / missing / provided-by-another), **level**
+   (required vs optional), the **exact install command** (copy-able), and an **Install** button; plus
+   **Install all required** and a **manual command** escape hatch.
+5. **Nothing installs without an explicit click** (charter consent); the scheduled `launchd`
+   scheduleTask **never installs** — on a missing required tool it **records a `needs_tool` gap and skips
+   the run** (surfaced in the app), rather than erroring repeatedly (§3, §4.1).
+6. An install runs as an **`install` progress-dock op** with streamed output; success **re-probes** and
+   updates the row; failure toasts the captured error; after Kubo, `ipfs init` / daemon start are offered
+   as explicit steps that never enable a public/recursive gateway (§4.1).
+7. The page is **cross-platform** (Homebrew primary; apt/dnf/pacman; winget/choco) — only the manager and
+   command branch per OS; the probe is identical (§5).
+8. The **IPFS page** and the **scan** both depend on this preflight: the IPFS page routes here when
+   `ipfs` is missing ([ipfs.mdx §8](./ipfs.mdx#8-acceptance-criteria)); the scan will not run without its
+   required tools.
+
+<!--
+  This is the CLI-TOOLS + INSTALL-PREFLIGHT spec. LOCKED: ipfs (Kubo) is the one REQUIRED tool (its
+  absence blocks + triggers the preflight); ffmpeg/ffprobe + image tooling are OPTIONAL (absence degrades
+  the compression baselines/actions, never blocks the scan). The preflight gates the scan/scheduleTask
+  (scan.mdx) and any tool-using action; a missing required tool routes to this page (interactive) or is
+  recorded as a needs_tool gap + skipped run (the launchd scheduleTask). Homebrew is primary (Mac);
+  Linux/Windows managers swap in. NOTHING installs without an explicit click (charter consent); the
+  scheduleTask never installs. Installs run as the `install` dock op (webapp.mdx §11). After Kubo, init/
+  daemon are explicit steps that never open a public/recursive gateway (knowledge/ipfs.mdx §6). Table/
+  menu conventions come from menus.mdx + repos.mdx.
+-->

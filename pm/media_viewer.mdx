@@ -1,0 +1,220 @@
+---
+title: LargeFileBridge — View one image / View one video
+description: The two viewer-first single-media pages. /image?path=<abs> is the image viewer; /video?path=<abs> is the video viewer. Unlike the properties-first View-one-file page (files.mdx), these pages are dominated by the media itself — a large viewer fills everything below a slim header. Above the viewer sit a thin action-button row (Add/Remove IPFS · repo chip · compressed-state chip · codec chip · the ⋯ more menu) and, below or beside it, a compact property strip and action links. The media plays/loads straight off the user's local disk, streamed through the backend over an authenticated, HTTP-Range endpoint (no file:// URL, no public gateway). This spec defines the shared viewer layout, the streaming + codec-probe backend contract, the action bar, and acceptance criteria for both pages. Implemented by the /api/media backend module and the ViewOneImagePage / ViewOneVideoPage frontend (shared MediaViewer layout).
+---
+
+# LargeFileBridge — View one image / View one video
+
+`LargeFileBridge` shows a file in many tables and browsers. When that file is a **playable/viewable
+medium**, the row/cell/menu opens a **viewer-first** page instead of the properties page:
+
+* an **image** file → **`/image?path=<abs>`** (the image viewer),
+* a **video** file → **`/video?path=<abs>`** (the video viewer).
+
+Both are the same page with a different centerpiece widget, so they share one layout (`MediaViewer`).
+The generic, properties-first **[View one file](./files.mdx)** page (`/file`) remains the fallback for
+everything that is not a viewable medium (and is always reachable from a viewer via **View properties**).
+
+Siblings this builds on and does not repeat:
+
+* [View one file](./files.mdx) — the entity identity, the two sticky flags, the sync/compression/IPFS
+  fact cards, and the top-right `⋯` more menu. The viewer pages reuse that same `EntityView` payload and
+  the same `⋯` menu; they only re-front it around a big media surface.
+* [Menus](./menus.mdx) — the LOCKED **File action catalog** (§5.3) and the `⋯` more-menu (§4). The
+  action-button row here is a *promotion* of a few catalog items to visible chips; it never invents new
+  actions.
+* [One repo](./one_repo.mdx) — the **decision model** (§1) behind Add/Remove IPFS and the repo chip.
+* [Directory](./directory.mdx) — the **code badges** (§3) reused in the property strip.
+
+---
+
+## 1. Why stream (no `file://`)
+
+The media lives on the user's **local disk**, but the web app is served over `http://localhost` (and,
+later, over a real server). A page loaded over http **cannot** load `file:///…` sub-resources — browsers
+block it — so a bare `<img src="file://…">` / `<video src="file://…">` will not play. Even where it might,
+it would leak absolute-path structure and bypass our allow-list.
+
+So we **stream the bytes through the backend** on the same origin as the app:
+
+* An **authenticated grant** endpoint mints a short-lived, HMAC-signed URL for one absolute path.
+* The `<img>` / `<video>` element loads that URL from **`/api/media/raw`**, which the web dev server
+  proxies to the backend (same origin in production). The raw endpoint honors **HTTP `Range`** so video
+  seeks/streams instead of downloading whole.
+
+This keeps the charter's promises: **no anonymous access** (every grant is minted for an allow-listed
+session), and **no public gateway/relay** — this is ordinary same-origin file serving to the signed-in
+user's own browser, unrelated to IPFS gateway behavior (charter: IPFS no-relay policy).
+
+---
+
+## 2. The backend contract (`/api/media`)
+
+Three endpoints in one module. Two are allow-list-gated like every data route; the third is gated by the
+signed token so a plain media element (which cannot send a `Bearer` header) can still load.
+
+```
+GET /api/media/grant?path=<abs>     (allow-listed)  → { url: "/api/media/raw?path=<abs>&e=<expMs>&t=<hmac>" }
+GET /api/media/probe?path=<abs>     (allow-listed)  → MediaProbe
+GET /api/media/raw?path=&e=&t=       (token-gated)   → the bytes, with Range support
+```
+
+**Grant.** `t = HMAC-SHA256( `path`\n`expMs`, MEDIA_SECRET )`, hex. `MEDIA_SECRET` is a random 32-byte
+key minted once per backend process (tokens naturally invalidate on restart — acceptable for a viewer).
+Default expiry ≈ 6h so a long viewing session with re-buffers keeps working.
+
+**Raw.** Re-derives + constant-time-compares the HMAC, checks `expMs` is in the future, re-stats the path
+(must be an existing **regular file** — never a directory), sets `Content-Type` from a small extension→MIME
+map, `Accept-Ranges: bytes`, `Content-Disposition: inline`, and:
+
+* No `Range` → `200` with `Content-Length`, streams the whole file.
+* `Range: bytes=a-b` → `206 Partial Content` with `Content-Range`, `Content-Length` of the slice, streams
+  just that slice (`fs.createReadStream(abs, { start, end })`).
+* Unsatisfiable range → `416`.
+
+**Probe** (`MediaProbe`, `@lfb/shared`). A **best-effort, local-only, no-shell** sniff (charter forbids
+shell/ffprobe). It reads a bounded head (and, for videos, a bounded tail) and reports what it can:
+
+```ts
+interface MediaProbe {
+  kind: "image" | "video" | "other"; // from extension family
+  container: string | null;          // e.g. "MP4", "QuickTime", "Matroska", "WebM", "PNG", "JPEG"
+  codec: string | null;              // e.g. "H.264", "HEVC", "AV1", "VP9", "ProRes", "PNG (lossless)"
+  width: number | null;              // pixels — parsed for images; videos when cheaply available
+  height: number | null;
+  compressState: "should" | "done" | null; // mirrors the C/c heuristic (badges.ts)
+}
+```
+
+* **Images** — dimensions parsed from the header (PNG IHDR, JPEG SOFn, GIF logical screen, WebP VP8X/VP8).
+  `codec` is the format family; `compressState` mirrors `compressInfo` (PNG/BMP/TIFF/GIF → `should`,
+  JPEG/WebP/HEIC/AVIF → `done`).
+* **Video** — `container` from extension; `codec` sniffed by scanning the bounded buffer for the sample
+  entry fourcc (ISO-BMFF `avc1`/`hvc1`/`hev1`/`av01`/`vp09`/`ap4h`…; Matroska/WebM `V_MPEG4/ISO/AVC`,
+  `V_MPEGH/ISO/HEVC`, `V_AV1`, `V_VP9`…). When the moov/tracks lie outside the bounded window, `codec` is
+  `null` (honest unknown). Duration is **not** computed (needs a full parse) and is omitted.
+
+Any field we cannot determine is `null`; the UI degrades to "—". The probe never blocks the viewer — the
+media loads from the grant URL regardless of what probe returns.
+
+---
+
+## 3. Layout (shared `MediaViewer`)
+
+One column. A **slim header**, a **thin action-button row**, the **big viewer surface** (the star — it
+takes all remaining height), and a **compact property strip + action links** pinned at the bottom.
+
+```
+┌────────────┬───────────────────────────────────────────────────────────────────────────┐
+│  LEFT BAR  │  ‹ back   final_4k.mov                                             ┌───┐    │ ← header
+│            │           ~/BGit/…/Our_Movies/render/final_4k.mov                  │ ⋯ │    │
+│            ├───────────────────────────────────────────────────────────────────┴───┴────┤
+│            │  [ + Add to IPFS ]   ⟨repo: Our_Movies⟩  ⟨looks uncompressed⟩  ⟨H.264 · MP4⟩ │ ← action bar
+│            ├───────────────────────────────────────────────────────────────────────────┤
+│            │                                                                             │
+│            │                     ┌───────────────────────────────┐                       │
+│            │                     │                               │                       │
+│            │                     │        ▶  video / image        │  ← VIEWER (fills)     │
+│            │                     │                               │                       │
+│            │                     └───────────────────────────────┘                       │
+│            │                                                                             │
+│            ├───────────────────────────────────────────────────────────────────────────┤
+│            │  8.2 GB · 3840×2160 · modified 2h ago · badges: i C r    Open folder · Copy  │ ← props + links
+│            │                                                          path · View props   │
+└────────────┴───────────────────────────────────────────────────────────────────────────┘
+```
+
+* **Header.** Back affordance, the **file name** title, absolute **path** muted beneath, and the same
+  top-right **`⋯` more menu** ([menus.mdx §4](./menus.mdx)) the properties page carries — the full File
+  catalog verbatim.
+* **Action-button row.** A slim strip of the most-relevant catalog items promoted to visible controls
+  (§4).
+* **Viewer surface.** Everything below the action row until the property strip. Dark/neutral backdrop,
+  the medium centered and scaled **to fit** (never upscaled past 100% by default), letterboxed.
+  * **Image viewer:** `<img>` from the grant URL, object-fit contain. Click toggles **fit ↔ 100%**
+    (pan by drag when zoomed). A checkerboard shows through real transparency.
+  * **Video viewer:** `<video controls>` from the grant URL (native controls: play/scrub/volume/fullscreen).
+    `preload="metadata"`; not autoplaying with sound.
+* **Property strip + action links.** One line: size · dimensions (from probe) · modified · the code
+  **badges**; then text links **Open containing folder** (`/fs`), **Copy path**, **View properties**
+  (`/file`), and **Open raw** (opens the grant URL in a new tab — download/native handoff).
+
+---
+
+## 4. The action-button row (promotion, not invention)
+
+The row promotes a fixed, small set of the File catalog ([menus.mdx §5.3](./menus.mdx)) to visible
+controls; the complete catalog still lives under `⋯`. Left→right:
+
+1. **IPFS primary button** — the single most-useful next action, identical rule to
+   [files.mdx §3](./files.mdx):
+   * in a repo, `neverIpfs` off, decision ≠ sync → **+ Add to IPFS** (a.k.a. *Pin*; sets decision `sync`).
+   * decision = sync → **Remove from IPFS** (a.k.a. *Unpin*; sets `ignore`).
+   * not in a repo, or `neverIpfs` on → the button is absent (the `⋯` menu still governs).
+2. **Repo chip** — `⟨repo: <name>⟩`, a link to that repo ([one_repo.mdx](./one_repo.mdx)); "not in a repo"
+   when loose (muted, non-link).
+3. **Compressed-state chip** — `⟨looks uncompressed⟩` / `⟨already compressed⟩` from `compressState`
+   (suppressed to a neutral "video"/"image" label when **Do not compress** is on). When the state is
+   `should` and `noCompress` is off, the chip is clickable → the **Compress…** offer (explicit-click,
+   confirm — charter §6.1; never automatic).
+4. **Codec chip** — `⟨H.264 · MP4⟩` from `MediaProbe` (`codec · container`). Unknown codec → just the
+   container; unknown both → hidden.
+
+The IPFS button and the compress chip are the **same state** as their `⋯` menu items and the files.mdx
+switches — flipping one updates the others.
+
+---
+
+## 5. Empty & error states
+
+* **Not found / moved** (`exists:false`): the shared "no longer at that path" card (files.mdx §5) — no
+  viewer surface.
+* **Wrong route for the kind:** if `/video` is opened on an image (or vice-versa), redirect to the correct
+  viewer (`/image` ↔ `/video`); a non-media file redirects to `/file`. Routing is by the file's kind, so a
+  correct link never lands on the wrong viewer.
+* **Decode/playback failure:** the browser element failed to render the bytes (unsupported codec —
+  e.g. HEVC/ProRes in a browser that can't decode it). Show an inline notice over the viewer: "This
+  browser can't play this file's codec (`<codec>`)." with **Open raw** (hand off to the OS) and, for video
+  that looks uncompressed, the **Compress…** offer as the suggested fix — bytes are never altered without
+  the user asking.
+* **Loading:** skeleton header + action row + a shimmering viewer block; the grant + probe fetch in
+  parallel; the media element mounts as soon as the grant URL resolves (probe fills the codec chip later).
+* **IPFS node unreachable:** the IPFS button disables with a tooltip (parity with one_repo.mdx §5); the
+  viewer, probe, flags, and property links all still work.
+
+---
+
+## 6. Acceptance criteria
+
+1. `/image?path=<abs>` and `/video?path=<abs>` each render the **shared MediaViewer**: slim header
+   (name title + muted absolute path + `⋯`), a thin **action-button row**, a **large viewer surface** that
+   takes all remaining height, and a **compact property strip + action links**.
+2. The medium **plays/loads off the local disk** via the backend stream — never a `file://` URL. Video
+   supports **seeking** because `/api/media/raw` answers HTTP **`Range`** (`206` + `Content-Range`); images
+   load whole. The stream is reachable only through a **short-lived signed grant** minted for an
+   allow-listed session; the raw endpoint refuses expired/forged tokens and any non-file path.
+3. The **action-button row** shows the IPFS primary (Add/Remove per §4/files.mdx §3), a **repo chip**
+   (link, or "not in a repo"), a **compressed-state chip** (from `compressState`, clickable → Compress…
+   offer when `should` & not suppressed), and a **codec chip** (`codec · container` from `MediaProbe`,
+   degrading to container-only or hidden when unknown). The top-right `⋯` menu renders the full File
+   catalog ([menus.mdx §5.3](./menus.mdx)) verbatim.
+4. `MediaProbe` is computed **locally with no shell** (charter): image dimensions + format from the header;
+   video container from extension and codec by a bounded fourcc/EBML sniff; unknown fields are `null` and
+   render as "—" without breaking the viewer.
+5. Property strip shows size · dimensions · modified · **code badges** (directory.mdx §3); action links
+   **Open containing folder**, **Copy path**, **View properties** (`/file`), and **Open raw** all work.
+6. Error/empty states render per §5 (not-found card, wrong-route redirect, decode-failure notice with
+   Open-raw + Compress offer, loading skeleton, node-unreachable). Nothing on either page ever **deletes**
+   or **alters** the local file; Compress is only ever an explicit-click offer.
+
+<!--
+  View-one-IMAGE (/image) and View-one-VIDEO (/video) viewer-first pages. Shared MediaViewer layout.
+  Reuse EntityView (files.mdx §2) + the ⋯ File catalog (menus.mdx §5.3) — never restate them. The star is
+  a large viewer over a streamed, Range-capable, signed-grant backend endpoint (/api/media) — NOT file://,
+  NOT a public gateway (charter). Codec/dimensions come from MediaProbe — a local, no-shell header sniff.
+  Action-button row = a promotion of catalog items (IPFS primary, repo chip, compress-state chip, codec
+  chip), never new actions. Sibling/fallback: files.mdx (properties-first /file). When the File catalog
+  changes it changes in menus.mdx and these pages inherit it.
+-->
+</content>
+</invoke>

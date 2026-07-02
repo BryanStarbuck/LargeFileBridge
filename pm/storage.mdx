@@ -513,6 +513,32 @@ wins). The rule: the state store holds sessions and a signing secret (operationa
 **never** long-lived provider secrets. Because LFB has **no anonymous account** (§4), every session
 record belongs to an allow-listed email.
 
+**Credentials file — schema, read order, and the setup UI.** The file is read by
+`config/credentials-file.ts` and passed to OpenAuthFederated (`auth-frontend.ts`). Its exact shape:
+
+```json
+{
+  "large_files_bridge": {
+    "google": {
+      "clientId": "YOUR_GOOGLE_OAUTH_CLIENT_ID",
+      "clientSecret": "YOUR_GOOGLE_OAUTH_CLIENT_SECRET"
+    }
+  }
+}
+```
+
+Resolution order: `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` env vars win; otherwise the file's
+`large_files_bridge.google` object (a bare top-level `google` object is also accepted for
+backwards-compat). **The secret VALUES are never committed to the repo** — only this placeholder
+schema and the expected filename (`large_files_bridge.json`) live in code.
+
+When the credentials can't be found on a computer, the app must **guide the user to create the
+file**: `GET /api/health/auth-config` returns a `credentialsFile` block —
+`{ configured, usingEnv, exists, path, filename, directory, schemaExample }` (never the secret
+values) — and the UI renders it (`CredentialsSetupCard`) on the **sign-in screen** and in
+**Settings → Authentication**, showing the **full path**, the **exact JSON filename**, and the
+**schema to fill in**. This is what a fresh computer sees before it can sign in.
+
 ---
 
 ## 11. `peers.yaml` — the user's other computers
@@ -569,6 +595,12 @@ Per the repo `CLAUDE.md`, on Mac LFB runs a **background process** that periodic
 files over IPFS. It is scheduled as a **launchd plist** (the macOS cron equivalent), runs **every 15
 minutes**, and runs LFB's own TypeScript-on-Node worker (never raw shell/`curl`).
 
+> **Naming ([scan.mdx §2](./scan.mdx#naming--scheduletask-internally-scan-in-the-ui-locked)).** This
+> 15-minute background job — and the 4-hour discovery job — are the app's two **scheduleTasks**; the UI
+> calls what they do **"scans"** (the left-bar **Scans** page). The `sync_process` config key below
+> keeps its name for continuity, but the concept is a *scheduleTask*. The per-file **Sync** decision and
+> the portable **Sync List** are different concepts and keep their names.
+
 Two independent facts about it, both surfaced in the web app:
 
 * **Installed** — is the launchd plist present on this machine? (`sync_process.installed`, §3.) The
@@ -586,6 +618,14 @@ The web app (first priority per `CLAUDE.md`) provides transparency and control:
 
 Each background run: rescan (§7) → for every `synced: true` unit, add new/changed large files to IPFS,
 update the manifest (§9), pin locally, fetch any missing CIDs from peers, and write `status.yaml`.
+It also **reads the local IPFS pinset (`ipfs pin ls`) and reconciles it against the manifests**
+([scan.mdx §2.1](./scan.mdx#21-the-15-minute-scheduletask-reads-the-ipfs-pinset-import-already-pinned)):
+manifest CIDs that are really pinned confirm this computer's `pinned_by` claim; manifest CIDs whose pin
+was lost are re-queued; **pinned CIDs absent from every manifest become "import" candidates** surfaced on
+the [IPFS page](./ipfs.mdx#4-import--the-load-bearing-feature) — importing one is metadata-only and makes
+that already-pinned file **count as Synced**. Before the run, the
+[tools preflight](./scan.mdx#42-preflight--required-tools-before-a-scan-brew-install) checks that `ipfs`
+is present; unattended, a missing required tool is recorded as a `needs_tool` gap and the run is skipped.
 
 ---
 

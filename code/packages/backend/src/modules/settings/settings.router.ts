@@ -5,6 +5,12 @@ import { toBytes, type GlobalSettings } from "@lfb/shared";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { requireAllowListed, requireAdmin } from "../auth/identify.js";
+import { rebuildAuthFrontend } from "../auth/auth-frontend.js";
+import {
+  getSecurityAccess,
+  updateSecurity,
+  SecurityError,
+} from "../security/security.service.js";
 
 export const settingsRouter = Router();
 settingsRouter.use(requireAllowListed);
@@ -27,6 +33,7 @@ async function toGlobalSettings(): Promise<GlobalSettings> {
       compliant: await ipfs.isCompliant(),
     },
     allowedEmails: c.access.allowed_emails,
+    access: getSecurityAccess(),
   };
 }
 
@@ -73,17 +80,36 @@ settingsRouter.patch("/", async (req, res) => {
   res.json({ ok: true, data: await toGlobalSettings() });
 });
 
-// Allow-list editing is admin-only (settings.mdx §4).
-settingsRouter.get("/allow-list", (_req, res) => {
-  res.json({ ok: true, data: getAppConfig().access.allowed_emails });
+// ── Security allow-list editor — the return-visit surface (security.mdx §7.3, §10) ──
+// The ONLY way to change the allow-list after first-run setup. Admin-only; shares the setup page's
+// two sections (companies + individuals), normalization, and non-empty invariant.
+settingsRouter.get("/security", (_req, res) => {
+  res.json({ ok: true, data: getSecurityAccess() });
 });
 
-settingsRouter.patch("/allow-list", requireAdmin, async (req, res) => {
-  const body = z.object({ emails: z.array(z.string().email()) }).safeParse(req.body);
-  if (!body.success) return res.status(400).json({ ok: false, error: "emails[] required" });
-  await updateAppConfig((c) => {
-    c.access.allowed_emails = body.data.emails.map((e) => e.toLowerCase());
-    return c;
-  });
+const SecurityPatch = z.object({
+  allowCompanies: z.boolean(),
+  domains: z.array(z.string()).default([]),
+  allowIndividuals: z.boolean(),
+  emails: z.array(z.string()).default([]),
+});
+
+settingsRouter.patch("/security", requireAdmin, async (req, res) => {
+  const parsed = SecurityPatch.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.message });
+  try {
+    const access = await updateSecurity(parsed.data);
+    // Hot-swap OAF's OIDC pre-filter so an added/removed company domain applies immediately — no
+    // restart (restartRecommended is retained in the contract but always false now).
+    rebuildAuthFrontend();
+    res.json({ ok: true, data: { access, restartRecommended: false } });
+  } catch (e) {
+    if (e instanceof SecurityError) return res.status(e.status).json({ ok: false, error: e.message, code: e.code });
+    throw e;
+  }
+});
+
+// Back-compat alias: the flat email-only allow-list (superseded by /security above).
+settingsRouter.get("/allow-list", (_req, res) => {
   res.json({ ok: true, data: getAppConfig().access.allowed_emails });
 });

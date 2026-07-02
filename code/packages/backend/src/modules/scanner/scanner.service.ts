@@ -19,6 +19,7 @@ import {
 } from "../store-model/units.service.js";
 import { readYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import { computerUnitDir, unitConfigPath, unitStatusPath } from "../../shared/store/scopes.js";
+import { HARD_SKIP, isMediaFile } from "../../shared/scan-filters.js";
 import { log } from "../../shared/logging.js";
 
 interface Candidate {
@@ -26,8 +27,6 @@ interface Candidate {
   size: number;
   modified_at: string;
 }
-
-const HARD_SKIP = new Set([".git", "node_modules", ".Trash", ".cache", "Caches"]);
 
 export async function scanAll(source: "scheduled" | "manual" = "scheduled"): Promise<void> {
   const cfg = getAppConfig();
@@ -68,6 +67,7 @@ export async function scanAll(source: "scheduled" | "manual" = "scheduled"): Pro
     }
     const threshold = resolveThreshold(rc.big_file_override, cfg.big_file.threshold_bytes);
     const ig = rc.large_files.follow_gitignore ? buildRepoIgnore(repoPath) : null;
+    // ig === null means "no real .gitignore to follow" → size-gate only, no media-bypass.
     const candidates = walkUnit(repoPath, threshold, {
       ignore: ig,
       includeGlobs: rc.large_files.include_globs,
@@ -153,7 +153,18 @@ function walkUnit(root: string, threshold: number, opts: WalkOpts): Candidate[] 
       }
       const bigEnough = st.size >= threshold;
       const forced = incl?.ignores(rel) ?? false;
-      const isCandidate = forced || (bigEnough && (opts.ignore ? opts.ignore.ignores(rel) : true));
+      // Is a repo .gitignore being followed, and does THIS file match it? A real gitignore
+      // hit means the user deliberately kept the file out of git — LFBridge's whole domain.
+      const gitIgnored = opts.ignore ? opts.ignore.ignores(rel) : false;
+      const followsGitignore = opts.ignore != null;
+      // THE FIX (scan.mdx §4.1): a git-ignored *media* file is a large-file-bridge payload
+      // regardless of the big-file size threshold. Videos/audio/images excluded from git are
+      // exactly what we sync over IPFS; the 100 MB threshold must not hide the 5–100 MB ones.
+      // Non-media git-ignored files (and the computer unit, which has no gitignore) still use
+      // the pure size gate, so junk (.env, logs) and generic files aren't swept in.
+      const gitIgnoredMedia = gitIgnored && isMediaFile(ent.name);
+      const isCandidate =
+        forced || gitIgnoredMedia || (bigEnough && (followsGitignore ? gitIgnored : true));
       if (!isCandidate) continue;
       out.push({
         path: opts.rootLabelAbsolute ? abs : rel,
@@ -223,16 +234,16 @@ export function resolveThreshold(
   return Math.round(override.value * mult);
 }
 
-function buildRepoIgnore(repoPath: string): Ignore {
-  const ig = ignore();
+function buildRepoIgnore(repoPath: string): Ignore | null {
   try {
     const gi = fs.readFileSync(path.join(repoPath, ".gitignore"), "utf8");
-    ig.add(gi);
+    return ignore().add(gi);
   } catch {
-    // no .gitignore -> nothing is git-ignored; treat all big files as candidates instead
-    return ignore().add("*");
+    // No .gitignore -> there is no real git-ignore rule to follow. Return null so walkUnit
+    // falls back to the pure size gate (every big file is a candidate, as before) and the
+    // media-bypass — which requires a genuine gitignore hit — does NOT fire on every file.
+    return null;
   }
-  return ig;
 }
 
 function findGitRepos(root: string, followSymlinks: boolean): string[] {

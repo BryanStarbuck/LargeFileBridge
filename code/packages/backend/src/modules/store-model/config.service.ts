@@ -1,5 +1,6 @@
 // Typed accessor for the app-level, computer-wide config.yaml (storage.mdx §3, settings.mdx).
-import { AppConfigSchema, type AppConfig } from "@lfb/shared";
+import path from "node:path";
+import { AppConfigSchema, type AppConfig, type FileFlags } from "@lfb/shared";
 import { readYaml, updateYaml } from "../../shared/store/yaml-store.js";
 import { appConfigPath } from "../../shared/store/scopes.js";
 
@@ -22,4 +23,49 @@ export async function updateAppConfig(mutate: (c: AppConfig) => AppConfig): Prom
 function defaultRoots(): string[] {
   const home = process.env.HOME || "~";
   return [`${home}/BGit`, `${home}/Documents`];
+}
+
+// ── Sticky per-entity flags (menus.mdx §6.6, files.mdx, directories.mdx) ─────
+// Stored app-scope keyed by ABSOLUTE path. A directory's flag applies to everything under it, so the
+// EFFECTIVE flag for a path is its own entry OR'd with any ancestor directory's entry.
+
+/** The exact flags stored ON this path (not inherited). Used by the entity page's own toggle state. */
+export function ownFlags(absPath: string): FileFlags {
+  const e = getAppConfig().file_flags[path.resolve(absPath)];
+  return { neverIpfs: e?.never_ipfs ?? false, noCompress: e?.no_compress ?? false };
+}
+
+/** The effective flags for this path: its own entry OR any ancestor directory's entry (path-scoped). */
+export function effectiveFlags(absPath: string): FileFlags {
+  const map = getAppConfig().file_flags;
+  const target = path.resolve(absPath);
+  let neverIpfs = false;
+  let noCompress = false;
+  for (const [key, val] of Object.entries(map)) {
+    const k = path.resolve(key);
+    if (target === k || target.startsWith(k + path.sep)) {
+      neverIpfs = neverIpfs || !!val.never_ipfs;
+      noCompress = noCompress || !!val.no_compress;
+    }
+  }
+  return { neverIpfs, noCompress };
+}
+
+/** Write one or both flags for a path; a flag that turns fully off is pruned so the map stays lean. */
+export async function setFileFlags(
+  absPath: string,
+  patch: { neverIpfs?: boolean; noCompress?: boolean },
+): Promise<FileFlags> {
+  const key = path.resolve(absPath);
+  await updateAppConfig((c) => {
+    const cur = c.file_flags[key] ?? { never_ipfs: false, no_compress: false };
+    const next = {
+      never_ipfs: patch.neverIpfs ?? cur.never_ipfs,
+      no_compress: patch.noCompress ?? cur.no_compress,
+    };
+    if (!next.never_ipfs && !next.no_compress) delete c.file_flags[key];
+    else c.file_flags[key] = next;
+    return c;
+  });
+  return ownFlags(key);
 }

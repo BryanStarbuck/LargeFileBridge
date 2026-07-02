@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Repos
-description: The landing screen (route /) — one TanStack Table listing every git repo on THIS computer that LargeFileBridge manages. One row per repo, with the repo name, local path, large-file counts (Synced / Pending / Undecided / Ignored), peer count, last-sync time, and a rolled-up sync status. Above the table sits the standard control row (search box + icon-only filter and sort dropdowns). Clicking a row opens that repo's per-file sync screen (one_repo.mdx). Defines the table columns, the RepoRow type, the add-repo action, the row → one_repo navigation, pagination at 500, and empty/loading states.
+description: The landing screen (route /) — one TanStack Table listing every git repo on THIS computer that LargeFileBridge manages. One row per repo, with a leading bookmark (favorite) toggle, the repo name, local path, large-file counts (Synced / Pending / Undecided / Ignored), peer count, last-sync time, and a rolled-up sync status. Above the table sits the standard control row (search box + icon-only filter and sort dropdowns). Clicking a row opens that repo's per-file sync screen (one_repo.mdx). Defines the table columns, the leading bookmark toggle (persisted per-repo in config.yaml), the RepoRow type, the add-repo action, the row → one_repo navigation, pagination at 500, and empty/loading states.
 ---
 
 # LargeFileBridge — Repos
@@ -38,10 +38,12 @@ Three terms, used consistently across every spec and every screen:
 // The per-repo summary the backend returns for each Repos-table row.
 export interface RepoRow {
   repoId: string;        // stable id (hash of the absolute path)
+  bookmarked: boolean;   // user favorite — persisted per-repo in config.yaml (§8); drives the leading ribbon toggle
   name: string;          // folder name
   path: string;          // absolute local path
   counts: {
-    synced: number;      // large files in sync (CID present + pinned locally)
+    synced: number;      // large files in sync (CID present + pinned locally) — INCLUDES files
+                         //   that were already IPFS-pinned and got imported (ipfs.mdx §4)
     pending: number;     // decided "Sync" but not yet transferred (fetch/push queued)
     undecided: number;   // found by LFBridge, no Sync/Ignore decision yet
     ignored: number;     // decided "Ignore" — deliberately not synced
@@ -75,10 +77,10 @@ header**, the **top-right Add repo button**, and the **Repos table** with its co
 │ Repos ◀    ├───────────────────────────────────────────────────────────────────────────┤
 │ Peers      │  search…                                                      ⇅   ⛛        │ ← control row
 │ Sync       ├───────────────────────────────────────────────────────────────────────────┤
-│ Settings   │  Repo          Path              Synced Pending Undec Ignored Peers Last     │
-│            │  Our_Movies    ~/BGit/…/Movies    128    2       5     40      3   09:14  › │ ← row → one_repo
-│            │  render_farm   ~/work/render       0    311      0      0      1   —      › │
-│            │  photos_2026   ~/Pictures/2026    980    0      12      0      2   06:30  › │
+│ Settings   │     Repo        Path             Synced Pending Undec Ignored Peers Last    │
+│            │  ▮  Our_Movies  ~/BGit/…/Movies   128    2       5     40      3   09:14  › │ ← ▮ = solid yellow (bookmarked)
+│            │  ▯  render_farm ~/work/render       0    311      0      0      1   —      › │ ← ▯ = gray outline (not bookmarked)
+│            │  ▮  photos_2026 ~/Pictures/2026    980    0      12      0      2   06:30  › │
 │            ├───────────────────────────────────────────────────────────────────────────┤
 │  [account] │  3 repos                                        page 1 / 1        [500 ▾]   │ ← count + pagination
 └────────────┴───────────────────────────────────────────────────────────────────────────┘
@@ -119,16 +121,18 @@ Column order, left to right. Numeric columns are right-aligned, `tabular-nums`.
 
 | # | Column | Kind | Sort | Filter | Notes |
 | --- | --- | --- | --- | --- | --- |
+| 0 | **`▮` Bookmark** | toggle | ✓ | ✓ | **Leading** column — a ribbon **favorite** toggle (§8). A **control cell**: clicking it flips `bookmarked` and **never opens the repo**. Solid **yellow** when on, thin **gray outline** (white fill) when off. Sort surfaces bookmarked repos first; filter = Bookmarked yes/no. |
 | 1 | **Repo** | text | ✓ | ✓ (contains) | Folder name, bold. |
 | 2 | **Path** | text | ✓ | ✓ (contains) | Absolute local path, muted, middle-truncated with a tooltip of the full path. |
-| 3 | **Synced** | int | ✓ | ✓ | `counts.synced`. Green metric. |
+| 3 | **Synced** | int | ✓ | ✓ | `counts.synced`. Green metric. **Counts already-pinned files too:** any large file that was **already IPFS-pinned** on this computer and got **imported** into tracking ([ipfs.mdx §4](./ipfs.mdx#4-import--the-load-bearing-feature)) is present-and-pinned, i.e. **Synced** — so `Synced` reflects both LFB-synced and adopted-already-pinned files. The word is **Synced** (a state), never "Sync." |
 | 4 | **Pending** | int | ✓ | ✓ | `counts.pending`. Amber when > 0. |
 | 5 | **Undecided** | int | ✓ | ✓ | `counts.undecided`. Accent-highlighted when > 0 (there are decisions to make). |
 | 6 | **Ignored** | int | ✓ | ✓ | `counts.ignored`. Muted. |
 | 7 | **Peers** | int | ✓ | ✓ | `peerCount` — how many of your computers pin this repo. `0` renders red (nothing backing it up). |
 | 8 | **Last sync** | timestamp | ✓ | ✓ | `lastSyncAt`, relative (`2h ago`) with an absolute tooltip; `—` if never. |
 | 9 | **Status** | enum | ✓ | ✓ | `status` (§4.2) as a colored pill. `filterOptions` = the `RepoStatus` values. |
-| — | *(row control)* | — | — | — | Trailing **› right chevron** affordance (opens the repo, same as the row click). |
+| — | *(chevron)* | — | — | — | Trailing **› right chevron** affordance (opens the repo, same as the row click). |
+| — | **`⋯`** | — | — | — | The row **kebab** — the **repo** action catalog ([menus.mdx §3 / §5.1](./menus.mdx#3-the-row--kebab--every-table-has-one)). A control cell: it opens the menu, never the row. Right-click on the row opens the same menu ([menus.mdx §3.1](./menus.mdx#31-right-click-opens-the-same-menu-locked)). |
 
 ### 3.3 Pagination — LOCKED
 
@@ -142,6 +146,8 @@ Column order, left to right. Numeric columns are right-aligned, `tabular-nums`.
 import type { ColumnDef } from "@tanstack/react-table";
 
 export const repoColumns: ColumnDef<RepoRow>[] = [
+  // Leading control cell — a favorite/ribbon toggle. Not a navigable cell (see §5.1, §8).
+  { id: "bookmark",  header: "",          kind: "toggle", align: "center", accessor: r => r.bookmarked },
   { id: "name",      header: "Repo",      kind: "text",      accessor: r => r.name },
   { id: "path",      header: "Path",      kind: "text",      accessor: r => r.path },
   { id: "synced",    header: "Synced",    kind: "int",  align: "right", accessor: r => r.counts.synced },
@@ -164,6 +170,13 @@ Each row's four counts are the whole point of the page — they let the user dec
 needs attention: **Undecided > 0** means there are files to triage; **Pending > 0** means bytes are
 owed in or out; **Peers = 0** means nothing is backing this repo up.
 
+> **These counts include git-ignored media of *any* size.** The scan's payload rule
+> ([scan.mdx §4.1](./scan.mdx#41-what-counts-as-a-candidate--the-payload-rule-locked)) treats every
+> git-ignored video/audio/image as a large file **regardless of the 100 MB threshold** — so a repo of
+> 5–100 MB clips (e.g. `charlie-kirk`: 46 files, `Intel_Murder_Docus`: 27) shows its *real* Undecided
+> count, not just the two or three files over 100 MB. A previous scanner bug gated everything on the
+> size threshold and made these repos look nearly empty; that is fixed.
+
 ### 4.2 Status pill colors (LOCKED)
 
 | `status` | Meaning | Pill |
@@ -180,12 +193,44 @@ Precedence when several could apply: `error` > `syncing` > `behind` > `needs_rev
 
 ---
 
-## 5. Row click → one repo
+## 5. Row & cell navigation
 
-**Clicking anywhere on a row opens that repo** — it navigates to the per-file sync screen
-([One repo](./one_repo.mdx)) at `/repos/$repoId`. The whole row is the hit target
+### 5.1 Whole-row and per-cell targets
+
+**Clicking a bare part of a row opens that repo** — it navigates to the per-file sync screen
+([One repo](./one_repo.mdx)) at `/repos/$repoId`. The whole row is the default hit target
 (`cursor-pointer`, hover highlight), routed via TanStack Router; the trailing **›** chevron is the
 visual affordance and goes to the same place.
+
+**On top of that, each data cell is a deep link** to the most specific view for that cell
+([menus.mdx §2](./menus.mdx#2-cell-navigation--clicking-a-cell-is-a-deep-link)) — so a click lands the
+user exactly where they meant to go instead of opening the repo and re-filtering by hand:
+
+| Cell | Click target |
+| --- | --- |
+| **`▮` Bookmark** | **Nothing — toggles the favorite** (§8). A control cell like `⋯`: it flips `bookmarked` and **never navigates**. |
+| **Repo** | The repo page (`/repos/$repoId`) — same as the row. |
+| **Path** | The [File System](./directory.mdx) browser revealed at that repo path. |
+| **Synced** | The repo's files table filtered to **transfer = synced**. |
+| **Pending** | The repo's files table filtered to **Pending**. |
+| **Undecided** | The repo's files table filtered to **Undecided** (the triage queue). |
+| **Ignored** | The repo's files table filtered to **decision = Ignore**. |
+| **Peers** | [Peers](./left_bar.mdx) filtered to this repo (which of your computers pin it). |
+| **Last sync** | The repo page (its status strip / recent activity). |
+| **Status** | The repo page. |
+| **`⋯`** | Opens the **repo action menu** — **never navigates** (§5.2). |
+
+A linking cell shows a pointer cursor + hover emphasis; the counts read as clickable numbers.
+`⌘`/middle-click opens the target in a new context where supported. Cell clicks **never mutate**.
+
+### 5.2 The row `⋯` menu
+
+The trailing **`⋯` kebab** opens the **repo** action catalog
+([menus.mdx §5.1](./menus.mdx#51-repo)) — Open / Open in File System / View pinned on IPFS / Rescan /
+Sync now / Git-ignore big files… / Toggle Synced / Repo settings… / Copy path / **Remove repo**
+(destructive, last). Right-clicking the row opens the same menu
+([menus.mdx §3.1](./menus.mdx#31-right-click-opens-the-same-menu-locked)). The kebab is a control cell:
+it opens the menu and never opens the repo.
 
 ---
 
@@ -213,12 +258,72 @@ this computer with LFBridge:
 
 ---
 
-## 8. Acceptance criteria
+## 8. Bookmark (favorite) — the leading ribbon toggle
+
+Each row's **leading cell** is a **bookmark** (favorite) toggle: a ribbon-shaped icon the user clicks
+to mark repos they care about so they float to the top of a long list.
+
+### 8.1 The icon and its two states (LOCKED)
+
+Use the **ribbon bookmark** glyph — lucide **`Bookmark`** (the classic banner/ribbon shape), sized to
+the row (≈16px), vertically centered in the leading cell.
+
+| State | `bookmarked` | Rendering |
+| --- | --- | --- |
+| **On** (favorite) | `true` | **Solid yellow** — filled *and* stroked in the warning/yellow token (e.g. `#EAB308`). It reads as a fully-colored ribbon. |
+| **Off** (default) | `false` | A **thin gray outline** with a **white** (empty) fill — just the 1px ribbon stroke in a muted gray, no fill. |
+
+Implementation note: one `<Bookmark>` with `fill` toggled — `fill="currentColor"` + yellow color when
+on; `fill="none"` + `stroke` muted-gray when off. On hover of an **off** star, preview a faint yellow
+so it's discoverable. No layout shift between states (same box).
+
+### 8.2 Interaction (LOCKED)
+
+* **Click toggles** `bookmarked` for that repo. It is a **control cell** — exactly like the `⋯` kebab
+  (§5.2): the click **stops propagation** and **never opens the repo** or triggers cell navigation.
+* **Optimistic**: the icon flips immediately; the write (§8.3) happens in the background; on failure it
+  reverts and shows a toast.
+* **Accessible**: render as a `<button aria-pressed={bookmarked} aria-label="Bookmark this repo">`;
+  it is keyboard-focusable and toggles on `Enter`/`Space`. Tooltip: *"Bookmark"* / *"Bookmarked"*.
+* The same toggle is also offered in the repo **`⋯` menu** as *"Bookmark / Remove bookmark"*
+  ([menus.mdx §5.1](./menus.mdx#51-repo)) so it is reachable without hunting for the tiny icon.
+
+### 8.3 Persistence — it lives in the repo's `config.yaml` (LOCKED)
+
+The bookmark is a **local, per-computer** preference (a favorite *this machine's* user set), so it
+persists in that repo's **sync-unit `config.yaml`** — the same file that holds `synced`,
+`big_file_override`, etc. — **not** in the shared manifest and **not** synced to peers.
+
+```yaml
+# sync/r/<repo>/config.yaml  (excerpt)
+schema_version: 1
+repo: { name: charlie-kirk, path: /Users/…/charlie-kirk, remote: … }
+synced: false
+bookmarked: true          # ← the favorite flag (default false). Written by the bookmark toggle.
+big_file_override: { … }
+```
+
+* **Default `false`.** A newly discovered/added repo is not bookmarked.
+* **The scan never touches it.** Discovery writes `status.yaml` and reconciles `config.yaml` **without
+  clobbering** `bookmarked` (or any other user field) — re-registering an existing repo preserves it.
+* **API:** `POST /api/repos/:repoId/bookmark` with `{ bookmarked: boolean }` writes the flag to
+  `config.yaml` and returns the updated `RepoRow`. Idempotent; unknown `repoId` → 404.
+
+### 8.4 Sort & filter
+
+* **Sort** by Bookmark puts **bookmarked repos first** (then the secondary sort, default name). This is
+  the natural way to pull favorites to the top of a 100-repo list.
+* **Filter** = *Bookmarked: yes / no* (boolean) in the standard filter dropdown (§3.1).
+* Bookmark state is **independent** of `status` — a bookmarked repo still shows its true status pill.
+
+---
+
+## 9. Acceptance criteria
 
 1. The brand header shows **"Repos"** as normal text; the left-bar Repos item routes here (`/`).
-2. The page is **one TanStack Table**, flat/chromeless, one row per managed repo, with columns:
-   Repo, Path, Synced, Pending, Undecided, Ignored, Peers, Last sync, Status (in that order), plus a
-   trailing **›** chevron.
+2. The page is **one TanStack Table**, flat/chromeless, one row per managed repo, with columns: a
+   leading **bookmark toggle**, then Repo, Path, Synced, Pending, Undecided, Ignored, Peers, Last sync,
+   Status (in that order), plus a trailing **›** chevron.
 3. The **control row** above the table has a left **search box** and **icon-only** filter (`⛛`) and
    sort dropdowns on the right — no text labels, no button boxes; the icon colors when active;
    filters AND together and reset to page 1.
@@ -226,17 +331,26 @@ this computer with LFBridge:
    options are 500 / 1000 / All.
 5. Each numeric count renders per §4.1 (Peers = 0 → red; Undecided > 0 → accent; Pending > 0 →
    amber) and the **Status** column is a colored pill per the locked §4.2 mapping and precedence.
-6. **Clicking anywhere on a row** opens that repo at `/repos/$repoId` ([One repo](./one_repo.mdx));
-   the trailing chevron does the same.
+6. **Clicking a bare part of a row** opens that repo at `/repos/$repoId` ([One repo](./one_repo.mdx));
+   the trailing chevron does the same. **Each data cell is additionally a deep link** per §5.1 (counts
+   → the repo's files filtered to that slice; Path → File System; Peers → Peers filtered to the repo).
+   The **`⋯` kebab** (and right-click) opens the **repo** action menu ([menus.mdx §5.1](./menus.mdx#51-repo))
+   and never navigates. The **Synced** count includes files that were **already IPFS-pinned and imported**
+   ([ipfs.mdx §4](./ipfs.mdx#4-import--the-load-bearing-feature)).
 7. **+ Add repo** registers a git repo by folder path, validates it is a git working tree, scans its
    large git-ignored files (new ones start Undecided), and rejects duplicates.
 8. Empty / loading / refetch states render per §7 with no layout shift.
+9. The **leading bookmark toggle** (§8) renders **solid yellow** when `bookmarked`, **thin gray
+   outline / white fill** when not; clicking it flips the flag **without opening the repo** (a control
+   cell), persists to the repo's `config.yaml` (`bookmarked`, default `false`, survives rescans), and
+   is exposed as a sort (bookmarked first) and a Bookmarked yes/no filter.
 
 <!--
   Keep this page aligned with one_repo.mdx (the per-file screen a row opens) and left_bar.yaml (the
   nav). LOCKED across specs: vocabulary Repo → Large file → Decision (Sync / Ignore / Undecided);
   the four per-repo counts (Synced / Pending / Undecided / Ignored); the RepoStatus enum + pill
   colors + precedence (§4.2); the standard control row (search left; icon-only sort/filter right);
-  pagination default 500 with the item count shown. All tables are TanStack tables. The left bar
-  lives in ./left_bar.mdx + pm/left_bar.yaml — never redefine it here.
+  the leading bookmark toggle (§8) — solid-yellow/gray-outline ribbon, control cell, persisted in the
+  repo's config.yaml; pagination default 500 with the item count shown. All tables are TanStack
+  tables. The left bar lives in ./left_bar.mdx + pm/left_bar.yaml — never redefine it here.
 -->

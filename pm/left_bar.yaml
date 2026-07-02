@@ -58,9 +58,9 @@ Left_Nav:
         - id: file_system
           label: "File System"
           icon: "Columns3"
-          route: "/files"
+          route: "/fs"
           order: 2
-          description: "Browse your whole filesystem in a Finder-style column view. Each file/directory shows code badges: R/r repo (brown), S sync (pink), C/c compress (yellow), i IPFS (blue). Defaults to your home directory. See pm/directory.mdx."
+          description: "Browse your whole filesystem two ways: a Finder-style column view (/fs) and a flat Full-paths table (/fs/paths) of the large files under a folder. Each row shows code badges: R/r repo (brown), S sync (pink), C/c compress (yellow), i IPFS (blue). Defaults to your home directory. See pm/directory.mdx + pm/full_paths.mdx."
 
         - id: peers
           label: "Peers"
@@ -69,18 +69,30 @@ Left_Nav:
           order: 3
           description: "Your other computers (laptop, desktop, studio, server, family) that pin these files over IPFS."
 
-        - id: sync
-          label: "Sync"
-          icon: "RefreshCw"
-          route: "/sync"
+        - id: ipfs
+          label: "IPFS"
+          icon: "Boxes"
+          route: "/ipfs"
           order: 4
-          description: "The background sync process: whether the launchd job is installed, whether it is on or off, the run-every-15-min schedule, and recent activity."
+          description: "What your local IPFS node is actually pinning: tracked vs. pinned-but-untracked content (import already-pinned files), plus the node's only-our-content security posture. See pm/ipfs.mdx."
+
+        # NAMING (pm/menus.mdx / scan.mdx): the scheduled background jobs are
+        # "scheduleTasks" internally; the UI calls what they do "scans". This
+        # page is the transparency+control surface for both scheduleTasks — the
+        # every-15-min one (sync bytes + read the IPFS pinset) and the every-4h
+        # discovery one — whether each is installed, on/off, and recent runs.
+        - id: scans
+          label: "Scans"
+          icon: "RefreshCw"
+          route: "/scans"
+          order: 5
+          description: "The scheduled background scan tasks (scheduleTasks): whether each launchd job is installed, on or off, the every-15-min and every-4h schedules, and recent activity."
 
         - id: settings
           label: "Settings"
           icon: "Settings"
           route: "/settings"
-          order: 5
+          order: 6
           description: "Account, allow-list, and IPFS node configuration."
 
       # Footer: account block (avatar/name/Google email) -> popup menu (expands UP).

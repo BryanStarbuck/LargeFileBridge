@@ -1,7 +1,7 @@
 // Local Kubo/IPFS client over the HTTP RPC (knowledge/ipfs.mdx). Uses fetch, never `curl`.
 // Enforces the only-our-content rule: Reprovider.Strategy = pinned, no public/recursive gateway.
 import fs from "node:fs";
-import type { IpfsHealth } from "@lfb/shared";
+import type { IpfsHealth, IpfsPinType } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import { log } from "../../shared/logging.js";
 
@@ -85,6 +85,81 @@ export async function isPinned(cid: string): Promise<boolean> {
     return Boolean(json.Keys && json.Keys[cid]);
   } catch {
     return false;
+  }
+}
+
+// ── Reading the pinset (ipfs.mdx §6 — the scheduleTask's metadata-only read) ─
+export interface Pin {
+  cid: string;
+  type: IpfsPinType;
+}
+
+/**
+ * The local pinset as ground truth (`ipfs pin ls`). Lists only ROOT pins — recursive + direct —
+ * and never the indirect blocks kept under a recursive root (ipfs.mdx §1). Metadata only: it names
+ * CIDs and their pin type; it opens no file and moves no bytes.
+ */
+export async function listPins(): Promise<Pin[]> {
+  const out = new Map<string, IpfsPinType>();
+  for (const type of ["recursive", "direct"] as const) {
+    try {
+      const res = await rpc("pin/ls", { query: { type } });
+      const json = (await res.json()) as { Keys?: Record<string, { Type?: string }> };
+      for (const cid of Object.keys(json.Keys ?? {})) if (!out.has(cid)) out.set(cid, type);
+    } catch (e) {
+      log.warn("ipfs", `pin ls (${type}) failed: ${(e as Error).message}`);
+    }
+  }
+  return [...out].map(([cid, type]) => ({ cid, type }));
+}
+
+/**
+ * Best-effort cumulative on-disk size of a CID's DAG. Uses `files/stat` (`object/stat` is removed in
+ * modern Kubo); reads the whole block DAG including framing, so it matches what the pin actually costs.
+ * Returns null when unknown (e.g. the node can't resolve the CID).
+ */
+export async function objectSize(cid: string): Promise<number | null> {
+  try {
+    const res = await rpc("files/stat", { args: [`/ipfs/${cid}`] });
+    const json = (await res.json()) as { CumulativeSize?: number };
+    return typeof json.CumulativeSize === "number" ? json.CumulativeSize : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A snapshot of the node's only-our-content posture for the IPFS page card (ipfs.mdx §3). */
+export interface NodePosture {
+  reprovideStrategy: "pinned" | "roots" | "all";
+  gatewayLocalOnly: boolean;
+  gcOn: boolean;
+}
+
+const LOOPBACK = /\/ip4\/127\.0\.0\.1\/|\/ip6\/::1\//;
+
+/** Read the live node config for the card; falls back to app-config values when unreachable. */
+export async function nodePosture(): Promise<NodePosture> {
+  const cfg = getAppConfig();
+  try {
+    const strat = String((await getConfigKey("Reprovider.Strategy")) ?? "").toLowerCase();
+    const reprovideStrategy =
+      strat === "pinned" || strat === "roots" || strat === "all"
+        ? (strat as "pinned" | "roots" | "all")
+        : cfg.ipfs.reprovide_strategy;
+    const gwAddr = await getConfigKey("Addresses.Gateway");
+    const gateways = Array.isArray(gwAddr) ? (gwAddr as string[]) : gwAddr ? [String(gwAddr)] : [];
+    const gatewayLocalOnly = gateways.length > 0 && gateways.every((a) => LOOPBACK.test(a));
+    // Best-effort: a non-empty GCPeriod means GC is configured to reclaim incidental third-party
+    // cache (knowledge/ipfs.mdx §4). RPC can't observe whether the daemon was launched with
+    // --enable-gc, so this reads the intent, not the runtime flag.
+    const gcPeriod = String((await getConfigKey("Datastore.GCPeriod")) ?? "").trim();
+    return { reprovideStrategy, gatewayLocalOnly, gcOn: gcPeriod.length > 0 };
+  } catch {
+    return {
+      reprovideStrategy: cfg.ipfs.reprovide_strategy,
+      gatewayLocalOnly: !cfg.ipfs.public_gateway,
+      gcOn: true,
+    };
   }
 }
 

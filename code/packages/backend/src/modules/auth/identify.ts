@@ -1,29 +1,21 @@
 // "Identify, don't gate" middleware (sister pattern) + LFB's allow-list enforcement.
-// Verifies the Bearer access token via @auth/backend, then re-checks the email against
-// config.access.allowed_emails (charter: allow-listed users only, no anonymous account).
+// Verifies the Bearer access token via @auth/backend, then re-checks the email against the LIVE
+// security allow-list (security.mdx §1/§6.2 — companies OR individuals; charter: allow-listed only).
 import type { Request, Response, NextFunction } from "express";
 import { verifyToken } from "@auth/backend";
 import { getAppConfig } from "../store-model/config.service.js";
-import { AUTH_ISSUER, allowedDomains } from "./auth-frontend.js";
+import { AUTH_ISSUER } from "./auth-frontend.js";
 import { hasGoogleCreds } from "../../config/credentials-file.js";
+import { allowListed, securityConfigured } from "../security/security.service.js";
 import { DEFAULT_USER, type AuthUser } from "./current-user.js";
 import { log } from "../../shared/logging.js";
-
-function allowListed(email: string | null): boolean {
-  if (!email) return false;
-  const cfg = getAppConfig();
-  const list = cfg.access.allowed_emails.map((e) => e.toLowerCase());
-  const domainOk = allowedDomains().some((d) => email.toLowerCase().endsWith("@" + d.toLowerCase()));
-  // Allow-listed if explicitly listed, or (no explicit list yet) if the domain matches.
-  if (list.length > 0) return list.includes(email.toLowerCase());
-  return domainOk;
-}
 
 export async function identify(req: Request, _res: Response, next: NextFunction): Promise<void> {
   const withUser = req as Request & { user?: AuthUser };
 
-  // Localhost dev bypass: no Google creds + LFB_DEV_AUTH -> act as the first allow-listed user.
-  if (!hasGoogleCreds() && process.env.LFB_DEV_AUTH !== "false") {
+  // Localhost dev bypass: only once security is configured (else the frontend shows the one-time
+  // Security Setup page first — security.mdx §3). No Google creds + LFB_DEV_AUTH -> act as an admin.
+  if (securityConfigured() && !hasGoogleCreds() && process.env.LFB_DEV_AUTH !== "false") {
     const email = getAppConfig().access.allowed_emails[0] || "dev@localhost";
     withUser.user = {
       authenticated: true,

@@ -1,0 +1,557 @@
+---
+title: LargeFileBridge — Security Setup (first-run allow-list) & Access Enforcement
+description: The one-time, unauthenticated Security Setup page shown the very first time LargeFileBridge runs on a computer — before anyone can sign in — when the app-level config.yaml has no security values yet. It names the app on top, states it is configuring who may access this install, and offers two ways to allow people in, each a checkbox + editable rows with a "+" to add more. (1) "Allow anyone from these companies" — one or more Google Workspace COMPANY DOMAINS shown with a leading @ and placeholder mycompany.com; anyone with a Google account on that domain gets in. (2) "Individual Google accounts" — one or more exact Google email addresses (e.g. joesmith@gmail.com, no leading @); only those accounts get in, nothing else. On save the values are written into config.yaml → access (allow_companies / allowed_domains / allow_individuals / allowed_emails / configured:true) and drive OpenAuthFederated: the company domains become the OIDC domain pre-filter and, together with the individual emails, become the AUTHORITATIVE allow-list that the backend re-reads live on every request (identify.ts → allowListed → requireAllowListed). Once configured, the setup page never shows again — the app enforces those rules on every return visit; further edits happen only through the admin-only Access editor in Settings. Covers the security model, the initial-experience web UI, how state maps to storage (storage.mdx §3/§4/§10), how it feeds OpenAuthFederated (auth-frontend.ts / identify.ts), the exact API calls, and a threat-model section (one-time write lock, loopback guard, fail-closed defaults, info-disclosure, path/JSON hardening). Grounded in real code: config.service.ts, schemas.ts (access block), identify.ts, auth-frontend.ts, settings.router.ts, main.tsx, SecuritySetupPage.tsx, security.router.ts, security.service.ts.
+---
+
+# LargeFileBridge — Security Setup (first-run allow-list) & Access Enforcement
+
+This spec covers the **very first screen** LargeFileBridge (LFB) shows on a computer: a one-time,
+**unauthenticated** **Security Setup** page that decides **who is allowed to sign in to this install**.
+It renders only while the app-level `config.yaml` has **no security values yet**
+([storage.mdx §3](./storage.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)); once the
+operator sets them, LFB **stores them in `config.yaml`** and **enforces them on every return visit** —
+the setup page never appears again.
+
+Per the charter, LFB uses **OpenAuthFederated** with **Google** sign-in and lets in **only
+allow-listed users** — there is **no anonymous / no-login path**. But an allow-list is empty on a fresh
+install, so *nobody* could get in and there would be nothing to configure it with. The Security Setup
+page is the bootstrap: the **one moment** LFB shows a UI without a signed-in user, for the **sole
+purpose** of writing the allow-list that every later request is checked against.
+
+Two ways to allow people in, exactly as the product describes them:
+
+* **Allow anyone from these companies** — one or more **Google Workspace company domains** (`@mycompany.com`).
+  Anyone who signs in with a Google account **on that domain** is let in. This is the "we trust the
+  whole company" case.
+* **Individual Google accounts** — one or more **exact** Google email addresses
+  (`joesmith@gmail.com`). **Only** those accounts are let in — nothing else. This is the "just me / just
+  these few people" case.
+
+An operator can use **either or both**: often just a company domain, sometimes just their own Google
+account, sometimes a domain plus a couple of extra outside accounts.
+
+Grounded in real code:
+
+* First-run page: `code/packages/frontend/src/pages/security/SecuritySetupPage.tsx`
+* Frontend gate that mounts it: `code/packages/frontend/src/main.tsx`
+* Public config signal + one-time write: `code/packages/backend/src/modules/security/security.router.ts`
+  (`GET /api/security/config`, `POST /api/security/setup`)
+* The security model: `code/packages/backend/src/modules/security/security.service.ts`
+* Authoritative enforcement: `code/packages/backend/src/modules/auth/identify.ts`
+  (`allowListed`, `requireAllowListed`, `requireAdmin`)
+* OIDC wiring: `code/packages/backend/src/modules/auth/auth-frontend.ts` (`allowedDomains`)
+* Persisted shape: `code/packages/shared/src/schemas.ts` (`AppConfigSchema.access`)
+* Admin editor for return visits: `code/packages/frontend/src/pages/settings/AllowListPage.tsx`
+  + `code/packages/backend/src/modules/settings/settings.router.ts` (`/settings/security`)
+
+Siblings:
+[webapp.mdx](./webapp.mdx) (the **Google client-credentials** setup — a *different* first-run concern;
+this file is the **allow-list**, that file is the **OAuth client**) ·
+[storage.mdx §4](./storage.mdx#4-per-logged-in-user-storage--the-per-user-requirement) (the per-user
+tree keyed by verified email) ·
+[storage.mdx §10](./storage.mdx#10-auth-session--signing-secret-runtime-not-settings) (sessions +
+signing secret) ·
+[settings.mdx §4](./settings.mdx#4-the-rest-of-the-global-settings-surface) (the admin-only Access
+editor) · [code_plan.mdx](./code_plan.mdx) (ports: web app **:2222**, API **:8787**).
+
+---
+
+## 1. The security model — what "allowed" means
+
+There is exactly **one** allow decision in LFB, applied to a **verified** Google email, and it is the
+gate on **all** data. Every access rule reduces to this predicate (`security.service.ts → allowListed`):
+
+```
+allowListed(email):
+  if not email:                              -> false          # unauthenticated
+  a = config.access                          # read LIVE, every request (no caching, no boot snapshot)
+  if a.allow_companies:
+    if domainOf(email) ∈ a.allowed_domains   -> true           # "the whole company" case
+  if a.allow_individuals:
+    if lower(email)    ∈ a.allowed_emails     -> true           # "these exact accounts" case
+  else                                        -> false          # FAIL CLOSED — default deny
+```
+
+* **Two independent switches, OR'd.** `allow_companies` covers *domains*; `allow_individuals` covers
+  *exact emails*. An email is allowed if **either** switch admits it. A switch that is **off**
+  contributes nothing even if its list is non-empty (turning the switch off is a kill-switch that keeps
+  the list for later).
+* **Default deny.** With nothing configured — `allow_companies:false`, `allow_individuals:false`, both
+  lists empty — **every** email is rejected. This is deliberate: a fresh, un-set-up install lets in
+  **no one**, which is exactly why the Security Setup page must run first (§4).
+* **Read live.** `allowListed` calls `getAppConfig()` **on every request** — it never trusts a value
+  captured at boot. Editing the allow-list (setup page or admin editor) takes effect on the **next
+  request**, no restart needed for the authoritative gate. (The one boot-captured value is OpenAuthFederated's
+  OIDC domain pre-filter — §6.3.)
+* **Two enforcement points, same predicate:**
+  * `requireAllowListed` — wraps **every** data route; returns **401** to a caller that is not
+    allow-listed. Nothing about the user's repos, files, peers, or settings is served otherwise.
+  * `requireAdmin` — wraps allow-list **editing**; requires `role:admin` **and** allow-listed; **403**
+    otherwise (`settings.mdx §4`).
+
+"Configured" is its own boolean, `access.configured`, set to `true` the instant the Security Setup page
+saves. It is the single fact the frontend gate (§4.1) and the one-time write lock (§8.1) both key on.
+
+---
+
+## 2. Where security values live — the storage mapping
+
+All security values persist in the **app-level, computer-wide** `config.yaml`
+([storage.mdx §3](./storage.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)), under a
+single `access:` block. This is machine-owned (not per-user): who may sign in to *this install* is a
+property of the machine, decided once, before any user exists.
+
+```yaml
+# ~/T/_large_files_bridge/config.yaml  (excerpt — the security allow-list)
+access:
+  configured: true            # false on a fresh install → the Security Setup page runs (§4)
+
+  # (1) "Allow anyone from these companies" — Google Workspace domains
+  allow_companies: true       # the section-1 checkbox
+  allowed_domains:            # domains shown with a leading @ in the UI; stored WITHOUT the @
+    - act3ai.com
+    - mycompany.com
+
+  # (2) "Individual Google accounts" — exact emails
+  allow_individuals: true     # the section-2 checkbox
+  allowed_emails:             # stored lowercased; the exact accounts allowed in
+    - joesmith@gmail.com
+    - bryan@act3ai.com
+```
+
+* **`allowed_emails` is unchanged in name** from earlier storage (`storage.mdx §3 access.allowed_emails`)
+  — this spec **adds** `configured`, `allow_companies`, `allowed_domains`, and `allow_individuals`
+  alongside it. Existing installs read forward cleanly: a missing field defaults per
+  `schemas.ts` (`configured:false`, both switches `false`, both lists `[]`).
+* **Domains are stored bare** (`mycompany.com`), never with the `@`. The UI shows a fixed `@` prefix
+  purely as an affordance (§5.1); the backend strips any leading `@` the user types.
+* **Emails are stored lowercased.** The `@` is part of the value (`joesmith@gmail.com`) — there is no
+  UI `@` prefix on the individual rows.
+* This block **supersedes** the old flat `access.allowed_emails`-only model and the env-only
+  `AUTH_ALLOWED_DOMAINS` domain source: config is now authoritative (§6.3). `AUTH_ALLOWED_DOMAINS`
+  remains honored only as an explicit ops/dev override, never as a silent default that would breach
+  default-deny.
+* No secret lives here — Google **client** id/secret stay out-of-repo
+  ([storage.mdx §10](./storage.mdx#10-auth-session--signing-secret-runtime-not-settings)); this block is
+  non-secret policy (which domains/emails are allowed).
+
+Inventory row (per storage.mdx §14 rule — every persisted key has a row):
+
+| Data | Location | Tier |
+| --- | --- | --- |
+| Security configured flag + both switches + both lists | `config.yaml → access` | app (computer-wide) |
+
+---
+
+## 3. The initial experience — when the Security Setup page runs
+
+LFB's boot-time UX has a strict order. The first two gates are **unauthenticated** by nature; only past
+them does a signed-in session exist.
+
+```
+   ┌─────────────────────────── frontend <Root> gate order (main.tsx) ──────────────────────────┐
+   │                                                                                             │
+   │  1. GET /api/security/config → { configured }                                               │
+   │        configured == false  ──────────────►  <SecuritySetupPage/>   (§4, THIS SPEC)         │
+   │        configured == true   ──────────────►  step 2                                         │
+   │                                                                                             │
+   │  2. GET /api/health/auth-config → { oauthConfigured }   (webapp.mdx)                         │
+   │        Google client creds missing  ──────►  <SignInPage/> w/ CredentialsSetupCard          │
+   │        creds present                 ─────►  step 3                                          │
+   │                                                                                             │
+   │  3. GET /api/auth/me → { authenticated, allowListed }                                        │
+   │        not (authenticated && allowListed) ►  <SignInPage/>  ("Sign in with Google")         │
+   │        allow-listed                        ►  render the app (RouterProvider)                │
+   └─────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+* **Security first.** The allow-list gate (step 1) precedes the Google-client gate (step 2) and the
+  sign-in gate (step 3). You cannot sign in to an install whose allow-list is empty, so LFB makes you
+  set it first.
+* **Independent of Google client creds.** `configured` (the allow-list) and `oauthConfigured` (the
+  OAuth client) are **separate**. The Security Setup page shows even when Google creds are already
+  present, and the credentials card (webapp.mdx) shows even after security is configured. They are two
+  different missing pieces with two different remediations.
+* **One-and-done.** Once step 1 sees `configured:true`, the Security Setup page is **unreachable** — it
+  is not a route in the app; it is only what `<Root>` renders in place of the router while the allow-list
+  is unset. On every return visit, `configured` is already `true`, so `<Root>` skips straight to the
+  sign-in/app gates and the stored rules from §2 are what enforce access. **This is the "we use that for
+  security when they come back" contract:** the same values entered once at setup are the values every
+  future request is checked against.
+
+---
+
+## 4. The Security Setup page — the initial-experience web UI
+
+The page LFB renders when `access.configured == false`. It has **no left bar and no nav** — it precedes
+[left_bar.mdx](./left_bar.mdx) entirely, exactly like the Sign-In page. It is reachable **without
+authentication** because there is no user yet; its write path is protected instead by the one-time lock
+and loopback guard of §8.
+
+### 4.1 Layout
+
+```
+ ┌────────────────────────────────────────────────────────────────────┐
+ │                        Large File Bridge                            │   ← app name on top (§9)
+ │              Configure who can access this computer                 │
+ │                                                                     │
+ │   This is a one-time setup for THIS install. Choose who is allowed  │
+ │   to sign in with Google. You can allow a whole company domain, a   │
+ │   few individual Google accounts, or both.                          │
+ │                                                                     │
+ │  ┌────────────────────────────────────────────────────────────┐    │
+ │  │ ☑  Allow anyone from these companies                        │    │
+ │  │       Anyone with a Google account on this domain gets in.  │    │
+ │  │                                                             │    │
+ │  │       @ ┌───────────────────────────────┐                   │    │
+ │  │         │ mycompany.com                 │   ⊖               │    │
+ │  │         └───────────────────────────────┘                   │    │
+ │  │       @ ┌───────────────────────────────┐                   │    │
+ │  │         │ act3ai.com                    │   ⊖               │    │
+ │  │         └───────────────────────────────┘                   │    │
+ │  │       ⊕ Add another company                                 │    │
+ │  └────────────────────────────────────────────────────────────┘    │
+ │                                                                     │
+ │  ┌────────────────────────────────────────────────────────────┐    │
+ │  │ ☑  Individual Google accounts                               │    │
+ │  │       Only these exact accounts get in — nothing else.      │    │
+ │  │                                                             │    │
+ │  │         ┌───────────────────────────────┐                   │    │
+ │  │         │ joesmith@gmail.com            │   ⊖               │    │
+ │  │         └───────────────────────────────┘                   │    │
+ │  │       ⊕ Add another account                                 │    │
+ │  └────────────────────────────────────────────────────────────┘    │
+ │                                                                     │
+ │   [ Save & enable sign-in ]                                         │
+ │                                                                     │
+ │   Locked in after saving. To change it later, sign in and open      │
+ │   Settings → Access (admin only).                                   │
+ └────────────────────────────────────────────────────────────────────┘
+```
+
+### 4.2 Section 1 — "Allow anyone from these companies"
+
+* A **checkbox** labeled **"Allow anyone from these companies."** When checked, the domain rows below
+  are active; when unchecked, they are disabled/greyed (kept, but not enforced — mirrors
+  `allow_companies:false`).
+* Each row is an edit box with a **fixed, non-editable `@` prefix** to its left and placeholder
+  **`mycompany.com`**. The user types **just the domain** (`mycompany.com`) — the `@` is decoration so
+  the meaning ("an @company address") is obvious. The stored value is the bare domain.
+* A **"⊕ Add another company"** control appends an empty row. Each populated row has a **"⊖" remove**
+  control. Multiple domains are supported.
+* Validation (client + server): each domain must be a plausible domain (`label.tld`, no `@`, no spaces,
+  no scheme, no path). A leading `@` a user pastes is stripped, not rejected.
+
+### 4.3 Section 2 — "Individual Google accounts"
+
+* A **checkbox** labeled **"Individual Google accounts."** When checked, the email rows are active.
+* Each row is an edit box **with no `@` prefix** (the `@` is part of what they type). Placeholder
+  **`joesmith@gmail.com`**. The user types the **whole** email address.
+* A **"⊕ Add another account"** control appends a row; each row has a **"⊖" remove."** Multiple
+  accounts are supported.
+* Validation: each entry must be a syntactically valid email. Stored lowercased.
+
+### 4.4 Save behavior
+
+* **At least one rule required.** Save is disabled until at least one *enabled* section has at least one
+  **valid** entry (`allow_companies && ≥1 domain`) **or** (`allow_individuals && ≥1 email`). Saving an
+  install with *no* allowed principals would lock everyone out permanently (default deny, §1) and is not
+  allowed — the server rejects it too (§8.2).
+* On **Save** the page `POST`s the four fields to `/api/security/setup` (§7). Success sets
+  `configured:true` server-side; the page invalidates the `security/config` query and the gate (§3)
+  advances to the Google sign-in step.
+* The button reads **"Save & enable sign-in"** to make the effect concrete: the moment this is saved,
+  Google sign-in becomes the enforced gate for exactly the people just listed.
+* After save, a short note reminds the operator the choice is **locked in** and that changes later go
+  through the admin **Settings → Access** editor (§10).
+
+---
+
+## 5. Field details & normalization
+
+The backend normalizes every value before storing, so the enforced list is canonical regardless of how
+the operator typed it (`security.service.ts`).
+
+| Field | UI | Normalization before store |
+| --- | --- | --- |
+| Company domain | `@` prefix + `mycompany.com` | trim; strip a leading `@`; lowercase; drop empty; reject if it still contains `@`, whitespace, `/`, or `:`; must match `^[a-z0-9.-]+\.[a-z]{2,}$`. |
+| Individual email | plain `joesmith@gmail.com` | trim; lowercase; drop empty; must be a valid email (`local@domain.tld`). |
+| `allow_companies` | section-1 checkbox | boolean; forced `false` if `allowed_domains` ends up empty. |
+| `allow_individuals` | section-2 checkbox | boolean; forced `false` if `allowed_emails` ends up empty. |
+
+* Duplicates are de-duped. Ordering is preserved as entered (minus removed/blank rows).
+* An **enabled** switch with an **empty** list after normalization is coerced to disabled — the store
+  never holds `allow_companies:true, allowed_domains:[]` (an enabled-but-empty switch is meaningless and
+  a foot-gun).
+
+---
+
+## 6. How it feeds OpenAuthFederated (OAF)
+
+LFB's Google sign-in runs **in-process** via OpenAuthFederated's embedded Frontend API
+(`auth-frontend.ts`, mounted at `/api/v1`;
+[storage.mdx §10](./storage.mdx#10-auth-session--signing-secret-runtime-not-settings)). The security
+values feed OAF at **two** layers.
+
+### 6.1 Layer 1 — the OIDC domain pre-filter (`allowedDomains`, coarse)
+
+`createFederatedFrontend({ allowedDomains })` is told which Workspace domains may complete the Google
+OIDC round-trip. LFB computes this set from the security config:
+
+```
+oafAllowedDomains =
+    (allow_companies ? allowed_domains : [])                 # company domains
+  ∪ (allow_individuals ? domainsOf(allowed_emails) : [])     # e.g. gmail.com for joesmith@gmail.com
+  ∪ (explicit AUTH_ALLOWED_DOMAINS env, if set)              # ops/dev override only
+```
+
+* Individual-account domains are unioned in so an individual **gmail.com** account can complete the
+  round-trip even when no company domain is configured. The coarse filter would otherwise reject
+  `gmail.com`.
+* This set is a **pre-filter only**, not the authority. It may admit *other* `gmail.com` users to the
+  OIDC step; the authoritative allow-list (§6.2) is what actually decides.
+
+### 6.2 Layer 2 — the authoritative allow-list (`identify.ts`, exact)
+
+After OAF verifies the Bearer access token, `identify.ts` re-checks the verified email against the
+**live** security config via `allowListed` (§1). This is the real gate: for the company case it accepts
+the whole domain; for the individual case it narrows to the **exact** email — so a stray `gmail.com`
+user who passed Layer 1 is still rejected here, and `requireAllowListed` returns 401 for them on every
+data route.
+
+### 6.3 Boot-capture caveat & the restart nudge
+
+Layer 1 (`allowedDomains`) is read **when the OAF middleware is built at boot**; Layer 2 is read **live
+per request**. Consequences:
+
+* **Changing individual emails or the authoritative decision needs no restart** — Layer 2 is live.
+* **Adding a brand-new *company domain*** may need a **backend restart** for Layer 1's OIDC pre-filter
+  to admit that domain's users to the round-trip. This mirrors the existing product behavior where
+  Google **client** credentials are also read at boot and require a restart
+  ([webapp.mdx §3.2](./webapp.mdx#32-the-four-required-elements)). The Security Setup success state and
+  the admin editor both surface a **"restart the backend to finish enabling new company domains"** nudge
+  when a domain was added.
+* This is tracked as an open question (§12): a future version may hot-reload the OAF middleware so no
+  restart is ever needed.
+
+---
+
+## 7. The API calls
+
+Three endpoints, mounted at `/api/security` and `/api/settings` (`security.router.ts`,
+`settings.router.ts`). The first two are the first-run pair; the third is the return-visit editor.
+
+### 7.1 `GET /api/security/config` — public, unauthenticated
+
+Drives the frontend gate (§3) and the setup page title. Returns **only** non-sensitive facts — it must
+never leak the allow-list to an unauthenticated caller (§8.3):
+
+```jsonc
+// 200
+{ "ok": true, "data": { "configured": false, "appName": "Large File Bridge" } }
+```
+
+### 7.2 `POST /api/security/setup` — one-time, loopback-guarded, unauthenticated
+
+Writes the allow-list **exactly once**. Refused with **409** once `configured` is already `true` (§8.1),
+and refused with **403** from a non-loopback origin (§8.4). Body:
+
+```jsonc
+{
+  "allowCompanies": true,
+  "domains": ["mycompany.com", "act3ai.com"],   // bare domains; server strips any leading @
+  "allowIndividuals": true,
+  "emails": ["joesmith@gmail.com"]
+}
+```
+
+On success it normalizes (§5), writes `config.yaml → access`, sets `configured:true`, and returns
+`{ ok:true, data:{ configured:true, restartRecommended:<bool> } }` (`restartRecommended` true when a new
+company domain was added — §6.3).
+
+### 7.3 `GET`/`PATCH /api/settings/security` — admin-only (return visits)
+
+The **only** way to change the allow-list after setup. `GET` returns the full `SecurityAccess`
+(companies + individuals) for the admin editor; `PATCH` replaces it. Both are wrapped by
+`requireAllowListed` **and** `requireAdmin` (`settings.mdx §4`). `PATCH` re-runs the same normalization
+and the same "at least one rule" guard as setup, so an admin cannot accidentally lock everyone out.
+`configured` stays `true`.
+
+Client wrappers (`api/client.ts`): `api.securityConfig()`, `api.securitySetup(input)`,
+`api.security()`, `api.setSecurity(input)`.
+
+---
+
+## 8. Threat model & how LFB analyzes/mitigates it
+
+The Security Setup page is the app's single **unauthenticated write** surface, so it is threat-modeled
+tightly. Each attack, and the concrete mitigation in code:
+
+### 8.1 Allow-list takeover after setup (the primary threat)
+
+**Attack.** An unauthenticated request re-`POST`s `/api/security/setup` to overwrite the allow-list with
+the attacker's own domain/email, granting themselves access.
+
+**Mitigation — one-time write lock.** `setup` is refused with **409 Conflict** whenever
+`config.access.configured` is already `true`. The unauthenticated write exists for **exactly one**
+transition (unconfigured → configured). Every subsequent change must go through the **authenticated,
+admin-gated** `PATCH /api/settings/security` (§7.3). There is no unauthenticated path to mutate the
+allow-list after the first save.
+
+### 8.2 Lock-out / denial (allow no one)
+
+**Attack (or accident).** Save an empty allow-list (both switches off, or on-but-empty), locking every
+future user out permanently, since default-deny (§1) then rejects everyone with no UI left to fix it.
+
+**Mitigation — non-empty invariant.** Both `setup` and `PATCH` reject a config with **zero** allowed
+principals (400). The client also disables Save until one valid rule exists (§4.4). An enabled-but-empty
+switch is coerced off (§5), so the stored config can never be "enabled yet allows nobody."
+
+### 8.3 Allow-list disclosure to an anonymous caller
+
+**Attack.** An unauthenticated caller reads the allow-list (which company/people use this install) — an
+information-disclosure / recon leak.
+
+**Mitigation — minimal public payload.** `GET /api/security/config` returns **only** `{ configured,
+appName }` — never the domains or emails. The full `SecurityAccess` is served **only** by the
+admin-gated `GET /api/settings/security`. The Security Setup page never pre-populates real values from
+the server (it starts blank), so nothing sensitive crosses the wire to an anonymous browser.
+
+### 8.4 Remote drive-by of the setup page (server mode)
+
+**Attack.** In a hosted deployment, a remote visitor reaches the still-unconfigured install and completes
+setup before the real operator does — seizing the install.
+
+**Mitigation — loopback guard on the write.** `POST /api/security/setup` is accepted **only from
+loopback** (`127.0.0.1` / `::1`), reusing the same guard as the internal worker route
+(`internal.router.ts → loopbackOnly`). First-run security setup is therefore performed **on the box**
+(localhost), which is the correct trust boundary for a one-time bootstrap. Server-mode operators may
+alternatively pre-seed `config.yaml → access` out-of-band (config file / env) before exposing the port;
+LFB reads that as already-`configured` and never shows the page. `trust proxy` is set to `loopback`
+(`main.ts`) so a spoofed `X-Forwarded-For` cannot fake a loopback address.
+
+### 8.5 Post-auth privilege confusion (enforcement bypass)
+
+**Attack.** A user who is authenticated by Google but **not** on the allow-list (e.g. a random
+`gmail.com` account that slipped past the coarse OIDC pre-filter, §6.1) tries to read data.
+
+**Mitigation — authoritative re-check on every route.** `requireAllowListed` runs `allowListed` against
+**live** config for **every** data route and returns 401 for non-listed callers; `identify.ts` logs the
+rejection (`Rejected non-allow-listed sign-in`). OAF's coarse `allowedDomains` is never trusted as the
+gate — §6.2. Allow-list **editing** additionally requires `role:admin` (§7.3), so an ordinary
+allow-listed user cannot widen the allow-list.
+
+### 8.6 Injection via domain/email strings
+
+**Attack.** A crafted domain/email (`../`, NUL, `@evil`, whitespace, scheme/path) tries to corrupt
+config, break the domain comparison, or become a path segment.
+
+**Mitigation — strict normalization + no path use.** Every value is trimmed, lowercased, `@`-stripped
+(domains), and regex-validated (§5) before storage; invalid entries are dropped, not stored. These
+values are compared as strings and **never** used to build a filesystem path (unlike the email→folder
+key of storage.mdx §4, which has its own `sanitizeSegment`). Domain match is a strict suffix compare on
+a validated `label.tld`, so `evilmycompany.com` never matches `mycompany.com`
+(`domainOf(email) === domain` on the exact label, not a substring test).
+
+### 8.7 CSRF against the one-time write
+
+**Attack.** A malicious page in the operator's browser auto-submits the setup form during the first-run
+window.
+
+**Mitigation.** The endpoint accepts **JSON only** (`express.json`, not form-encoded), requires a
+same-origin `Content-Type: application/json` (a cross-site form can't set it without a CORS preflight),
+is CORS-restricted to configured/localhost origins (`main.ts → corsOrigin`), and is loopback-guarded
+(§8.4). The write window is also seconds-to-minutes long (the operator is actively doing setup), not a
+standing surface.
+
+### 8.8 Transport / HSTS pitfalls
+
+Covered by the existing `main.ts` posture: HSTS is **off** on plain-http localhost (so the OAuth
+callback isn't force-upgraded to a non-existent `https://localhost`), **on** in server mode behind real
+TLS. `cookieSecure` follows `COOKIE_SECURE`. The security page adds no new transport surface.
+
+---
+
+## 9. Copy correctness — this app is "Large File Bridge"
+
+Like the credentials card (webapp.mdx §6), every app-identity string on this page must be **ours**:
+
+* Wordmark on top: **"Large File Bridge"** (three words, spaced — never `LargeFileBridge`).
+* Domain placeholder: **`mycompany.com`**. Email placeholder: **`joesmith@gmail.com`**.
+* The **app name** shown on the page comes from the backend (`GET /api/security/config → appName`), so it
+  can't drift from a hard-typed constant. No sister-app strings (e.g. "Starbuck Family Hub", port 9322).
+
+---
+
+## 10. Return visits — the admin Access editor
+
+Once configured, the allow-list is edited **only** through **Settings → Access** (the
+`AllowListPage.tsx`, admin-only, reached from the Settings "Access" section and the account-menu
+"Allow-list" item — `left_bar.yaml`, `permission_gate: role:admin`). That editor is the **same two
+sections** as the setup page (companies + individuals, with the same `@`-prefixed domain rows and plain
+email rows), backed by `GET`/`PATCH /api/settings/security` (§7.3). It re-uses the §5 normalization and
+the §8.2 non-empty invariant so an admin can widen, narrow, or toggle rules but never lock everyone out.
+`configured` remains `true`; the setup page never returns.
+
+This is the concrete realization of "we use the entered values for security when they come back": the
+values written once at first-run are read live on every request forever after (§1), and the only way to
+change them is this authenticated admin surface.
+
+---
+
+## 11. Acceptance criteria
+
+Security is correct when **all** of the following hold:
+
+1. On a fresh install (`config.access.configured == false`), the frontend `<Root>` gate renders the
+   **Security Setup page** **before** any sign-in, reachable **without authentication**, ahead of both
+   the Google-client-creds gate and the sign-in gate (§3).
+2. The page shows the app name **"Large File Bridge"** on top (from `GET /api/security/config → appName`)
+   and states it is configuring who may access this computer.
+3. **Section 1 — "Allow anyone from these companies":** a checkbox plus one or more rows, each an edit
+   box with a fixed **`@` prefix** and placeholder **`mycompany.com`**, and a **"+" to add** more rows
+   and a remove control per row.
+4. **Section 2 — "Individual Google accounts":** a checkbox plus one or more rows, each an edit box
+   **without** an `@` prefix, placeholder **`joesmith@gmail.com`**, with a **"+" to add** and a remove
+   control per row.
+5. Saving `POST`s `{ allowCompanies, domains, allowIndividuals, emails }` to
+   `POST /api/security/setup`; on success `config.yaml → access` holds `configured:true`,
+   `allow_companies`, `allowed_domains` (bare, lowercased), `allow_individuals`, and `allowed_emails`
+   (lowercased), normalized per §5.
+6. **Default deny:** with nothing configured, `allowListed` rejects every email; **Save is refused**
+   (client and server) unless at least one enabled section has a valid entry (§4.4, §8.2).
+7. **Company case:** any Google account whose domain ∈ `allowed_domains` (when `allow_companies`) is
+   allowed in. **Individual case:** only exact emails ∈ `allowed_emails` (when `allow_individuals`) are
+   allowed — nothing else (§1).
+8. The values feed OpenAuthFederated at two layers: the **OIDC domain pre-filter** (company domains ∪
+   individual-email domains ∪ explicit env, boot-captured) and the **authoritative live allow-list**
+   (`identify.ts → allowListed`, exact, re-read every request); `requireAllowListed` returns 401 for
+   non-listed callers on every data route (§6).
+9. **One-time write lock:** `POST /api/security/setup` is refused with **409** once `configured` is
+   `true`; it is **loopback-guarded** (403 otherwise); after setup the page is unreachable and enforcement
+   uses the stored values on every return visit (§3, §8.1, §8.4).
+10. `GET /api/security/config` returns **only** `{ configured, appName }` — never the allow-list;
+    the full list is served **only** by admin-gated `GET /api/settings/security` (§8.3).
+11. **Return-visit editing** happens **only** via admin-only `GET`/`PATCH /api/settings/security`
+    (the Settings → Access editor), sharing the setup page's two sections, normalization, and non-empty
+    invariant (§10).
+12. All persisted keys appear in the storage inventory (§2); every threat in §8 has a named,
+    code-grounded mitigation.
+
+---
+
+## 12. Open questions (resolve as `code/` matures)
+
+* **OAF hot-reload (§6.3).** Adding a **new company domain** currently needs a backend restart for the
+  OIDC pre-filter to admit it (Layer 1 is boot-captured). Decide whether to hot-rebuild the OAF
+  middleware on an allow-list change so no restart is ever needed, or keep the restart nudge.
+* **Server-mode first-run.** Loopback-only setup (§8.4) means hosted installs are bootstrapped on the
+  box or pre-seeded via `config.yaml`/env. Confirm this is the desired server story, or add a
+  first-boot admin token for remote first-run.
+* **Domain vs. sub-domain semantics.** Company match is exact `label.tld` today
+  (`user@sub.mycompany.com` does **not** match `mycompany.com`). Decide whether sub-domains of an
+  allowed company should be admitted (suffix match) — with care that `evilmycompany.com` must never
+  match.
+* **Group/OU granularity.** A company domain admits the *whole* Workspace. If finer control is wanted
+  (specific Google Groups/OUs), that needs Workspace Directory API scopes — out of scope for the
+  local-first first pass.

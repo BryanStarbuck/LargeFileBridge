@@ -10,6 +10,7 @@ import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
 import { RepoStatusPill, TransferPill } from "../../components/Pill.js";
+import { EntityKebab } from "../../components/menu/EntityMenu.js";
 import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
 
 const DECISIONS: Decision[] = ["sync", "ignore", "undecided"];
@@ -92,6 +93,11 @@ export function OneRepoPage() {
       cell: (f) => f.cid ? <code className="text-xs text-black/60" title={f.cid} onClick={() => navigator.clipboard?.writeText(f.cid!)}>{middleTruncate(f.cid, 16)}</code> : <span className="text-black/20">—</span> },
     { id: "changed", header: "Changed", kind: "timestamp", accessor: (f) => f.changedAt,
       cell: (f) => <span title={absoluteTime(f.changedAt)}>{relativeTime(f.changedAt)}</span> },
+    // Trailing ⋯ kebab — the file entity menu (menus.mdx §3), same catalog as View-one-file.
+    { id: "menu", header: "", kind: "text", sortable: false, filterable: false, align: "right",
+      accessor: () => "",
+      cell: (f) =>
+        detail?.path ? <EntityKebab path={`${detail.path}/${f.path}`} /> : null },
   ];
 
   const c = detail?.counts;

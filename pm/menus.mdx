@@ -1,0 +1,307 @@
+---
+title: LargeFileBridge — Cell Navigation, Row "⋯" Menus & Entity "More" Menus
+description: The cross-cutting interaction spec that every table screen and every single-entity screen references instead of restating. Three linked conventions. (1) CELL NAVIGATION — clicking a cell in any TanStack table navigates to the most specific relevant screen for THAT cell (a count cell → the child list pre-filtered to that slice; a path cell → the File System browser at that path; a peers cell → Peers filtered to that entity), so the table is a set of deep links, not just whole-row navigation. (2) The ROW "⋯" KEBAB — the trailing, right-aligned per-row action menu present on every table; it drops down the actions for the ENTITY that row represents (repo, directory, file, or peer). (3) The ENTITY "MORE" (⋯) MENU — on a single-entity page (view one repo / view one file / view one directory), the SAME action set appears as a top-right "more" button, because the page IS one entity. Defines the per-entity action catalogs (repo / directory / file / peer) once — LOCKED — with their grouping, destructive-action separation, permission gates, and the charter guardrails (never compress/convert/ignore/delete without an explicit user click; local files are never deleted by an unsync/untrack). Cross-links repos.mdx, one_repo.mdx, directory.mdx, ipfs.mdx, repo_settings.mdx, settings.mdx, and the operation taxonomy in webapp.mdx §11.
+---
+
+# LargeFileBridge — Cell Navigation, Row "⋯" Menus & Entity "More" Menus
+
+Every screen in LargeFileBridge (LFB) is built from the same two shapes: **tables** (the TanStack
+`DataTable` used on [Repos](./repos.mdx), [One repo](./one_repo.mdx), [Peers](./left_bar.mdx),
+[IPFS](./ipfs.mdx), …) and **single-entity pages** (view *one* repo, *one* file, *one* directory).
+This file defines the three interactions those shapes share, **once**, so no other spec restates them:
+
+1. **Cell navigation** — a click on a *cell* goes somewhere specific (§2).
+2. **The row `⋯` kebab** — every table row's trailing per-row action menu (§3). **Right-clicking the
+   row (or a file/dir entry anywhere) opens the same menu** (§3.1).
+3. **The entity `⋯` "more" menu** — the same actions, top-right, on a single-entity page (§4). The
+   two single-entity pages are [files.mdx](./files.mdx) (**View one file**) and
+   [directories.mdx](./directories.mdx) (**View one directory**).
+
+The rule that ties them together: **a table cell is a deep link, and the row's `⋯` (or a right-click,
+or the page's top-right `⋯`) is that same entity's action menu.** Clicking *data* navigates; clicking
+`⋯` (or right-clicking) *acts*.
+
+Siblings that reference this file (and must not redefine these conventions):
+
+* [Repos](./repos.mdx) — the repos table (repo rows).
+* [One repo](./one_repo.mdx) — a single repo page (its top-right `⋯`) whose files table has file rows.
+* [File System](./directory.mdx) — the column browser; its selected file/dir gets the entity menu.
+* [IPFS](./ipfs.mdx) — the pinned-content table (file/CID rows).
+* [Repo settings](./repo_settings.mdx) / [Settings](./settings.mdx) — where the "Settings…" items land.
+* [Web app](./webapp.mdx#11-what-shows-up-in-the-dock--the-lfbridge-operation-taxonomy) — every action
+  that does background work reports through the progress dock's **operation taxonomy**.
+
+---
+
+## 1. Vocabulary — Cell link / Row menu / Entity menu / Action (LOCKED)
+
+| Term | Definition |
+| --- | --- |
+| **Cell link** | A table cell that, when clicked, **navigates** to the most specific screen for that cell's value (§2). Not every cell links; the ones that do are listed per table. |
+| **Row `⋯` kebab** | The trailing, right-aligned control on **every** table row. It opens the **entity action menu** (§3) for the entity that row represents. It is a control column — it **never** triggers cell navigation or row navigation. |
+| **Entity `⋯` "more" menu** | On a **single-entity page**, the top-right `⋯` button that opens the **same** action menu as that entity's row kebab (§4). "The page is one entity, so the page has that entity's menu." |
+| **Entity** | The thing a row or page is *about*: a **repo**, a **directory**, a **file**, or a **peer**. Each entity has exactly **one** LOCKED action catalog (§5), used by both its row kebab and its page's more-menu. |
+| **Action** | One menu item. Either **navigates** (opens a screen), **mutates** (does work — always through the progress dock + charter guardrails, §6), or **copies** (path / CID to clipboard). |
+
+---
+
+## 2. Cell navigation — clicking a cell is a deep link
+
+Whole-row navigation still exists where a spec defines it (a Repos row opens that repo). **On top of
+that**, individual cells navigate to the *most specific* view for their value, so the user can jump
+straight to the slice they care about instead of opening the parent and re-filtering by hand.
+
+### 2.1 The rule (LOCKED)
+
+* **A count/metric cell** → the child list, **pre-filtered** to exactly that slice. (Clicking a repo's
+  `Undecided 5` opens that repo's files table already filtered to the 5 undecided files.)
+* **A path/name cell** → the place that path lives: a **repo name** → that repo's page; a **file path**
+  → the [File System](./directory.mdx) browser revealing that file; a **directory path** → the browser
+  at that directory.
+* **A relationship cell** (Peers, pinned-by) → the related list **filtered to this entity**
+  (`Peers 3` → [Peers](./left_bar.mdx) filtered to this repo/file).
+* **A status/enum cell** → the same target as the row (the entity page), scrolled/aware of that status.
+* **An identifier cell** (CID) → does **not** navigate away; it **copies** (monospace, click-to-copy) —
+  and optionally opens the [IPFS](./ipfs.mdx) page filtered to that CID via a small inline affordance.
+* **The `⋯` kebab column never navigates** — it only opens the menu (§3).
+
+A linking cell shows a pointer cursor + hover underline/emphasis so it reads as clickable; a
+non-linking cell (e.g. a raw size) does not. Middle-click / ⌘-click opens the target in context where
+the platform supports it. Cell navigation **never mutates** — it only routes.
+
+### 2.2 The per-table cell-link maps referenced elsewhere
+
+Each table spec owns its own column→target map and links back here for the rule:
+
+* **Repos table** — [repos.mdx §5.1](./repos.mdx#5-row--cell-navigation).
+* **One-repo files table** — [one_repo.mdx §4.7](./one_repo.mdx#4-the-files-table-tanstack-house-style).
+* **IPFS pinned table** — [ipfs.mdx](./ipfs.mdx).
+* **Peers table** — its own spec, following this rule.
+
+---
+
+## 3. The row `⋯` kebab — every table has one
+
+Every LFB TanStack table gets a **trailing control column** whose cell is a right-aligned **`⋯`
+kebab** button. It is the standard, discoverable home for *acting on one row* — distinct from the
+existing header **`⋮` bulk menu** (which acts on the *selected set*, [one_repo.mdx §4.4](./one_repo.mdx)).
+
+* **Placement.** Last column, fixed narrow width, right-aligned, no header label. It stays pinned as
+  the row's other cells navigate — clicking `⋯` opens a menu, it does **not** open the row.
+* **Contents.** The **entity action catalog** for whatever that row is (§5) — a repo row shows the
+  **repo** catalog, a file row the **file** catalog, and so on.
+* **Popover.** A rounded floating popover (the house popover style used by the sort/filter dropdowns,
+  [repos.mdx §3.1](./repos.mdx)), grouped with thin dividers, destructive items last and tinted red,
+  gated items hidden without the claim (§6.3). Opens on click, closes on select / outside-click / `Esc`.
+* **Keyboard + a11y.** Focusable button (`aria-haspopup="menu"`), arrow-key navigation, `Enter`
+  activates, `Esc` closes and returns focus. Each item has a clear label; icons are decorative.
+
+### 3.1 Right-click opens the same menu (LOCKED)
+
+Wherever a **file or directory entry** is rendered — a table row, a [File System](./directory.mdx)
+column-browser row, a tile — **right-clicking (context menu) opens the exact same entity action
+catalog** (§5) as that entity's `⋯` kebab. The kebab is the discoverable, always-visible affordance;
+the right-click is the power-user shortcut. They are two triggers for **one** menu component fed by
+**one** catalog — never a divergent list.
+
+* The context menu opens at the pointer, is flipped to stay on-screen, and closes on
+  select / outside-click / `Esc` (same popover as the kebab).
+* Right-click **suppresses the browser's native context menu** only over LFB entity rows; elsewhere the
+  native menu is untouched.
+* Right-click never *navigates* and never *selects* — it only opens the menu (the kebab discipline, §3).
+
+---
+
+## 4. The entity `⋯` "more" menu — single-entity pages
+
+A page that shows **one** entity — the [One repo](./one_repo.mdx) page, the **View one file** page
+([files.mdx](./files.mdx)), the **View one directory** page ([directories.mdx](./directories.mdx)), or
+a selected entry in the [File System](./directory.mdx) browser — carries a **top-right `⋯` "more"
+button**. Opening it shows the **same catalog** as that entity's row kebab — because the page *is* that
+entity.
+
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│  ‹ Repos  /  Our_Movies                          ┌────────────┐  ┌───┐ │
+│  ~/BGit/…/Our_Movies                             │ ⟳ Sync now │  │ ⋯ │ │ ← entity "more" menu
+│                                                  └────────────┘  └───┘ │
+└───────────────────────────────────────────────────────────────────────┘
+                                                                    │
+                              ┌─────────────────────────────────────▼──┐
+                              │  Open in File System                    │
+                              │  Rescan                                 │
+                              │  Repo settings…                         │
+                              │  Toggle Synced                          │
+                              │  Git-ignore big files                   │
+                              │  View pinned on IPFS                    │
+                              │  Copy path                              │
+                              │  ───────────────────────────────────── │
+                              │  Remove repo (unregister)          ⚠    │  ← destructive, last
+                              └─────────────────────────────────────────┘
+```
+
+* **Primary vs. more.** The single **most-common** action stays a visible button (e.g. *Sync now* on a
+  repo page); everything else lives under `⋯`. The most-common action also appears **inside** the menu
+  so the menu is a complete catalog.
+* **Same catalog, one source.** The page-level menu and the row kebab render from the **same** per-entity
+  definition (§5) — they never drift. If an action makes no sense at the page altitude (e.g. "Open" when
+  you are already on the page), it is simply **omitted/disabled**, not a different list.
+
+---
+
+## 5. The per-entity action catalogs (LOCKED)
+
+Four entities, four catalogs. Each is used verbatim by that entity's **row kebab** (§3) **and** its
+**page more-menu** (§4). Order and grouping are as shown; **destructive items are last and separated**.
+
+### 5.1 Repo
+
+| Group | Action | Kind | Notes |
+| --- | --- | --- | --- |
+| Open | **Open repo** | navigate | → [`/repos/$repoId`](./one_repo.mdx). (Omitted on the repo page itself.) |
+| Open | **Open in File System** | navigate | → [File System](./directory.mdx) at the repo's path. |
+| Open | **View pinned on IPFS** | navigate | → [IPFS](./ipfs.mdx) filtered to this repo. |
+| Work | **Rescan** | mutate | Runs the discovery scan for this repo now (`scan` op, [webapp.mdx §11](./webapp.mdx#11-what-shows-up-in-the-dock--the-lfbridge-operation-taxonomy)). |
+| Work | **Sync now** | mutate | Push/fetch this repo's `Sync` files (`sync` op). Never changes a decision. |
+| Work | **Git-ignore big files…** | mutate | One-click ignore of big, not-yet-ignored files (charter nudge; opens a confirm list — never edits `.gitignore` silently, §6.1). |
+| Config | **Toggle Synced** | mutate | Flip this repo's master `synced` on/off ([repo_settings §2.2](./repo_settings.mdx)). |
+| Config | **Repo settings…** | navigate | → [Repo settings](./repo_settings.mdx) (the gear target). |
+| Copy | **Copy path** | copy | Absolute repo path to clipboard. |
+| Danger | **Remove repo (unregister)** | mutate ⚠ | Unregisters from LFB only. **Never deletes the folder or any local file** (§6.2); confirm required. |
+
+### 5.2 Directory (non-repo)
+
+| Group | Action | Kind | Notes |
+| --- | --- | --- | --- |
+| Open | **View directory** | navigate | → the **View one directory** page ([directories.mdx](./directories.mdx)). (Omitted on that page itself.) |
+| Open | **Open in File System** | navigate | Drill into this directory in the [browser](./directory.mdx). |
+| Open | **View pinned on IPFS** | navigate | → [IPFS](./ipfs.mdx) filtered to files under this directory. |
+| Work | **Rescan** | mutate | Discovery scan of this directory now (`scan` op). |
+| Work | **Track / Sync this directory** | mutate | Add it to the computer sync unit ([storage §8](./storage.mdx#8-synccomputer--the-whole-computer-sync-unit)); the files inside become triage-able. |
+| Work | **Compress videos/images inside…** | mutate | Offer only (charter: video 1st, image 2nd; **explicit click only**, §6.1). |
+| Work | **Git-ignore big files inside…** | mutate | Confirm-list ignore of big files under here (§6.1). |
+| Flag | **Never IPFS** (toggle) | mutate | Sticky per-directory flag: nothing under here is ever added to IPFS / synced, and no "add to IPFS" offers appear for it (§6.6). Turning it **on** clears any `sync` decisions on files below and stops offering them; turning it **off** returns them to `undecided`. |
+| Flag | **Do not compress** (toggle) | mutate | Sticky per-directory flag: suppress the `C` "should compress" badge/offer for media under here — the user has said "leave these alone" (§6.6). |
+| Copy | **Copy path** | copy | Absolute directory path. |
+
+### 5.3 File
+
+| Group | Action | Kind | Notes |
+| --- | --- | --- | --- |
+| Open | **View file** | navigate | → the **View one file** page ([files.mdx](./files.mdx)). (Omitted on that page itself.) |
+| Open | **Open containing folder** | navigate | → [File System](./directory.mdx) revealing this file. |
+| IPFS | **Add to IPFS** | mutate | Sets the [decision](./one_repo.mdx#1-the-decision-model-locked) to `sync`: add to the manifest, pin, and transfer to peers. Hidden when **Never IPFS** is on (§6.6). Shown when the file is not already a Sync file. |
+| IPFS | **Remove from IPFS** | mutate ⚠ | Sets the decision to `ignore`: remove from the manifest and unpin **on this machine**. **Never deletes the local bytes** (§6.2). Shown when the file is currently a Sync file. |
+| Decision | **Set decision ▸ Sync / Ignore / Undecided** | mutate | The full three-state submenu ([decision model](./one_repo.mdx#1-the-decision-model-locked)); "Add to IPFS" / "Remove from IPFS" above are the two one-click shortcuts. Changing it **never deletes** the local file. |
+| Work | **Sync now** | mutate | Queue this one file's transfer (`sync` op). Only meaningful when its decision is Sync. |
+| Work | **Compress…** | mutate | Video/image only, **explicit click** (charter §6.1); `compress` op. Hidden when **Do not compress** is on. |
+| Work | **Convert to compressible…** | mutate | PNG→JPEG etc., **after the alpha/functionality safety checks** (charter; warn before converting, §6.1). |
+| Work | **Git-ignore this file** | mutate | Shown only when the file is big and **not** already git-ignored (§6.1). |
+| Work | **Find duplicates (fingerprint)** | mutate | Local-only perceptual/content match (charter; never networks, §6.4). |
+| Flag | **Never IPFS** (toggle) | mutate | Sticky per-file flag: this file is never added to IPFS / synced and shows no "Add to IPFS" offer (§6.6). Turning it **on** clears a `sync` decision back to `ignore`. |
+| Flag | **Do not compress** (toggle) | mutate | Sticky per-file flag: suppress the `C` "should compress" badge/offer for this file (§6.6). |
+| IPFS | **View on IPFS** | navigate | → [IPFS](./ipfs.mdx) filtered to this file's CID. |
+| Copy | **Copy CID** · **Copy path** | copy | CID present only once the file is a Sync file with a CID. |
+| Danger | **Stop syncing (untrack / unpin)** | mutate ⚠ | Removes from the manifest and unpins **on this machine**. **Never deletes the local bytes** (§6.2); confirm required. |
+
+### 5.4 Peer (a user's other computer)
+
+| Group | Action | Kind | Notes |
+| --- | --- | --- | --- |
+| Open | **View peer** | navigate | The peer's detail (which repos/files it pins). |
+| Copy | **Copy PeerID** | copy | The IPFS PeerID ([storage §11](./storage.mdx#11-peersyaml--the-users-other-computers)). |
+| Danger | **Remove peer** | mutate ⚠ | Forget this computer from `peers.yaml`; confirm required. Does not touch remote content. |
+
+---
+
+## 6. Guardrails the menus inherit (LOCKED)
+
+These are charter rules the menus must honor — they are **why** several actions are confirm-gated.
+
+### 6.1 Never act on files without an explicit click
+**Compress, convert (PNG→compressible), and git-ignore are OFFERS, not automatic.** They exist in the
+menu, but selecting one **opens a confirm step** (a review list for the ignore/compress set; the
+alpha-channel/functionality warning for a convert) — LFB never compresses, converts, or writes a
+`.gitignore` entry on its own (charter: "Never compress or alter a file unless the user explicitly
+asks"; "Never add a `.gitignore` entry automatically"). Once confirmed, the work runs through the
+progress dock as its `compress` / `ignore` op ([webapp.mdx §11](./webapp.mdx#11-what-shows-up-in-the-dock--the-lfbridge-operation-taxonomy)).
+
+### 6.2 Local bytes are never deleted by LFB
+**Remove repo**, **Stop syncing (untrack/unpin)**, and **Remove peer** change only *LFB's tracking* —
+they unregister, unpin, or forget. They **never delete the user's folder or files** on disk (matching
+the decision model: "changing a decision never deletes the user's local file", [one_repo.mdx §4.5](./one_repo.mdx)).
+Every destructive item is visually separated (last, red-tinted) and requires a confirm.
+
+### 6.3 Permission gates
+Menu items honor OpenAuthFederated claims exactly as the nav does ([left_bar.mdx §5](./left_bar.mdx)):
+a gated item (e.g. an admin-only action) is **hidden**, not disabled, when the claim is absent.
+
+### 6.4 Local-only, never phones home
+**Find duplicates (fingerprint)** and any hashing run **entirely locally** (charter: PhotoDNA-style
+perceptual match with **no external networking**). No menu action performs a network call to a third
+party; the only network LFB does is IPFS between the user's own machines.
+
+### 6.5 The IPFS-only-our-content rule still holds
+No menu action ever turns this machine into a public gateway/relay
+([knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule)); "View on
+IPFS" and "View pinned" are read-only views of **our own** pinned content.
+
+### 6.6 The two sticky flags — Never IPFS & Do not compress (LOCKED)
+
+Both are **persistent per-entity flags** (not one-shot actions): they are stored, survive rescans, and
+apply to **either a file or a directory**. They are the user's standing "leave this alone" wishes.
+
+* **Never IPFS** — the entity (and, for a directory, everything under it) is **never** added to IPFS or
+  synced. While it is on: no `sync` decision may be set, the **Add to IPFS** item is **hidden**, the
+  sync `S` badge never appears, and background sync skips it. Turning it **on** demotes any existing
+  `sync` decision (a file → `ignore`; a directory → clears its files' `sync` decisions). It is a
+  *policy*, stronger than a per-file `ignore` decision, and it is scoped by path so a directory's flag
+  covers new files that appear later. It **never deletes local bytes** (§6.2) — it only forbids syncing.
+* **Do not compress** — suppress the `C` "should be compressed" offer and badge for this file (or all
+  media under this directory). Compression is already an explicit-click-only offer (§6.1); this flag
+  makes the *offer itself* go away for entities the user has judged fine as-is. It does **not** alter
+  the file.
+* Both flags are **toggles** in the menu with a check when on, are reflected on the entity's page
+  ([files.mdx](./files.mdx) / [directories.mdx](./directories.mdx)) as a labeled switch, and — like every
+  mutating action — write immediately and can be flipped back at any time.
+
+---
+
+## 7. Acceptance criteria
+
+1. In every TanStack table, **data cells are deep links**: a count cell opens the child list
+   pre-filtered to that slice; a path/name cell opens the entity or the File System at that path; a
+   Peers/pinned cell opens Peers filtered to that entity; a CID cell copies (does not navigate away);
+   per §2. Linking cells show a clickable affordance; the `⋯` column never navigates.
+2. Every table row (and every File System entry) has a trailing **`⋯` kebab** that opens the **entity
+   action catalog** (§5) for that row's entity, as a grouped popover with destructive items separated
+   last; it is a control column and never opens the row. **Right-clicking the same entity opens the same
+   menu** (§3.1).
+3. Every **single-entity page** (view one repo / file / directory; the File System selection) has a
+   **top-right `⋯` "more" menu** rendering the **same catalog** as that entity's row kebab (§4); the one
+   most-common action may also be a visible primary button. The file/directory pages are
+   [files.mdx](./files.mdx) / [directories.mdx](./directories.mdx).
+4. The **two sticky flags** — **Never IPFS** and **Do not compress** — are persistent per-entity
+   toggles on both files and directories (§6.6): Never IPFS hides "Add to IPFS", forbids `sync`, and
+   suppresses the `S` badge; Do not compress suppresses the `C` badge/offer; neither deletes or alters
+   local bytes.
+5. The four **entity catalogs** (repo / directory / file / peer) are defined **once** here and used
+   verbatim by both surfaces — no per-spec re-listing that can drift.
+6. **Charter guardrails hold** (§6): compress / convert / git-ignore are explicit-click offers with a
+   confirm step; Remove-repo / Stop-syncing / Remove-peer never delete local bytes and require confirm;
+   fingerprint/hash never network; gated items are hidden without the claim; no action opens a public
+   gateway.
+7. Every **mutating** menu action runs through the progress dock as its taxonomy op
+   ([webapp.mdx §11](./webapp.mdx#11-what-shows-up-in-the-dock--the-lfbridge-operation-taxonomy)), and
+   every **navigate** action routes via TanStack Router; **copy** actions write the clipboard and toast.
+
+<!--
+  HUB spec for three shared interactions: (1) cell navigation (data cells are deep links), (2) the row
+  ⋯ kebab (per-row entity actions, distinct from the header ⋮ bulk menu), (3) the entity ⋯ more-menu on
+  single-entity pages (same catalog as the row kebab). LOCKED: the four per-entity action catalogs
+  (repo/directory/file/peer) live HERE and nowhere else — table/entity specs reference §5, never restate
+  it. Charter guardrails (§6) are load-bearing: explicit-click-only for compress/convert/ignore; LFB
+  never deletes local bytes on remove/untrack; local-only fingerprinting; hidden (not disabled) gated
+  items; only-our-content IPFS. When adding a table, give it a cell-link map (link back to §2) and the
+  ⋯ kebab; when adding an entity, add a catalog to §5 and both surfaces get it for free.
+-->

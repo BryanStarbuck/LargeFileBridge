@@ -4,8 +4,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { FsEntry, FsEntryKind, FsListing } from "@lfb/shared";
-import { buildBadgeContext, computeBadges, HARD_SKIP } from "./badges.js";
+import type { FsEntry, FsEntryKind, FsListing, FlatFileListing } from "@lfb/shared";
+import { buildBadgeContext, computeBadges, nearestGitAtOrAbove, HARD_SKIP } from "./badges.js";
 
 export function homeDir(): string {
   return os.homedir();
@@ -86,6 +86,86 @@ export function listDirectory(input: string | undefined, showHidden: boolean): F
     home: homeDir(),
     entries,
   };
+}
+
+// ── Full paths: the flat recursive large-file walk (full_paths.mdx) ───────────
+// Rows are the files at/above the big-file threshold under `root`, gathered from every depth.
+// Metadata-only (stat), Node fs only, bounded by a file cap + an iteration budget (no silent
+// truncation — `truncated` is surfaced). Same hard-skip set / dotfile rule as the column browser.
+const FLAT_FILE_CAP = 5000; // max rows returned before we stop and flag truncation
+const FLAT_ITER_BUDGET = 300000; // max directory pops before we stop and flag truncation
+
+export function listFilesFlat(input: string | undefined, showHidden: boolean): FlatFileListing {
+  const rootAbs = resolveDir(input);
+  // One shared badge context (registered repos, sticky flags, threshold) built once; its
+  // per-directory `enclosingRepoForChildren` is re-pointed as we descend (cached per dir).
+  const ctx = buildBadgeContext(rootAbs);
+  const threshold = ctx.thresholdBytes;
+  const repoCache = new Map<string, string | null>();
+  const enclosingFor = (dir: string): string | null => {
+    let v = repoCache.get(dir);
+    if (v === undefined) {
+      v = nearestGitAtOrAbove(dir);
+      repoCache.set(dir, v);
+    }
+    return v;
+  };
+
+  const files: FsEntry[] = [];
+  let truncated = false;
+  let budget = FLAT_ITER_BUDGET;
+  const stack: string[] = [rootAbs];
+
+  while (stack.length) {
+    if (budget-- <= 0) {
+      truncated = true;
+      break;
+    }
+    const dir = stack.pop()!;
+    let dirents: fs.Dirent[];
+    try {
+      dirents = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    // All files in this directory share the same enclosing repo → set it once for the batch.
+    ctx.enclosingRepoForChildren = enclosingFor(dir);
+    for (const ent of dirents) {
+      if (!showHidden && ent.name.startsWith(".")) continue;
+      if (ent.isSymbolicLink()) continue;
+      const abs = path.join(dir, ent.name);
+      if (ent.isDirectory()) {
+        if (!HARD_SKIP.has(ent.name)) stack.push(abs);
+        continue;
+      }
+      if (!ent.isFile()) continue;
+      let st: fs.Stats;
+      try {
+        st = fs.statSync(abs); // metadata only (scan.mdx §1)
+      } catch {
+        continue;
+      }
+      if (st.size < threshold) continue;
+      if (files.length >= FLAT_FILE_CAP) {
+        truncated = true;
+        stack.length = 0; // stop the walk
+        break;
+      }
+      const { badges, isRepoRoot } = computeBadges(abs, ent.name, "file", st.size, ctx);
+      files.push({
+        name: ent.name,
+        path: abs,
+        kind: "file",
+        sizeBytes: st.size,
+        modifiedAt: st.mtime.toISOString(),
+        isRepoRoot,
+        badges,
+        hasChildren: false,
+      });
+    }
+  }
+
+  return { root: rootAbs, home: homeDir(), thresholdBytes: threshold, files, truncated };
 }
 
 function kindOf(ent: fs.Dirent): FsEntryKind {

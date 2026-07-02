@@ -1,28 +1,38 @@
 // The File System page (directory.mdx) — a Mac-Finder column-view (Miller-column) browser.
 // Each column lists one directory level and lazily fetches GET /fs?path=…; clicking a directory
 // opens a new column to its right (replacing any columns further right). Every row shows its
-// code badges pinned to the far right.
+// code badges pinned to the far right, plus a ⋯ kebab and right-click that open the shared entity
+// action menu (menus.mdx §3/§3.1 — the same catalog as the view-one pages).
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSearch, useNavigate } from "@tanstack/react-router";
 import { ChevronRight, File as FileIcon, Folder, Home } from "lucide-react";
 import type { FsEntry, FsListing } from "@lfb/shared";
+import { viewerRouteForName } from "@lfb/shared";
 import { api } from "@/api/client";
 import { Badges } from "@/components/fs/Badges";
+import { EntityKebab, EntityMenuAt, type MenuPos } from "@/components/menu/EntityMenu";
 import { formatBytes, middleTruncate } from "@/lib/format";
+import { FsTabs } from "./FsTabs";
 
 export default function FileSystemPage() {
+  const { path: initialPath } = useSearch({ strict: false }) as { path?: string };
   // The column stack: one absolute directory path per column (index 0 is the root/home column).
   const [stack, setStack] = useState<string[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [showHidden, setShowHidden] = useState(false);
   const [pathInput, setPathInput] = useState("");
+  // Right-click context menu (menus.mdx §3.1).
+  const [menu, setMenu] = useState<{ path: string; pos: MenuPos } | null>(null);
   const stripRef = useRef<HTMLDivElement>(null);
 
-  // Open on the OS home directory.
+  // Open on the ?path deep-link if present, else the OS home directory.
   const home = useQuery({ queryKey: ["fs", "home"], queryFn: api.fsHome });
   useEffect(() => {
-    if (home.data && stack.length === 0) setStack([home.data.home]);
-  }, [home.data, stack.length]);
+    if (stack.length > 0) return;
+    if (initialPath) setStack([initialPath]);
+    else if (home.data) setStack([home.data.home]);
+  }, [home.data, initialPath, stack.length]);
 
   // Auto-scroll to the newest column whenever the stack grows.
   useEffect(() => {
@@ -55,6 +65,7 @@ export default function FileSystemPage() {
 
   return (
     <div className="flex h-full flex-col">
+      <FsTabs />
       {/* Breadcrumb / controls */}
       <div className="flex items-center gap-2 border-b border-[var(--lfb-border)] px-4 py-2">
         <button
@@ -96,9 +107,12 @@ export default function FileSystemPage() {
             selectedFile={selectedFile}
             onOpenDir={(p) => openDir(i, p)}
             onSelectFile={selectFile}
+            onContextMenu={(path, pos) => setMenu({ path, pos })}
           />
         ))}
       </div>
+
+      {menu && <EntityMenuAt path={menu.path} pos={menu.pos} onClose={() => setMenu(null)} />}
     </div>
   );
 }
@@ -110,9 +124,10 @@ interface FsColumnProps {
   selectedFile: string | null;
   onOpenDir: (path: string) => void;
   onSelectFile: (path: string) => void;
+  onContextMenu: (path: string, pos: MenuPos) => void;
 }
 
-function FsColumn({ root, showHidden, openedChild, selectedFile, onOpenDir, onSelectFile }: FsColumnProps) {
+function FsColumn({ root, showHidden, openedChild, selectedFile, onOpenDir, onSelectFile, onContextMenu }: FsColumnProps) {
   const q = useQuery<FsListing>({
     queryKey: ["fs", "list", root, showHidden],
     queryFn: () => api.fsList(root, showHidden),
@@ -137,6 +152,7 @@ function FsColumn({ root, showHidden, openedChild, selectedFile, onOpenDir, onSe
             active={e.path === openedChild || e.path === selectedFile}
             onOpenDir={onOpenDir}
             onSelectFile={onSelectFile}
+            onContextMenu={onContextMenu}
           />
         ))}
       </div>
@@ -149,18 +165,33 @@ function FsRow({
   active,
   onOpenDir,
   onSelectFile,
+  onContextMenu,
 }: {
   entry: FsEntry;
   active: boolean;
   onOpenDir: (path: string) => void;
   onSelectFile: (path: string) => void;
+  onContextMenu: (path: string, pos: MenuPos) => void;
 }) {
   const isDir = entry.kind === "dir";
+  const navigate = useNavigate();
+  // Clicking a directory opens its column; clicking a FILE opens its viewer/properties page
+  // (media_viewer.mdx / files.mdx): image → /image, video → /video, anything else → /file.
+  const openFile = () => {
+    onSelectFile(entry.path); // keep the row highlighted as we leave
+    navigate({ to: viewerRouteForName(entry.name), search: { path: entry.path } });
+  };
   return (
-    <button
-      onClick={() => (isDir ? onOpenDir(entry.path) : onSelectFile(entry.path))}
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => (isDir ? onOpenDir(entry.path) : openFile())}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onContextMenu(entry.path, { x: e.clientX, y: e.clientY });
+      }}
       title={entry.path}
-      className={`flex w-full items-center gap-1.5 px-3 py-1 text-left text-[13px] ${
+      className={`group flex w-full cursor-pointer items-center gap-1.5 px-3 py-1 text-left text-[13px] ${
         active ? "bg-[var(--lfb-primary-tint)]" : "hover:bg-slate-100"
       }`}
     >
@@ -169,14 +200,18 @@ function FsRow({
       ) : (
         <FileIcon size={14} className="shrink-0 text-slate-400" />
       )}
-      <span className="min-w-0 flex-1 truncate text-black">{middleTruncate(entry.name, 34)}</span>
+      <span className="min-w-0 flex-1 truncate text-black">{middleTruncate(entry.name, 30)}</span>
       {entry.kind === "file" && entry.sizeBytes != null && (
         <span className="shrink-0 text-[10px] tabular-nums text-slate-400">
           {formatBytes(entry.sizeBytes)}
         </span>
       )}
       <Badges badges={entry.badges} />
+      {/* ⋯ kebab — appears on hover; opens the same entity menu as right-click (menus.mdx §3). */}
+      <span className="opacity-0 group-hover:opacity-100 focus-within:opacity-100">
+        <EntityKebab path={entry.path} />
+      </span>
       {isDir && entry.hasChildren && <ChevronRight size={13} className="shrink-0 text-slate-400" />}
-    </button>
+    </div>
   );
 }

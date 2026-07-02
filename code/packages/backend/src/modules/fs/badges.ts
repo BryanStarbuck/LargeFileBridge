@@ -7,9 +7,8 @@ import path from "node:path";
 import type { FsBadge, FsEntryKind } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import { listRepoFolders, getRepoConfig, isGitWorkingTree } from "../store-model/units.service.js";
-
-// Directories we never descend into (matches the scanner's hard-skip set, scan.mdx §4).
-const HARD_SKIP = new Set([".git", "node_modules", ".Trash", ".cache", "Caches"]);
+// One source of truth for the never-descend set — shared with the scanner (scan.mdx §4).
+import { HARD_SKIP } from "../../shared/scan-filters.js";
 
 // IPFS list artifacts (directory.mdx §3.4, ipfs_share_files.mdx §3). Case-insensitive match.
 const IPFS_ARTIFACT_NAMES = new Set(["ipfs.sh", "ipfs.txt", "get_videos.sh"]);
@@ -36,6 +35,8 @@ export interface FsBadgeContext {
   enclosingRepoForChildren: string | null;
   /** Shared, bounded budget for the "contains a repo below" downward probes. */
   ancestorProbeBudget: { left: number };
+  /** Sticky per-entity flags (menus.mdx §6.6), snapshotted once so each row is cheap. */
+  fileFlags: Array<{ path: string; never_ipfs: boolean; no_compress: boolean }>;
 }
 
 /** Build the per-listing context once, so each row is cheap. */
@@ -48,12 +49,27 @@ export function buildBadgeContext(dirAbs: string): FsBadgeContext {
       registeredRepos.push({ path: path.resolve(expandHome(rc.repo.path)), decisions: rc.decisions });
     }
   }
+  const fileFlags = Object.entries(cfg.file_flags).map(([p, v]) => ({
+    path: path.resolve(p),
+    never_ipfs: !!v.never_ipfs,
+    no_compress: !!v.no_compress,
+  }));
   return {
     thresholdBytes: cfg.big_file.threshold_bytes,
     registeredRepos,
     enclosingRepoForChildren: nearestGitAtOrAbove(dirAbs),
     ancestorProbeBudget: { left: 4000 },
+    fileFlags,
   };
+}
+
+/** Effective sticky flag for a path: its own entry OR any ancestor directory's entry (path-scoped). */
+function effectiveFlag(childAbs: string, ctx: FsBadgeContext, key: "never_ipfs" | "no_compress"): boolean {
+  for (const f of ctx.fileFlags) {
+    if (!f[key]) continue;
+    if (childAbs === f.path || childAbs.startsWith(f.path + path.sep)) return true;
+  }
+  return false;
 }
 
 export interface BadgeResult {
@@ -81,13 +97,16 @@ export function computeBadges(
   const repo = repoBadge(childAbs, isDir, isRepoRoot, ctx);
   if (repo) badges.push(repo);
 
-  // 2. Sync badge (files whose decision is "sync").
-  if (isFile && fileIsSynced(childAbs, ctx)) badges.push("sync");
+  // 2. Sync badge (files whose decision is "sync"). Never IPFS forbids sync, so suppress it (menus §6.6).
+  if (isFile && fileIsSynced(childAbs, ctx) && !effectiveFlag(childAbs, ctx, "never_ipfs")) {
+    badges.push("sync");
+  }
 
-  // 3. Compress badge (video/image files).
+  // 3. Compress badge (video/image files). "Do not compress" suppresses the "should compress" C offer.
   if (isFile) {
     const c = compressBadge(name, sizeBytes, ctx.thresholdBytes);
-    if (c) badges.push(c);
+    // Only the "should compress" (C) offer is user-suppressible; the "already compressed" (c) fact stays.
+    if (c && !(c === "compress" && effectiveFlag(childAbs, ctx, "no_compress"))) badges.push(c);
   }
 
   // 4. IPFS badge (files: artifact/markdown list; dirs: publishes one underneath).
@@ -161,6 +180,23 @@ function compressBadge(name: string, _sizeBytes: number | null, _threshold: numb
     return "compress"; // C — offer to (re)compress
   }
   return null;
+}
+
+/** Compression classification for the entity view (files.mdx §2). Mirrors compressBadge's rules. */
+export function compressInfo(name: string): {
+  compressible: "video" | "image" | null;
+  compressState: "should" | "done" | null;
+} {
+  const ext = path.extname(name).toLowerCase();
+  if (IMAGE_COMPRESSED_EXT.has(ext)) return { compressible: "image", compressState: "done" };
+  if (IMAGE_UNCOMPRESSED_EXT.has(ext)) return { compressible: "image", compressState: "should" };
+  if (VIDEO_EXT.has(ext)) {
+    return {
+      compressible: "video",
+      compressState: VIDEO_COMPRESSED_MARK.test(name) ? "done" : "should",
+    };
+  }
+  return { compressible: null, compressState: null };
 }
 
 // ── ipfs ──────────────────────────────────────────────────────────────────────

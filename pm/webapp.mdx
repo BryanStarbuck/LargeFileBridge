@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Web App Entry & Sign-In (credentials setup)
-description: The web app's entry gate (the UiPageWeRender shown before anyone is signed in). Specifies the sign-in screen and — the focus of this file — the "sign-in is not configured yet" remediation panel that renders when the Google OAuth client credentials are missing. That panel must name the app correctly (Large File Bridge — NOT any sister app's name), show the FULL path where the credentials JSON must be installed (~/.credentials/large_files_bridge.json), print the exact JSON layout to paste into it, show the exact redirect URI to register on the Google Cloud OAuth client (http://localhost:8787/api/v1/oauth_callback), and tell the user to restart the backend. Grounded in the real code: SignInPage.tsx, the auth gate in main.tsx, GET /api/health/auth-config, and config/credentials-file.ts. Precedence is env-wins-then-file. Cross-links storage.mdx §10 (where the secret lives / signing secret) and §4 (the allow-list).
+description: The web app shell spec, in two parts. Part I is the entry gate (the UiPageWeRender shown before anyone is signed in) — the sign-in screen and its "sign-in is not configured yet" remediation panel that renders when the Google OAuth client credentials are missing. That panel must name the app correctly (Large File Bridge — NOT any sister app's name), show the FULL path where the credentials JSON must be installed (~/.credentials/large_files_bridge.json), print the exact JSON layout to paste into it, show the exact redirect URI to register on the Google Cloud OAuth client (http://localhost:8787/api/v1/oauth_callback), and tell the user to restart the backend. Grounded in the real code: SignInPage.tsx, the auth gate in main.tsx, GET /api/health/auth-config, and config/credentials-file.ts. Precedence is env-wins-then-file. Part II is the app shell's "something is happening" surfaces — the two bottom-left feedback regions that tell the signed-in user work is running asynchronously: (1) the app-wide sonner toasts, re-anchored from bottom-right to bottom-left, enlarged, and offset clear of the 256px left bar; and (2) a new bottom-left progress dock — a stack of short "Running <op> <target>" cards with a spinning icon (and an optional determinate bar) that appears while long jobs run (scan discovery, IPFS sync/pin/publish, compress, hash/fingerprint, git-ignore) and drains card-by-card as each job finishes. The dock reflects BOTH browser-initiated jobs (optimistic) and server-side background-worker jobs (scan every 4h, sync every 15m) polled from a new GET /api/progress, so a job started by launchd or another tab still shows. Cross-links storage.mdx §10 (where the secret lives / signing secret) and §4 (the allow-list), scan.mdx (the discovery worker), sync_list.mdx (the sync backbone), and left_bar.mdx (the 256px bar this offset clears). Learns its progress pattern from the sister app EmailDeliveryHero (pm/progress_ui.mdx).
 ---
 
 # LargeFileBridge — Web App Entry & Sign-In (credentials setup)
@@ -254,3 +254,303 @@ server reports; it never assumes defaults the server may have overridden.
    leftover sister-app values (§6).
 8. Displayed path / redirect URI / JSON key / allowed domain reflect the backend's **resolved** values
    (env or file overrides included), not hard-coded UI defaults.
+
+---
+---
+
+# Part II — Progress & asynchronous feedback (the app shell)
+
+Everything above is the **pre-app gate**. Once a user is signed in and allow-listed, `main.tsx` renders
+the app (`<RouterProvider>`), and the shell gains a second job: **tell the user when work is happening
+in the background**. LFBridge is a **long-job** app — a scan walks thousands of files, an IPFS
+add/pin/publish moves hundreds of megabytes, a video compress runs `ffmpeg` for minutes, a
+content-fingerprint pass hashes whole files. None of that is instant, and today the UI gives **no live
+signal** while it runs (the current endpoints simply **block** — `POST /api/repos/rescan` awaits
+`scanAll()`, `POST /api/repos/:repoId/sync` awaits `syncRepoFolder()` — and return only when finished;
+`repos.router.ts:43`, `:90`). Part II fixes that.
+
+We follow the pattern proven in the sister app **EmailDeliveryHero** ([pm/progress_ui.mdx](../../EmailDeliveryHero/pm/progress_ui.mdx)):
+put the "something is happening" feedback **at the bottom**, **bottom-left**, **clear of the left bar**,
+as a **stack of small cards that drain independently** as each job finishes. LFBridge adapts it in two
+ways that its architecture demands: the cards name **many kinds of operation** (not just one "scan"),
+and the dock reflects **server-side background-worker jobs** too — not only ones this browser started —
+because the sync/scan workers run under **`launchd`** on their own schedule (charter: sync every 15
+min; [scan.mdx §2](./scan.mdx): scan every 4 h).
+
+There are **two** surfaces, and they must not be confused:
+
+1. **Toasts** — the transient `sonner` event notifications that already fire on mutations ("… updated",
+   error messages). Part II **re-positions and enlarges** them; it does **not** change *when* they fire.
+2. **The progress dock** — a **new, dedicated** surface. While ≥1 long job runs, it shows one short card
+   per in-flight job with a spinning icon and **"Running <op> <target>"**; cards **stack** and each
+   **removes itself the instant its job finishes**.
+
+Both live in the **bottom-left**, offset past the **256px** left bar ([left_bar.mdx](./left_bar.mdx)),
+the dock sitting **above** the toast stack so the two never collide. Ports for reference:
+web **:2222**, API **:8787** ([code_plan.mdx](./code_plan.mdx)).
+
+---
+
+## 8. Goals (what "on the bottom, doing work asynchronously" means here)
+
+* When something happens (a decision saved, a worker toggled), a **toast pops in from the bottom-left**
+  — not the top-right it uses today.
+* Toasts appear **about twice as big** as the default and anchored **bottom-left**, but **never
+  overlapping the left navigation bar**.
+* Any **long-running job** shows its progress in that same bottom-left region, **below/clear of the left
+  bar**, as a **short, somewhat-wide card**.
+* Jobs run **in parallel**, bounded by a small concurrency limiter. Syncing four repos, or compressing
+  three videos, shows **all of them at once**, and each card **leaves as its own job finishes** — so a
+  slow job lingers after a fast one is gone.
+* Each card reads **"Running <op> <target>"** (e.g. *Syncing movie.mp4*, *Compressing trailer.mov*,
+  *Scanning act3ai-repo*) with an **animated circular-arrows icon** signalling live work.
+* Where the backend can report a **fraction** (bytes added, `ffmpeg` percent, files walked), the card
+  also shows a **thin determinate bar** and a small detail line (e.g. `412 MB / 734 MB`). Where it
+  can't, the spinner alone carries "still working."
+* **When a job finishes, its card disappears.** The stack drains unevenly.
+* The dock reflects **server-side jobs too** — a scan or sync kicked off by `launchd` (or from another
+  browser tab) appears here, not just jobs this tab started.
+
+---
+
+## 9. Toasts — reposition, enlarge, clear the left bar
+
+Today `main.tsx` mounts a single `<Toaster position="bottom-right" richColors />` (`main.tsx:60`). It is
+reconfigured:
+
+| Property | Before (`main.tsx:60`) | After (this spec) |
+| --- | --- | --- |
+| `position` | `bottom-right` | **`bottom-left`** — toasts rise in from the bottom-left corner. |
+| Size | default (~356px wide, `text-sm`) | **~1.8–2× visual weight**: wider card (`--width` ≈ **440px**), larger type (`text-base`), roomier padding. |
+| Left offset | none | **Cleared past the left bar.** The bar is **256px** (`config/left_bar.ts` default `sidebarWidth: "256px"`); the container is pushed to **`left: 272px`** (16px gutter) so a toast **never sits over the nav** — on every route. |
+| `richColors` | on | unchanged (green success / red error). |
+
+Implementation notes (non-normative, see §14):
+
+* Anchor with `position="bottom-left"`, then override the container's inline `left` with a
+  `!left-[272px]` utility (Tailwind `!important` beats sonner's inline `left`) so the stack clears the
+  256px bar. If the bar width ever changes in `config/left_bar.ts`, this offset changes with it.
+* Enlarge via the Toaster `style={{ "--width": "440px" }}` and a `text-base`, roomier-padding
+  `toastOptions`.
+* **Behavior is unchanged** — every existing `toast.success/error(...)` call (AllowListPage,
+  SettingsPage, OneRepoPage, ReposPage, RepoSettingsPage, SecuritySetupPage, SyncPage) fires on the same
+  events. Only **where/how big** they render changes.
+
+---
+
+## 10. The progress dock (new surface)
+
+### 10.1 Where it lives
+
+A **fixed-position** region in the **bottom-left** of the viewport, offset the same **272px** to clear
+the 256px left bar, sitting **above** the toast stack so the two never collide (dock `bottom: 88px`,
+toasts `bottom: 16px`; both anchored left). It renders **only while ≥1 job is active** and is otherwise
+**absent from the DOM** (no empty box).
+
+```
+┌────────────┬──────────────────────────────────────────────────────────┐
+│  LEFT BAR  │  content area                                             │
+│  (256px)   │                                                           │
+│  Repos     │                                                           │
+│  File Sys  │                                                           │
+│  Peers     │                                                           │
+│  Sync      │   ┌─────────────────────────────────────────┐  ← dock,   │
+│  Settings  │   │ ⟳  Syncing  movie.mp4    412 / 734 MB    │    stacked │
+│            │   │ ▇▇▇▇▇▇▇▇▇▇▇▇▇░░░░░░░░░                    │    one per │
+│            │   ├─────────────────────────────────────────┤    job     │
+│  account   │   │ ⟳  Compressing  trailer.mov   47%        │            │
+│  slot      │   │ ▇▇▇▇▇▇▇▇▇░░░░░░░░░░░                      │            │
+│            │   ├─────────────────────────────────────────┤            │
+│            │   │ ⟳  Scanning  act3ai-repo   1,240 files   │            │
+│            │   └─────────────────────────────────────────┘            │
+│            │   ── toast stack rises below the dock ──                  │
+└────────────┴──────────────────────────────────────────────────────────┘
+   ▲ dock left edge = 272px (never over the 256px bar)
+```
+
+### 10.2 The card
+
+One card per **active job**:
+
+* **Icon** — lucide-react **`RefreshCw`** (two arrows forming a circle) with `animate-spin`, sized to the
+  text (~`h-4 w-4`). It circles continuously = "progress is happening." (A per-kind glyph may lead the
+  label — see §11 — but the spinning arrows are the constant.)
+* **Label** — muted **verb** ("Syncing", "Compressing", "Scanning", "Pinning", "Hashing", "Ignoring") +
+  the **target** (repo name or file basename) in medium weight, single line, truncated if long.
+* **Progress detail (optional).** When the job reports a fraction, a **thin determinate bar** under the
+  label plus a small right-aligned detail (`412 / 734 MB`, `47%`, `1,240 files`). When it doesn't, **no
+  bar** — the spinner alone signals indeterminate work.
+* **Shape** — **short** (label line + optional bar, `py-2`) and **somewhat wide**
+  (`min-w-[260px]`, `max-w-[360px]`). Near-white card, subtle border (`--lfb-border`) and shadow,
+  rounded. Each card is an isolated element so it can leave independently.
+* **Stacking** — a vertical `flex-col` with a small gap; newest on top.
+
+### 10.3 Lifecycle
+
+1. A job **starts** → a card is added immediately. For a **browser-initiated** job the add is
+   **optimistic** (the user sees it the moment they click **Sync now** / **Compress** / **Rescan**,
+   before the round-trip resolves). For a **server-initiated** job it appears on the **next progress
+   poll** (§12).
+2. The card stays while the job is in flight, updating its bar/detail from progress reports.
+3. The job **finishes** (success **or** error) → **its card is removed at once**. Success also
+   invalidates the relevant queries (the repo/file grids recolor, the uncompressed/ignored counts
+   update); failure raises an **error toast** (§9). A brief fade-out is allowed but must not delay
+   removal past ~200 ms.
+4. When the **last** card leaves, the dock unmounts. A single batch **"…complete"** success toast fires
+   once a user-initiated batch settles (not one per job — the cards already gave per-job feedback);
+   each **failed** job still gets its own error toast.
+
+### 10.4 Accessibility
+
+* The dock is an `aria-live="polite"` region so screen readers announce "Syncing movie.mp4" and its
+  removal. Determinate cards expose `role="progressbar"` with `aria-valuenow`.
+* The spinner is decorative (`aria-hidden`); the **text** carries the meaning — motion/color is never
+  the only signal.
+
+---
+
+## 11. What shows up in the dock — the LFBridge operation taxonomy
+
+Unlike the sister app (one "scan" verb), LFBridge runs **several kinds** of long job. The dock renders
+one small, shared card type; the **verb** and any progress detail come from the job's `kind`:
+
+| `kind` | Card verb | Target | Progress detail (when available) | Where it starts |
+| --- | --- | --- | --- | --- |
+| `scan` | **Scanning** | repo / root name | files walked (`1,240 files`) | `POST /api/repos/rescan` (`scanAll`); the scan worker |
+| `sync` | **Syncing** | file or repo name | bytes added (`412 / 734 MB`) | `POST /api/repos/:repoId/sync`; the sync worker |
+| `pin` | **Pinning** | file / CID | indeterminate | inside a sync job |
+| `publish` | **Publishing** | backbone / IPNS | indeterminate | inside a sync job |
+| `compress` | **Compressing** | file basename | `ffmpeg` percent (`47%`) | a user-invoked compress action (charter: video 1st, image 2nd) |
+| `hash` | **Hashing** | file basename | bytes hashed | tracking a file (per-file fingerprint / compressed+uncompressed hashes) |
+| `fingerprint` | **Fingerprinting** | file basename | indeterminate | perceptual/content-fingerprint pass (local-only, no network) |
+| `ignore` | **Ignoring** | file basename | (fast) | one-click git-ignore of a big, non-ignored file |
+| `import` | **Importing** | file / CID | (fast) | adopting an already-pinned CID into tracking ([ipfs.mdx §4](./ipfs.mdx#4-import--the-load-bearing-feature)) — metadata-only, no bytes moved |
+| `install` | **Installing** | tool name | package-manager output | installing a missing CLI tool via Homebrew et al. ([tools.mdx §4.1](./tools.mdx#41-running-an-install-locked)) — explicit-click only |
+
+Two policy reminders the dock inherits (charter): **never** compress/convert/ignore a file **unless the
+user explicitly asked** — a `compress`/`ignore` card only ever exists because the user clicked it; and
+the `fingerprint`/`hash` work is **strictly local** (it must never appear to "phone home," and it
+doesn't — no network job kind exists).
+
+---
+
+## 12. Where progress comes from — two sources, one dock
+
+The dock's active set is the **union** of two streams:
+
+**A. Browser-initiated jobs (optimistic).** The pages route their long actions through **one** shared
+runner (`useProgress().run(...)`) instead of the old blocking `mutate`. On click it adds a card, fires
+the request, and removes the card when the request resolves — exactly the EmailDeliveryHero fan-out
+model. This is what makes **Sync all** / **Compress selected** show every item at once and drain
+unevenly.
+
+**B. Server-initiated jobs (polled).** Because the **scan** and **sync** workers run under `launchd` on
+their own schedule — and because a job may have been started in **another browser tab** — the dock must
+show work **this tab did not start**. A new backend **job registry** tracks every in-flight job
+(browser- or worker-initiated) with `{ id, kind, target, startedAt, progress? }`, exposed at:
+
+```
+GET /api/progress   →  { ok: true, data: { jobs: Job[] } }
+Job = { id, kind, target, startedAt, done?, total?, unit? }   // done/total present iff determinate
+```
+
+The frontend polls it (TanStack Query `refetchInterval`) at a **gentle cadence while idle** and a
+**faster one while the dock is non-empty**, and **merges** those jobs into the same dock by `id`. A
+server job's card leaves when it stops appearing in the poll. Optimistic (A) and polled (B) cards are
+**de-duplicated by job id**, so a job this tab started (and already shows optimistically) is not
+doubled when the same job comes back on the poll.
+
+> This keeps the "background process transparency" promise of the app whole: the **Sync page** already
+> shows whether each worker is **installed** and **on/off** ([scan.mdx §7](./scan.mdx), SyncPage); the
+> dock now shows, live, **when a worker is actually running right now**.
+
+---
+
+## 13. Concurrency model — jobs run in parallel, bounded
+
+* **Bounded fan-out.** Both the browser runner and the backend workers cap parallelism with a small
+  limiter (default **4** concurrent). Extra items **queue** and start as slots free; a card is added
+  only when the item **actually starts**, so the dock reflects **true in-flight** work (a queued item
+  simply has no card yet).
+* **A tiny shared `mapLimit`.** A dependency-free `mapLimit(items, limit, fn)` (a `p-limit`-style
+  runner, a few lines) lives in **both** packages — `frontend/src/lib/concurrency.ts` and
+  `backend/src/shared/concurrency.ts` — the single "task view" the browser fan-out and the server
+  runner share. No worker threads / `piscina`: scan, IPFS, hashing and even `ffmpeg` supervision are
+  **I/O- or process-bound**, so bounded async concurrency on the event loop is the right, lightweight
+  tool.
+* **Endpoints become non-blocking + reportable.** The blocking handlers (`/rescan`, `/:repoId/sync`)
+  are re-shaped to **register a job**, return promptly with the job id, and **report progress** into
+  the registry as they run — so `GET /api/progress` can surface them and the card can show a bar.
+* **Safe persistence under parallelism.** Parallel jobs that write the same on-disk state (a repo's
+  `status.yaml` / `manifest.yaml`, [storage.mdx](./storage.mdx)) **serialize their write step** through
+  an in-service async lock (a promise chain) so no concurrent job clobbers another's result — invisible
+  to callers; only the disk write is serialized.
+
+---
+
+## 14. Implementation map (files)
+
+**Frontend (`code/packages/frontend/src`)**
+
+* `lib/concurrency.ts` — **new.** `mapLimit<T,R>(items, limit, fn): Promise<R[]>`.
+* `progress/ProgressContext.tsx` — **new.** `ProgressProvider` + `useProgress()` — holds the active-job
+  set, exposes `run(jobs)` (the optimistic fan-out via `mapLimit`), polls `GET /api/progress` and merges
+  server jobs (de-dup by id), invalidates queries and fires batch/failure toasts.
+* `components/ProgressDock.tsx` — **new.** The fixed bottom-left stacked-card UI (spinner, label,
+  optional determinate bar).
+* `main.tsx` — wrap the signed-in app in `<ProgressProvider>` (inside `QueryClientProvider`); render
+  `<ProgressDock />` once at the root so it overlays every screen; reconfigure `<Toaster>` to
+  **bottom-left, enlarged, `!left-[272px]`** (replacing `position="bottom-right"` on `main.tsx:60`).
+* `pages/repos/ReposPage.tsx`, `pages/repos/OneRepoPage.tsx`, `pages/sync/SyncPage.tsx`, and any
+  compress/ignore actions — their long actions call `useProgress().run(...)` instead of a blocking
+  `mutate`.
+
+**Backend (`code/packages/backend/src`)**
+
+* `shared/concurrency.ts` — **new.** Same `mapLimit`.
+* `modules/progress/progress.registry.ts` — **new.** In-process job registry:
+  `begin(kind, target) → id`, `report(id, {done,total,unit})`, `end(id)`, `list()`.
+* `modules/progress/progress.router.ts` — **new.** `GET /api/progress` → `{ jobs }` (allow-listed).
+* `modules/scanner/scanner.service.ts`, `modules/sync/sync.service.ts` — register a job at start,
+  `report()` progress as they walk/add bytes, `end()` on finish; run their per-item work through
+  `mapLimit`; serialize the state write.
+* `modules/repos/repos.router.ts` — `/rescan` and `/:repoId/sync` register jobs (so both manual and
+  worker runs are visible) rather than only blocking.
+
+---
+
+## 15. Acceptance criteria (Part II)
+
+1. Toasts render **bottom-left**, ~**2× larger**, and the container's left edge is **≥ 272px** so a
+   toast never overlaps the 256px left bar — on **every** route. (Replaces `position="bottom-right"` in
+   `main.tsx:60`.)
+2. Existing mutations still fire their same toasts ("… updated", errors) — only position/size change.
+3. Starting **N** long jobs (e.g. **Sync all** across N repos, or compress N files) adds **N cards** (up
+   to the concurrency cap at a time), each **"Running <op> <target>"** with a **spinning `RefreshCw`**;
+   cards **stack**, sit clear of the left bar, are short and somewhat wide.
+4. Jobs run **concurrently (bounded)** — a fast job's card disappears while a slow job's card remains;
+   the dock **drains card-by-card** and **unmounts** when the last finishes.
+5. Jobs that report a fraction show a **determinate bar + detail** (`412 / 734 MB`, `47%`,
+   `1,240 files`); jobs that can't show the **spinner only**.
+6. A job started **server-side** (a `launchd` scan/sync run) or in **another tab** appears in the dock
+   via `GET /api/progress`; optimistic and polled cards are **de-duplicated by id** (no doubles).
+7. The blocking handlers (`/rescan`, `/:repoId/sync`) **register jobs and report progress**; concurrent
+   jobs **never lose a result** to a competing state write (serialized persist).
+8. The concurrency limiter is a **small dependency-free `mapLimit`** shared in both packages; **no**
+   worker-thread / `piscina` dependency is added.
+9. `compress` and `ignore` cards exist **only** because the **user explicitly invoked** them; no
+   `fingerprint`/`hash` job performs any **network** call (charter: local-only, never phones home).
+10. On a batch settling, a single **"…complete"** toast fires; each failed job raises its own error
+    toast; successful jobs **invalidate queries** so grids/counts refresh with no full reload.
+
+<!--
+  Part II maintenance: this owns the app-shell progress surfaces (toast placement/size + the progress
+  dock). Learned from EmailDeliveryHero/pm/progress_ui.mdx — keep the pattern in step with it, but note
+  LFBridge's two deltas: (a) a MULTI-kind operation taxonomy (§11), not one "scan" verb; (b) the dock
+  must reflect SERVER-side background-worker jobs via GET /api/progress (§12), because scan/sync run
+  under launchd on their own schedule. If the left-bar width changes in config/left_bar.ts, update the
+  272px offset here and in main.tsx/ProgressDock. Cards are driven by REAL in-flight jobs (registry +
+  optimistic runner) — never fake progress; a card exists iff a job is actually running. Serialize the
+  on-disk write step as long as jobs fan out in parallel against the per-unit YAML state (storage.mdx).
+-->
+

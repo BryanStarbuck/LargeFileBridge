@@ -1,0 +1,149 @@
+---
+title: LargeFileBridge — View one directory
+description: The single-entity page for ONE directory (route /dir?path=<abs>). Reached from any directory row's "View directory" action, from clicking a directory's name/path cell, or by selecting a directory in the File System browser. It shows what LargeFileBridge knows about that one directory — identity (name, absolute path, kind, repo membership), its code badges (repo / ipfs), a rollup of what's inside (counts of videos-that-can-compress, images-that-can-compress, big-not-ignored files, and big-git-ignored-not-tracked files — the charter's category rollup table), and its two sticky flags (Never IPFS, Do not compress) which apply to everything underneath it. Because the page IS one directory, it carries the top-right "⋯" MORE menu rendering the exact same Directory action catalog as that directory's row kebab (menus.mdx §5.2) — plus the two sticky flags as labeled switches and a primary "Open in File System" button. This spec defines the layout, the data payload (EntityView + DirRollup), the category rollup table, the flag switches, and the acceptance criteria. Implemented by the /api/entity backend module and the ViewOneDirectoryPage frontend. NOTE: this is the per-directory ENTITY page — distinct from directory.mdx, which is the multi-level File System column BROWSER.
+---
+
+# LargeFileBridge — View one directory
+
+The **View one directory** page is the single-entity page for **one** directory. Do not confuse it with
+[directory.mdx](./directory.mdx) — that is the **File System column browser** (walk the whole tree,
+many directories at once). *This* page is one directory as an **entity**: everything LFB knows about it
+and every action you can take on it, reached at `/dir?path=<abs>` from a **View directory** action, a
+directory-name cell click, or a browser selection. The page *is* that directory, so it carries the
+entity **`⋯` "more" menu** ([menus.mdx §4](./menus.mdx)).
+
+Siblings this builds on and does not repeat:
+
+* [Menus](./menus.mdx) — the LOCKED **Directory action catalog** (§5.2), the `⋯` more-menu (§4),
+  right-click (§3.1), and the two sticky flags **Never IPFS** / **Do not compress** (§6.6).
+* [File System](./directory.mdx) — the **code badges** (§3) and the column browser this links into.
+* [Charter — Category rollup table](../CLAUDE.md) — the count+category rollup shown in §3 (videos to
+  compress / images to compress / big-not-ignored / big-ignored-not-tracked), each with a per-row action.
+* [Files](./files.mdx) — the sibling **View one file** page (same shape, file catalog).
+
+---
+
+## 1. Layout
+
+One content column: a **header** (identity + primary button + `⋯`), a **badge/flag strip**, the
+**category rollup table**, and an **inside** summary.
+
+```
+┌────────────┬───────────────────────────────────────────────────────────────────────────┐
+│  LEFT BAR  │  ‹ back      render                                ┌──────────────────┐ ┌──┐│
+│            │  ~/BGit/…/Our_Movies/render                        │ Open in File Sys │ │⋯ ││ ← primary + more
+│            ├───────────────────────────────────────────────────────────────────────────┤
+│            │   i  r         Never IPFS ◯off      Do not compress ◯off                    │ ← badges + flag switches
+│            ├───────────────────────────────────────────────────────────────────────────┤
+│            │  What's inside                                   Count    Action            │
+│            │  Videos that can be compressed                     27     [ Compress… ]     │
+│            │  Images that can be compressed                     14     [ Compress… ]     │
+│            │  Big files not git-ignored                          3     [ Git-ignore… ]   │
+│            │  Big files git-ignored, not tracked                 9     [ Track / Sync ]  │
+│            ├───────────────────────────────────────────────────────────────────────────┤
+│            │  Directory · inside repo Our_Movies · 53 entries · scanned 2h ago           │
+└────────────┴───────────────────────────────────────────────────────────────────────────┘
+```
+
+* **Header** — back affordance, directory **name** title, absolute **path** muted beneath.
+* **Primary button** — **Open in File System** (drill into it in the [browser](./directory.mdx)); the
+  rest of the [Directory catalog](./menus.mdx) is under `⋯`.
+* **`⋯` more menu** — the **Directory catalog** ([menus.mdx §5.2](./menus.mdx)) verbatim; **View
+  directory** is omitted (you are on it).
+
+---
+
+## 2. The category rollup table (charter) — TanStack, house style
+
+The heart of this page is the charter's **count + category** rollup for everything under this directory
+(a [TanStack `DataTable`](../CLAUDE.md) like all others — search/filter/sort control row, 500 default).
+One row per category, each with a per-row action:
+
+| # | Category | Count | Row action |
+| --- | --- | --- | --- |
+| 1 | **Videos that can be compressed** | n | **Compress…** (offer only, [menus.mdx §6.1](./menus.mdx)) |
+| 2 | **Images that can be compressed** | n | **Compress…** (offer only) |
+| 3 | **Big files not git-ignored** | n | **Git-ignore…** (confirm list, never silent) |
+| 4 | **Big files git-ignored, not tracked** | n | **Track / Sync** (add to a sync unit; triage inside) |
+
+Clicking a **count** deep-links into the [File System](./directory.mdx) browser at this directory,
+pre-filtered to that category ([menus.mdx §2](./menus.mdx)). When **Do not compress** is on, rows 1–2
+still count but their **Compress…** action is hidden (the offer is suppressed); when **Never IPFS** is
+on, row 4's **Track / Sync** is hidden (nothing under here may be synced).
+
+---
+
+## 3. The data payload (`EntityView` + `DirRollup`)
+
+Same `EntityView` as [files.mdx §2](./files.mdx) (with `kind: "dir"`), plus a directory rollup:
+
+```ts
+interface DirRollup {
+  videosToCompress: number;      // category 1
+  imagesToCompress: number;      // category 2
+  bigNotIgnored: number;         // category 3
+  bigIgnoredNotTracked: number;  // category 4
+  entryCount: number;            // immediate children (files + dirs)
+  scannedAt: string | null;
+}
+```
+
+For a directory, `EntityView.sizeBytes` may be a rolled-up total or `null`; `decision`/`transfer`/`cid`
+are `null` (decisions are per-file), and `repo` is populated when the directory sits inside a
+registered repo. `flags` carries the same two sticky flags, applied to **everything under** the
+directory ([menus.mdx §6.6](./menus.mdx)).
+
+---
+
+## 4. The two sticky-flag switches
+
+The badge/flag strip shows both flags as **labeled switches** (as on [files.mdx §4](./files.mdx)), but
+here they are **directory-scoped** — they cover current and future contents:
+
+* **Never IPFS** — on ⇒ no file under this directory is ever synced; turning it on clears any `sync`
+  decisions on files below; the rollup's **Track / Sync** action hides; new files that appear later are
+  covered automatically (the flag is a path-scoped policy).
+* **Do not compress** — on ⇒ the **Compress…** offers (rows 1–2 and any per-file offer under here) are
+  suppressed and the `C` badge is not painted for media below.
+
+Neither flag deletes or alters any bytes ([menus.mdx §6.2/§6.6](./menus.mdx)).
+
+---
+
+## 5. Empty & error states
+
+* **Directory not found / moved** (`exists: false`): a card — "This directory is no longer at that
+  path." with **Copy path** and a link to the [File System](./directory.mdx) at its parent.
+* **Nothing to act on:** all four rollup counts 0 → the table shows a friendly "Nothing here needs
+  attention — no uncompressed media, no big un-ignored files."
+* **Loading:** skeleton header + table.
+* **IPFS node unreachable:** the **Track / Sync** action disables with a tooltip; flag writes still save.
+
+---
+
+## 6. Acceptance criteria
+
+1. `/dir?path=<abs>` renders **one directory's** identity (name title, absolute path muted), its **code
+   badges** ([directory.mdx §3](./directory.mdx)), and the **category rollup table** (§2) with the four
+   charter categories, each showing a count and a per-row action.
+2. The page carries a **top-right `⋯` "more" menu** rendering the **Directory catalog**
+   ([menus.mdx §5.2](./menus.mdx)) verbatim (same as the row kebab), with **Open in File System** as the
+   visible primary; right-clicking the directory entity opens the same menu ([menus.mdx §3.1](./menus.mdx)).
+3. The rollup is a **TanStack `DataTable`** in the house style; clicking a **count** deep-links into the
+   [File System](./directory.mdx) browser at this directory filtered to that category ([menus.mdx §2](./menus.mdx)).
+4. Both **sticky flags** (**Never IPFS**, **Do not compress**) show as labeled switches (§4), are
+   **directory-scoped**, write immediately, stay in sync with the menu toggles, and honor
+   [menus.mdx §6.6](./menus.mdx) — Never IPFS hides row-4 **Track / Sync** and forbids sync below; Do not
+   compress hides the **Compress…** offers; neither deletes or alters bytes.
+5. Not-found / nothing-to-do / node-unreachable / loading states render per §5.
+6. This page is the per-directory **entity** page and stays distinct from the [File System column
+   browser](./directory.mdx); the two never merge.
+
+<!--
+  View-one-DIRECTORY single-entity page (route /dir?path=). Renders the Directory action catalog from
+  menus.mdx §5.2 — never restates it. Distinct from directory.mdx (the File System column BROWSER):
+  keep the two apart. The category rollup table (§2) is the charter's count+category rollup and is a
+  TanStack table like all others. Data contract = EntityView (files.mdx §2) + DirRollup in @lfb/shared,
+  served by GET /api/entity?path=. Two sticky flags Never IPFS / Do not compress are DIRECTORY-SCOPED
+  (menus.mdx §6.6). Sibling: files.mdx (View one file).
+-->

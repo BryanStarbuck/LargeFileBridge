@@ -27,6 +27,10 @@ export default defineConfig(async () => {
   return {
     plugins: [react(), tailwindcss()],
     server: {
+      // Bind the SAME address family the resolver manages (web-port.mjs uses 127.0.0.1). Without this
+      // Vite binds "localhost" → ::1 (IPv6) on macOS, which our IPv4 port checks can't see or reclaim,
+      // so a stale LFB instance on [::1]:2222 slips past resolveWebPort() and Vite dies on EADDRINUSE.
+      host: "127.0.0.1",
       port,
       strictPort: true, // the port is already resolved above — never let Vite silently pick another
       fs: { allow: [repoRoot] },

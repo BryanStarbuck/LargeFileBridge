@@ -6,10 +6,12 @@ import { toast } from "sonner";
 import type { GlobalSettings, SizeUnit } from "@lfb/shared";
 import { SIZE_UNITS, toBytes } from "@lfb/shared";
 import { api } from "../../api/client.js";
+import { CredentialsSetupCard } from "../../components/CredentialsSetupCard.js";
 
 export function SettingsPage() {
   const qc = useQueryClient();
   const { data } = useQuery({ queryKey: ["settings"], queryFn: api.settings });
+  const { data: auth } = useQuery({ queryKey: ["authConfig"], queryFn: api.authConfig });
   const [value, setValue] = useState(100);
   const [unit, setUnit] = useState<SizeUnit>("MB");
   const [roots, setRoots] = useState("");
@@ -77,10 +79,37 @@ export function SettingsPage() {
         </dl>
       </div>
 
+      <div className="mb-5 rounded-lg border border-[var(--lfb-border)] p-4">
+        <h2 className="mb-1 font-semibold">Authentication</h2>
+        {auth?.oauthConfigured ? (
+          <dl className="text-sm text-black/70 space-y-1">
+            <div>
+              Google OAuth: <span className="text-green-700">configured</span>
+              {auth.credentialsFile.usingEnv
+                ? " (from environment)"
+                : ` (from ${auth.credentialsFile.filename})`}
+            </div>
+            <div>
+              Credentials file: <code>{auth.credentialsFile.path}</code>
+            </div>
+          </dl>
+        ) : auth ? (
+          <div className="mt-2">
+            <CredentialsSetupCard info={auth.credentialsFile} devAuth={auth.devAuth} />
+          </div>
+        ) : (
+          <p className="text-sm text-black/50">Loading…</p>
+        )}
+      </div>
+
       <div className="rounded-lg border border-[var(--lfb-border)] p-4">
         <h2 className="mb-1 font-semibold">Access</h2>
-        <p className="text-sm text-black/60">{data.allowedEmails.length} allow-listed email(s).{" "}
-          <Link to="/settings/allow-list" className="text-[var(--lfb-primary)]">Manage allow-list →</Link></p>
+        <p className="text-sm text-black/60">
+          {data.access.allowCompanies ? data.access.allowedDomains.length : 0} company domain(s),{" "}
+          {data.access.allowIndividuals ? data.access.allowedEmails.length : 0} individual account(s)
+          allowed.{" "}
+          <Link to="/settings/allow-list" className="text-[var(--lfb-primary)]">Manage access →</Link>
+        </p>
       </div>
     </div>
   );

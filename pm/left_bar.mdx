@@ -19,7 +19,14 @@ Division of labor:
 
 Siblings: [Repos](./repos.mdx) (the landing screen to the right of this bar) ·
 [One repo](./one_repo.mdx) (the per-repo file-sync screen a Repos row opens) ·
-[File System](./directory.mdx) (the Finder-style column browser the **File System** item opens).
+[File System](./directory.mdx) (the Finder-style column browser the **File System** item opens) ·
+[IPFS](./ipfs.mdx) (the local-pinset view the **IPFS** item opens) ·
+[scan.mdx](./scan.mdx) (the scheduleTasks the **Scans** item surfaces).
+
+> **Naming note (pm/menus.mdx, scan.mdx).** The scheduled background jobs are called **"scheduleTasks"**
+> internally; the **UI calls what they do "scans."** The former **Sync** nav item is therefore now
+> **Scans**. The per-file **Sync** *decision* and the portable **Sync List** keep their names — those
+> are different concepts and are unaffected by this rename.
 
 ---
 
@@ -70,8 +77,9 @@ A flat, ordered list under the wordmark; the account slot pinned to the bottom. 
 | 1 | **Repos** | `FolderGit2` | `/` | Every managed git repo on this computer, with its large-file sync counts and status ([Repos](./repos.mdx)). |
 | 2 | **File System** | `Columns3` | `/files` | A Finder-style **column browser** of the whole filesystem, rooted at the home directory, with per-entry **code badges** (R/r repo, S sync, C/c compress, i IPFS) ([File System](./directory.mdx)). |
 | 3 | **Peers** | `Network` | `/peers` | Your other computers that pin these files over IPFS — laptop, desktop, studio, server, family. |
-| 4 | **Sync** | `RefreshCw` | `/sync` | The background sync process: installed? on/off? the every-15-min `launchd` schedule and recent activity. |
-| 5 | **Settings** | `Settings` | `/settings` | Account, allow-list, and IPFS node configuration. |
+| 4 | **IPFS** | `Boxes` | `/ipfs` | What the local IPFS node is actually pinning — tracked vs. **pinned-but-untracked** content (import already-pinned files) and the node's only-our-content security posture ([IPFS](./ipfs.mdx)). |
+| 5 | **Scans** | `RefreshCw` | `/scans` | The scheduled background **scan tasks** ("scheduleTasks"): each `launchd` job's installed / on-off state, the every-15-min and every-4h schedules, and recent activity ([scan.mdx](./scan.mdx)). |
+| 6 | **Settings** | `Settings` | `/settings` | Account, allow-list, and IPFS node configuration. |
 
 States:
 
@@ -116,7 +124,8 @@ Pinned to the bottom of the bar, always visible:
    and the Sign-in accent.
 4. The bar renders its content **from `pm/left_bar.yaml`** — items, order, icons, routes, labels,
    and gates; no hard-coded copies in components.
-5. The app bar lists exactly: Repos, File System, Peers, Sync, Settings — in that order.
+5. The app bar lists exactly: Repos, File System, Peers, IPFS, Scans, Settings — in that order. (The
+   **Scans** item is the renamed former **Sync** item — the scheduleTasks surface; §naming note.)
 6. Active state matches by route (exact `/`, prefix otherwise); gated items are hidden without the
    claim; hover shows the light-grey fill without changing text color.
 7. The account slot sits at the bottom, is always signed-in (no anonymous state), and its popup

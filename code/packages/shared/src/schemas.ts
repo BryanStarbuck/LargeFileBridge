@@ -65,9 +65,15 @@ export const AppConfigSchema = z.object({
       last_run_ok: z.boolean().nullable().default(null),
     })
     .default({}),
+  // Security allow-list (security.mdx §2). Set once by the first-run Security Setup page, then read
+  // LIVE on every request by identify.ts. `configured` gates the setup page; both switches are OR'd.
   access: z
     .object({
-      allowed_emails: z.array(z.string()).default([]),
+      configured: z.boolean().default(false), // has first-run Security Setup completed? (security.mdx §1)
+      allow_companies: z.boolean().default(false), // section-1 checkbox — allow whole Workspace domains
+      allowed_domains: z.array(z.string()).default([]), // bare domains, lowercased (no leading @)
+      allow_individuals: z.boolean().default(false), // section-2 checkbox — allow exact accounts
+      allowed_emails: z.array(z.string()).default([]), // exact emails, lowercased
     })
     .default({}),
   scanner: z
@@ -84,6 +90,17 @@ export const AppConfigSchema = z.object({
       theme: z.enum(["system", "light", "dark"]).default("system"),
       density: z.enum(["comfortable", "compact"]).default("comfortable"),
     })
+    .default({}),
+  // Sticky per-entity flags keyed by ABSOLUTE path (menus.mdx §6.6, files.mdx, directories.mdx).
+  // App-scope so they work for any file/dir whether or not it lives inside a registered repo. A
+  // directory's flag applies to everything under it (checked by path-prefix at read time).
+  file_flags: z
+    .record(
+      z.object({
+        never_ipfs: z.boolean().default(false),
+        no_compress: z.boolean().default(false),
+      }),
+    )
     .default({}),
 });
 export type AppConfig = z.infer<typeof AppConfigSchema>;

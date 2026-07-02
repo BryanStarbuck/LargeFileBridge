@@ -99,10 +99,17 @@ Three regions stacked in the content column: the **header** (repo identity + Syn
 
 * **Breadcrumb** — `‹ Repos / <repo name>`; the repo name is the title, the absolute **path** shown
   muted beneath it.
-* **Sync now** button (top-right, `RefreshCw`) — kicks off a sync for **this repo**: push out every
+* **Sync now** button (top-right, `RefreshCw`) — the repo's one **primary** action: push out every
   `Sync` file this machine has that peers lack, fetch every `Sync` file peers have that this machine
   lacks. States: idle (`Sync now`) → running (`Syncing…`, spinner, disabled) → done (counts + table
   refresh). It never changes any decision.
+* **`⋯` "more" menu** (top-right, next to Sync now) — because this page **is one repo**, it carries the
+  **repo entity menu**: the same catalog as a Repos-table row's kebab
+  ([menus.mdx §4 / §5.1](./menus.mdx#4-the-entity--more-menu--single-entity-pages)) — Open in File
+  System · View pinned on IPFS · Rescan · Sync now · Git-ignore big files… · Toggle Synced · Repo
+  settings… · Copy path · **Remove repo (unregister)** (destructive, last, never deletes local bytes).
+  *Open repo* is omitted (you are already here). Sync now appears both as the primary button and in the
+  menu so the menu is a complete catalog.
 
 ### 3.2 Status / settings strip
 
@@ -155,8 +162,33 @@ Identical to the standard toolbar ([Repos §3.1](./repos.mdx)):
 | 5 | **Peers** | int | ✓ | ✓ | How many of your computers hold this file. `0` on a **Sync** file renders red (not backed up yet). |
 | 6 | **CID** | text | ✓ | ✓ | IPFS content id (monospace, middle-truncated, click to copy); blank until the file is a Sync file with a CID. |
 | 7 | **Changed** | timestamp | ✓ | ✓ | `changedAt`, relative with absolute tooltip. |
+| — | **`⋯`** | — | — | — | The row **kebab** — the **file** action catalog ([menus.mdx §5.3](./menus.mdx#53-file)). A control cell: opens the menu, never navigates. Right-click on the row opens the same menu ([menus.mdx §3.1](./menus.mdx#31-right-click-opens-the-same-menu-locked)). |
 
 Pagination: **default 500** ([Repos §3.3](./repos.mdx)); the **file count** shows left of the pager.
+
+### 4.7 Cell navigation (per file) — LOCKED
+
+Beyond the inline Decision select, each data cell is a deep link
+([menus.mdx §2](./menus.mdx#2-cell-navigation--clicking-a-cell-is-a-deep-link)):
+
+| Cell | Click target |
+| --- | --- |
+| **File** | The **View one file** page ([files.mdx](./files.mdx)) for this file. |
+| **Size** | View one file (details). |
+| **Decision** | Inline select — edits in place, does not navigate (§4.5). |
+| **Status** | View one file (its transfer detail). |
+| **Peers** | [Peers](./left_bar.mdx) filtered to this file (which computers hold it). |
+| **CID** | **Copies** the CID (click-to-copy); an inline affordance opens [IPFS](./ipfs.mdx) filtered to it. Does not navigate away. |
+| **Changed** | View one file. |
+| **`⋯`** | Opens the **file action menu** — never navigates (§4.3). |
+
+The **File** row's kebab (and right-click) is the **file** catalog ([menus.mdx §5.3](./menus.mdx#53-file)):
+View file · Open containing folder · Add to IPFS / Remove from IPFS · Set decision ▸ · Sync now ·
+Compress… · Convert to compressible… · Git-ignore this file · Find duplicates (fingerprint) · the two
+sticky flags **Never IPFS** / **Do not compress** ([menus.mdx §6.6](./menus.mdx#66-the-two-sticky-flags--never-ipfs--do-not-compress-locked)) ·
+View on IPFS · Copy CID / path · **Stop syncing (untrack/unpin)** (destructive, never deletes local
+bytes). Compress/convert/ignore are **explicit-click offers with a confirm step**
+([menus.mdx §6.1](./menus.mdx#61-never-act-on-files-without-an-explicit-click)).
 
 ### 4.4 Bulk actions
 
@@ -217,7 +249,7 @@ it.
    Undecided is accent-highlighted when > 0.
 4. The **files table** is one TanStack table, one row per large git-ignored file, flat/chromeless,
    with the standard control row (search left; icon-only filter `⛛` and sort dropdowns right) and
-   columns: select, File, Size, Decision, Status, Peers, CID, Changed.
+   columns: select, File, Size, Decision, Status, Peers, CID, Changed, and a trailing **`⋯`** kebab.
 5. **Pagination defaults to 500**; the **file count** shows left of the pager.
 6. The **Decision** cell is a per-row inline select (Sync / Ignore / Undecided) that writes
    immediately per §4.5; changing a decision never deletes the user's local file.
@@ -227,6 +259,12 @@ it.
 8. The **Status** column follows the LOCKED transfer-status pill mapping (§4.6); a Sync file with
    Peers = 0 renders the peer count red.
 9. Empty / all-decided / loading / node-unreachable states render per §5.
+10. The header carries a top-right **`⋯` "more" menu** = the **repo** entity catalog
+    ([menus.mdx §5.1](./menus.mdx#51-repo)), with *Open repo* omitted and *Sync now* also present as the
+    primary button (§3.1). Each files-table **data cell is a deep link** per §4.7 (File/Size/Status/
+    Changed → View one file; Peers → Peers filtered to the file; CID copies); the row **`⋯` kebab** (and
+    right-click) opens the **file** catalog ([menus.mdx §5.3](./menus.mdx#53-file)) and never navigates,
+    with compress/convert/ignore gated behind an explicit-click confirm.
 
 <!--
   Keep this page aligned with repos.mdx (the list it drills into) and left_bar.yaml (the nav).

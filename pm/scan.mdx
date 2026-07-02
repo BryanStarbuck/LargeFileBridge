@@ -14,15 +14,30 @@ hands that move the bytes.
 
 Two scheduled jobs, two cadences, on purpose:
 
-| Job | Cadence | What it does | Where spec'd |
+| Job (scheduleTask) | Cadence | What it does | Where spec'd |
 | --- | --- | --- | --- |
-| **Scan** (this file) | **every 4 hours** | Deep, whole-filesystem **discovery** — stat every candidate file, find big files + filesystem/repo changes. Metadata only; no IPFS. | this file |
-| **Sync** | every **15 minutes** | Targeted work on **already-known** `synced: true` units — add/update manifests, pin, fetch missing CIDs over IPFS. | [storage.mdx §13](./storage.mdx#13-the-background-sync-process--the-transparency-contract) |
+| **Discovery scheduleTask** (this file) | **every 4 hours** | Deep, whole-filesystem **discovery** — stat every candidate file, find big files + filesystem/repo changes. Metadata only; no IPFS. | this file |
+| **Sync scheduleTask** | every **15 minutes** | Targeted work on **already-known** `synced: true` units — add/update manifests, pin, fetch missing CIDs over IPFS **— and read the local IPFS pinset (`ipfs pin ls`) to reconcile + import already-pinned files** (§2.1). | [storage.mdx §13](./storage.mdx#13-the-background-sync-process--the-transparency-contract) |
 
-The scan is expensive (it walks the tree and stats many files), so it is throttled to **every four
-hours**. The sync is cheap per unit and time-sensitive, so it runs **every fifteen minutes** over the
-small set the scan has already found. The 15-min sync may do a *light* rescan of a unit it is about to
-sync; the **deep, full-filesystem discovery walk is this 4-hour scan's job alone.**
+The discovery pass is expensive (it walks the tree and stats many files), so it is throttled to **every
+four hours**. The 15-minute pass is cheap per unit and time-sensitive, so it runs over the small set the
+discovery pass has already found. The 15-min pass may do a *light* rescan of a unit it is about to sync;
+the **deep, full-filesystem discovery walk is the 4-hour job's alone.**
+
+### Naming — "scheduleTask" internally, "scan" in the UI (LOCKED)
+
+The scheduled background jobs are called **scheduleTasks** in code, config, and scheduler labels — **not
+"sync"** as the generic term. In the **UI** the user sees what they do as **"scans"** (the left-bar
+[**Scans**](./left_bar.mdx) page, formerly *Sync*, is their transparency+control surface). Two names,
+one concept: a *scheduleTask* is the mechanism; a *scan* is what the user watches it do.
+
+* This rename covers the **scheduled process only**. The per-file **Sync** *decision*
+  ([one_repo.mdx §1](./one_repo.mdx#1-the-decision-model-locked)) and the portable **Sync List**
+  ([sync_list.mdx](./sync_list.mdx)) are **different concepts and keep their names.**
+* The config blocks stay where they are — `scan_process` (this discovery task, §5) and `sync_process`
+  ([storage.mdx §13](./storage.mdx#13-the-background-sync-process--the-transparency-contract), the
+  15-min task) — but both are understood as **scheduleTasks**, both surfaced as **scans** in the UI, and
+  both gated by the **tools preflight** (§4.4).
 
 > This file is the scanning-service spec. It refines the scanner described in
 > [storage.mdx §7](./storage.mdx#7-the-scanner--discovering-repos-and-the-mask) into a scheduled,
@@ -50,21 +65,47 @@ CIDs, and does **not** touch IPFS at all. Hashing and CID computation are the sy
 files the scan has already flagged as big and that live in a `synced: true` unit. Keeping the scan to
 pure `stat` is what makes it cheap enough to run over the whole filesystem every four hours.
 
-What the scan produces is a **candidate list** per sync unit: the set of files at or above the big
-threshold, plus a diff against the previous scan (added / grown / shrunk / moved / deleted), written
-to that unit's `status.yaml` (§6). It changes **no** file contents and moves **no** bytes.
+What the scan produces is a **candidate list** per sync unit: the files that are large-file-bridge
+payload per the **payload rule** (§4.1) — git-ignored media at *any* size, plus anything at/above the
+big threshold — with a diff against the previous scan (added / grown / shrunk / moved / deleted),
+written to that unit's `status.yaml` (§6). It changes **no** file contents and moves **no** bytes.
 
 ---
 
-## 2. Cadence — every four hours
+## 2. Cadence — the two scheduleTasks (4-hour discovery + 15-minute pinset)
 
-* The scan runs **once every four hours** (`interval_hours: 4`, i.e. 14400 seconds).
+* The **discovery scheduleTask** (this file) runs **once every four hours** (`interval_hours: 4`, i.e.
+  14400 seconds).
 * It also runs **on demand** from the web app — a **"Rescan"** action on the Repos page and on any
-  repo's page triggers the same scan worker immediately, out of band from the schedule.
-* Like the sync process, the scan has the same **installed vs. on/off** transparency contract
+  repo's page triggers the same worker immediately, out of band from the schedule.
+* Like the 15-minute scheduleTask, it has the same **installed vs. on/off** transparency contract
   (§7): the plist/timer/task can be installed but disabled, and the user toggles it from the web app.
 * Cadence is a setting, not a constant: `config.yaml → scan_process.interval_hours` (§5). Four hours
   is the default; the UI may expose it later. Changing it re-writes the schedule (§4).
+
+### 2.1 The 15-minute scheduleTask reads the IPFS pinset (import already-pinned)
+
+The **15-minute scheduleTask** ([storage.mdx §13](./storage.mdx#13-the-background-sync-process--the-transparency-contract))
+does the byte work — but it now also **reads the local IPFS pinset (`ipfs pin ls`)** every run and
+**reconciles it against the manifests**, so *"what files are being IPFS-pinned locally"* is always
+current without waiting on the 4-hour walk. Charter: *"Part of that scan is to look at what files are
+being IPFS-pinned locally … make that happen at the 15-minute [interval]."*
+
+* **Reconcile pins ↔ manifests.** Every pinned CID **in** a manifest → confirm this computer's
+  `pinned_by` claim (or, if the manifest claimed it but the pin is gone, drop the claim + queue a
+  re-pin — [sync_list §5.1](./sync_list.mdx#51-local-claims-are-verified-not-believed)). Every pinned
+  CID **not** in any manifest → an **Untracked (pinned)** import candidate.
+* **Import already-pinned.** *"If we get to a computer and the files are already IPFS-pinned, import
+  them."* Untracked pins are surfaced on the [IPFS page](./ipfs.mdx#4-import--the-load-bearing-feature)
+  and adopted into tracking; import is **metadata-only** (record the manifest entry, mark the file
+  **Sync**) — the bytes are already pinned, so nothing is fetched, re-added, or re-pinned. An imported
+  file is present-and-pinned, i.e. it **counts as Synced** ([repos.mdx §3.2](./repos.mdx#32-columns)).
+* **Still metadata-only.** Reading the pinset is a `pin ls` + `stat`; it opens no file and moves no
+  bytes, exactly like the discovery pass (§1). It is the one place the *scan* touches IPFS at all — and
+  only to *list* pins, never to serve or announce anything beyond the
+  [only-our-content](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule) defaults.
+* **Needs the `ipfs` CLI.** The pinset read requires Kubo; if it is missing the preflight (§4.4)
+  records a `needs_tool` gap and the app routes the user to [install it](./tools.mdx).
 
 ---
 
@@ -133,15 +174,48 @@ honoring `scanner.ignore_globs` and `follow_symlinks`. In one pass it does three
 2. **Build the mask.** The set of registered repo working-tree paths becomes the **mask** for the
    computer unit, so every file is attributed to exactly **one** unit — a repo unit or the computer
    unit, never both.
-3. **Flag big files.** Walk each unit's scope, `stat` every file, and record every file **at or above
-   the effective big threshold** (§4.1) as a candidate. Diff against the previous scan to classify
-   each change.
+3. **Flag candidates.** Walk each unit's scope, `stat` every file, and record every file that is a
+   large-file-bridge payload (§4.1). Diff against the previous scan to classify each change.
 
 The scan **never descends** into `scanner.ignore_globs` (e.g. `**/node_modules/**`, `**/.git/**`,
-`**/.Trash/**`) or a unit's own `exclude_globs` — this is both correctness (don't bridge build junk)
-and the main performance lever.
+`**/.Trash/**`), a unit's own `exclude_globs`, or the **hard-skip directory set** (§4.3) — this is
+both correctness (don't bridge build junk) and the main performance lever.
 
-### 4.1 The effective big threshold
+> **The hard-skip set is one source of truth.** The directories the scan refuses to descend into are
+> defined once in `code/.../shared/scan-filters.ts` (`HARD_SKIP`) and imported by **both** the scan
+> worker and the File System browser's badge pass, so the two can never drift (the invariant
+> previously written as a comment in `badges.ts`). See §4.3.
+
+### 4.1 What counts as a candidate — the payload rule (LOCKED)
+
+A file is a **candidate** (a large-file-bridge payload the scan records) when **any** of these hold:
+
+1. **Git-ignored media — regardless of size.** The file matches the repo's `.gitignore` **and** is a
+   **video / audio / image** (`isMediaFile`, defined in `shared/scan-filters.ts`). A git-ignored
+   `.mp4`/`.mp3`/`.png` is the *whole reason LFBridge exists* — the user deliberately kept it out of
+   git to bridge it over IPFS (README charter). **The big-file size threshold does NOT gate these.**
+2. **Any file at or above the effective big threshold** (§4.2) — the classic "big file" case. For a
+   repo with a followed `.gitignore`, this still requires the file to be git-ignored (a big file that
+   is *checked in* is not our payload); the **computer unit** (no gitignore) uses the pure size gate.
+3. **A forced include-glob match** (`large_files.include_globs`) — an explicit user opt-in.
+
+> #### Why this rule exists — the bug it fixes (root-cause note, do not remove)
+>
+> The scan originally required a repo file to be **big AND git-ignored** (`size ≥ threshold &&
+> gitIgnored`). Real repos broke this: in `charlie-kirk` the git-ignored `videos/` + `IPFS/videos/`
+> folders hold **46** media files (24 `.mp4` + 22 `.mp3`) but only **3** exceed 100 MB — so the scan
+> reported **3 of 46** and the repo looked almost empty. `Intel_Murder_Docus` reported **2 of 27**
+> for the same reason (`static/videos/*` is 16 `.mp4` + 11 `.mp3`, mostly 5–100 MB). The 100 MB
+> default (GitHub's hard limit) is the right nudge for *checked-in* files, but it must **never hide
+> git-ignored media the user has already chosen to bridge**. After the fix the counts are the full
+> **46** and **27** — verified by rescanning both repos and diffing `status.yaml` against a
+> filesystem census. The `stat`-only, no-content contract (§1) is unchanged; only the *predicate* for
+> "is this a candidate" changed.
+>
+> **Non-media git-ignored files are deliberately NOT bypassed** — a git-ignored `.env`, `.log`, or
+> `.DS_Store` must still clear the size threshold, so junk and secrets aren't swept into the bridge.
+
+### 4.2 The effective big threshold
 
 Whether a file is "big" is decided **per unit** by the threshold resolution in
 [settings.mdx](./settings.mdx):
@@ -153,7 +227,43 @@ effective_threshold(file) =
 ```
 
 The scan reads the resolved threshold for each unit and flags files whose **size ≥ threshold**.
-The scan does **not** define the threshold or its default — it only applies it. (§9 Reconciliation.)
+The scan does **not** define the threshold or its default — it only applies it (§9 Reconciliation).
+The threshold gates cases 2 and 3 of §4.1 only; git-ignored **media** (case 1) ignores it.
+
+### 4.3 The hard-skip directory set (never descend)
+
+Some directories are never walked at all — regenerated build output and dependency/VCS/OS junk. They
+are listed once in `shared/scan-filters.ts` as `HARD_SKIP` and shared with the FS browser:
+
+```
+.git  node_modules  .Trash  .cache  Caches            ← vcs / deps / os junk
+build  dist  out  .docusaurus  .next  .nuxt  .svelte-kit  .turbo  coverage   ← build outputs
+```
+
+**Why build outputs are skipped (second root-cause note):** a Docusaurus/Next build **copies** the
+source media into its output dir, so before this list the scan reported `Intel_Murder_Docus`'s hero
+video **twice** — once as `static/videos/x.mp4` and once as the generated `build/videos/x.mp4`.
+Build output is ephemeral and regenerated; it is **never** a sync candidate. Skipping these dirs
+removes the phantom duplicates (Intel dropped from 27+build-dupes to a clean **27**) and is also the
+main performance lever on large trees.
+
+### 4.4 Preflight — required tools before a scan (brew-install)
+
+Charter: the scan *"can and will use brew-install tools … Before it does a scan, see if any are missing
+and show that page to ask the user to install them."* So **before** a scan/scheduleTask runs, LFB runs
+the **tools preflight** ([tools.mdx §3](./tools.mdx#3-the-preflight--check-before-you-scan-locked)):
+
+* It probes the tools the run needs on `PATH` — **`ipfs` (Kubo)** is **required** (the pinset read §2.1
+  and all IPFS work depend on it); **`ffmpeg`/`ffprobe`** and image tooling are **optional** (they
+  sharpen the compress `C`/`c` judgment but never block discovery).
+* **Interactive run** (a user clicked Rescan): a missing **required** tool routes to the
+  [install-tools page](./tools.mdx) — detect Homebrew, list each tool with status + install command, and
+  a one-click **Install** (`brew install ipfs ffmpeg`) — with the pending scan **remembered** to resume
+  after install. Nothing installs without an explicit click (charter consent).
+* **Scheduled run** (the `launchd` scheduleTask, unattended): a missing **required** tool is recorded as
+  a **`needs_tool`** status the web app surfaces (banner + notification), and that run is **skipped** —
+  the scheduleTask never installs and never error-loops. The user installs the tool next time they open
+  the app; the schedule then resumes.
 
 ---
 
@@ -245,11 +355,18 @@ The scan is correct when **all** hold:
    hashes file contents**, and **never touches IPFS**.
 3. The scan is **cross-platform**, scheduled by a **launchd plist on Mac** (primary), and by cron /
    systemd timer on Linux and Task Scheduler on Windows — one shared Node/TS worker, per-OS installer.
-4. In one pass the scan **discovers/reconciles repos**, builds the **repo mask**, and flags every file
-   **at or above the effective big threshold**, attributing each file to exactly one sync unit.
+4. In one pass the scan **discovers/reconciles repos**, builds the **repo mask**, and records every
+   **candidate** per the payload rule (§4.1), attributing each file to exactly one sync unit.
+4a. **Git-ignored media (video/audio/image) is a candidate regardless of size** — the size threshold
+    must **never** hide the 5–100 MB git-ignored videos/images a user has chosen to bridge. Regression
+    guard: rescanning `charlie-kirk` yields **46** candidates (not 3) and `Intel_Murder_Docus` yields
+    **27** (not 2). Non-media git-ignored files (`.env`, `.log`, `.DS_Store`) are **not** bypassed.
+4b. **Build-output directories are never walked** (`build`, `dist`, `.docusaurus`, `.next`, … — the
+    shared `HARD_SKIP`, §4.3), so a build's *copy* of the source media is not counted as a second
+    candidate. `Intel_Murder_Docus` shows **no** `build/…` paths in its candidate list.
 5. The effective threshold is resolved **per unit** — the repo's override when its checkbox is on,
    else the **global default (100 MB)** — read from [settings.mdx](./settings.mdx); the scan applies
-   it but does not define it.
+   it but does not define it. It gates only the non-media cases of §4.1 (case 2 and case 3).
 6. The scan writes **only** operational metadata to each unit's `status.yaml` (last scan time,
    big-file counts, and an added/grew/shrank/moved/deleted change set); it writes **no** manifest and
    moves **no** bytes.
@@ -257,6 +374,18 @@ The scan is correct when **all** hold:
 8. `config.yaml → scan_process` records **installed** and **enabled** as two independent facts, both
    displayed in the web app, with install/uninstall + on/off toggle + Rescan available from the UI.
 9. Ignored paths (`scanner.ignore_globs`, per-unit `exclude_globs`) are never descended into.
+10. The scheduled jobs are **scheduleTasks** in code/config/labels and **"scans"** in the UI; the rename
+    covers the **scheduled process only** — the per-file **Sync** decision and the **Sync List** keep
+    their names (Naming, §2).
+11. The **15-minute scheduleTask reads the IPFS pinset** (`ipfs pin ls`) each run and **reconciles it
+    against the manifests** — confirming/dropping `pinned_by` claims and surfacing **pinned-but-untracked**
+    files as **import** candidates ([IPFS §4](./ipfs.mdx#4-import--the-load-bearing-feature)); import is
+    **metadata-only** and an imported file **counts as Synced** (§2.1). The read is metadata-only and
+    honors the only-our-content defaults.
+12. A scan runs the **tools preflight** first (§4.4): a missing **required** tool (`ipfs`) routes an
+    interactive run to the [install-tools page](./tools.mdx) (remembering the pending scan) and makes an
+    unattended scheduleTask record a **`needs_tool`** gap and **skip** that run — never installing on its
+    own, never error-looping.
 
 ---
 
