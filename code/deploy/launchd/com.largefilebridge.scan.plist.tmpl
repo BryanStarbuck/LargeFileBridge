@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The 4-hour discovery scan (scan.mdx §3.1). Installed by the web app / justfile. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.largefilebridge.scan</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE_BIN__</string>
+    <string>__TRIGGER_SCRIPT__</string>
+    <string>scan</string>
+    <string>__API_PORT__</string>
+  </array>
+  <key>StartInterval</key><integer>14400</integer>
+  <key>RunAtLoad</key><false/>
+  <key>StandardOutPath</key><string>__LOG_OUT__</string>
+  <key>StandardErrorPath</key><string>__LOG_ERR__</string>
+</dict>
+</plist>

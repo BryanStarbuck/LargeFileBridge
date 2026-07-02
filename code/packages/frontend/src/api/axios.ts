@@ -1,0 +1,44 @@
+// Single axios instance. In production the AuthBridge registers getToken (OpenAuthFederated);
+// in localhost dev mode no token is attached and the backend authenticates the dev user.
+import axios from "axios";
+import { toast } from "sonner";
+
+export const http = axios.create({ baseURL: "/api", withCredentials: true });
+
+type TokenGetter = () => Promise<string | null>;
+let getToken: TokenGetter | null = null;
+let reloadSession: (() => Promise<void>) | null = null;
+
+export function registerAuthBridge(g: TokenGetter, reload: () => Promise<void>): void {
+  getToken = g;
+  reloadSession = reload;
+}
+
+http.interceptors.request.use(async (config) => {
+  if (getToken) {
+    const token = await getToken().catch(() => null);
+    if (token) config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+http.interceptors.response.use(
+  (r) => r,
+  async (error) => {
+    const status = error?.response?.status;
+    if (status === 401 && reloadSession && !error.config.__retried) {
+      error.config.__retried = true;
+      await reloadSession().catch(() => {});
+      return http.request(error.config);
+    }
+    if (status === 403) toast.error("You don't have permission to do that.");
+    return Promise.reject(error);
+  },
+);
+
+// Unwrap the { ok, data } envelope; throw the error string on failure.
+export async function unwrap<T>(p: Promise<{ data: { ok: boolean; data?: T; error?: string } }>): Promise<T> {
+  const res = await p;
+  if (!res.data.ok) throw new Error(res.data.error || "request failed");
+  return res.data.data as T;
+}
