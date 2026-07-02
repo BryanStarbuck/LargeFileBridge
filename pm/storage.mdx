@@ -1,0 +1,705 @@
+---
+title: LargeFileBridge — Local Storage, Config & Sync State
+description: How LargeFileBridge persists state on disk — the no-database state root at ~/T/_large_files_bridge/, the computer-wide app-level config.yaml, the per-logged-in-user config under users/<email>/config.yaml (no anonymous account — every key is a verified allow-listed Google email), and the heart of the app: the two kinds of sync unit stored OUTSIDE user dirs because they are computer-wide — sync/computer/ (everything on the filesystem OUTSIDE registered repos, with repo sub-hierarchies masked out) and sync/r/<repo_name>/ (one folder per discovered Git repo, the PRIMARY sync unit). Each sync unit carries its own config.yaml (synced on/off + all per-unit settings) and a manifest of large git-ignored files mapped to their IPFS CIDs and pin state across the user's computers. Also covers the filesystem scanner that discovers repos, the committed in-repo manifest that travels via Git while IPFS carries the bytes, the background sync process (launchd, every 15 min — installed vs on/off, toggled from the web app), the OpenAuthFederated session store, the two log files, and the store module that fronts all of it. Works identically on a laptop and on a server; only the resolved state root and the logged-in user change.
+---
+
+# LargeFileBridge — Local Storage, Config & Sync State
+
+This is the spec for how **LargeFileBridge (LFB)** stores things on disk: configuration, per-user
+settings, the set of things it keeps in sync across your computers, and logs. There is **no
+database** — runtime state we control lives in small, hierarchical **YAML** files (config/settings)
+and machine-written **manifest** files (large-file → IPFS CID lists), all under a single **state
+root** outside the repo.
+
+LFB syncs *large files* across a user's own computers over **IPFS**. The idea (see the repo
+`CLAUDE.md` and `.gitignore`): **Git tracks the code plus a small manifest of what should exist; the
+IPFS layer moves the actual bytes.** Big binary files are git-ignored so pushes stay small; LFB pins
+them on every one of your computers, so losing a laptop never loses a file.
+
+It applies in two deployment modes, and is written so the **same code path works in both**:
+
+* **Local mode** — you run LFB on your own machine (localhost). Usually one user. This is the first
+  and primary target.
+* **Server mode** — LFB runs on a shared host and several allow-listed people log in. The design does
+  not assume localhost-only.
+
+The only things that change between the two are *where* the state root resolves and *who* is logged
+in. The layout, the file formats, and the read/write code are identical — a state dir made on a
+laptop and one made on a server have the same shape.
+
+> **Learned from the sister web apps.** The reference internal app (`~/BGit/all/app/`,
+> `pm/local_storage.mdx`) and EmailDeliveryHero (`~/BGit/Bryan_git/EmailDeliveryHero/pm/storage.mdx`)
+> both specify the same core idea: an app-level `config.yaml` plus **per-logged-in-user** config
+> under `users/<email>/config.yaml`, all under one state root, fronted by a typed store layer with
+> atomic writes. LFB follows that model, adapted to this app's state root
+> (`~/T/_large_files_bridge/`), its OpenAuthFederated auth (with **no anonymous account** — see §4),
+> and its two **computer-wide sync units** (§5–§8), which are the piece unique to LFB.
+
+Tech stack (repo `CLAUDE.md`): **TypeScript on Node**. The store layer, scanner, and background sync
+worker are all TypeScript-on-Node — never raw shell.
+
+---
+
+## 1. The state root
+
+Everything LFB persists lives under a single **state root directory**:
+
+```
+~/T/_large_files_bridge/
+```
+
+* Default `~/T/_large_files_bridge/`, overridable with the **`LFB_STATE_DIR`** environment variable
+  (server mode points it at a service-owned dir, e.g. `/var/lib/large_files_bridge`).
+* The leading `~/T/` matches the convention the sibling apps use (`~/T/_voice`, `~/T/_mai`,
+  `~/T/_emaildeliveryhero`) — one folder per app under `~/T`.
+* The directory is created on first use (`mkdirSync(dir, { recursive: true })`, best-effort) — the
+  app never crashes because the folder is missing.
+* A separate **`LFB_LOG_DIR`** may point the two log files (§12) elsewhere without moving the rest of
+  the state (tests use this so runs never pollute the real `error.err`).
+
+### Resolution rule
+
+```
+stateDir =
+  process.env.LFB_STATE_DIR                              // explicit override (server mode)
+  ?? join(os.homedir(), "T", "_large_files_bridge")      // default (local mode)
+  ?? "/tmp/_large_files_bridge"                          // last resort if homedir() throws
+```
+
+Nothing under the state root is ever committed to the repo — it is the boundary between code and
+runtime data. (The one thing that *is* committed lives inside each **watched repo**, not here: the
+portable in-repo manifest of §9.)
+
+---
+
+## 2. Directory layout
+
+```
+~/T/_large_files_bridge/
+├── config.yaml                 # APP-LEVEL, COMPUTER-WIDE config — install/machine settings (§3)
+├── users/                      # PER-LOGGED-IN-USER tree, keyed by verified email (§4)
+│   └── <email>/
+│       ├── config.yaml         #   that user's personal settings (theme, prefs, last view)
+│       └── sessions/           #   OpenAuthFederated FileSessionStore — one JSON per session (§10)
+├── sync/                       # THE SYNC STATE — computer-wide, OUTSIDE users/ (§5). Two kinds:
+│   ├── computer/               #   (a) the whole-computer sync unit — everything OUTSIDE repos (§8)
+│   │   ├── config.yaml         #       this unit's settings: on/off + roots + excludes + the mask
+│   │   ├── manifest.yaml       #       tracked large files → CID + pin state (the "IPFS file list")
+│   │   └── status.yaml         #       machine-written last-scan / last-sync operational cache
+│   └── r/                      #   (b) one folder PER DISCOVERED GIT REPO — the PRIMARY unit (§6)
+│       └── <repo_name>/
+│           ├── config.yaml     #       this repo's settings: synced on/off + all per-repo settings
+│           ├── manifest.yaml   #       local cache of the repo's committed manifest (§9) + pin state
+│           └── status.yaml     #       machine-written last-scan / last-sync operational cache
+├── peers.yaml                  # the user's OTHER computers that pin alongside this one (§11)
+├── .auth_session_secret        # stable HS256 signing secret (auto-created; never in .env) (§10)
+├── log.log                     # INFO/DEBUG/VERBOSE — the normal event trail (§12)
+└── error.err                   # WARN/ERROR/FATAL — the fault trail (§12)
+```
+
+There are three tiers, and one of them is unusual on purpose:
+
+* **App-level, computer-wide** (`config.yaml`, `peers.yaml`) — one copy for the whole install; the
+  global machine settings, the IPFS connection, the background-sync toggle, the allow-list display,
+  and this computer's identity. In local mode that is "this machine"; in server mode "this server".
+* **User-level** (`users/<email>/…`) — one folder per person who has ever logged in, created lazily
+  on first write. Personal, cosmetic preferences + that user's auth sessions.
+* **Sync state** (`sync/computer/`, `sync/r/<repo_name>/`) — **deliberately NOT under `users/`.**
+  What gets synced is a property of **the computer and its filesystem**, not of whoever happens to be
+  logged in. A repo on disk is the same repo no matter who signs into the web app. So sync state is
+  **computer-wide** and lives at the top level of the state root. (Which *users* may participate in a
+  given repo is a field *inside* that repo's config — see §6 "some need users, some don't" — but the
+  sync unit itself is owned by the machine.)
+
+### Why YAML for config + manifests
+
+The product rule is **"keep human-facing data in YAML unless the data type makes that a bad fit."**
+
+| Need | Goes in | Why |
+| --- | --- | --- |
+| Settings, toggles, small key/values | `config.yaml` (app / per-user / per-sync-unit) | Human-readable, hot-editable, **hierarchical**. |
+| The list of the user's other computers | `peers.yaml` | A short sequence an operator reads and edits. |
+| The **large-file manifest** — path → IPFS CID + size + pin state, read by humans and the app alike | `manifest.yaml` per sync unit | An operator can open any unit and see exactly which big files are tracked and where they are pinned. Small text; travels well. |
+| Machine-written scan/sync cache (high-churn, never hand-edited) | `status.yaml` per sync unit | App-owned; rewritten atomically after each scan/sync. |
+| Secrets (Google OAuth client id/secret) | `~/.credentials/large_files_bridge.json` **or** env | Never in the state store, never in the repo (§10). |
+| Append-only logs | `log.log` / `error.err` | Flat append streams; appending to YAML is wrong. |
+
+Everything here is **default-everything**: LFB boots on sensible defaults and writes a file only when
+a value is set, so a fresh install runs with no files present.
+
+---
+
+## 3. App-level `config.yaml` — computer-wide settings (hierarchical)
+
+`~/T/_large_files_bridge/config.yaml` is the install-wide, machine-owned settings file. Every value
+is nested under a top-level group so the tree stays **hierarchical** and one concern is one block.
+
+```yaml
+# ~/T/_large_files_bridge/config.yaml — app-level, computer-wide settings
+schema_version: 1
+updated_at: 2026-07-02T14:32:15.123Z
+
+# Where the web app is reachable (localhost first; the same shape on a server)
+server:
+  frontend_port: 8080        # React + Vite SPA
+  backend_port: 8787         # Node/TS REST API under /api
+  mode: local                # local | server
+
+# This computer's identity in the user's personal IPFS swarm (§11)
+computer:
+  id: 4f9c-…                 # stable UUID minted on first boot
+  label: bryan-macbook       # human name shown in the UI and in peers.yaml
+  ipfs_peer_id: 12D3Koo…     # the local IPFS node's PeerID (filled once IPFS is reachable)
+
+# How LFB talks to IPFS (a local Kubo/IPFS daemon by default)
+ipfs:
+  api_addr: /ip4/127.0.0.1/tcp/5001     # Kubo HTTP API multiaddr
+  gateway_addr: /ip4/127.0.0.1/tcp/8080 # local gateway for reads
+  pin_mode: recursive                    # how added files are pinned locally
+  auto_start_daemon: false               # if true, LFB tries to start the daemon when absent
+  reprovide: true                        # keep announcing our CIDs to the DHT so peers can find them
+
+# ── The background sync process (launchd) — see §13 for the transparency contract ──
+sync_process:
+  installed: false           # is the launchd plist installed on this machine? (separate from on/off)
+  enabled: false             # is it currently turned ON? (user toggles this from the web app)
+  interval_minutes: 15       # cadence — runs every 15 minutes
+  label: com.largefilebridge.sync   # launchd job label
+  large_file_min_bytes: 5242880     # 5 MiB — files at/above this are "large" and get bridged
+
+# ── Access — DISPLAY of the OpenAuthFederated-enforced allow-list (see §4) ──
+access:
+  allowed_emails:            # only these Google emails may sign in; enforced on the OAF side
+    - bryan@act3ai.com
+  # NOTE: there is NO anonymous / default account. Enforcement is OAF's; this block is the mirror
+  # the Settings UI displays. Editing it here does not by itself grant access.
+
+# ── The filesystem scanner (§7) — where it looks for repos + what it ignores everywhere ──
+scanner:
+  roots:                     # top-level dirs the scanner walks to discover repos
+    - ~/BGit
+    - ~/Documents
+  ignore_globs:              # never descend into these (applies to repo discovery AND computer sync)
+    - "**/node_modules/**"
+    - "**/.git/**"
+    - "**/.Trash/**"
+  follow_symlinks: false
+
+# ── Defaults applied to every user until their own users/<email>/config.yaml overrides them ──
+defaults:
+  theme: system              # system | light | dark
+  density: comfortable       # comfortable | compact
+```
+
+Secrets never go here — Google client credentials come from env or the out-of-repo credentials file
+(§10); the auth signing secret is its own file. `config.yaml` holds only non-secret ports, flags, and
+settings.
+
+---
+
+## 4. Per-logged-in-user storage — the per-user requirement
+
+App-level `config.yaml` holds shared, machine-owned settings; each person's **personal** preferences
+live in their own file:
+
+```
+~/T/_large_files_bridge/users/<email>/config.yaml
+```
+
+* `<email>` is the user's **verified** email from the OpenAuthFederated JWT (their Google identity).
+* **There is no `default` / anonymous key.** Unlike some sibling apps that fall back to a `default`
+  folder when logged out, LFB (per the repo `CLAUDE.md`) has **no no-login access path** — every
+  session belongs to an authenticated, allow-listed user, so **every** per-user folder key is a real
+  verified email. A request that is not authenticated has no user folder because it never reaches
+  authenticated routes at all.
+* In **server mode** this cleanly separates every teammate's settings on one shared install. In
+  **local mode** there is usually one user, but the same folder is used, so the shape is identical.
+* The folder is created **lazily** on the first write for that user. Reading a user who has no folder
+  yet returns the `defaults` block from the app `config.yaml` — never an error, never a first-run
+  write.
+
+### `users/<email>/config.yaml` shape
+
+```yaml
+# ~/T/_large_files_bridge/users/bryan@act3ai.com/config.yaml
+schema_version: 1
+updated_at: 2026-07-02T14:32:15.123Z
+
+# Appearance (per-user, cosmetic)
+ui:
+  theme: dark                # overrides defaults.theme
+  density: compact
+  last_route: /sync          # restore the user where they left off
+
+# Remembered per-table sort/filter, keyed by table id (e.g. the repos table)
+tables:
+  views:
+    repos:
+      sort: { col: name, dir: asc }
+      filters:
+        synced: { op: eq, value: true }
+```
+
+### Email → directory policy
+
+* **Lowercase** the email.
+* Store it **verbatim as the folder name** (`bryan@act3ai.com`) so the tree is human-browsable.
+* **Sanitize defensively:** reject/strip any `/`, `\`, `..`, or NUL before using the value as a path
+  segment. It comes from a trusted JWT, but we never build a path from an unsanitized string.
+
+---
+
+## 5. The two kinds of sync unit — the core model
+
+This is the piece unique to LFB. There are exactly **two kinds of thing LFB keeps in sync**, and
+both live under `sync/` (computer-wide, outside `users/`):
+
+1. **Repos** — every **Git repository** discovered on the filesystem. A repo is mapped to a
+   sub-hierarchy of the filesystem (its working tree). It is the **PRIMARY** sync unit: most of a
+   user's large files live inside repos, Git already carries the repo's code + committed manifest
+   between computers, and IPFS carries the git-ignored bytes. One folder per repo at
+   `sync/r/<repo_name>/` (§6).
+
+2. **The computer** — **everything else on the filesystem, OUTSIDE every registered repo.** The
+   whole-computer sync unit "**masks out**" the sub-hierarchies that belong to repos and worries only
+   about large files that live *outside* any repo. One folder at `sync/computer/` (§8).
+
+```
+The filesystem, as LFB sees it:
+
+  ~/BGit/act3/WebApp/  ─┐
+  ~/BGit/Bryan_git/…/  ─┤  registered repos  → each is a sync/r/<repo_name>/ unit  (PRIMARY)
+  ~/Documents/proj/    ─┘
+
+  everything else on disk (photos in ~/Pictures, ~/Movies, loose files …)
+                          → the sync/computer/ unit, with the repo paths above MASKED OUT
+```
+
+The **repo is primary**; the **computer is the remainder**. The masking rule (formalized in §8): a
+path belongs to the computer unit **only if it is not inside any registered repo's working tree**.
+Discover a new repo and its subtree instantly leaves the computer unit's scope and becomes its own
+`sync/r/<repo_name>/` unit.
+
+Every sync unit — repo or computer — has the same three files:
+
+* `config.yaml` — **is this unit synced on or off**, plus all of that unit's settings.
+* `manifest.yaml` — the tracked large files, each mapped to its IPFS **CID**, size, and where it is
+  pinned. This is the "list of IPFS files" the charter describes.
+* `status.yaml` — machine-written operational cache: last scan time, last sync time, counts, errors.
+
+---
+
+## 6. `sync/r/<repo_name>/` — the per-repo sync unit (PRIMARY)
+
+One folder per discovered Git repo. The repo is identified by its working-tree path and its Git
+remote; the **folder name** is the repo name, sanitized.
+
+### 6.1 Keying / folder name
+
+* `<repo_name>` = the repository's directory name, lowercased, with any char outside `[A-Za-z0-9._-]`
+  mapped to `_` (same sanitize rule as the email folder key, §4). Chosen because it is
+  operator-facing — a human finds `sync/r/largefilebridge/` instantly.
+* **Collisions** (two repos with the same directory name in different locations) are disambiguated by
+  appending `-2`, `-3`, … in discovery order; the authoritative identity is the `path` + `remote`
+  recorded inside `config.yaml`, not the folder name. `status.yaml` records the resolved folder name
+  so re-scans stay stable.
+
+### 6.2 `sync/r/<repo_name>/config.yaml`
+
+```yaml
+# ~/T/_large_files_bridge/sync/r/largefilebridge/config.yaml
+schema_version: 1
+updated_at: 2026-07-02T14:32:15.123Z
+
+# Identity (written by the scanner; the source of truth for what this unit is)
+repo:
+  name: largefilebridge
+  path: ~/BGit/Bryan_git/LargeFileBridge      # working-tree root on THIS computer
+  remote: https://github.com/BryanStarbuck/LargeFileBridge.git
+
+# THE on/off flag — "what was turned on or off on sync" for this repo
+synced: true                 # false = discovered but ignored; LFB neither pins nor fetches its files
+
+# Which large files this repo bridges. Defaults mirror the repo's own .gitignore so LFB bridges
+# exactly the big files Git is ignoring; extra include/exclude globs refine it.
+large_files:
+  follow_gitignore: true     # treat git-ignored big files as the bridge set (the .gitignore IS the list)
+  min_bytes: 5242880         # override app-level large_file_min_bytes for this repo (optional)
+  include_globs: []          # force-bridge these even if Git tracks them
+  exclude_globs: []          # never bridge these even if git-ignored (e.g. build caches)
+
+# Pinning / peers policy for this repo
+sync:
+  pin_locally: true          # this computer pins the repo's large files
+  fetch_missing: true        # this computer fetches (from peers) any manifest CID it lacks
+  publish_manifest: true     # write the committed in-repo manifest (§9) so Git carries it to peers
+
+# ── "Some repos need users, some don't." Which allow-listed people participate in THIS repo. ──
+access:
+  shared: false              # false = private to the owner's own computers (no extra users needed)
+  participants: []           # when shared: the allow-listed emails whose computers also pin this repo
+                             # e.g. [bryan@act3ai.com, family.member@example.com]
+```
+
+* `synced` is the per-repo master toggle. A repo is bridged only when **it** is `synced: true` (a
+  repo the user never wants synced stays discovered-but-off, so a re-scan doesn't keep re-proposing
+  it).
+* **"Some need users, some won't."** `access.shared: false` is the common case — the repo is just
+  *your* repo across *your* computers; no user list is required. Set `shared: true` and list
+  `participants` when a repo is shared with a family member or teammate; only those allow-listed
+  emails' computers pin it. This is the per-repo realization of the app-wide allow-list (§4).
+
+### 6.3 `sync/r/<repo_name>/manifest.yaml`
+
+The local cache of the repo's large-file manifest — see §9 for the full manifest shape and how it is
+**also committed into the repo** so Git carries it between computers. `status.yaml` holds last-scan /
+last-sync / counts / errors, written after every scan and sync.
+
+---
+
+## 7. The scanner — discovering repos and the mask
+
+A backend scanner (TypeScript-on-Node) periodically walks the `scanner.roots` (§3), honoring
+`scanner.ignore_globs` and `follow_symlinks`:
+
+* **Repo discovery.** Any directory containing a `.git` folder (and, in server mode, that resolves to
+  a real Git working tree) is registered as a repo sync unit. On first discovery LFB creates
+  `sync/r/<repo_name>/` with `synced` defaulting per policy (default **off** until the user opts in,
+  so nothing is bridged without consent), writes the `repo:` identity block, and reads the repo's
+  `.gitignore` to seed `large_files`.
+* **Stability.** A repo already registered keeps its folder, its `synced` flag, and all its settings
+  across re-scans — the scanner reconciles, it never clobbers user choices. A repo that has vanished
+  from disk is marked `missing` in its `status.yaml` (its folder and settings are retained so a
+  temporarily-unmounted drive doesn't lose configuration), not deleted.
+* **The mask.** After discovery, the set of registered repo working-tree paths is the **mask** for
+  the computer unit (§8): the computer scan walks the same roots but **prunes every registered repo
+  subtree**, so a file is attributed to exactly one unit — never both.
+
+The scanner runs on demand (a "Rescan" action in the web app) and as part of the background sync
+process (§13).
+
+---
+
+## 8. `sync/computer/` — the whole-computer sync unit
+
+Everything the scanner finds that is **not inside any registered repo** and is **large** belongs to
+the single computer-wide unit.
+
+### 8.1 `sync/computer/config.yaml`
+
+```yaml
+# ~/T/_large_files_bridge/sync/computer/config.yaml
+schema_version: 1
+updated_at: 2026-07-02T14:32:15.123Z
+
+# THE on/off flag for computer-wide (non-repo) sync
+synced: false                # default off — opt in before LFB bridges loose files across the machine
+
+# Which roots the computer unit covers (usually the same scanner roots, minus the repo mask)
+roots:
+  - ~/Pictures
+  - ~/Movies
+
+# The mask — repo subtrees are excluded automatically (§7); these are EXTRA manual excludes
+exclude_globs:
+  - "**/Caches/**"
+  - "**/*.tmp"
+
+large_files:
+  min_bytes: 5242880         # 5 MiB threshold (defaults to app-level large_file_min_bytes)
+
+sync:
+  pin_locally: true
+  fetch_missing: true
+  # No Git carries this unit's manifest (there is no repo), so it is published over IPNS so peers
+  # can discover the current list (§9.3).
+  publish_manifest_ipns: true
+```
+
+* `synced` is the computer unit's master toggle, independent of every repo's toggle.
+* **The mask is implicit and automatic:** the computer scan always prunes registered repo subtrees
+  (§7) so repo files are never double-counted here. `exclude_globs` is for *additional* things the
+  user wants the computer unit to skip.
+
+### 8.2 `sync/computer/manifest.yaml` + `status.yaml`
+
+Same shape as any unit's manifest (§9). Because there is no Git repo to carry it, the computer unit's
+manifest is published over **IPNS** (or a designated peer-shared record) so the user's other
+computers can fetch the current list — see §9.3. `status.yaml` holds last-scan / last-sync / counts.
+
+---
+
+## 9. The manifest & IPFS pin model
+
+A **manifest** is the "list of IPFS files" at the heart of LFB: for one sync unit, it maps each
+tracked large file's **relative path** to its **IPFS CID** plus metadata and pin state. Git carries a
+repo's manifest between computers; IPFS carries the bytes.
+
+### 9.1 Manifest shape (per sync unit)
+
+```yaml
+# manifest.yaml — one sync unit's tracked large files
+schema_version: 1
+unit: repo                    # repo | computer
+generated_at: 2026-07-02T14:32:15.123Z
+files:
+  - path: large/trailer_v3.mp4        # relative to the unit root (repo working tree, or a computer root)
+    cid: bafybeigd…                   # the IPFS content id (content-addressed — changes when bytes change)
+    size: 734003200                   # bytes
+    modified_at: 2026-07-01T09:14:02Z # source file mtime when hashed
+    sha256: 9f2c…                     # integrity check independent of the CID
+    pinned_by:                        # which of the user's computers have pinned this CID
+      - bryan-macbook
+      - bryan-studio
+  - path: assets/hero_8k.png
+    cid: bafybeih2…
+    size: 41231884
+    modified_at: 2026-07-01T08:02:11Z
+    sha256: 1a77…
+    pinned_by: [bryan-studio]
+```
+
+* **CID is content-addressed.** Editing a file changes its bytes and therefore its CID; the manifest
+  entry is updated and the old CID is unpinned (subject to retention). This is how "up-to-date" works
+  across computers.
+* **`pinned_by`** is the redundancy record — if a file is pinned by ≥1 other computer, losing this
+  laptop loses nothing. The web app surfaces any file pinned by only one computer as at-risk.
+
+### 9.2 Repo manifests travel via Git (the elegant part)
+
+For a repo unit, the manifest is **also written into the repo working tree** as a committed file:
+
+```
+<repo>/.lfbridge/manifest.yaml     # committed to Git — small text, travels with every push/pull
+```
+
+The big files stay git-ignored (`.gitignore`); the tiny manifest is committed. When another computer
+pulls the repo, LFB reads `<repo>/.lfbridge/manifest.yaml`, sees which CIDs it lacks, and fetches +
+pins them from IPFS. The state-root `sync/r/<repo_name>/manifest.yaml` is the **local cache** of that
+committed file plus this computer's live pin state. (`publish_manifest` in §6.2 controls writing the
+committed copy.)
+
+### 9.3 Computer manifests travel via IPNS
+
+The computer unit has no Git repo to carry its manifest, so LFB publishes
+`sync/computer/manifest.yaml` under this computer's **IPNS** name (or a small shared record among the
+user's peers). Other computers resolve it, diff against their own, and fetch missing CIDs. This keeps
+loose (non-repo) large files in sync without any repository.
+
+### 9.4 Write / retention rules
+
+* Manifests are rewritten **atomically** (§11) after each scan/sync; they are the app's own files (a
+  repo's committed copy is the portable source of truth, the state-root copy is the cache).
+* Unpinning of superseded CIDs follows a retention window (keep the previous CID for a grace period so
+  a mid-sync peer can still fetch it), recorded in `status.yaml`.
+
+---
+
+## 10. Auth session & signing secret (runtime, not settings)
+
+Authentication state lives under the state root, kept **separate** from settings so it is never
+hand-edited or exported with a config backup:
+
+| File / dir | What it is | Source |
+| --- | --- | --- |
+| `.auth_session_secret` | The stable HS256 signing secret — a base64url string (48 random bytes), written `0600`, auto-created on first boot and reused so sessions survive restarts. **Never** read from `.env`. | auth module (`loadOrCreateSecret`) |
+| `users/<email>/sessions/<sid>.json` | The OpenAuthFederated `FileSessionStore` records behind the rotating session cookie — one JSON per session, `0600`. Sign-out writes a `revoked: true` tombstone rather than deleting. | `@auth/backend` FileSessionStore |
+
+Google OAuth client credentials are **not** here — they come from env or the out-of-repo
+`~/.credentials/large_files_bridge.json` (override the path with **`LFB_CREDENTIALS_FILE`**; env
+wins). The rule: the state store holds sessions and a signing secret (operational auth state),
+**never** long-lived provider secrets. Because LFB has **no anonymous account** (§4), every session
+record belongs to an allow-listed email.
+
+---
+
+## 11. `peers.yaml` — the user's other computers
+
+The set of the user's own computers that pin alongside this one (this machine's identity is
+`config.yaml → computer`, §3):
+
+```yaml
+# ~/T/_large_files_bridge/peers.yaml
+schema_version: 1
+updated_at: 2026-07-02T14:32:15.123Z
+peers:
+  - id: 7a20-…
+    label: bryan-studio
+    ipfs_peer_id: 12D3KooW…
+    owner: bryan@act3ai.com          # the allow-listed user this computer belongs to
+    last_seen: 2026-07-02T13:59:00Z
+  - id: c113-…
+    label: family-imac
+    ipfs_peer_id: 12D3KooW…
+    owner: family.member@example.com # a shared peer (only pins repos where they are a participant, §6.2)
+    last_seen: 2026-07-01T22:10:00Z
+```
+
+* Peers are how `pinned_by` (§9.1) is resolved to real machines and how "fetch from a peer" finds a
+  provider. LFB dials these IPFS PeerIDs directly (swarm connect) in addition to the public DHT.
+* A shared peer only participates in repos whose `access.participants` include its `owner` (§6.2).
+
+---
+
+## 12. Logging
+
+Two append-only flat files **directly at the state root** (no `logs/` subdirectory):
+
+```
+~/T/_large_files_bridge/log.log     # INFO/DEBUG/VERBOSE — the normal event trail
+~/T/_large_files_bridge/error.err   # WARN/ERROR/FATAL — the fault trail
+```
+
+* One line per event: `[ISO-8601 UTC] [LEVEL] [Context] message`. WARN/ERROR/FATAL are written to
+  **both** files (`error.err` is the complete fault list; `log.log` keeps them inline for context).
+* The log dir defaults to the state root; override with **`LFB_LOG_DIR`**.
+* **Never let logging throw** — a failed write falls back to `stderr` and the request continues.
+* Rotation is on: each file is capped (5 MiB) with rotated backups (`log.log.1`…, `error.err.1`…);
+  expected-absence (a first-run missing file) is logged as INFO/DEBUG, never as an error.
+* Everything that can go wrong — a failed IPFS pin, an unreachable peer, a store-write failure, a
+  scan error — lands in `error.err` with enough context (unit, path, CID) to act on it.
+
+---
+
+## 13. The background sync process — the transparency contract
+
+Per the repo `CLAUDE.md`, on Mac LFB runs a **background process** that periodically syncs the large
+files over IPFS. It is scheduled as a **launchd plist** (the macOS cron equivalent), runs **every 15
+minutes**, and runs LFB's own TypeScript-on-Node worker (never raw shell/`curl`).
+
+Two independent facts about it, both surfaced in the web app:
+
+* **Installed** — is the launchd plist present on this machine? (`sync_process.installed`, §3.) The
+  plist must be installed for the background process to exist at all.
+* **On / off** — is it currently enabled? (`sync_process.enabled`, §3.) Separate from installed: the
+  user can install it and still leave it off.
+
+The web app (first priority per `CLAUDE.md`) provides transparency and control:
+
+* It **displays** whether the process is installed and whether it is on or off (read from
+  `config.yaml → sync_process`, reconciled with the actual launchd state).
+* The user can **turn it on or off** from the web app — a toggle that writes
+  `sync_process.enabled` and loads/unloads the launchd job accordingly. Installing / uninstalling the
+  plist is a separate explicit action.
+
+Each background run: rescan (§7) → for every `synced: true` unit, add new/changed large files to IPFS,
+update the manifest (§9), pin locally, fetch any missing CIDs from peers, and write `status.yaml`.
+
+---
+
+## 14. What gets stored — the complete inventory
+
+Everything LFB persists, and where. **Rule:** a store not in this table does not exist — adding any
+persisted file or key requires a row here.
+
+| Data | Location | Tier |
+| --- | --- | --- |
+| Ports / run mode | `config.yaml → server` | app (computer-wide) |
+| This computer's id, label, IPFS PeerID | `config.yaml → computer` | app |
+| IPFS connection (API/gateway addr, pin mode, reprovide) | `config.yaml → ipfs` | app |
+| Background-sync installed / on-off / interval / large-file threshold | `config.yaml → sync_process` | app |
+| Allow-listed emails (display of OAF policy) | `config.yaml → access.allowed_emails` | app |
+| Scanner roots + global ignore globs | `config.yaml → scanner` | app |
+| Per-user defaults | `config.yaml → defaults` | app |
+| **Theme / density / last route** | `users/<email>/config.yaml → ui` | **per-user** |
+| **Remembered table sort/filter** | `users/<email>/config.yaml → tables.views` | **per-user** |
+| **Per-repo: synced on/off + all settings** | `sync/r/<repo_name>/config.yaml` | sync unit (computer-wide) |
+| **Per-repo: which users participate** (shared repos) | `sync/r/<repo_name>/config.yaml → access` | sync unit |
+| **Per-repo: large-file manifest (path → CID + pin state)** | `sync/r/<repo_name>/manifest.yaml` (+ committed `<repo>/.lfbridge/manifest.yaml`) | sync unit |
+| Per-repo scan/sync cache (last scan, last sync, counts, errors, missing) | `sync/r/<repo_name>/status.yaml` | sync unit |
+| **Computer unit: synced on/off + roots + excludes** | `sync/computer/config.yaml` | sync unit |
+| **Computer unit: large-file manifest** | `sync/computer/manifest.yaml` (published via IPNS) | sync unit |
+| Computer unit scan/sync cache | `sync/computer/status.yaml` | sync unit |
+| The user's other computers (peers) | `peers.yaml` | app |
+| Auth session records (revocation tombstones on sign-out) | `users/<email>/sessions/<sid>.json` | runtime |
+| Auth signing secret | `.auth_session_secret` | runtime |
+| Google client id/secret (`LFB_CREDENTIALS_FILE` overrides path; env wins) | `~/.credentials/large_files_bridge.json` **or** env | out-of-repo secret |
+| Logs (5 MiB cap × rotated backups each) | `log.log`, `error.err` | runtime |
+
+---
+
+## 15. The store layer (how code touches disk)
+
+All filesystem access for state goes through a thin **`store` module** so callers never deal with
+paths, parsing, atomic writes, or the local-vs-server difference.
+
+* **Atomic writes.** Serialize → write to a **unique** `*.tmp` (per-write, so concurrent writers never
+  share a temp path) → `rename` over the real file, so a crash mid-write never leaves a half-written
+  `config.yaml` / `manifest.yaml`; a failed write cleans up the temp file, logs, and rethrows.
+* **Per-file mutex.** Read-modify-write is serialized per file (matters when the web app and the
+  background sync run at once); every write stamps `updated_at` / `generated_at`.
+* **Defaults on absence.** Reading a missing file returns typed defaults and logs nothing — expected
+  first-run absence is **not** an error and must not spam `error.err`.
+* **Schema validation on read.** Files are validated against the record/config schema on load;
+  malformed data is rejected loudly rather than silently trusted (silently falling back on a corrupt
+  manifest would hide data loss).
+* **Three scopes.** App-scoped (`config.yaml`, `peers.yaml`), user-scoped (`users/<email>/…`, created
+  lazily), and unit-scoped (`sync/computer/…`, `sync/r/<repo_name>/…`). The unit-scoped opener is what
+  makes sync state computer-wide (§5).
+
+The store is isolated behind an interface so a later move to a real database is a single-module
+change; services never touch the filesystem directly.
+
+---
+
+## 16. Acceptance criteria
+
+Storage is correct when **all** of the following hold:
+
+1. All persisted state lives under a single **state root** (`~/T/_large_files_bridge/`, override
+   `LFB_STATE_DIR`), created on first use, never committed to the repo.
+2. App-level, **computer-wide** settings live in a hierarchical `config.yaml` (one nested block per
+   concern: `server`, `computer`, `ipfs`, `sync_process`, `access`, `scanner`, `defaults`), which is
+   **default-everything** — a fresh install runs with no file present.
+3. Per-logged-in-user settings live in `users/<email>/config.yaml`, keyed by the **verified**
+   allow-listed email, created **lazily** on first write. There is **no `default`/anonymous key** —
+   every session is authenticated (repo `CLAUDE.md`).
+4. Sync state lives **outside `users/`** because it is computer-wide: `sync/computer/` (the whole
+   machine, minus repos) and `sync/r/<repo_name>/` (one per discovered Git repo, the primary unit).
+5. Every sync unit carries `config.yaml` with a **`synced` on/off** flag plus its settings, a
+   `manifest.yaml` (path → IPFS **CID** + size + `pinned_by`), and a machine-written `status.yaml`.
+6. A repo is bridged only when its own `sync/r/<repo_name>/config.yaml → synced` is true; the computer
+   unit is bridged only when `sync/computer/config.yaml → synced` is true — the two toggles are
+   independent.
+7. The scanner discovers Git repos under `scanner.roots`, registers each as `sync/r/<repo_name>/`
+   (sanitized, collision-disambiguated), seeds `large_files` from the repo `.gitignore`, and **masks
+   out** every registered repo subtree so the computer unit attributes each file to exactly one unit.
+8. A repo's manifest is **committed into the repo** at `<repo>/.lfbridge/manifest.yaml` so Git carries
+   it between computers; the computer unit's manifest is published over **IPNS**. The big bytes stay
+   git-ignored and move over IPFS; the manifest is the small text list that travels.
+9. **"Some repos need users, some don't":** a repo defaults to `access.shared: false` (private to the
+   owner's own computers, no user list); a shared repo lists `access.participants` (allow-listed
+   emails whose computers also pin it), consistent with the app-wide allow-list.
+10. The background sync process is a **launchd plist** running **every 15 minutes**; `config.yaml →
+    sync_process` records **installed** and **enabled** as two independent facts, both displayed in
+    the web app, with the user able to toggle **on/off** and install/uninstall from the UI.
+11. Auth session records (`users/<email>/sessions/`) and the signing secret (`.auth_session_secret`)
+    live under the state root, separate from settings; **no** provider secret is stored there or in
+    `config.yaml`.
+12. Every read/write goes through the `store` layer: atomic write-temp-then-rename, per-file mutex,
+    defaults on absence, schema validation on read; services never touch the filesystem directly.
+13. Logs append to `log.log` (INFO/DEBUG/VERBOSE) and `error.err` (WARN/ERROR/FATAL) at the state
+    root, size-capped with rotation; logging never throws; every failed pin/peer/scan/write lands in
+    `error.err` with unit + path + CID context.
+14. The layout, formats, and code are **identical** in local and server mode — only the resolved state
+    root and the logged-in user differ; a state dir copies between machines unchanged.
+15. Every persisted file/key appears in the §14 inventory — never a silent store.
+
+---
+
+## 17. Open questions (to resolve as `code/` is built)
+
+Greenfield today (no `code/` yet), so there is no code-vs-spec drift ledger. The design decisions
+worth revisiting once implementation starts:
+
+* **Repo default `synced`.** Spec'd **off** until the user opts in (§7), so a scan never bridges data
+  without consent. Confirm this is the desired default (vs. on-with-easy-off).
+* **Manifest transport.** Repos via committed `<repo>/.lfbridge/manifest.yaml` + Git (§9.2); the
+  computer unit via IPNS (§9.3). Validate IPNS latency/reliability for the computer unit, or replace
+  with a small peer-shared pubsub record.
+* **CID keying vs. path.** Manifest is keyed by relative path with CID as the value (§9.1); a rename
+  is a new path with the same CID. Confirm rename handling (keep pin, update path) matches intent.
+* **Collision disambiguation for `<repo_name>`.** Folder-name `-2`/`-3` suffixes (§6.1) with identity
+  in `config.yaml`. If repos are more stably keyed by remote URL, revisit the folder-name scheme.
+* **Retention / unpin window.** The grace period before unpinning a superseded CID (§9.4) needs a
+  concrete default.

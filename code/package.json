@@ -1,0 +1,15 @@
+{
+  "name": "@lfb/root",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LargeFileBridge — sync large git-ignored files across your own computers over IPFS.",
+  "packageManager": "pnpm@11.0.9",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "pnpm --filter @lfb/frontend --filter @lfb/backend --parallel dev",
+    "build": "pnpm -r build",
+    "start": "pnpm --filter @lfb/frontend --filter @lfb/backend --parallel start",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test"
+  }
+}

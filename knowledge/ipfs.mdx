@@ -1,0 +1,346 @@
+---
+title: IPFS — What It Is and How LargeFileBridge Uses It
+description: The IPFS knowledge base for LargeFileBridge (LFB). Explains what IPFS is (content addressing, CIDs, blocks, the DAG), and the pieces LFB depends on — pinning (direct / recursive / indirect, and MFS as implicit pinning), garbage collection and the local block cache, content routing / discovery (how IPFS "finds" a CID via the DHT and delegated routing), gateways (local, public, trustless, path vs subdomain — documented heavily), lists of CIDs (pinsets, CAR files, IPNS as a mutable pointer to a synced manifest), syncing a whole directory (MFS / ipfs add -r), and IPFS Cluster (multi-node pinset orchestration — which we deliberately do NOT default to). Centers the one non-negotiable rule for LFB: the local computer must only pin and serve OUR OWN content — never cache, re-provide, or relay other people's content. Documents exactly which Kubo config knobs enforce that (Reprovider/Provide.Strategy, no recursive public gateway, garbage collection, offline retrieval). Ends with the concrete defaults LFB should adopt. All facts here were gathered from the official IPFS/Kubo/IPFS-Cluster docs via web search — see Sources.
+---
+
+# IPFS — What It Is and How LargeFileBridge Uses It
+
+This is the **knowledge base** for how **LargeFileBridge (LFB)** moves large, git-ignored files
+between a user's own computers. Git carries the code plus a small manifest of what should exist;
+**IPFS carries the actual bytes.** This file exists so we (and the AI) understand IPFS *well* — what
+its parts are called, what they do, and which behaviors we must configure so LFB is safe.
+
+> **The single most important rule, stated up front.** The local computer must **only pin and serve
+> OUR OWN content** — the large files this user chose to sync across their own machines. It must
+> **never become a cache, re-provider, or relay for other people's content.** IPFS *can* do that (it
+> is a public peer-to-peer network), but LFB must be configured so it does not. The exact knobs that
+> enforce this are in [§6 Only-our-content](#6-only-our-content-the-non-negotiable-rule). Read that
+> section carefully — it is the whole reason this file leads with it.
+
+---
+
+## 1. What IPFS is
+
+**IPFS** (InterPlanetary File System) is a peer-to-peer system for storing and moving files by
+**what they are**, not **where they are**. Instead of a URL that points at a server (`location
+addressing`), IPFS uses **content addressing**: every file gets a **CID** (Content Identifier) — a
+hash-derived fingerprint of the bytes.
+
+* **CID (Content Identifier)** — the address of a piece of content. It is derived from the content's
+  hash, so the same bytes always produce the same CID, and any change to the bytes produces a
+  different CID. If two computers ask for the same CID, they are guaranteed to get identical bytes.
+* **Block** — IPFS chops a file into blocks. Each block has its own CID.
+* **DAG (Merkle DAG)** — a file or directory is represented as a tree of blocks (a Directed Acyclic
+  Graph) linked by CID. The **root CID** names the whole thing; its children are the blocks beneath
+  it. This is why "add a folder" gives you back one CID that transitively addresses everything in it.
+* **Bitswap** — the protocol nodes use to actually exchange blocks once they've found a peer that
+  has them.
+
+For LFB the mental model is simple: **each large file (or each directory of large files) becomes a
+CID.** We record that CID in the git-tracked manifest. On another computer, LFB reads the manifest,
+asks IPFS for the CID, and the bytes arrive.
+
+The most common IPFS node implementation is **Kubo** (the Go implementation, formerly `go-ipfs`).
+When this file says "the node" or references `ipfs ...` commands or config keys, it means Kubo.
+
+---
+
+## 2. Content routing / discovery — how IPFS "finds" a CID
+
+This is the "search" half of IPFS: given a CID, how does a node **find a peer that has it**? LFB
+needs this to work between the user's own machines, but we do **not** want to broadcast our content
+to the world (see §6).
+
+* **Provider records** — when a node has content, it can *announce* ("provide" / "reprovide") to the
+  network that it holds a given CID. Other nodes look up these announcements to find who to ask.
+* **DHT (Distributed Hash Table)** — the default global lookup table. A node publishes provider
+  records into the DHT and resolves CIDs by querying it. This is how two of the user's machines can
+  find each other's content even without knowing each other's address in advance.
+* **Delegated routing / HTTP routing** — instead of (or in addition to) participating in the DHT
+  directly, a node can ask an HTTP routing endpoint "who has this CID?" This is lighter weight.
+* **Direct peering** — you can tell a node to always stay connected to specific peers (the user's
+  *other* machines). For LFB this is attractive: the user's computers can peer directly with each
+  other so content moves between them reliably, without depending on the wider network. Combined with
+  the §6 announce restrictions, this keeps sharing scoped to the user's own fleet.
+
+**"Enable web search" for our purposes = content discovery.** When we say the node should be able to
+find content, we mean it can resolve a CID to a provider (via DHT / delegated routing / direct
+peers). What we announce, and to whom, is controlled separately — that is the §6 concern.
+
+---
+
+## 3. Pinning — telling IPFS to KEEP a file
+
+By default IPFS treats locally held blocks as a **cache**: it keeps them for a while after you touch
+them, but **garbage collection can delete them** later (see §4). **Pinning** is how you say "never
+garbage-collect this — keep it." Pinning is the backbone of LFB: every large file we sync is pinned
+on **every** one of the user's computers, so losing a laptop never loses a file.
+
+Three kinds of pin:
+
+* **Direct pin** — pins exactly one block, none of its children.
+* **Recursive pin** — pins a block **and all of its children** (the whole DAG under a root CID). This
+  is what you get from `ipfs add` by default, and it is what LFB wants for a file or a directory: pin
+  the root CID recursively and the entire thing is protected.
+* **Indirect pin** — the automatic result of a block's parent being recursively pinned. You don't
+  create these directly; they exist because something above them is pinned.
+
+**MFS as implicit pinning.** The **Mutable File System** (see §7) is a second way to protect content:
+items placed in MFS are **not explicitly pinned, but are protected from garbage collection** anyway.
+So MFS acts as "implicit pinning" — a convenient, folder-like way to keep content alive without
+managing a pin list by hand.
+
+Practically, for LFB:
+
+* `ipfs add -r <path>` — add a file or directory recursively; returns the root CID; recursively
+  pinned by default.
+* `ipfs pin add <cid>` — pin a CID that's already known (e.g. one LFB read from the manifest on
+  another machine), pulling and keeping its bytes.
+* `ipfs pin rm <cid>` — unpin (lets GC reclaim it later, if nothing else keeps it).
+* `ipfs pin ls` — list what's pinned (see §5 — this is one kind of "IPFS list").
+
+---
+
+## 4. Garbage collection and the local cache
+
+Understanding GC is essential to the §6 rule, so it gets its own section.
+
+* An IPFS node keeps a **local repo (block store)**. Anything the node fetches — including content it
+  merely relayed or was asked about — may land in this store as **cache**.
+* **Garbage collection removes non-pinned blocks.** Pinned content (and content in MFS) is **never**
+  removed by GC. Everything else is disposable cache.
+* GC is governed by config: **`StorageMax`** (default **10 GB**) is the cap, and
+  **`StorageGCWatermark`** (default **90%**) is the threshold. When the store exceeds the watermark,
+  GC runs and clears **all** non-pinned blocks (it is aggressive — it does not trim just enough).
+* You can also GC on demand: `ipfs repo gc`.
+
+**Why this matters for LFB:** the only thing guaranteed to persist on the user's disk is what **we
+pin** (our own large files) plus MFS-protected content. Anything else — including any of *other
+people's* content the node happened to touch — is cache that GC will reclaim. That is good, but
+"reclaim eventually" is not the same as "never accept in the first place." §6 is about not accepting
+or advertising it at all.
+
+---
+
+## 5. IPFS "lists" — pinsets, CID lists, CAR files, and IPNS
+
+"IPFS list" is not one single thing. Several distinct concepts get called "a list." LFB cares about
+publishing/syncing **a list of CIDs** so each computer knows what it should be pinning. Here are the
+options, most relevant first:
+
+* **The pinset (`ipfs pin ls`)** — the local list of everything a node keeps. Each node has its own.
+  This is "what THIS machine is pinning." LFB's manifest is essentially the desired pinset,
+  authored once and reconciled onto every machine.
+
+* **LFB's git-tracked manifest (our primary mechanism)** — a small file that git carries, mapping
+  each large git-ignored file to its CID (and pin state per machine). This is how the list travels
+  between computers today: **git moves the list of CIDs; IPFS moves the bytes.** Simple, auditable,
+  no extra IPFS moving parts. This is the default LFB pattern; the IPFS-native options below are
+  alternatives to understand, not to reach for first.
+
+* **CAR file (Content Addressable aRchive)** — a single file that bundles a set of blocks (a whole
+  DAG, or several) with their CIDs. Useful for exporting/importing "here is exactly this content" in
+  one blob (`ipfs dag export` / `ipfs dag import`). A CAR is a **list-plus-bytes** in one file.
+
+* **IPNS (InterPlanetary Name System) — a mutable pointer.** A CID is immutable: change the bytes,
+  get a new CID. **IPNS gives you one stable name that you can re-point at a new CID whenever the
+  content changes.** You publish `ipfs name publish <cid>`, and others resolve `ipfs name resolve
+  <ipns-name>` to get the current CID. This is exactly the shape you want for **"publish a list and
+  keep it in sync"**: point one IPNS name at the current manifest/directory CID, update the pointer
+  when it changes, and every machine resolves the same name to find the latest list. IPNS resolves
+  over the **DHT** (global) or **PubSub** (topic-based, among interested peers).
+
+  > LFB does not need IPNS as long as git is carrying the manifest — git already provides the mutable,
+  > synchronized pointer. IPNS is the IPFS-native equivalent to keep in mind for server mode or for a
+  > future where we want the list to travel over IPFS itself instead of git.
+
+---
+
+## 6. Only-our-content — the non-negotiable rule
+
+**LFB must sync only the user's own content and must never cache, re-provide, or serve other people's
+content through the local computer.** IPFS is a public network by default; left unconfigured, a node
+will announce content, answer other peers, and accumulate cache. We turn those behaviors down to the
+minimum needed for the user's own machines to exchange their own files. The relevant Kubo knobs:
+
+* **Reprovider / Provide strategy — announce ONLY our own pinned content.** Kubo's
+  **`Reprovider.Strategy`** (newer Kubo: **`Provide.Strategy`**) controls **which CIDs the node
+  announces** to the content-routing system:
+  * **`pinned`** — announce **only recursively pinned CIDs** (i.e. only content we deliberately keep).
+  * **`roots`** — announce **only the root CID** of each pinned DAG (even narrower; child blocks are
+    still retrievable over Bitswap once a peer connects, but they aren't separately advertised).
+  * The default (`all`) announces everything in the block store, **including cached third-party
+    content** — we must **not** use that. LFB should set the strategy to **`pinned`** (or `roots`).
+  * When you change the strategy and restart, Kubo **clears the provide queue** so only content
+    matching the new strategy is announced. Announcing can be disabled entirely with
+    `Provide.Enabled = false`, but LFB still needs the user's own machines to find each other, so we
+    keep providing **on** but scoped to `pinned`.
+
+* **Do NOT run a recursive / public gateway.** A **recursive gateway** will fetch *any* CID from the
+  network on behalf of *any* requester — that turns the machine into a relay for other people's
+  content, which is exactly what we forbid. If LFB exposes a gateway at all, it must be a **local,
+  private** one (bound to `127.0.0.1`, for the user only), and ideally **trustless / non-recursive**
+  so it serves blocks it already has rather than fetching arbitrary content for strangers. See §8 for
+  gateway types.
+
+* **Let garbage collection reclaim any incidental cache.** Because only pinned/MFS content survives
+  GC (§4), keep GC enabled with a sane `StorageMax` so any third-party blocks the node ever touches
+  are transient, not permanent residents.
+
+* **Prefer offline / scoped retrieval where possible.** Kubo can run `ipfs --offline daemon` for
+  fully local operation; more usefully for LFB, **direct peering** (§2) between the user's own
+  machines lets their content move among themselves without leaning on — or contributing to — the
+  wider public network. A trustless gateway in a P2P context returns **404 rather than going and
+  fetching** content it doesn't already hold, which is the behavior we want.
+
+**Summary of the rule in config terms:** announce `pinned` only; no recursive/public gateway (local
+private gateway only); GC on; direct-peer the user's own machines. That combination means the node
+keeps and advertises **only what the user chose to sync**, and never becomes a node in other people's
+distribution.
+
+---
+
+## 7. Syncing a whole directory — MFS and `ipfs add -r`
+
+LFB often wants to sync not just a single large file but **an entire directory** of them. Two tools:
+
+* **`ipfs add -r <dir>`** — recursively imports a directory into IPFS, building the Merkle DAG and
+  returning a **single root CID** for the whole tree (recursively pinned by default). Record that one
+  CID and every file under it is addressed and kept.
+
+* **MFS (Mutable File System)** — a **mutable, folder-like layer over immutable IPFS content.** It
+  lets you work with files and directories using familiar path operations without manually tracking
+  the CID that changes on every edit:
+  * `ipfs files cp /ipfs/<cid> /some/path` — lazily reference existing IPFS content into MFS at a
+    path (cheap — it does not copy bytes, it references the CID).
+  * `ipfs files cp` / `ipfs files rm -r` / `ipfs files mkdir` — copy, remove (recursively), and
+    create directories inside MFS.
+  * `ipfs add -r --to-files=/path/in/mfs <dir>` — add a directory and drop it straight into MFS at a
+    path in one step.
+  * `ipfs files stat /path` — get the current CID of an MFS path (this is the "what is the CID of
+    this folder right now" query; the CID changes as contents change).
+  * Content in MFS is **protected from GC** (implicit pinning, §3), so it is a natural home for "the
+    set of large files this machine keeps."
+
+For LFB, a directory-oriented sync unit maps cleanly onto **MFS path ⇄ root CID**, with the root CID
+recorded in the manifest and (optionally) an IPNS name pointing at it so the pointer itself can be
+synced (§5).
+
+---
+
+## 8. Gateways — documented heavily
+
+A **gateway** is an **HTTP bridge to IPFS**: it speaks ordinary HTTP so browsers and tools that don't
+understand the IPFS protocol can still fetch content-addressed data. You give it a CID over HTTP and
+it returns the bytes. This is worth understanding well because it is both the most convenient way to
+read IPFS content **and** the biggest footgun for the §6 rule.
+
+**Address forms.** Gateways expose content two ways:
+
+* **Path resolution** — `https://<gateway>/ipfs/<cid>/path/to/file` (e.g. `ipfs.io`). Simple, but all
+  content shares one origin.
+* **Subdomain resolution** — `https://<cid>.ipfs.<gateway>/path` (e.g. `dweb.link`). Each CID gets its
+  own web origin, which matters for browser security (cookies, CORS, origin isolation).
+* **IPNS forms** — the same shapes with `/ipns/<name>` (path) or `<name>.ipns.<gateway>` (subdomain)
+  resolve a **mutable** IPNS pointer instead of a fixed CID.
+
+**Kinds of gateway:**
+
+* **Local gateway** — the gateway your **own** IPFS node exposes, by default at
+  **`http://localhost:8080`**. It is meant to be on localhost or a trusted LAN. It returns
+  reassembled bytes without extra verification overhead because you trust your own node. **This is
+  the gateway LFB should use** — bound to `127.0.0.1`, for the logged-in user only.
+
+* **Public gateway** — a gateway run by someone else as a public good (e.g. `https://ipfs.io` — path;
+  `https://dweb.link` — subdomain; `https://trustless-gateway.link` — trustless). They are
+  **best-effort, no SLA**, and can **rate-limit, change, or go offline at any time** — suitable for
+  demos and testing, **not** something to depend on. LFB should not build a workflow that requires a
+  public gateway to be up.
+
+* **Trustless gateway** — a **minimal, verifiable** gateway. The client explicitly asks for raw
+  blocks (`application/vnd.ipld.raw`) or a CAR (`application/vnd.ipld.car`) and **verifies the hashes
+  itself**, so it does **not** have to trust the gateway to return honest bytes. In a P2P context a
+  trustless gateway is **non-recursive**: if it doesn't already hold the content it returns **404
+  Not Found** instead of going out and fetching it from the network. That non-recursive,
+  return-what-I-have behavior is aligned with §6.
+
+* **Recursive gateway** — the powerful-but-dangerous kind: it will **fetch any CID from the whole
+  network** on behalf of the caller. Great UX for end users, **resource-intensive and abuse-prone**
+  for the operator — and for LFB it is disallowed, because it makes the machine a relay for arbitrary
+  third-party content. **LFB must not run a recursive/public gateway.**
+
+**Bottom line for LFB:** use the **local gateway on `127.0.0.1`** for the app to read the user's own
+content; treat public gateways as untrusted convenience only; never expose a recursive/public
+gateway from the user's machine.
+
+---
+
+## 9. IPFS Cluster — and why we do NOT default to it
+
+**IPFS Cluster** is a separate application that runs as a **sidecar** next to IPFS nodes and maintains
+a **global cluster pinset** — it **allocates, replicates, and tracks** which CIDs are pinned across a
+**swarm of many IPFS daemons**. Every cluster peer holds a copy of the full pinset and can pin,
+unpin, or add content; the cluster then makes sure the content is replicated to N nodes, retrying on
+failure ("fire & forget"). `ipfs-cluster-ctl add` pins to **several** peers at once, unlike plain
+`ipfs add` which only touches the local daemon.
+
+That is genuinely useful — **for orchestrating many nodes** (a fleet of servers, replication targets,
+free-space-aware allocation across regions). It is the tool you reach for when you're running
+infrastructure with lots of IPFS daemons that need coordinated replication.
+
+> **LFB rule: do NOT default to IPFS Cluster.** Per the charter, we only use Cluster if we go out of
+> our way to say so. LFB's model is a handful of the **user's own computers**, each running a plain
+> Kubo node that **pins the user's own content** (§3) and finds the other machines (§2). Standalone
+> Kubo pinning — where **each machine independently pins the same CIDs from the manifest** — already
+> gives us the redundancy we want ("lose a laptop, the files are safe on the other computers")
+> without the operational weight of a cluster. Cluster is a **future/server-mode** option to keep in
+> mind if we ever manage many nodes centrally, not the default.
+
+---
+
+## 10. Concrete defaults LFB should adopt
+
+Pulling §1–§9 into the settings and habits LFB should ship with:
+
+* **Node:** one plain **Kubo** node per computer. No IPFS Cluster by default (§9).
+* **Keep our files:** **recursively pin** every large file / directory root CID from the manifest on
+  **every** machine (§3). Directories via `ipfs add -r` and/or **MFS** paths (§7).
+* **Announce our content only:** set **`Reprovider.Strategy` / `Provide.Strategy` = `pinned`** (or
+  `roots`). Never leave it at `all` (§6).
+* **No public/recursive gateway:** if a gateway is used at all, it is the **local gateway on
+  `127.0.0.1`** for the user only; prefer **trustless / non-recursive** behavior (§6, §8).
+* **Let GC clear incidental cache:** GC on, sensible `StorageMax`; only pinned/MFS content survives
+  (§4).
+* **Find the user's own machines:** rely on the **DHT / delegated routing**, and prefer **direct
+  peering** between the user's own computers so their content moves among themselves (§2).
+* **The list travels via git:** the git-tracked **manifest of CIDs** is the primary way each machine
+  learns what to pin; **IPNS** is the IPFS-native mutable-pointer alternative to keep in mind for
+  server mode (§5).
+
+Everything above serves the one rule this file opened with: **sync only our own content; never cache,
+re-provide, or serve other people's content through the local computer.**
+
+---
+
+## Sources
+
+Gathered from the official IPFS / Kubo / IPFS-Cluster documentation:
+
+* [Pin files using IPFS — IPFS Docs](https://docs.ipfs.tech/how-to/pin-files/)
+* [Persistence, permanence and pinning — IPFS Docs](https://docs.ipfs.tech/concepts/persistence/)
+* [When does IPFS' garbage collector clear the cache — Ctrl blog](https://www.ctrl.blog/entry/ipfs-repo-cache-gc.html)
+* [Guide to IPFS garbage collection — LogRocket](https://blog.logrocket.com/guide-ipfs-garbage-collection/)
+* [IPFS Gateway — IPFS Docs](https://docs.ipfs.tech/concepts/ipfs-gateway/)
+* [Trustless Gateway Specification — IPFS Standards](https://specs.ipfs.tech/http-gateways/trustless-gateway/)
+* [Public IPFS Utilities — IPFS Docs](https://docs.ipfs.tech/concepts/public-utilities/)
+* [Best practices for HTTP Gateways — IPFS Docs](https://docs.ipfs.tech/how-to/gateway-best-practices/)
+* [Kubo config reference (Reprovider / Provide.Strategy, StorageMax, StorageGCWatermark) — GitHub](https://github.com/ipfs/kubo/blob/master/docs/config.md)
+* [Kubo CLI reference — IPFS Docs](https://docs.ipfs.tech/reference/kubo/cli/)
+* [Content routing issue #9416 (Reprovider.Strategy "roots") — Kubo GitHub](https://github.com/ipfs/kubo/issues/9416)
+* [IPNS (InterPlanetary Name System) — IPFS Docs](https://docs.ipfs.tech/concepts/ipns/)
+* [Publishing IPNS names — IPFS Docs](https://docs.ipfs.tech/how-to/publish-ipns/)
+* [File systems (MFS) — IPFS Docs](https://docs.ipfs.tech/concepts/file-systems/)
+* [Mutable File System tutorial — ProtoSchool](https://proto.school/mutable-file-system/09/)
+* [IPFS Cluster — Pinset orchestration for IPFS](https://ipfscluster.io/)
+* [IPFS Cluster: scaling IPFS data storage — IPFS Blog](https://blog.ipfs.tech/2022-07-01-ipfs-cluster/)
+* [Set up server infrastructure with IPFS Cluster — IPFS Docs](https://docs.ipfs.tech/install/server-infrastructure/)

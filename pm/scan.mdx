@@ -1,0 +1,282 @@
+---
+title: LargeFileBridge — The Scanning Service (Big-File Discovery)
+description: The periodic filesystem scan that discovers large files and filesystem changes. It runs on its OWN cadence — once every FOUR hours — separate from the every-15-minute background sync (storage.mdx §13). It is a metadata-only pass: it stats files (name, size, mtime) and NEVER opens or reads file contents. Cross-platform — scheduled by a launchd plist on Mac, cron/systemd timer on Linux, and Task Scheduler on Windows — with the Mac launchd plist as the primary target. It walks the scanner roots, discovers Git repos, applies the repo mask, and flags every file at or above the "big" threshold (default 100 MB, set in settings.mdx). Its output is written to each sync unit's status.yaml and feeds the Repos/Sync UI. This is how LFBridge notices new big files, grown files, moved/renamed files, deleted files, and newly appeared or vanished repos without any manual action.
+---
+
+# LargeFileBridge — The Scanning Service (Big-File Discovery)
+
+The **scan** is the periodic pass that answers one question across all of a user's computers:
+**"Have any big files — or the repos that hold them — changed since last time?"** It discovers new
+large files, notices files that have grown past the "big" threshold, spots moves/renames/deletes, and
+registers repos that have appeared or vanished. It is the eyes of LargeFileBridge (LFB); the
+[background sync](./storage.mdx#13-the-background-sync-process--the-transparency-contract) is the
+hands that move the bytes.
+
+Two scheduled jobs, two cadences, on purpose:
+
+| Job | Cadence | What it does | Where spec'd |
+| --- | --- | --- | --- |
+| **Scan** (this file) | **every 4 hours** | Deep, whole-filesystem **discovery** — stat every candidate file, find big files + filesystem/repo changes. Metadata only; no IPFS. | this file |
+| **Sync** | every **15 minutes** | Targeted work on **already-known** `synced: true` units — add/update manifests, pin, fetch missing CIDs over IPFS. | [storage.mdx §13](./storage.mdx#13-the-background-sync-process--the-transparency-contract) |
+
+The scan is expensive (it walks the tree and stats many files), so it is throttled to **every four
+hours**. The sync is cheap per unit and time-sensitive, so it runs **every fifteen minutes** over the
+small set the scan has already found. The 15-min sync may do a *light* rescan of a unit it is about to
+sync; the **deep, full-filesystem discovery walk is this 4-hour scan's job alone.**
+
+> This file is the scanning-service spec. It refines the scanner described in
+> [storage.mdx §7](./storage.mdx#7-the-scanner--discovering-repos-and-the-mask) into a scheduled,
+> cross-platform service with its own cadence, and it is the authoritative source for the **scan
+> interval**. The **"big" threshold** it applies is owned by [settings.mdx](./settings.mdx)
+> (global default **100 MB**, per-repo overridable). See "Reconciliation" (§9).
+
+Tech stack (repo `CLAUDE.md`): **TypeScript on Node** — the scan worker is a Node/TS entry point, run
+by the OS scheduler. Never raw shell/`find`/`du`.
+
+---
+
+## 1. What the scan does — and deliberately does NOT do
+
+The scan is a **metadata-only** pass. For every candidate path it reads only what the filesystem
+already knows without opening the file:
+
+* **name / path**
+* **size in bytes** (from `stat`)
+* **mtime** (last-modified time, from `stat`)
+* file vs. directory vs. symlink
+
+It **never opens or reads file contents.** It does **not** hash files, does **not** compute IPFS
+CIDs, and does **not** touch IPFS at all. Hashing and CID computation are the sync's job, and only for
+files the scan has already flagged as big and that live in a `synced: true` unit. Keeping the scan to
+pure `stat` is what makes it cheap enough to run over the whole filesystem every four hours.
+
+What the scan produces is a **candidate list** per sync unit: the set of files at or above the big
+threshold, plus a diff against the previous scan (added / grown / shrunk / moved / deleted), written
+to that unit's `status.yaml` (§6). It changes **no** file contents and moves **no** bytes.
+
+---
+
+## 2. Cadence — every four hours
+
+* The scan runs **once every four hours** (`interval_hours: 4`, i.e. 14400 seconds).
+* It also runs **on demand** from the web app — a **"Rescan"** action on the Repos page and on any
+  repo's page triggers the same scan worker immediately, out of band from the schedule.
+* Like the sync process, the scan has the same **installed vs. on/off** transparency contract
+  (§7): the plist/timer/task can be installed but disabled, and the user toggles it from the web app.
+* Cadence is a setting, not a constant: `config.yaml → scan_process.interval_hours` (§5). Four hours
+  is the default; the UI may expose it later. Changing it re-writes the schedule (§4).
+
+---
+
+## 3. Cross-platform — runs on Mac, Windows, and Linux
+
+LFB runs on the **Mac filesystem** primarily, but also on **Windows and Linux**. The scan **worker
+is one cross-platform Node/TS program**; only the *scheduler that launches it* differs per OS. The
+worker code path is identical everywhere — only path normalization and the schedule installer branch
+on platform.
+
+| OS | Scheduler | Unit | Primary? |
+| --- | --- | --- | --- |
+| **macOS** | **launchd** | a `.plist` LaunchAgent (`StartInterval` = 14400) | **Yes — primary target** |
+| **Linux** | cron **or** systemd timer | a crontab line / `.timer` + `.service` | secondary |
+| **Windows** | Task Scheduler | a scheduled task (4-hour trigger) | secondary |
+
+The **Mac launchd plist is the primary, first-class implementation** ("the plist for Mac … the Mac
+equivalent specific one"). Windows and Linux schedulers are supported and follow the same
+installed / on-off model, implemented per-OS behind one installer interface.
+
+### 3.1 The Mac launchd plist
+
+A LaunchAgent, distinct from the sync job's plist (`com.largefilebridge.sync`,
+[storage.mdx §3](./storage.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)):
+
+```xml
+<!-- ~/Library/LaunchAgents/com.largefilebridge.scan.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>                <string>com.largefilebridge.scan</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>/path/to/LargeFileBridge/code/.../scan-worker.js</string>
+  </array>
+  <key>StartInterval</key>        <integer>14400</integer>   <!-- every 4 hours -->
+  <key>RunAtLoad</key>            <false/>                    <!-- honor the on/off toggle -->
+  <key>StandardOutPath</key>      <string>~/T/_large_files_bridge/log.log</string>
+  <key>StandardErrorPath</key>    <string>~/T/_large_files_bridge/error.err</string>
+</dict>
+</plist>
+```
+
+* **Installed** = the plist exists at `~/Library/LaunchAgents/com.largefilebridge.scan.plist`.
+* **On** = the job is `launchctl bootstrap`/`enable`d; **off** = `bootout`/`disable`d. Installed and
+  on/off are two independent facts (§7), mirrored in `config.yaml → scan_process`.
+* stdout/stderr flow into the same two log files as the rest of LFB
+  ([storage.mdx §12](./storage.mdx#12-logging)).
+
+---
+
+## 4. Roots, discovery, and the mask
+
+The scan walks the **`scanner.roots`**
+([storage.mdx §3](./storage.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)),
+honoring `scanner.ignore_globs` and `follow_symlinks`. In one pass it does three things, in order:
+
+1. **Repo discovery.** Any directory containing a `.git` folder is registered/reconciled as a repo
+   sync unit (`sync/r/<repo_name>/`). New repos are created (default `synced: false` until the user
+   opts in); already-known repos keep their settings; repos gone from disk are marked `missing` in
+   their `status.yaml` — never silently deleted
+   ([storage.mdx §7](./storage.mdx#7-the-scanner--discovering-repos-and-the-mask)).
+2. **Build the mask.** The set of registered repo working-tree paths becomes the **mask** for the
+   computer unit, so every file is attributed to exactly **one** unit — a repo unit or the computer
+   unit, never both.
+3. **Flag big files.** Walk each unit's scope, `stat` every file, and record every file **at or above
+   the effective big threshold** (§4.1) as a candidate. Diff against the previous scan to classify
+   each change.
+
+The scan **never descends** into `scanner.ignore_globs` (e.g. `**/node_modules/**`, `**/.git/**`,
+`**/.Trash/**`) or a unit's own `exclude_globs` — this is both correctness (don't bridge build junk)
+and the main performance lever.
+
+### 4.1 The effective big threshold
+
+Whether a file is "big" is decided **per unit** by the threshold resolution in
+[settings.mdx](./settings.mdx):
+
+```
+effective_threshold(file) =
+  the repo's override        if that repo's "override big threshold" checkbox is ON
+  else the global setting    (default 100 MB)
+```
+
+The scan reads the resolved threshold for each unit and flags files whose **size ≥ threshold**.
+The scan does **not** define the threshold or its default — it only applies it. (§9 Reconciliation.)
+
+---
+
+## 5. Config — `scan_process` in the app config
+
+The scan's schedule/state is a hierarchical block in the app-level, computer-wide `config.yaml`
+([storage.mdx §3](./storage.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)),
+parallel to `sync_process`:
+
+```yaml
+# ~/T/_large_files_bridge/config.yaml  (excerpt — the scanning service)
+scan_process:
+  installed: false            # is the scan scheduler (launchd/cron/task) installed on this machine?
+  enabled: false              # is it currently ON? (user toggles from the web app)
+  interval_hours: 4           # cadence — the scan runs every 4 hours
+  label: com.largefilebridge.scan   # launchd label (Mac) / task name / timer name
+  last_run_at: 2026-07-02T12:00:00Z # machine-written: when the scan last completed
+  last_run_ok: true           # machine-written: did the last scan finish without a fatal error?
+```
+
+The existing `scanner:` block (roots / ignore_globs / follow_symlinks) stays where it is in
+`config.yaml` — `scan_process` adds only the **scheduling + on/off** facts, exactly mirroring how
+`sync_process` is structured.
+
+---
+
+## 6. Output — what the scan writes
+
+The scan writes **only** operational metadata; it never writes a manifest or moves bytes. Per sync
+unit it updates that unit's `status.yaml`
+([storage.mdx §6.3 / §8.2](./storage.mdx#5-the-two-kinds-of-sync-unit--the-core-model)):
+
+```yaml
+# sync/r/<repo_name>/status.yaml  (excerpt — written by the scan)
+schema_version: 1
+last_scan_at: 2026-07-02T12:00:03.114Z
+scan_source: scheduled            # scheduled | manual (Rescan button)
+effective_threshold_bytes: 104857600   # 100 MB — what "big" meant for THIS unit this run
+big_file_count: 7                 # files at/above the threshold right now
+big_file_bytes: 5629499534        # total bytes of those big files
+changes_since_last_scan:
+  added:   [large/trailer_v4.mp4]        # newly appeared big files
+  grew:    [assets/render_out.exr]       # crossed the threshold since last scan
+  shrank:  []                            # dropped below the threshold
+  moved:   [{ from: old/hero.png, to: assets/hero.png }]  # same size+mtime, new path
+  deleted: [large/trailer_v2.mp4]        # gone from disk
+repo_state: present               # present | missing (drive unmounted / repo deleted)
+```
+
+* **Move/rename detection** uses size + mtime heuristics only (no content hashing) — a file that
+  vanished at path A and appeared at path B with the same size and mtime is reported as a **move**,
+  not a delete+add, so the sync can keep the existing pin instead of re-adding bytes.
+* The **computer unit** (`sync/computer/status.yaml`) gets the same shape for everything outside
+  repos.
+* The scan **stamps `last_scan_at`** and the change set; the **sync** later reads these to know what
+  work to do. The scan itself pins nothing and fetches nothing.
+
+The web app reads these `status.yaml` files to show, per repo and on the Sync page: last scan time,
+big-file counts, and "N new big files found" badges — all without the scan ever having opened a file.
+
+---
+
+## 7. The transparency contract (installed vs. on/off)
+
+Identical in spirit to the sync process
+([storage.mdx §13](./storage.mdx#13-the-background-sync-process--the-transparency-contract)) — the
+web app is transparent about the scan and lets the user control it:
+
+* **Installed** — is the scan scheduler present on this machine? (`scan_process.installed`, the plist
+  on Mac / cron entry or timer on Linux / task on Windows.) It must be installed for the scan to
+  exist at all.
+* **On / off** — is it currently enabled? (`scan_process.enabled`.) Separate from installed: the user
+  can install it and still leave it off.
+* The web app **displays** both facts (reconciled with the real launchd/cron/task state) and lets the
+  user **install/uninstall** and **toggle on/off** from the UI, plus **Rescan now** on demand.
+
+This surfaces on the **Sync** page alongside the 15-min sync's own installed/on-off state, so the two
+scheduled jobs are visible side by side.
+
+---
+
+## 8. Acceptance criteria
+
+The scan is correct when **all** hold:
+
+1. The scan runs **every 4 hours** by default (`scan_process.interval_hours: 4`), on its own schedule
+   **separate** from the every-15-minute sync, and also runs on demand from a **Rescan** action.
+2. The scan is **metadata-only**: it `stat`s files for name/size/mtime and **never opens, reads, or
+   hashes file contents**, and **never touches IPFS**.
+3. The scan is **cross-platform**, scheduled by a **launchd plist on Mac** (primary), and by cron /
+   systemd timer on Linux and Task Scheduler on Windows — one shared Node/TS worker, per-OS installer.
+4. In one pass the scan **discovers/reconciles repos**, builds the **repo mask**, and flags every file
+   **at or above the effective big threshold**, attributing each file to exactly one sync unit.
+5. The effective threshold is resolved **per unit** — the repo's override when its checkbox is on,
+   else the **global default (100 MB)** — read from [settings.mdx](./settings.mdx); the scan applies
+   it but does not define it.
+6. The scan writes **only** operational metadata to each unit's `status.yaml` (last scan time,
+   big-file counts, and an added/grew/shrank/moved/deleted change set); it writes **no** manifest and
+   moves **no** bytes.
+7. Move/rename is detected by size+mtime (no hashing) and reported as a **move**, not delete+add.
+8. `config.yaml → scan_process` records **installed** and **enabled** as two independent facts, both
+   displayed in the web app, with install/uninstall + on/off toggle + Rescan available from the UI.
+9. Ignored paths (`scanner.ignore_globs`, per-unit `exclude_globs`) are never descended into.
+
+---
+
+## 9. Reconciliation with existing specs
+
+Two fields in `storage.mdx` predate these instructions and must be reconciled — flagged here, not
+silently contradicted:
+
+* **Big-file threshold default.** `storage.mdx §3` shows `sync_process.large_file_min_bytes: 5242880`
+  (5 MiB) and `sync/r/<repo>/config.yaml → large_files.min_bytes: 5242880`. The **authoritative
+  default is now 100 MB**, owned by [settings.mdx](./settings.mdx). Those `storage.mdx` values should
+  be updated to `104857600` (100 MB) and re-pointed at the settings resolution, or dropped in favor of
+  the settings-owned value. (GitHub's own hard limit is 100 MB — see `README.md` — so 100 MB is the
+  natural "big" default.)
+* **Scan cadence.** `storage.mdx §7` describes the scanner as running "on demand … and as part of the
+  background sync process (§13)" every 15 min. This file makes the **deep discovery scan its own
+  4-hour scheduled job**; the 15-min sync may still do a *light* per-unit rescan, but the
+  whole-filesystem discovery walk is this scan. `storage.mdx §7` should reference this file for the
+  discovery cadence.
+
+Siblings: [settings.mdx](./settings.mdx) (global big-file threshold + units) ·
+[repo_settings.mdx](./repo_settings.mdx) (per-repo overrides, reached via the gear icon) ·
+[storage.mdx](./storage.mdx) (state root, sync units, the 15-min sync).

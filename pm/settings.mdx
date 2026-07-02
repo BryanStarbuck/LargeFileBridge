@@ -1,0 +1,176 @@
+---
+title: LargeFileBridge — Settings (Global)
+description: The global Settings page (/settings). The authoritative source for the "big file" threshold — the size cutoff at or above which a file is considered big and eligible to be bridged over IPFS. Default 100 MB. A value field with a unit dropdown on its right that toggles between MB, GB, and TB. This global threshold is inherited by every repo by default. Each repo carries a per-repo override checkbox that is OFF by default (meaning "inherit the global value"); a user can turn it ON for a single repo and type a custom value to override just that repo — see repo_settings.mdx. This file also frames the rest of the global settings surface (account, allow-list, IPFS node, scan + sync process controls) which link out to their own specs.
+---
+
+# LargeFileBridge — Settings (Global)
+
+The **Settings** page (`/settings`, the Settings nav item —
+[left_bar.mdx §3](./left_bar.mdx#3-the-app-bar-main-navigation)) holds LargeFileBridge's (LFB)
+**computer-wide, global** configuration. Its most important control, and the focus of this spec, is
+the **big-file threshold**: the single number that decides what LFB even considers a "big file."
+
+Everything on this page writes to the app-level, computer-wide `config.yaml`
+([storage.mdx §3](./storage.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)). These
+are global defaults for the whole install; a repo may override a subset of them on its own page
+([repo_settings.mdx](./repo_settings.mdx)).
+
+Siblings: [repo_settings.mdx](./repo_settings.mdx) (per-repo overrides, reached via the gear icon) ·
+[scan.mdx](./scan.mdx) (the scan that *applies* the threshold) · [storage.mdx](./storage.mdx) (where
+these values persist).
+
+---
+
+## 1. The big-file threshold — the headline setting
+
+**What counts as "big."** A file is **big** when its size is **at or above the threshold**. Only big
+files are candidates for bridging over IPFS; everything smaller is left to Git as usual. This one
+number is the dividing line the whole product turns on.
+
+* **Default: 100 MB.** A fresh install treats any file **≥ 100 MB** as big. (This mirrors GitHub's own
+  100 MB hard push limit — see `README.md` — so the default catches exactly the files Git hosting
+  rejects.)
+* It is a **global setting**: one value for the whole computer, inherited by every repo unless that
+  repo overrides it (§3).
+* The **[scan](./scan.mdx)** reads this value every run and flags every file at or above it; the scan
+  applies the threshold but does not define it — **this page is the authoritative source.**
+
+### 1.1 The control — a value field with a unit dropdown
+
+The threshold renders as **one number input with a unit dropdown on its right**:
+
+```
+ Big-file threshold
+ ┌───────────────┐  ┌──────┐
+ │      100      │  │ MB ▾ │      Files at or above this size are bridged over IPFS.
+ └───────────────┘  └──────┘
+      value            unit
+```
+
+* **Value** — the numeric field. Default `100`.
+* **Unit dropdown (on the right)** — toggles between **MB**, **GB**, and **TB**. Default **MB**.
+  Changing the unit **does not silently rescale the number** — it changes the interpretation of the
+  value the user typed (100 MB → switch to GB → 100 GB). The UI shows the resolved byte size as helper
+  text (`= 104,857,600 bytes`) so the meaning is never ambiguous.
+* The pair (value + unit) is the human-facing form; LFB **stores the resolved byte count** in
+  `config.yaml` so all downstream code compares plain bytes.
+
+### 1.2 Units — MB / GB / TB
+
+| Unit | Multiplier (binary, matching `storage.mdx` byte fields) | Example value → bytes |
+| --- | --- | --- |
+| **MB** | 1 MB = 1,048,576 bytes (MiB) | 100 MB → 104,857,600 |
+| **GB** | 1 GB = 1,073,741,824 bytes (GiB) | 2 GB → 2,147,483,648 |
+| **TB** | 1 TB = 1,099,511,627,776 bytes (TiB) | 1 TB → 1,099,511,627,776 |
+
+The dropdown offers exactly these three units, in this order. (Binary multipliers keep the stored
+byte values consistent with the `size:`/`min_bytes:` fields already used throughout
+[storage.mdx](./storage.mdx).)
+
+### 1.3 Where it persists
+
+```yaml
+# ~/T/_large_files_bridge/config.yaml  (excerpt — the global big-file threshold)
+big_file:
+  threshold_bytes: 104857600   # resolved bytes — the SOURCE OF TRUTH downstream code reads
+  # The value+unit the user typed, kept so the UI redisplays their form exactly:
+  threshold_display:
+    value: 100
+    unit: MB                    # MB | GB | TB
+```
+
+This `big_file` block is the authoritative home of the threshold. It **supersedes** the older
+`sync_process.large_file_min_bytes` / per-repo `large_files.min_bytes` defaults in
+[storage.mdx §3/§6](./storage.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical), which
+should be re-pointed at this value (see [scan.mdx §9](./scan.mdx#9-reconciliation-with-existing-specs)).
+
+---
+
+## 2. Threshold resolution — global default, per-repo override
+
+The threshold is **global with per-repo override**. Resolution for any given repo:
+
+```
+effective_threshold(repo) =
+  repo.big_file_override.value (in its unit)   if repo's override checkbox is ON
+  else the GLOBAL big_file.threshold_bytes      (default 100 MB)
+```
+
+* By default **every repo inherits the global value** — there is nothing to set per repo.
+* A repo opts out only by **turning on its override checkbox** and typing its own value+unit. That
+  affects **only that repo**.
+* The [scan](./scan.mdx) computes `effective_threshold` per unit each run and records it in that
+  unit's `status.yaml` (`effective_threshold_bytes`) so the UI can always show what "big" meant for a
+  given repo on a given scan.
+
+---
+
+## 3. The per-repo override — checkbox OFF by default
+
+The override lives on the **repo's own settings page** ([repo_settings.mdx](./repo_settings.mdx)),
+but the *rule* is defined here because it is a property of this global setting:
+
+* Each repo has a **checkbox: "Override the global big-file threshold for this repo."**
+* **Default: OFF** for every repo. OFF means **inherit the global value** — the repo shows the global
+  threshold, greyed out, as read-only context.
+* When a user **turns the checkbox ON**, the repo reveals its own value field + unit dropdown
+  (same MB/GB/TB control as §1.1), pre-filled with the current global value, which they then change.
+* Turning it back **OFF** discards the override and the repo reverts to inheriting the global value.
+
+This is deliberately a two-step opt-in: the common case is "one threshold for everything," and a user
+only goes out of their way to override when a specific repo needs it (e.g. a repo full of 40 MB images
+where they want a lower cutoff, or a video repo where they want a higher one).
+
+The per-repo override persists in that repo's own config
+([storage.mdx §6.2](./storage.mdx#62-syncrrepo_nameconfigyaml)):
+
+```yaml
+# sync/r/<repo_name>/config.yaml  (excerpt — the per-repo threshold override)
+big_file_override:
+  enabled: false                # the checkbox — OFF = inherit the global threshold
+  value: 100                    # only meaningful when enabled: true
+  unit: MB                      # MB | GB | TB
+```
+
+---
+
+## 4. The rest of the global settings surface
+
+The threshold is the headline, but the Settings page is also where the other global, computer-wide
+concerns live. Each is specified elsewhere; the page groups them into sections:
+
+| Section | What | Spec |
+| --- | --- | --- |
+| **Big files** | The threshold (§1) + its unit. | this file |
+| **Scan process** | The 4-hour discovery scan: installed / on-off / Rescan now. | [scan.mdx §7](./scan.mdx#7-the-transparency-contract-installed-vs-onoff) |
+| **Sync process** | The 15-min background sync: installed / on-off. | [storage.mdx §13](./storage.mdx#13-the-background-sync-process--the-transparency-contract) |
+| **Scanner roots** | Which top-level dirs the scan walks + global ignore globs. | [storage.mdx §3/§7](./storage.mdx#7-the-scanner--discovering-repos-and-the-mask) |
+| **IPFS node** | API/gateway multiaddrs, pin mode, reprovide. | [storage.mdx §3](./storage.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical) |
+| **Access / allow-list** | The OpenAuthFederated allow-listed emails (admin only). | [storage.mdx §4](./storage.mdx#4-per-logged-in-user-storage--the-per-user-requirement) |
+| **Account** | The signed-in user, theme/density, sign out. | [storage.mdx §4](./storage.mdx#4-per-logged-in-user-storage--the-per-user-requirement) |
+
+Global settings write to the app `config.yaml`; account/appearance settings write to the per-user
+`users/<email>/config.yaml`.
+
+---
+
+## 5. Acceptance criteria
+
+1. The Settings page (`/settings`) shows a **big-file threshold** control: a numeric **value** field
+   with a **unit dropdown on its right** offering **MB / GB / TB** (in that order), defaulting to
+   **100** / **MB**.
+2. A file is "big" when its size is **≥ the threshold**; only big files are bridged. The default
+   threshold is **100 MB**.
+3. Changing the unit changes the interpretation of the typed value (it does not silently rescale);
+   the UI shows the resolved byte size as helper text.
+4. The threshold persists to `config.yaml → big_file` as **resolved `threshold_bytes`** plus the
+   `threshold_display` value+unit; downstream code reads bytes.
+5. The global threshold is **inherited by every repo by default**. Each repo has an **override
+   checkbox that is OFF by default** (= inherit); turning it ON reveals a per-repo value+unit that
+   overrides **only that repo**.
+6. The [scan](./scan.mdx) resolves `effective_threshold` per repo (override if on, else global) each
+   run and records it in that unit's `status.yaml`.
+7. This page is the **authoritative source** for the threshold and its default; the older
+   `large_file_min_bytes` / `large_files.min_bytes` fields in `storage.mdx` are re-pointed at it.
+8. The page also groups the other global concerns (scan/sync process, scanner roots, IPFS, allow-list,
+   account), each linking to its own spec; allow-list editing is gated to `role:admin`.

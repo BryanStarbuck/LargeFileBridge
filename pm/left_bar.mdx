@@ -1,0 +1,128 @@
+---
+title: LargeFileBridge — Left Bar
+description: The left navigation bar specification — the human companion to pm/left_bar.yaml (the machine source of truth the frontend imports raw). Defines the "Large File Bridge" wordmark (spaces between the three words), the LOCKED color rules (all left-bar text black; the brand accent stays accent; medium grey becomes black), the single app bar, every nav item (Repos, Peers, Sync, Settings), the bottom account slot, active/hover states, and permission gates.
+---
+
+# LargeFileBridge — Left Bar
+
+The **left bar** is the fixed 256px navigation column on every screen. There is **one** left bar —
+the **app bar** — data-driven from **`pm/left_bar.yaml`**, which the frontend imports raw
+(`src/config/left_bar.ts`, via Vite `?raw`). There is no second code copy of the nav content.
+
+Division of labor:
+
+* **`pm/left_bar.yaml`** — the **machine source of truth** for the *content*: items, labels, icons,
+  routes, order, gates, the header label, the account-menu items.
+* **This file** — the **human spec** for everything around that content: the wordmark treatment,
+  the color rules, states, layout, and acceptance criteria. Where prose here and the yaml disagree
+  on content, the yaml wins; on styling, this file wins.
+
+Siblings: [Repos](./repos.mdx) (the landing screen to the right of this bar) ·
+[One repo](./one_repo.mdx) (the per-repo file-sync screen a Repos row opens).
+
+---
+
+## 1. The wordmark (top of the bar)
+
+The header of the app bar shows the product name as **text only** — no icon mark:
+
+* The label is **"Large File Bridge"** — with a **space between "Large" and "File"** and a **space
+  between "File" and "Bridge"**. Never `LargeFileBridge` run together in the wordmark (that spelling
+  is only the repo/package name).
+* Normal letter tracking (`tracking-normal`) — plain readable text, not a tracked-out logotype.
+* It keeps its **brand accent** color (`--lfb-primary`, `#2563eb`) — the accent stays the accent (§2).
+* `text-lg font-semibold`, vertically centered in the header band, left-padded to align with the
+  nav items, bottom border `--lfb-border`.
+* Clicking it routes to `/` (the Repos page).
+
+The label string itself lives in `pm/left_bar.yaml` (`header.label`) so the frontend renders it
+verbatim — the yaml carries the spaced form.
+
+---
+
+## 2. Color rules (LOCKED)
+
+The left bar's text is **black**. The complete rule set:
+
+| What | Was | Now |
+| --- | --- | --- |
+| Nav item labels + icons | medium grey | **black** (`text-black`) |
+| Account slot name / email lines | name dark, email medium grey | **both black** (`text-black`) |
+| Wordmark "Large File Bridge" | brand accent | **stays accent** (`--lfb-primary`) |
+| Active nav item | accent text on accent-tint background | **stays accent** |
+| "Sign in" accent in the account slot | accent | **stays accent** |
+| Hover background (`hover:bg-slate-100`) | light grey fill | unchanged (it is a fill, not text) |
+
+The principle, verbatim: **everything on the brand accent stays accent; everything that was medium
+grey becomes black.** Icons inherit their item's text color, so they follow the same rule
+automatically. Black on white passes WCAG AAA; the active state keeps its tint background for shape.
+
+---
+
+## 3. The app bar (main navigation)
+
+A flat, ordered list under the wordmark; the account slot pinned to the bottom. Content from
+`pm/left_bar.yaml` (`Location: app`):
+
+| Order | Item | Icon (lucide) | Route | Purpose |
+| --- | --- | --- | --- | --- |
+| 1 | **Repos** | `FolderGit2` | `/` | Every managed git repo on this computer, with its large-file sync counts and status ([Repos](./repos.mdx)). |
+| 2 | **Peers** | `Network` | `/peers` | Your other computers that pin these files over IPFS — laptop, desktop, studio, server, family. |
+| 3 | **Sync** | `RefreshCw` | `/sync` | The background sync process: installed? on/off? the every-15-min `launchd` schedule and recent activity. |
+| 4 | **Settings** | `Settings` | `/settings` | Account, allow-list, and IPFS node configuration. |
+
+States:
+
+* **Active** — the item whose route matches the current path (`/` exact; others by prefix):
+  accent text + `--lfb-primary`/10 tint background, `font-medium`.
+* **Inactive** — black text (§2), transparent background.
+* **Hover** — `bg-slate-100` fill; text color unchanged.
+* Each item shows its yaml `description` as the hover `title` tooltip.
+
+---
+
+## 4. The account slot (bottom of the bar)
+
+Pinned to the bottom of the bar, always visible:
+
+* Every session belongs to an **allow-listed, signed-in** user (OpenAuthFederated Google SSO —
+  there is **no default / anonymous account**, per the charter). So the slot always renders a
+  **signed-in** state: avatar + **name** + **Google email**, both text lines **black** (§2).
+* Clicking it opens an **upward-expanding** popup menu (items from the yaml `footer`): **Settings**,
+  **Allow-list** (only with `role:admin`), **Log out**. Log out returns to the sign-in screen.
+
+---
+
+## 5. Layout & behavior
+
+* Fixed width **256px** (`w-64`), full height, white background, right border `--lfb-border`;
+  the nav list scrolls independently if it overflows.
+* Permission gates come from OpenAuthFederated claims (e.g. `role:admin`); a gated item is
+  **hidden**, not disabled, when the claim is absent.
+* Icons resolve by lucide name in `NavIcon.tsx`; an unknown icon name renders no icon rather than
+  crashing.
+
+---
+
+## 6. Acceptance criteria
+
+1. The header reads **"Large File Bridge"** — spaces between *Large*/*File* and *File*/*Bridge*,
+   normal tracking, brand accent (`--lfb-primary`), and routes to `/`.
+2. All left-bar text is **black**: nav labels, icons, and both account-slot text lines. Nothing in
+   the bar renders in medium grey.
+3. Accent elements keep their accent: the wordmark, the active nav item (text + tint background),
+   and the Sign-in accent.
+4. The bar renders its content **from `pm/left_bar.yaml`** — items, order, icons, routes, labels,
+   and gates; no hard-coded copies in components.
+5. The app bar lists exactly: Repos, Peers, Sync, Settings — in that order.
+6. Active state matches by route (exact `/`, prefix otherwise); gated items are hidden without the
+   claim; hover shows the light-grey fill without changing text color.
+7. The account slot sits at the bottom, is always signed-in (no anonymous state), and its popup
+   expands upward.
+
+<!--
+  This file is the styling/behavior spec; pm/left_bar.yaml is the content source of truth the
+  frontend imports raw. LOCKED here: the spaced wordmark "Large File Bridge", and the color rule
+  "accent stays accent, medium grey becomes black". ONE left bar only (app). When adding a nav item,
+  edit the yaml (content) and, if it needs special treatment, add a row to §3 here.
+-->

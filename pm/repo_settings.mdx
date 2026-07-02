@@ -1,0 +1,168 @@
+---
+title: LargeFileBridge — Repo Settings (Per-Repo)
+description: The per-repo settings page. Reached by the GEAR ICON shown on a single repo's page (the "one repo" view) — clicking the gear opens this settings page scoped to that one repo. It holds the settings that can differ per repo: the big-file threshold override (a checkbox that is OFF by default = inherit the global setting from settings.mdx; ON reveals a value + MB/GB/TB unit dropdown that overrides just this repo), the synced on/off master toggle, the large-file selection rules (follow .gitignore, include/exclude globs), the pinning/fetch policy, and sharing (private to your own computers vs. shared with allow-listed participants). Everything on this page writes to that repo's sync/r/<repo_name>/config.yaml. Settings not overridden here fall back to the global values.
+---
+
+# LargeFileBridge — Repo Settings (Per-Repo)
+
+Every repo can be configured on its own. This is the **per-repo settings page** — the screen you land
+on when you click the **gear icon** on a single repo's page. It is scoped to **one repo** and holds
+exactly the settings that are allowed to differ between repos; anything a repo does not override falls
+back to the global values on [settings.mdx](./settings.mdx).
+
+Everything here writes to that repo's own config,
+`sync/r/<repo_name>/config.yaml` ([storage.mdx §6.2](./storage.mdx#62-syncrrepo_nameconfigyaml)) —
+never to the global `config.yaml`.
+
+Siblings: [settings.mdx](./settings.mdx) (the global defaults this page can override) ·
+[scan.mdx](./scan.mdx) (applies the effective per-repo threshold) ·
+[storage.mdx §6](./storage.mdx#6-syncrrepo_name--the-per-repo-sync-unit-primary) (the per-repo sync
+unit and its `config.yaml`).
+
+---
+
+## 1. How you get here — the gear icon
+
+* On a single repo's page (the [one repo](./one_repo.mdx) view — the screen a Repos-table row opens,
+  route `/repos/$repoId`), a **gear icon** is shown in the header for that repo (top-right, alongside
+  **Sync now**). *This gear is a new addition the one-repo header must add;
+  [one_repo.mdx §3.1](./one_repo.mdx#31-header) should gain it.*
+* Clicking the gear **navigates to this per-repo settings page**, scoped to that repo — route
+  `/repos/$repoId/settings`, matching the one-repo route convention (or a slide-over panel over the
+  repo view; final form settled with the one-repo spec).
+* The page header names the repo and its working-tree path so it is unambiguous which repo is being
+  configured. A **back** affordance returns to the repo's page.
+
+The gear is the **only** entry to per-repo settings — global settings never expose per-repo controls;
+they only show the global defaults this page can override.
+
+---
+
+## 2. The settings on this page
+
+The page presents these per-repo settings, each of which either overrides a global default or is
+inherently repo-specific.
+
+### 2.1 Big-file threshold override
+
+The headline per-repo control, and the reason the checkbox model exists (rule defined in
+[settings.mdx §3](./settings.mdx#3-the-per-repo-override--checkbox-off-by-default)):
+
+* A **checkbox: "Override the global big-file threshold for this repo."**
+* **Default: OFF** → the repo **inherits the global threshold** (default 100 MB). While off, the page
+  shows the current global value **greyed out / read-only** so the user sees what will apply.
+* **ON** → reveals a **value field + unit dropdown (MB / GB / TB)** — the same control as
+  [settings.mdx §1.1](./settings.mdx#11-the-control--a-value-field-with-a-unit-dropdown) — pre-filled
+  with the global value, which the user then changes. This overrides the threshold **for this repo
+  only**.
+* Turning it back OFF discards the override; the repo reverts to inheriting the global value.
+
+```yaml
+# sync/r/<repo_name>/config.yaml  (excerpt)
+big_file_override:
+  enabled: false      # the checkbox — OFF = inherit global; ON = use value+unit below
+  value: 100
+  unit: MB            # MB | GB | TB
+```
+
+The [scan](./scan.mdx) resolves the effective threshold as *override if enabled, else global* and
+records `effective_threshold_bytes` in this repo's `status.yaml` each run.
+
+### 2.2 Synced on / off (the master toggle)
+
+* A single toggle: **is this repo synced?** (`config.yaml → synced`,
+  [storage.mdx §6.2](./storage.mdx#62-syncrrepo_nameconfigyaml)).
+* **Default: OFF** — a newly discovered repo is registered but **not** bridged until the user opts in,
+  so a scan never bridges data without consent. `true` = LFB bridges this repo's big files; `false` =
+  discovered-but-ignored (a re-scan won't keep re-proposing it).
+
+### 2.3 Large-file selection rules
+
+Which big files in this repo get bridged (`config.yaml → large_files`):
+
+* **Follow `.gitignore`** (default **on**) — treat the repo's git-ignored big files as the bridge set,
+  so LFB bridges exactly the big files Git is already ignoring.
+* **Include globs** — force-bridge these paths even if Git tracks them.
+* **Exclude globs** — never bridge these even if git-ignored (e.g. build caches).
+
+### 2.4 Pinning / fetch policy
+
+How this computer participates for this repo (`config.yaml → sync`):
+
+* **Pin locally** (default on) — this computer pins the repo's big files.
+* **Fetch missing** (default on) — this computer fetches from peers any manifest CID it lacks.
+* **Publish manifest** (default on) — write the committed in-repo manifest
+  (`<repo>/.lfbridge/manifest.yaml`) so Git carries it to your other computers
+  ([storage.mdx §9.2](./storage.mdx#92-repo-manifests-travel-via-git-the-elegant-part)).
+
+### 2.5 Sharing — "some repos need users, some don't"
+
+Who participates in this repo (`config.yaml → access`,
+[storage.mdx §6.2](./storage.mdx#62-syncrrepo_nameconfigyaml)):
+
+* **Private** (default) — `shared: false`. Just *your* repo across *your own* computers; no user list.
+* **Shared** — `shared: true` + a list of allow-listed **participant** emails whose computers also pin
+  this repo (e.g. a family member or teammate). Only those allow-listed emails' computers participate.
+
+---
+
+## 3. Persistence — one repo config file
+
+Everything above writes to the single per-repo config
+([storage.mdx §6.2](./storage.mdx#62-syncrrepo_nameconfigyaml)):
+
+```yaml
+# ~/T/_large_files_bridge/sync/r/<repo_name>/config.yaml
+schema_version: 1
+updated_at: 2026-07-02T14:32:15.123Z
+
+repo:                          # identity — written by the scanner, read-only on this page
+  name: largefilebridge
+  path: ~/BGit/Bryan_git/LargeFileBridge
+  remote: https://github.com/BryanStarbuck/LargeFileBridge.git
+
+synced: false                  # §2.2 master toggle
+
+big_file_override:             # §2.1 threshold override (OFF = inherit settings.mdx global)
+  enabled: false
+  value: 100
+  unit: MB
+
+large_files:                   # §2.3 selection rules
+  follow_gitignore: true
+  include_globs: []
+  exclude_globs: []
+
+sync:                          # §2.4 pinning / fetch policy
+  pin_locally: true
+  fetch_missing: true
+  publish_manifest: true
+
+access:                        # §2.5 sharing
+  shared: false
+  participants: []
+```
+
+* Repo **identity** (`repo:`) is written by the [scanner](./scan.mdx) and shown read-only here — the
+  user configures behavior, not identity.
+* Any field a repo does **not** override falls back to the global default: the threshold falls back to
+  [settings.mdx](./settings.mdx) when `big_file_override.enabled` is false; `large_files.min_bytes`
+  semantics are subsumed by the threshold-override model.
+
+---
+
+## 4. Acceptance criteria
+
+1. The per-repo settings page is opened by the **gear icon** on a single repo's page, is scoped to
+   that one repo, and names the repo + its path.
+2. The page shows a **big-file threshold override checkbox, OFF by default** (= inherit the global
+   100 MB). Turning it ON reveals a **value + MB/GB/TB** control that overrides only this repo;
+   turning it OFF reverts to inheriting the global value.
+3. The page exposes the **synced on/off** master toggle (default OFF — discovered repos are not
+   bridged until opted in).
+4. The page exposes the **large-file selection rules** (follow `.gitignore` default on, include/exclude
+   globs), the **pinning/fetch policy** (pin locally / fetch missing / publish manifest, all default
+   on), and **sharing** (private by default; shared adds allow-listed participants).
+5. Everything on this page writes to that repo's `sync/r/<repo_name>/config.yaml` — never the global
+   config; unoverridden settings fall back to the global defaults in [settings.mdx](./settings.mdx).
+6. Repo identity (`repo:` name/path/remote) is written by the scanner and shown read-only here.

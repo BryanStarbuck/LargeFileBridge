@@ -1,0 +1,98 @@
+# ============================================================================
+# LargeFileBridge — Left Navigation Bar Specification
+# ============================================================================
+# Single source of truth for the app's left-side navigation bar.
+# The frontend imports THIS file directly (code/.../src/config/left_bar.ts,
+# via Vite `?raw`) — there is no separate code copy of the nav content.
+# Human companion spec: pm/left_bar.mdx (wordmark, color rules, states).
+#
+# There is ONE left bar (the product is a focused, single-window localhost app):
+#   1. app  — a flat list of the primary sections. Settings is a nav item that
+#             routes to /settings; there is no separate settings sub-bar yet.
+#
+# Product context (see README.md + CLAUDE.md charter):
+#   - Localhost web app that syncs a user's LARGE files across their own
+#     computers via IPFS. Git tracks the small files; LFBridge moves the big,
+#     git-ignored files peer-to-peer. Node + TypeScript.
+#   - Auth: OpenAuthFederated federated Google SSO. Allow-listed users only.
+#     No default / anonymous account — every bar renders for a signed-in user.
+# ============================================================================
+
+Left_Nav:
+  Left_bars:
+
+    # ==========================================================================
+    # LEFT BAR: app — the main app
+    # ==========================================================================
+    - Location: app
+      name: "LargeFileBridge — Main Left Bar"
+      description: "Primary navigation: Repos, Peers, Sync, Settings."
+      auth_system: "openauth_federated"
+      sidebar_width: 256px
+
+      header:
+        kind: logo
+        # Spaces between the three words are REQUIRED (pm/left_bar.mdx §1) —
+        # never "LargeFileBridge" run together in the wordmark. Rendered
+        # verbatim, normal tracking.
+        label: "Large File Bridge"
+        alt_text: "Large File Bridge — sync large files across your computers via IPFS"
+        click_route: "/"
+
+      # Color rules (pm/left_bar.mdx §2, LOCKED): all left-bar text is black;
+      # anything on the brand accent (wordmark, active item, sign-in accent)
+      # stays the accent color; anything that was medium grey becomes black.
+      styling:
+        text_color: "black"
+        keep_accent: ["wordmark", "active_item", "sign_in_accent"]
+        replace_medium_grey_with: "black"
+
+      nav_items:
+        - id: repos
+          label: "Repos"
+          icon: "FolderGit2"
+          route: "/"
+          order: 1
+          description: "Every git repo on this computer that LargeFileBridge manages, with its large-file sync counts and status."
+
+        - id: peers
+          label: "Peers"
+          icon: "Network"
+          route: "/peers"
+          order: 2
+          description: "Your other computers (laptop, desktop, studio, server, family) that pin these files over IPFS."
+
+        - id: sync
+          label: "Sync"
+          icon: "RefreshCw"
+          route: "/sync"
+          order: 3
+          description: "The background sync process: whether the launchd job is installed, whether it is on or off, the run-every-15-min schedule, and recent activity."
+
+        - id: settings
+          label: "Settings"
+          icon: "Settings"
+          route: "/settings"
+          order: 4
+          description: "Account, allow-list, and IPFS node configuration."
+
+      # Footer: account block (avatar/name/Google email) -> popup menu (expands UP).
+      footer:
+        - id: account_block
+          type: account
+          expands_upward: true
+          shows: ["avatar", "name", "email"]
+          menu_items:
+            - id: settings
+              label: "Settings"
+              icon: "Settings"
+              route: "/settings"
+            - id: admin
+              label: "Allow-list"
+              icon: "ShieldAlert"
+              route: "/settings/allow-list"
+              permission_gate: "role:admin"
+            - id: logout
+              label: "Log out"
+              icon: "LogOut"
+              action: "sign_out"

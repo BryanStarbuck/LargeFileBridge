@@ -1,0 +1,286 @@
+---
+title: LargeFileBridge — Dropbox Backbone
+description: The per-backbone spec for using Dropbox as a bridge backbone that carries the COMPUTER-scope Sync List (LargeFilesBridge_SyncList.yaml) between a user's own computers. Dropbox is "the road"; the Sync List is "the cargo." Only the small YAML list ever enters Dropbox — NEVER the large files themselves (IPFS moves the bytes; putting big files in Dropbox would defeat the entire product). Each computer writes its OWN list into a per-computer subfolder (~/Dropbox/LargeFileBridge/<computer_label>/LargeFilesBridge_SyncList.yaml) so two machines never clobber one shared file; a computer WRITES only its own subfolder and READS every peer subfolder, reconciling each against local reality per the hub's §5 trust model. Covers locating the real Dropbox root via ~/.dropbox/info.json (Personal/Business, Dropbox / Dropbox (Personal) / Dropbox (Company)), enable/disable + root override through large_files.settings.backbones.dropbox, and the Dropbox-specific hazards the reader must tolerate — conflicted-copy files, online-only / Smart Sync placeholders that must be materialized before reading, selective-sync exclusions producing spurious absences (absence != delete), .dropbox / .dropbox.cache metadata to ignore, and partial/zero-byte mid-sync files (reject-and-keep-previous). Details change detection (fsevents watch + debounce, periodic poll fallback tied to the background sync process), publishing our own list (bump revision, stamp written_at, atomic temp-then-rename, only self-verifiable pinned_by claims), and the privacy posture (Dropbox is a third party; the list carries paths + CIDs, never bytes and never secrets). It is the file-based alternative to storage.mdx §9.3's IPNS transport for the whole-computer list, and references sync_list.mdx rather than restating the schema or the trust rules.
+---
+
+# LargeFileBridge — Dropbox Backbone
+
+**Dropbox** is one of the three **bridge backbones** LargeFileBridge (LFB) uses to move the
+**Sync List** between a user's own computers. The Sync List is the small human-readable YAML file
+`LargeFilesBridge_SyncList.yaml`; Dropbox is a transport channel that already syncs a folder across
+the user's machines, so LFB drops the list into that folder and lets Dropbox carry it. **A backbone
+is "the road"; the Sync List is "the cargo."** This spec covers the Dropbox road only — it does not
+redefine the cargo.
+
+This file is a **sibling** of the other two backbone specs and a child of the hub:
+
+* [Sync List (hub)](./sync_list.mdx) — THE hub. The `large_files` YAML hierarchy, the two scopes,
+  the `origin`/`revision` provenance, and the [§5 trust/reconciliation model](./sync_list.mdx#5-trust--reconciliation-the-load-bearing-rule)
+  are all defined there and are **not** restated here.
+* [Google Drive](./google_drive.mdx) — the sibling whole-computer file backbone (same shape as this
+  one, different vendor).
+* [Repo (git)](./repo__list_syns.mdx) — the sibling backbone that carries each **per-repo** list
+  inside the repo over git.
+* [storage.mdx](./storage.mdx) — the on-disk state model (state root, per-unit `config.yaml` +
+  `manifest.yaml`, `peers.yaml`). Dropbox is the **file-based alternative to
+  [storage.mdx §9.3](./storage.mdx#93-computer-manifests-travel-via-ipns)'s IPNS transport** for the
+  whole-computer list.
+* [knowledge/ipfs.mdx](../knowledge/ipfs.mdx) — the only-our-content rule ([§6](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule))
+  the list's IPFS settings must honor.
+
+> **The one Dropbox rule that shapes everything here.** **Only the small YAML Sync List goes into
+> Dropbox — NEVER the large files themselves.** IPFS carries the bytes; putting big files in Dropbox
+> would defeat the product's entire reason to exist (the whole point is that Git ignores the big
+> files and IPFS moves them peer-to-peer). Dropbox carries **the list, and only the list.** This is
+> **LOCKED**.
+
+---
+
+## 1. Scope — Dropbox carries the COMPUTER list
+
+Dropbox is a **whole-computer backbone**: it syncs a folder that belongs to the user's Dropbox
+account, not to any one repo. So it carries the **computer-scope** Sync List
+([hub §2](./sync_list.mdx#2-two-scopes--one-per-computer-one-per-repo)) — the file whose
+`large_files.scope` is `computer`, covering the global `settings`, every managed `repos:` entry, and
+every non-repo `directories:` entry.
+
+It does **not** carry per-repo lists — those ride the repo over git
+([repo__list_syns.mdx](./repo__list_syns.mdx)). When a repo appears both in the Dropbox-carried
+computer list and in its own in-repo list, the **in-repo (git) list is authoritative for that repo's
+files** ([hub §5.4](./sync_list.mdx#54-when-the-same-repo-arrives-on-two-backbones)); the Dropbox
+copy is a convenience mirror.
+
+| Question | Answer |
+| --- | --- |
+| Which scope? | `computer` only ([hub §2](./sync_list.mdx#2-two-scopes--one-per-computer-one-per-repo)). |
+| What travels? | The YAML Sync List. **Never** the large files (LOCKED, above). |
+| Alternative to? | [storage.mdx §9.3](./storage.mdx#93-computer-manifests-travel-via-ipns) IPNS transport. Both may be enabled; they reconcile through the same [hub §5](./sync_list.mdx#5-trust--reconciliation-the-load-bearing-rule) rules. |
+
+---
+
+## 2. Path convention — one subfolder per computer (LOCKED)
+
+Dropbox syncs a **single shared folder** into every machine, so if two computers wrote to one shared
+file they would forever clobber each other and spawn conflict copies. LFB avoids that by giving
+**each computer its own subfolder**, keyed by that computer's label:
+
+```
+~/Dropbox/LargeFileBridge/<computer_label>/LargeFilesBridge_SyncList.yaml
+```
+
+* A computer **WRITES only its own subfolder** (`<computer_label>` = `config.yaml → computer.label`,
+  [storage.mdx §3](./storage.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)).
+* A computer **READS every peer subfolder** and **reconciles each one** against its own reality
+  ([hub §5](./sync_list.mdx#5-trust--reconciliation-the-load-bearing-rule)) — never applies any of
+  them blindly.
+
+```
+~/Dropbox/                                    ← Dropbox root (located per §3)
+└── LargeFileBridge/                          ← backbone root (settings.backbones.dropbox.root)
+    ├── bryan-macbook/                         ← THIS machine writes ONLY here
+    │   └── LargeFilesBridge_SyncList.yaml     ← our computer-scope list (scope: computer)
+    ├── bryan-studio/                          ← a peer — READ ONLY, reconcile
+    │   └── LargeFilesBridge_SyncList.yaml
+    ├── work-mini/                             ← a peer — READ ONLY, reconcile
+    │   └── LargeFilesBridge_SyncList.yaml
+    └── family-imac/                           ← a peer — READ ONLY, reconcile
+        └── LargeFilesBridge_SyncList.yaml
+```
+
+* The filename is **exactly** `LargeFilesBridge_SyncList.yaml` — "Files" is plural even though the
+  product is "LargeFileBridge" ([hub §1](./sync_list.mdx#1-vocabulary--sync-list--backbone--scope-locked)).
+  Honor it verbatim; the scanner matches on this name.
+* The subfolder key is the peer's **label**, matching `peers.yaml`
+  ([storage.mdx §11](./storage.mdx#11-peersyaml--the-users-other-computers)) — that is how a
+  discovered file resolves to a known peer.
+* Sanitize `<computer_label>` as a single path segment (same rule as the repo/email keys,
+  [storage.mdx §6.1](./storage.mdx#61-keying--folder-name)): lowercase, any char outside
+  `[A-Za-z0-9._-]` → `_`, reject `/`, `\`, `..`, NUL. A label collision across two machines is a
+  configuration error surfaced in the web app — never silently merged.
+
+---
+
+## 3. Locating the Dropbox root
+
+The backbone root is **not** hard-coded to `~/Dropbox`. Dropbox's folder location varies by account
+type and OS setup: it may be `~/Dropbox`, `~/Dropbox (Personal)`, `~/Dropbox (Company)`, a
+Business-account path, or a user-chosen location. LFB resolves it in order:
+
+1. **Explicit override** — `large_files.settings.backbones.dropbox.root` (from the hub schema). If
+   set, use it verbatim; do not probe further.
+2. **`~/.dropbox/info.json`** — Dropbox writes this file with the **actual root path(s)** of each
+   linked account. Parse it and read the `path` field of the relevant account (`personal` /
+   `business`). This is the authoritative discovery source.
+3. **Give up gracefully** — if neither yields a real directory, mark the Dropbox backbone
+   `unavailable` in the web app (do not error the whole app), and skip it until it resolves.
+
+```jsonc
+// ~/.dropbox/info.json — Dropbox's own record of where each account's root lives
+{
+  "personal": { "path": "/Users/bryan/Dropbox (Personal)", "host": 123, "is_team": false },
+  "business": { "path": "/Users/bryan/Dropbox (Company)",  "host": 456, "is_team": true  }
+}
+```
+
+The resolved backbone root is then `<account root>/LargeFileBridge/` (or whatever
+`settings.backbones.dropbox.root` overrides it to). Enable/disable is
+`settings.backbones.dropbox.enabled` — when `false`, LFB neither reads nor writes Dropbox at all.
+
+---
+
+## 4. Dropbox-specific hazards (map each to hub §5.5)
+
+Dropbox mangles files in vendor-specific ways. Each hazard below is a concrete instance of the
+backbone-delivered hazards the reader must tolerate
+([hub §5.5](./sync_list.mdx#55-backbone-delivered-hazards-the-reader-must-expect)) — quarantine or
+reject, **never trust blindly**.
+
+| Hazard | What it looks like | Rule |
+| --- | --- | --- |
+| **Conflicted copies** | `LargeFilesBridge (bryan's conflicted copy 2026-07-02).yaml`, `... (1).yaml` | Detect by filename pattern, treat as an **additional untrusted input**, reconcile it like any peer copy ([hub §5.5](./sync_list.mdx#55-backbone-delivered-hazards-the-reader-must-expect)) — never load blindly, never overwrite the canonical file with it. |
+| **Online-only / Smart Sync placeholders** | A zero-content placeholder / `.dropbox` cloud-only stub; the bytes live in the cloud, not on disk | **Materialize (download) the file before reading it.** A placeholder is not "absent" and not "empty" — force a local download, then parse. Never treat a placeholder as a missing or zero-byte list. |
+| **Selective-sync exclusions** | A peer subfolder the user excluded from this machine simply isn't present | This is a **spurious absence**, not a delete. Per [hub §5.2](./sync_list.mdx#52-absence-is-not-deletion-default), **absence ≠ delete** (`settings.conflict.absence_is_delete: false`). Record the peer as *not-currently-visible*, keep the last reconciled truth for it, do **not** drop its files. |
+| **Dropbox metadata** | `.dropbox`, `.dropbox.cache/`, `.dropbox.attr` inside the tree | **Ignore entirely** — never scan, read, reconcile, or write these. They are Dropbox's own bookkeeping. |
+| **Partial / zero-byte mid-sync files** | A file caught mid-download: truncated, zero bytes, invalid YAML | **Reject loudly and keep the previous good copy** ([storage.mdx §15](./storage.mdx#15-the-store-layer-how-code-touches-disk)). A file that fails to parse as the expected `large_files` schema is never trusted. |
+| **Foreign owner** | A peer list whose `origin.owner` is not an allow-listed user | **Never adopt it** ([hub §5.5](./sync_list.mdx#55-backbone-delivered-hazards-the-reader-must-expect)). It is the user's own Dropbox, but only allow-listed owners' lists are reconciled. |
+
+---
+
+## 5. Change detection — watch, then reconcile
+
+LFB learns that a peer's list changed two ways, both feeding the same reconcile step:
+
+* **fsevents watch (macOS), debounced.** Watch the Dropbox backbone subtree
+  (`<root>/LargeFileBridge/`) with an fsevents recursive watcher. Dropbox writes files in bursts as a
+  sync lands, so **debounce** (settle for a few seconds of quiet) before acting, and coalesce a burst
+  into one reconcile pass. Ignore events under `.dropbox` / `.dropbox.cache` (§4).
+* **Periodic poll fallback.** fsevents can miss events (placeholders materializing, a machine waking
+  from sleep, a missed distributed notification), so the **background sync process**
+  ([storage.mdx §13](./storage.mdx#13-the-background-sync-process--the-transparency-contract), the
+  launchd job every 15 min) also **polls** the subtree each run: list peer subfolders, stat each
+  `LargeFilesBridge_SyncList.yaml`, and reconcile any whose mtime/size changed since last seen.
+
+When a peer's file changes, LFB **reconciles it** — verifies local claims against the real filesystem
++ IPFS pinset ([hub §5.1](./sync_list.mdx#51-local-claims-are-verified-not-believed)), treats absences
+as untrusted ([hub §5.2](./sync_list.mdx#52-absence-is-not-deletion-default)), and resolves conflicts
+by revision → content → time ([hub §5.3](./sync_list.mdx#53-conflicts-resolve-by-revision-then-content-then-time)).
+The reconciled result is written through the [storage.mdx §15](./storage.mdx#15-the-store-layer-how-code-touches-disk)
+store layer. **Never apply a Dropbox-delivered list directly.**
+
+---
+
+## 6. Publishing — writing OUR list to Dropbox
+
+The inverse direction. After a scan/sync, this computer writes its **own** current computer-scope
+list into **its own subfolder only** (§2), following the hub's publish rules
+([hub §6](./sync_list.mdx#6-publishing--writing-our-list-out-to-the-backbones)):
+
+* Bump `origin.revision`, stamp `origin.written_at`, set `origin.computer_id/label/owner` to **this**
+  machine.
+* Write **only what this computer can vouch for** — `pinned_by` includes this computer only for CIDs
+  it actually pins right now ([hub §5.1](./sync_list.mdx#51-local-claims-are-verified-not-believed));
+  claims about peers are copied forward from the last reconciled truth, never invented.
+* **Write atomically** — serialize to a unique `*.tmp` in the same subfolder, then `rename` over the
+  real file, so Dropbox never uploads a half-written list (which would reach peers as a partial/
+  zero-byte hazard, §4).
+* Only when `settings.backbones.dropbox.enabled` is `true`. Honor the IPFS only-our-content defaults
+  ([knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule)):
+  publishing the list never turns this machine into a public gateway/relay, and
+  `settings.ipfs.reprovide_strategy` stays `pinned`.
+
+---
+
+## 7. Privacy & security
+
+Dropbox is a **third party**. What LFB puts there is deliberately low-risk, but the posture is
+explicit:
+
+* **Metadata only, never bytes.** The list carries file **paths** and **IPFS CIDs** — metadata about
+  what should exist and where it is content-addressed. The **actual file bytes never touch Dropbox**
+  (LOCKED, top of file); IPFS moves them.
+* **No secrets, ever.** The list holds no auth sessions, no OAuth credentials, no signing secret —
+  those live under the state root and never leave it
+  ([storage.mdx §10](./storage.mdx#10-auth-session--signing-secret-runtime-not-settings)).
+* **Owner allow-list.** It is the user's **own** Dropbox account, and only **allow-listed owners'**
+  lists are adopted — a peer file with a non-allow-listed `origin.owner` is rejected
+  ([hub §5.5](./sync_list.mdx#55-backbone-delivered-hazards-the-reader-must-expect)).
+* **Only-our-content honored.** Nothing about the Dropbox backbone loosens the IPFS defaults
+  ([knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule)); the
+  computer stays a private, gateway-off node.
+
+---
+
+## 8. YAML — the backbone block, and a reminder of the file it lives in
+
+The Dropbox backbone is configured by the hub's own schema block — no new keys beyond
+backbone-local `enabled` / `root`:
+
+```yaml
+# inside large_files.settings.backbones — the Dropbox knobs (defined by the hub, §3)
+large_files:
+  settings:
+    backbones:
+      dropbox:
+        enabled: true                          # read from / publish to Dropbox at all?
+        root: ~/Dropbox (Personal)/LargeFileBridge   # override; else resolved via ~/.dropbox/info.json (§3)
+      google_drive: { enabled: false, root: null }
+      repo_git:     { enabled: true }
+```
+
+The file at `~/Dropbox/…/<computer_label>/LargeFilesBridge_SyncList.yaml` is a **normal
+computer-scope Sync List** — do not restate its schema here; the hub owns it
+([hub §3](./sync_list.mdx#3-the-file--largefilesbridge_synclistyaml)). Its first three lines are the
+reminder of what it is:
+
+```yaml
+large_files:
+  scope: computer          # Dropbox carries the COMPUTER list only (§1)
+  origin: { computer_label: bryan-macbook, revision: 42, written_at: 2026-07-02T14:32:15Z, owner: bryan@act3ai.com }
+  # ...settings / repos / directories exactly per sync_list.mdx §3 — NOT repeated here.
+```
+
+---
+
+## 9. Acceptance criteria
+
+Dropbox as a backbone is correct when **all** of the following hold:
+
+1. **Only the YAML Sync List is written to Dropbox — never a large file.** No code path ever places a
+   bridged large file (or its bytes) into the Dropbox tree (LOCKED).
+2. Dropbox carries the **computer-scope** list only (`scope: computer`); per-repo lists ride git
+   ([repo__list_syns.mdx](./repo__list_syns.mdx)), not Dropbox.
+3. Each computer writes to **its own subfolder only** —
+   `~/Dropbox/LargeFileBridge/<computer_label>/LargeFilesBridge_SyncList.yaml` (label sanitized) —
+   and **reads every peer subfolder**, so two machines never clobber one shared file.
+4. Every peer file is **reconciled**, never applied blindly ([hub §5](./sync_list.mdx#5-trust--reconciliation-the-load-bearing-rule)):
+   local claims verified against the filesystem + IPFS pinset, absence ≠ delete, conflicts by
+   revision → content → time.
+5. The Dropbox root is resolved via `settings.backbones.dropbox.root` first, else
+   **`~/.dropbox/info.json`** (Personal/Business, `~/Dropbox` / `~/Dropbox (Personal)` /
+   `~/Dropbox (Company)`); enable/disable via `settings.backbones.dropbox.enabled`.
+6. All Dropbox hazards are tolerated per §4 → [hub §5.5](./sync_list.mdx#55-backbone-delivered-hazards-the-reader-must-expect):
+   conflicted copies (reconciled as extra untrusted input), online-only placeholders (materialized
+   before reading), selective-sync exclusions (spurious absence, not delete), `.dropbox` /
+   `.dropbox.cache` metadata (ignored), partial/zero-byte files (rejected, previous kept).
+7. Change detection uses an **fsevents watch with debounce** plus a **periodic poll fallback** via
+   the background sync process ([storage.mdx §13](./storage.mdx#13-the-background-sync-process--the-transparency-contract));
+   a changed peer file triggers reconciliation, never a blind apply.
+8. Publishing bumps `revision`, stamps `written_at`, writes **only self-verifiable `pinned_by`**
+   claims, writes **atomically** (temp-then-rename in our own subfolder), only when
+   `dropbox.enabled` is true, honoring the IPFS only-our-content defaults
+   ([knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule)).
+9. The list contains **paths + CIDs only** — never bytes, never secrets — and only **allow-listed
+   owners'** lists are adopted (§7).
+
+<!--
+  This is the DROPBOX backbone spec — one of three siblings (google_drive.mdx, repo__list_syns.mdx)
+  under the hub sync_list.mdx. It REFERENCES the hub rather than restating it: the LargeFilesBridge_
+  SyncList.yaml filename, the single top-level `large_files` key + level-2 settings/repos/directories,
+  the two scopes, the origin/revision provenance, and above all the §5 trust model (incoming lists are
+  reconciled, never applied) all live in sync_list.mdx and must NOT be duplicated here. LOCKED for this
+  backbone: only the small YAML Sync List ever enters Dropbox — NEVER the large files themselves (IPFS
+  carries the bytes); one subfolder per computer keyed by computer_label (write own, read peers); the
+  computer-scope only rule. Dropbox is the file-based alternative to storage.mdx §9.3's IPNS transport
+  for the whole-computer list. Honors knowledge/ipfs.mdx §6 (only-our-content). Do not add schema keys
+  beyond backbone-local settings.backbones.dropbox.{enabled,root}.
+-->

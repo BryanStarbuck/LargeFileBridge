@@ -1,0 +1,240 @@
+---
+title: LargeFileBridge — One repo
+description: The per-repo screen (route /repos/$repoId) a Repos-table row opens. Top region shows the repo's settings, sync progress, and status (per-repo sync on/off, IPFS pin status, peers, last sync, Sync now). Below it is one TanStack Table — one row per large git-ignored file — where the user makes the core decision: Sync / Ignore / Undecided. The table has the standard search + icon-only filter/sort control row, a decision column with per-row and bulk actions, per-file transfer status, size, CID, and which peers hold each file. Defines the summary counts, the FileRow type, the decision model, bulk actions, Sync-now, and empty/loading states.
+---
+
+# LargeFileBridge — One repo
+
+The **One repo** screen is where the work happens. You reach it by clicking a repo on the
+[Repos](./repos.mdx) page; it opens that repo at `/repos/$repoId`. It has two jobs:
+
+1. **Show this repo's settings, progress, and status** — is per-repo sync on? are the files pinned?
+   which of your computers hold them? when did it last sync? — and let you **Sync now**.
+2. **Let you decide, file by file, what LFBridge should move** — the core interaction. For every
+   large git-ignored file the repo contains, you choose **Sync**, **Ignore**, or leave it
+   **Undecided**. Most of the user's time here is spent scanning "how many will sync, how many will
+   not, and which ones I still need to decide on."
+
+This spec builds on the siblings and does not repeat them:
+
+* [Repos](./repos.mdx) — the list this screen drills into; defines the LOCKED vocabulary
+  **Repo → Large file → Decision** (§1 there), the `RepoStatus` enum, and the per-repo counts.
+* [Left bar](./left_bar.mdx) — the left navigation (source of truth `pm/left_bar.yaml`).
+* [README](../README.md) — the product charter (git for small files; IPFS/p2p for the big ones).
+
+---
+
+## 1. The decision model (LOCKED)
+
+Every large file in the repo is in exactly **one** of three **decision** states. This is the
+vocabulary the whole app shares:
+
+| Decision | Meaning | LFBridge behavior |
+| --- | --- | --- |
+| **Sync** | The user wants this file kept in sync across their computers. | LFBridge adds it to the manifest, pins it on IPFS, and transfers it to/from peers. |
+| **Ignore** | The user deliberately does **not** want this file synced. | LFBridge leaves it alone — never added to the manifest, never transferred. Stays a purely local file. |
+| **Undecided** | LFBridge found the file but the user has not chosen yet. | LFBridge does **nothing** with the bytes yet; it just surfaces the file so the user can triage it. This is the queue of decisions to make. |
+
+Independently of the decision, a **Sync** file has a **transfer status** — where its bytes are
+relative to the network (§4.2). A file's decision is user intent; its transfer status is reality.
+
+```ts
+// One row of the files table.
+export interface FileRow {
+  fileId: string;        // stable id (repoId + relative path)
+  path: string;          // path relative to the repo root
+  sizeBytes: number;     // on-disk (or expected) size
+  cid: string | null;    // IPFS content id once added to the manifest; null while Undecided/Ignore
+  decision: "sync" | "ignore" | "undecided";
+  transfer: TransferStatus;   // meaningful for decision === "sync" (see §4.2)
+  peers: string[];       // ids of your computers currently pinning this file
+  changedAt: string;     // ISO date-time the file last changed on disk
+}
+
+export type TransferStatus =
+  | "synced"     // present locally AND pinned on >=1 peer
+  | "pending"    // queued to push out or fetch in
+  | "fetching"   // transfer in progress (inbound)
+  | "pushing"    // transfer in progress (outbound)
+  | "missing"    // in the manifest but the bytes are not on this machine
+  | "error"      // last transfer failed
+  | "na";        // not applicable (decision is ignore/undecided)
+```
+
+---
+
+## 2. Layout
+
+Three regions stacked in the content column: the **header** (repo identity + Sync now), the
+**status/settings strip**, and the **files table** with its control row.
+
+```
+┌────────────┬───────────────────────────────────────────────────────────────────────────┐
+│            │  ‹ Repos   /   Our_Movies                              ┌──────────────┐     │
+│  LEFT BAR  │  ~/BGit/…/Our_Movies                                   │ ⟳ Sync now   │     │
+│            │                                                        └──────────────┘     │
+│ Repos      ├───────────────────────────────────────────────────────────────────────────┤
+│ Peers      │  Sync ◉ on    Status ● up to date    Peers 3    Last sync 09:14   IPFS ● ok │ ← status strip
+│ Sync       ├───────────────────────────────────────────────────────────────────────────┤
+│ Settings   │  128 Sync   ·   5 Undecided   ·   40 Ignore            (summary counts)     │
+│            │  search…                                                     ⇅   ⛛   ⋮bulk │ ← control row
+│            ├───────────────────────────────────────────────────────────────────────────┤
+│            │  ☐  File                     Size   Decision   Status    Peers  Changed      │
+│            │  ☐  render/final_4k.mov      8.2GB  [Sync ▾]   Synced    3      2h ago       │
+│            │  ☐  render/take_07.mov       6.1GB  [Undecid▾] —         0      5m ago  ⚠    │
+│  [account] │  ☐  scratch/proxy.mp4        220MB  [Ignore ▾] —         0      1d ago       │
+│            ├───────────────────────────────────────────────────────────────────────────┤
+│            │  173 files                                     page 1 / 1        [500 ▾]     │
+└────────────┴───────────────────────────────────────────────────────────────────────────┘
+```
+
+* The header's **‹ Repos** breadcrumb returns to the [Repos](./repos.mdx) list.
+* The files table is the same flat, chromeless TanStack `DataTable` house style as everywhere else.
+
+---
+
+## 3. Header + status/settings strip
+
+### 3.1 Header
+
+* **Breadcrumb** — `‹ Repos / <repo name>`; the repo name is the title, the absolute **path** shown
+  muted beneath it.
+* **Sync now** button (top-right, `RefreshCw`) — kicks off a sync for **this repo**: push out every
+  `Sync` file this machine has that peers lack, fetch every `Sync` file peers have that this machine
+  lacks. States: idle (`Sync now`) → running (`Syncing…`, spinner, disabled) → done (counts + table
+  refresh). It never changes any decision.
+
+### 3.2 Status / settings strip
+
+A single horizontal strip of the repo's live status (read) and its one per-repo setting:
+
+| Field | Meaning |
+| --- | --- |
+| **Sync** (toggle) | Per-repo on/off. When **off**, LFBridge skips this repo during background syncs; decisions are preserved but no bytes move. The only editable control in the strip. |
+| **Status** | The rolled-up `RepoStatus` pill ([Repos §4.2](./repos.mdx)) — up to date / syncing / behind / needs review / error / never. |
+| **Peers** | Count of your computers currently pinning this repo → clicking opens [Peers](./left_bar.mdx) filtered to this repo (peers page is out of scope here). |
+| **Last sync** | Relative time of the last completed sync (absolute on hover). |
+| **IPFS** | The local IPFS node health — `ok` (green) / `unreachable` (red). If unreachable, Sync now is disabled with a tooltip. |
+
+Note: the app-wide **background sync process** (installed? on/off? the every-15-min `launchd`
+schedule) is the **Sync** left-bar page, not this strip. This strip's toggle is only *this repo's*
+participation in it.
+
+---
+
+## 4. The files table (TanStack, house style)
+
+**One row per large git-ignored file** in the repo. Same flat `DataTable` and the same standard
+control row as [Repos §3](./repos.mdx).
+
+### 4.1 Summary counts (above the control row)
+
+A one-line summary the user reads first: **`128 Sync · 5 Undecided · 40 Ignore`**. Each segment is a
+**quick filter** — clicking `Undecided` filters the table to the undecided files (the triage queue),
+etc. `Undecided` is accent-highlighted whenever it is > 0.
+
+### 4.2 Control row — LOCKED
+
+Identical to the standard toolbar ([Repos §3.1](./repos.mdx)):
+
+* **Search box** (left) — substring, case-insensitive, over the **file path**.
+* **Filter icon** (`⛛`, icon-only, no box) — dropdown of filterable columns; operators by column
+  kind; multiple filters ANDed; colored when active; resets to page 1.
+* **Sort icon** (icon-only, no box) — dropdown of sortable columns, asc/desc; colored when active.
+* **Bulk menu** (`⋮`) — enabled when ≥1 row is checkbox-selected (§4.4).
+
+### 4.3 Columns
+
+| # | Column | Kind | Sort | Filter | Notes |
+| --- | --- | --- | --- | --- | --- |
+| 0 | **☐ select** | — | — | — | Row checkbox; header checkbox selects the current page (for bulk decisions). |
+| 1 | **File** | text | ✓ | ✓ (contains) | Path relative to the repo root; directory prefix muted, filename bold. |
+| 2 | **Size** | int (bytes) | ✓ | ✓ | Human-readable (`8.2 GB`), right-aligned; sorts/filters on raw bytes. |
+| 3 | **Decision** | enum | ✓ | ✓ | A **`[Sync ▾]` inline select** — Sync / Ignore / Undecided (§4.5). `filterOptions` = the three values. |
+| 4 | **Status** | enum | ✓ | ✓ | `transfer` status pill (§4.6); `—` for non-sync files. |
+| 5 | **Peers** | int | ✓ | ✓ | How many of your computers hold this file. `0` on a **Sync** file renders red (not backed up yet). |
+| 6 | **CID** | text | ✓ | ✓ | IPFS content id (monospace, middle-truncated, click to copy); blank until the file is a Sync file with a CID. |
+| 7 | **Changed** | timestamp | ✓ | ✓ | `changedAt`, relative with absolute tooltip. |
+
+Pagination: **default 500** ([Repos §3.3](./repos.mdx)); the **file count** shows left of the pager.
+
+### 4.4 Bulk actions
+
+When rows are selected, the `⋮` bulk menu applies one decision to all of them at once — the fast
+path for triaging many files:
+
+* **Set to Sync** · **Set to Ignore** · **Set to Undecided** — bulk-writes the decision.
+* **Sync now (selected)** — queues transfers for the selected `Sync` files.
+
+Selecting the header checkbox selects the whole current page; a "Select all N matching" affordance
+appears when a filter is active, to act on the entire filtered set, not just the page.
+
+### 4.5 The Decision select (per row) — the core interaction
+
+Each row's **Decision** cell is an inline select with the three states. Changing it writes
+immediately (optimistic, with rollback on error):
+
+* → **Sync**: LFBridge adds the file to the manifest, computes/records its **CID**, pins it, and
+  queues transfers to peers. The row's Status moves to `pending` → `fetching`/`pushing` → `synced`.
+* → **Ignore**: removes it from the manifest (if present); Status becomes `—`; bytes stay local only.
+* → **Undecided**: parks it back in the triage queue; no bytes move.
+
+Changing a decision never deletes the user's local file — it only changes what LFBridge *does* with
+it.
+
+### 4.6 Transfer status pill (LOCKED)
+
+| `transfer` | Meaning | Pill |
+| --- | --- | --- |
+| `synced` | Present locally and pinned on ≥1 peer. | green |
+| `pending` | Queued to push out or fetch in. | amber |
+| `fetching` / `pushing` | Transfer in progress. | blue (accent), animated |
+| `missing` | In the manifest but bytes not on this machine (fetch to restore). | red outline |
+| `error` | Last transfer failed. | red |
+| `na` | Decision is Ignore/Undecided — nothing to transfer. | `—`, muted |
+
+---
+
+## 5. Empty & loading states
+
+* **No large files:** the table is replaced by a card — "No large files found in this repo. LFBridge
+  looks for git-ignored files under `large/` and the ignored media extensions."
+* **All decided:** the summary shows `Undecided 0`; the quick-filter for Undecided is disabled.
+* **Loading:** skeleton rows sized to the columns; no layout shift.
+* **IPFS node unreachable:** a banner at the top of the content; Sync now and per-row transfers are
+  disabled, but decisions can still be edited (they queue for when the node returns).
+
+---
+
+## 6. Acceptance criteria
+
+1. The screen opens at `/repos/$repoId` from a [Repos](./repos.mdx) row click; the header shows the
+   `‹ Repos / <name>` breadcrumb, the absolute path, and a **Sync now** button that syncs only this
+   repo and never changes a decision.
+2. The **status/settings strip** shows Sync (the one editable per-repo on/off toggle), Status pill,
+   Peers, Last sync, and IPFS node health; when the node is unreachable, Sync now is disabled.
+3. The **summary counts** line reads `N Sync · N Undecided · N Ignore`, each a quick-filter;
+   Undecided is accent-highlighted when > 0.
+4. The **files table** is one TanStack table, one row per large git-ignored file, flat/chromeless,
+   with the standard control row (search left; icon-only filter `⛛` and sort dropdowns right) and
+   columns: select, File, Size, Decision, Status, Peers, CID, Changed.
+5. **Pagination defaults to 500**; the **file count** shows left of the pager.
+6. The **Decision** cell is a per-row inline select (Sync / Ignore / Undecided) that writes
+   immediately per §4.5; changing a decision never deletes the user's local file.
+7. **Bulk actions** (`⋮`, enabled on selection) set Sync / Ignore / Undecided across selected rows
+   and can Sync-now the selected Sync files; the header checkbox selects the page, with a
+   "select all matching" affordance under an active filter.
+8. The **Status** column follows the LOCKED transfer-status pill mapping (§4.6); a Sync file with
+   Peers = 0 renders the peer count red.
+9. Empty / all-decided / loading / node-unreachable states render per §5.
+
+<!--
+  Keep this page aligned with repos.mdx (the list it drills into) and left_bar.yaml (the nav).
+  LOCKED across specs: the three-state DECISION model Sync / Ignore / Undecided (user intent) vs the
+  TransferStatus (reality); the transfer-status pill colors (§4.6); the standard control row (search
+  left; icon-only sort/filter right); pagination default 500 with the count shown. The Decision
+  inline-select is the core interaction — changing it never deletes local bytes. The app-wide
+  background sync process (launchd install / on-off / 15-min schedule) is the Sync left-bar PAGE, not
+  this repo's strip toggle. All tables are TanStack tables. The left bar lives in ./left_bar.mdx +
+  pm/left_bar.yaml — never redefine it here.
+-->

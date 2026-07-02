@@ -1,0 +1,242 @@
+---
+title: LargeFileBridge — Repos
+description: The landing screen (route /) — one TanStack Table listing every git repo on THIS computer that LargeFileBridge manages. One row per repo, with the repo name, local path, large-file counts (Synced / Pending / Undecided / Ignored), peer count, last-sync time, and a rolled-up sync status. Above the table sits the standard control row (search box + icon-only filter and sort dropdowns). Clicking a row opens that repo's per-file sync screen (one_repo.mdx). Defines the table columns, the RepoRow type, the add-repo action, the row → one_repo navigation, pagination at 500, and empty/loading states.
+---
+
+# LargeFileBridge — Repos
+
+The **Repos** page is the landing view of LargeFileBridge and the screen users live in. It answers
+one question at a glance: *for every repo on this computer, are my large files in sync across my
+other machines?* It is a header over **one TanStack Table** — one row per managed repo — with the
+standard search / filter / sort control row above it.
+
+The left bar's **Repos** item (order 1, icon `FolderGit2`, route `/` — source of truth
+`pm/left_bar.yaml`) lands here. Clicking any repo row opens that repo's per-file screen
+([One repo](./one_repo.mdx)).
+
+This spec builds on the siblings and does not repeat them:
+
+* [README](../README.md) — the product charter: Git tracks the small files; LFBridge moves the big,
+  git-ignored files peer-to-peer over IPFS.
+* [Left bar](./left_bar.mdx) — the left navigation (data source of truth `pm/left_bar.yaml`); this
+  document does not redefine it and only shows where it sits.
+* [One repo](./one_repo.mdx) — the per-file sync screen a row click opens.
+
+---
+
+## 1. Vocabulary — Repo → Large file → Decision (LOCKED)
+
+Three terms, used consistently across every spec and every screen:
+
+| Term | Definition |
+| --- | --- |
+| **Repo** | A git repository on this computer that LFBridge manages. It has a local **path**, a **name** (the folder name), a git-ignore that excludes the big files, and a **manifest** (checked into git) listing the large files by path + IPFS CID. |
+| **Large file** | A big, git-ignored file inside a repo (video, image, model weights, dataset, render output). LFBridge — not git — is responsible for moving its bytes between your computers. |
+| **Decision** | Per large file, whether LFBridge should move it: **Sync**, **Ignore** (deliberately not synced), or **Undecided** (LFBridge found it but the user has not yet chosen). Defined in full on the [One repo](./one_repo.mdx) screen; the Repos table only shows the **counts** per decision. |
+
+```ts
+// The per-repo summary the backend returns for each Repos-table row.
+export interface RepoRow {
+  repoId: string;        // stable id (hash of the absolute path)
+  name: string;          // folder name
+  path: string;          // absolute local path
+  counts: {
+    synced: number;      // large files in sync (CID present + pinned locally)
+    pending: number;     // decided "Sync" but not yet transferred (fetch/push queued)
+    undecided: number;   // found by LFBridge, no Sync/Ignore decision yet
+    ignored: number;     // decided "Ignore" — deliberately not synced
+  };
+  peerCount: number;     // how many of your computers currently pin this repo
+  lastSyncAt: string | null;  // ISO date-time of the last completed sync, or null
+  status: RepoStatus;    // rolled-up sync status (see §4.2)
+}
+
+export type RepoStatus =
+  | "up_to_date"   // every "Sync" file present locally and on >=1 peer
+  | "syncing"      // a transfer is in progress
+  | "behind"       // pending > 0 (files owed in or out)
+  | "needs_review" // undecided > 0 (user has decisions to make)
+  | "error"        // last sync failed / IPFS node unreachable
+  | "never";       // repo added, never synced
+```
+
+---
+
+## 2. Layout
+
+The screen has four regions: the **left bar** (see [Left bar](./left_bar.mdx)), the **brand
+header**, the **top-right Add repo button**, and the **Repos table** with its control row.
+
+```
+┌────────────┬───────────────────────────────────────────────────────────────────────────┐
+│            │  Repos                                                   ┌──────────────┐   │
+│  LEFT BAR  │  (large + bold, NORMAL letter spacing)                  │ + Add repo   │   │
+│            │                                                         └──────────────┘   │
+│ Repos ◀    ├───────────────────────────────────────────────────────────────────────────┤
+│ Peers      │  search…                                                      ⇅   ⛛        │ ← control row
+│ Sync       ├───────────────────────────────────────────────────────────────────────────┤
+│ Settings   │  Repo          Path              Synced Pending Undec Ignored Peers Last     │
+│            │  Our_Movies    ~/BGit/…/Movies    128    2       5     40      3   09:14  › │ ← row → one_repo
+│            │  render_farm   ~/work/render       0    311      0      0      1   —      › │
+│            │  photos_2026   ~/Pictures/2026    980    0      12      0      2   06:30  › │
+│            ├───────────────────────────────────────────────────────────────────────────┤
+│  [account] │  3 repos                                        page 1 / 1        [500 ▾]   │ ← count + pagination
+└────────────┴───────────────────────────────────────────────────────────────────────────┘
+```
+
+* The page renders inside the standard app frame: 256px left bar, scrolling content, a centered
+  content column.
+* Every row is a whole-row click target that opens that repo ([One repo](./one_repo.mdx), §5).
+* The table is a **flat data surface** — no card box, no colored header fill; rows separated by a
+  single 1px bottom rule (the house table style, §3).
+
+---
+
+## 3. The table (TanStack, house style)
+
+**All tables are TanStack tables** (charter rule). This is one flat, chromeless `DataTable`:
+
+### 3.1 Control row (above the table) — LOCKED
+
+A single control row sits above the table, matching the standard toolbar:
+
+* **Search box** (left) — a free-text input; substring match, case-insensitive, across **Repo name
+  + path**. Filters the current data set live.
+* **Filter icon** (right, icon-only `⛛` funnel — **no text label, no button box**) — opens a
+  dropdown listing the filterable columns; each filter row is an **operator select + value input**;
+  multiple filters are **ANDed**; Clear / Apply, `Enter` applies. The icon is **colored** when any
+  filter is active (with an optional count). Applying a filter resets to page 1.
+* **Sort icon** (right, icon-only sort glyph — **no text label, no button box**) — opens a dropdown
+  listing the sortable columns, each with asc/desc; the icon is **colored** when a sort is active.
+
+Build the filter/sort dropdowns **very well** — match the pattern used by the sister app's
+`DataTable` toolbar (search left; icon-only sort/filter popovers right; rounded fills reserved for
+the floating popovers, never the data surface).
+
+### 3.2 Columns
+
+Column order, left to right. Numeric columns are right-aligned, `tabular-nums`.
+
+| # | Column | Kind | Sort | Filter | Notes |
+| --- | --- | --- | --- | --- | --- |
+| 1 | **Repo** | text | ✓ | ✓ (contains) | Folder name, bold. |
+| 2 | **Path** | text | ✓ | ✓ (contains) | Absolute local path, muted, middle-truncated with a tooltip of the full path. |
+| 3 | **Synced** | int | ✓ | ✓ | `counts.synced`. Green metric. |
+| 4 | **Pending** | int | ✓ | ✓ | `counts.pending`. Amber when > 0. |
+| 5 | **Undecided** | int | ✓ | ✓ | `counts.undecided`. Accent-highlighted when > 0 (there are decisions to make). |
+| 6 | **Ignored** | int | ✓ | ✓ | `counts.ignored`. Muted. |
+| 7 | **Peers** | int | ✓ | ✓ | `peerCount` — how many of your computers pin this repo. `0` renders red (nothing backing it up). |
+| 8 | **Last sync** | timestamp | ✓ | ✓ | `lastSyncAt`, relative (`2h ago`) with an absolute tooltip; `—` if never. |
+| 9 | **Status** | enum | ✓ | ✓ | `status` (§4.2) as a colored pill. `filterOptions` = the `RepoStatus` values. |
+| — | *(row control)* | — | — | — | Trailing **› right chevron** affordance (opens the repo, same as the row click). |
+
+### 3.3 Pagination — LOCKED
+
+* **Default page size 500.** Do **not** default to a small page size. Show the **item count**
+  (`N repos`) to the left of the pager. Page-size options: `500 / 1000 / All`.
+
+### 3.4 `ColumnDef` shape
+
+```ts
+// pages/repos/columns.ts — kinds drive the filter operators & alignment.
+import type { ColumnDef } from "@tanstack/react-table";
+
+export const repoColumns: ColumnDef<RepoRow>[] = [
+  { id: "name",      header: "Repo",      kind: "text",      accessor: r => r.name },
+  { id: "path",      header: "Path",      kind: "text",      accessor: r => r.path },
+  { id: "synced",    header: "Synced",    kind: "int",  align: "right", accessor: r => r.counts.synced },
+  { id: "pending",   header: "Pending",   kind: "int",  align: "right", accessor: r => r.counts.pending },
+  { id: "undecided", header: "Undecided", kind: "int",  align: "right", accessor: r => r.counts.undecided },
+  { id: "ignored",   header: "Ignored",   kind: "int",  align: "right", accessor: r => r.counts.ignored },
+  { id: "peers",     header: "Peers",     kind: "int",  align: "right", accessor: r => r.peerCount },
+  { id: "lastSync",  header: "Last sync", kind: "timestamp",  accessor: r => r.lastSyncAt },
+  { id: "status",    header: "Status",    kind: "enum", filterOptions: STATUS_OPTIONS, accessor: r => r.status },
+];
+```
+
+---
+
+## 4. Status
+
+### 4.1 The counts, at a glance
+
+Each row's four counts are the whole point of the page — they let the user decide, per repo, what
+needs attention: **Undecided > 0** means there are files to triage; **Pending > 0** means bytes are
+owed in or out; **Peers = 0** means nothing is backing this repo up.
+
+### 4.2 Status pill colors (LOCKED)
+
+| `status` | Meaning | Pill |
+| --- | --- | --- |
+| `up_to_date` | Every "Sync" file present locally and on ≥1 peer. | green |
+| `syncing` | A transfer is in progress right now. | blue (accent), animated |
+| `behind` | `pending > 0` — files owed in or out. | amber |
+| `needs_review` | `undecided > 0` — the user has decisions to make. | accent outline |
+| `error` | Last sync failed, or the IPFS node is unreachable. | red |
+| `never` | Repo added but never synced. | grey |
+
+Precedence when several could apply: `error` > `syncing` > `behind` > `needs_review` > `up_to_date`
+> `never`.
+
+---
+
+## 5. Row click → one repo
+
+**Clicking anywhere on a row opens that repo** — it navigates to the per-file sync screen
+([One repo](./one_repo.mdx)) at `/repos/$repoId`. The whole row is the hit target
+(`cursor-pointer`, hover highlight), routed via TanStack Router; the trailing **›** chevron is the
+visual affordance and goes to the same place.
+
+---
+
+## 6. Add repo (top-right)
+
+A **+ Add repo** button, top-right of the header. It opens a small dialog to register a git repo on
+this computer with LFBridge:
+
+* **Pick a folder** — a path field (the repo's git root). LFBridge validates it is a git working
+  tree.
+* On confirm: LFBridge reads the repo's `.gitignore` + manifest, scans for large git-ignored files,
+  and adds a row. New large files it finds start as **Undecided** (the user triages them on the
+  [One repo](./one_repo.mdx) screen).
+* A repo already registered is rejected with an inline message (no duplicate rows).
+
+---
+
+## 7. Empty & loading states
+
+* **No repos:** the table is replaced by a dashed card — "No repos yet. Add your first repo →"
+  (opens the Add-repo dialog).
+* **Loading:** skeleton rows sized to the columns, so there is no layout shift.
+* **Refetch:** existing rows stay visible until new data replaces them; a repo mid-sync shows the
+  animated `syncing` pill without blocking interaction.
+
+---
+
+## 8. Acceptance criteria
+
+1. The brand header shows **"Repos"** as normal text; the left-bar Repos item routes here (`/`).
+2. The page is **one TanStack Table**, flat/chromeless, one row per managed repo, with columns:
+   Repo, Path, Synced, Pending, Undecided, Ignored, Peers, Last sync, Status (in that order), plus a
+   trailing **›** chevron.
+3. The **control row** above the table has a left **search box** and **icon-only** filter (`⛛`) and
+   sort dropdowns on the right — no text labels, no button boxes; the icon colors when active;
+   filters AND together and reset to page 1.
+4. **Pagination defaults to 500** items per page; the **repo count** shows to the left of the pager;
+   options are 500 / 1000 / All.
+5. Each numeric count renders per §4.1 (Peers = 0 → red; Undecided > 0 → accent; Pending > 0 →
+   amber) and the **Status** column is a colored pill per the locked §4.2 mapping and precedence.
+6. **Clicking anywhere on a row** opens that repo at `/repos/$repoId` ([One repo](./one_repo.mdx));
+   the trailing chevron does the same.
+7. **+ Add repo** registers a git repo by folder path, validates it is a git working tree, scans its
+   large git-ignored files (new ones start Undecided), and rejects duplicates.
+8. Empty / loading / refetch states render per §7 with no layout shift.
+
+<!--
+  Keep this page aligned with one_repo.mdx (the per-file screen a row opens) and left_bar.yaml (the
+  nav). LOCKED across specs: vocabulary Repo → Large file → Decision (Sync / Ignore / Undecided);
+  the four per-repo counts (Synced / Pending / Undecided / Ignored); the RepoStatus enum + pill
+  colors + precedence (§4.2); the standard control row (search left; icon-only sort/filter right);
+  pagination default 500 with the item count shown. All tables are TanStack tables. The left bar
+  lives in ./left_bar.mdx + pm/left_bar.yaml — never redefine it here.
+-->

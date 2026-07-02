@@ -1,0 +1,442 @@
+---
+title: LargeFileBridge — Public IPFS Share Sites (Publishing an IPFS List)
+description: The OPT-IN, per-repo feature for repos that don't just sync their large files privately across the owner's own computers, but also PUBLISH their list of IPFS files publicly so that OTHER people can pin the content and keep it alive (public replication / preservation). This is the deliberate opposite of LFB's private default, and it is OFF by default. The spec is grounded in the real reference repos that already do this — DocuSaurus sites (charlie-kirk, Intel_Murder_Docus, holon, UAP_Murder_Docus) that ship an IPFS list artifact in one of three learned shapes: (1) a master pin script IPFS.sh (`ipfs pin add <CID>` per file, grouped, symlinked into static/ so it serves at /IPFS.sh); (2) a three-command ipfs.txt (`ipfs get` / `ipfs add` / `ipfs pin add` per file); (3) a curl-pipe-able installer get_videos.sh PLUS a machine-readable manifest.yaml (filename, ipfs_cid, ipfs_gateway_url, source_url, description, added_date, pinned) served under a public static/videos/ directory whose media is git-ignored, with a companion React /ipfs page. It also documents the DocuSaurus detection signals (docusaurus.config.ts/js, @docusaurus deps, sidebars*.ts, static/ + .nojekyll/CNAME/robots.txt), the public-directory convention, the git-ignored public video directory, and the special video-embed system (docs embed `<video><source src="https://ipfs.io/ipfs/<CID>">`). LFB's job here is DETECT + record a definite yes/no per repo (is this a public IPFS share site? is it a DocuSaurus site? where is the list, what shape, what public URL, what public/video dir, what embed/gateway) into that repo's config.yaml under `public_ipfs_share` — and, ONLY when the user turns the feature (and `auto_update`) ON for that repo, optionally REGENERATE those published artifacts (IPFS.sh / ipfs.txt / get_videos.sh / manifest.yaml / embed CIDs) when a file's CID changes. Default is detect-and-report; LFB never creates or rewrites a published file on its own. The load-bearing rule: publishing a list for others to pin is our content and our choice, but it NEVER turns this machine into a public gateway/relay — knowledge/ipfs.mdx §6 only-our-content still holds for our own node. Cross-references knowledge/ipfs.mdx, repo_settings.mdx, scan.mdx, storage.mdx §6.2/§9, one_repo.mdx, and contrasts with sync_list.mdx (the PRIVATE list).
+---
+
+# LargeFileBridge — Public IPFS Share Sites (Publishing an IPFS List)
+
+Almost everything else in LargeFileBridge (LFB) is **private**: the user syncs *their own* large files
+across *their own* computers, and the [knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule)
+rule says the node must **only pin and serve our own content**. This spec is the one **deliberate,
+opt-in exception**: a repo that additionally **publishes its list of IPFS files to the public** — a
+website, a pin script, a manifest — so that **other people can `ipfs pin add` the content and keep it
+alive.** That is *replication / preservation*: the more strangers pin our CIDs, the harder the content
+is to lose or censor. It is a real pattern several of the owner's repos already use (they are DocuSaurus
+sites), and LFB should **understand it, track a definite yes/no for each repo, and — only when asked —
+help keep the published list in sync.**
+
+> **The one rule this feature is built on.** Public IPFS sharing is **OFF by default and configured
+> per repo.** By default LFB only **detects and reports** whether a repo publishes an IPFS list — it
+> **never creates or rewrites** a published file. LFB writes those artifacts **only when the user has
+> turned the feature ON for that repo** *and* turned on `auto_update` (§6). And publishing a *list*
+> for others to pin **never turns this machine into a public gateway or relay** — we invite others to
+> pin **our** content; we still do not serve **theirs**. [knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule)
+> holds unchanged for our own node (§7).
+
+This spec does not restate its siblings; it references them:
+
+* [knowledge/ipfs.mdx](../knowledge/ipfs.mdx) — what a CID / pin is ([§3](../knowledge/ipfs.mdx#3-pinning--telling-ipfs-to-keep-a-file)),
+  what "an IPFS list" means ([§5](../knowledge/ipfs.mdx#5-ipfs-lists--pinsets-cid-lists-car-files-and-ipns)),
+  and the only-our-content rule ([§6](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule)) this feature must still honor.
+* [sync_list.mdx](./sync_list.mdx) — the **private** Sync List (your computers only). §2 contrasts the two.
+* [repo_settings.mdx](./repo_settings.mdx) — the per-repo settings page; this feature adds one block to it.
+* [scan.mdx](./scan.mdx) — the scan that discovers repos; detection (§4) runs there.
+* [storage.mdx §6.2](./storage.mdx#62-syncrrepo_nameconfigyaml) — the per-repo `config.yaml` this block lives in ·
+  [storage.mdx §9](./storage.mdx#9-the-manifest--ipfs-pin-model) — the CIDs we publish come from the manifest.
+* [one_repo.mdx](./one_repo.mdx) — where the "is a share site" indicator shows on a repo's page.
+
+---
+
+## 1. Vocabulary — Share site / IPFS list / pin script / public dir / embed (LOCKED)
+
+| Term | Definition |
+| --- | --- |
+| **Public IPFS share site** | A repo that **publishes its list of IPFS CIDs publicly** so anyone can pin the content. Distinct from a private sync. In practice it is (so far, always) a **static website** — a DocuSaurus site — but the *website is optional* (§3.1): the defining thing is a **published IPFS list artifact**, not the framework. |
+| **IPFS list artifact** | The published file that carries the CIDs. One of three learned shapes (§3.3): a **pin script** (`IPFS.sh`), a **three-command list** (`ipfs.txt`), or a **curl-pipe installer + manifest** (`get_videos.sh` + `manifest.yaml`). |
+| **Pin script** | A shell file that runs `ipfs pin add <CID>` (and sometimes `ipfs get`) for each shared file, so a visitor's node pulls and pins the content. Human-readable *and* executable. |
+| **Public directory** | The web-served root of the site. On DocuSaurus it is **`static/`**; anything under it (e.g. `static/videos/`) is publicly reachable at the site URL. The media there is usually **git-ignored** and carried by IPFS. |
+| **Video-embed system** | How the site plays a shared video inline: docs embed a `<video><source src="https://ipfs.io/ipfs/<CID>" …>` tag — a **public IPFS-gateway URL**, not a committed file (§3.5). |
+| **Detect-and-report** | LFB's **default** posture: record whether a repo is a share site and how, but **write nothing** to the published files. |
+| **auto_update** | The per-repo opt-in that lets LFB **regenerate** the published list artifacts when a CID changes (§6). Off by default. |
+
+---
+
+## 2. Two directions of an IPFS list — private sync vs. public share
+
+Both directions are "a list of CIDs," but they point at opposite audiences and are governed by opposite defaults:
+
+| | Private Sync List ([sync_list.mdx](./sync_list.mdx)) | Public IPFS Share (this spec) |
+| --- | --- | --- |
+| **Audience** | The user's **own** computers only (+ allow-listed participants) | **Anyone** on the public internet |
+| **Purpose** | Keep the user's fleet in sync ("lose a laptop, files are safe") | **Replication / preservation** — get strangers to pin the content |
+| **Artifact** | `LargeFilesBridge_SyncList.yaml` (private, backbone-carried) | `IPFS.sh` / `ipfs.txt` / `get_videos.sh` + `manifest.yaml` (public, web-served) |
+| **Default** | **On** for synced repos — this is the product's core job | **Off** — opt-in per repo |
+| **LFB writes it?** | Yes (deterministically, atomically — [repo__list_syns.mdx](./repo__list_syns.mdx)) | **No, unless `auto_update` is ON** (§6) |
+| **Gateway posture** | No public/recursive gateway; only our own node reads it | Others fetch via **public gateways** (`ipfs.io`) — but *our* node still runs no public gateway (§7) |
+
+A single repo can be **both**: it privately syncs its big files across the owner's machines *and*
+publicly shares the same CIDs so others can pin them. The two lists coexist; they do not conflict,
+because they are read by different audiences over different transports.
+
+---
+
+## 3. What a public IPFS share site looks like (from the real repos)
+
+The reference repos LFB should learn from — `charlie-kirk`, `Intel_Murder_Docus`, `holon`,
+`UAP_Murder_Docus` — are all **DocuSaurus sites** that publish an IPFS list. Their shared anatomy:
+
+```
+<repo>/                              # a DocuSaurus site that is ALSO an IPFS share site
+├── docusaurus.config.ts             # ← DocuSaurus signal (url, baseUrl, organizationName…)
+├── package.json                     # ← @docusaurus/* dependencies
+├── sidebarsEpstein.ts …             # ← sidebars*.ts
+├── CLAUDE.md                        # often documents the IPFS setup in an "== IPFS ==" section
+├── IPFS.sh                          # ← the master pin script (source of truth)
+├── docs/…                           # markdown pages; some embed <video src="https://ipfs.io/ipfs/<CID>">
+├── src/pages/ipfs.tsx               # optional React "help keep these alive" page → /ipfs
+└── static/                          # ← the PUBLIC directory (web-served root)
+    ├── .nojekyll  CNAME  robots.txt
+    ├── IPFS.sh -> ../IPFS.sh        # symlink → publishes the pin script at  /IPFS.sh
+    └── videos/                      # ← public video directory
+        ├── .gitignore               #    *.mp4 *.mp3 *.mov … (media NOT committed)
+        ├── manifest.yaml            #    machine-readable list (CIDs + metadata)
+        └── get_videos.sh            #    curl-pipe installer → /videos/get_videos.sh
+```
+
+### 3.1 DocuSaurus detection (optional — a site is *usual*, not *required*)
+
+Whether a repo is a DocuSaurus site is a **strong, cheap signal** that it may be a public share site, so
+LFB detects it — but **the website is optional**. A repo can publish an `IPFS.sh` with no site at all.
+DocuSaurus signals (any is indicative; several together is conclusive):
+
+* **`docusaurus.config.ts` / `.js`** at the repo root — read `url` + `baseUrl` (+ `trailingSlash`) to
+  derive the **published site URL**; read `organizationName` / `projectName` for identity.
+* **`package.json`** with `@docusaurus/*` dependencies (and a `docusaurus` `start`/`build` script).
+* **`sidebars*.ts`** files and a **`static/`** directory, often with **`.nojekyll`**, **`CNAME`**
+  (custom domain), and **`robots.txt`**.
+* A **`build/`** directory is the *generated* output — LFB reads the **source** (`static/`, root
+  files), never edits `build/`.
+
+LFB records DocuSaurus as its own boolean (`docusaurus: true|false`) separate from the share-site
+boolean — a repo may be a DocuSaurus site without sharing IPFS, or share IPFS without DocuSaurus.
+
+### 3.2 The public directory (`static/`) — what "publicly visible" means
+
+On DocuSaurus, **`static/` is copied verbatim to the web root**, so `static/foo` serves at
+`<url><baseUrl>foo`. That is why the share artifacts live under (or are symlinked into) `static/`:
+
+* `static/IPFS.sh -> ../IPFS.sh` publishes the root pin script at **`/IPFS.sh`** while keeping a single
+  source of truth at the repo root.
+* `static/videos/get_videos.sh` publishes at **`/videos/get_videos.sh`**; `static/videos/manifest.yaml`
+  at **`/videos/manifest.yaml`**.
+
+LFB must know **which directories are public** so it can (a) reason about what is exposed and (b), when
+`auto_update` is on, write regenerated artifacts to the right place (the source file, not `build/`).
+
+### 3.3 The IPFS list artifact — three learned shapes
+
+LFB recognizes three concrete shapes. All are "a list of CIDs"; they differ in ergonomics.
+
+**Shape A — pin script (`IPFS.sh`).** One `ipfs pin add <CID>` per file, grouped by section, with a
+descriptive comment per entry. Served at `/IPFS.sh` via the static symlink. From `Intel_Murder_Docus`:
+
+```sh
+#!/bin/sh
+# This file is the master IPFS pin manifest… served publicly via the Docusaurus site as /IPFS.sh
+# Source of truth: ~/BGit/Bryan_git/Intel_Murder_Docus/IPFS.sh   (static/IPFS.sh is a symlink here)
+# Entries are derived from: static/videos/manifest.yaml
+
+# VIDEO: Patton speaking before his assassination
+ipfs pin add Qmcsf7pCYjaits6N4NE2tuyKVYGUEcE6nAR5o4CASR5FaJ
+```
+
+**Shape B — three-command list (`ipfs.txt`).** `ipfs get` → `ipfs add` → `ipfs pin add` per file (pulls
+the bytes, re-adds locally, pins). From `charlie-kirk/IPFS/ipfs.txt`:
+
+```sh
+# 2046416264567140352.mp4 — @MJTruthUltra · 2026-04-20
+ipfs get QmchuzwZemj9rh5Z4fAPVP36KL8fqWYd4UTm5djnJRJZpc
+ipfs add "2046416264567140352.mp4"
+ipfs pin add QmchuzwZemj9rh5Z4fAPVP36KL8fqWYd4UTm5djnJRJZpc
+```
+
+**Shape C — curl-pipe installer (`get_videos.sh`) + machine-readable manifest (`manifest.yaml`).** The
+richest form. `get_videos.sh` is **both human-readable and executable**, meant to be run with one line —
+it installs kubo (via Homebrew on Mac), inits the repo, starts the daemon, then `ipfs get … && ipfs pin
+add …` per file:
+
+```sh
+#  TO DOWNLOAD ALL INVESTIGATION VIDEOS — copy and run this command:
+#    curl -fsSL https://intelligencemurders.com/videos/get_videos.sh | sh
+#  Full metadata (IPFS CIDs, sources, descriptions):
+#    https://intelligencemurders.com/videos/manifest.yaml
+ipfs get --output=2044938947495940117.mp4 Qmcsf7…FaJ && ipfs pin add Qmcsf7…FaJ
+```
+
+`manifest.yaml` is the **structured source of truth** LFB most wants — one entry per file:
+
+```yaml
+videos:
+- filename: 2044938947495940117.mp4
+  ipfs_cid: Qmcsf7pCYjaits6N4NE2tuyKVYGUEcE6nAR5o4CASR5FaJ
+  ipfs_gateway_url: https://ipfs.io/ipfs/Qmcsf7pCYjaits6N4NE2tuyKVYGUEcE6nAR5o4CASR5FaJ
+  source_url: https://x.com/DigitalGermania/status/2044938947495940117
+  source_author: '@DigitalGermania'
+  description: 'General George S. Patton speaking about the postwar situation before his assassination'
+  investigation: 'Intel'
+  added_date: '2026-04-17'
+  pinned: true
+```
+
+A repo may ship **several** of these at once (e.g. `IPFS.sh` at the root *and* `get_videos.sh` +
+`manifest.yaml` under `static/videos/`). LFB records **each** artifact it finds, its shape, its path,
+and its published URL. Optionally, a companion **React `/ipfs` page** (`src/pages/ipfs.tsx`) renders the
+human-facing "help keep these alive" page and an inventory table — LFB treats it as a *presentation*
+surface, not a source of CIDs.
+
+### 3.4 The public video/media directory — git-ignored, IPFS-carried
+
+The shared media lives in a public dir (e.g. `static/videos/`) whose **`.gitignore` excludes the media**
+so the bytes are never committed — exactly LFB's own principle (git carries the list, IPFS carries the
+bytes). The real `.gitignore` there:
+
+```gitignore
+# Video files are not committed to git. Tracked via manifest.yaml and distributed via IPFS.
+*.mp4  *.mp3  *.wav  *.mov  *.mkv  *.webm  *.avi  *.m4v  *.wmv  *.flv  *.mpg  *.mpeg
+```
+
+This is the LFB pattern in the wild: **big, git-ignored files, listed by CID, synced/served over IPFS.**
+The share list may include **any** large file type — videos primarily, but also **images** (the
+`charlie-kirk` list pins `.jpg` thumbnails) and documents (`.pdf`, `.txt`).
+
+### 3.5 Video embeds using IPFS gateway URLs (the "special embed system")
+
+Inside the docs, a shared video is played by embedding a **public IPFS-gateway URL** rather than a
+committed file — this is the "special video embed system" the DocuSaurus sites use. Real markup from
+`Intel_Murder_Docus/docs/Intel/Earth_Quake.md`:
+
+```html
+<video controls style={{maxWidth: '50vw', maxHeight: '50vh', display: 'block', margin: '1rem auto'}}>
+  <source src="https://ipfs.io/ipfs/QmcpJNervZ1cxrWAXu12U5k2NB2Yz32A1dtfxLYUgSuonC" type="video/mp4" />
+</video>
+```
+
+Some pages also offer a **local archive** link to the public dir copy —
+`[clip](/videos/2050968626413363217.mp4) (IPFS: QmXNA…)` — so the same file is reachable two ways
+(gateway URL for anyone, `static/videos/` path for a visitor who has run the pin script). LFB must
+recognize these embedded CIDs as **part of the published list**: if a file's CID changes, the embed
+URL is one more place that references it (§6.2).
+
+---
+
+## 4. Detection & state — a definite yes/no per repo
+
+During the [scan](./scan.mdx), for each discovered repo LFB answers, **definitively**, "does this repo
+publish an IPFS list, and how?" It records the answer (not a guess to re-derive every time).
+
+**Signals it looks for** (repo root and public dir):
+
+* An **IPFS list artifact** — a file named `IPFS.sh`, `ipfs.sh`, `ipfs.txt`, or `get_videos.sh`, or a
+  `manifest.yaml` under a public dir whose entries carry `ipfs_cid` — this is the **decisive** signal.
+* A **symlink** surfacing such a file into `static/` (e.g. `static/IPFS.sh -> ../IPFS.sh`) — confirms
+  it is *published*, not just present.
+* **DocuSaurus** signals (§3.1) — supporting context + the public URL.
+* **IPFS-gateway `<source>` URLs** in `docs/` (§3.5) — confirms embedded shared media.
+* A public **media directory** with a media-excluding `.gitignore` (§3.4).
+* A **`CLAUDE.md`** with an IPFS section describing the setup — advisory, human-authored context.
+
+**What LFB records** (into the repo's `config.yaml`, §5): the boolean **`detected`**, a **confidence**
+(from the strength/agreement of signals), the **list of artifacts** (each with `kind`, `path`,
+`published_url`), the **public/video dirs**, the **embed style + gateway**, and whether it is a
+**DocuSaurus** site. Detection **only reads and reports**; enabling the feature and any writing is a
+separate, explicit user act (§5, §6).
+
+Absence of signals is a definite **no** — most repos are private-only and never become share sites.
+
+---
+
+## 5. Config — the per-repo `public_ipfs_share` block (OFF by default)
+
+Everything lives in that repo's own [`sync/r/<repo_name>/config.yaml`](./storage.mdx#62-syncrrepo_nameconfigyaml)
+— never the global config — as a new sibling of the existing per-repo blocks
+([repo_settings.mdx §3](./repo_settings.mdx#3-persistence--one-repo-config-file)). It is a set of
+**on/off options plus the detected facts**:
+
+```yaml
+# sync/r/<repo_name>/config.yaml  (excerpt — the public IPFS share block)
+public_ipfs_share:
+  enabled: false                 # THE master toggle — OFF by default. OFF ⇒ detect-and-report only.
+  auto_update: false             # may LFB REGENERATE the published artifacts on CID change? OFF by default (§6).
+
+  detected: true                 # LFB's autodetected yes/no (§4) — written by the scan, read-only to the user
+  confidence: high               # high | medium | low  — from signal strength/agreement
+  docusaurus: true               # is this a DocuSaurus site? (§3.1) — independent boolean
+
+  site:                          # present only when docusaurus: true (§3.1)
+    url: https://intelligencemurders.com
+    base_url: /
+    trailing_slash: true
+
+  public_dirs:                   # web-served roots (§3.2) — LFB writes source files here, never build/
+    - static
+  media_dirs:                    # public dirs whose media is git-ignored + IPFS-carried (§3.4)
+    - static/videos
+
+  artifacts:                     # every published IPFS-list file found (§3.3) — one entry each
+    - kind: ipfs_sh              # ipfs_sh | ipfs_txt | get_videos_sh | manifest_yaml
+      path: IPFS.sh              # source of truth (repo-relative)
+      published_via: static/IPFS.sh          # the symlink/copy that serves it
+      published_url: https://intelligencemurders.com/IPFS.sh
+    - kind: manifest_yaml
+      path: static/videos/manifest.yaml
+      published_url: https://intelligencemurders.com/videos/manifest.yaml
+    - kind: get_videos_sh
+      path: static/videos/get_videos.sh
+      published_url: https://intelligencemurders.com/videos/get_videos.sh
+
+  embed:                         # the video-embed system (§3.5)
+    style: ipfs_gateway_source   # <video><source src="<gateway>/ipfs/<CID>">
+    gateway: https://ipfs.io/ipfs/
+    scan_docs: [docs]            # where embedded CIDs are referenced
+```
+
+* **`enabled: false`** is the LOCKED default. While off, LFB shows the repo's detected share state in
+  the UI (§8) and **touches nothing**.
+* **`detected` / `confidence` / `docusaurus` / `site` / `artifacts` / `public_dirs` / `media_dirs` /
+  `embed`** are **written by the scan** and shown **read-only** — they describe *what is*, not
+  *what LFB should do*.
+* **`enabled`** and **`auto_update`** are the only fields the **user** sets. Both must be **on** for LFB
+  to write anything (§6).
+
+---
+
+## 6. Optional updating — only when turned ON
+
+By **default LFB never writes a published file.** Regeneration happens **only** when, for that repo,
+`public_ipfs_share.enabled: true` **and** `public_ipfs_share.auto_update: true`. This mirrors the
+charter's "we detect, surface, and offer — we do not act on files on our own," and the user's explicit
+instruction that updates happen *only if that's turned on*.
+
+### 6.1 What a regeneration does
+
+When a shared file's **CID changes** (a new/recompressed variant — its CID in the [manifest](./storage.mdx#9-the-manifest--ipfs-pin-model)
+moved) and `auto_update` is on, LFB rewrites the published artifacts so they point at the current CID:
+
+* **`manifest.yaml`** — update `ipfs_cid` + `ipfs_gateway_url` for the entry; add new entries for newly
+  shared files; keep human-authored fields (`description`, `source_url`, `added_date`) intact.
+* **`IPFS.sh` / `ipfs.txt` / `get_videos.sh`** — regenerate the `ipfs pin add` / `ipfs get` lines from
+  the manifest (the manifest is the source of truth; the scripts are derived, exactly as the real
+  `IPFS.sh` header states).
+* **Embedded gateway URLs** (§3.5) — update `<source src="…/ipfs/<CID>">` in the `scan_docs` paths where
+  the changed file is embedded.
+
+### 6.2 How it writes (LOCKED)
+
+* **Never commit the media.** The public media dir's `.gitignore` stays; LFB only writes the small
+  list/script/manifest/doc files — **git carries the list, IPFS carries the bytes** (the whole point).
+* **Write the source, not the build.** Edit `IPFS.sh` (root) and `static/…` sources; never touch
+  `build/` (regenerated by `docusaurus build`).
+* **Preserve human content.** Comments, descriptions, grouping, and ordering that a person wrote are
+  kept — LFB updates CIDs in place, it does not flatten the file.
+* **Atomic + deterministic** writes ([storage.mdx §15](./storage.mdx#15-the-store-layer-how-code-touches-disk)),
+  so a half-written manifest is never served and re-running with no CID change is a no-op (no noise diffs).
+* **No auto-commit / no branch.** As everywhere in LFB, it writes files but **does not commit, push,
+  branch, or deploy** unless separately configured; the project `CLAUDE.md` forbids auto branch/push,
+  and republishing the site is the user's own action.
+
+Turning `auto_update` **off** (or `enabled` off) instantly returns the repo to detect-and-report — LFB
+stops touching the published files.
+
+---
+
+## 7. Security — opt-in *public*, but the node stays private
+
+Public sharing looks like it contradicts [knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule).
+It does not — the two concern different things:
+
+* **What we publish is a *list of our own CIDs*.** Inviting strangers to `ipfs pin add` **our** content
+  is our content and our deliberate choice. That is the opposite of hosting *other people's* content.
+* **Our node still serves only our own content.** Publishing a list **does not** flip on a public or
+  recursive gateway on this machine. Visitors pin via **their** nodes and read via **public** gateways
+  (`ipfs.io`) — not through us. Our node keeps `reprovide_strategy: pinned` and **no public/recursive
+  gateway** ([ipfs.mdx §6/§8](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule)).
+* **Explicit, per repo, off by default.** Nothing is shared until the user turns `enabled` on for a
+  specific repo — matching the charter's "the only acceptable exception is when the user has gone out of
+  their way" to opt in.
+* **Do not share private repos.** A repo that is `access.shared: false` and not a website should not be
+  auto-surfaced as a share candidate; sharing is offered where the signals (§4) are strong, and always
+  as an offer, never an action.
+
+LFB should also **flag out-of-compliance cases**: if enabling this feature would (mis)configure the node
+as a public gateway/relay, refuse and warn — publishing a list must never require it.
+
+---
+
+## 8. Where it surfaces in the UI
+
+* **On the [one repo](./one_repo.mdx) page** — a badge/indicator when `detected: true`: *"Public IPFS
+  share site"* (and *"DocuSaurus"* when applicable), with the **published URL**, the **artifacts** and
+  their public URLs, and the **shared-file count**. Read-only unless the user opens settings.
+* **In [repo settings](./repo_settings.mdx)** — the `public_ipfs_share` controls: the **`enabled`**
+  master toggle (off by default) and, revealed when on, **`auto_update`** (off by default) plus the
+  read-only detected facts (site URL, artifacts, public/media dirs, embed style). This is the "options
+  turned on and off in the repo's settings yaml" the feature is built around.
+* **Counts** — the shared-file count feeds the repo's at-a-glance status alongside the existing
+  large-file counts ([repos.mdx §4](./repos.mdx#4-status)); a share site with a stale CID (published URL
+  no longer matches the current manifest CID) is surfaced as an actionable nudge (offer to update — only
+  writes if `auto_update` is on).
+
+---
+
+## 9. Reconciliation with existing specs
+
+| Concern | Owned by | This spec adds |
+| --- | --- | --- |
+| CID / pin / "IPFS list" concepts | [knowledge/ipfs.mdx §3/§5](../knowledge/ipfs.mdx#5-ipfs-lists--pinsets-cid-lists-car-files-and-ipns) | The **public** flavor of a list (for strangers), vs. the private pinset/manifest |
+| only-our-content / no public gateway | [knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule) | §7 — publishing a list is compatible; the node stays private |
+| The private cross-computer list | [sync_list.mdx](./sync_list.mdx) | §2 — the opposite-audience counterpart; a repo can be both |
+| Where CIDs come from | [storage.mdx §9](./storage.mdx#9-the-manifest--ipfs-pin-model) | The published artifacts are **derived from** the manifest CIDs |
+| Per-repo config & settings UI | [repo_settings.mdx](./repo_settings.mdx) / [storage.mdx §6.2](./storage.mdx#62-syncrrepo_nameconfigyaml) | The `public_ipfs_share` block + its toggles |
+| Discovery | [scan.mdx](./scan.mdx) | Detection (§4) runs during the scan and writes the detected facts |
+| Per-repo page | [one_repo.mdx](./one_repo.mdx) | The share-site indicator (§8) |
+
+Detection here **only reads**; it never bridges, pins, or writes on its own — consistent with the scan's
+"discover, don't act" contract ([scan.mdx §1](./scan.mdx#1-what-the-scan-does--and-deliberately-does-not-do)).
+
+---
+
+## 10. Acceptance criteria
+
+1. A repo can be recognized as a **public IPFS share site** — a repo that publishes a **list of IPFS
+   CIDs** so others can pin the content — independently of whether it is a DocuSaurus site (§1, §3.1).
+2. LFB **detects and records a definite yes/no per repo** during the scan (§4), plus a **confidence**,
+   the **DocuSaurus** boolean + **site URL**, every **list artifact** (`kind` ∈ {`ipfs_sh`, `ipfs_txt`,
+   `get_videos_sh`, `manifest_yaml`} with `path` + `published_url`), the **public/media dirs**, and the
+   **embed style + gateway** — written to that repo's `config.yaml` and shown **read-only**.
+3. The feature is **OFF by default** (`public_ipfs_share.enabled: false`); while off LFB is
+   **detect-and-report only** and **writes nothing** to any published file (§5, §6).
+4. LFB recognizes the **three real artifact shapes** — `IPFS.sh` pin script (symlinked into `static/`,
+   served at `/IPFS.sh`), three-command `ipfs.txt`, and `get_videos.sh` + machine-readable
+   `manifest.yaml` under a public `static/videos/` — plus the companion React `/ipfs` page as
+   presentation only (§3.3).
+5. LFB understands the **public directory** convention (`static/` serves at the web root; edit sources,
+   never `build/`), the **git-ignored public media dir** (media excluded, CID-listed, IPFS-carried), and
+   the **video-embed system** (`<video><source src="https://ipfs.io/ipfs/<CID>">`) (§3.2, §3.4, §3.5).
+6. LFB **regenerates** published artifacts **only** when `enabled` **and** `auto_update` are both on
+   (§6): it updates `ipfs_cid`/gateway URLs from the manifest, regenerates derived scripts, updates
+   embedded gateway URLs, **preserves human-authored content**, writes **source not build**, never
+   commits the media, and writes atomically/deterministically with **no auto-commit/branch/push** (§6.2).
+7. Publishing a list **never turns this machine into a public/recursive gateway or relay**; the node
+   keeps the [ipfs.mdx §6](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule) only-our-content
+   defaults, and LFB flags any configuration that would violate that (§7).
+8. The share state surfaces on the **one-repo page** (indicator + URL + artifacts + count) and its
+   toggles live in **per-repo settings**; a stale published CID is an **offer to update**, acted on only
+   when `auto_update` is on (§8).
+
+<!--
+  This is the PUBLIC IPFS SHARE spec — the OPT-IN, per-repo, OFF-by-default counterpart to the private
+  sync_list.mdx. It does NOT restate CID/pin/list concepts (knowledge/ipfs.mdx §3/§5), the
+  only-our-content rule (ipfs.mdx §6), the private Sync List (sync_list.mdx), the manifest CID source
+  (storage.mdx §9), per-repo config (storage.mdx §6.2 / repo_settings.mdx), the scan (scan.mdx), or the
+  one-repo page (one_repo.mdx) — it references them. LOCKED: the feature is per-repo and OFF by default
+  (public_ipfs_share.enabled:false ⇒ detect-and-report only); LFB writes a published file ONLY when
+  enabled AND auto_update are both ON; three artifact shapes (IPFS.sh pin script symlinked into static/ →
+  /IPFS.sh; three-command ipfs.txt; get_videos.sh curl-pipe installer + machine-readable manifest.yaml
+  under public static/videos/); DocuSaurus detection is optional supporting context, not required; the
+  public dir is static/ (edit source, never build/); public media is git-ignored + IPFS-carried; the
+  video-embed system uses public gateway URLs (<video><source src="https://ipfs.io/ipfs/<CID>">);
+  regeneration derives scripts/embeds from the manifest CIDs, preserves human content, is
+  atomic/deterministic, and never auto-commits/branches/pushes; publishing a LIST never makes our node a
+  public/recursive gateway/relay — ipfs.mdx §6 holds for our own node. Grounded in the real repos:
+  charlie-kirk, Intel_Murder_Docus, holon, UAP_Murder_Docus.
+-->
