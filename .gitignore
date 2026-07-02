@@ -1,0 +1,105 @@
+# ============================================================================
+# LargeFileBridge .gitignore
+# ----------------------------------------------------------------------------
+# This file IS the bridge. Its whole job is to keep large binary files OUT of
+# Git history so pushes stay small and never hit GitHub's 100 MB limit.
+#
+# The files ignored below are NOT lost — they are synced between your computers
+# out-of-band over IPFS or peer-to-peer sync (Syncthing-style). Git tracks the
+# code + a manifest of what should exist; the p2p layer moves the actual bytes.
+#
+# Rule of thumb: if it's big and binary, ignore it here and let the bridge sync
+# it. If it's small and text, let Git track it.
+# ============================================================================
+
+# --- The dedicated large-file drop zone (synced via p2p, never committed) ---
+large/
+Large/
+LargeFiles/
+
+# --- Video ------------------------------------------------------------------
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.wmv
+*.flv
+*.webm
+*.m4v
+*.mpg
+*.mpeg
+*.prores
+
+# --- Audio ------------------------------------------------------------------
+*.wav
+*.aiff
+*.aif
+*.flac
+*.m4a
+*.mp3
+*.ogg
+
+# --- Images (large / source formats) ----------------------------------------
+*.psd
+*.psb
+*.ai
+*.tif
+*.tiff
+*.raw
+*.cr2
+*.nef
+*.arw
+*.dng
+*.exr
+*.hdr
+
+# --- 3D / render / DCC assets -----------------------------------------------
+*.blend
+*.blend1
+*.fbx
+*.obj
+*.abc
+*.usd
+*.usdz
+*.glb
+*.gltf
+*.ply
+
+# --- AI / ML model weights & data -------------------------------------------
+*.ckpt
+*.safetensors
+*.pt
+*.pth
+*.bin
+*.onnx
+*.gguf
+*.npz
+*.h5
+
+# --- Archives & disk images -------------------------------------------------
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.gz
+*.7z
+*.rar
+*.dmg
+*.iso
+
+# --- Datasets ---------------------------------------------------------------
+*.csv.gz
+*.parquet
+*.sqlite
+*.db
+
+# --- OS / editor cruft ------------------------------------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# ----------------------------------------------------------------------------
+# NOTE: The manifest that records the ignored large files (paths + IPFS CIDs /
+# content hashes) is INTENTIONALLY tracked by Git. Do not add it here.
+# ----------------------------------------------------------------------------
