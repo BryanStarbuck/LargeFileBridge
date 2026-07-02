@@ -1,0 +1,256 @@
+---
+title: LargeFileBridge — Web App Entry & Sign-In (credentials setup)
+description: The web app's entry gate (the UiPageWeRender shown before anyone is signed in). Specifies the sign-in screen and — the focus of this file — the "sign-in is not configured yet" remediation panel that renders when the Google OAuth client credentials are missing. That panel must name the app correctly (Large File Bridge — NOT any sister app's name), show the FULL path where the credentials JSON must be installed (~/.credentials/large_files_bridge.json), print the exact JSON layout to paste into it, show the exact redirect URI to register on the Google Cloud OAuth client (http://localhost:8787/api/v1/oauth_callback), and tell the user to restart the backend. Grounded in the real code: SignInPage.tsx, the auth gate in main.tsx, GET /api/health/auth-config, and config/credentials-file.ts. Precedence is env-wins-then-file. Cross-links storage.mdx §10 (where the secret lives / signing secret) and §4 (the allow-list).
+---
+
+# LargeFileBridge — Web App Entry & Sign-In (credentials setup)
+
+This spec covers the **first thing anyone sees**: the web app's **entry gate**. Before a session
+belongs to an authenticated, allow-listed user, the app renders the **Sign-In page** — and when the
+server has **no Google OAuth client credentials yet**, that page shows a **"sign-in is not configured
+yet" remediation panel** telling the operator exactly how to install them.
+
+The remediation panel is the **focus of this file**. Per the charter, LFB uses **OpenAuthFederated**
+with **Google** sign-in and an **allow-list** — there is **no anonymous / no-login path**. So if the
+OAuth client isn't configured, nobody can get in, and the page's whole job is to make fixing that
+**unambiguous**: the **exact file path**, the **exact JSON to paste**, and the **exact redirect URI**
+to register.
+
+Grounded in the real code:
+
+* Component: `code/packages/frontend/src/pages/sign-in/SignInPage.tsx`
+* Auth gate that mounts it: `code/packages/frontend/src/main.tsx`
+* Config signal: `GET /api/health/auth-config` → `{ oauthConfigured, devAuth }`
+  (`code/packages/backend/src/modules/health/health.router.ts` → `authConfig()`)
+* Where creds are read: `code/packages/backend/src/config/credentials-file.ts`
+
+Siblings: [storage.mdx §10](./storage.mdx#10-auth-session--signing-secret-runtime-not-settings) (the
+signing secret + why client creds are **not** in the state store) ·
+[storage.mdx §4](./storage.mdx#4-per-logged-in-user-storage--the-per-user-requirement) (the
+allow-list that decides who, once signed in, is actually let in) ·
+[settings.mdx §4](./settings.mdx#4-the-rest-of-the-global-settings-surface) (allow-list editing,
+admin-only) · [code_plan.mdx](./code_plan.mdx) (ports: web app **:2222**, API **:8787**).
+
+---
+
+## 1. When this page renders — the auth gate
+
+The gate lives in `main.tsx`. It calls `GET /api/auth/me` and shows the Sign-In page unless the
+caller is **both** authenticated **and** allow-listed:
+
+```
+me = GET /api/auth/me
+if (!me.authenticated || !me.allowListed)  →  render <SignInPage/>
+else                                        →  render the app (RouterProvider)
+```
+
+So the Sign-In page is the pre-app gate. It has **no left bar** and **no nav** — it precedes
+[left_bar.mdx](./left_bar.mdx) entirely. It is not a routed page; it is what `<Root>` renders in place
+of the router when the gate is closed.
+
+The Sign-In page then asks a **second** question — *is the server even able to sign anyone in?* — via
+`GET /api/health/auth-config`, which returns:
+
+| Field | Meaning |
+| --- | --- |
+| `oauthConfigured` | `true` when the backend has **both** a Google client id **and** secret (from env or the credentials file). Drives the "Sign in" button vs. the remediation panel. |
+| `devAuth` | `true` when no creds are set **and** `LFB_DEV_AUTH !== "false"` — the localhost offline bypass (§4). |
+
+---
+
+## 2. The three states of the entry page
+
+| State | Condition | What the card shows |
+| --- | --- | --- |
+| **A — Ready** | `oauthConfigured: true` | Title, tagline, and a **"Sign in with Google"** button → `href="/api/v1/sign_in/sso"`. |
+| **B — Not configured** | `oauthConfigured: false` | The **remediation panel** (§3) — the setup instructions. **This is what this spec grows.** |
+| **C — Dev bypass** | `devAuth: true` (implies not configured) | On localhost the backend has already authenticated the first allow-listed email as the signed-in user, so the gate is usually **already open** and the app renders — the operator rarely sees the card at all. State B is what a **server / non-dev** deployment hits. |
+
+Every state's card carries the **correct app identity** (§5): the wordmark **"Large File Bridge"** and
+the tagline **"Sync your large files across your own computers."**
+
+---
+
+## 3. The remediation panel — "Sign-in is not configured yet"
+
+This is the UiPageWeRender the task calls for. When `oauthConfigured` is `false`, the card body
+replaces the sign-in button with a setup panel. It must contain **all four** of the following, in
+plain, copy-pasteable form.
+
+### 3.1 The exact layout
+
+```
+ ┌──────────────────────────────────────────────────────────────┐
+ │                      Large File Bridge                        │
+ │        Sync your large files across your own computers.       │
+ │                                                               │
+ │   ⚠  Sign-in is not configured yet                            │
+ │                                                               │
+ │   Large File Bridge signs in with your Google account, and    │
+ │   the server needs a Google OAuth client before anyone can    │
+ │   enter. To finish setup:                                     │
+ │                                                               │
+ │   1. Create the credentials file at this exact path:          │
+ │      ┌────────────────────────────────────────────────┐  ⧉   │
+ │      │ ~/.credentials/large_files_bridge.json         │       │
+ │      └────────────────────────────────────────────────┘       │
+ │      (the file does not exist yet)                            │
+ │                                                               │
+ │   2. Put this JSON inside it:                                 │
+ │      ┌────────────────────────────────────────────────┐  ⧉   │
+ │      │ {                                              │       │
+ │      │   "large_files_bridge": {                      │       │
+ │      │     "google": {                                │       │
+ │      │       "clientId": "<YOUR_GOOGLE_CLIENT_ID>",   │       │
+ │      │       "clientSecret": "<YOUR_CLIENT_SECRET>"   │       │
+ │      │     }                                          │       │
+ │      │   }                                            │       │
+ │      │ }                                              │       │
+ │      └────────────────────────────────────────────────┘       │
+ │                                                               │
+ │   3. Register this exact redirect URI on the Google Cloud     │
+ │      OAuth client:                                            │
+ │      ┌────────────────────────────────────────────────┐  ⧉   │
+ │      │ http://localhost:8787/api/v1/oauth_callback    │       │
+ │      └────────────────────────────────────────────────┘       │
+ │                                                               │
+ │   4. Restart the backend, then reload this page.              │
+ │                                                               │
+ │   Alternatives: set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET   │
+ │   in the backend environment (env wins over the file), or —   │
+ │   on localhost only — run with LFB_DEV_AUTH=true to bypass     │
+ │   sign-in for offline development.                            │
+ └──────────────────────────────────────────────────────────────┘
+```
+
+### 3.2 The four required elements
+
+1. **The full install path — shown literally.** `~/.credentials/large_files_bridge.json`. This is the
+   default read location in `credentials-file.ts` (`path.join(os.homedir(), ".credentials",
+   "large_files_bridge.json")`). It must be rendered as **selectable, monospaced text with a
+   copy button** — never buried in prose. State plainly that **the file does not exist yet** (that is
+   the normal first-run condition). If the operator overrode the path with **`LFB_CREDENTIALS_FILE`**,
+   the panel should show **that** path instead (see §6).
+
+2. **The JSON layout — shown literally.** The exact shape the backend parses (§4). Rendered in a
+   copy-able code block with placeholder values so the operator can paste and fill in.
+
+3. **The exact redirect URI — shown literally.** `http://localhost:8787/api/v1/oauth_callback`
+   (the `GOOGLE_REDIRECT_URI` default in `.env.example`, built from the **API** port **8787** — *not*
+   the web app port 2222). This must be registered **verbatim** on the Google Cloud OAuth client's
+   "Authorized redirect URIs," or Google rejects the round-trip. Copy button here too.
+
+4. **The restart nudge.** Credentials are read at boot (`loadGoogleCreds()` runs when the auth
+   Frontend API is built), so the operator must **restart the backend** and reload. Say so explicitly.
+
+The panel should also surface the **allowed sign-in domain(s)** as context — default **`act3ai.com`**
+(`AUTH_ALLOWED_DOMAINS`) — so the operator knows *which* Google account will be accepted even once the
+client is wired up. Being on an allowed domain still isn't sufficient by itself: the email must also
+be on the **allow-list** ([storage.mdx §4](./storage.mdx#4-per-logged-in-user-storage--the-per-user-requirement)).
+
+---
+
+## 4. The credentials JSON — the layout the backend actually parses
+
+`credentials-file.ts` accepts **two shapes** and reads `clientId` / `clientSecret` from whichever is
+present. The panel shows the **nested** (preferred) form; document both here so the spec matches code.
+
+**Preferred (namespaced) form — what the UI prints:**
+
+```json
+{
+  "large_files_bridge": {
+    "google": {
+      "clientId": "1234567890-abcdef.apps.googleusercontent.com",
+      "clientSecret": "GOCSPX-xxxxxxxxxxxxxxxxxxxx"
+    }
+  }
+}
+```
+
+**Also accepted (top-level) form:**
+
+```json
+{
+  "google": {
+    "clientId": "1234567890-abcdef.apps.googleusercontent.com",
+    "clientSecret": "GOCSPX-xxxxxxxxxxxxxxxxxxxx"
+  }
+}
+```
+
+Resolution in code: `json.large_files_bridge?.google ?? json.google ?? {}`. The namespaced form is
+preferred because **one `~/.credentials/*.json` file can hold keys for several sibling apps** — namespacing
+under `large_files_bridge` keeps LFB's block from colliding with theirs.
+
+**This is a secret file.** It holds the OAuth **client secret** and therefore lives **out of the repo**
+and **out of the state store** — never checked in, never inside `~/T/_large_files_bridge/`
+([storage.mdx §10](./storage.mdx#10-auth-session--signing-secret-runtime-not-settings)). The panel may
+remind the operator to keep it private (e.g. `chmod 600`).
+
+---
+
+## 5. Precedence — where the client id/secret come from
+
+The backend resolves credentials with **env-wins-then-file** (`loadGoogleCreds()`):
+
+```
+clientId / clientSecret =
+  1. process.env.GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET      (if BOTH set → use, stop)
+  2. else  <credsFile>.large_files_bridge.google.{clientId,clientSecret}
+  3. else  <credsFile>.google.{clientId,clientSecret}
+  4. else  "" / ""  →  oauthConfigured = false  →  render §3 panel
+credsFile = process.env.LFB_CREDENTIALS_FILE
+            || ~/.credentials/large_files_bridge.json
+```
+
+So the panel's two documented paths — **the JSON file** and **the two env vars** — are exactly the two
+inputs the code honors, in that priority. `oauthConfigured` is simply `Boolean(clientId && clientSecret)`
+after this resolution; a half-filled config (id but no secret) still reads as **not configured** and
+still shows the §3 panel.
+
+---
+
+## 6. Copy correctness — this app is "Large File Bridge"
+
+The reference mock this panel was derived from belongs to a **sister app** ("Starbuck Family Hub", on
+port `9322`). Every app-specific string in **our** panel must be **ours**, not inherited:
+
+| Must be | Not (sister-app value) |
+| --- | --- |
+| **Large File Bridge** (wordmark, body copy) | ~~Starbuck Family Hub~~ |
+| `~/.credentials/large_files_bridge.json` | ~~`~/.credentials/starbuck_hub.json`~~ |
+| `large_files_bridge.google` (JSON key) | ~~`starbuck_hub.google`~~ |
+| `http://localhost:8787/api/v1/oauth_callback` | ~~`http://localhost:9322/api/v1/oauth_callback`~~ |
+| Allowed domain `act3ai.com` | (whatever the sister app allows) |
+
+**Single source of truth.** These strings must not be hand-typed into JSX where they can drift from the
+backend. The **path, redirect URI, JSON key, and allowed domain** the panel displays should come from
+the backend (extend `authConfig()` / the `/api/health/auth-config` payload to include
+`credentialsPath`, `redirectUri`, and `allowedDomains`) so the UI always shows the **real** resolved
+values — including a custom `LFB_CREDENTIALS_FILE` or `GOOGLE_REDIRECT_URI`. The panel renders what the
+server reports; it never assumes defaults the server may have overridden.
+
+---
+
+## 7. Acceptance criteria
+
+1. The entry gate (`main.tsx`) renders `<SignInPage/>` whenever the caller is not **both**
+   authenticated **and** allow-listed; otherwise it renders the app.
+2. `SignInPage` reads `GET /api/health/auth-config` and shows **state A** (Sign in with Google →
+   `/api/v1/sign_in/sso`) when `oauthConfigured` is true, and the **§3 remediation panel** when it is
+   false.
+3. The remediation panel shows the **full credentials path** —
+   `~/.credentials/large_files_bridge.json` (or the resolved `LFB_CREDENTIALS_FILE`) — as selectable,
+   copy-able monospaced text, and states that the file does not exist yet.
+4. The panel prints the **exact JSON layout** to paste (`large_files_bridge.google.{clientId,
+   clientSecret}`), copy-able, matching what `credentials-file.ts` parses.
+5. The panel shows the **exact redirect URI** to register on the Google Cloud OAuth client —
+   `http://localhost:8787/api/v1/oauth_callback` (API port 8787, **not** web port 2222) — copy-able.
+6. The panel tells the operator to **restart the backend** and reload, and documents the **env-var
+   alternative** (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`, which win over the file) and the
+   **localhost `LFB_DEV_AUTH=true`** bypass.
+7. All app-identity strings say **Large File Bridge** and use LFB's path/key/port/domain — **no**
+   leftover sister-app values (§6).
+8. Displayed path / redirect URI / JSON key / allowed domain reflect the backend's **resolved** values
+   (env or file overrides included), not hard-coded UI defaults.

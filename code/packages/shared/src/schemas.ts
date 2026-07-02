@@ -10,7 +10,7 @@ export const AppConfigSchema = z.object({
   updated_at: iso.optional(),
   server: z
     .object({
-      frontend_port: z.number().default(8080),
+      frontend_port: z.number().default(2222), // web app (browser-facing) default; smart-resolved on boot
       backend_port: z.number().default(8787),
       mode: z.enum(["local", "server"]).default("local"),
       cors_origins: z.array(z.string()).default([]),

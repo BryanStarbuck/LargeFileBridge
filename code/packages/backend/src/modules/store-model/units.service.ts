@@ -101,7 +101,7 @@ export async function registerRepo(absPath: string): Promise<{ folder: string; r
     repo: { name, path: resolved, remote: readGitRemote(resolved) },
     synced: false, // discovered but off until the user opts in (storage.mdx §7)
   }));
-  const status = UnitStatusSchema.parse(undefined);
+  const status = UnitStatusSchema.parse({});
   status.folder_name = folder;
   writeRepoStatus(folder, status);
   log.info("units", `Registered repo ${name} -> sync/r/${folder}`);

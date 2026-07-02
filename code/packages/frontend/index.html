@@ -3,6 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Stable ownership marker: lets the port resolver tell OUR web server apart from a
+         foreign process squatting on the port (code_plan.mdx §2, port collision policy). -->
+    <meta name="x-app" content="large-file-bridge" />
     <title>Large File Bridge</title>
   </head>
   <body>

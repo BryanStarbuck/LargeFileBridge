@@ -4,6 +4,16 @@
   --lfb-primary: #2563eb; /* brand accent (left_bar.mdx §1) */
   --lfb-primary-tint: rgba(37, 99, 235, 0.1);
   --lfb-border: #e2e8f0;
+
+  /* File System code-badge palette (directory.mdx §4). White letter on solid fill. */
+  --lfb-badge-repo-root: #5b3a1a; /* R  dark brown */
+  --lfb-badge-repo-descendant: #8a5a2b; /* r  medium brown (inside a repo) */
+  --lfb-badge-repo-ancestor: #b8865b; /* r  light brown (contains a repo below) */
+  --lfb-badge-sync: #ff2d9b; /* S  bright pink */
+  --lfb-badge-compress: #f5c518; /* C  bright yellow (should compress) */
+  --lfb-badge-compressed: #f3e6a6; /* c  light yellow (already compressed) */
+  --lfb-badge-compressed-ink: #3a3320; /* dark ink for the light-yellow c */
+  --lfb-badge-ipfs: #2f6fed; /* i  blue */
 }
 
 html,

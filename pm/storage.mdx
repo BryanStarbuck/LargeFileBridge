@@ -141,7 +141,9 @@ updated_at: 2026-07-02T14:32:15.123Z
 
 # Where the web app is reachable (localhost first; the same shape on a server)
 server:
-  frontend_port: 8080        # React + Vite SPA
+  frontend_port: 2222        # web app (browser-facing page server) — ALWAYS defaults to :2222.
+                             # Resolved on boot: free → take it; held by our OWN stale instance →
+                             # kill & reclaim; held by a FOREIGN process → increment (+1) and report.
   backend_port: 8787         # Node/TS REST API under /api
   mode: local                # local | server
 

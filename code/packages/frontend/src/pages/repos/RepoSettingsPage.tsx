@@ -8,7 +8,7 @@ import { SIZE_UNITS, toBytes } from "@lfb/shared";
 import { api } from "../../api/client.js";
 
 export function RepoSettingsPage() {
-  const { repoId } = useParams({ from: "/repos/$repoId/settings" });
+  const { repoId } = useParams({ strict: false }) as { repoId: string };
   const qc = useQueryClient();
   const { data: s } = useQuery({ queryKey: ["repoSettings", repoId], queryFn: () => api.repoSettings(repoId) });
 

@@ -37,7 +37,7 @@ export function readYaml<S extends ZodTypeAny>(file: string, schema: S): z.outpu
   try {
     raw = fs.readFileSync(file, "utf8");
   } catch {
-    return schema.parse(undefined) as z.output<S>; // defaults-on-absence
+    return schema.parse({}) as z.output<S>; // defaults-on-absence (our schemas are all objects)
   }
   let parsed: unknown;
   try {

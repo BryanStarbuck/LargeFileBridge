@@ -165,6 +165,40 @@ export interface CurrentUser {
   allowListed: boolean;
 }
 
+// ── File System column browser (directory.mdx) ──────────────────────────────
+// One code badge painted on a file/dir row. White letter on a solid color.
+// Ordered rightmost-first when they stack: repo(R/r) · sync(S) · compress(C/c) · ipfs(i).
+export type FsBadge =
+  | "repo_root" // R  dark brown      (dir — its own .git working tree)
+  | "repo_descendant" // r  medium brown    (file|dir inside a repo)
+  | "repo_ancestor" // r  light brown     (dir that contains a repo below it)
+  | "sync" // S  bright pink     (file whose decision === "sync")
+  | "compress" // C  bright yellow   (video/image file that looks uncompressed)
+  | "compressed" // c  light yellow    (video/image file already compressed)
+  | "ipfs"; // i  blue            (IPFS list/share artifact, or dir publishing one)
+
+export type FsEntryKind = "dir" | "file" | "symlink" | "other";
+
+// One row in a column of the File System browser (directory.mdx §5).
+export interface FsEntry {
+  name: string;
+  path: string; // absolute, server-normalized
+  kind: FsEntryKind;
+  sizeBytes: number | null; // files only
+  modifiedAt: string | null; // ISO
+  isRepoRoot: boolean;
+  badges: FsBadge[]; // ordered rightmost-first (directory.mdx §3.5)
+  hasChildren: boolean; // dir has ≥1 visible child (drives the disclosure)
+}
+
+// The contents of one directory level — one column of the browser.
+export interface FsListing {
+  root: string; // the absolute path this column lists
+  parent: string | null; // for "up" navigation (null at a volume root)
+  home: string; // the OS home dir (default root)
+  entries: FsEntry[];
+}
+
 // ── Generic API envelope for mutations ──────────────────────────────────────
 export interface Ok<T = unknown> {
   ok: true;

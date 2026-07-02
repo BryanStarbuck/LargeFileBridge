@@ -8,6 +8,7 @@ import { buildAuthFrontend } from "./modules/auth/auth-frontend.js";
 import { identify } from "./modules/auth/identify.js";
 import { authRouter } from "./modules/auth/auth.router.js";
 import { reposRouter } from "./modules/repos/repos.router.js";
+import { fsRouter } from "./modules/fs/fs.router.js";
 import { settingsRouter } from "./modules/settings/settings.router.js";
 import { syncRouter } from "./modules/sync/sync.router.js";
 import { peersRouter } from "./modules/peers/peers.router.js";
@@ -28,11 +29,25 @@ async function bootstrapState(): Promise<void> {
   if (pid) await updateAppConfig((c) => ((c.computer.ipfs_peer_id = pid), c));
 }
 
-function corsOrigins(): string[] {
+function configuredOrigins(): string[] {
   const fromEnv = (process.env.CORS_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean);
   const fromCfg = getAppConfig().server.cors_origins;
   const merged = [...new Set([...fromEnv, ...fromCfg])];
-  return merged.length ? merged : ["http://localhost:8080"];
+  return merged.length ? merged : ["http://localhost:2222"];
+}
+
+// The web app defaults to :2222 but may increment past a foreign process (code_plan.mdx §2 port
+// collision policy). In LOCAL mode we therefore accept ANY localhost origin so a moved web port
+// still reaches the API; in SERVER mode we fail closed to the configured origin list only.
+const LOCALHOST_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+function corsOrigin(): cors.CorsOptions["origin"] {
+  const allowlist = new Set(configuredOrigins());
+  const local = getAppConfig().server.mode === "local";
+  return (origin, cb) => {
+    if (!origin) return cb(null, true); // same-origin / curl — no browser origin to check
+    if (allowlist.has(origin) || (local && LOCALHOST_ORIGIN.test(origin))) return cb(null, true);
+    cb(new Error(`origin not allowed: ${origin}`));
+  };
 }
 
 async function main(): Promise<void> {
@@ -43,7 +58,7 @@ async function main(): Promise<void> {
   const app = express();
   app.set("trust proxy", "loopback");
   app.use(helmet({ contentSecurityPolicy: false }));
-  app.use(cors({ origin: corsOrigins(), credentials: true }));
+  app.use(cors({ origin: corsOrigin(), credentials: true }));
 
   // OpenAuthFederated Frontend API (own namespace, before body parsing so it owns its routes).
   app.use("/api/v1", buildAuthFrontend());
@@ -54,6 +69,7 @@ async function main(): Promise<void> {
   app.use("/api/auth", authRouter);
   app.use("/api/health", healthRouter);
   app.use("/api/repos", reposRouter);
+  app.use("/api/fs", fsRouter);
   app.use("/api/settings", settingsRouter);
   app.use("/api/sync", syncRouter);
   app.use("/api/peers", peersRouter);

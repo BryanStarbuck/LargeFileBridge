@@ -15,7 +15,7 @@ import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js"
 const DECISIONS: Decision[] = ["sync", "ignore", "undecided"];
 
 export function OneRepoPage() {
-  const { repoId } = useParams({ from: "/repos/$repoId" });
+  const { repoId } = useParams({ strict: false }) as { repoId: string };
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [selected, setSelected] = useState<Set<string>>(new Set());

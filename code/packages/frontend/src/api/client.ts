@@ -12,6 +12,7 @@ import type {
   WorkerKind,
   WorkerState,
   SizeUnit,
+  FsListing,
 } from "@lfb/shared";
 import { http, unwrap } from "./axios.js";
 
@@ -50,4 +51,11 @@ export const api = {
     unwrap<WorkerState>(http.post(`/sync/${worker}/${action}`)),
 
   peers: () => unwrap<PeerRow[]>(http.get("/peers")),
+
+  // File System column browser (directory.mdx).
+  fsHome: () => unwrap<{ home: string }>(http.get("/fs/home")),
+  fsList: (path?: string, hidden = false) =>
+    unwrap<FsListing>(
+      http.get("/fs", { params: { ...(path ? { path } : {}), ...(hidden ? { hidden: "1" } : {}) } }),
+    ),
 };
