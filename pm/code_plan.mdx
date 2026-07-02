@@ -156,6 +156,11 @@ packages/backend/src/
 │   │   ├── repos.service.ts     #   compose RepoRow[] from units + status; add-repo validation (git working tree)
 │   │   └── files.service.ts     #   FileRow[] + decision writes (sync/ignore/undecided) + bulk
 │   │
+│   ├── fs/                      # directory.mdx — the File System column browser (Finder column view)
+│   │   ├── fs.router.ts         #   GET /fs?path=… (one directory level) · GET /fs/home (default root)
+│   │   ├── fs.service.ts        #   readdir one level (Node fs, no shell), normalize, sort, per-entry badges
+│   │   └── badges.ts            #   compute FsBadge[]: repo (R/r brown), sync (S pink), compress (C/c yellow), ipfs (i blue)
+│   │
 │   ├── settings/                # settings.mdx + repo_settings.mdx
 │   │   └── settings.controller.ts # GET/PATCH /settings (big_file threshold, scanner roots, ipfs) · /settings/allow-list (admin)
 │   │
