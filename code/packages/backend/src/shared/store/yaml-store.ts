@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import type { ZodType } from "zod";
+import { z, type ZodTypeAny } from "zod";
 import { log } from "../logging.js";
 import { ensureDir } from "../../config/state-dir.js";
 
@@ -32,12 +32,12 @@ async function withLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
  * Missing file -> schema defaults (NOT an error, no write, no log spam).
  * Malformed file -> logged loudly and rethrown (storage.mdx §15: never silently trust).
  */
-export function readYaml<T>(file: string, schema: ZodType<T>): T {
+export function readYaml<S extends ZodTypeAny>(file: string, schema: S): z.output<S> {
   let raw: string;
   try {
     raw = fs.readFileSync(file, "utf8");
   } catch {
-    return schema.parse(undefined as unknown); // defaults-on-absence
+    return schema.parse(undefined) as z.output<S>; // defaults-on-absence
   }
   let parsed: unknown;
   try {
@@ -78,15 +78,15 @@ export function writeYaml<T extends Record<string, unknown>>(file: string, value
 }
 
 /** Read-modify-write under the per-file mutex. */
-export async function updateYaml<T extends Record<string, unknown>>(
+export async function updateYaml<S extends ZodTypeAny>(
   file: string,
-  schema: ZodType<T>,
-  mutate: (current: T) => T,
-): Promise<T> {
+  schema: S,
+  mutate: (current: z.output<S>) => z.output<S>,
+): Promise<z.output<S>> {
   return withLock(file, async () => {
     const current = readYaml(file, schema);
     const next = mutate(current);
-    writeYaml(file, next);
+    writeYaml(file, next as Record<string, unknown>);
     return next;
   });
 }

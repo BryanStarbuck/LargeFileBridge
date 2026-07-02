@@ -15,7 +15,7 @@ function apiBase(): string {
 
 async function rpc(
   cmd: string,
-  opts: { query?: Record<string, string>; args?: string[]; body?: BodyInit } = {},
+  opts: { query?: Record<string, string>; args?: string[]; body?: FormData } = {},
 ) {
   const params = new URLSearchParams(opts.query);
   for (const a of opts.args ?? []) params.append("arg", a); // repeated ?arg=…&arg=…

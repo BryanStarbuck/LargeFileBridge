@@ -6,6 +6,7 @@
     "rootDir": "src",
     "outDir": "dist",
     "noEmit": true,
+    "declaration": false,
     "types": ["node"]
   },
   "include": ["src"]

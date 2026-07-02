@@ -26,7 +26,7 @@ Left_Nav:
     # ==========================================================================
     - Location: app
       name: "LargeFileBridge — Main Left Bar"
-      description: "Primary navigation: Repos, Peers, Sync, Settings."
+      description: "Primary navigation: Repos, File System, Peers, Sync, Settings."
       auth_system: "openauth_federated"
       sidebar_width: 256px
 
@@ -55,25 +55,32 @@ Left_Nav:
           order: 1
           description: "Every git repo on this computer that LargeFileBridge manages, with its large-file sync counts and status."
 
+        - id: file_system
+          label: "File System"
+          icon: "Columns3"
+          route: "/files"
+          order: 2
+          description: "Browse your whole filesystem in a Finder-style column view. Each file/directory shows code badges: R/r repo (brown), S sync (pink), C/c compress (yellow), i IPFS (blue). Defaults to your home directory. See pm/directory.mdx."
+
         - id: peers
           label: "Peers"
           icon: "Network"
           route: "/peers"
-          order: 2
+          order: 3
           description: "Your other computers (laptop, desktop, studio, server, family) that pin these files over IPFS."
 
         - id: sync
           label: "Sync"
           icon: "RefreshCw"
           route: "/sync"
-          order: 3
+          order: 4
           description: "The background sync process: whether the launchd job is installed, whether it is on or off, the run-every-15-min schedule, and recent activity."
 
         - id: settings
           label: "Settings"
           icon: "Settings"
           route: "/settings"
-          order: 4
+          order: 5
           description: "Account, allow-list, and IPFS node configuration."
 
       # Footer: account block (avatar/name/Google email) -> popup menu (expands UP).

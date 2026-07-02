@@ -93,6 +93,30 @@ LargeFiles/
 *.sqlite
 *.db
 
+# --- Node / build artifacts (regenerated from package.json + lockfile) ------
+# node_modules is NEVER committed — `pnpm install` rebuilds it from the
+# committed pnpm-lock.yaml. Committing it bloats the repo with 10k+ files.
+node_modules/
+.pnpm-store/
+dist/
+build/
+out/
+*.tsbuildinfo
+.vite/
+coverage/
+.turbo/
+
+# --- Local env / secrets (keep .env.example, ignore real envs) --------------
+.env
+.env.*
+!.env.example
+
+# --- Logs -------------------------------------------------------------------
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+
 # --- OS / editor cruft ------------------------------------------------------
 .DS_Store
 Thumbs.db
