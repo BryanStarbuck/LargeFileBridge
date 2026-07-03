@@ -437,6 +437,18 @@ export interface FlatFileListing {
   truncated: boolean; // true if the file-cap / iteration budget was hit (show the "narrow root" note)
 }
 
+// ── Streaming flat listing (performance.mdx Part III, P-22/P-23) ──────────────
+// The flat large-file walk is ALSO delivered as an NDJSON stream (GET /api/fs/flat/stream): one JSON
+// object per line so the Full Paths table fills PROGRESSIVELY as the walk discovers rows, instead of
+// the browser waiting on — then parsing + committing — one up-to-5000-row blob. `meta` arrives first
+// (root/home/threshold), then `batch` events carry rows in chunks, then a single terminal `done`
+// (or `error`). The non-streaming GET /api/fs/flat (FlatFileListing) remains for any buffered caller.
+export type FlatStreamEvent =
+  | { t: "meta"; root: string; home: string; thresholdBytes: number }
+  | { t: "batch"; files: FsEntry[] }
+  | { t: "done"; truncated: boolean; total: number }
+  | { t: "error"; error: string };
+
 // ── Single-entity views + sticky flags (menus.mdx §6.6, files.mdx, directories.mdx) ──
 // Two persistent per-entity flags the user sets from the ⋯ / right-click menu or the entity page.
 // They apply to a file OR a directory (a directory's flag covers everything under it), survive

@@ -4,7 +4,15 @@
 // icons; the action row (Select all / IPFS pin / Unpin) drives the one_repo.mdx decision model
 // (sync/ignore) via the per-entity endpoint — files outside a registered repo (or with Never IPFS on)
 // are reported as skipped, never silently dropped, and no bytes ever move.
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
@@ -28,7 +36,7 @@ import {
   CheckSquare,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { FsEntry, FlatFileListing } from "@lfb/shared";
+import type { FsEntry } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { Badges } from "../../components/fs/Badges.js";
 import { BadgeLegend } from "../../components/fs/BadgeLegend.js";
@@ -36,9 +44,17 @@ import { EntityKebab } from "../../components/menu/EntityMenu.js";
 import { formatBytes, relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
 import { useDebounced } from "../../lib/useDebounced.js";
 import { useWindowedRows } from "../../components/table/useWindowedRows.js";
+import { useStreamedFlatListing } from "../../components/table/useStreamedFlatListing.js";
 import { FsTabs } from "./FsTabs.js";
 
 const ROW_H = 41; // fixed body-row height the windowing math relies on (px).
+// content-visibility lets the browser skip layout+paint for rows scrolled just out of the windowed
+// slice, and containIntrinsicSize keeps the scrollbar honest for them (performance.mdx P-25).
+const ROW_STYLE: CSSProperties = {
+  height: ROW_H,
+  contentVisibility: "auto",
+  containIntrinsicSize: `${ROW_H}px`,
+};
 
 type CompressFilter = "both" | "compressed" | "uncompressed";
 type IpfsFilter = "both" | "in" | "not";
@@ -91,13 +107,11 @@ export function FullPathsPage() {
     if (root == null && home.data) setRoot(home.data.home);
   }, [home.data, root]);
 
-  const flat = useQuery({
-    queryKey: ["fsFlat", root, showHidden],
-    queryFn: () => api.fsFlat(root ?? undefined, showHidden),
-    enabled: root != null,
-  });
-
-  const files = flat.data?.files ?? [];
+  // Stream the flat walk progressively instead of one blocking blob (performance.mdx P-22/P-23). The
+  // return shape mirrors the old useQuery fields the rest of this page reads, plus setFiles for the
+  // optimistic pin patch below.
+  const flat = useStreamedFlatListing(root, showHidden);
+  const files = flat.files;
 
   // Debounce the free-text filters so filtering the (up to 5000-row) dataset runs once per pause,
   // not once per keystroke (performance.mdx P-05). The inputs stay instant; only `filtered` trails.
@@ -237,19 +251,13 @@ export function FullPathsPage() {
       const verb = decision === "sync" ? "Pinned" : "Unpinned";
       toast.success(`${verb} ${ok} file${ok === 1 ? "" : "s"}${skipped ? `, skipped ${skipped}` : ""}`);
       setSelected(new Set());
-      // P-08: DON'T invalidate ["fsFlat"] — that would re-walk the whole directory tree just to flip a
-      // badge. Optimistically patch the cached listing instead: add/remove the "sync" badge on the
-      // affected rows. The next scheduled scan reconciles the source of truth.
+      // P-08/P-23: DON'T re-walk to flip a badge. Optimistically patch the streamed rows in place —
+      // add/remove the "sync" badge on the affected rows. The next scheduled scan reconciles truth.
       const done = new Set(okPaths);
-      qc.setQueryData<FlatFileListing>(["fsFlat", root, showHidden], (prev) =>
-        prev
-          ? {
-              ...prev,
-              files: prev.files.map((f) =>
-                done.has(f.path) ? { ...f, badges: withSyncBadge(f.badges, decision === "sync") } : f,
-              ),
-            }
-          : prev,
+      flat.setFiles((prev) =>
+        prev.map((f) =>
+          done.has(f.path) ? { ...f, badges: withSyncBadge(f.badges, decision === "sync") } : f,
+        ),
       );
       // Repo counts change — that endpoint reads status YAML (no filesystem walk), so it's cheap.
       qc.invalidateQueries({ queryKey: ["repos"] });
@@ -257,7 +265,7 @@ export function FullPathsPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const rootError = flat.isError ? (flat.error as Error)?.message : null;
+  const rootError = flat.error;
 
   return (
     // Full-page-height (full_paths.mdx §4 / repos.mdx §3.3.1): flex column so the table body flexes to
@@ -443,7 +451,7 @@ export function FullPathsPage() {
         {selected.size > 0 && <span className="text-sm text-black/60">{selected.size} selected</span>}
       </div>
 
-      {flat.data?.truncated && (
+      {flat.truncated && (
         <div className="mb-2 shrink-0 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
           Showing the first {files.length} files (walk capped) — narrow the root to see everything.
         </div>
@@ -454,8 +462,9 @@ export function FullPathsPage() {
         </div>
       )}
 
-      {/* The flat, chromeless table */}
-      {flat.isLoading ? (
+      {/* The flat, chromeless table. While the stream is still arriving with nothing matching yet,
+          keep the skeleton up; only show the empty state once the walk is DONE (P-23). */}
+      {filtered.length === 0 && (flat.loading || !flat.done) ? (
         <SkeletonRows />
       ) : filtered.length === 0 ? (
         <EmptyState
@@ -517,7 +526,7 @@ export function FullPathsPage() {
                 return (
                   <tr
                     key={row.id}
-                    style={{ height: ROW_H }}
+                    style={ROW_STYLE}
                     className="group border-b border-[var(--lfb-border)] hover:bg-slate-100"
                   >
                     <td className="px-2">

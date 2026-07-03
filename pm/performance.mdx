@@ -324,6 +324,207 @@ capped + cooperatively yielding — no exceptions, on any page.**
 
 ---
 
+## Part III — The architecture transformation (streaming background filesystem index)
+
+Everything above (P-01…P-21) is **client-side triage plus "make the walk yield."** It cut the
+worst freezes, yet Chrome still reports **"Page Unresponsive"** on a large home directory. That is
+the tell that the fixes so far treat *symptoms* — the **request/response shape is still wrong at the
+root**, and no amount of windowing or `setImmediate` yielding can fix a wrong shape. This Part is the
+**one architectural change** that does, and it is exactly what the work order calls for: *"load data
+from the file system as a background service … stream data asynchronously … React tables read it in
+asynchronously without blocking."*
+
+### P-22 — The remaining root cause: walk-per-request → one giant blob (the model, not the loop) · 🔴 T3/T1/T4
+
+Two endpoints back the two heaviest pages, and both share the same broken model:
+
+- **Where:** `code/packages/backend/src/modules/fs/fs.service.ts` — `listFilesFlat()` (backs
+  `GET /api/fs/flat`, the **Full Paths** page `code/packages/frontend/src/pages/fs/FullPathsPage.tsx`)
+  and `listDirectory()` (backs `GET /api/fs`, the **File System** column browser
+  `code/packages/frontend/src/pages/fs/FileSystemPage.tsx`).
+- **Why yielding + windowing weren't enough:**
+  1. **The whole subtree is walked *inside the HTTP request*, every time.** `await setImmediate`
+     every 400 entries keeps the *event loop* breathing, but it does **not** reduce the total work,
+     and it does **not** let the browser render anything until the walk **finishes**. On a big root,
+     **time-to-first-row == time-to-last-row** — seconds of blank skeleton, then one enormous commit.
+  2. **`computeBadges()` (`code/packages/backend/src/modules/fs/badges.ts`) runs heavy per-entry
+     filesystem probes.** Per directory row: `isGitWorkingTree()`, `containsRepoBelow()` (a *recursive*
+     `readdirSync` probe, depth 5, budget 4000), `dirPublishesIpfs()` (`readdirSync` + `existsSync`),
+     and `dirHasChildren()`. Per markdown/manifest file: `fs.readFileSync` up to **512 KB** + regex.
+     For an N-entry directory this is O(N × several syscalls), all on the critical path before a
+     single byte reaches the client.
+  3. **The response is one blob of up to `FLAT_FILE_CAP = 5000` rows** (`FsEntry`, ~8 fields + a
+     badges array each). The browser must `JSON.parse` all of it in one synchronous task, hold it all
+     in memory, and TanStack must build core/filtered/sorted/paginated **row models over all 5000** —
+     then re-run filter/sort over all 5000 on **every keystroke** (windowing only caps *DOM nodes*,
+     not the JS working set).
+  4. **Nothing is persisted or cached.** Every navigation, every `["fsFlat"]`/`["fs"]` invalidation
+     (P-08/P-17 patched *some* of these) re-walks from scratch.
+  5. **Two walk systems that never share.** The **background scanner**
+     (`code/packages/backend/src/modules/scanner/scanner.service.ts` +
+     `scan-job.ts`) *already* walks the tree, detached and single-flight, and **persists** results to
+     `status.yaml`. The FS pages ignore it and re-walk live in the request. We built the right pattern
+     once (`scan-job.ts`) and then bypassed it for the two pages that hang.
+- **Fix (architecture): a Filesystem Index Service that walks in the background, caches, and
+  streams.** See the target design below. `listFilesFlat`/`listDirectory` stop being
+  request-synchronous producers of a blob and become **thin readers over a streaming index**.
+
+### The target architecture
+
+```
+                    ┌─────────────────────── backend (Node) ────────────────────────┐
+  browser           │                                                                │
+ ┌────────┐  GET /api/fs/flat/stream   ┌───────────────────────────────────────────┐ │
+ │ Full   │ ───────────────────────▶   │  Filesystem Index Service                  │ │
+ │ Paths  │   (NDJSON, chunked)        │  code/packages/backend/src/modules/fsindex │ │
+ │ table  │ ◀───────────────────────   │                                            │ │
+ └────────┘  batch,batch,…,done        │  • in-memory index: Map<key, CachedListing>│ │
+     ▲                                 │  • mtime-keyed, stale-while-revalidate      │ │
+     │ useSyncExternalStore            │  • single-flight per (root,hidden)          │ │
+     │ (throttled rAF flush)           │  • emits batches as the walk discovers rows │ │
+ ┌────────┐                            │        │                                    │ │
+ │ store  │  ← accumulates batches     │        ▼  (CPU-bound walk + badges)         │ │
+ │ (ref)  │                            │   ┌───────────────────────┐                 │ │
+ └────────┘                            │   │  walker (worker thread)│  never janks    │ │
+                                       │   │  reuses walkUnit/badges│  the HTTP loop  │ │
+ ┌──────────────┐   filter/sort in     │   └───────────────────────┘                 │ │
+ │ filter.worker│ ◀ a Web Worker,      │                    ▲                        │ │
+ │  (frontend)  │   off the main thread │        shares HARD_SKIP / badge logic       │ │
+ └──────────────┘                      │        with scanner.service (one source)    │ │
+                                       └───────────────────────────────────────────┘ │
+                    └────────────────────────────────────────────────────────────────┘
+```
+
+Five properties, each mapping to an aspect of "performance in all ways":
+
+1. **Background, off the request.** The walk runs in a detached job (the `scan-job.ts` pattern) and,
+   for the CPU-bound portion, a **worker thread** — so the HTTP event loop that serves `/health`,
+   `/auth/me`, the scan-status poll, and the *stream itself* is never starved. (This finally makes
+   P-04/P-16's "yield every N" unnecessary as the *only* defense.)
+2. **Streaming, not blob.** Rows are delivered in **batches over a chunked NDJSON response** as the
+   walk finds them. **Time-to-first-row drops to tens of milliseconds**; the table fills
+   progressively; the browser never faces one 5000-row parse+commit.
+3. **Cached + stale-while-revalidate.** Listings are memoized in-process keyed by
+   `(absPath, hidden, dirMtime)`. Re-opening a column or re-visiting Full Paths serves **instantly
+   from the index**; a background refresh streams only if the directory's mtime moved.
+4. **Two-phase rows (cheap now, expensive later).** A batch carries the **cheap metadata**
+   (`name/size/mtime/kind/hasChildren`) that's available from `readdir`+`stat` immediately; the
+   **expensive badges** are computed in a second pass and streamed as **badge-patch events** keyed by
+   path, so rows appear at once and badges "fill in." Filters that depend on badges simply activate as
+   the badge data arrives.
+5. **One source of truth.** The indexer reuses `HARD_SKIP`
+   (`code/packages/backend/src/shared/scan-filters.ts`) and the badge logic
+   (`code/packages/backend/src/modules/fs/badges.ts`) — and, longer term, reads the scanner's
+   persisted `status.yaml` so the FS pages and the Repos/Sync pages agree and never double-walk.
+
+### Aspect 1 — Backend: the index service and the streaming walk
+
+- **New module `code/packages/backend/src/modules/fsindex/fsindex.service.ts`.**
+  - `walkFilesFlatStreaming(root, hidden, onBatch, signal): Promise<FlatWalkSummary>` — the existing
+    `listFilesFlat` walk refactored to **push `FsEntry[]` batches** through `onBatch(batch)` every
+    `FLAT_BATCH = 250` files (and to honor an `AbortSignal` so a client disconnect stops the walk).
+    Same caps (`FLAT_FILE_CAP`, `FLAT_ITER_BUDGET`), same `HARD_SKIP`, same `computeBadges`.
+  - `getListingCached(dir, hidden): FsListing | null` and `putListing(...)` — the mtime-keyed
+    directory cache backing the column browser (`listDirectory`), so an unchanged directory is served
+    without re-walking. Invalidation compares `statSync(dir).mtimeMs` against the cached value.
+- **Refactor `code/packages/backend/src/modules/fs/fs.service.ts`:** keep `listFilesFlat` (now a thin
+  buffer over `walkFilesFlatStreaming` for any non-streaming caller) and make `listDirectory` consult
+  `getListingCached` first. No behavior change for existing callers.
+- **Worker thread (follow-up within this Part):**
+  `code/packages/backend/src/modules/fsindex/walker.worker.ts` runs the walk via
+  `node:worker_threads` and `postMessage`s batches back; `fsindex.service.ts` owns the worker
+  lifecycle and re-emits messages to `onBatch`. Ship the in-thread streaming walk **first** (it
+  already unblocks time-to-first-row); move it into the worker to also remove the residual CPU cost
+  from the main loop.
+- **New routes in `code/packages/backend/src/modules/fs/fs.router.ts`:**
+  - `GET /api/fs/flat/stream?path&hidden` → sets `Content-Type: application/x-ndjson`,
+    `Cache-Control: no-store`, `X-Accel-Buffering: no`; writes one JSON object **per line** per event
+    (`{"t":"meta",…}`, `{"t":"batch","files":[…]}` × N, `{"t":"done","truncated":…,"total":…}`), and
+    `res.flush?.()` after each so chunks leave immediately through the Vite `/api` proxy. Aborts the
+    walk on `req.on("close")`.
+  - `GET /api/fs` unchanged externally but now cache-backed.
+
+### Aspect 2 — The streaming protocol (the cross-package contract)
+
+- **New types in `code/packages/shared/src/types.ts`** (exported via `src/index.ts`):
+  `FlatStreamEvent = { t: "meta"; root; home; thresholdBytes } | { t: "batch"; files: FsEntry[] } |
+  { t: "done"; truncated: boolean; total: number } | { t: "error"; error: string }`.
+- **Why NDJSON over a chunked `fetch`, not `EventSource` (SSE):** the app authenticates every `/api`
+  call with a **`Bearer` token** minted by `authCore.getToken()`
+  (`code/packages/frontend/src/api/axios.ts`). `EventSource` **cannot set an `Authorization`
+  header**, so SSE would bypass `identify.ts`'s allow-list gate. A `fetch()` with a manual
+  `Authorization` header + a `ReadableStream` reader gives us streaming *and* the existing auth, and
+  streams cleanly through the dev proxy (`code/packages/frontend/vite.config.ts` `/api` → `:8787`).
+
+### Aspect 3 — Frontend: asynchronous, non-blocking consumption
+
+- **New `code/packages/frontend/src/lib/streamNdjson.ts`** — a small reader:
+  `streamNdjson(path, { signal, onEvent })` that fetches with the `Bearer` header (same token source
+  as axios), reads the `ReadableStream`, splits on `\n`, `JSON.parse`s each line, and calls `onEvent`.
+  Backpressure and cancellation come free from the reader + `AbortController`.
+- **New `code/packages/frontend/src/components/table/useStreamedFlatListing.ts`** — the hook the table
+  consumes. It:
+  - accumulates incoming `batch` rows into a **`useRef` array** (no per-batch React render);
+  - flushes the ref into state **coalesced on `requestAnimationFrame`** (at most one render per frame,
+    the P-18 discipline applied to *ingest*), so a 5000-row stream costs a bounded number of renders,
+    not 5000;
+  - exposes `{ files, done, truncated, error, loading }` — a **drop-in replacement** for the
+    `useQuery(api.fsFlat)` shape `FullPathsPage` already reads, so the existing windowing (P-01),
+    debounced filters (P-05), and optimistic patches (P-08) keep working unchanged;
+  - **aborts on unmount / root change** (client disconnect → backend stops walking — no orphaned
+    walks, directly addressing "how we'd be performant … at scale").
+- **Wire `code/packages/frontend/src/pages/fs/FullPathsPage.tsx`** to `useStreamedFlatListing(root,
+  showHidden)` instead of `useQuery({ queryKey: ["fsFlat", …] })`. Everything downstream (`filtered`,
+  the TanStack model, `useWindowedRows`) already operates on a plain growing `files` array.
+
+### Aspect 4 — Off-main-thread filter/sort (follow-up, specified now)
+
+Even streamed, filtering a 5000-element array on every (debounced) keystroke runs on the **main
+thread**. Move it to a **Web Worker** — `code/packages/frontend/src/workers/filter.worker.ts` —
+that owns the row array and returns only the matching **indices/ids** for the current query+sort. The
+main thread then windows over the result. This is a follow-up (debounce already caps the frequency);
+it becomes load-bearing only for the largest roots.
+
+### Aspect 5 — HTML / CSS
+
+- **`content-visibility: auto` + `contain: layout paint style` on off-screen rows / columns** so the
+  browser skips layout+paint for content outside the viewport even before our JS windows it. Add to
+  the row containers in `FullPathsPage.tsx`, `FileSystemPage.tsx` (`FsRow`), and
+  `code/packages/frontend/src/components/table/DataTable.tsx`.
+- **Fixed row heights are already in place** (`ROW_H`, `FSROW_H`) — keep them; windowing depends on
+  them and they eliminate layout reflow from variable content.
+- **Sticky header stays out of the scroll layer** (`position: sticky` already used) so the header
+  never repaints on scroll.
+- **Don't eagerly compute tooltips.** `absoluteTime()` in every `title=` (P-06) still runs per
+  visible row; with windowing that's ~30, acceptable — but prefer a lazy `title` via `onMouseEnter`
+  if a row ever grows more per-cell work.
+- **GPU-cheap hover.** Row hover uses a background-color swap (already) — avoid box-shadow / filter on
+  rows, which force expensive repaints on a long list.
+
+### Aspect 6 — Data-loading discipline (keep and extend)
+
+- **No background polling** — `refetchIntervalInBackground: false`
+  (`code/packages/frontend/src/api/queryClient.ts`) and the single scan-status poller
+  (`ScanProgressBar.tsx`) stay. The stream replaces polling for the FS pages entirely.
+- **Optimistic patches, never broad invalidation** (P-08/P-17) — extend the same rule to the stream:
+  a flag/decision change patches the in-memory row store, it never restarts a walk.
+- **React Query `select`** to subscribe to the minimum slice (P-09) — audit remaining `useQuery` reads
+  for over-subscription (`Sidebar.tsx` done; check `OneRepoPage.tsx`, `IpfsPage.tsx`).
+- **Stale-while-revalidate** at both layers: the backend index serves cached listings instantly and
+  refreshes in the background; React Query keeps `staleTime` non-zero so navigation is instant.
+
+### Aspect 7 — Scaling / server mode
+
+- **Cursor/limit on the stream** — the backend already caps at 5000; expose a `?limit`/`?after`
+  cursor so a hosted deployment can page truly huge trees without ever buffering them.
+- **Abort propagation** — a disconnected client stops the walk (above), so a hosted server can't
+  accumulate orphaned walks under many tabs.
+- **Shared index across requests** — the in-memory index is per-process today; in server mode it
+  becomes the natural seam for a shared cache (Redis/SQLite) so N users browsing the same tree walk it
+  **once**.
+- **One walk, many readers** — unify with the scanner's persisted `status.yaml` so a scheduled scan
+  *warms* the FS-page index instead of the FS page triggering a second, redundant walk.
+
 ## Remediation log (Stage 3)
 
 | ID | Fix shipped | File(s) |
@@ -347,8 +548,16 @@ capped + cooperatively yielding — no exceptions, on any page.**
 | P-18 | rAF-coalesced scroll + skip re-render when window start is unchanged | `useWindowedRows.ts` |
 | P-20 | `React.memo(FsRow)` (folded into P-15) | `pages/fs/FileSystemPage.tsx` |
 | P-21 | `loading="lazy"` on the media `<img>` (completes P-13) | `MediaViewer.tsx` |
+| P-22 | **Streaming background filesystem index** — flat walk refactored to push row batches; new NDJSON stream endpoint; the walk no longer produces one 5000-row blob | `backend/modules/fsindex/fsindex.service.ts`, `backend/modules/fs/fs.service.ts`, `backend/modules/fs/fs.router.ts`, `shared/src/types.ts` (`FlatStreamEvent`) |
+| P-23 | **Progressive, non-blocking consumption** — fetch/NDJSON reader (Bearer-authed) + `useStreamedFlatListing` (ref accumulate + rAF-coalesced flush); Full Paths fills progressively, time-to-first-row ≈ tens of ms. Kept P-17's optimistic `⋯`-menu badge patch working after the page left React Query via a small pub/sub bridge | `frontend/src/lib/streamNdjson.ts`, `frontend/src/components/table/useStreamedFlatListing.ts`, `frontend/src/pages/fs/FullPathsPage.tsx`, `frontend/src/lib/flatListingPatch.ts`, `frontend/src/lib/patchEntityBadges.ts` |
+| P-24 | **mtime-keyed directory-listing cache** — re-opening a column serves from the index instead of re-walking | `backend/modules/fsindex/fsindex.service.ts`, `backend/modules/fs/fs.service.ts` |
+| P-25 | **`content-visibility`/`contain` on off-screen rows** — browser skips layout+paint for out-of-view content | `frontend/src/pages/fs/FullPathsPage.tsx`, `frontend/src/pages/fs/FileSystemPage.tsx`, `frontend/src/components/table/DataTable.tsx` |
 
-Follow-ups (not blocking the hang fix): server-side filtered/paginated `/fs/flat`
-(P-05c), backend downscaled image previews (P-13), unify the two scan-status pollers
-into one shared observer (P-07c), extract a single shared windowed-body primitive so
-the three windowed tables can't drift (P-19).
+Follow-ups (not blocking the hang fix): move the walk into a **worker thread**
+(`backend/modules/fsindex/walker.worker.ts`) so even CPU cost leaves the HTTP loop
+(P-22 ships the in-thread streaming walk first); off-main-thread filter/sort Web
+Worker (`frontend/src/workers/filter.worker.ts`, Aspect 4); stream the column browser
+too (`GET /api/fs/stream`); a `?limit`/`?after` cursor for hosted server mode
+(Aspect 7); read the scanner's persisted `status.yaml` to warm the index (one walk,
+many readers); backend downscaled image previews (P-13); extract a single shared
+windowed-body primitive so the windowed tables can't drift (P-19).

@@ -3,7 +3,7 @@
 // opens a new column to its right (replacing any columns further right). Every row shows its
 // code badges pinned to the far right, plus a ⋯ kebab and right-click that open the shared entity
 // action menu (menus.mdx §3/§3.1 — the same catalog as the view-one pages).
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 import { ChevronRight, File as FileIcon, Folder, Home } from "lucide-react";
@@ -18,6 +18,13 @@ import { formatBytes, middleTruncate } from "@/lib/format";
 import { FsTabs } from "./FsTabs";
 
 const FSROW_H = 28; // fixed column-row height the windowing math relies on (px).
+// content-visibility lets the browser skip layout+paint for rows just outside the windowed slice
+// (performance.mdx P-25).
+const FSROW_STYLE: CSSProperties = {
+  height: FSROW_H,
+  contentVisibility: "auto",
+  containIntrinsicSize: `${FSROW_H}px`,
+};
 
 export default function FileSystemPage() {
   const { path: initialPath } = useSearch({ strict: false }) as { path?: string };
@@ -213,7 +220,7 @@ const FsRow = memo(function FsRow({
     <div
       role="button"
       tabIndex={0}
-      style={{ height: FSROW_H }}
+      style={FSROW_STYLE}
       onClick={() => (isDir ? onOpenDir(colIndex, entry.path) : openFile())}
       onContextMenu={(e) => {
         e.preventDefault();

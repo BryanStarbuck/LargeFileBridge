@@ -2,30 +2,20 @@
 // Node fs only — never the `find`/`du` shell (charter + macOS-indexing rule). Metadata-only walk;
 // the only file reads are the small capped peeks in badges.ts for IPFS-list detection.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { FsEntry, FsEntryKind, FsListing, FlatFileListing } from "@lfb/shared";
-import { buildBadgeContext, computeBadges, nearestGitAtOrAbove, HARD_SKIP } from "./badges.js";
+import { buildBadgeContext, computeBadges, HARD_SKIP } from "./badges.js";
+import { homeDir, resolveDir } from "./paths.js";
+import {
+  walkFilesFlatStreaming,
+  getListingCached,
+  putListing,
+} from "../fsindex/fsindex.service.js";
 
-export function homeDir(): string {
-  return os.homedir();
-}
-
-/** Resolve + validate the requested path to an existing absolute directory. */
-export function resolveDir(input: string | undefined): string {
-  const raw = (input && input.trim()) || homeDir();
-  const expanded = raw.replace(/^~(?=\/|$)/, os.homedir());
-  const abs = path.resolve(expanded);
-  if (abs.includes("\0")) throw new Error("invalid path");
-  let st: fs.Stats;
-  try {
-    st = fs.statSync(abs);
-  } catch {
-    throw new Error("directory not found");
-  }
-  if (!st.isDirectory()) throw new Error("not a directory");
-  return abs;
-}
+// Path resolution lives in ./paths.ts so fs.service and the streaming index can share it without
+// importing each other (performance.mdx Part III). Re-exported here to keep existing import sites
+// (fs.router, badges callers) unchanged.
+export { homeDir, resolveDir };
 
 // One directory level (the column browser). Async + cooperatively yielding + entry-capped, exactly
 // like listFilesFlat/walkUnit — because per entry it does MORE synchronous filesystem work than the
@@ -41,6 +31,10 @@ export async function listDirectory(
   showHidden: boolean,
 ): Promise<FsListing> {
   const dirAbs = resolveDir(input);
+  // Serve a fresh cached listing without re-walking / recomputing badges (performance.mdx P-24).
+  const cached = getListingCached(dirAbs, showHidden);
+  if (cached) return cached;
+
   const parent = path.dirname(dirAbs);
   const ctx = buildBadgeContext(dirAbs);
 
@@ -103,110 +97,39 @@ export async function listDirectory(
 
   entries.sort(compareEntries);
 
-  return {
+  const listing: FsListing = {
     root: dirAbs,
     parent: parent === dirAbs ? null : parent, // null at a volume root
     home: homeDir(),
     entries,
     truncated,
   };
+  putListing(dirAbs, showHidden, listing);
+  return listing;
 }
 
 // ── Full paths: the flat recursive large-file walk (full_paths.mdx) ───────────
-// Rows are the files at/above the big-file threshold under `root`, gathered from every depth.
-// Metadata-only (stat), Node fs only, bounded by a file cap + an iteration budget (no silent
-// truncation — `truncated` is surfaced). Same hard-skip set / dotfile rule as the column browser.
-const FLAT_FILE_CAP = 5000; // max rows returned before we stop and flag truncation
-const FLAT_ITER_BUDGET = 300000; // max directory pops before we stop and flag truncation
-
-// Cooperative yielding — the flat walk is a tight synchronous readdirSync/statSync loop that can run
-// for seconds on a big home directory. Served straight from the HTTP request, a synchronous walk pins
-// the single Node thread and starves EVERY other request (scan-status polls, page loads, auth) until
-// it finishes — which reads as "the whole app hangs." So we yield to the event loop every few hundred
-// entries, exactly like scanner.service.walkUnit (scan.mdx §10, performance.mdx P-04).
-const FLAT_YIELD_EVERY = 400;
-const flatYield = () => new Promise<void>((r) => setImmediate(r));
-
+// Rows are the files at/above the big-file threshold under `root`, gathered from every depth. The one
+// walk implementation now lives in the streaming index (fsindex.service.walkFilesFlatStreaming) so the
+// NDJSON stream and this buffered form can't drift (performance.mdx P-19/P-22). This wrapper collects
+// the streamed batches into one FlatFileListing for any non-streaming caller.
 export async function listFilesFlat(
   input: string | undefined,
   showHidden: boolean,
 ): Promise<FlatFileListing> {
-  const rootAbs = resolveDir(input);
-  // One shared badge context (registered repos, sticky flags, threshold) built once; its
-  // per-directory `enclosingRepoForChildren` is re-pointed as we descend (cached per dir).
-  const ctx = buildBadgeContext(rootAbs);
-  const threshold = ctx.thresholdBytes;
-  const repoCache = new Map<string, string | null>();
-  const enclosingFor = (dir: string): string | null => {
-    let v = repoCache.get(dir);
-    if (v === undefined) {
-      v = nearestGitAtOrAbove(dir);
-      repoCache.set(dir, v);
-    }
-    return v;
-  };
-
   const files: FsEntry[] = [];
-  let truncated = false;
-  let budget = FLAT_ITER_BUDGET;
-  let sinceYield = 0;
-  const stack: string[] = [rootAbs];
-
-  while (stack.length) {
-    if (budget-- <= 0) {
-      truncated = true;
-      break;
-    }
-    const dir = stack.pop()!;
-    let dirents: fs.Dirent[];
-    try {
-      dirents = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    // Hand the event loop back every few hundred entries so concurrent requests aren't starved.
-    if ((sinceYield += dirents.length) >= FLAT_YIELD_EVERY) {
-      sinceYield = 0;
-      await flatYield();
-    }
-    // All files in this directory share the same enclosing repo → set it once for the batch.
-    ctx.enclosingRepoForChildren = enclosingFor(dir);
-    for (const ent of dirents) {
-      if (!showHidden && ent.name.startsWith(".")) continue;
-      if (ent.isSymbolicLink()) continue;
-      const abs = path.join(dir, ent.name);
-      if (ent.isDirectory()) {
-        if (!HARD_SKIP.has(ent.name)) stack.push(abs);
-        continue;
-      }
-      if (!ent.isFile()) continue;
-      let st: fs.Stats;
-      try {
-        st = fs.statSync(abs); // metadata only (scan.mdx §1)
-      } catch {
-        continue;
-      }
-      if (st.size < threshold) continue;
-      if (files.length >= FLAT_FILE_CAP) {
-        truncated = true;
-        stack.length = 0; // stop the walk
-        break;
-      }
-      const { badges, isRepoRoot } = computeBadges(abs, ent.name, "file", st.size, ctx);
-      files.push({
-        name: ent.name,
-        path: abs,
-        kind: "file",
-        sizeBytes: st.size,
-        modifiedAt: st.mtime.toISOString(),
-        isRepoRoot,
-        badges,
-        hasChildren: false,
-      });
-    }
-  }
-
-  return { root: rootAbs, home: homeDir(), thresholdBytes: threshold, files, truncated };
+  const summary = await walkFilesFlatStreaming(input, showHidden, {
+    onBatch: (b) => {
+      for (const f of b) files.push(f);
+    },
+  });
+  return {
+    root: summary.root,
+    home: summary.home,
+    thresholdBytes: summary.thresholdBytes,
+    files,
+    truncated: summary.truncated,
+  };
 }
 
 function kindOf(ent: fs.Dirent): FsEntryKind {
