@@ -11,6 +11,7 @@ import type { FsEntry, FsListing } from "@lfb/shared";
 import { viewerRouteForName } from "@lfb/shared";
 import { api } from "@/api/client";
 import { Badges } from "@/components/fs/Badges";
+import { BadgeLegend } from "@/components/fs/BadgeLegend";
 import { EntityKebab, EntityMenuAt, type MenuPos } from "@/components/menu/EntityMenu";
 import { useWindowedRows } from "@/components/table/useWindowedRows";
 import { formatBytes, middleTruncate } from "@/lib/format";
@@ -99,6 +100,8 @@ export default function FileSystemPage() {
           Show hidden
         </label>
       </div>
+
+      <BadgeLegend className="border-b border-[var(--lfb-border)] px-4 py-1" />
 
       {/* The column strip */}
       <div ref={stripRef} className="flex flex-1 overflow-x-auto">

@@ -70,6 +70,12 @@ export function ViewOneFilePage() {
         <FlagSwitches view={v} />
       </div>
 
+      {/* Per-file verdict (use_cases.mdx §5.6): synced & backed up / not backed up / not tracked. */}
+      {(() => {
+        const fv = fileVerdict(v);
+        return <StatusBanner state={fv.state} headline={fv.headline} sub={fv.sub} />;
+      })()}
+
       {/* Cards */}
       <div className="space-y-3">
         <Card title="Sync">
@@ -131,6 +137,46 @@ export function ViewOneFilePage() {
       </div>
     </div>
   );
+}
+
+// This file's own health verdict (use_cases.mdx §5.6): is it synced and actually backed up on
+// another computer, or is it at risk / not tracked?
+function fileVerdict(v: EntityView): { state: Health; headline: string; sub?: string } {
+  if (!v.repo) {
+    return {
+      state: "neutral",
+      headline: "Not tracked — this file isn't inside a managed repo",
+      sub: "LFBridge only syncs files inside repos it manages.",
+    };
+  }
+  if (v.decision !== "sync") {
+    if (v.decision === "ignore") {
+      return { state: "neutral", headline: "Set to Ignore — not synced", sub: "This file is deliberately not bridged." };
+    }
+    return {
+      state: "warn",
+      headline: "Not set to sync yet",
+      sub: "Add it to IPFS to keep it synced across your computers.",
+    };
+  }
+  // decision === "sync"
+  if (v.transfer === "missing" || v.transfer === "error") {
+    return { state: "bad", headline: "Set to sync, but the copy isn't in place", sub: "The transfer failed or the file is missing — try Sync now from the repo." };
+  }
+  if (v.peers.length === 0) {
+    return {
+      state: "warn",
+      headline: "Set to sync, but on 0 other computers — not backed up yet",
+      sub: "Open LFBridge on another machine so it can pull this file.",
+    };
+  }
+  if (v.transfer && v.transfer !== "synced") {
+    return { state: "warn", headline: "Transfer in progress", sub: "This file is moving to or from your other computers." };
+  }
+  return {
+    state: "ok",
+    headline: `Synced · backed up on ${v.peers.length} other computer${v.peers.length === 1 ? "" : "s"}`,
+  };
 }
 
 /** The one link from the properties page to its viewer-first sibling (files.mdx §7). Media only. */

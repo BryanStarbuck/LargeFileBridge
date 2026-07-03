@@ -31,6 +31,7 @@ import { toast } from "sonner";
 import type { FsEntry, FlatFileListing } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { Badges } from "../../components/fs/Badges.js";
+import { BadgeLegend } from "../../components/fs/BadgeLegend.js";
 import { EntityKebab } from "../../components/menu/EntityMenu.js";
 import { formatBytes, relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
 import { useDebounced } from "../../lib/useDebounced.js";
@@ -292,6 +293,8 @@ export function FullPathsPage() {
           Show hidden
         </label>
       </div>
+
+      <BadgeLegend className="py-1" />
 
       {/* Control row — segmented controls + house search / sort / filter icons */}
       <div className="flex flex-wrap items-center gap-3 py-1">
