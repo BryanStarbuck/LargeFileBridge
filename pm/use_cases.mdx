@@ -272,14 +272,23 @@ structural change.** It already answers UC-1 at a glance. The only thing the red
 is the *tuning fork* — the shared components below are styled so every other page feels like it
 belongs next to this one.
 
-### 5.1 IPFS page (`/ipfs`) — the biggest redesign
-Today: a dense one-line node/security strip over the pinset table. The strip mixes health, security
-posture, and metrics at one altitude.
+### 5.1 IPFS — dashboard (`/ipfs`) + Shared files (`/ipfs/pins`)
+The IPFS surface is split in two, and the redesign treats them differently:
 
-Redesign, top to bottom:
+* **IPFS dashboard (`/ipfs`)** — the node control panel (install / start / on-off, metric tiles that
+  drill in, gateway summary, security card). This page **already embodies the model**: mutually
+  exclusive states (Not installed → **Install IPFS**; Installed-but-stopped → **Turn on**;
+  Running → tiles + security), each with a plain-English headline and the one primary action, and a
+  live progress/error view for install/start jobs. It is **kept** as the IPFS landing and, like the
+  Home dashboard, is the reference the Shared-files page is brought in line with. (Its metric tiles
+  drill into `/ipfs/pins` and `/peers`; its security card fixes non-compliance in place.)
+* **Shared files (`/ipfs/pins`)** — the pinset table, reached from the dashboard's "Shared files"
+  tile. This is where the StatusBanner + tiles + node-details redesign below applies.
 
-1. **PageHeader** — "IPFS" (+ `· {repoName}` when filtered by a pinning repo). Actions:
-   **Import all untracked (N)** (when N>0), **Rescan**.
+Shared-files page, top to bottom:
+
+1. **PageHeader** — back-link "‹ IPFS" to the dashboard; title "Shared files" (+ `· {repoName}` when
+   filtered by a pinning repo). Actions: **Import all untracked (N)** (when N>0), **Rescan**.
 2. **StatusBanner (the verdict).** Worst-first:
    * Node unreachable → **Broken**, red: *"The IPFS engine isn't running — your files can't move
      between computers."* Primary **[Start IPFS]** (or, if the CLI is missing, **[Install IPFS]**),
