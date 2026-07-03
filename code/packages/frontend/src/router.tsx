@@ -1,20 +1,8 @@
 // Code-based TanStack Router (sister convention). Auth gating happens in main.tsx (outside the tree).
-import { createRootRoute, createRoute, createRouter, Outlet } from "@tanstack/react-router";
+// Each page component is code-split via lazyRouteComponent (performance.mdx P-10), so first paint only
+// downloads the AppShell + the landing route's JS — not every table and the media viewer up front.
+import { createRootRoute, createRoute, createRouter, lazyRouteComponent, Outlet } from "@tanstack/react-router";
 import { AppShell } from "./pages/app/AppShell.js";
-import { ReposPage } from "./pages/repos/ReposPage.js";
-import { OneRepoPage } from "./pages/repos/OneRepoPage.js";
-import { RepoSettingsPage } from "./pages/repos/RepoSettingsPage.js";
-import { PeersPage } from "./pages/peers/PeersPage.js";
-import { SyncPage } from "./pages/sync/SyncPage.js";
-import { SettingsPage } from "./pages/settings/SettingsPage.js";
-import { AllowListPage } from "./pages/settings/AllowListPage.js";
-import FileSystemPage from "./pages/fs/FileSystemPage.js";
-import { FullPathsPage } from "./pages/fs/FullPathsPage.js";
-import { ViewOneFilePage } from "./pages/entity/ViewOneFilePage.js";
-import { ViewOneDirectoryPage } from "./pages/entity/ViewOneDirectoryPage.js";
-import { IpfsPage } from "./pages/ipfs/IpfsPage.js";
-import { ViewOneImagePage } from "./pages/entity/ViewOneImagePage.js";
-import { ViewOneVideoPage } from "./pages/entity/ViewOneVideoPage.js";
 
 // The File System browser and both entity pages take an optional absolute `path` search param
 // (menus.mdx §2 cell navigation → files.mdx / directories.mdx / directory.mdx).
@@ -24,80 +12,95 @@ const pathSearch = (search: Record<string, unknown>): { path?: string } => ({
 
 const rootRoute = createRootRoute({ component: () => <Outlet /> });
 
+// AppShell stays eager — it's the always-present layout (sidebar + scan bar) that hosts every route.
 const appLayout = createRoute({
   getParentRoute: () => rootRoute,
   id: "app",
   component: AppShell,
 });
 
-const reposRoute = createRoute({ getParentRoute: () => appLayout, path: "/", component: ReposPage });
+const reposRoute = createRoute({
+  getParentRoute: () => appLayout,
+  path: "/",
+  component: lazyRouteComponent(() => import("./pages/repos/ReposPage.js"), "ReposPage"),
+});
 const repoSettingsRoute = createRoute({
   getParentRoute: () => appLayout,
   path: "/repos/$repoId/settings",
-  component: RepoSettingsPage,
+  component: lazyRouteComponent(() => import("./pages/repos/RepoSettingsPage.js"), "RepoSettingsPage"),
 });
 const oneRepoRoute = createRoute({
   getParentRoute: () => appLayout,
   path: "/repos/$repoId",
-  component: OneRepoPage,
+  component: lazyRouteComponent(() => import("./pages/repos/OneRepoPage.js"), "OneRepoPage"),
 });
-const peersRoute = createRoute({ getParentRoute: () => appLayout, path: "/peers", component: PeersPage });
+const peersRoute = createRoute({
+  getParentRoute: () => appLayout,
+  path: "/peers",
+  component: lazyRouteComponent(() => import("./pages/peers/PeersPage.js"), "PeersPage"),
+});
 // The IPFS page (ipfs.mdx). Optional `?repo=<repoId>` filters the pinset to one pinning repo (§2.1).
 const ipfsRoute = createRoute({
   getParentRoute: () => appLayout,
   path: "/ipfs",
-  component: IpfsPage,
+  component: lazyRouteComponent(() => import("./pages/ipfs/IpfsPage.js"), "IpfsPage"),
   validateSearch: (search: Record<string, unknown>): { repo?: string } => ({
     repo: typeof search.repo === "string" ? search.repo : undefined,
   }),
 });
-const syncRoute = createRoute({ getParentRoute: () => appLayout, path: "/sync", component: SyncPage });
+// The Scans page (left_bar.yaml routes the "Scans" nav item here). The scheduled background jobs are
+// "scheduleTasks" in code; the UI calls what they do "scans" — so the route is /scans (scan.mdx §2 naming).
+const scansRoute = createRoute({
+  getParentRoute: () => appLayout,
+  path: "/scans",
+  component: lazyRouteComponent(() => import("./pages/sync/SyncPage.js"), "SyncPage"),
+});
 const allowListRoute = createRoute({
   getParentRoute: () => appLayout,
   path: "/settings/allow-list",
-  component: AllowListPage,
+  component: lazyRouteComponent(() => import("./pages/settings/AllowListPage.js"), "AllowListPage"),
 });
 const settingsRoute = createRoute({
   getParentRoute: () => appLayout,
   path: "/settings",
-  component: SettingsPage,
+  component: lazyRouteComponent(() => import("./pages/settings/SettingsPage.js"), "SettingsPage"),
 });
 const fsRoute = createRoute({
   getParentRoute: () => appLayout,
   path: "/fs",
-  component: FileSystemPage,
+  component: lazyRouteComponent(() => import("./pages/fs/FileSystemPage.js")), // default export
   validateSearch: pathSearch,
 });
 // Full paths — the flat large-file table tab under File System (full_paths.mdx).
 const fsPathsRoute = createRoute({
   getParentRoute: () => appLayout,
   path: "/fs/paths",
-  component: FullPathsPage,
+  component: lazyRouteComponent(() => import("./pages/fs/FullPathsPage.js"), "FullPathsPage"),
   validateSearch: pathSearch,
 });
 const viewFileRoute = createRoute({
   getParentRoute: () => appLayout,
   path: "/file",
-  component: ViewOneFilePage,
+  component: lazyRouteComponent(() => import("./pages/entity/ViewOneFilePage.js"), "ViewOneFilePage"),
   validateSearch: pathSearch,
 });
 const viewDirRoute = createRoute({
   getParentRoute: () => appLayout,
   path: "/dir",
-  component: ViewOneDirectoryPage,
+  component: lazyRouteComponent(() => import("./pages/entity/ViewOneDirectoryPage.js"), "ViewOneDirectoryPage"),
   validateSearch: pathSearch,
 });
 // Viewer-first media pages (media_viewer.mdx): /image + /video.
 const viewImageRoute = createRoute({
   getParentRoute: () => appLayout,
   path: "/image",
-  component: ViewOneImagePage,
+  component: lazyRouteComponent(() => import("./pages/entity/ViewOneImagePage.js"), "ViewOneImagePage"),
   validateSearch: pathSearch,
 });
 const viewVideoRoute = createRoute({
   getParentRoute: () => appLayout,
   path: "/video",
-  component: ViewOneVideoPage,
+  component: lazyRouteComponent(() => import("./pages/entity/ViewOneVideoPage.js"), "ViewOneVideoPage"),
   validateSearch: pathSearch,
 });
 
@@ -108,7 +111,7 @@ const routeTree = rootRoute.addChildren([
     oneRepoRoute,
     peersRoute,
     ipfsRoute,
-    syncRoute,
+    scansRoute,
     allowListRoute,
     settingsRoute,
     fsRoute,

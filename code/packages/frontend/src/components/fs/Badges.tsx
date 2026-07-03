@@ -2,6 +2,7 @@
 // The backend orders badges[] RIGHTMOST-FIRST — [repo, sync, compress, ipfs] (directory.mdx §5) —
 // so we render the array REVERSED, giving the fixed visual left→right order  i · C/c · S · R/r
 // with the repo badge pinned to the far right.
+import { memo } from "react";
 import type { FsBadge } from "@lfb/shared";
 
 interface BadgeMeta {
@@ -36,7 +37,9 @@ const BADGE_META: Record<FsBadge, BadgeMeta> = {
   ipfs: { letter: "i", bg: "var(--lfb-badge-ipfs)", ink: "#fff", title: "IPFS share / list artifact" },
 };
 
-export function Badges({ badges }: { badges: FsBadge[] }) {
+// Memoized — the badge array for a row only changes identity when that row's data changes, so a table
+// re-render (scroll/keystroke/selection) doesn't rebuild every row's chips (performance.mdx P-12).
+export const Badges = memo(function Badges({ badges }: { badges: FsBadge[] }) {
   if (!badges.length) return null;
   return (
     <span className="flex items-center gap-0.5">
@@ -55,4 +58,4 @@ export function Badges({ badges }: { badges: FsBadge[] }) {
       })}
     </span>
   );
-}
+});

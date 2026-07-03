@@ -61,9 +61,12 @@ async function main(): Promise<void> {
   // saved allow-list back to defaults during the dev-server swarm).
   const holder = await acquireSingleInstanceLock();
   if (holder !== null) {
-    log.warn(
+    // Expected, healthy outcome of the guard during a normal dev-watch restart / double-start: another
+    // live backend already holds the lock, so we cleanly stand down. Logged at info (not warn) so this
+    // routine, non-fault stand-down does not pollute error.err.
+    log.info(
       "main",
-      `Another LargeFileBridge backend (pid ${holder}) already holds the lock — exiting so shared config is not corrupted. Stop the other instance first.`,
+      `Another LargeFileBridge backend (pid ${holder}) already holds the lock — exiting so shared config is not corrupted. The guard is working as intended; stop the other instance first if this was unexpected.`,
     );
     process.exit(0);
   }

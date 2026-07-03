@@ -24,6 +24,8 @@ import type {
   MediaGrant,
   IpfsPageData,
   IpfsImportResult,
+  ScanJob,
+  RescanResult,
 } from "@lfb/shared";
 import { http, unwrap } from "./axios.js";
 
@@ -44,7 +46,8 @@ export const api = {
 
   repos: () => unwrap<RepoRow[]>(http.get("/repos")),
   addRepo: (path: string) => unwrap<{ repoId: string }>(http.post("/repos", { path })),
-  rescan: () => unwrap<{ rescanned: boolean }>(http.post("/repos/rescan")),
+  rescan: () => unwrap<RescanResult>(http.post("/repos/rescan")),
+  scanStatus: () => unwrap<ScanJob>(http.get("/repos/scan-status")),
 
   repo: (repoId: string) => unwrap<RepoDetail>(http.get(`/repos/${repoId}`)),
   repoFiles: (repoId: string) => unwrap<FileRow[]>(http.get(`/repos/${repoId}/files`)),

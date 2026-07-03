@@ -1,5 +1,5 @@
 // The landing screen (repos.mdx): one TanStack table of managed repos + Add repo + Rescan.
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { RefreshCw, Plus } from "lucide-react";
@@ -26,11 +26,28 @@ export function ReposPage() {
   const [showAdd, setShowAdd] = useState(false);
   const { data: repos, isLoading } = useQuery({ queryKey: ["repos"], queryFn: api.repos });
 
+  // The scan runs server-side. The always-mounted ScanProgressBar is the single poller for
+  // ["scanStatus"] (performance.mdx P-07) — here we just subscribe to that SHARED cache, with no second
+  // competing interval, so the Rescan button reflects a scan running anywhere (even one started before
+  // this page mounted) without doubling the request rate.
+  const { data: scan } = useQuery({ queryKey: ["scanStatus"], queryFn: api.scanStatus });
+  const scanning = scan?.status === "running";
+
+  // When a scan transitions out of "running", refresh the repos table with the fresh counts.
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    if (wasRunning.current && !scanning) {
+      qc.invalidateQueries({ queryKey: ["repos"] });
+      if (scan?.status === "error") toast.error(scan.error ?? "Scan failed");
+    }
+    wasRunning.current = scanning;
+  }, [scanning, scan?.status, scan?.error, qc]);
+
   const rescan = useMutation({
     mutationFn: api.rescan,
-    onSuccess: () => {
-      toast.success("Rescan complete");
-      qc.invalidateQueries({ queryKey: ["repos"] });
+    onSuccess: (r) => {
+      if (!r.started) toast.info("A scan is already running");
+      qc.invalidateQueries({ queryKey: ["scanStatus"] });
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -77,10 +94,11 @@ export function ReposPage() {
         <div className="flex gap-2">
           <button
             onClick={() => rescan.mutate()}
-            disabled={rescan.isPending}
-            className="flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm hover:bg-slate-100"
+            disabled={scanning || rescan.isPending}
+            className="flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-60"
           >
-            <RefreshCw className={`h-4 w-4 ${rescan.isPending ? "animate-spin" : ""}`} /> Rescan
+            <RefreshCw className={`h-4 w-4 ${scanning ? "animate-spin" : ""}`} />{" "}
+            {scanning ? "Scanning…" : "Rescan"}
           </button>
           <button
             onClick={() => setShowAdd(true)}

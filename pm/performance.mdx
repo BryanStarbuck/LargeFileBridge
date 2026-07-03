@@ -1,0 +1,231 @@
+---
+title: Performance — problems, architecture fixes, and remediation
+status: in-progress
+owner: engineering
+scope: code/packages/frontend, code/packages/backend
+---
+
+# Performance
+
+Chrome reports **severe** performance problems in the web app — jank, long tasks,
+and outright tab hangs. This spec is the single source of truth for **why** and
+**how we fix it**.
+
+It has three stages, matching the work order:
+
+1. **Diagnosis** — the full catalogued list of performance problems (below, §P-01…).
+2. **Architecture fixes** — the design-level fix for each problem (the `Fix:` line
+   under each entry).
+3. **Remediation** — the concrete code changes, tracked in the **Status** column
+   and summarized in §"Remediation log".
+
+Severity legend: 🔴 critical (causes hangs/long tasks) · 🟠 high (visible jank) ·
+🟡 medium (wasteful, scales badly) · ⚪ low (hygiene).
+
+---
+
+## The root-cause themes
+
+Almost every problem below is an instance of one of four themes. Fix the theme and
+many symptoms disappear at once.
+
+- **T1 — We render whole datasets to the DOM.** Tables materialize every row of a
+  page (up to an **"All" = `Number.MAX_SAFE_INTEGER`** option, over a `5000`-row
+  backend cap) as real DOM nodes, each with nested buttons, badges, a kebab menu,
+  and per-cell `Date` parsing. Thousands of `<tr>` × ~10 cells is tens of thousands
+  of nodes → giant layout/paint/GC, and the tab freezes.
+- **T2 — Every keystroke/click re-renders everything.** Search, filter, and each
+  checkbox toggle live in state that the whole table body depends on, with no
+  memoized rows and no debounce, so one keypress re-runs filtering over the whole
+  dataset **and** re-renders every visible row.
+- **T3 — The backend blocks the Node event loop.** The flat large-file walk runs a
+  tight synchronous `readdirSync`/`statSync` loop (up to `300_000` iterations)
+  *inside the HTTP request*, starving every other request — polls, page loads, and
+  the scan-status endpoint all hang while it runs.
+- **T4 — We over-fetch and over-invalidate.** A global 5s poll runs on every page
+  forever; single actions invalidate broad query keys that trigger full-filesystem
+  re-walks; the sidebar subscribes to the entire IPFS payload to read one field.
+
+---
+
+## Diagnosis + architecture fixes
+
+### 🔴 P-01 — Tables render every row of the page as DOM (no virtualization) · T1
+- **Where:** `components/table/DataTable.tsx` (`table.getRowModel().rows.map(...)`),
+  `pages/fs/FullPathsPage.tsx` (`pageRows.map(...)`).
+- **Symptom:** With the default page size of **500** — and worse, the **"All"**
+  option (`Number.MAX_SAFE_INTEGER`) over a backend cap of **5000** files — the
+  browser builds 500–5000 `<tr>`, each holding 2 nav buttons, a checkbox,
+  `formatBytes`, `relativeTime` + `absoluteTime` (Date parsing), a `<Badges>` chip
+  group, and an `<EntityKebab>` (a button with handlers). That is 10k–50k DOM nodes
+  and React elements built in one synchronous commit → multi-second hang.
+- **Fix (architecture):** **Row windowing.** Render only the rows visible in the
+  scroll viewport plus a small overscan, using a fixed row height and top/bottom
+  spacer rows (`<tr>` with a single height-only `<td>`), inside a scroll container.
+  No new dependency required — a small `useWindowedRows(count, rowHeight)` hook keyed
+  off the scroll container's `scrollTop`. Also **delete the `Number.MAX_SAFE_INTEGER`
+  "All" page-size footgun**; cap the page-size menu at sane values.
+
+### 🔴 P-02 — Row selection copies the whole Set and re-renders the whole table · T2
+- **Where:** `FullPathsPage.tsx` (`selected: Set<string>`, per-checkbox
+  `new Set(selected)`), `DataTable.tsx` (same pattern in the `__select` column),
+  `OneRepoPage.tsx`, `IpfsPage.tsx`.
+- **Symptom:** Every checkbox toggle allocates a new `Set` (O(n)) **and** replaces
+  the `selected` reference the entire body reads, so toggling one row re-renders all
+  500 rows. "Select all" builds a Set of up to 5000 paths in one click.
+- **Fix (architecture):** Extract a **`React.memo` row component** that receives a
+  boolean `selected` and a **stable** `onToggle(id)` callback (from a `useCallback`
+  that reads/writes the Set via the functional updater). Only the toggled row
+  re-renders. Selection stays a `Set` for O(1) membership, but rows no longer close
+  over the whole Set.
+
+### 🔴 P-03 — `DataTable` rebuilds its entire column + row model every render · T2
+- **Where:** `DataTable.tsx` — `tanColumns` `useMemo(..., [columns, selection, data,
+  getRowId])`.
+- **Symptom:** Callers pass `selection={{ selected, onChange, bulk }}` and
+  `columns=[...]` as **fresh object/array literals every render**, so the memo key
+  changes every render; `tanColumns` is rebuilt, which makes TanStack recompute the
+  core/filtered/sorted/paginated row models from scratch every render — on every
+  keystroke. The header checkbox also runs `data.map(getRowId)` inline each render.
+- **Fix (architecture):** Split selection into **primitive/stable deps**: memoize
+  the select column on `[getRowId]` only and read live selection through a ref or a
+  memoized cell that subscribes to a boolean. Depend the column memo on `columns`
+  and `getRowId` (stable), not on the `selection` object. Compute "all on page
+  selected" from `pageIds` once, not per header render.
+
+### 🔴 P-04 — The flat large-file endpoint blocks the event loop · T3
+- **Where:** `backend/modules/fs/fs.service.ts` → `listFilesFlat()` (sync
+  `while (stack.length)` with `readdirSync`/`statSync`, budget `300_000`), served by
+  the `/fs/flat` route.
+- **Symptom:** Unlike `scanner.service.ts` (which `await`s `setImmediate` every 400
+  entries), the flat walk is fully synchronous inside the request handler. On a big
+  home directory it pins the single Node thread for seconds — **all** concurrent
+  requests (scan-status poll, other pages, auth) stall behind it. Reads as "the
+  whole app hangs."
+- **Fix (architecture):** Make `listFilesFlat` **async and cooperatively yielding**
+  (`await setImmediate` every N entries), exactly like `walkUnit`. The route handler
+  `await`s it. Keeps the caps; frees the loop between chunks.
+
+### 🟠 P-05 — Client does full-dataset filter/sort/paginate on the main thread · T1/T2
+- **Where:** `FullPathsPage.tsx` `filtered = useMemo(files.filter(...))` +
+  TanStack sort/paginate; `DataTable.tsx` `getFilteredRowModel`/`getSortedRowModel`.
+- **Symptom:** The server returns up to 5000 rows; every filter/search re-scans the
+  full array on the main thread on each keystroke. Combined with P-01/P-02 the work
+  compounds.
+- **Fix (architecture):** (a) **Debounce** the search/filter inputs (~200ms) so we
+  filter once per pause, not per keypress. (b) Keep filtering client-side (dataset is
+  capped at 5000) but ensure it runs on **debounced** values and feeds a **windowed**
+  body. (c) Longer term, push filtering to the server with a `limit`/`query` param so
+  the payload shrinks — noted as a follow-up, not required for the hang fix.
+
+### 🟠 P-06 — Time formatting allocates `Date` objects per cell per render · T2
+- **Where:** `lib/format.ts` `relativeTime`/`absoluteTime` (called in `changed`,
+  `lastSync`, `seen`, etc. columns, plus `absoluteTime` in `title=` attributes).
+- **Symptom:** 500 rows × 2 time columns × (`new Date` + `Date.now` +
+  `toLocaleString`) on every render. `toLocaleString` is comparatively expensive.
+- **Fix (architecture):** With windowing (P-01) only ~30 rows format at a time, which
+  largely resolves this. Additionally, compute `absoluteTime` **lazily** (only when
+  the tooltip is needed) rather than eagerly into every `title` — or accept it once
+  windowing caps the row count. Memoize the row so re-renders don't re-format.
+
+### 🟠 P-07 — Global 5s poll runs on every page forever, hitting a blocking endpoint · T4
+- **Where:** `components/ScanProgressBar.tsx` (mounted in `AppShell`, `refetchInterval`
+  1s running / **5s always otherwise**), `pages/repos/ReposPage.tsx` (a **second**
+  independent `scanStatus` poll), `pages/sync/SyncPage.tsx` (`refetchInterval: 10_000`).
+- **Symptom:** Even when idle, the app polls `/api/repos/scan-status` every 5s on
+  every page, in every tab, including background tabs — and that endpoint shares the
+  thread the blocking walk (P-04) can occupy. ReposPage doubles it.
+- **Fix (architecture):** (a) `refetchIntervalInBackground: false` so hidden tabs
+  don't poll. (b) Idle interval up to **15s**, fast **1s** only while `running`.
+  (c) ReposPage reads the **shared** `["scanStatus"]` cache (same key) without adding
+  a second competing interval — keep one poller (the always-mounted `ScanProgressBar`)
+  as the source of truth; ReposPage observes without its own `refetchInterval`, or
+  they share and we accept one timer. (d) Keep the endpoint itself cheap (it already
+  returns module state) and non-blocking (P-04).
+
+### 🟠 P-08 — Single actions invalidate broad keys → full-filesystem re-walks · T4
+- **Where:** `FullPathsPage.tsx` pin mutation `invalidateQueries(["fsFlat"])` +
+  `["fs"]` + `["repos"]`; `EntityMenu.tsx` `invalidate()` hits `["fs"]` (every open
+  column) + `["repo"]`.
+- **Symptom:** Pinning one file invalidates `["fsFlat"]`, forcing a **re-walk of the
+  entire directory tree** (the P-04 endpoint) just to flip one badge. Every flag
+  toggle refetches every File-System column.
+- **Fix (architecture):** **Optimistically patch the cache.** After a decision/flag
+  change, `setQueryData` to flip the affected row's badges in the existing
+  `FlatFileListing`/listings instead of invalidating the expensive walk. Fall back to
+  a single targeted refetch of the specific entity, not the whole tree.
+
+### 🟡 P-09 — Sidebar subscribes to the entire IPFS payload for one field · T4
+- **Where:** `components/layout/Sidebar.tsx` — `useQuery(["ipfs"])` then reads only
+  `ipfsData.repos`.
+- **Symptom:** The `["ipfs"]` payload includes **all pins** (potentially large). The
+  sidebar re-renders whenever any part of that object changes, though it only needs
+  `repos`.
+- **Fix (architecture):** Use React Query's **`select`** to subscribe to
+  `data.repos` only, so the sidebar re-renders only when the repo list changes.
+
+### 🟡 P-10 — No route-level code splitting; whole app in one bundle · T1(load)
+- **Where:** `router.tsx` eagerly imports every page (all tables, `MediaViewer`, all
+  icon usage).
+- **Symptom:** First paint downloads/parses every page's code, including the heavy
+  media viewer and every table, before the first route renders.
+- **Fix (architecture):** `React.lazy` each route `component` + a `Suspense`
+  fallback, so each page's JS loads on navigation. Vite splits them into async chunks.
+
+### 🟡 P-11 — `autoResetPageIndex` + unstable inputs reset/recompute tables · T2
+- **Where:** `DataTable.tsx` / `FullPathsPage.tsx` (`autoResetPageIndex: true`).
+- **Symptom:** Any data identity change (including from over-invalidation, P-08)
+  resets to page 1 and recomputes the row model.
+- **Fix (architecture):** Keep `autoReset` where it's semantically needed, but remove
+  the churn source (P-08). Stable data identity (optimistic patch, not refetch) means
+  fewer resets.
+
+### 🟡 P-12 — `Badges` allocates and re-renders per row on every table render · T1/T2
+- **Where:** `components/fs/Badges.tsx` — `badges.slice().reverse().map(...)` with no
+  memo; rendered once per row.
+- **Symptom:** Every table render rebuilds every badge group (array copy + reverse +
+  map) for every visible row.
+- **Fix (architecture):** `React.memo(Badges)` (props are a small array; memo on
+  identity is fine since the backend returns a fresh array only when data changes).
+  Windowing (P-01) caps how many render at once.
+
+### 🟡 P-13 — MediaViewer loads full-resolution originals into the DOM · T1(media)
+- **Where:** `pages/entity/MediaViewer.tsx` — `<img src={grant.url}>` at natural
+  size; zoom uses `max-w-none`.
+- **Symptom:** A 50–100 MB image/PNG is fetched and **decoded on the main thread** at
+  full resolution, causing a long decode/paint hitch; video is fine (`preload=
+  "metadata"` + Range).
+- **Fix (architecture):** Add `loading="lazy"` + `decoding="async"` to the `<img>`
+  so decode moves off the critical path; longer term, request a backend-generated
+  **downscaled preview** for very large images and only load the original on explicit
+  "view full resolution." (Preview endpoint is a follow-up; the async-decode attrs
+  ship now.)
+
+### ⚪ P-14 — Redundant `Home`/icon imports & dead nodes · hygiene
+- **Where:** `DataTable.tsx` renders a hidden `<Check className="hidden" />` (dead
+  node); misc.
+- **Fix:** Remove dead render nodes. Minor.
+
+---
+
+## Remediation log (Stage 3)
+
+| ID | Fix shipped | File(s) |
+|----|-------------|---------|
+| P-01 | Row windowing hook + removed `MAX_SAFE_INTEGER` "All" option | `components/table/useWindowedRows.ts`, `DataTable.tsx`, `FullPathsPage.tsx` |
+| P-02 | Stable `onToggle`/`toggleAll` (functional Set updates) — with windowing, per-toggle work is ~30 rows so a per-row `React.memo` was unnecessary | `DataTable.tsx`, `FullPathsPage.tsx` |
+| P-03 | Stabilized `tanColumns` memo (no `selection` object dep) | `DataTable.tsx` |
+| P-04 | Async cooperative-yield flat walk | `backend/modules/fs/fs.service.ts`, `fs.router.ts` |
+| P-05 | Debounced search/filter inputs | `DataTable.tsx`, `FullPathsPage.tsx`, `lib/useDebounced.ts` |
+| P-06 | Covered by windowing (fewer rows format) | — |
+| P-07 | No-background-poll + slower idle interval | `ScanProgressBar.tsx`, `ReposPage.tsx` |
+| P-08 | Optimistic badge patch instead of re-walk invalidation | `FullPathsPage.tsx` |
+| P-09 | `select` only `repos` in sidebar | `Sidebar.tsx` |
+| P-10 | `React.lazy` routes + `Suspense` | `router.tsx` |
+| P-12 | `React.memo(Badges)` | `Badges.tsx` |
+| P-13 | `decoding="async"` / `loading="lazy"` on media `<img>` | `MediaViewer.tsx` |
+| P-14 | Removed dead render node | `DataTable.tsx` |
+
+Follow-ups (not blocking the hang fix): server-side filtered/paginated `/fs/flat`
+(P-05c), backend downscaled image previews (P-13), unify the two scan-status pollers
+into one shared observer (P-07c).

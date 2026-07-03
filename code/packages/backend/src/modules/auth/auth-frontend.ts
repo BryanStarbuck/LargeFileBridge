@@ -4,6 +4,7 @@
 import type { RequestHandler } from "express";
 import {
   createFederatedFrontend,
+  configureEmbeddedVerification,
   FileSessionStore,
   loadOrCreateSecret,
 } from "@auth/backend";
@@ -15,6 +16,23 @@ import { getAppConfig } from "../store-model/config.service.js";
 import { log } from "../../shared/logging.js";
 
 export const AUTH_ISSUER = "large-file-bridge";
+
+/**
+ * Configure @auth/backend's embedded (HS256, in-process) token verification unconditionally — even
+ * when Google creds are absent. This is an embedded/in-process deployment with NO JWKS endpoint, so
+ * verifyToken() must always take the HS256 path. Without this, `createFederatedFrontend()` (which
+ * calls configureEmbeddedVerification internally) only runs when Google creds exist; with creds
+ * absent, `embeddedVerification` stays null and any stale Bearer token in identify.ts falls to the
+ * JWKS path, where the bare "large-file-bridge" issuer throws the misleading "issuer must be an
+ * absolute URL" error. We seed the verifier with the SAME sessionSecret + issuer the frontend mints
+ * with, so minting and verification share one source of truth. Idempotent — safe to call repeatedly.
+ */
+export function ensureEmbeddedVerification(): void {
+  configureEmbeddedVerification({
+    sessionSecret: loadOrCreateSecret(authSecretPath()),
+    issuer: AUTH_ISSUER,
+  });
+}
 
 // OAF's coarse OIDC domain pre-filter (security.mdx §6.1): company domains ∪ individual-email domains
 // ∪ explicit AUTH_ALLOWED_DOMAINS. Re-read every time the middleware is (re)built — at boot and on each
@@ -105,6 +123,7 @@ function constructAuthFrontend(): RequestHandler {
  * newly added company domain (or redirect origin) takes effect on the very next sign-in — no restart.
  */
 export function rebuildAuthFrontend(): void {
+  ensureEmbeddedVerification();
   activeMiddleware = constructAuthFrontend();
 }
 
@@ -114,6 +133,9 @@ export function rebuildAuthFrontend(): void {
  * edit is enforced immediately without re-mounting or restarting.
  */
 export function buildAuthFrontend(): RequestHandler {
+  // Always seed embedded verification at boot — this runs regardless of whether Google creds exist,
+  // so identify.ts verifies stale/any Bearer token via the HS256 path (never the JWKS path).
+  ensureEmbeddedVerification();
   if (!activeMiddleware) rebuildAuthFrontend();
   return (req, res, next) => activeMiddleware!(req, res, next);
 }

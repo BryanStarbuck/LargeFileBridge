@@ -4,7 +4,7 @@
 // icons; the action row (Select all / IPFS pin / Unpin) drives the one_repo.mdx decision model
 // (sync/ignore) via the per-entity endpoint — files outside a registered repo (or with Never IPFS on)
 // are reported as skipped, never silently dropped, and no bytes ever move.
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
@@ -28,12 +28,16 @@ import {
   CheckSquare,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { FsEntry } from "@lfb/shared";
+import type { FsEntry, FlatFileListing } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { Badges } from "../../components/fs/Badges.js";
 import { EntityKebab } from "../../components/menu/EntityMenu.js";
 import { formatBytes, relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
+import { useDebounced } from "../../lib/useDebounced.js";
+import { useWindowedRows } from "../../components/table/useWindowedRows.js";
 import { FsTabs } from "./FsTabs.js";
+
+const ROW_H = 41; // fixed body-row height the windowing math relies on (px).
 
 type CompressFilter = "both" | "compressed" | "uncompressed";
 type IpfsFilter = "both" | "in" | "not";
@@ -41,6 +45,13 @@ type IpfsFilter = "both" | "in" | "not";
 const compressStateOf = (e: FsEntry): CompressFilter | "none" =>
   e.badges.includes("compressed") ? "compressed" : e.badges.includes("compress") ? "uncompressed" : "none";
 const inIpfs = (e: FsEntry): boolean => e.badges.includes("sync");
+
+// Optimistic badge flip for the pin/unpin action (P-08) — add or remove the "sync" badge without a
+// filesystem re-walk. Preserves the backend's rightmost-first ordering closely enough for the chip row.
+const withSyncBadge = (badges: FsEntry["badges"], on: boolean): FsEntry["badges"] => {
+  const without = badges.filter((b) => b !== "sync");
+  return on ? [...without, "sync"] : without;
+};
 
 const SORT_COLS = [
   { id: "size", label: "Size" },
@@ -87,11 +98,17 @@ export function FullPathsPage() {
 
   const files = flat.data?.files ?? [];
 
+  // Debounce the free-text filters so filtering the (up to 5000-row) dataset runs once per pause,
+  // not once per keystroke (performance.mdx P-05). The inputs stay instant; only `filtered` trails.
+  const searchD = useDebounced(search, 200);
+  const pathContainsD = useDebounced(pathContains, 200);
+  const minSizeMBD = useDebounced(minSizeMB, 200);
+
   // Client-side filters (search + the two segmented quick-filters + the icon-dropdown finers).
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const pc = pathContains.trim().toLowerCase();
-    const minBytes = minSizeMB.trim() ? Number(minSizeMB) * 1024 * 1024 : 0;
+    const q = searchD.trim().toLowerCase();
+    const pc = pathContainsD.trim().toLowerCase();
+    const minBytes = minSizeMBD.trim() ? Number(minSizeMBD) * 1024 * 1024 : 0;
     return files.filter((e) => {
       if (q && !(`${e.name} ${e.path}`.toLowerCase().includes(q))) return false;
       if (pc && !e.path.toLowerCase().includes(pc)) return false;
@@ -101,7 +118,7 @@ export function FullPathsPage() {
       if (ipfs === "not" && inIpfs(e)) return false;
       return true;
     });
-  }, [files, search, pathContains, minSizeMB, compressed, ipfs]);
+  }, [files, searchD, pathContainsD, minSizeMBD, compressed, ipfs]);
 
   const columns = useMemo<ColumnDef<FsEntry>[]>(
     () => [
@@ -169,8 +186,33 @@ export function FullPathsPage() {
   });
 
   const pageRows = table.getRowModel().rows;
-  const pagePaths = pageRows.map((r) => r.original.path);
+  const pagePaths = useMemo(() => pageRows.map((r) => r.original.path), [pageRows]);
   const allPageSelected = pagePaths.length > 0 && pagePaths.every((p) => selected.has(p));
+
+  // Stable selection toggles (P-02) — functional updates so a checkbox never closes over the whole Set.
+  const toggleOne = useCallback((p: string, on: boolean) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      on ? next.add(p) : next.delete(p);
+      return next;
+    });
+  }, []);
+  const togglePage = useCallback(
+    (on: boolean) => {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        for (const p of pagePaths) on ? next.add(p) : next.delete(p);
+        return next;
+      });
+    },
+    [pagePaths],
+  );
+
+  // Windowing (P-01): only the rows on screen are in the DOM.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const win = useWindowedRows(pageRows.length, ROW_H, scrollRef);
+  const visibleRows = pageRows.slice(win.start, win.end);
+  const colSpan = 7; // checkbox + name + path + size + changed + badges + kebab
 
   const setSort = (id: string) =>
     setSorting((prev) => {
@@ -183,17 +225,32 @@ export function FullPathsPage() {
     mutationFn: async (decision: "sync" | "ignore") => {
       const paths = [...selected];
       const results = await Promise.allSettled(paths.map((p) => api.setEntityDecision(p, decision)));
+      const okPaths = paths.filter((_, i) => results[i].status === "fulfilled");
       return {
-        ok: results.filter((r) => r.status === "fulfilled").length,
+        ok: okPaths.length,
         skipped: results.filter((r) => r.status === "rejected").length,
+        okPaths,
       };
     },
-    onSuccess: ({ ok, skipped }, decision) => {
+    onSuccess: ({ ok, skipped, okPaths }, decision) => {
       const verb = decision === "sync" ? "Pinned" : "Unpinned";
       toast.success(`${verb} ${ok} file${ok === 1 ? "" : "s"}${skipped ? `, skipped ${skipped}` : ""}`);
       setSelected(new Set());
-      qc.invalidateQueries({ queryKey: ["fsFlat"] });
-      qc.invalidateQueries({ queryKey: ["fs"] });
+      // P-08: DON'T invalidate ["fsFlat"] — that would re-walk the whole directory tree just to flip a
+      // badge. Optimistically patch the cached listing instead: add/remove the "sync" badge on the
+      // affected rows. The next scheduled scan reconciles the source of truth.
+      const done = new Set(okPaths);
+      qc.setQueryData<FlatFileListing>(["fsFlat", root, showHidden], (prev) =>
+        prev
+          ? {
+              ...prev,
+              files: prev.files.map((f) =>
+                done.has(f.path) ? { ...f, badges: withSyncBadge(f.badges, decision === "sync") } : f,
+              ),
+            }
+          : prev,
+      );
+      // Repo counts change — that endpoint reads status YAML (no filesystem walk), so it's cheap.
       qc.invalidateQueries({ queryKey: ["repos"] });
     },
     onError: (e: Error) => toast.error(e.message),
@@ -402,69 +459,77 @@ export function FullPathsPage() {
           onClear={() => { setCompressed("both"); setIpfs("both"); setSearch(""); setMinSizeMB(""); setPathContains(""); }}
         />
       ) : (
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr className="border-b border-[var(--lfb-border)] text-left text-black/60">
-              <th className="w-8 py-2 px-2">
-                <input
-                  type="checkbox"
-                  checked={allPageSelected}
-                  onChange={(e) => {
-                    const next = new Set(selected);
-                    for (const p of pagePaths) e.target.checked ? next.add(p) : next.delete(p);
-                    setSelected(next);
-                  }}
-                />
-              </th>
-              {table.getHeaderGroups()[0].headers.map((h) => {
-                const align = (h.column.columnDef.meta as { align?: string } | undefined)?.align;
+        <div ref={scrollRef} className="max-h-[65vh] overflow-auto">
+          <table className="w-full border-collapse text-sm">
+            <thead className="sticky top-0 z-10 bg-white">
+              <tr className="border-b border-[var(--lfb-border)] text-left text-black/60">
+                <th className="w-8 py-2 px-2">
+                  <input
+                    type="checkbox"
+                    checked={allPageSelected}
+                    onChange={(e) => togglePage(e.target.checked)}
+                  />
+                </th>
+                {table.getHeaderGroups()[0].headers.map((h) => {
+                  const align = (h.column.columnDef.meta as { align?: string } | undefined)?.align;
+                  return (
+                    <th key={h.id} className={`py-2 px-2 font-medium ${align === "right" ? "text-right" : ""}`}>
+                      {flexRender(h.column.columnDef.header, h.getContext())}
+                    </th>
+                  );
+                })}
+                <th className="py-2 px-2" />
+                <th className="w-8 py-2" />
+              </tr>
+            </thead>
+            <tbody>
+              {win.padTop > 0 && (
+                <tr aria-hidden style={{ height: win.padTop }}>
+                  <td colSpan={colSpan} />
+                </tr>
+              )}
+              {visibleRows.map((row) => {
+                const e = row.original;
                 return (
-                  <th key={h.id} className={`py-2 px-2 font-medium ${align === "right" ? "text-right" : ""}`}>
-                    {flexRender(h.column.columnDef.header, h.getContext())}
-                  </th>
+                  <tr
+                    key={row.id}
+                    style={{ height: ROW_H }}
+                    className="group border-b border-[var(--lfb-border)] hover:bg-slate-100"
+                  >
+                    <td className="px-2">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(e.path)}
+                        onChange={(ev) => toggleOne(e.path, ev.target.checked)}
+                      />
+                    </td>
+                    {row.getVisibleCells().map((cell) => {
+                      const align = (cell.column.columnDef.meta as { align?: string } | undefined)?.align;
+                      return (
+                        <td key={cell.id} className={`py-2 px-2 ${align === "right" ? "text-right tabular-nums" : ""}`}>
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </td>
+                      );
+                    })}
+                    <td className="py-2 px-2 text-right">
+                      <span className="inline-flex justify-end">
+                        <Badges badges={e.badges} />
+                      </span>
+                    </td>
+                    <td className="pr-2 text-right opacity-0 group-hover:opacity-100 focus-within:opacity-100">
+                      <EntityKebab path={e.path} />
+                    </td>
+                  </tr>
                 );
               })}
-              <th className="py-2 px-2" />
-              <th className="w-8 py-2" />
-            </tr>
-          </thead>
-          <tbody>
-            {pageRows.map((row) => {
-              const e = row.original;
-              return (
-                <tr key={row.id} className="group border-b border-[var(--lfb-border)] hover:bg-slate-100">
-                  <td className="px-2">
-                    <input
-                      type="checkbox"
-                      checked={selected.has(e.path)}
-                      onChange={(ev) => {
-                        const next = new Set(selected);
-                        ev.target.checked ? next.add(e.path) : next.delete(e.path);
-                        setSelected(next);
-                      }}
-                    />
-                  </td>
-                  {row.getVisibleCells().map((cell) => {
-                    const align = (cell.column.columnDef.meta as { align?: string } | undefined)?.align;
-                    return (
-                      <td key={cell.id} className={`py-2 px-2 ${align === "right" ? "text-right tabular-nums" : ""}`}>
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </td>
-                    );
-                  })}
-                  <td className="py-2 px-2 text-right">
-                    <span className="inline-flex justify-end">
-                      <Badges badges={e.badges} />
-                    </span>
-                  </td>
-                  <td className="pr-2 text-right opacity-0 group-hover:opacity-100 focus-within:opacity-100">
-                    <EntityKebab path={e.path} />
-                  </td>
+              {win.padBottom > 0 && (
+                <tr aria-hidden style={{ height: win.padBottom }}>
+                  <td colSpan={colSpan} />
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              )}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {/* Count + pagination (default 500) */}
@@ -496,9 +561,9 @@ export function FullPathsPage() {
               value={pageSize}
               onChange={(e) => { setPageSize(Number(e.target.value)); setPageIndex(0); }}
             >
-              {[500, 1000, Number.MAX_SAFE_INTEGER].map((s) => (
+              {[100, 250, 500].map((s) => (
                 <option key={s} value={s}>
-                  {s === Number.MAX_SAFE_INTEGER ? "All" : s}
+                  {s}
                 </option>
               ))}
             </select>

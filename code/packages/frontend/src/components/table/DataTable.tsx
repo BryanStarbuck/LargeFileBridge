@@ -1,6 +1,13 @@
 // The house table (charter: all tables are TanStack tables). Flat/chromeless, with the standard
 // control row (search left; icon-only Filter ⛛ + Sort ⇅ right) and pagination default 500.
-import { useMemo, useState, type ReactNode } from "react";
+//
+// Performance (performance.mdx):
+//  * P-01 row windowing — the body scrolls inside a bounded container and only the rows intersecting
+//    the viewport are in the DOM, so a 500/5000-row page costs ~30 <tr> not 500/5000.
+//  * P-03 the selection checkbox column is rendered by hand (leading cell), NOT baked into the TanStack
+//    column model, so `tanColumns` no longer depends on the unstable `selection` object.
+//  * P-05 the search box is debounced — filtering the dataset runs once per pause, not per keypress.
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -12,7 +19,9 @@ import {
   type SortingState,
   type ColumnFiltersState,
 } from "@tanstack/react-table";
-import { Search, Filter, ArrowUpDown, Check } from "lucide-react";
+import { Search, Filter, ArrowUpDown } from "lucide-react";
+import { useDebounced } from "../../lib/useDebounced.js";
+import { useWindowedRows } from "./useWindowedRows.js";
 import type { LfbColumn } from "./types.js";
 
 interface DataTableProps<T> {
@@ -32,7 +41,8 @@ interface DataTableProps<T> {
   empty?: ReactNode;
 }
 
-const PAGE_SIZES = [500, 1000, Number.MAX_SAFE_INTEGER];
+const PAGE_SIZES = [100, 250, 500]; // P-01: no "All" (Number.MAX_SAFE_INTEGER) footgun.
+const ROW_H = 41; // fixed body-row height the windowing math relies on (px).
 
 export function DataTable<T>({
   data,
@@ -48,56 +58,25 @@ export function DataTable<T>({
 }: DataTableProps<T>) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
-  const [globalFilter, setGlobalFilter] = useState("");
+  const [search, setSearch] = useState(""); // controlled input value (instant)
+  const globalFilter = useDebounced(search, 200); // what the table actually filters on (P-05)
   const [pageSize, setPageSize] = useState(500);
   const [showSort, setShowSort] = useState(false);
   const [showFilter, setShowFilter] = useState(false);
 
-  const searchText = (row: T): string =>
-    typeof searchKeys === "function"
-      ? searchKeys(row)
-      : searchKeys.map((k) => String(row[k] ?? "")).join(" ");
+  const searchText = useCallback(
+    (row: T): string =>
+      typeof searchKeys === "function"
+        ? searchKeys(row)
+        : searchKeys.map((k) => String(row[k] ?? "")).join(" "),
+    [searchKeys],
+  );
 
-  const tanColumns = useMemo<ColumnDef<T>[]>(() => {
-    const cols: ColumnDef<T>[] = [];
-    if (selection) {
-      cols.push({
-        id: "__select",
-        header: () => {
-          const pageIds = data.map(getRowId);
-          const allOn = pageIds.length > 0 && pageIds.every((id) => selection.selected.has(id));
-          return (
-            <input
-              type="checkbox"
-              checked={allOn}
-              onChange={(e) => {
-                const next = new Set(selection.selected);
-                for (const id of pageIds) e.target.checked ? next.add(id) : next.delete(id);
-                selection.onChange(next);
-              }}
-            />
-          );
-        },
-        cell: ({ row }) => {
-          const id = getRowId(row.original);
-          return (
-            <input
-              type="checkbox"
-              checked={selection.selected.has(id)}
-              onClick={(e) => e.stopPropagation()}
-              onChange={(e) => {
-                const next = new Set(selection.selected);
-                e.target.checked ? next.add(id) : next.delete(id);
-                selection.onChange(next);
-              }}
-            />
-          );
-        },
-        enableSorting: false,
-      });
-    }
-    for (const c of columns) {
-      cols.push({
+  // Column model — selection is NOT part of it (P-03), so this only rebuilds when the caller's
+  // logical columns change, never when a checkbox toggles.
+  const tanColumns = useMemo<ColumnDef<T>[]>(
+    () =>
+      columns.map((c) => ({
         id: c.id,
         header: c.header,
         accessorFn: (row) => c.accessor(row),
@@ -111,10 +90,9 @@ export function DataTable<T>({
         },
         cell: ({ row }) => (c.cell ? c.cell(row.original) : String(c.accessor(row.original) ?? "")),
         meta: { align: c.align },
-      });
-    }
-    return cols;
-  }, [columns, selection, data, getRowId]);
+      })),
+    [columns],
+  );
 
   const table = useReactTable({
     data,
@@ -122,7 +100,6 @@ export function DataTable<T>({
     state: { sorting, columnFilters, globalFilter, pagination: { pageIndex: 0, pageSize } },
     onSortingChange: setSorting,
     onColumnFiltersChange: setColumnFilters,
-    onGlobalFilterChange: setGlobalFilter,
     globalFilterFn: (row, _id, filterValue) =>
       searchText(row.original).toLowerCase().includes(String(filterValue).toLowerCase()),
     getCoreRowModel: getCoreRowModel(),
@@ -135,6 +112,39 @@ export function DataTable<T>({
   const filtersActive = columnFilters.length > 0;
   const sortActive = sorting.length > 0;
   const rowCount = table.getFilteredRowModel().rows.length;
+  const pageRows = table.getRowModel().rows;
+
+  // Selection — stable callbacks so toggling a row never closes over the whole Set (P-02).
+  const sel = selection?.selected;
+  const onSelChange = selection?.onChange;
+  const toggleOne = useCallback(
+    (id: string, on: boolean) => {
+      if (!sel || !onSelChange) return;
+      const next = new Set(sel);
+      on ? next.add(id) : next.delete(id);
+      onSelChange(next);
+    },
+    [sel, onSelChange],
+  );
+  const pageIds = useMemo(() => pageRows.map((r) => getRowId(r.original)), [pageRows, getRowId]);
+  const allOnPage = !!sel && pageIds.length > 0 && pageIds.every((id) => sel.has(id));
+  const toggleAll = useCallback(
+    (on: boolean) => {
+      if (!sel || !onSelChange) return;
+      const next = new Set(sel);
+      for (const id of pageIds) on ? next.add(id) : next.delete(id);
+      onSelChange(next);
+    },
+    [sel, onSelChange, pageIds],
+  );
+
+  // Windowing (P-01): render only the rows on screen inside a bounded scroll container.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const win = useWindowedRows(pageRows.length, ROW_H, scrollRef);
+  const visibleRows = pageRows.slice(win.start, win.end);
+
+  // select cell + data cells + trailing chevron cell
+  const colSpan = (selection ? 1 : 0) + tanColumns.length + 1;
 
   return (
     <div>
@@ -143,8 +153,8 @@ export function DataTable<T>({
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-black/40" />
           <input
-            value={globalFilter}
-            onChange={(e) => setGlobalFilter(e.target.value)}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
             placeholder="search…"
             className="w-full pl-8 pr-2 py-1.5 rounded-md border border-[var(--lfb-border)] text-sm outline-none focus:border-[var(--lfb-primary)]"
           />
@@ -236,54 +246,88 @@ export function DataTable<T>({
         </Popover>
       )}
 
-      {/* The flat, chromeless data surface */}
+      {/* The flat, chromeless data surface — body scrolls inside a bounded, windowed container. */}
       {loading ? (
         <SkeletonRows cols={tanColumns.length} />
       ) : rowCount === 0 && empty ? (
         <div className="py-10">{empty}</div>
       ) : (
-        <table className="w-full text-sm border-collapse">
-          <thead>
-            {table.getHeaderGroups().map((hg) => (
-              <tr key={hg.id} className="border-b border-[var(--lfb-border)] text-left text-black/60">
-                {hg.headers.map((h) => {
-                  const align = (h.column.columnDef.meta as { align?: string } | undefined)?.align;
-                  return (
-                    <th
-                      key={h.id}
-                      className={`py-2 px-2 font-medium ${align === "right" ? "text-right" : ""}`}
-                    >
-                      {h.isPlaceholder ? null : flexRender(h.column.columnDef.header, h.getContext())}
+        <div ref={scrollRef} className="max-h-[65vh] overflow-auto">
+          <table className="w-full text-sm border-collapse">
+            <thead className="sticky top-0 z-10 bg-white">
+              {table.getHeaderGroups().map((hg) => (
+                <tr key={hg.id} className="border-b border-[var(--lfb-border)] text-left text-black/60">
+                  {selection && (
+                    <th className="w-8 py-2 px-2">
+                      <input
+                        type="checkbox"
+                        checked={allOnPage}
+                        onChange={(e) => toggleAll(e.target.checked)}
+                      />
                     </th>
-                  );
-                })}
-                <th />
-              </tr>
-            ))}
-          </thead>
-          <tbody>
-            {table.getRowModel().rows.map((row) => (
-              <tr
-                key={row.id}
-                onClick={() => onRowClick?.(row.original)}
-                className={`border-b border-[var(--lfb-border)] ${onRowClick ? "cursor-pointer hover:bg-slate-100" : ""}`}
-              >
-                {row.getVisibleCells().map((cell) => {
-                  const align = (cell.column.columnDef.meta as { align?: string } | undefined)?.align;
-                  return (
-                    <td
-                      key={cell.id}
-                      className={`py-2 px-2 ${align === "right" ? "text-right tabular-nums" : ""}`}
-                    >
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </td>
-                  );
-                })}
-                <td className="text-black/30 pr-2">{onRowClick ? "›" : ""}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                  )}
+                  {hg.headers.map((h) => {
+                    const align = (h.column.columnDef.meta as { align?: string } | undefined)?.align;
+                    return (
+                      <th
+                        key={h.id}
+                        className={`py-2 px-2 font-medium ${align === "right" ? "text-right" : ""}`}
+                      >
+                        {h.isPlaceholder ? null : flexRender(h.column.columnDef.header, h.getContext())}
+                      </th>
+                    );
+                  })}
+                  <th />
+                </tr>
+              ))}
+            </thead>
+            <tbody>
+              {win.padTop > 0 && (
+                <tr aria-hidden style={{ height: win.padTop }}>
+                  <td colSpan={colSpan} />
+                </tr>
+              )}
+              {visibleRows.map((row) => {
+                const id = getRowId(row.original);
+                return (
+                  <tr
+                    key={row.id}
+                    onClick={() => onRowClick?.(row.original)}
+                    style={{ height: ROW_H }}
+                    className={`border-b border-[var(--lfb-border)] ${onRowClick ? "cursor-pointer hover:bg-slate-100" : ""}`}
+                  >
+                    {selection && (
+                      <td className="px-2" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selection.selected.has(id)}
+                          onChange={(e) => toggleOne(id, e.target.checked)}
+                        />
+                      </td>
+                    )}
+                    {row.getVisibleCells().map((cell) => {
+                      const align = (cell.column.columnDef.meta as { align?: string } | undefined)?.align;
+                      return (
+                        <td
+                          key={cell.id}
+                          className={`py-2 px-2 ${align === "right" ? "text-right tabular-nums" : ""}`}
+                        >
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </td>
+                      );
+                    })}
+                    <td className="text-black/30 pr-2">{onRowClick ? "›" : ""}</td>
+                  </tr>
+                );
+              })}
+              {win.padBottom > 0 && (
+                <tr aria-hidden style={{ height: win.padBottom }}>
+                  <td colSpan={colSpan} />
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {/* Count + pagination (default 500) */}
@@ -318,11 +362,10 @@ export function DataTable<T>({
           >
             {PAGE_SIZES.map((s) => (
               <option key={s} value={s}>
-                {s === Number.MAX_SAFE_INTEGER ? "All" : s}
+                {s}
               </option>
             ))}
           </select>
-          <Check className="hidden" />
         </div>
       </div>
     </div>

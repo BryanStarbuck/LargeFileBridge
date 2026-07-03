@@ -9,9 +9,9 @@ export function SyncPage() {
   const { data } = useQuery({ queryKey: ["syncPage"], queryFn: api.syncPage, refetchInterval: 10_000 });
   return (
     <div className="max-w-3xl">
-      <h1 className="mb-1 text-2xl font-bold">Sync</h1>
+      <h1 className="mb-1 text-2xl font-bold">Scans</h1>
       <p className="mb-4 text-sm text-black/60">
-        Two scheduled background jobs on this computer ({data?.computerLabel}). IPFS node:{" "}
+        Two scheduled background jobs (scheduleTasks) on this computer ({data?.computerLabel}). IPFS node:{" "}
         <span className={data?.ipfs === "ok" ? "text-green-700" : "text-red-600"}>{data?.ipfs}</span>
       </p>
       {data && (

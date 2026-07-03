@@ -12,11 +12,11 @@ fsRouter.get("/home", (_req, res) => {
 });
 
 // GET /api/fs/flat?path=<abs>&hidden=1 — the flat, recursive LARGE-file listing (full_paths.mdx).
-fsRouter.get("/flat", (req, res) => {
+fsRouter.get("/flat", async (req, res) => {
   const p = typeof req.query.path === "string" ? req.query.path : undefined;
   const showHidden = req.query.hidden === "1" || req.query.hidden === "true";
   try {
-    res.json({ ok: true, data: listFilesFlat(p, showHidden) });
+    res.json({ ok: true, data: await listFilesFlat(p, showHidden) });
   } catch (e) {
     res.status(400).json({ ok: false, error: (e as Error).message });
   }

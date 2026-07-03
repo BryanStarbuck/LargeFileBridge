@@ -386,6 +386,77 @@ The scan is correct when **all** hold:
     interactive run to the [install-tools page](./tools.mdx) (remembering the pending scan) and makes an
     unattended scheduleTask record a **`needs_tool`** gap and **skip** that run — never installing on its
     own, never error-looping.
+13. An on-demand scan is a **detached, server-side background job** (§10). The **Rescan** route returns
+    immediately; the walk is **never tied to the HTTP request** that started it, so closing the tab,
+    navigating away, or a request timeout **never cancels** a scan. Its **live progress** is readable
+    from `GET /api/repos/scan-status` on **any** page, so the progress indicator **re-attaches** after
+    the user navigates away and back.
+14. The scan is **single-flight and non-blocking**: only one discovery walk runs at a time (a second
+    Rescan is **coalesced** into one queued follow-up pass, never a concurrent racer on the same
+    `status.yaml`), and the walk **cooperatively yields** so it does **not freeze** the web app —
+    `scan-status` polls and every other page stay responsive while a scan runs.
+
+---
+
+## 10. On-demand scan execution — the detached background job (LOCKED)
+
+A **Rescan** (Repos page or a repo page, §2) and the scheduled launchd run (§3.1) both drive the **same
+worker**, and both run it as a **server-side background job** owned by the backend process — **never**
+inside, or tied to, the HTTP request that triggered it. This section is the authoritative contract for
+*how* an on-demand scan runs, and it exists to fix a real, observed bug.
+
+> #### The bug this fixes (root-cause note, do not remove)
+>
+> The Rescan route originally did `await scanAll()` **inside the request handler** and only responded
+> when the whole walk finished, and the walk itself was **fully synchronous** (`readdirSync`/`statSync`
+> in a tight loop). Two failures fell out of that:
+>
+> 1. **Progress was request/component state, not server state.** The only "progress" was the React
+>    mutation's `isPending` on the Repos page. Navigating away unmounted it, so the spinner vanished and
+>    the scan **looked stopped**; navigating back showed nothing, because the client had no way to ask
+>    the server *"is a scan running, and how far along?"*
+> 2. **The synchronous walk froze the whole app.** Because the walk never yielded, it **starved the Node
+>    event loop for the entire scan** — `scan-status` polls, page loads, every request hung until the
+>    walk finished. A frozen app reads as *"the scan (and everything) stopped."*
+>
+> The fix makes the scan a **detached, observable, cooperatively-yielding** background job.
+
+### 10.1 Detached from the request (never cancel on navigation)
+
+* The Rescan route calls `startScan(source)` and **returns immediately** (`{ started, job }`); it does
+  **not** `await` the walk. The walk runs in the backend process, **outliving** the request.
+* Therefore **nothing the browser does cancels a scan** — closing the tab, route-changing away from the
+  Repos page, or an aborted/timed-out request. (This also fixes the scheduled path: the launchd
+  `run-worker` fetch has a 60 s timeout; a full-filesystem walk can exceed it, so the internal run route
+  **also** starts the detached job and returns immediately instead of blocking and being aborted.)
+* The job runner **stamps `scan_process.last_run_at` / `last_run_ok` on completion** (§5) — for **both**
+  manual and scheduled runs — reflecting the real finish, not the moment the trigger route returned.
+
+### 10.2 Observable — live progress lives on the server
+
+* The backend holds one **scan job record** (`ScanJob`): `status` (`idle | running | done | error`),
+  `source`, `startedAt` / `finishedAt`, `phase` (`discovering → repos → computer → done`),
+  `reposTotal` / `reposDone`, `currentUnit`, `candidatesFound`, and `error` / `ok`.
+* `GET /api/repos/scan-status` returns it. The web app mounts **one global progress bar** (in the app
+  shell, present on **every** page) that **polls** this endpoint — fast (~1 s) while running, slow
+  (~5 s) when idle so a scan started **elsewhere** (a scheduled run, or Rescan on another tab/computer)
+  still lights it up. Because the state is on the server and the bar is always mounted, **navigating
+  away and back simply re-attaches** to the same live job — the progress on the bottom returns.
+* The Repos page's **Rescan button reflects the *server* scan status**, not local mutation state — it
+  shows *"Scanning…"* and is disabled whenever a scan is running, even one it did not start.
+
+### 10.3 Single-flight, coalesced, non-blocking
+
+* **One at a time.** `startScan` is single-flight: if a scan is already running it does **not** start a
+  second (which would race the first on the same `status.yaml` files). It instead sets a **rerun
+  flag** and returns `{ started: false }`; when the current pass finishes, **exactly one** follow-up
+  pass runs. This coalesces double-clicks **and** guarantees a repo **added mid-scan** is still covered.
+* **Cooperative yielding.** The walk (`walkUnit`, the computer-unit walk, and repo discovery
+  `findGitRepos`) **yields to the event loop** every few hundred entries (`await setImmediate`). This
+  keeps the HTTP server responsive throughout a scan — verified: `scan-status` polls return in
+  **milliseconds** while a 90-repo / thousands-of-candidates walk is in flight, with `reposDone` and
+  `candidatesFound` advancing between polls. The `stat`-only, no-content contract (§1) is unchanged;
+  yielding changes only *when* the synchronous stats run, never *what* they read.
 
 ---
 

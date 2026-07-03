@@ -159,6 +159,9 @@ function ViewerSurface({
         <img
           src={src}
           alt={name}
+          // Decode off the main thread so a large original doesn't hitch the tab while it paints
+          // (performance.mdx P-13).
+          decoding="async"
           onError={() => setFailed(true)}
           onClick={() => setZoom((z) => !z)}
           style={{ imageRendering: "auto" }}

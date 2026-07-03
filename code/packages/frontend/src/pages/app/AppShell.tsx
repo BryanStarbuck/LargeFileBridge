@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { CurrentUser } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { Sidebar } from "../../components/layout/Sidebar.js";
+import { ScanProgressBar } from "../../components/ScanProgressBar.js";
 
 const FALLBACK: CurrentUser = {
   authenticated: false,
@@ -24,6 +25,7 @@ export function AppShell() {
           <Outlet />
         </div>
       </main>
+      <ScanProgressBar />
     </div>
   );
 }

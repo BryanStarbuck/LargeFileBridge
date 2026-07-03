@@ -11,7 +11,7 @@ import {
   getRepoConfig,
   updateRepoConfig,
 } from "../store-model/units.service.js";
-import { scanAll } from "../scanner/scanner.service.js";
+import { startScan, getScanJob } from "../scanner/scan-job.js";
 import { syncRepoFolder } from "../sync/sync.service.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { requireAllowListed } from "../auth/identify.js";
@@ -32,17 +32,27 @@ reposRouter.post("/", async (req, res) => {
   if (!body.success) return res.status(400).json({ ok: false, error: "path required" });
   try {
     const { repoId } = await registerRepo(body.data.path);
-    await scanAll("manual");
+    // Kick a background scan to populate the new repo's status; do NOT block the response on the walk.
+    // If a scan is already running, startScan coalesces this into a queued follow-up pass so the new
+    // repo is still covered (scan-job.ts single-flight).
+    startScan("manual");
     res.json({ ok: true, data: { repoId } });
   } catch (e) {
     res.status(400).json({ ok: false, error: (e as Error).message });
   }
 });
 
-// POST /api/repos/rescan — trigger the discovery scan on demand.
-reposRouter.post("/rescan", async (_req, res) => {
-  await scanAll("manual");
-  res.json({ ok: true, data: { rescanned: true } });
+// POST /api/repos/rescan — trigger the discovery scan on demand. Returns IMMEDIATELY; the walk runs as
+// a detached server-side job (scan-job.ts) so navigating away or a request timeout never cancels it.
+reposRouter.post("/rescan", (_req, res) => {
+  const result = startScan("manual");
+  res.json({ ok: true, data: result });
+});
+
+// GET /api/repos/scan-status — live progress of the current/last discovery scan (scan.mdx §10). The
+// progress bar polls this so it can re-attach after the user navigates away and back.
+reposRouter.get("/scan-status", (_req, res) => {
+  res.json({ ok: true, data: getScanJob() });
 });
 
 // GET /api/repos/:repoId — the One-repo detail (header + status strip + files).

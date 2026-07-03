@@ -22,8 +22,15 @@ export function Sidebar({ user }: { user: CurrentUser }) {
 
   // Left-bar children (ipfs.mdx §2.1): the repos that actually hold pins. Fetched only while the IPFS
   // section is active; shares the ["ipfs"] cache with the page so there's no extra request.
-  const { data: ipfsData } = useQuery({ queryKey: ["ipfs"], queryFn: api.ipfs, enabled: onIpfs });
-  const pinningRepos = ipfsData?.repos ?? [];
+  // Subscribe to ONLY the pinning-repos slice of the (potentially large) IPFS payload via `select`
+  // (performance.mdx P-09), so the sidebar re-renders only when that list changes — not on every pin
+  // update. Shares the ["ipfs"] cache with the page, so there's still no extra request.
+  const { data: pinningRepos = [] } = useQuery({
+    queryKey: ["ipfs"],
+    queryFn: api.ipfs,
+    enabled: onIpfs,
+    select: (d) => d.repos,
+  });
 
   return (
     <aside

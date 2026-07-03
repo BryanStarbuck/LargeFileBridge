@@ -28,15 +28,35 @@ interface Candidate {
   modified_at: string;
 }
 
-export async function scanAll(source: "scheduled" | "manual" = "scheduled"): Promise<void> {
+// Progress reporter threaded through the walk so the background job runner (scan-job.ts) can surface
+// live progress to the web app. Every method is optional in spirit — a no-op sink runs a silent scan.
+export interface ProgressSink {
+  setPhase(phase: "idle" | "discovering" | "repos" | "computer" | "done"): void;
+  setReposTotal(n: number): void;
+  unitStart(name: string): void;
+  unitDone(candidatesInUnit: number): void;
+}
+
+const NOOP_SINK: ProgressSink = {
+  setPhase() {},
+  setReposTotal() {},
+  unitStart() {},
+  unitDone() {},
+};
+
+export async function scanAll(
+  source: "scheduled" | "manual" = "scheduled",
+  progress: ProgressSink = NOOP_SINK,
+): Promise<void> {
   const cfg = getAppConfig();
   const roots = cfg.scanner.roots.map(expandHome).filter((r) => safeIsDir(r));
   log.info("scan", `Scan (${source}) starting over ${roots.length} root(s).`);
 
   // 1. Repo discovery — register any .git working tree found under the roots.
+  progress.setPhase("discovering");
   const discovered = new Set<string>();
   for (const root of roots) {
-    for (const repoPath of findGitRepos(root, cfg.scanner.follow_symlinks)) {
+    for (const repoPath of await findGitRepos(root, cfg.scanner.follow_symlinks)) {
       discovered.add(repoPath);
     }
   }
@@ -56,57 +76,72 @@ export async function scanAll(source: "scheduled" | "manual" = "scheduled"): Pro
     if (rc.repo.path) repoPaths.push(path.resolve(expandHome(rc.repo.path)));
   }
 
-  // 3. Scan each repo unit.
+  // 3. Scan each repo unit. +1 for the computer unit walked in step 4.
+  progress.setPhase("repos");
+  progress.setReposTotal(repoFolders.length + 1);
   for (const folder of repoFolders) {
     const rc = getRepoConfig(folder);
+    progress.unitStart(rc.repo.name || folder);
     const repoPath = rc.repo.path ? path.resolve(expandHome(rc.repo.path)) : "";
     if (!repoPath || !isGitWorkingTree(repoPath)) {
       const st = getRepoStatus(folder);
       writeRepoStatus(folder, { ...st, repo_state: "missing" });
+      progress.unitDone(0);
       continue;
     }
     const threshold = resolveThreshold(rc.big_file_override, cfg.big_file.threshold_bytes);
     const ig = rc.large_files.follow_gitignore ? buildRepoIgnore(repoPath) : null;
     // ig === null means "no real .gitignore to follow" → size-gate only, no media-bypass.
-    const candidates = walkUnit(repoPath, threshold, {
+    const candidates = await walkUnit(repoPath, threshold, {
       ignore: ig,
       includeGlobs: rc.large_files.include_globs,
       excludeGlobs: rc.large_files.exclude_globs,
       maskPaths: [],
     });
     writeStatus(folder, "repo", candidates, threshold, source);
+    progress.unitDone(candidates.length);
   }
 
   // 4. Scan the computer unit (roots minus the repo mask).
-  scanComputerUnit(roots, repoPaths, cfg.big_file.threshold_bytes, source);
+  progress.setPhase("computer");
+  progress.unitStart("computer");
+  const computerCount = await scanComputerUnit(
+    roots,
+    repoPaths,
+    cfg.big_file.threshold_bytes,
+    source,
+  );
+  progress.unitDone(computerCount);
 
+  progress.setPhase("done");
   log.info("scan", `Scan (${source}) complete.`);
 }
 
-function scanComputerUnit(
+async function scanComputerUnit(
   roots: string[],
   maskPaths: string[],
   globalThreshold: number,
   source: "scheduled" | "manual",
-): void {
+): Promise<number> {
   const cc = readYaml(unitConfigPath(computerUnitDir()), ComputerUnitConfigSchema);
   const scanRoots = (cc.roots.length ? cc.roots.map(expandHome) : roots).filter(safeIsDir);
   const all: Candidate[] = [];
   for (const root of scanRoots) {
     all.push(
-      ...walkUnit(root, globalThreshold, {
+      ...(await walkUnit(root, globalThreshold, {
         ignore: null,
         includeGlobs: [],
         excludeGlobs: cc.exclude_globs,
         maskPaths,
         rootLabelAbsolute: true,
-      }),
+      })),
     );
   }
   const dir = computerUnitDir();
   const prev = readYaml(unitStatusPath(dir), UnitStatusSchema);
   const next = diffStatus(prev, all, globalThreshold, source, "computer");
   writeYaml(unitStatusPath(dir), { ...next });
+  return all.length;
 }
 
 interface WalkOpts {
@@ -117,12 +152,21 @@ interface WalkOpts {
   rootLabelAbsolute?: boolean;
 }
 
+// Yield control back to the event loop so a long, CPU-bound synchronous walk does not FREEZE the whole
+// web app. The walk is fs.readdirSync/statSync in a tight loop; without cooperative yields it starves
+// the HTTP server for the whole scan — scan-status polls, page loads, everything hangs, which reads as
+// "the scan (and the app) stopped." Yielding every few hundred entries keeps the server responsive
+// while the scan runs truly in the background (scan.mdx §10).
+const YIELD_EVERY = 400;
+const yieldToLoop = () => new Promise<void>((r) => setImmediate(r));
+
 // Recursive stat-only walk. Returns files >= threshold that pass the ignore/mask rules.
-function walkUnit(root: string, threshold: number, opts: WalkOpts): Candidate[] {
+async function walkUnit(root: string, threshold: number, opts: WalkOpts): Promise<Candidate[]> {
   const out: Candidate[] = [];
   const stack: string[] = [root];
   const excl = ignore().add(opts.excludeGlobs);
   const incl = opts.includeGlobs.length ? ignore().add(opts.includeGlobs) : null;
+  let sinceYield = 0;
 
   while (stack.length) {
     const dir = stack.pop()!;
@@ -131,6 +175,10 @@ function walkUnit(root: string, threshold: number, opts: WalkOpts): Candidate[] 
       entries = fs.readdirSync(dir, { withFileTypes: true });
     } catch {
       continue;
+    }
+    if ((sinceYield += entries.length) >= YIELD_EVERY) {
+      sinceYield = 0;
+      await yieldToLoop();
     }
     for (const ent of entries) {
       const abs = path.join(dir, ent.name);
@@ -246,12 +294,17 @@ function buildRepoIgnore(repoPath: string): Ignore | null {
   }
 }
 
-function findGitRepos(root: string, followSymlinks: boolean): string[] {
+async function findGitRepos(root: string, followSymlinks: boolean): Promise<string[]> {
   const found: string[] = [];
   const stack: string[] = [root];
   let budget = 20000; // bounded walk so discovery never runs away
+  let sinceYield = 0;
   while (stack.length && budget-- > 0) {
     const dir = stack.pop()!;
+    if (++sinceYield >= YIELD_EVERY) {
+      sinceYield = 0;
+      await yieldToLoop(); // keep the server responsive during discovery too (scan.mdx §10)
+    }
     if (isGitWorkingTree(dir)) {
       found.push(dir);
       continue; // do not descend into a repo to find nested repos (keep it simple)

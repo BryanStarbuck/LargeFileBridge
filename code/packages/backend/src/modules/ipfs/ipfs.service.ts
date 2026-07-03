@@ -165,9 +165,16 @@ export async function nodePosture(): Promise<NodePosture> {
 
 // ── Compliance (knowledge/ipfs.mdx §6) ──────────────────────────────────────
 async function getConfigKey(key: string): Promise<unknown> {
-  const res = await rpc("config", { args: [key] });
-  const json = (await res.json()) as { Value?: unknown };
-  return json.Value;
+  try {
+    const res = await rpc("config", { args: [key] });
+    const json = (await res.json()) as { Value?: unknown };
+    return json.Value;
+  } catch (e) {
+    // Kubo answers HTTP 500 "<key> not found" for a config key that is simply unset.
+    // That is "unset", not a fault — return undefined so callers see it as unset.
+    if (/not found/i.test((e as Error).message)) return undefined;
+    throw e;
+  }
 }
 
 async function setConfigKey(key: string, value: string): Promise<void> {
@@ -196,8 +203,18 @@ export async function enforceCompliance(): Promise<void> {
   try {
     const strat = String((await getConfigKey("Reprovider.Strategy")) ?? "").toLowerCase();
     if (strat !== "pinned" && strat !== "roots") {
-      await setConfigKey("Reprovider.Strategy", cfg.ipfs.reprovide_strategy);
-      log.info("ipfs", `Set Reprovider.Strategy = ${cfg.ipfs.reprovide_strategy} (only-our-content).`);
+      try {
+        await setConfigKey("Reprovider.Strategy", cfg.ipfs.reprovide_strategy);
+        log.info("ipfs", `Set Reprovider.Strategy = ${cfg.ipfs.reprovide_strategy} (only-our-content).`);
+      } catch (e) {
+        // Some Kubo builds don't expose Reprovider.Strategy at all; the SET then 500s "not found".
+        // That's a benign capability gap, not a fault — log it once at info so it stays out of error.err.
+        if (/not found/i.test((e as Error).message)) {
+          log.info("ipfs", `Reprovider.Strategy not settable on this Kubo build — skipping enforcement.`);
+        } else {
+          throw e;
+        }
+      }
     }
   } catch (e) {
     log.warn("ipfs", `Could not enforce compliance: ${(e as Error).message}`);

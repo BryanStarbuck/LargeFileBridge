@@ -95,7 +95,18 @@ export function listDirectory(input: string | undefined, showHidden: boolean): F
 const FLAT_FILE_CAP = 5000; // max rows returned before we stop and flag truncation
 const FLAT_ITER_BUDGET = 300000; // max directory pops before we stop and flag truncation
 
-export function listFilesFlat(input: string | undefined, showHidden: boolean): FlatFileListing {
+// Cooperative yielding — the flat walk is a tight synchronous readdirSync/statSync loop that can run
+// for seconds on a big home directory. Served straight from the HTTP request, a synchronous walk pins
+// the single Node thread and starves EVERY other request (scan-status polls, page loads, auth) until
+// it finishes — which reads as "the whole app hangs." So we yield to the event loop every few hundred
+// entries, exactly like scanner.service.walkUnit (scan.mdx §10, performance.mdx P-04).
+const FLAT_YIELD_EVERY = 400;
+const flatYield = () => new Promise<void>((r) => setImmediate(r));
+
+export async function listFilesFlat(
+  input: string | undefined,
+  showHidden: boolean,
+): Promise<FlatFileListing> {
   const rootAbs = resolveDir(input);
   // One shared badge context (registered repos, sticky flags, threshold) built once; its
   // per-directory `enclosingRepoForChildren` is re-pointed as we descend (cached per dir).
@@ -114,6 +125,7 @@ export function listFilesFlat(input: string | undefined, showHidden: boolean): F
   const files: FsEntry[] = [];
   let truncated = false;
   let budget = FLAT_ITER_BUDGET;
+  let sinceYield = 0;
   const stack: string[] = [rootAbs];
 
   while (stack.length) {
@@ -127,6 +139,11 @@ export function listFilesFlat(input: string | undefined, showHidden: boolean): F
       dirents = fs.readdirSync(dir, { withFileTypes: true });
     } catch {
       continue;
+    }
+    // Hand the event loop back every few hundred entries so concurrent requests aren't starved.
+    if ((sinceYield += dirents.length) >= FLAT_YIELD_EVERY) {
+      sinceYield = 0;
+      await flatYield();
     }
     // All files in this directory share the same enclosing repo → set it once for the batch.
     ctx.enclosingRepoForChildren = enclosingFor(dir);

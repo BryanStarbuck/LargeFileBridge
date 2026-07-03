@@ -245,6 +245,34 @@ export interface SyncPageData {
   peers: PeerRow[];
 }
 
+// ── The on-demand scan job (scan.mdx §10) ───────────────────────────────────
+// The discovery scan runs as a SERVER-SIDE background job, detached from the HTTP request that
+// started it. Its live progress lives on the backend so the web app can poll it from ANY page and
+// re-attach after the user navigates away and back. Never tied to a request lifecycle — closing the
+// tab or leaving the Repos page does NOT cancel a scan.
+export type ScanPhase = "idle" | "discovering" | "repos" | "computer" | "done";
+
+export interface ScanJob {
+  status: "idle" | "running" | "done" | "error";
+  source: "manual" | "scheduled" | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  phase: ScanPhase;
+  reposTotal: number; // repo units this pass will scan (known after discovery)
+  reposDone: number; // repo units finished so far
+  currentUnit: string | null; // the unit being scanned right now (repo name or "computer")
+  candidatesFound: number; // running total of big-file candidates recorded this pass
+  error: string | null; // fatal error message when status === "error"
+  ok: boolean | null; // did the last completed run finish without a fatal error?
+  rerunQueued: boolean; // a Rescan arrived mid-run → one more pass will follow (single-flight)
+}
+
+// POST /api/repos/rescan → does not block on the walk; reports whether a fresh job started.
+export interface RescanResult {
+  started: boolean; // false when a scan was already running (this click was coalesced)
+  job: ScanJob;
+}
+
 // ── Auth (mirrors @auth/backend AuthUser, trimmed) ──────────────────────────
 export interface CurrentUser {
   authenticated: boolean;

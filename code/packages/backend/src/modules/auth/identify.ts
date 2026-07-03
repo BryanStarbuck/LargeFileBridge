@@ -36,7 +36,11 @@ export async function identify(req: Request, _res: Response, next: NextFunction)
     return next();
   }
   try {
-    const claims = await verifyToken(token, { issuer: AUTH_ISSUER });
+    // Force the embedded (HS256, in-process) path: this app has no JWKS endpoint. `embedded: true`
+    // guarantees the symmetric verification path even if configuration ordering ever changes, so a
+    // stale/invalid token fails with a proper signature error (caught below) rather than the
+    // misleading "issuer must be an absolute URL" thrown on the JWKS path for a bare issuer string.
+    const claims = await verifyToken(token, { issuer: AUTH_ISSUER, embedded: true });
     const email = (claims.email as string | undefined) ?? null;
     const listed = allowListed(email);
     withUser.user = {
