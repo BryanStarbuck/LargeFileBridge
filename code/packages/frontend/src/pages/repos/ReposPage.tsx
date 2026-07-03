@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { RefreshCw, Plus } from "lucide-react";
+import { RefreshCw, Plus, Bookmark } from "lucide-react";
 import { toast } from "sonner";
 import type { RepoRow, RepoStatus } from "@lfb/shared";
 import { api } from "../../api/client.js";
@@ -52,7 +52,42 @@ export function ReposPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  // Bookmark toggle (repos.mdx §8) — optimistic: flip the row in cache immediately, roll back on error.
+  const toggleBookmark = useMutation({
+    mutationFn: ({ repoId, bookmarked }: { repoId: string; bookmarked: boolean }) =>
+      api.toggleBookmark(repoId, bookmarked),
+    onMutate: async ({ repoId, bookmarked }) => {
+      await qc.cancelQueries({ queryKey: ["repos"] });
+      const prev = qc.getQueryData<RepoRow[]>(["repos"]);
+      qc.setQueryData<RepoRow[]>(["repos"], (old) =>
+        old?.map((r) => (r.repoId === repoId ? { ...r, bookmarked } : r)),
+      );
+      return { prev };
+    },
+    onError: (e: Error, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["repos"], ctx.prev);
+      toast.error(e.message);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ["repos"] }),
+  });
+
   const columns: LfbColumn<RepoRow>[] = [
+    {
+      // Leading favorite toggle — a control cell (never opens the repo). Sort/filter on yes/no.
+      id: "bookmark",
+      header: "Bookmark",
+      kind: "enum",
+      filterOptions: ["yes", "no"],
+      accessor: (r) => (r.bookmarked ? "yes" : "no"),
+      cell: (r) => (
+        <BookmarkToggle
+          on={r.bookmarked}
+          onToggle={() =>
+            toggleBookmark.mutate({ repoId: r.repoId, bookmarked: !r.bookmarked })
+          }
+        />
+      ),
+    },
     {
       id: "name",
       header: "Repo",
@@ -126,6 +161,30 @@ export function ReposPage() {
 
       {showAdd && <AddRepoDialog onClose={() => setShowAdd(false)} />}
     </div>
+  );
+}
+
+// The leading ribbon toggle (repos.mdx §8.1). On = solid yellow (filled + stroked). Off = thin gray
+// outline with an empty (white) fill. A control cell: the click stops propagation so it never opens
+// the repo row (§8.2). Keyboard-accessible via the native <button>.
+function BookmarkToggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+  return (
+    <button
+      aria-pressed={on}
+      aria-label={on ? "Bookmarked — click to remove" : "Bookmark this repo"}
+      title={on ? "Bookmarked" : "Bookmark"}
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle();
+      }}
+      className="grid place-items-center rounded p-0.5 hover:bg-slate-100"
+    >
+      <Bookmark
+        className={`h-4 w-4 ${on ? "text-yellow-500" : "text-black/25 hover:text-yellow-400"}`}
+        fill={on ? "currentColor" : "none"}
+        strokeWidth={1.5}
+      />
+    </button>
   );
 }
 

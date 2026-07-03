@@ -32,6 +32,7 @@ export interface RepoCounts {
 // One row of the Repos table (repos.mdx §1).
 export interface RepoRow {
   repoId: string; // stable hash of the absolute path
+  bookmarked: boolean; // user favorite (repos.mdx §8) — drives the leading ribbon toggle
   name: string;
   path: string;
   counts: RepoCounts;

@@ -118,6 +118,7 @@ export function computeRepoRow(folder: string): RepoRow {
   const peerCount = peerCountForFiles(files);
   return {
     repoId: repoIdFromPath(cfg.repo.path || folder),
+    bookmarked: cfg.bookmarked,
     name: cfg.repo.name || folder,
     path: cfg.repo.path || "",
     counts,

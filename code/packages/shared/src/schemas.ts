@@ -117,6 +117,7 @@ export const RepoUnitConfigSchema = z.object({
     })
     .default({}),
   synced: z.boolean().default(false),
+  bookmarked: z.boolean().default(false), // user favorite (repos.mdx §8) — local, not synced to peers
   big_file_override: z
     .object({
       enabled: z.boolean().default(false),

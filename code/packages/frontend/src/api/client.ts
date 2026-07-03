@@ -46,6 +46,8 @@ export const api = {
 
   repos: () => unwrap<RepoRow[]>(http.get("/repos")),
   addRepo: (path: string) => unwrap<{ repoId: string }>(http.post("/repos", { path })),
+  toggleBookmark: (repoId: string, bookmarked: boolean) =>
+    unwrap<RepoRow>(http.post(`/repos/${repoId}/bookmark`, { bookmarked })),
   rescan: () => unwrap<RescanResult>(http.post("/repos/rescan")),
   scanStatus: () => unwrap<ScanJob>(http.get("/repos/scan-status")),
 

@@ -55,6 +55,18 @@ reposRouter.get("/scan-status", (_req, res) => {
   res.json({ ok: true, data: getScanJob() });
 });
 
+// POST /api/repos/:repoId/bookmark — toggle the favorite (repos.mdx §8). Persists to config.yaml;
+// idempotent. Returns the updated RepoRow so the table can reconcile its optimistic flip.
+reposRouter.post("/:repoId/bookmark", async (req, res) => {
+  const body = z.object({ bookmarked: z.boolean() }).safeParse(req.body);
+  if (!body.success) return res.status(400).json({ ok: false, error: "bookmarked (boolean) required" });
+  const folder = folderForRepoId(req.params.repoId);
+  if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
+  await updateRepoConfig(folder, (c) => ({ ...c, bookmarked: body.data.bookmarked }));
+  log.info("repos", `${folder}: bookmarked -> ${body.data.bookmarked}`);
+  res.json({ ok: true, data: computeRepoRow(folder) });
+});
+
 // GET /api/repos/:repoId — the One-repo detail (header + status strip + files).
 reposRouter.get("/:repoId", async (req, res) => {
   const folder = folderForRepoId(req.params.repoId);
