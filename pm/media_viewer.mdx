@@ -171,7 +171,8 @@ switches — flipping one updates the others.
   viewer surface.
 * **Wrong route for the kind:** if `/video` is opened on an image (or vice-versa), redirect to the correct
   viewer (`/image` ↔ `/video`); a non-media file redirects to `/file`. Routing is by the file's kind, so a
-  correct link never lands on the wrong viewer.
+  correct link never lands on the wrong viewer. The redirect **replaces** history (does not push) so the
+  wrong-kind URL never lingers to re-bounce on Back.
 * **Decode/playback failure:** the browser element failed to render the bytes (unsupported codec —
   e.g. HEVC/ProRes in a browser that can't decode it). Show an inline notice over the viewer: "This
   browser can't play this file's codec (`<codec>`)." with **Open raw** (hand off to the OS) and, for video

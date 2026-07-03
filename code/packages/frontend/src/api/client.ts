@@ -22,6 +22,7 @@ import type {
   SecuritySetupResult,
   MediaProbe,
   MediaGrant,
+  IpfsHealth,
   IpfsPageData,
   IpfsImportResult,
   ScanJob,
@@ -32,6 +33,9 @@ import { http, unwrap } from "./axios.js";
 export const api = {
   me: () => unwrap<CurrentUser>(http.get("/auth/me")),
   authConfig: () => unwrap<AuthConfig>(http.get("/health/auth-config")),
+  // Cheap liveness — { status, ipfs }. Drives the media viewer's node-unreachable IPFS-button
+  // disable (media_viewer.mdx §5) without walking the pinset like api.ipfs() does.
+  health: () => unwrap<{ status: string; ipfs: IpfsHealth }>(http.get("/health")),
 
   // Security allow-list (security.mdx §7). config is public; setup is one-time + loopback-guarded;
   // security/setSecurity are the admin-only return-visit editor.

@@ -6,7 +6,7 @@
 // The medium plays/loads off local disk via the backend stream — never file:// — through a short-lived
 // signed grant (GET /api/media/grant) that the <img>/<video> element loads from /api/media/raw. Video
 // seeks because that endpoint honors HTTP Range (media_viewer.mdx §1–§2).
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 import { ChevronLeft, UploadCloud, DownloadCloud, FolderOpen, Copy, FileText, ExternalLink, Zap } from "lucide-react";
@@ -43,6 +43,14 @@ export function MediaViewer({ kind }: { kind: MediaKind }) {
     queryFn: () => api.mediaProbe(path!),
     enabled: !!path && !!v?.exists,
   });
+  // Cheap IPFS liveness so the IPFS button can disable when the node is down (media_viewer.mdx §5).
+  // Undefined while loading → treat as reachable so the button is never needlessly disabled.
+  const { data: health } = useQuery({
+    queryKey: ["health"],
+    queryFn: () => api.health(),
+    staleTime: 30 * 1000,
+  });
+  const ipfsReachable = health?.ipfs !== "unreachable";
 
   const decide = useMutation({
     mutationFn: (d: Decision) => api.setEntityDecision(path!, d),
@@ -57,12 +65,13 @@ export function MediaViewer({ kind }: { kind: MediaKind }) {
   });
 
   // Route by the file's real kind — never leave the wrong viewer mounted (media_viewer.mdx §5).
+  // `replace` so the wrong-kind URL doesn't linger in history and re-bounce on Back.
   useEffect(() => {
     if (!v?.exists) return;
     const actual: "image" | "video" | null = v.compressible; // "image" | "video" | null
-    if (actual === "image" && kind !== "image") navigate({ to: "/image", search: { path: v.path } });
-    else if (actual === "video" && kind !== "video") navigate({ to: "/video", search: { path: v.path } });
-    else if (actual === null) navigate({ to: "/file", search: { path: v.path } });
+    if (actual === "image" && kind !== "image") navigate({ to: "/image", search: { path: v.path }, replace: true });
+    else if (actual === "video" && kind !== "video") navigate({ to: "/video", search: { path: v.path }, replace: true });
+    else if (actual === null) navigate({ to: "/file", search: { path: v.path }, replace: true });
   }, [v, kind, navigate]);
 
   if (!path) return <p className="text-black/60">No file selected.</p>;
@@ -94,7 +103,7 @@ export function MediaViewer({ kind }: { kind: MediaKind }) {
 
       {/* Action-button row (media_viewer.mdx §4) */}
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <IpfsPrimary view={v} decide={decide} />
+        <IpfsPrimary view={v} decide={decide} ipfsReachable={ipfsReachable} />
         <RepoChip view={v} navigate={navigate} />
         <CompressChip view={v} />
         <CodecChip codec={probe?.codec ?? null} container={probe?.container ?? null} />
@@ -102,7 +111,7 @@ export function MediaViewer({ kind }: { kind: MediaKind }) {
 
       {/* The viewer surface — the star; takes all remaining height (media_viewer.mdx §3) */}
       <div className="mt-3 min-h-0 flex-1">
-        <ViewerSurface kind={kind} src={grant?.url ?? null} name={v.name} probeCodec={probe?.codec ?? null} />
+        <ViewerSurface kind={kind} src={grant?.url ?? null} view={v} probeCodec={probe?.codec ?? null} />
       </div>
 
       {/* Property strip + action links */}
@@ -135,43 +144,83 @@ export function MediaViewer({ kind }: { kind: MediaKind }) {
 }
 
 // ── The viewer surface ──────────────────────────────────────────────────────────
+// A checkerboard so real transparency shows through a PNG/WebP (media_viewer.mdx §3). Painted
+// BEHIND the image only — an opaque JPEG/frame fully covers it, so it reads only through alpha.
+const CHECKERBOARD: React.CSSProperties = {
+  backgroundColor: "#1b1b1b",
+  backgroundImage:
+    "linear-gradient(45deg, #2e2e2e 25%, transparent 25%), linear-gradient(-45deg, #2e2e2e 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #2e2e2e 75%), linear-gradient(-45deg, transparent 75%, #2e2e2e 75%)",
+  backgroundSize: "20px 20px",
+  backgroundPosition: "0 0, 0 10px, 10px -10px, -10px 0",
+};
+
 function ViewerSurface({
   kind,
   src,
-  name,
+  view,
   probeCodec,
 }: {
   kind: MediaKind;
   src: string | null;
-  name: string;
+  view: EntityView;
   probeCodec: string | null;
 }) {
   const [failed, setFailed] = useState(false);
   const [zoom, setZoom] = useState(false); // image: fit ↔ 100%
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const drag = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
 
   // Reset transient view state when the source changes.
   useEffect(() => { setFailed(false); setZoom(false); }, [src]);
 
+  // Drag-to-pan a zoomed image (media_viewer.mdx §3). Only active when zoomed-in and overflowing.
+  const onPointerDown = (e: React.PointerEvent) => {
+    const el = scrollRef.current;
+    if (!zoom || !el) return;
+    drag.current = { x: e.clientX, y: e.clientY, left: el.scrollLeft, top: el.scrollTop };
+    el.setPointerCapture(e.pointerId);
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    const el = scrollRef.current;
+    if (!drag.current || !el) return;
+    el.scrollLeft = drag.current.left - (e.clientX - drag.current.x);
+    el.scrollTop = drag.current.top - (e.clientY - drag.current.y);
+  };
+  const endDrag = (e: React.PointerEvent) => {
+    if (drag.current) scrollRef.current?.releasePointerCapture(e.pointerId);
+    drag.current = null;
+  };
+
   return (
-    <div className="relative flex h-full w-full items-center justify-center overflow-auto rounded-lg bg-[#141414]">
+    <div
+      ref={scrollRef}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+      className={`relative flex h-full w-full items-center justify-center overflow-auto rounded-lg bg-[#141414] ${
+        zoom ? "cursor-grab active:cursor-grabbing" : ""
+      }`}
+    >
       {!src ? (
         <div className="h-2/3 w-2/3 animate-pulse rounded bg-white/5" />
       ) : failed ? (
-        <DecodeFailure codec={probeCodec} src={src} />
+        <DecodeFailure kind={kind} codec={probeCodec} src={src} view={view} />
       ) : kind === "image" ? (
         <img
           src={src}
-          alt={name}
+          alt={view.name}
           // Decode off the main thread so a large original doesn't hitch the tab while it paints
           // (performance.mdx P-13); loading="lazy" completes the pair (P-21).
           decoding="async"
           loading="lazy"
           onError={() => setFailed(true)}
-          onClick={() => setZoom((z) => !z)}
-          style={{ imageRendering: "auto" }}
+          // Click toggles fit ↔ 100%; a pan-drag isn't a click, so suppress the toggle after a drag.
+          onClick={() => { if (!drag.current) setZoom((z) => !z); }}
+          style={{ imageRendering: "auto", ...CHECKERBOARD }}
           className={
             zoom
-              ? "max-w-none cursor-zoom-out"
+              ? "max-w-none"
               : "max-h-full max-w-full cursor-zoom-in object-contain"
           }
         />
@@ -188,48 +237,94 @@ function ViewerSurface({
   );
 }
 
-function DecodeFailure({ codec, src }: { codec: string | null; src: string }) {
+function DecodeFailure({
+  kind,
+  codec,
+  src,
+  view,
+}: {
+  kind: MediaKind;
+  codec: string | null;
+  src: string;
+  view: EntityView;
+}) {
+  // Charter §6.1: bytes are never altered without an explicit ask. For an uncompressed video whose
+  // codec the browser can't decode, offer Compress… as the suggested fix (media_viewer.mdx §5).
+  const offerCompress = kind === "video" && canOfferCompress(view);
   return (
     <div className="max-w-md rounded-lg border border-white/15 bg-black/40 px-5 py-4 text-center text-sm text-white/80">
       <p className="mb-3">
         This browser can't play this file{codec ? <> ’s codec (<b>{codec}</b>)</> : null}.
       </p>
-      <a
-        href={src}
-        target="_blank"
-        rel="noreferrer"
-        className="inline-flex items-center gap-1 rounded-md bg-white/10 px-3 py-1.5 text-white hover:bg-white/20"
-      >
-        <ExternalLink className="h-4 w-4" /> Open raw / hand off to the OS
-      </a>
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        <a
+          href={src}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 rounded-md bg-white/10 px-3 py-1.5 text-white hover:bg-white/20"
+        >
+          <ExternalLink className="h-4 w-4" /> Open raw / hand off to the OS
+        </a>
+        {offerCompress && (
+          <button
+            onClick={() => runCompressOffer(view)}
+            title="Offer to compress (nothing changes until it runs)"
+            className="inline-flex items-center gap-1 rounded-md bg-amber-500/90 px-3 py-1.5 text-white hover:bg-amber-500"
+          >
+            <Zap className="h-4 w-4" /> Compress…
+          </button>
+        )}
+      </div>
     </div>
   );
 }
 
+// ── Compress offer (charter §6.1 — explicit click, confirm, never automatic) ───────
+/** Eligible for a Compress… offer: it "should" compress and the user hasn't opted out. */
+function canOfferCompress(v: EntityView): boolean {
+  return v.compressState === "should" && !v.flags.noCompress;
+}
+/** Fire the confirm-gated compress offer. Shared by the action-row chip and the decode-failure card. */
+function runCompressOffer(v: EntityView): void {
+  if (!window.confirm(`Compress ${v.name}? This is an offer — nothing changes until it runs.`)) return;
+  api.compressEntity(v.path).then(() => toast.success("Compression queued")).catch((e: Error) => toast.error(e.message));
+}
+
 // ── Action-bar pieces ────────────────────────────────────────────────────────────
-function IpfsPrimary({ view: v, decide }: { view: EntityView; decide: { mutate: (d: Decision) => void } }) {
+function IpfsPrimary({
+  view: v,
+  decide,
+  ipfsReachable,
+}: {
+  view: EntityView;
+  decide: { mutate: (d: Decision) => void };
+  ipfsReachable: boolean;
+}) {
   if (!v.repo) return null;
-  if (v.decision === "sync") {
-    return (
-      <button
-        onClick={() => decide.mutate("ignore")}
-        className="flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm text-black/70 hover:bg-slate-100"
-      >
-        <DownloadCloud className="h-4 w-4" /> Remove from IPFS
-      </button>
-    );
-  }
-  if (!v.flags.neverIpfs) {
-    return (
-      <button
-        onClick={() => decide.mutate("sync")}
-        className="flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white"
-      >
-        <UploadCloud className="h-4 w-4" /> Add to IPFS
-      </button>
-    );
-  }
-  return null;
+  const isSync = v.decision === "sync";
+  // Not-in-sync + Never-IPFS → no primary button (the ⋯ menu still governs).
+  if (!isSync && v.flags.neverIpfs) return null;
+  // Node down → the button stays visible but disabled with a tooltip (parity with one_repo.mdx §5).
+  const disabledProps = ipfsReachable
+    ? {}
+    : { disabled: true, title: "IPFS node unreachable — start your IPFS node to add/remove pins" };
+  return isSync ? (
+    <button
+      {...disabledProps}
+      onClick={() => decide.mutate("ignore")}
+      className="flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm text-black/70 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+    >
+      <DownloadCloud className="h-4 w-4" /> Remove from IPFS
+    </button>
+  ) : (
+    <button
+      {...disabledProps}
+      onClick={() => decide.mutate("sync")}
+      className="flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      <UploadCloud className="h-4 w-4" /> Add to IPFS
+    </button>
+  );
 }
 
 function RepoChip({ view: v, navigate }: { view: EntityView; navigate: ReturnType<typeof useNavigate> }) {
@@ -247,19 +342,15 @@ function RepoChip({ view: v, navigate }: { view: EntityView; navigate: ReturnTyp
 function CompressChip({ view: v }: { view: EntityView }) {
   if (!v.compressible) return null;
   const done = v.compressState === "done";
-  const suppressed = v.flags.noCompress;
   // A clickable Compress… offer only when it "should" compress and the user hasn't opted out.
-  if (!done && !suppressed) {
-    const compress = () => {
-      if (!window.confirm(`Compress ${v.name}? This is an offer — nothing changes until it runs.`)) return;
-      api.compressEntity(v.path).then(() => toast.success("Compression queued")).catch((e) => toast.error(e.message));
-    };
+  if (canOfferCompress(v)) {
     return (
-      <button onClick={compress} title="Offer to compress (nothing changes until it runs)">
+      <button onClick={() => runCompressOffer(v)} title="Offer to compress (nothing changes until it runs)">
         <Chip tone="warn"><Zap className="h-3 w-3" /> looks uncompressed</Chip>
       </button>
     );
   }
+  // Suppressed (Do not compress) collapses to a neutral kind label; else the compressed fact (media_viewer.mdx §4).
   return <Chip muted>{done ? "already compressed" : v.compressible}</Chip>;
 }
 
