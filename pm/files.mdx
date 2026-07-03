@@ -6,7 +6,7 @@ description: The single-entity page for ONE file (route /file?path=<abs>). Reach
 # LargeFileBridge — View one file
 
 The **View one file** page is the single-entity page for **one** file. A file shows up in many places
-in LFB — a [repo's files table](./one_repo.mdx), the [File System](./directory.mdx) column browser, the
+in LFB — a [repo's files table](./one_repo.mdx), the [File System](./directories.mdx) column browser, the
 [IPFS](./ipfs.mdx) pinned table — and from any of them the **View file** action (or clicking the
 file's name) lands here at `/file?path=<abs>`. The page *is* that file, so it carries the entity
 **`⋯` "more" menu** ([menus.mdx §4](./menus.mdx)).
@@ -18,7 +18,7 @@ Siblings this builds on and does not repeat:
   catalog; it never invents a different one.
 * [One repo](./one_repo.mdx) — the **decision model** (Sync / Ignore / Undecided, §1) and the
   **transfer-status pill** (§4.6) shown here for the file's sync state.
-* [File System](./directory.mdx) — the **code badges** (§3) painted at the top of this page.
+* [File System](./directories.mdx) — the **code badges** (§3) painted at the top of this page.
 * [Directories](./directories.mdx) — the sibling **View one directory** page (same shape, dir catalog).
 * [Media viewer](./media_viewer.mdx) — the **viewer-first** siblings **View one image** (`/image`) and
   **View one video** (`/video`). When a file is a viewable medium, rows/cells/menus open the viewer page
@@ -94,7 +94,7 @@ interface EntityView {
   sizeBytes: number | null;  // file bytes (dir: rolled-up or null)
   createdAt: string | null;
   modifiedAt: string | null;
-  badges: FsBadge[];         // same vocabulary as directory.mdx §3, order rightmost-first
+  badges: FsBadge[];         // same vocabulary as directories.mdx §3, order rightmost-first
   flags: FileFlags;
 
   // Repo / sync context — populated when the entity is inside a registered repo.
@@ -104,7 +104,7 @@ interface EntityView {
   cid: string | null;
   peers: string[];
 
-  // Compression heuristic (directory.mdx §3.3) — drives the Compression card.
+  // Compression heuristic (directories.mdx §3.3) — drives the Compression card.
   compressible: "video" | "image" | null;   // eligible media kind, else null
   compressState: "should" | "done" | null;  // C / c / none
 }
@@ -158,7 +158,7 @@ For non-media files there is no such affordance.
 ## 5. Empty & error states
 
 * **File not found / moved** (`exists: false`): a card — "This file is no longer at that path." with
-  **Copy path** and a link back to the [File System](./directory.mdx) at its parent directory.
+  **Copy path** and a link back to the [File System](./directories.mdx) at its parent directory.
 * **Not in a repo:** the Sync/IPFS cards render a muted "Not tracked — this file isn't inside a
   registered repo" with an **Open containing folder** link; badges, compression, and flags still show.
 * **Loading:** skeleton header + cards, no layout shift.
@@ -170,7 +170,7 @@ For non-media files there is no such affordance.
 ## 6. Acceptance criteria
 
 1. `/file?path=<abs>` renders **one file's** identity (name title, absolute path muted), its **code
-   badges** ([directory.mdx §3](./directory.mdx)), and stacked fact cards (Sync, Compression, IPFS, File).
+   badges** ([directories.mdx §3](./directories.mdx)), and stacked fact cards (Sync, Compression, IPFS, File).
 2. The page carries a **top-right `⋯` "more" menu** rendering the **File catalog**
    ([menus.mdx §5.3](./menus.mdx)) verbatim (the same as the row kebab), destructive item last;
    right-clicking anywhere on the page's entity opens the same menu ([menus.mdx §3.1](./menus.mdx)).
@@ -188,7 +188,7 @@ For non-media files there is no such affordance.
 <!--
   View-one-FILE single-entity page (route /file?path=). Renders the File action catalog from
   menus.mdx §5.3 — never restates it. LOCKED elsewhere and only referenced here: the decision model
-  (one_repo.mdx §1), transfer pill (one_repo.mdx §4.6), badges (directory.mdx §3), and the two sticky
+  (one_repo.mdx §1), transfer pill (one_repo.mdx §4.6), badges (directories.mdx §3), and the two sticky
   flags Never IPFS / Do not compress (menus.mdx §6.6). Data contract = EntityView in @lfb/shared,
   served by GET /api/entity?path=. Siblings: directories.mdx (View one directory) and media_viewer.mdx
   (viewer-first /image + /video — a medium routes there, this page is the properties-first fallback and

@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Cell Navigation, Row "⋯" Menus & Entity "More" Menus
-description: The cross-cutting interaction spec that every table screen and every single-entity screen references instead of restating. Three linked conventions. (1) CELL NAVIGATION — clicking a cell in any TanStack table navigates to the most specific relevant screen for THAT cell (a count cell → the child list pre-filtered to that slice; a path cell → the File System browser at that path; a peers cell → Peers filtered to that entity), so the table is a set of deep links, not just whole-row navigation. (2) The ROW "⋯" KEBAB — the trailing, right-aligned per-row action menu present on every table; it drops down the actions for the ENTITY that row represents (repo, directory, file, or peer). (3) The ENTITY "MORE" (⋯) MENU — on a single-entity page (view one repo / view one file / view one directory), the SAME action set appears as a top-right "more" button, because the page IS one entity. Defines the per-entity action catalogs (repo / directory / file / peer) once — LOCKED — with their grouping, destructive-action separation, permission gates, and the charter guardrails (never compress/convert/ignore/delete without an explicit user click; local files are never deleted by an unsync/untrack). Cross-links repos.mdx, one_repo.mdx, directory.mdx, ipfs.mdx, repo_settings.mdx, settings.mdx, and the operation taxonomy in webapp.mdx §11.
+description: The cross-cutting interaction spec that every table screen and every single-entity screen references instead of restating. Three linked conventions. (1) CELL NAVIGATION — clicking a cell in any TanStack table navigates to the most specific relevant screen for THAT cell (a count cell → the child list pre-filtered to that slice; a path cell → the File System browser at that path; a peers cell → Peers filtered to that entity), so the table is a set of deep links, not just whole-row navigation. (2) The ROW "⋯" KEBAB — the trailing, right-aligned per-row action menu present on every table; it drops down the actions for the ENTITY that row represents (repo, directory, file, or peer). (3) The ENTITY "MORE" (⋯) MENU — on a single-entity page (view one repo / view one file / view one directory), the SAME action set appears as a top-right "more" button, because the page IS one entity. Defines the per-entity action catalogs (repo / directory / file / peer) once — LOCKED — with their grouping, destructive-action separation, permission gates, and the charter guardrails (never compress/convert/ignore/delete without an explicit user click; local files are never deleted by an unsync/untrack). Cross-links repos.mdx, one_repo.mdx, directories.mdx, ipfs.mdx, repo_settings.mdx, settings.mdx, and the operation taxonomy in webapp.mdx §11.
 ---
 
 # LargeFileBridge — Cell Navigation, Row "⋯" Menus & Entity "More" Menus
@@ -25,7 +25,7 @@ Siblings that reference this file (and must not redefine these conventions):
 
 * [Repos](./repos.mdx) — the repos table (repo rows).
 * [One repo](./one_repo.mdx) — a single repo page (its top-right `⋯`) whose files table has file rows.
-* [File System](./directory.mdx) — the column browser; its selected file/dir gets the entity menu.
+* [File System](./directories.mdx) — the column browser; its selected file/dir gets the entity menu.
 * [IPFS](./ipfs.mdx) — the pinned-content table (file/CID rows).
 * [Repo settings](./repo_settings.mdx) / [Settings](./settings.mdx) — where the "Settings…" items land.
 * [Web app](./webapp.mdx#11-what-shows-up-in-the-dock--the-lfbridge-operation-taxonomy) — every action
@@ -56,7 +56,7 @@ straight to the slice they care about instead of opening the parent and re-filte
 * **A count/metric cell** → the child list, **pre-filtered** to exactly that slice. (Clicking a repo's
   `Undecided 5` opens that repo's files table already filtered to the 5 undecided files.)
 * **A path/name cell** → the place that path lives: a **repo name** → that repo's page; a **file path**
-  → the [File System](./directory.mdx) browser revealing that file; a **directory path** → the browser
+  → the [File System](./directories.mdx) browser revealing that file; a **directory path** → the browser
   at that directory.
 * **A relationship cell** (Peers, pinned-by) → the related list **filtered to this entity**
   (`Peers 3` → [Peers](./left_bar.mdx) filtered to this repo/file).
@@ -98,7 +98,7 @@ existing header **`⋮` bulk menu** (which acts on the *selected set*, [one_repo
 
 ### 3.1 Right-click opens the same menu (LOCKED)
 
-Wherever a **file or directory entry** is rendered — a table row, a [File System](./directory.mdx)
+Wherever a **file or directory entry** is rendered — a table row, a [File System](./directories.mdx)
 column-browser row, a tile — **right-clicking (context menu) opens the exact same entity action
 catalog** (§5) as that entity's `⋯` kebab. The kebab is the discoverable, always-visible affordance;
 the right-click is the power-user shortcut. They are two triggers for **one** menu component fed by
@@ -116,7 +116,7 @@ the right-click is the power-user shortcut. They are two triggers for **one** me
 
 A page that shows **one** entity — the [One repo](./one_repo.mdx) page, the **View one file** page
 ([files.mdx](./files.mdx)), the **View one directory** page ([directories.mdx](./directories.mdx)), or
-a selected entry in the [File System](./directory.mdx) browser — carries a **top-right `⋯` "more"
+a selected entry in the [File System](./directories.mdx) browser — carries a **top-right `⋯` "more"
 button**. Opening it shows the **same catalog** as that entity's row kebab — because the page *is* that
 entity.
 
@@ -159,7 +159,7 @@ Four entities, four catalogs. Each is used verbatim by that entity's **row kebab
 | Group | Action | Kind | Notes |
 | --- | --- | --- | --- |
 | Open | **Open repo** | navigate | → [`/repos/$repoId`](./one_repo.mdx). (Omitted on the repo page itself.) |
-| Open | **Open in File System** | navigate | → [File System](./directory.mdx) at the repo's path. |
+| Open | **Open in File System** | navigate | → [File System](./directories.mdx) at the repo's path. |
 | Open | **View pinned on IPFS** | navigate | → [IPFS](./ipfs.mdx) filtered to this repo. |
 | Work | **Rescan** | mutate | Runs the discovery scan for this repo now (`scan` op, [webapp.mdx §11](./webapp.mdx#11-what-shows-up-in-the-dock--the-lfbridge-operation-taxonomy)). |
 | Work | **Sync now** | mutate | Push/fetch this repo's `Sync` files (`sync` op). Never changes a decision. |
@@ -174,7 +174,7 @@ Four entities, four catalogs. Each is used verbatim by that entity's **row kebab
 | Group | Action | Kind | Notes |
 | --- | --- | --- | --- |
 | Open | **View directory** | navigate | → the **View one directory** page ([directories.mdx](./directories.mdx)). (Omitted on that page itself.) |
-| Open | **Open in File System** | navigate | Drill into this directory in the [browser](./directory.mdx). |
+| Open | **Open in File System** | navigate | Drill into this directory in the [browser](./directories.mdx). |
 | Open | **View pinned on IPFS** | navigate | → [IPFS](./ipfs.mdx) filtered to files under this directory. |
 | Work | **Rescan** | mutate | Discovery scan of this directory now (`scan` op). |
 | Work | **Track / Sync this directory** | mutate | Add it to the computer sync unit ([storage §8](./storage.mdx#8-synccomputer--the-whole-computer-sync-unit)); the files inside become triage-able. |
@@ -189,7 +189,7 @@ Four entities, four catalogs. Each is used verbatim by that entity's **row kebab
 | Group | Action | Kind | Notes |
 | --- | --- | --- | --- |
 | Open | **View file** | navigate | → the **View one file** page ([files.mdx](./files.mdx)). (Omitted on that page itself.) |
-| Open | **Open containing folder** | navigate | → [File System](./directory.mdx) revealing this file. |
+| Open | **Open containing folder** | navigate | → [File System](./directories.mdx) revealing this file. |
 | IPFS | **Add to IPFS** | mutate | Sets the [decision](./one_repo.mdx#1-the-decision-model-locked) to `sync`: add to the manifest, pin, and transfer to peers. Hidden when **Never IPFS** is on (§6.6). Shown when the file is not already a Sync file. |
 | IPFS | **Remove from IPFS** | mutate ⚠ | Sets the decision to `ignore`: remove from the manifest and unpin **on this machine**. **Never deletes the local bytes** (§6.2). Shown when the file is currently a Sync file. |
 | Decision | **Set decision ▸ Sync / Ignore / Undecided** | mutate | The full three-state submenu ([decision model](./one_repo.mdx#1-the-decision-model-locked)); "Add to IPFS" / "Remove from IPFS" above are the two one-click shortcuts. Changing it **never deletes** the local file. |

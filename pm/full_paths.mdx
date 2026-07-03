@@ -1,15 +1,15 @@
 ---
 title: LargeFileBridge — Full Paths (flat large-file table under File System)
-description: A second TAB under the File System area (route /fs/paths, tab "Full paths" beside the column-view tab). Where the File System column browser (directory.mdx) walks ONE directory level per column and shows only names, this tab shows a FLAT, recursive TanStack table of the large files under a chosen root — one row per file — with two lead columns the browser can't give you at a glance: the file NAME and its full absolute PATH. Each row has a checkbox. Above the table sits a control row built from three SEGMENTED CONTROLS (a.k.a. segmented buttons) plus the house search box and sort/filter icons: (1) a compressed filter Both · Compressed · Uncompressed (default Both), (2) a sort segmented control Size · Name · Path each with an up/down direction arrow (default Size, biggest on top), and (3) an IPFS-membership filter In IPFS · Not · Both (default Both). Action buttons — Select all, IPFS pin, Unpin — act on the checked rows. The workflow: sort by size (biggest first), flip the IPFS filter to Not to reveal the big files that aren't pinned yet, check the ones worth backing up, and click IPFS pin. It reuses the directory.mdx code badges, the one_repo.mdx sync/pin decision model, and the ipfs.mdx pin semantics. Implemented by GET /api/fs/flat (a recursive, metadata-only, big-file walk) and the FullPathsPage frontend.
+description: A second TAB under the File System area (route /fs/paths, tab "Full paths" beside the column-view tab). Where the File System column browser (directories.mdx) walks ONE directory level per column and shows only names, this tab shows a FLAT, recursive TanStack table of the large files under a chosen root — one row per file — with two lead columns the browser can't give you at a glance: the file NAME and its full absolute PATH. Each row has a checkbox. Above the table sits a control row built from three SEGMENTED CONTROLS (a.k.a. segmented buttons) plus the house search box and sort/filter icons: (1) a compressed filter Both · Compressed · Uncompressed (default Both), (2) a sort segmented control Size · Name · Path each with an up/down direction arrow (default Size, biggest on top), and (3) an IPFS-membership filter In IPFS · Not · Both (default Both). Action buttons — Select all, IPFS pin, Unpin — act on the checked rows. The workflow: sort by size (biggest first), flip the IPFS filter to Not to reveal the big files that aren't pinned yet, check the ones worth backing up, and click IPFS pin. It reuses the directories.mdx code badges, the one_repo.mdx sync/pin decision model, and the ipfs.mdx pin semantics. Implemented by GET /api/fs/flat (a recursive, metadata-only, big-file walk) and the FullPathsPage frontend.
 ---
 
 # LargeFileBridge — Full Paths
 
-The **Full paths** tab is the **flat, whole-tree** companion to the [File System](./directory.mdx)
+The **Full paths** tab is the **flat, whole-tree** companion to the [File System](./directories.mdx)
 column browser. Both live under the **File System** left-bar item ([left_bar.mdx](./left_bar.mdx));
 a small **tab strip** at the top of the File System area switches between them:
 
-* **Column view** (`/fs`) — the Finder/Miller column browser ([directory.mdx](./directory.mdx)):
+* **Column view** (`/fs`) — the Finder/Miller column browser ([directories.mdx](./directories.mdx)):
   one directory level per column, names only, drill down to the right.
 * **Full paths** (`/fs/paths`) — *this page*: a single **TanStack table** of the **large files
   under a chosen root, recursively**, one row per file, whose two lead columns are the **file name**
@@ -23,7 +23,7 @@ and pin them in one click.
 
 Siblings this spec builds on and does **not** repeat:
 
-* [Directory / File System](./directory.mdx) — the **code badges** (R/r · S · C/c · i, §3) painted on
+* [Directory / File System](./directories.mdx) — the **code badges** (R/r · S · C/c · i, §3) painted on
   every row here, and the recursive, **no-shell**, metadata-only walk discipline (§2/§AC9).
 * [One repo](./one_repo.mdx) — the **decision model** Sync / Ignore / Undecided (§1) that **IPFS pin /
   Unpin** drive, and the standard **control row** + **pagination default 500** conventions.
@@ -46,9 +46,9 @@ workflow. So the rows are exactly the files the rest of LFB already cares about:
 * **A row is a file at or above the big-file threshold** ([settings.mdx §1](./settings.mdx)) found
   anywhere below the chosen root, at **any depth**.
 * The walk is **recursive, metadata-only, Node `fs` only** — never the `find`/`du` shell
-  ([directory.mdx §2](./directory.mdx), charter + macOS-indexing rule). It stats sizes; it opens no
-  file bytes (the only capped content peek is the badge module's IPFS-list detection, [directory.mdx
-  §3.4](./directory.mdx)).
+  ([directories.mdx §2](./directories.mdx), charter + macOS-indexing rule). It stats sizes; it opens no
+  file bytes (the only capped content peek is the badge module's IPFS-list detection, [directories.mdx
+  §3.4](./directories.mdx)).
 * It honors the same **hard-skip set** (`.git`, `node_modules`, `.Trash`, `.cache`, `Caches`) and
   hides dotfiles by default ([scan.mdx §4](./scan.mdx)); symlinks are not followed.
 * The walk is **bounded** (a file cap and an iteration budget). If the cap is hit, the page shows a
@@ -57,7 +57,7 @@ workflow. So the rows are exactly the files the rest of LFB already cares about:
 
 Directories are **never** rows here (this is a file table; the column browser is where directories
 live). The chosen **root** defaults to the OS **home directory**, with a **Home** button and an
-absolute-path input to re-root (and a `?path=` deep link, same as [directory.mdx §1](./directory.mdx)).
+absolute-path input to re-root (and a `?path=` deep link, same as [directories.mdx §1](./directories.mdx)).
 
 ---
 
@@ -100,7 +100,7 @@ are **three**, plus the house search box and the house sort/filter icons, plus a
 ### 3.1 Compressed filter — `Both · Compressed · Uncompressed` (default **Both**)
 
 Three segments; default **Both**. It filters the rows below by their compression state (derived from
-the **C/c** badge, [directory.mdx §3.3](./directory.mdx)):
+the **C/c** badge, [directories.mdx §3.3](./directories.mdx)):
 
 | Segment | Shows |
 | --- | --- |
@@ -127,7 +127,7 @@ updates the other. Only one column sorts at a time.
 
 Three segments; **In IPFS** left, **Not** middle, **Both** right; default **Both**. "In IPFS" means the
 file is **pinned / synced** — its decision is **sync** and it carries the pink **`S`** badge
-([directory.mdx §3.2](./directory.mdx), [one_repo.mdx §1](./one_repo.mdx)):
+([directories.mdx §3.2](./directories.mdx), [one_repo.mdx §1](./one_repo.mdx)):
 
 | Segment | Shows |
 | --- | --- |
@@ -181,7 +181,7 @@ everywhere ([repos.mdx §3](./repos.mdx)).
 | 2 | **Path** | text | ✓ | The **full absolute path** — the widest column, middle-truncated with the full path on hover/`title`. Clicking opens **View one file**. |
 | 3 | **Size** | bytes | ✓ | Human-readable (`8.2 GB`), right-aligned; sorts on raw bytes. The default sort (▼). |
 | 4 | **Changed** | timestamp | ✓ | `modifiedAt`, relative with an absolute tooltip. |
-| — | **badges** | — | — | The right-aligned **code badges** ([directory.mdx §3](./directory.mdx)) — here mostly **C/c** (compress) and **S** (sync/IPFS), plus **r** inside a repo and **i** for list artifacts. |
+| — | **badges** | — | — | The right-aligned **code badges** ([directories.mdx §3](./directories.mdx)) — here mostly **C/c** (compress) and **S** (sync/IPFS), plus **r** inside a repo and **i** for list artifacts. |
 | — | **`⋯`** | — | — | The row **kebab** — the **file** action catalog ([menus.mdx §5.3](./menus.mdx)); right-click on the row opens the same menu ([menus.mdx §3.1](./menus.mdx)). Never navigates. |
 
 Pagination **defaults to 500** ([repos.mdx §3.3](./repos.mdx)); the **file count** shows left of the
@@ -205,12 +205,12 @@ interface FlatFileListing {
   root: string;          // absolute directory the walk was rooted at (server-normalized)
   home: string;          // the OS home dir (the default root)
   thresholdBytes: number;// the big-file threshold that scoped this list (settings.mdx §1)
-  files: FsEntry[];      // FILES only, gathered recursively; each carries badges (directory.mdx §5)
+  files: FsEntry[];      // FILES only, gathered recursively; each carries badges (directories.mdx §5)
   truncated: boolean;    // true if the file-cap / iteration budget was hit (show the "narrow root" note)
 }
 ```
 
-`files[]` are the **same `FsEntry`** the column browser returns ([directory.mdx §5](./directory.mdx))
+`files[]` are the **same `FsEntry`** the column browser returns ([directories.mdx §5](./directories.mdx))
 — `name`, absolute `path`, `sizeBytes`, `modifiedAt`, and the ordered `badges[]`. The frontend derives
 the two segmented filters from the badges: **compressed** = badge `compressed`, **uncompressed** =
 badge `compress`; **in IPFS** = badge `sync`. No new per-row shape is needed — Full paths is a
@@ -235,7 +235,7 @@ different *view* of the same file knowledge, not new knowledge.
 ## 7. Acceptance criteria
 
 1. A **tab strip** at the top of the File System area offers **Column view** (`/fs`,
-   [directory.mdx](./directory.mdx)) and **Full paths** (`/fs/paths`); both keep the **File System**
+   [directories.mdx](./directories.mdx)) and **Full paths** (`/fs/paths`); both keep the **File System**
    left-bar item active.
 2. **Full paths** is **one TanStack table** (house flat/chromeless) whose rows are the **large files
    under a chosen root, gathered recursively** — file **Name** and full absolute **Path** as the two
@@ -270,15 +270,15 @@ different *view* of the same file knowledge, not new knowledge.
   Full paths = a SECOND TAB under File System (route /fs/paths), a FLAT recursive TanStack table of the
   LARGE files (>= big-file threshold) under a chosen root — lead columns Name + full absolute Path,
   per-row checkbox, trailing ⋯ kebab. It is a different VIEW of the same FsEntry knowledge the column
-  browser (directory.mdx) returns — NOT new per-file data. Three SEGMENTED CONTROLS: compressed
+  browser (directories.mdx) returns — NOT new per-file data. Three SEGMENTED CONTROLS: compressed
   (Both·Compressed·Uncompressed, default Both, driven by the C/c badge), sort (Size·Name·Path with
   up/down arrows, default Size ▼, shares state with the house sort icon), IPFS (In IPFS·Not·Both,
   default Both, driven by the S badge). Actions Select all / IPFS pin / Unpin reuse the one_repo.mdx
   decision model (sync/ignore) via the per-entity decision endpoint — so files outside a registered
   repo, or with Never IPFS on, are REPORTED as skipped, never silently dropped, and no bytes ever move.
   Backend: GET /api/fs/flat (recursive, metadata-only, Node fs, bounded, honors threshold + hard-skip).
-  Reuses badges (directory.mdx §3), control-row + pagination-500 (repos.mdx), pin semantics (ipfs.mdx),
-  the ⋯ file catalog + sticky flags (menus.mdx). Sibling tab: directory.mdx (column browser). When the
+  Reuses badges (directories.mdx §3), control-row + pagination-500 (repos.mdx), pin semantics (ipfs.mdx),
+  the ⋯ file catalog + sticky flags (menus.mdx). Sibling tab: directories.mdx (column browser). When the
   badge vocabulary or the decision model changes, it changes in those specs and this tab inherits it.
 -->
 </content>

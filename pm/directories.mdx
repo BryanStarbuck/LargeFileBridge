@@ -1,29 +1,321 @@
 ---
-title: LargeFileBridge — View one directory
-description: The single-entity page for ONE directory (route /dir?path=<abs>). Reached from any directory row's "View directory" action, from clicking a directory's name/path cell, or by selecting a directory in the File System browser. It shows what LargeFileBridge knows about that one directory — identity (name, absolute path, kind, repo membership), its code badges (repo / ipfs), a rollup of what's inside (counts of videos-that-can-compress, images-that-can-compress, big-not-ignored files, and big-git-ignored-not-tracked files — the charter's category rollup table), and its two sticky flags (Never IPFS, Do not compress) which apply to everything underneath it. Because the page IS one directory, it carries the top-right "⋯" MORE menu rendering the exact same Directory action catalog as that directory's row kebab (menus.mdx §5.2) — plus the two sticky flags as labeled switches and a primary "Open in File System" button. This spec defines the layout, the data payload (EntityView + DirRollup), the category rollup table, the flag switches, and the acceptance criteria. Implemented by the /api/entity backend module and the ViewOneDirectoryPage frontend. NOTE: this is the per-directory ENTITY page — distinct from directory.mdx, which is the multi-level File System column BROWSER.
+title: LargeFileBridge — Directories (File System column browser + View one directory)
+description: The combined directory spec, covering BOTH directory surfaces of LargeFileBridge. PART A — The File System (route /files, a.k.a. /fs): a Mac-Finder-column-view (Miller-column) browser that lets the user walk their whole filesystem, one directory level per column, opening a new column to the right each time a directory is clicked. It defaults to the user's HOME directory and works on Mac, Windows, and Linux. Every file and directory row carries, on its far right, a stack of single-letter CODE BADGES — white letter on a solid colored square — that surface what LargeFileBridge knows about it: R/r (repo, brown — uppercase R at a repo root, lowercase r for an ancestor of a repo or any descendant inside a repo), S (sync, bright pink — a file we track and sync), C/c (compress, yellow — bright-yellow C = should be compressed, light-yellow c = already compressed), and i (ipfs, blue — an IPFS list/share artifact, an IPFS-list markdown file, or a directory that publishes such artifacts underneath it). Badges are right-aligned and stack leftward; a row may show zero, one, or several. PART B — View one directory (route /dir?path=<abs>): the single-entity page for ONE directory, reached from any directory row's "View directory" action, from clicking a directory's name/path cell, or by selecting a directory in the File System browser. It shows what LargeFileBridge knows about that one directory — identity (name, absolute path, kind, repo membership), its code badges, a rollup of what's inside (counts of videos-that-can-compress, images-that-can-compress, big-not-ignored files, and big-git-ignored-not-tracked files — the charter's category rollup table), and its two sticky flags (Never IPFS, Do not compress) which apply to everything underneath it; it carries the top-right "⋯" MORE menu rendering the exact same Directory action catalog as that directory's row kebab (menus.mdx §5.2). Part A is implemented by the /api/fs backend module and the FileSystemPage frontend (code_plan.mdx §14) and adds the "File System" nav item to left_bar.yaml; Part B is implemented by the /api/entity backend module and the ViewOneDirectoryPage frontend.
 ---
 
-# LargeFileBridge — View one directory
+# LargeFileBridge — Directories
 
-The **View one directory** page is the single-entity page for **one** directory. Do not confuse it with
-[directory.mdx](./directory.mdx) — that is the **File System column browser** (walk the whole tree,
-many directories at once). *This* page is one directory as an **entity**: everything LFB knows about it
-and every action you can take on it, reached at `/dir?path=<abs>` from a **View directory** action, a
-directory-name cell click, or a browser selection. The page *is* that directory, so it carries the
-entity **`⋯` "more" menu** ([menus.mdx §4](./menus.mdx)).
+This spec covers **both** directory-viewing surfaces of LargeFileBridge (LFB), which share a data
+model, the code-badge vocabulary, and the same entity action menus:
+
+* **Part A — The File System** (§1–§6): the **column browser** (route `/files`, a.k.a. `/fs`) that
+  walks the *whole filesystem*, many directories at once, and paints the **code badges** on every row.
+* **Part B — View one directory** (§7–§12): the **single-entity page** (route `/dir?path=<abs>`) for
+  **one** directory — its identity, its category rollup, and its two sticky flags.
+
+They are two views of the same subject: the browser is where you find directories; the entity page is
+where you inspect and act on **one**. The badge vocabulary defined in **§3** is the shared source both
+this file and every sibling spec reference.
+
+Siblings this builds on: [Left bar](./left_bar.mdx) (where the **File System** item lives) ·
+[Repos](./repos.mdx) / [One repo](./one_repo.mdx) (the managed-repo views) ·
+[Menus](./menus.mdx) (the LOCKED entity action catalogs) ·
+[Files](./files.mdx) (the sibling **View one file** page) ·
+[scan.mdx](./scan.mdx) (the big-file threshold that drives the C badge's "big" cutoff) ·
+[ipfs_share_files.mdx](./ipfs_share_files.mdx) (the artifacts the **i** badge recognizes) ·
+[settings.mdx](./settings.mdx) (the global big-file threshold) ·
+[code_plan.mdx §14](./code_plan.mdx) (the engineering implementation).
+
+---
+
+# PART A — The File System (column browser + code badges)
+
+The **File System** page is the direct, hands-on way to see what LargeFileBridge knows about
+**every** file and directory on this computer — not just the repos it already manages. You reach it
+from the **File System** item in the [left bar](./left_bar.mdx). It is modeled on the **Mac Finder
+column view** (a *Miller-column* browser): a row of narrow columns, each showing the contents of one
+directory level, where clicking a directory in one column **opens the next column to its right**.
+
+The point of this page is the **code badges**: a small, dense visual language of single letters that
+tells you, at a glance and at any depth, which directories are repos, which files we sync, which files
+should be compressed, and which files/directories are part of an IPFS share. It complements the
+higher-level [Repos](./repos.mdx) table (which only lists *registered git repos*) by letting you see
+the **raw filesystem** with the same knowledge painted on top.
+
+---
+
+## 1. The column browser (Finder column view)
+
+The page is a horizontally scrolling strip of **columns**. Each column lists the entries — files and
+directories — at **one** level of the directory hierarchy.
+
+* **Root column.** On first open, the leftmost column shows the contents of the user's **home
+  directory** (`$HOME` on Mac/Linux, `%USERPROFILE%` on Windows). The current root path is shown above
+  the strip as a breadcrumb, with a control to jump to home or type/paste an absolute path.
+* **Drill down.** Clicking a **directory** row highlights it and opens a **new column immediately to
+  its right** showing that directory's contents. Clicking a directory in an earlier column **replaces**
+  every column to its right with a single new one (exactly like Finder).
+* **Columns are narrow.** Each column is a fixed, comfortably narrow width (≈ 280px), tall, and
+  scrolls vertically on its own. The strip scrolls horizontally and, on drill-down, auto-scrolls so
+  the newest column is visible.
+* **Selecting a file.** Clicking a **file** row selects it (for future preview/detail) but opens no
+  new column — files are leaves.
+* **Sorting within a column.** Directories first, then files, each alphabetical (locale-aware,
+  case-insensitive) by default. (This page is a *browser*, not one of the product's TanStack tables —
+  the [Tables](../CLAUDE.md) rules do not apply here; the rollup counts still live in the table views.)
+* **Hidden entries.** Dotfiles/dot-directories are **hidden by default**, with a toggle to show them.
+  A small set of noise directories (`.git`, `node_modules`, `.Trash`, `.cache`, OS caches) is always
+  collapsed to a single non-expanding row so the walk never drowns in build junk — matching the
+  scanner's hard-skip set ([scan.mdx §4](./scan.mdx)).
+
+Each row shows, left to right: an (optional) folder/file glyph, the **entry name** (middle-truncated
+if long), a flexible spacer, and then the **code badges** pinned to the **far right** (§3).
+
+### 1.1 Row actions — the entity menu (right-click + `⋯`)
+
+Even though this page is a *browser*, not a TanStack table, its file/dir rows carry the same **entity
+action menu** as everywhere else ([menus.mdx](./menus.mdx)):
+
+* **Right-clicking** a row opens the **file** or **directory** action catalog
+  ([menus.mdx §3.1 / §5.2 / §5.3](./menus.mdx#31-right-click-opens-the-same-menu-locked)) — Open /
+  Track-Sync / Rescan / Compress… / Convert… / Git-ignore… / View on IPFS / Copy path, with
+  compress/convert/ignore as **explicit-click confirm offers** and no action ever deleting local bytes.
+* Hovering a row reveals a small trailing **`⋯`** affordance that opens the same menu (the
+  discoverable companion to right-click).
+* Opening the dedicated **View one file** ([files.mdx](./files.mdx)) or **View one directory**
+  (Part B, §7) page gives that entity's menu as the top-right `⋯`
+  ([menus.mdx §4](./menus.mdx#4-the-entity--more-menu--single-entity-pages)).
+
+---
+
+## 2. Cross-platform
+
+The browser must work on **Mac, Windows, and Linux** — it is the same one page everywhere.
+
+* The **root** is the OS home directory; the **path separator** and **drive/volume roots** are
+  normalized by the backend (`/` on POSIX, drive letters on Windows). Paths cross the API as absolute,
+  server-normalized strings.
+* Repo detection, symlink handling, and the hard-skip set are identical across platforms; only path
+  normalization branches per OS (same discipline as [scan.mdx §3](./scan.mdx)).
+* No shell, ever — the backend lists directories with Node `fs` (charter + macOS-indexing rule: never
+  the `find` CLI).
+
+---
+
+## 3. Code badges (the visual language) — LOCKED
+
+Every row can carry a stack of **code badges** on its far right. A badge is a **single letter in white
+text on a solid colored square** (a small rounded chip). The **letter** names the category, the
+**color** encodes the category, and the **case** (upper vs. lower) encodes a state within it.
+
+There are four categories: **R** (repo), **S** (sync), **C** (compress), **i** (ipfs).
+
+| Badge | Category | Applies to | Color | Meaning |
+| --- | --- | --- | --- | --- |
+| **R** | Repo root | directory | **dark brown** | This directory **is a git repo** (its own `.git` working tree). Uppercase = it is the repo **root**. |
+| **r** | Repo ancestor | directory | **medium-light brown** | This directory is **not** a repo itself but **contains a repo** somewhere below it (a parent/ancestor of a repo). Lowercase = not a root. |
+| **r** | Repo descendant | file **or** directory | **medium brown** | This entry lives **inside** a repo (any recursive child of a repo working tree). Lowercase = not a root. |
+| **S** | Sync | file | **bright pink** | We **sync and track** this file — its decision is *sync* ([one_repo.mdx §1](./one_repo.mdx)). |
+| **C** | Compress (should) | file | **bright yellow** | This file **should be compressed** — a video (primary) or image (secondary) that looks **uncompressed**. |
+| **c** | Compressed (done) | file | **light yellow** | We have **already successfully compressed** this file. Lowercase = the finished state. |
+| **i** | IPFS | file **or** directory | **blue** | An **IPFS list / share artifact** (or a markdown list of IPFS files); on a directory, it **publishes** such artifacts underneath it. |
+
+### 3.1 The repo badge (R / r) — brown, three shades
+
+Repos are about **directories** (only a directory can *be* a repo), but the descendant "r" is painted
+on **both files and directories** so you can tell, anywhere in a tree, that you are inside a repo.
+
+Precedence for any entry, in order (a row shows **at most one** repo badge):
+
+1. **Repo root → `R`, dark brown.** The directory has its own `.git` (it is a git working tree root).
+   This is the strongest signal — uppercase because it is the **root**.
+2. **Repo descendant → `r`, medium brown.** The entry (file or directory) sits **inside** a repo — some
+   ancestor directory is a git working tree. Lowercase because it is **not** the root.
+3. **Repo ancestor → `r`, medium-light brown.** A directory that is **not** in a repo and is **not** a
+   repo, but **contains** at least one repo below it (it is a parent of one or more repos). Lowercase,
+   and the **lightest** brown because it is the furthest from "being" a repo.
+
+So: **uppercase R only at the actual repo root; everything else that touches a repo is a lowercase r**,
+darker the deeper you are (root darkest → descendant mid → ancestor lightest). A plain directory with
+no repo above or below it gets **no** repo badge.
+
+> A repo does not have to be *registered/managed* by LFB to earn its badge — the browser detects
+> `.git` on disk directly, so unregistered repos still show **R**. (Registration is what puts a repo in
+> the [Repos](./repos.mdx) table and turns on syncing; the badge is purely "is this a repo on disk".)
+
+### 3.2 The sync badge (S) — bright pink, files only
+
+`S` marks a **file we sync and track**: its decision is **sync** in the owning unit's config
+([one_repo.mdx §1](./one_repo.mdx) — the `sync | ignore | undecided` decision model). "Sync it" means
+LFB will add it to the manifest, pin it, and keep it in step across the user's computers. A file that
+is only a *candidate* (big, but still `undecided`) does **not** get `S` — only a committed **sync**
+decision earns it. Directories never carry `S` (syncing is per-file).
+
+### 3.3 The compress badges (C / c) — yellow, files only
+
+Compression is a **core value** (charter): find large files that are uncompressed when they need not
+be, and — only when the user asks — offer to compress them. The badge surfaces the state:
+
+* **`C`, bright yellow — should be compressed.** A **video** (primary) or **image** (secondary) file
+  that appears **uncompressed** (a lossless/uncompressed container, or a large media file with no
+  compressed variant on record). This is an **offer**, never an action — LFB never compresses on its
+  own.
+* **`c`, light yellow — already compressed.** We have a recorded **compressed** variant for this file
+  (the compressed hash/size in the tracking YAML), or the format is already an efficiently-compressed
+  one. Lowercase = the finished, satisfied state.
+
+Only **video and image** files are ever eligible (charter's scope); everything else gets no compress
+badge. The uncompressed/compressed judgment is a **heuristic** in the first cut (extension/format +
+the big-file threshold), with a seam to the **learned size-baseline** model (duration × resolution →
+expected compressed/uncompressed size, charter "Detecting whether a file is compressed") that replaces
+the heuristic later. See [code_plan.mdx §13](./code_plan.mdx) (deferred/phased) — the badge is wired
+now; the baseline sharpens it later.
+
+### 3.4 The IPFS badge (i) — blue, files and directories
+
+`i` marks anything that is part of an **IPFS list / share** ([ipfs_share_files.mdx](./ipfs_share_files.mdx)):
+
+* On a **file**, `i` means it is an **IPFS list artifact** — a pin script (`IPFS.sh` / `ipfs.sh`), a
+  three-command list (`ipfs.txt`), a curl-pipe installer (`get_videos.sh`), an IPFS `manifest.yaml`
+  under a public dir — **or** a **markdown file that is a list of IPFS files** (a `.md` / `.mdx` that
+  references `ipfs pin add`, `/ipfs/<CID>`, or `ipfs_cid` entries).
+* On a **directory**, `i` means it is **doing special IPFS broadcast underneath it** — it contains (or
+  publishes via `static/`) one of those IPFS list artifacts or IPFS-list markdown files.
+
+This is the same knowledge [ipfs_share_files.mdx](./ipfs_share_files.mdx) tracks per repo; the badge
+just paints it onto the raw filesystem so a share site is visible while browsing. The badge is
+**detect-and-report only** — showing `i` never publishes, rewrites, or turns this machine into a public
+gateway (the only-our-content rule, [knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx), stands).
+
+### 3.5 Ordering & stacking (LOCKED)
+
+* Badges are **pinned to the far right** of the row. When a row has several, they **stack leftward**:
+  the newest/rightmost slot is filled first, and each additional badge is added **to its left**.
+* The **fixed right-to-left order** (rightmost first) is: **R/r · S · C/c · i**. So a repo-root
+  directory that also publishes IPFS shows, right to left, `R` then `i` (i.e. `i R` reading
+  left-to-right). A synced, uncompressed, IPFS-listed file inside a repo shows, right to left,
+  `r · S · C · i` (rendered `i C S r`).
+* A row shows **at most one badge per category** (never both `C` and `c`, never two repo shades).
+* Zero badges is normal and common.
+* Each badge has a **hover tooltip** spelling out its meaning (e.g. "Repo root", "Sync — tracked",
+  "Should be compressed", "IPFS share artifact").
+
+---
+
+## 4. Color reference (LOCKED tokens)
+
+The badge palette lives as CSS variables so both this page and any future badge use share one source.
+White letter (`#ffffff`) on the solid fills below:
+
+| Token | Badge | Suggested hex | Notes |
+| --- | --- | --- | --- |
+| `--lfb-badge-repo-root` | `R` | `#5b3a1a` | dark brown — repo root |
+| `--lfb-badge-repo-descendant` | `r` (inside) | `#8a5a2b` | medium brown — inside a repo |
+| `--lfb-badge-repo-ancestor` | `r` (parent) | `#b8865b` | medium-light brown — contains a repo below |
+| `--lfb-badge-sync` | `S` | `#ff2d9b` | bright pink |
+| `--lfb-badge-compress` | `C` | `#f5c518` | bright yellow — should compress |
+| `--lfb-badge-compressed` | `c` | `#f3e6a6` | light yellow — already compressed (dark letter for contrast) |
+| `--lfb-badge-ipfs` | `i` | `#2f6fed` | blue (distinct from the app accent `--lfb-primary #2563eb`) |
+
+The light-yellow `c` is the one fill light enough that its letter uses a **dark** ink (`#3a3320`)
+rather than white, to stay legible — the only exception to "white letter".
+
+---
+
+## 5. Data model (what a row carries)
+
+The backend returns, per entry, a small typed record the frontend renders directly (types in
+`@lfb/shared`, endpoint `GET /api/fs`, [code_plan.mdx §14](./code_plan.mdx)):
+
+```ts
+type FsBadge =
+  | "repo_root"        // R  dark brown      (dir)
+  | "repo_descendant"  // r  medium brown    (file|dir, inside a repo)
+  | "repo_ancestor"    // r  light brown     (dir, contains a repo below)
+  | "sync"             // S  bright pink     (file, decision === "sync")
+  | "compress"         // C  bright yellow   (file, video/image, looks uncompressed)
+  | "compressed"       // c  light yellow    (file, video/image, already compressed)
+  | "ipfs";            // i  blue            (file|dir, IPFS list/share)
+
+interface FsEntry {
+  name: string;
+  path: string;          // absolute, server-normalized
+  kind: "dir" | "file" | "symlink" | "other";
+  sizeBytes: number | null;   // files only
+  modifiedAt: string | null;  // ISO
+  isRepoRoot: boolean;
+  badges: FsBadge[];     // ordered rightmost-first: R/r, S, C/c, i (§3.5)
+  hasChildren: boolean;  // dir has at least one visible child (drives the disclosure)
+}
+
+interface FsListing {
+  root: string;          // the absolute path this column lists
+  parent: string | null; // for "up" navigation
+  home: string;          // the OS home dir (default root)
+  entries: FsEntry[];
+}
+```
+
+The order of `badges[]` is authoritative — the frontend renders them in array order **right to left**,
+so the array is already sorted `[repo, sync, compress, ipfs]` per §3.5.
+
+---
+
+## 6. Acceptance criteria (File System browser)
+
+1. The **File System** left-bar item ([left_bar.yaml](./left_bar.yaml)) opens a page that shows a
+   **Finder-style column browser** rooted at the user's **home directory**, and works on **Mac,
+   Windows, and Linux**.
+2. Clicking a **directory** opens a **new column to its right** with that directory's contents;
+   clicking a directory in an earlier column **replaces** all columns to its right. Clicking a **file**
+   selects it and opens no column.
+3. Every row renders its **code badges** as **white-letter-on-solid-color** chips pinned to the **far
+   right**, stacking **leftward** in the fixed order **R/r · S · C/c · i** (§3.5), at most one badge per
+   category, zero badges allowed.
+4. **Repo badge:** a directory with its own `.git` shows **`R` (dark brown)**; any file/directory
+   inside a repo shows **`r` (medium brown)**; a directory that merely **contains** a repo below shows
+   **`r` (medium-light brown)**; a directory unrelated to any repo shows no repo badge. Unregistered
+   repos still get their badge.
+5. **Sync badge:** a file whose decision is **sync** shows **`S` (bright pink)**; undecided/ignored
+   files and all directories do not.
+6. **Compress badges:** a **video or image** file that looks **uncompressed** shows **`C` (bright
+   yellow)**; one with a recorded/known-compressed variant shows **`c` (light yellow)**; non-media
+   files show neither.
+7. **IPFS badge:** an IPFS list artifact (`IPFS.sh`/`ipfs.sh`/`ipfs.txt`/`get_videos.sh`/public
+   `manifest.yaml`) or an IPFS-list markdown file shows **`i` (blue)**; a directory that contains/
+   publishes such artifacts shows **`i`** too. Showing `i` performs **no** publishing action.
+8. Each badge has a **hover tooltip** naming it. Dotfiles are hidden by default with a toggle;
+   `.git`/`node_modules`/caches never expand.
+9. No shell (`find`/`du`) is used; the listing is Node `fs`, metadata-only for the walk.
+10. **Right-clicking** a file/dir row (and a hover **`⋯`** affordance) opens that entity's action menu
+    ([menus.mdx §3.1/§5](./menus.mdx#31-right-click-opens-the-same-menu-locked)); compress/convert/ignore
+    are explicit-click confirm offers and no action deletes local bytes. Opening
+    [View one file](./files.mdx) / **View one directory** (Part B, §7) gives the same catalog as a
+    top-right `⋯` more-menu.
+
+---
+
+# PART B — View one directory (single-entity page)
+
+The **View one directory** page is the single-entity page for **one** directory — the entity companion
+to the File System browser above. Where the browser (Part A) walks the whole tree many directories at
+once, *this* page is one directory as an **entity**: everything LFB knows about it and every action you
+can take on it, reached at `/dir?path=<abs>` from a **View directory** action, a directory-name cell
+click, or a browser selection. The page *is* that directory, so it carries the entity **`⋯` "more"
+menu** ([menus.mdx §4](./menus.mdx)).
 
 Siblings this builds on and does not repeat:
 
 * [Menus](./menus.mdx) — the LOCKED **Directory action catalog** (§5.2), the `⋯` more-menu (§4),
   right-click (§3.1), and the two sticky flags **Never IPFS** / **Do not compress** (§6.6).
-* [File System](./directory.mdx) — the **code badges** (§3) and the column browser this links into.
-* [Charter — Category rollup table](../CLAUDE.md) — the count+category rollup shown in §3 (videos to
+* **File System** (Part A above) — the **code badges** (§3) and the column browser this links into.
+* [Charter — Category rollup table](../CLAUDE.md) — the count+category rollup shown in §8 (videos to
   compress / images to compress / big-not-ignored / big-ignored-not-tracked), each with a per-row action.
 * [Files](./files.mdx) — the sibling **View one file** page (same shape, file catalog).
 
 ---
 
-## 1. Layout
+## 7. Layout
 
 One content column: a **header** (identity + primary button + `⋯`), a **badge/flag strip**, the
 **category rollup table**, and an **inside** summary.
@@ -46,14 +338,14 @@ One content column: a **header** (identity + primary button + `⋯`), a **badge/
 ```
 
 * **Header** — back affordance, directory **name** title, absolute **path** muted beneath.
-* **Primary button** — **Open in File System** (drill into it in the [browser](./directory.mdx)); the
-  rest of the [Directory catalog](./menus.mdx) is under `⋯`.
+* **Primary button** — **Open in File System** (drill into it in the browser, §1); the rest of the
+  [Directory catalog](./menus.mdx) is under `⋯`.
 * **`⋯` more menu** — the **Directory catalog** ([menus.mdx §5.2](./menus.mdx)) verbatim; **View
   directory** is omitted (you are on it).
 
 ---
 
-## 2. The category rollup table (charter) — TanStack, house style
+## 8. The category rollup table (charter) — TanStack, house style
 
 The heart of this page is the charter's **count + category** rollup for everything under this directory
 (a [TanStack `DataTable`](../CLAUDE.md) like all others — search/filter/sort control row, 500 default).
@@ -66,14 +358,14 @@ One row per category, each with a per-row action:
 | 3 | **Big files not git-ignored** | n | **Git-ignore…** (confirm list, never silent) |
 | 4 | **Big files git-ignored, not tracked** | n | **Track / Sync** (add to a sync unit; triage inside) |
 
-Clicking a **count** deep-links into the [File System](./directory.mdx) browser at this directory,
-pre-filtered to that category ([menus.mdx §2](./menus.mdx)). When **Do not compress** is on, rows 1–2
-still count but their **Compress…** action is hidden (the offer is suppressed); when **Never IPFS** is
-on, row 4's **Track / Sync** is hidden (nothing under here may be synced).
+Clicking a **count** deep-links into the File System browser (§1) at this directory, pre-filtered to
+that category ([menus.mdx §2](./menus.mdx)). When **Do not compress** is on, rows 1–2 still count but
+their **Compress…** action is hidden (the offer is suppressed); when **Never IPFS** is on, row 4's
+**Track / Sync** is hidden (nothing under here may be synced).
 
 ---
 
-## 3. The data payload (`EntityView` + `DirRollup`)
+## 9. The data payload (`EntityView` + `DirRollup`)
 
 Same `EntityView` as [files.mdx §2](./files.mdx) (with `kind: "dir"`), plus a directory rollup:
 
@@ -95,7 +387,7 @@ directory ([menus.mdx §6.6](./menus.mdx)).
 
 ---
 
-## 4. The two sticky-flag switches
+## 10. The two sticky-flag switches
 
 The badge/flag strip shows both flags as **labeled switches** (as on [files.mdx §4](./files.mdx)), but
 here they are **directory-scoped** — they cover current and future contents:
@@ -110,10 +402,10 @@ Neither flag deletes or alters any bytes ([menus.mdx §6.2/§6.6](./menus.mdx)).
 
 ---
 
-## 5. Empty & error states
+## 11. Empty & error states
 
 * **Directory not found / moved** (`exists: false`): a card — "This directory is no longer at that
-  path." with **Copy path** and a link to the [File System](./directory.mdx) at its parent.
+  path." with **Copy path** and a link to the File System browser (§1) at its parent.
 * **Nothing to act on:** all four rollup counts 0 → the table shows a friendly "Nothing here needs
   attention — no uncompressed media, no big un-ignored files."
 * **Loading:** skeleton header + table.
@@ -121,29 +413,38 @@ Neither flag deletes or alters any bytes ([menus.mdx §6.2/§6.6](./menus.mdx)).
 
 ---
 
-## 6. Acceptance criteria
+## 12. Acceptance criteria (View one directory)
 
 1. `/dir?path=<abs>` renders **one directory's** identity (name title, absolute path muted), its **code
-   badges** ([directory.mdx §3](./directory.mdx)), and the **category rollup table** (§2) with the four
-   charter categories, each showing a count and a per-row action.
+   badges** (§3), and the **category rollup table** (§8) with the four charter categories, each showing
+   a count and a per-row action.
 2. The page carries a **top-right `⋯` "more" menu** rendering the **Directory catalog**
    ([menus.mdx §5.2](./menus.mdx)) verbatim (same as the row kebab), with **Open in File System** as the
    visible primary; right-clicking the directory entity opens the same menu ([menus.mdx §3.1](./menus.mdx)).
 3. The rollup is a **TanStack `DataTable`** in the house style; clicking a **count** deep-links into the
-   [File System](./directory.mdx) browser at this directory filtered to that category ([menus.mdx §2](./menus.mdx)).
-4. Both **sticky flags** (**Never IPFS**, **Do not compress**) show as labeled switches (§4), are
+   File System browser (§1) at this directory filtered to that category ([menus.mdx §2](./menus.mdx)).
+4. Both **sticky flags** (**Never IPFS**, **Do not compress**) show as labeled switches (§10), are
    **directory-scoped**, write immediately, stay in sync with the menu toggles, and honor
    [menus.mdx §6.6](./menus.mdx) — Never IPFS hides row-4 **Track / Sync** and forbids sync below; Do not
    compress hides the **Compress…** offers; neither deletes or alters bytes.
-5. Not-found / nothing-to-do / node-unreachable / loading states render per §5.
-6. This page is the per-directory **entity** page and stays distinct from the [File System column
-   browser](./directory.mdx); the two never merge.
+5. Not-found / nothing-to-do / node-unreachable / loading states render per §11.
+6. The per-directory **entity** page (Part B) and the **File System column browser** (Part A) are two
+   views of the same subject in this one spec — the entity page inspects **one** directory; the browser
+   walks **many**. They share the badge vocabulary (§3) and the data model (§5/§9).
 
 <!--
-  View-one-DIRECTORY single-entity page (route /dir?path=). Renders the Directory action catalog from
-  menus.mdx §5.2 — never restates it. Distinct from directory.mdx (the File System column BROWSER):
-  keep the two apart. The category rollup table (§2) is the charter's count+category rollup and is a
-  TanStack table like all others. Data contract = EntityView (files.mdx §2) + DirRollup in @lfb/shared,
-  served by GET /api/entity?path=. Two sticky flags Never IPFS / Do not compress are DIRECTORY-SCOPED
-  (menus.mdx §6.6). Sibling: files.mdx (View one file).
+  Combined DIRECTORIES spec. PART A (§1–§6) = the File System column BROWSER (route /files, a.k.a. /fs)
+  + the LOCKED code-badge vocabulary. LOCKED: the badge vocabulary (R/r repo brown three-shades, S sync
+  bright pink, C/c compress yellow, i ipfs blue), the case rule (uppercase R only at a repo root;
+  everything else lowercase), and the fixed right-to-left badge order R/r · S · C/c · i. Implemented by
+  code_plan.mdx §14 (/api/fs + FileSystemPage) and surfaced by the "File System" item in left_bar.yaml.
+  PART B (§7–§12) = the View-one-DIRECTORY single-entity page (route /dir?path=). Renders the Directory
+  action catalog from menus.mdx §5.2 — never restates it. The category rollup table (§8) is the
+  charter's count+category rollup and is a TanStack table like all others. Data contract = EntityView
+  (files.mdx §2) + DirRollup in @lfb/shared, served by GET /api/entity?path=. Two sticky flags Never IPFS
+  / Do not compress are DIRECTORY-SCOPED (menus.mdx §6.6). Sibling: files.mdx (View one file). When
+  adding a new badge category, add a row to §3's table, a color token to §4, a FsBadge value to §5, and
+  a slot to the §3.5 order. (This file merges the former directory.mdx — the File System browser — into
+  directories.mdx as Part A; external "directory.mdx §N" references now resolve to "directories.mdx §N"
+  since §1–§6 numbering was preserved.)
 -->

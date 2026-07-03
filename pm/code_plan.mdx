@@ -18,7 +18,7 @@ Source specs this plan implements: [storage.mdx](./storage.mdx) · [scan.mdx](./
 [settings.mdx](./settings.mdx) · [repo_settings.mdx](./repo_settings.mdx) ·
 [sync_list.mdx](./sync_list.mdx) · [dropbox.mdx](./dropbox.mdx) ·
 [google_drive.mdx](./google_drive.mdx) · [repo__list_syns.mdx](./repo__list_syns.mdx) ·
-[repos.mdx](./repos.mdx) · [one_repo.mdx](./one_repo.mdx) · [directory.mdx](./directory.mdx) ·
+[repos.mdx](./repos.mdx) · [one_repo.mdx](./one_repo.mdx) · [directories.mdx](./directories.mdx) ·
 [left_bar.mdx](./left_bar.mdx) + [left_bar.yaml](./left_bar.yaml) ·
 [../knowledge/ipfs.mdx](../knowledge/ipfs.mdx).
 
@@ -170,7 +170,7 @@ packages/backend/src/
 │   │   ├── repos.service.ts     #   compose RepoRow[] from units + status; add-repo validation (git working tree)
 │   │   └── files.service.ts     #   FileRow[] + decision writes (sync/ignore/undecided) + bulk
 │   │
-│   ├── fs/                      # directory.mdx — the File System column browser (Finder column view)
+│   ├── fs/                      # directories.mdx — the File System column browser (Finder column view)
 │   │   ├── fs.router.ts         #   GET /fs?path=… (one directory level) · GET /fs/home (default root)
 │   │   ├── fs.service.ts        #   readdir one level (Node fs, no shell), normalize, sort, per-entry badges
 │   │   └── badges.ts            #   compute FsBadge[]: repo (R/r brown), sync (S pink), compress (C/c yellow), ipfs (i blue)
@@ -312,12 +312,12 @@ packages/frontend/src/
 │   ├── repos/ReposPage.tsx      # route "/" — DataTable of RepoRow (repos.mdx)
 │   ├── repos/OneRepoPage.tsx    # route "/repos/$repoId" — status strip + files DataTable (one_repo.mdx)
 │   ├── repos/RepoSettingsPage.tsx # route "/repos/$repoId/settings" — gear icon target (repo_settings.mdx)
-│   ├── fs/FileSystemPage.tsx    # route "/files" — Finder-style column browser + code badges (directory.mdx)
+│   ├── fs/FileSystemPage.tsx    # route "/files" — Finder-style column browser + code badges (directories.mdx)
 │   ├── peers/PeersPage.tsx      # route "/peers"
 │   ├── sync/SyncPage.tsx        # route "/sync" — both workers' installed/on-off + activity (scan.mdx §7, storage.mdx §13)
 │   └── settings/SettingsPage.tsx + AllowListPage.tsx  # route "/settings" (settings.mdx)
 ├── components/
-│   ├── fs/{ColumnBrowser,FsColumn,FsRow,Badges}.tsx  # Miller-column browser + the code-badge chips (directory.mdx §3)
+│   ├── fs/{ColumnBrowser,FsColumn,FsRow,Badges}.tsx  # Miller-column browser + the code-badge chips (directories.mdx §3)
 │   ├── layout/{Sidebar,AccountMenu,NavIcon}.tsx   # NavIcon resolves lucide by name; unknown → no icon
 │   └── table/                   # THE house DataTable, TanStack-backed (charter)
 │       ├── DataTable.tsx        #   useReactTable; flat/chromeless; pagination default 500 (options 500/1000/All)
@@ -353,8 +353,8 @@ All under `/api`, all typed by `@lfb/shared`. (`/api/v1/*` is the auth middlewar
 | `GET/PATCH /repos/:repoId/settings` | per-repo settings | repo_settings.mdx |
 | `GET/PATCH /settings` | global config: `big_file`, scanner roots, IPFS node | settings.mdx |
 | `GET/PATCH /settings/allow-list` | allow-listed emails (`role:admin`) | settings.mdx §4 |
-| `GET /fs?path=…` | one directory level for the column browser: `FsEntry[]` with code badges | directory.mdx §1,§3,§5 |
-| `GET /fs/home` | the default root (OS home dir) the browser opens on | directory.mdx §1 |
+| `GET /fs?path=…` | one directory level for the column browser: `FsEntry[]` with code badges | directories.mdx §1,§3,§5 |
+| `GET /fs/home` | the default root (OS home dir) the browser opens on | directories.mdx §1 |
 | `GET /peers` | the user's other computers | storage.mdx §11 |
 | `GET /sync` | both workers' installed/enabled + last-run + activity | scan.mdx §7, storage.mdx §13 |
 | `POST /sync/:worker/{install,uninstall,enable,disable}` | control a worker (`worker` ∈ scan\|sync) | storage.mdx §13 |
@@ -376,7 +376,7 @@ All under `/api`, all typed by `@lfb/shared`. (`/api/v1/*` is the auth middlewar
 | sync_list.mdx (LargeFilesBridge_SyncList.yaml, reconcile/trust) | `sync/synclist.service.ts`, `@lfb/shared/schemas.ts` |
 | dropbox/google_drive/repo__list_syns.mdx (backbones) | `sync/synclist.service.ts` backbone adapters (git first; Dropbox/Drive = file-copy path) |
 | repos.mdx / one_repo.mdx (tables, decisions, status pills) | `repos/*`, `ReposPage.tsx`, `OneRepoPage.tsx`, `components/table/*` |
-| directory.mdx (File System column browser + code badges) | `modules/fs/*`, `pages/fs/FileSystemPage.tsx`, `components/fs/*`, `@lfb/shared` FsEntry/FsBadge |
+| directories.mdx (File System column browser + code badges) | `modules/fs/*`, `pages/fs/FileSystemPage.tsx`, `components/fs/*`, `@lfb/shared` FsEntry/FsBadge |
 | left_bar.mdx + left_bar.yaml (nav) | `config/left_bar.ts`, `components/layout/Sidebar.tsx` |
 | knowledge/ipfs.mdx (only-our-content) | `ipfs/ipfs.service.ts` |
 | OpenAuthFederated (charter auth) | `modules/auth/*`, `main.tsx`, `api/AuthBridge.tsx` |
@@ -425,9 +425,9 @@ enabled"), so turning it on is additive, never a rewrite.
 
 ---
 
-## 14. The File System column browser (implements directory.mdx)
+## 14. The File System column browser (implements directories.mdx)
 
-The **File System** page ([directory.mdx](./directory.mdx)) is a **Finder column-view (Miller-column)
+The **File System** page ([directories.mdx](./directories.mdx)) is a **Finder column-view (Miller-column)
 browser** over the raw filesystem, with a per-entry **code-badge** overlay. It is deliberately **not**
 a TanStack table (it is a navigator, not a rollup) — the charter's table rules do not apply here.
 
@@ -446,7 +446,7 @@ column by column):
   hide dotfiles by default, collapse the hard-skip set (`.git`, `node_modules`, `.Trash`, caches — the
   same set as [scan.mdx §4](./scan.mdx)), sort **directories-first then alphabetical**, and attach
   `badges` from `badges.ts`.
-* **`badges.ts`** — the badge computation (directory.mdx §3), all metadata-cheap:
+* **`badges.ts`** — the badge computation (directories.mdx §3), all metadata-cheap:
   * **Repo (R/r, brown).** `isRepoRoot = isGitWorkingTree(dir)` (a `.git` child — reused from
     `units.service.ts`); **descendant** = the listed directory is itself inside a repo (walk up once
     from the column's path, cached per request); **ancestor** = a directory that contains a repo below
@@ -468,11 +468,11 @@ column by column):
     ([knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx)).
 
   Badges are returned **ordered rightmost-first** — `[repo?, sync?, compress?, ipfs?]` — so the
-  frontend renders array order right-to-left (directory.mdx §3.5).
+  frontend renders array order right-to-left (directories.mdx §3.5).
 
 ### 14.2 Shared types (`@lfb/shared`)
 
-`FsBadge` (the seven-value union), `FsEntry`, and `FsListing` from directory.mdx §5 live in
+`FsBadge` (the seven-value union), `FsEntry`, and `FsListing` from directories.mdx §5 live in
 `packages/shared/src/types.ts`, so backend and frontend agree on the contract.
 
 ### 14.3 Frontend — `pages/fs/FileSystemPage.tsx` + `components/fs/*`
@@ -485,7 +485,7 @@ column by column):
   strip scrolls horizontally and auto-scrolls to the newest column.
 * **`FsRow`** shows glyph + middle-truncated name + spacer + **`Badges`**.
 * **`Badges`** renders each `FsBadge` as a **white-letter-on-solid-color** chip, right-pinned, in array
-  order; colors come from the `--lfb-badge-*` CSS tokens (directory.mdx §4); each chip has a `title`
+  order; colors come from the `--lfb-badge-*` CSS tokens (directories.mdx §4); each chip has a `title`
   tooltip. The light-yellow `c` uses dark ink for contrast (the one exception to white letters).
 * A breadcrumb above the strip shows the current deepest path with a **Home** jump and an absolute-path
   input; a **Show hidden** toggle flips dotfile visibility.
