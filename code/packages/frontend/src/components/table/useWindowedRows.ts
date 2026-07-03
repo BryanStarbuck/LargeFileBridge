@@ -3,7 +3,7 @@
 // little overscan) and the top/bottom padding needed to keep the scrollbar honest. The caller renders
 // only rows [start, end) inside a bounded-height scroll container, with two spacer <tr>s (padTop /
 // padBottom) so a 5000-row table costs ~30 DOM rows instead of 5000.
-import { useEffect, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 
 export interface RowWindow {
   start: number;
@@ -20,11 +20,25 @@ export function useWindowedRows(
 ): RowWindow {
   const [scrollTop, setScrollTop] = useState(0);
   const [viewport, setViewport] = useState(0);
+  const rafRef = useRef<number | null>(null);
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const onScroll = () => setScrollTop(el.scrollTop);
+    // Coalesce scroll updates to at most one per animation frame, and only re-render when the derived
+    // start row actually changes — a fast scroll fires many events per frame, and most deltas stay
+    // within a single row (performance.mdx P-18). setScrollTop's functional updater bails out (returns
+    // the same reference) when the start index is unchanged, so React skips the re-render entirely.
+    const onScroll = () => {
+      if (rafRef.current != null) return;
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null;
+        const next = el.scrollTop;
+        setScrollTop((prev) =>
+          Math.floor(prev / rowHeight) === Math.floor(next / rowHeight) ? prev : next,
+        );
+      });
+    };
     const measure = () => setViewport(el.clientHeight);
     measure();
     el.addEventListener("scroll", onScroll, { passive: true });
@@ -33,9 +47,13 @@ export function useWindowedRows(
     return () => {
       el.removeEventListener("scroll", onScroll);
       ro.disconnect();
+      if (rafRef.current != null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
     };
     // Re-attach when the container node identity changes (e.g. table mounts after loading).
-  }, [containerRef, count]);
+  }, [containerRef, count, rowHeight]);
 
   if (count === 0) return { start: 0, end: 0, padTop: 0, padBottom: 0 };
 

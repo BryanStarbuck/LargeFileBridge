@@ -3,7 +3,7 @@
 // opens a new column to its right (replacing any columns further right). Every row shows its
 // code badges pinned to the far right, plus a ⋯ kebab and right-click that open the shared entity
 // action menu (menus.mdx §3/§3.1 — the same catalog as the view-one pages).
-import { useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 import { ChevronRight, File as FileIcon, Folder, Home } from "lucide-react";
@@ -12,8 +12,11 @@ import { viewerRouteForName } from "@lfb/shared";
 import { api } from "@/api/client";
 import { Badges } from "@/components/fs/Badges";
 import { EntityKebab, EntityMenuAt, type MenuPos } from "@/components/menu/EntityMenu";
+import { useWindowedRows } from "@/components/table/useWindowedRows";
 import { formatBytes, middleTruncate } from "@/lib/format";
 import { FsTabs } from "./FsTabs";
+
+const FSROW_H = 28; // fixed column-row height the windowing math relies on (px).
 
 export default function FileSystemPage() {
   const { path: initialPath } = useSearch({ strict: false }) as { path?: string };
@@ -40,13 +43,14 @@ export default function FileSystemPage() {
     if (el) el.scrollLeft = el.scrollWidth;
   }, [stack.length]);
 
-  function openDir(colIndex: number, path: string) {
+  // Stable callbacks (functional state updates, no deps) so memoized FsRows don't re-render when an
+  // unrelated part of the page state changes (performance.mdx P-20).
+  const openDir = useCallback((colIndex: number, path: string) => {
     setSelectedFile(null);
     setStack((s) => [...s.slice(0, colIndex + 1), path]);
-  }
-  function selectFile(path: string) {
-    setSelectedFile(path);
-  }
+  }, []);
+  const selectFile = useCallback((path: string) => setSelectedFile(path), []);
+  const openContextMenu = useCallback((path: string, pos: MenuPos) => setMenu({ path, pos }), []);
   function goHome() {
     if (home.data) {
       setSelectedFile(null);
@@ -101,13 +105,14 @@ export default function FileSystemPage() {
         {stack.map((root, i) => (
           <FsColumn
             key={`${i}:${root}`}
+            colIndex={i}
             root={root}
             showHidden={showHidden}
             openedChild={stack[i + 1] ?? null}
             selectedFile={selectedFile}
-            onOpenDir={(p) => openDir(i, p)}
+            onOpenDir={openDir}
             onSelectFile={selectFile}
-            onContextMenu={(path, pos) => setMenu({ path, pos })}
+            onContextMenu={openContextMenu}
           />
         ))}
       </div>
@@ -118,58 +123,78 @@ export default function FileSystemPage() {
 }
 
 interface FsColumnProps {
+  colIndex: number;
   root: string;
   showHidden: boolean;
   openedChild: string | null; // the child in THIS column that opened the next column (for highlight)
   selectedFile: string | null;
-  onOpenDir: (path: string) => void;
+  onOpenDir: (colIndex: number, path: string) => void;
   onSelectFile: (path: string) => void;
   onContextMenu: (path: string, pos: MenuPos) => void;
 }
 
-function FsColumn({ root, showHidden, openedChild, selectedFile, onOpenDir, onSelectFile, onContextMenu }: FsColumnProps) {
+function FsColumn({ colIndex, root, showHidden, openedChild, selectedFile, onOpenDir, onSelectFile, onContextMenu }: FsColumnProps) {
   const q = useQuery<FsListing>({
     queryKey: ["fs", "list", root, showHidden],
     queryFn: () => api.fsList(root, showHidden),
   });
 
+  // Windowing (performance.mdx P-15): a directory can hold thousands of entries; render only the
+  // rows intersecting the scroll viewport so an N-entry column costs ~30 <FsRow> not N.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const entries = q.data?.entries ?? [];
+  const win = useWindowedRows(entries.length, FSROW_H, scrollRef);
+  const visible = entries.slice(win.start, win.end);
+
   return (
     <div className="flex h-full w-[280px] shrink-0 flex-col border-r border-[var(--lfb-border)]">
-      <div className="overflow-y-auto">
+      {q.data?.truncated && (
+        <div className="border-b border-amber-200 bg-amber-50 px-3 py-1 text-[11px] text-amber-800">
+          Narrowed — showing first {entries.length.toLocaleString()}. Open a subfolder to see the rest.
+        </div>
+      )}
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
         {q.isLoading && <div className="px-3 py-2 text-xs text-slate-500">Loading…</div>}
         {q.isError && (
           <div className="px-3 py-2 text-xs text-red-600">
             {(q.error as Error)?.message || "Cannot read directory"}
           </div>
         )}
-        {q.data?.entries.length === 0 && (
+        {q.data && entries.length === 0 && (
           <div className="px-3 py-2 text-xs text-slate-500">Empty</div>
         )}
-        {q.data?.entries.map((e) => (
+        {win.padTop > 0 && <div aria-hidden style={{ height: win.padTop }} />}
+        {visible.map((e) => (
           <FsRow
             key={e.path}
             entry={e}
             active={e.path === openedChild || e.path === selectedFile}
+            colIndex={colIndex}
             onOpenDir={onOpenDir}
             onSelectFile={onSelectFile}
             onContextMenu={onContextMenu}
           />
         ))}
+        {win.padBottom > 0 && <div aria-hidden style={{ height: win.padBottom }} />}
       </div>
     </div>
   );
 }
 
-function FsRow({
+// Memoized (performance.mdx P-20): with stable callbacks from the page, opening a child column or
+// selecting a file re-renders only the rows whose `active` actually flips — not the whole column.
+const FsRow = memo(function FsRow({
   entry,
   active,
+  colIndex,
   onOpenDir,
   onSelectFile,
   onContextMenu,
 }: {
   entry: FsEntry;
   active: boolean;
-  onOpenDir: (path: string) => void;
+  colIndex: number;
+  onOpenDir: (colIndex: number, path: string) => void;
   onSelectFile: (path: string) => void;
   onContextMenu: (path: string, pos: MenuPos) => void;
 }) {
@@ -185,13 +210,14 @@ function FsRow({
     <div
       role="button"
       tabIndex={0}
-      onClick={() => (isDir ? onOpenDir(entry.path) : openFile())}
+      style={{ height: FSROW_H }}
+      onClick={() => (isDir ? onOpenDir(colIndex, entry.path) : openFile())}
       onContextMenu={(e) => {
         e.preventDefault();
         onContextMenu(entry.path, { x: e.clientX, y: e.clientY });
       }}
       title={entry.path}
-      className={`group flex w-full cursor-pointer items-center gap-1.5 px-3 py-1 text-left text-[13px] ${
+      className={`group flex w-full cursor-pointer items-center gap-1.5 px-3 text-left text-[13px] ${
         active ? "bg-[var(--lfb-primary-tint)]" : "hover:bg-slate-100"
       }`}
     >
@@ -214,4 +240,4 @@ function FsRow({
       {isDir && entry.hasChildren && <ChevronRight size={13} className="shrink-0 text-slate-400" />}
     </div>
   );
-}
+});

@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import type { EntityView, Decision } from "@lfb/shared";
 import { api } from "@/api/client";
+import { patchEntityBadges } from "@/lib/patchEntityBadges";
 
 // ── The action model ─────────────────────────────────────────────────────────
 interface Action {
@@ -106,29 +107,26 @@ export function EntityMenuAt({
     queryFn: () => api.entity(path),
   });
 
-  // After any mutation, refresh this entity + the File System listings (badges) + repo views.
-  const invalidate = () => {
-    qc.invalidateQueries({ queryKey: ["entity", path] });
-    qc.invalidateQueries({ queryKey: ["fs"] });
+  // After any mutation: patch the affected row's badges into the cached File-System listings in place
+  // (performance.mdx P-17) instead of invalidating ["fs"] — which would re-walk EVERY open column (the
+  // P-16 endpoint) just to flip one badge. The mutation returns the fresh EntityView, so we already
+  // have the authoritative badges. Repo views are cheap (stored status, not a deep walk) → still refresh.
+  const applyEntity = (v: EntityView) => {
+    qc.setQueryData(["entity", path], v);
+    patchEntityBadges(qc, path, v.badges);
     qc.invalidateQueries({ queryKey: ["repo"] });
   };
 
   const flags = useMutation({
     mutationFn: (patch: { neverIpfs?: boolean; noCompress?: boolean }) =>
       api.setEntityFlags(path, patch),
-    onSuccess: (v) => {
-      qc.setQueryData(["entity", path], v);
-      invalidate();
-    },
+    onSuccess: applyEntity,
     onError: (e: Error) => toast.error(e.message),
   });
 
   const decide = useMutation({
     mutationFn: (decision: Decision) => api.setEntityDecision(path, decision),
-    onSuccess: (v) => {
-      qc.setQueryData(["entity", path], v);
-      invalidate();
-    },
+    onSuccess: applyEntity,
     onError: (e: Error) => toast.error(e.message),
   });
 
@@ -137,7 +135,7 @@ export function EntityMenuAt({
     await fn();
   };
 
-  const actions = view ? buildActions(view, { navigate, flags, decide, invalidate }) : [];
+  const actions = view ? buildActions(view, { navigate, flags, decide }) : [];
 
   return (
     <MenuPortal pos={pos} onClose={onClose}>
@@ -192,7 +190,6 @@ interface Ctx {
   navigate: ReturnType<typeof useNavigate>;
   flags: { mutate: (p: { neverIpfs?: boolean; noCompress?: boolean }) => void };
   decide: { mutate: (d: Decision) => void };
-  invalidate: () => void;
 }
 
 function buildActions(v: EntityView, ctx: Ctx): Action[] {

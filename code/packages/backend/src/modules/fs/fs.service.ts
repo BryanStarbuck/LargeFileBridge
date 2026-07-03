@@ -27,7 +27,19 @@ export function resolveDir(input: string | undefined): string {
   return abs;
 }
 
-export function listDirectory(input: string | undefined, showHidden: boolean): FsListing {
+// One directory level (the column browser). Async + cooperatively yielding + entry-capped, exactly
+// like listFilesFlat/walkUnit — because per entry it does MORE synchronous filesystem work than the
+// flat walk (statSync + computeBadges, which can run the recursive containsRepoBelow probe + an IPFS
+// probe + isGitWorkingTree, + an O(1) hasChildren peek). Run synchronously and uncapped it pins the
+// single Node thread and starves every concurrent request on a large directory (performance.mdx P-16).
+const FS_ENTRY_CAP = 5000; // max rows one column returns before we stop and flag truncation
+const FS_YIELD_EVERY = 200; // hand the event loop back every N processed entries
+const fsYield = () => new Promise<void>((r) => setImmediate(r));
+
+export async function listDirectory(
+  input: string | undefined,
+  showHidden: boolean,
+): Promise<FsListing> {
   const dirAbs = resolveDir(input);
   const parent = path.dirname(dirAbs);
   const ctx = buildBadgeContext(dirAbs);
@@ -40,8 +52,19 @@ export function listDirectory(input: string | undefined, showHidden: boolean): F
   }
 
   const entries: FsEntry[] = [];
+  let truncated = false;
+  let sinceYield = 0;
   for (const ent of dirents) {
     if (!showHidden && ent.name.startsWith(".")) continue;
+    if (entries.length >= FS_ENTRY_CAP) {
+      truncated = true;
+      break;
+    }
+    // Yield to the event loop every few hundred entries so concurrent requests aren't starved.
+    if (++sinceYield >= FS_YIELD_EVERY) {
+      sinceYield = 0;
+      await fsYield();
+    }
     const abs = path.join(dirAbs, ent.name);
     const kind = kindOf(ent);
     const collapsed = kind === "dir" && HARD_SKIP.has(ent.name); // shown, but never expandable
@@ -73,8 +96,8 @@ export function listDirectory(input: string | undefined, showHidden: boolean): F
       sizeBytes,
       modifiedAt,
       isRepoRoot,
-      badges,
       hasChildren: kind === "dir" && !collapsed && dirHasChildren(abs, showHidden),
+      badges,
     });
   }
 
@@ -85,6 +108,7 @@ export function listDirectory(input: string | undefined, showHidden: boolean): F
     parent: parent === dirAbs ? null : parent, // null at a volume root
     home: homeDir(),
     entries,
+    truncated,
   };
 }
 
@@ -200,15 +224,26 @@ function compareEntries(a: FsEntry, b: FsEntry): number {
   return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
 }
 
-/** Cheap "does this directory have any visible child" for the disclosure chevron. */
+/** Cheap "does this directory have any visible child" for the disclosure chevron.
+ * Uses opendir + a few readSync peeks instead of a full readdirSync, so it stays O(1) syscalls even
+ * for a directory with tens of thousands of children (performance.mdx P-16). */
 function dirHasChildren(dirAbs: string, showHidden: boolean): boolean {
+  let dir: fs.Dir | null = null;
   try {
-    for (const ent of fs.readdirSync(dirAbs, { withFileTypes: true })) {
-      if (!showHidden && ent.name.startsWith(".")) continue;
-      return true;
+    dir = fs.opendirSync(dirAbs);
+    for (;;) {
+      const ent = dir.readSync();
+      if (!ent) return false; // exhausted → empty
+      if (!showHidden && ent.name.startsWith(".")) continue; // skip dotfiles, keep peeking
+      return true; // found a visible child
     }
   } catch {
-    /* unreadable → treat as empty */
+    return false; // unreadable → treat as empty
+  } finally {
+    try {
+      dir?.closeSync();
+    } catch {
+      /* ignore */
+    }
   }
-  return false;
 }

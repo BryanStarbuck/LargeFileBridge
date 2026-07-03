@@ -23,11 +23,11 @@ fsRouter.get("/flat", async (req, res) => {
 });
 
 // GET /api/fs?path=<abs>&hidden=1 — one directory level, entries carrying code badges.
-fsRouter.get("/", (req, res) => {
+fsRouter.get("/", async (req, res) => {
   const p = typeof req.query.path === "string" ? req.query.path : undefined;
   const showHidden = req.query.hidden === "1" || req.query.hidden === "true";
   try {
-    res.json({ ok: true, data: listDirectory(p, showHidden) });
+    res.json({ ok: true, data: await listDirectory(p, showHidden) });
   } catch (e) {
     res.status(400).json({ ok: false, error: (e as Error).message });
   }

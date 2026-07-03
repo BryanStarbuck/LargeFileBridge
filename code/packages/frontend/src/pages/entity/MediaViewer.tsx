@@ -16,6 +16,7 @@ import { formatBytes } from "@lfb/shared";
 import { api } from "@/api/client";
 import { Badges } from "@/components/fs/Badges";
 import { EntityMore } from "@/components/menu/EntityMenu";
+import { patchEntityBadges } from "@/lib/patchEntityBadges";
 import { EntityHeaderMissing } from "./entityShared";
 import { relativeTime, absoluteTime } from "@/lib/format";
 
@@ -46,8 +47,10 @@ export function MediaViewer({ kind }: { kind: MediaKind }) {
   const decide = useMutation({
     mutationFn: (d: Decision) => api.setEntityDecision(path!, d),
     onSuccess: (nv) => {
+      // Patch the fresh badges into cached File-System listings instead of re-walking ["fs"]
+      // (performance.mdx P-17). Repo views are cheap stored status → still refresh.
       qc.setQueryData(["entity", path], nv);
-      qc.invalidateQueries({ queryKey: ["fs"] });
+      patchEntityBadges(qc, nv.path, nv.badges);
       qc.invalidateQueries({ queryKey: ["repo"] });
     },
     onError: (e: Error) => toast.error(e.message),
@@ -160,8 +163,9 @@ function ViewerSurface({
           src={src}
           alt={name}
           // Decode off the main thread so a large original doesn't hitch the tab while it paints
-          // (performance.mdx P-13).
+          // (performance.mdx P-13); loading="lazy" completes the pair (P-21).
           decoding="async"
+          loading="lazy"
           onError={() => setFailed(true)}
           onClick={() => setZoom((z) => !z)}
           style={{ imageRendering: "auto" }}

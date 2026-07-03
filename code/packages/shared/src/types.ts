@@ -335,6 +335,7 @@ export interface FsListing {
   parent: string | null; // for "up" navigation (null at a volume root)
   home: string; // the OS home dir (default root)
   entries: FsEntry[];
+  truncated: boolean; // true if the per-column entry cap was hit (show the "narrowed" note; performance.mdx P-16)
 }
 
 // ── Full paths (flat large-file table under File System) — full_paths.mdx ─────

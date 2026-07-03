@@ -46,6 +46,20 @@ many symptoms disappear at once.
   forever; single actions invalidate broad query keys that trigger full-filesystem
   re-walks; the sidebar subscribes to the entire IPFS payload to read one field.
 
+### Second pass (P-15…P-21) — the theme leaked past the tables we first hardened
+
+The first remediation (P-01…P-14) hardened the two *TanStack* tables and the
+`/fs/flat` walk. But the **same four themes recur on surfaces the first pass never
+catalogued** — most importantly the **File System column browser**, which is the
+*default landing view* of the File System page (it opens on the home directory).
+It renders every directory entry as DOM (T1) off a backend endpoint that is
+synchronous and uncapped (T3). That endpoint does *more* per-entry filesystem work
+than the flat walk (a recursive "contains a repo below" probe, an IPFS-publish
+probe, and a `hasChildren` `readdirSync`), so on a large home directory it is a
+prime "Page Unresponsive" cause. The rule going forward: **every list that renders
+rows must be windowed, and every filesystem-walking endpoint must be async +
+capped + cooperatively yielding — no exceptions, on any page.**
+
 ---
 
 ## Diagnosis + architecture fixes
@@ -208,6 +222,100 @@ many symptoms disappear at once.
 
 ---
 
+## Second-pass diagnosis + architecture fixes (P-15…P-21)
+
+### 🔴 P-15 — The File System column browser renders every directory entry as DOM · T1
+- **Where:** `pages/fs/FileSystemPage.tsx` — `FsColumn` does
+  `q.data?.entries.map((e) => <FsRow …>)` with **no windowing and no cap**. Each
+  `FsRow` mounts a `<Badges>` chip group, an `<EntityKebab>` (a button with its own
+  `useState` + a portal-capable menu), a `useNavigate()` hook, an icon, and a size
+  string.
+- **Symptom:** This is the **default landing view** of the File System page (it opens
+  on the OS home directory). A directory with a few thousand children builds a few
+  thousand rows — each with a kebab button and badge group — in one synchronous
+  commit. Tens of thousands of DOM nodes → the exact multi-second hang P-01 fixed for
+  the *tables*, but on the page users hit first. Worse, several columns can be open at
+  once (Miller columns), each un-windowed.
+- **Fix (architecture):** **Window the column body** with the existing
+  `useWindowedRows(count, rowHeight, scrollRef)` hook — the column is already an
+  `overflow-y-auto` scroll container; give it a bounded height (`flex-1 min-h-0`),
+  a fixed row height, and top/bottom spacer rows, so an N-entry directory costs ~30
+  `FsRow` not N. Surface the backend's new `truncated` flag (P-16) as a "narrowed —
+  showing first N" note. Also **`React.memo(FsRow)`** (P-20) so opening a child column
+  or selecting a file re-renders only the affected rows, not the whole column.
+
+### 🔴 P-16 — The column-browser backend `listDirectory` blocks the event loop, uncapped · T3
+- **Where:** `backend/modules/fs/fs.service.ts` → `listDirectory()` (synchronous
+  `readdirSync` + per-file `statSync` + per-dir `dirHasChildren()` `readdirSync` +
+  `computeBadges()` which itself may run `containsRepoBelow()` — a bounded but
+  **recursive** `readdirSync` probe — plus `dirPublishesIpfs()` and
+  `isGitWorkingTree()`), served synchronously by `GET /api/fs`.
+- **Symptom:** This is P-04's disease on the endpoint the first pass never touched —
+  and it does **more** per-entry work than the flat walk. Unlike `listFilesFlat`
+  (capped at 5000 + `await setImmediate` every 400 entries) it has **no entry cap and
+  never yields**, so a large directory pins the single Node thread for seconds inside
+  the request handler. Every concurrent request (scan-status poll, auth, other
+  columns) stalls behind it → "the whole app hangs." And the unbounded `entries[]`
+  payload is what P-15 then renders.
+- **Fix (architecture):** Make `listDirectory` **async and cooperatively yielding**
+  (`await setImmediate` every ~200 entries), exactly like `listFilesFlat`/`walkUnit`.
+  **Cap the entry count** (`FS_ENTRY_CAP`, e.g. 5000) and add `truncated: boolean` to
+  `FsListing` (surfaced by P-15), so a pathological directory can't produce an
+  unbounded payload or unbounded work. Replace `dirHasChildren`'s full `readdirSync`
+  with a **single-entry `opendirSync` probe** (read one dirent, close) so the
+  disclosure check is O(1) syscalls, not O(children). Router handler `await`s it.
+
+### 🟠 P-17 — Entity flag/decision changes invalidate `["fs"]`/`["repo"]` → re-walk every open column · T4
+- **Where:** `components/menu/EntityMenu.tsx` `invalidate()`
+  (`invalidateQueries(["fs"])` + `["repo"]`), and `pages/entity/MediaViewer.tsx`
+  `decide.onSuccess` (same two invalidations). Extends P-08, which only patched
+  `FullPathsPage`'s pin path.
+- **Symptom:** Toggling one sticky flag or decision from the ⋯ menu invalidates the
+  `["fs", …]` key, which refetches **every open File System column** — each a full
+  `listDirectory` walk (now the P-16 endpoint) — plus every `["repo", …]` view, just
+  to flip one badge. The mutation already returns the fresh `EntityView`.
+- **Fix (architecture):** **Optimistically patch the cache.** The mutation response
+  carries the entity's new badges; use `qc.setQueriesData({ queryKey: ["fs"] }, …)`
+  (and `["fsFlat"]`) to splice the updated badges onto the one matching row across all
+  cached listings, instead of invalidating the expensive walks. `setQueryData(["entity", path])`
+  already updates the open entity view. The scheduled scan remains the source of truth
+  and reconciles later. No re-walk on a single-badge change.
+
+### 🟡 P-18 — Windowing writes React state on every scroll event (no rAF coalescing) · T2
+- **Where:** `components/table/useWindowedRows.ts` — the `scroll` listener calls
+  `setScrollTop(el.scrollTop)` on **every** scroll event.
+- **Symptom:** During a fast scroll the browser fires many scroll events per frame;
+  each `setState` re-renders the whole table component and recomputes the visible
+  slice. It's bounded (~30 rows) so it doesn't hang, but it wastes main-thread time
+  and can drop frames on long lists.
+- **Fix (architecture):** **Coalesce scroll updates with `requestAnimationFrame`** —
+  at most one window recompute per frame — and **skip the state update when the derived
+  `start` index hasn't changed** (most scroll deltas stay within the same row), so we
+  only re-render when the visible window actually moves.
+
+### 🟡 P-19 — Two hand-rolled windowed tables duplicate logic and drift · architecture
+- **Where:** `components/table/DataTable.tsx` and `pages/fs/FullPathsPage.tsx` each
+  implement their own windowed `<tbody>` (spacer rows, `ROW_H`, `slice(win.start,
+  win.end)`), and after P-15 the column browser is a *third* copy of the pattern.
+- **Symptom:** Not a runtime cost, but a **regression surface**: a windowing fix
+  applied to one table silently misses the others (this is exactly how the column
+  browser was left un-windowed in the first place).
+- **Fix (architecture):** Extract a shared windowed-body primitive (a
+  `useWindowedRows` consumer that renders spacer rows given a row renderer), or a
+  `<WindowedRows>` component, so all three surfaces share one implementation.
+  **Follow-up, not blocking** — the three copies are individually correct once
+  P-15/P-18 land; unify them next to prevent future drift.
+
+### ⚪ P-21 — MediaViewer `<img>` still eager-loads (missing `loading="lazy"`) · T1(media)
+- **Where:** `pages/entity/MediaViewer.tsx` `ViewerSurface` — the `<img>` has
+  `decoding="async"` (P-13) but **not** `loading="lazy"`, which P-13 also specified.
+- **Symptom:** Minor — the viewer image is the focal element, so lazy-loading buys
+  little here, but the item is incomplete.
+- **Fix:** Add `loading="lazy"` to complete P-13. (The real large-image win is the
+  backend downscaled-preview endpoint, still a follow-up.)
+
+---
+
 ## Remediation log (Stage 3)
 
 | ID | Fix shipped | File(s) |
@@ -225,7 +333,14 @@ many symptoms disappear at once.
 | P-12 | `React.memo(Badges)` | `Badges.tsx` |
 | P-13 | `decoding="async"` / `loading="lazy"` on media `<img>` | `MediaViewer.tsx` |
 | P-14 | Removed dead render node | `DataTable.tsx` |
+| P-15 | Windowed + memoized the File System column rows; surfaced `truncated` note | `pages/fs/FileSystemPage.tsx` |
+| P-16 | Async cooperative-yield + entry-capped `listDirectory`; O(1) `hasChildren` probe | `backend/modules/fs/fs.service.ts`, `fs.router.ts`, `shared/types.ts` (`FsListing.truncated`) |
+| P-17 | Optimistic badge patch across cached listings instead of `["fs"]`/`["repo"]` re-walk | `EntityMenu.tsx`, `MediaViewer.tsx` |
+| P-18 | rAF-coalesced scroll + skip re-render when window start is unchanged | `useWindowedRows.ts` |
+| P-20 | `React.memo(FsRow)` (folded into P-15) | `pages/fs/FileSystemPage.tsx` |
+| P-21 | `loading="lazy"` on the media `<img>` (completes P-13) | `MediaViewer.tsx` |
 
 Follow-ups (not blocking the hang fix): server-side filtered/paginated `/fs/flat`
 (P-05c), backend downscaled image previews (P-13), unify the two scan-status pollers
-into one shared observer (P-07c).
+into one shared observer (P-07c), extract a single shared windowed-body primitive so
+the three windowed tables can't drift (P-19).
