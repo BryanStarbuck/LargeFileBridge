@@ -12,6 +12,8 @@ import { Badges } from "@/components/fs/Badges";
 import { EntityMore } from "@/components/menu/EntityMenu";
 import { FlagSwitches, EntityHeaderMissing } from "./entityShared";
 import { TransferPill } from "@/components/Pill";
+import { StatusBanner } from "@/components/ui/StatusBanner";
+import { type Health } from "@/components/ui/health";
 import { relativeTime, absoluteTime, middleTruncate } from "@/lib/format";
 
 export function ViewOneFilePage() {
