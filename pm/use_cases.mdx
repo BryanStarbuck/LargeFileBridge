@@ -1,0 +1,403 @@
+---
+title: LargeFileBridge — Use Cases & UI Redesign
+description: A usability-led redesign of LargeFileBridge. Defines the product's one job (tell a non-expert whether their big files are safely synced across their computers, and if not, exactly what is broken and how to fix it), a single three-state health model (Broken / Improvable / Fixed) used on every screen, a progressive-disclosure rule (surface the status + the one next action; push technical detail lower or behind a chevron), the reusable diagnostic components (StatusBanner, DiagnosticCard, Disclosure, StatTile, PageHeader, Section), a set of customer use-case flows written from the non-expert's point of view, and a per-page layout redesign for every screen except the Home/Repos dashboard (which is kept as-is). This is the source of truth the page redesign code follows.
+---
+
+# LargeFileBridge — Use Cases & UI Redesign
+
+This document is written from the chair of a **usability designer** doing a heuristic review of the
+whole app. It has three jobs:
+
+1. State the **one question** every screen must help a non-expert answer.
+2. Define the shared **health model** and **progressive-disclosure** rules that make the answer
+   obvious, plus the reusable **components** that implement them.
+3. Give a **per-page redesign** — exactly what goes where — for every screen **except the
+   Home/Repos dashboard**, which is already in good shape and is treated as the fixed reference the
+   rest of the app should feel like a sibling of.
+
+It builds on the existing specs and does not repeat them: [Repos](./repos.mdx),
+[One repo](./one_repo.mdx), [IPFS pinset](./ipfs.mdx), [IPFS dashboard](./ipfs_ui.mdx),
+[Settings](./settings.mdx), [Security](./security.mdx), [Scan](./scan.mdx), [Files](./files.mdx),
+[Directories](./directories.mdx), [Full paths](./full_paths.mdx), [Left bar](./left_bar.mdx).
+
+---
+
+## 0. Who is the user, and what do they actually want?
+
+The person using LargeFileBridge is **not** an IPFS expert. They are a creator, a filmmaker, an
+engineer, or a family member who has a laptop, a desktop, maybe a studio machine or a server, and a
+pile of **big files** — videos, renders, image libraries, model weights, datasets — that git can't
+carry. They installed LFBridge so those files are **safe and up to date on all their computers**.
+
+They come to the app in one of a few moods:
+
+* **"Is everything OK?"** — a reassurance check. They want a green light and to leave.
+* **"Something's wrong."** — a file didn't show up on the other machine; a status looks red. They
+  want to know *what* is broken and *what to click* to fix it — not to read a manual on Kubo.
+* **"Can this be better?"** — they have 40 GB of uncompressed video, or a big file that isn't
+  git-ignored, and they half-know they should clean it up. They want the app to point it out and
+  offer a one-click fix.
+
+Every screen is judged against this: **does it answer "am I OK / what's broken / how do I fix it"
+without making a non-expert learn our internals first?**
+
+> The internals still matter — CIDs, peer IDs, multiaddrs, reprovide strategy, GC. But they are the
+> *second* thing the user sees, never the first. See the disclosure rule (§2).
+
+---
+
+## 1. The health model (Broken / Improvable / Fixed) — LOCKED
+
+The whole app speaks in **three states**. This is the single most important idea in the redesign:
+one vocabulary, one color language, one set of icons, used identically on every page, for a repo, a
+file, the IPFS node, a background job, or the whole computer.
+
+| State | Meaning to the user | Color | Icon | Dot |
+| --- | --- | --- | --- | --- |
+| **Fixed** | Working as intended. Nothing to do. | green | `CheckCircle2` | 🟢 |
+| **Improvable** | It works, but it could be safer / smaller / cleaner. An *offer*, never an alarm. | amber | `AlertTriangle` | 🟡 |
+| **Broken** | Something is actually not working. Files are at risk or not moving. Needs action. | red | `AlertCircle` | 🔴 |
+| *(Neutral)* | Not applicable / nothing set up yet / informational. | slate | `Circle` | ⚪ |
+
+Rules:
+
+* **Broken beats Improvable beats Fixed.** A page's overall state is the worst state among its
+  parts. One broken thing turns the page header red even if everything else is green.
+* **Improvable is an offer, not a warning-that-nags.** Amber means "here's something you *could* do,"
+  aligned with the charter: *never compress, git-ignore, or alter a file unless the user asks.* We
+  detect and surface; we never act on our own. Amber must never feel like an error.
+* **Every non-Fixed state carries a plain-English "what this means" line and, wherever we can, a
+  primary Fix action.** "The IPFS engine isn't running — your files can't move between computers
+  until it starts. **[Start it]**." Never a bare red pill with no next step.
+* **Fixed states are quiet.** Green gets a small dot and a short line; it does not shout. The screen's
+  visual weight goes to whatever is Broken or Improvable.
+
+Color tokens (add to `styles.css`, reuse everywhere — see §3):
+
+```
+--lfb-ok:      #16a34a   /* green-600  — Fixed   */
+--lfb-ok-bg:   #f0fdf4   /* green-50            */
+--lfb-warn:    #d97706   /* amber-600  — Improvable */
+--lfb-warn-bg: #fffbeb   /* amber-50            */
+--lfb-bad:     #dc2626   /* red-600    — Broken  */
+--lfb-bad-bg:  #fef2f2   /* red-50              */
+```
+
+---
+
+## 2. Progressive disclosure — surface the answer, hide the mechanism
+
+The complaint the redesign fixes: today several pages dump *everything* at one altitude — a flat row
+of PeerID, reprovide strategy, gateway, GC, pinned bytes, tracked/untracked counts all in one
+sentence. A non-expert can't tell what matters.
+
+The rule going forward, on **every** page:
+
+1. **Row 1 — the verdict.** One line, in plain English, colored by the health model: *"Everything's
+   synced across your 3 computers."* / *"1 thing needs attention."* / *"Sync is broken."*
+2. **Row 2 — the one next action.** When not Fixed, a single primary button that does the obvious
+   fix. At most one primary per screen.
+3. **Then — the working surface.** The table or the cards the user came to use.
+4. **Deeper — the mechanism.** CIDs, peer IDs, multiaddrs, raw metrics, reprovide/GC posture, logs.
+   These live **lower on the page** or **behind a chevron** (`Disclosure`). The user can always get
+   to every detail — they just **click to go deeper**. We never hide information; we **rank** it.
+
+**Chevrons are the primary "there's more here" affordance.** Use them consistently:
+
+* A **right chevron `›`** that rotates to **down `⌄`** on expand = a collapsible section
+  (`Disclosure` / `DiagnosticCard`). Label it with what's inside ("Technical details", "How to fix
+  it manually", "Node details", "Per-file breakdown").
+* A **trailing `›`** on a table row / list item = "click to open the deeper page for this thing"
+  (already the house table convention — keep it).
+* A **down chevron on a nav item** = that item expands into children (the IPFS → pinning-repos
+  disclosure in the left bar — keep it).
+
+Default collapsed state:
+
+* **Broken** detail starts **expanded** (they need it now).
+* **Improvable** and **Fixed** detail starts **collapsed** (offer it, don't shove it).
+
+---
+
+## 3. The reusable components (build once, use on every page)
+
+New directory: `code/packages/frontend/src/components/ui/`. These are the vocabulary of the
+redesign; every page below is assembled from them.
+
+### 3.1 `health.ts`
+Types + helpers so the model is defined in exactly one place.
+
+```ts
+export type Health = "ok" | "warn" | "bad" | "neutral";
+// worst(...) → the rollup rule (bad > warn > ok > neutral)
+// healthColor(h) / healthBg(h) / HealthIcon(h) → the color + icon for a state
+```
+
+### 3.2 `StatusBanner`
+The page's **verdict row** (§2 rows 1–2). Full-width rounded panel at the top of a page's content.
+
+* Left: the health **dot + icon** and a **headline** (plain English).
+* Optional **sub-line** under the headline (one sentence of "what this means").
+* Right: an optional **primary action** button (the one fix) and/or a small **secondary** link.
+* Background tint follows the state (`--lfb-*-bg`); border follows the state color. A **Fixed**
+  banner is quiet (thin green, small dot); a **Broken** banner is unmistakable (red tint).
+
+### 3.3 `DiagnosticCard`
+A single "here's a thing that might be wrong, and how to fix it" unit. Used in lists on IPFS, Scans,
+Settings, One-repo.
+
+* **Header row (always visible):** health icon · **title** (plain English) · optional status
+  pill(s) on the right · a **Fix** button when there's a one-click remedy · a **chevron** to expand.
+* **One-line summary** under the title: what it means for the user.
+* **Expandable body (chevron):** the mechanism — exact values, the manual command to run, the
+  "why", links to the relevant deeper page. Starts expanded when **bad**, collapsed otherwise.
+
+### 3.4 `Disclosure`
+Generic chevron section: a clickable summary row (label + optional right-aligned meta) that expands
+to arbitrary children. This is the workhorse for "push detail deeper." Controlled or uncontrolled.
+
+### 3.5 `StatTile`
+A metric tile for the dashboard-style rows (IPFS, computer rollups): big **value**, small **label**,
+optional **sub** (e.g. a byte size under a count), optional health tint and click-through. Tiles sit
+in a responsive `flex-wrap` / grid row.
+
+### 3.6 `PageHeader`
+Consistent page title block: **H1** + optional one-line **subtitle** + a right-aligned **actions**
+slot. Replaces the ad-hoc `flex items-center justify-between` + `h1` repeated on every page so all
+pages share the same top rhythm as the Home dashboard.
+
+### 3.7 `Section`
+A bordered, titled card (`rounded-lg border`), optionally collapsible (wraps `Disclosure`). Settings
+and Repo-settings are built from these; advanced groups are collapsed by default.
+
+---
+
+## 4. Customer use-case flows (the non-expert's point of view)
+
+These are the journeys the redesign must make effortless. Each is written as the *user's* question,
+then **where the app answers it** and **what they see**. The through-line is always
+**broken → what → fix**.
+
+### UC-1 — "Is everything OK?" (the reassurance check)
+* **Enters:** Home / Repos dashboard.
+* **Sees:** The dashboard already answers this well (kept as-is). The redesign's contribution: every
+  other page they might wander to also opens with a one-line green verdict, so the reassurance holds
+  everywhere, not just home.
+* **Fixed state:** a quiet green StatusBanner: *"All 6 repos are up to date. Last sync 8 minutes
+  ago."* Done — they leave.
+
+### UC-2 — "A file didn't show up on my other computer."
+This is the flagship "why is it broken" flow — LFBridge's equivalent of *"why is my email in spam?"*
+The user doesn't know if the cause is: the IPFS engine is off, the file was never set to sync, the
+other computer isn't a peer yet, or the transfer is still pending. **The app must diagnose it for
+them**, in order of likelihood, and hand them the fix.
+
+* **Enters:** the repo (or the file's properties page).
+* **The One-repo StatusBanner runs the diagnosis** and states the *first* real problem in plain
+  English, worst-first:
+  1. **IPFS engine down (Broken):** *"Sync is paused — the IPFS engine on this computer isn't
+     running."* Primary: **[Start IPFS]** (→ links to the IPFS page). Everything below still loads,
+     decisions still save, but transfers are paused — say so.
+  2. **File set to Ignore / Undecided (Improvable):** *"3 files here aren't set to sync yet."*
+     Primary: **[Review files]** scrolls to / filters the table to Undecided.
+  3. **No peers backing it up (Improvable→Broken):** *"5 files are synced from this computer but
+     aren't on any other computer yet."* Sub: *"Open LFBridge on your other machine so it can pull
+     them, or add it as a peer."* Primary: **[See peers]**.
+  4. **Transfer still pending (Improvable):** *"2 files are queued to transfer."* Sub: *"They'll move
+     on the next sync, or sync now."* Primary: **[Sync now]**.
+* **The file's row** carries the same verdict at file altitude via the transfer pill + a per-file
+  StatusBanner on the properties page (*"Set to sync, but on 0 other computers — not backed up
+  yet."*).
+* **Outcome:** the user never has to know *which* of the four causes it was — the page told them and
+  gave them the button.
+
+### UC-3 — "The app says something's red. What do I do?"
+* **Any red** the user sees is a `DiagnosticCard` or red `StatusBanner` — so it **always** has: a
+  plain-English title, a "what this means," and either a **Fix** button or, if we can't fix it for
+  them, the **exact manual step** behind the chevron (e.g. the `brew install ipfs` / daemon command,
+  copyable). No dead-end red states.
+
+### UC-4 — "Why is my disk full / this is a lot of data." (compression offer)
+* **Enters:** a directory or the Full-paths table, or the per-directory rollup.
+* **Sees (Improvable, amber, never automatic):** *"12 videos and 40 images here look uncompressed —
+  about 34 GB could shrink."* Each row shows the **C** (should-compress) badge; the rollup table row
+  says `12 · Compress…`. Clicking **Compress…** always confirms first and only ever acts on explicit
+  request (charter). The "how we decided it's uncompressed" (duration × resolution baseline) is a
+  chevron detail, not front-and-center.
+* **PNG → compressible:** the convert offer runs the alpha-channel / functionality safety checks
+  first and **warns** ("this PNG uses transparency — converting to JPEG loses it") before offering.
+
+### UC-5 — "Is this big file safe to just leave, or should I git-ignore it?"
+* **Enters:** Full-paths / directory rollup.
+* **Sees:** category rows — *"Big files that aren't git-ignored (a bad idea to check in): 3 ·
+  [Git-ignore]"* and *"Big git-ignored files we're not syncing: 7 · [Track]"*. One-click, always an
+  offer, never automatic (charter: we never edit `.gitignore` for anyone).
+
+### UC-6 — "Are my background syncs even running?"
+* **Enters:** Scans page.
+* **Sees:** a StatusBanner verdict: *"Background sync is on — runs every 15 minutes."* /
+  *"Background sync is installed but turned off."* / *"Background sync isn't installed on this
+  computer yet."* Then one `DiagnosticCard` per job (discovery 4h, transfer 15m) with a plain
+  purpose line, Installed / On pills, last-run health, and the Install / Turn on / off / Uninstall
+  actions. The launchd/plist mechanics are chevron detail.
+
+### UC-7 — "Did I set this up right? What's missing?" (configuration confidence)
+* **Enters:** Settings.
+* **Sees:** each configurable area reports its own health: **Authentication** — green *"Google sign-in
+  configured"* or red *"Not configured — sign-in won't work"* with the exact credentials file path
+  and placeholder schema behind the chevron. **IPFS node** — green/red with the only-our-content
+  posture summarized as one plain line (*"Serving only your own content ✓"*), the raw
+  reprovide/gateway/GC values in the chevron. **Access** — how many domains / accounts can sign in,
+  link to manage. The security-critical **only-our-content** default is stated in plain words with
+  its compliance state, per the charter.
+
+### UC-8 — "Which of my computers has these files?"
+* **Enters:** Peers.
+* **Sees:** if empty, not a blank table but a guided empty state: *"No other computers yet."* + a
+  chevron *"How to add one"* (install LFBridge on the other machine, sign in with the same Google
+  account, it appears here). If populated, the table, with each peer's last-seen recency colored by
+  the health model (seen recently = green, stale = amber).
+
+---
+
+## 5. Per-page redesign
+
+Ordering rule for every page: **PageHeader → StatusBanner (verdict + fix) → working surface →
+disclosed detail.** Tables stay TanStack tables with the standard control row (search left; filter +
+sort icons right; pagination default 500) — unchanged (charter).
+
+### 5.0 Home / Repos dashboard — KEEP AS-IS
+The landing dashboard is the reference the rest of the app is being brought in line with. **No
+structural change.** It already answers UC-1 at a glance. The only thing the redesign asks of it: it
+is the *tuning fork* — the shared components below are styled so every other page feels like it
+belongs next to this one.
+
+### 5.1 IPFS page (`/ipfs`) — the biggest redesign
+Today: a dense one-line node/security strip over the pinset table. The strip mixes health, security
+posture, and metrics at one altitude.
+
+Redesign, top to bottom:
+
+1. **PageHeader** — "IPFS" (+ `· {repoName}` when filtered by a pinning repo). Actions:
+   **Import all untracked (N)** (when N>0), **Rescan**.
+2. **StatusBanner (the verdict).** Worst-first:
+   * Node unreachable → **Broken**, red: *"The IPFS engine isn't running — your files can't move
+     between computers."* Primary **[Start IPFS]** (or, if the CLI is missing, **[Install IPFS]**),
+     with the exact command behind a chevron. This replaces today's separate red box.
+   * Node OK but **not compliant** (serving more than our own content) → **Broken** (or **Improvable**
+     if it's the acknowledged public-gateway opt-out): *"This computer is set to serve other people's
+     content."* Primary **[Fix — serve only my content]** (→ the existing enforce action).
+   * Node OK + compliant → **Fixed**, quiet green: *"IPFS is running and serving only your own
+     content."*
+3. **StatTile row** — the metrics, each a tile (not a run-on sentence):
+   `Pinned files` (count) · `Pinned size` (bytes) · `Tracked` · `Untracked` (amber tile when >0,
+   click → filters the table to import candidates). Peers/bandwidth tiles when available.
+4. **Untracked backlog** — when `untrackedCount > 0`, a `DiagnosticCard` (Improvable): *"N pinned
+   files aren't tracked by LFBridge yet."* Fix: **Import all**. Chevron: what "tracked" means.
+5. **"Pinned files" section** — the existing pinset TanStack table, unchanged in behavior
+   (per-row Import, kebab, `?repo` filter, "Untracked only" toggle, selection + bulk import).
+   Sits under an `h2` so it reads as the working surface, not the whole page.
+6. **"Node details" `Disclosure`** (collapsed) — PeerID (copyable), reprovide strategy, gateway
+   binding, GC. The mechanism, one click away. This is where today's strip fields go to live.
+
+### 5.2 Scans page (`/scans`) — worker transparency
+1. **PageHeader** — "Scans", subtitle *"Background jobs that keep your big files discovered and
+   synced on this computer ({computerLabel})."*
+2. **StatusBanner** — the combined verdict over both jobs (UC-6): on / installed-but-off /
+   not-installed, plus an IPFS-health note when the node is down (transfers can't run).
+3. **Two `DiagnosticCard`s** — Discovery (every 4h) and Transfer (every 15m). Each: plain purpose,
+   **Installed** / **On** pills, **last run** with a green/red dot and "(failed)" when applicable,
+   and the control buttons (Install · Turn on/off · Uninstall). The launchd label + plist path are
+   chevron detail.
+
+### 5.3 Settings page (`/settings`) — configuration confidence (UC-7)
+1. **PageHeader** — "Settings".
+2. **`Section`s**, each reporting its own health where it has one:
+   * **Big-file threshold** — the value editor (unchanged), plus a one-line "files at or above this
+     bridge over IPFS."
+   * **Scanner roots** — the textarea editor (unchanged).
+   * **Authentication** — `DiagnosticCard`-style health: green *"Google sign-in configured"* (from
+     file/env) or red *"Not configured"* with the `CredentialsSetupCard` and the file path + schema
+     behind the chevron.
+   * **IPFS node** — health line + the only-our-content posture in **plain words** (*"Serving only
+     your own content ✓"* / *"Will be corrected on next sync"*); raw apiAddr/gatewayAddr/reprovide in
+     a chevron. Restates the security default (charter) in words a non-expert reads.
+   * **Access** — counts + **Manage access →**.
+   Advanced/rarely-touched sections are collapsed `Section`s by default.
+
+### 5.4 One-repo page (`/repos/$repoId`) — where "why didn't it sync" is answered (UC-2)
+1. **PageHeader** — breadcrumb `Repos / {name}`, the path as subtitle. Actions: **gear** (repo
+   settings), **Sync now**.
+2. **StatusBanner** — the diagnosis engine of UC-2: worst-first verdict with the one fix
+   (IPFS down / undecided files / synced-but-no-peers / pending). This is the redesign's core payload
+   for this page.
+3. **Counts line** — `Sync · Undecided · Ignore` quick summary (kept), Undecided emphasized when >0.
+4. **Files TanStack table** — unchanged (decision select, transfer pill, peers, CID, kebab,
+   selection + bulk decision / sync-now).
+5. **"Repo details" `Disclosure`** (collapsed) — the old status strip (sync on/off, status pill,
+   peer count, last sync, IPFS ok) moves here as the mechanism.
+
+### 5.5 Peers page (`/peers`)
+1. **PageHeader** — "Peers", subtitle *"Your other computers that keep copies of these files."*
+2. **Empty state (guided)** — when no peers: a neutral StatusBanner *"No other computers yet"* + a
+   **Disclosure "How to add a computer"** (install LFBridge there, sign in with the same Google
+   account, it appears here). Not a blank table.
+3. **Table** — unchanged, but **Last seen** is colored by recency (green recent / amber stale) so the
+   health language reaches here too.
+
+### 5.6 File properties (`/file`) & Directory (`/dir`) pages
+* Add a small **per-entity StatusBanner** at the top under the header: the file's own verdict —
+  *"Synced · backed up on 2 computers"* (green) / *"Set to sync, but on 0 other computers"* (amber) /
+  *"Not tracked — not inside a managed repo"* (neutral) / *"Set to sync but the IPFS engine is
+  down"* (red).
+* Keep the existing **Sync / Compression / File** cards, but render them with the shared `Section`
+  so they match. The compression card stays an **offer** with the baseline reasoning as chevron
+  detail (UC-4).
+* Directory page: the category **rollup table** is the working surface (UC-4/UC-5); its four rows
+  already map to the charter categories. Keep, and let each actionable row read as an Improvable
+  offer.
+
+### 5.7 File System — Column view (`/fs`) & Full paths (`/fs/paths`)
+* Structurally these are already good (Finder columns; flat filterable table). The redesign only
+  aligns them:
+  * The **badge legend** should be reachable — a small **Disclosure "What do these letters mean?"**
+    that explains R/r · S · C/c · i once, so a non-expert isn't stuck guessing. (Badges themselves
+    unchanged.)
+  * Full-paths keeps its segmented controls + action row. Ensure the "N selected → IPFS pin / Unpin"
+    action row reads in the health language and that skipped files are reported (already true).
+
+---
+
+## 6. What we are deliberately NOT changing
+
+* **The Home/Repos dashboard** (§5.0) — kept.
+* **All tables stay TanStack tables** with the standard control row and 500-default pagination
+  (charter).
+* **The left bar** — data source of truth stays `pm/left_bar.yaml`; the IPFS disclosure children
+  stay.
+* **The charter guardrails** — we never compress, git-ignore, convert, or alter a file unless the
+  user explicitly asks; the IPFS node defaults to serving only our own content; nothing phones home.
+  The redesign only makes these **more legible**, never looser.
+* **The badge vocabulary and colors** — unchanged; only made self-explanatory via the legend
+  disclosure (§5.7).
+
+---
+
+## 7. Acceptance criteria
+
+* **AC-1** Every page (except Home) opens with a one-line health verdict in the Broken/Improvable/
+  Fixed language before any table or dense detail.
+* **AC-2** No red state anywhere is a dead end: each has a plain-English cause + either a Fix button
+  or the exact manual step (copyable) behind a chevron.
+* **AC-3** Technical detail (CIDs, peer IDs, multiaddrs, reprovide/gateway/GC, raw metrics, launchd
+  labels) is never at row 1 — it is lower on the page or behind a `Disclosure`, and always reachable
+  in ≤1 click.
+* **AC-4** The three-state model is implemented in exactly one place (`ui/health.ts`) and every
+  page's colors/icons come from it.
+* **AC-5** UC-2 ("a file didn't sync") is answered by the One-repo StatusBanner without the user
+  needing to know which of the four causes applied.
+* **AC-6** Improvable (amber) offers never read as errors and never trigger an action without an
+  explicit click + confirm (charter compliance).
+* **AC-7** The shared components (`StatusBanner`, `DiagnosticCard`, `Disclosure`, `StatTile`,
+  `PageHeader`, `Section`) are used by IPFS, Scans, Settings, One-repo, Peers, and the entity pages,
+  so the app feels like one product with the Home dashboard.
