@@ -130,6 +130,86 @@ export interface IpfsImportResult {
   data: IpfsPageData; // fresh page payload after the import
 }
 
+// ── The IPFS DASHBOARD / node control panel (ipfs_ui.mdx) ────────────────────
+// The landing page at /ipfs: is the node installed & running, an on/off toggle, live metrics,
+// gateway summary, and the only-our-content posture. The pinset table (above) is a drill-in.
+export type IpfsPlatform = "darwin" | "win32" | "linux" | "other";
+
+// The gateway summary shown on the dashboard (ipfs_ui.mdx §5.1 / §4 row 10).
+export interface IpfsGatewaySummary {
+  enabled: boolean; // a gateway address is configured/listening
+  localOnly: boolean; // bound to loopback only (compliant — knowledge/ipfs.mdx §8)
+  url: string | null; // e.g. http://127.0.0.1:8081 (null when unknown/none)
+  addr: string | null; // the raw multiaddr, e.g. /ip4/127.0.0.1/tcp/8081
+}
+
+// Live node metrics — every field nullable; an unknown value renders as "—" (ipfs_ui.mdx §5.2).
+export interface IpfsNodeMetrics {
+  sharedFiles: number | null; // recursive+direct pin count (the pinset size)
+  untrackedFiles: number | null; // pinned-but-untracked (the /ipfs/pins import backlog)
+  repoObjects: number | null; // repo/stat NumObjects (blocks)
+  repoSizeBytes: number | null; // repo/stat RepoSize (bytes on disk)
+  storageMaxBytes: number | null; // repo/stat StorageMax (the GC cap)
+  peersConnected: number | null; // swarm/peers count
+  bandwidthTotalIn: number | null; // stats/bw TotalIn (bytes)
+  bandwidthTotalOut: number | null; // stats/bw TotalOut (bytes)
+  bandwidthRateIn: number | null; // stats/bw RateIn (bytes/s)
+  bandwidthRateOut: number | null; // stats/bw RateOut (bytes/s)
+}
+
+// GET /api/ipfs/node — the whole dashboard payload (ipfs_ui.mdx §11).
+export interface IpfsNodeStatus {
+  installed: boolean; // the `ipfs` CLI/daemon is present on this computer
+  running: boolean; // the daemon answers RPC (health === "ok")
+  version: string | null; // Kubo version, e.g. "0.29.0"
+  peerId: string | null; // node identity
+  repoPath: string | null; // IPFS_PATH / repo location (advanced)
+  platform: IpfsPlatform; // drives the install path + manual command
+  installMethod: string | null; // "brew" | "winget" | "snap" | null (no package manager found)
+  installCommand: string; // the exact copyable manual command for this platform
+  packageManagerPresent: boolean; // is the chosen package manager on PATH?
+  metrics: IpfsNodeMetrics;
+  gateway: IpfsGatewaySummary;
+  // Only-our-content posture (mirrors IpfsNodeCard — knowledge/ipfs.mdx §6).
+  reprovideStrategy: "pinned" | "roots" | "all";
+  gatewayLocalOnly: boolean;
+  publicGateway: boolean; // the deliberate opt-out setting (amber, not red)
+  gcOn: boolean;
+  compliant: boolean;
+}
+
+// ── Install / start jobs — server-side, single-flight, re-attachable (ipfs_ui.mdx §7.2) ──
+export type IpfsJobKind = "install" | "start" | "stop";
+export type IpfsJobPhase =
+  | "idle"
+  | "detecting"
+  | "installing"
+  | "initializing"
+  | "starting"
+  | "stopping"
+  | "done"
+  | "error";
+
+export interface IpfsInstallJob {
+  kind: IpfsJobKind;
+  status: "idle" | "running" | "done" | "error";
+  phase: IpfsJobPhase;
+  method: string | null; // package manager actually used (brew/winget/snap) or null
+  log: string[]; // append-only, human-readable progress lines
+  manualCommand: string | null; // the copyable fallback command (always set on error)
+  error: string | null; // fatal message when status === "error"
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export type IpfsDaemonAction = "start" | "stop";
+
+// POST /api/ipfs/daemon result — either the fresh node status, or a job the UI should watch.
+export interface IpfsDaemonResult {
+  job: IpfsInstallJob | null; // set when the action runs as a progress job (start/stop)
+  node: IpfsNodeStatus; // the (best-effort) node status right after kicking the action
+}
+
 // ── Peers (storage.mdx §11) ─────────────────────────────────────────────────
 export interface PeerRow {
   id: string;

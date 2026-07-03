@@ -25,6 +25,10 @@ import type {
   IpfsHealth,
   IpfsPageData,
   IpfsImportResult,
+  IpfsNodeStatus,
+  IpfsInstallJob,
+  IpfsDaemonResult,
+  IpfsDaemonAction,
   ScanJob,
   RescanResult,
 } from "@lfb/shared";
@@ -88,6 +92,13 @@ export const api = {
   ipfsImport: (body: { cids?: string[]; all?: boolean }) =>
     unwrap<IpfsImportResult>(http.post("/ipfs/import", body)),
   ipfsEnforce: () => unwrap<IpfsPageData>(http.post("/ipfs/enforce")),
+
+  // IPFS dashboard (ipfs_ui.mdx) — node status, install, on/off toggle, install/start progress.
+  ipfsNode: () => unwrap<IpfsNodeStatus>(http.get("/ipfs/node")),
+  ipfsInstall: () => unwrap<IpfsInstallJob>(http.post("/ipfs/install")),
+  ipfsInstallStatus: () => unwrap<IpfsInstallJob>(http.get("/ipfs/install/status")),
+  ipfsDaemon: (action: IpfsDaemonAction) =>
+    unwrap<IpfsDaemonResult>(http.post("/ipfs/daemon", { action })),
 
   // File System column browser (directory.mdx).
   fsHome: () => unwrap<{ home: string }>(http.get("/fs/home")),

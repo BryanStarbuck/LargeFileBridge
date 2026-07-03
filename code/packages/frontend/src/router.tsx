@@ -39,10 +39,17 @@ const peersRoute = createRoute({
   path: "/peers",
   component: lazyRouteComponent(() => import("./pages/peers/PeersPage.js"), "PeersPage"),
 });
-// The IPFS page (ipfs.mdx). Optional `?repo=<repoId>` filters the pinset to one pinning repo (§2.1).
+// The IPFS dashboard / node control panel (ipfs_ui.mdx): install, on/off, metrics, gateway, security.
 const ipfsRoute = createRoute({
   getParentRoute: () => appLayout,
   path: "/ipfs",
+  component: lazyRouteComponent(() => import("./pages/ipfs/IpfsDashboardPage.js"), "IpfsDashboardPage"),
+});
+// The pinset table (ipfs.mdx), now at /ipfs/pins — reached from the dashboard's Shared-files tile.
+// Optional `?repo=<repoId>` filters the pinset to one pinning repo (ipfs.mdx §2.1).
+const ipfsPinsRoute = createRoute({
+  getParentRoute: () => appLayout,
+  path: "/ipfs/pins",
   component: lazyRouteComponent(() => import("./pages/ipfs/IpfsPage.js"), "IpfsPage"),
   validateSearch: (search: Record<string, unknown>): { repo?: string } => ({
     repo: typeof search.repo === "string" ? search.repo : undefined,
@@ -111,6 +118,7 @@ const routeTree = rootRoute.addChildren([
     oneRepoRoute,
     peersRoute,
     ipfsRoute,
+    ipfsPinsRoute,
     scansRoute,
     allowListRoute,
     settingsRoute,

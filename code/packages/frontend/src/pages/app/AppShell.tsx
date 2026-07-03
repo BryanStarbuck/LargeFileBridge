@@ -5,6 +5,7 @@ import type { CurrentUser } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { Sidebar } from "../../components/layout/Sidebar.js";
 import { ScanProgressBar } from "../../components/ScanProgressBar.js";
+import { IpfsStatusBanner } from "../../components/IpfsStatusBanner.js";
 
 const FALLBACK: CurrentUser = {
   authenticated: false,
@@ -21,6 +22,7 @@ export function AppShell() {
     <div className="flex h-full">
       <Sidebar user={user ?? FALLBACK} />
       <main className="flex-1 overflow-y-auto">
+        <IpfsStatusBanner />
         <div className="mx-auto max-w-6xl px-8 py-6">
           <Outlet />
         </div>

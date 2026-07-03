@@ -74,7 +74,7 @@ Left_Nav:
           icon: "Boxes"
           route: "/ipfs"
           order: 4
-          description: "What your local IPFS node is actually pinning: tracked vs. pinned-but-untracked content (import already-pinned files), plus the node's only-our-content security posture. See pm/ipfs.mdx."
+          description: "Your local IPFS node's control panel: is it installed and running, an on/off toggle, live metrics (shared files, storage, peers, bandwidth), the gateway, and the only-our-content security posture. Drills into the pinset table at /ipfs/pins. See pm/ipfs_ui.mdx (dashboard) + pm/ipfs.mdx (pinset)."
 
         # NAMING (pm/menus.mdx / scan.mdx): the scheduled background jobs are
         # "scheduleTasks" internally; the UI calls what they do "scans". This

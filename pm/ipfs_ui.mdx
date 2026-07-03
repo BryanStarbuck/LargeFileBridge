@@ -1,0 +1,375 @@
+---
+title: LargeFileBridge — The IPFS Page (Node Control Panel / Dashboard)
+description: The left-bar "IPFS" landing page — the product-manager-facing DASHBOARD for the user's LOCAL IPFS (Kubo) node. It answers, at a glance, "Is IPFS installed? Is it running right now? Should it be?" and gives the two big controls — INSTALL (when the node/CLI is missing) and an ON/OFF toggle (start/stop the daemon) — plus a clean grid of live metrics (shared files, blocks/objects, storage used, connected peers, bandwidth) and a gateway summary. Each metric TILE drills into a deeper page: "Shared files" opens the pinset table (pm/ipfs.mdx, now at /ipfs/pins); "Peers" opens the Peers page; "Gateway" opens the gateway detail. The page is built to work on macOS, Windows, and Linux: it detects the platform and drives the right install path (Homebrew / winget / package manager), falls back to a copyable manual command when auto-install can't run, and shows a live PROGRESS view while installing or starting. It carries the only-our-content security posture card (reprovide pinned, gateway local-only, GC on) with a Fix (knowledge/ipfs.mdx §6). And it is the SOURCE of the app-wide "IPFS is not running — Install / Start" nudge that appears on every OTHER page when the node is missing or off (and never when it is healthy). Every state is designed for errors: install failed, daemon won't start, node unreachable — each says what happened and the concrete next step. Cross-links pm/ipfs.mdx (the pinset drill-down), pm/tools.mdx (the install-tools preflight this reuses), knowledge/ipfs.mdx (what a node/gateway/pin is), pm/settings.mdx (the reprovide/gateway settings), pm/left_bar.mdx (nav), and pm/menus.mdx (drill-in navigation).
+---
+
+# LargeFileBridge — The IPFS Page (Node Control Panel)
+
+The **IPFS** left-bar item lands here. This is the **dashboard for the user's local IPFS (Kubo)
+node** — the one screen that makes the invisible visible: *is IPFS installed on this computer, is the
+daemon running this second, and how much is it doing for me?* Everything a non-expert needs to
+understand and control their node lives here; anything deeper is **one click away**.
+
+Think of it as the node's **home page**: a status hero at the top with the two controls that matter
+most (**Install** and an **on/off toggle**), a grid of **live metric tiles** below, and a **gateway**
+and **security** summary. Tiles are **drill-in surfaces** — clicking *Shared files* opens the full
+pinset table; clicking *Peers* opens the Peers page. The heavy, row-per-CID **pinset table** is a
+distinct page ([pm/ipfs.mdx](./ipfs.mdx)) that now lives at **`/ipfs/pins`** and is reached *from*
+this dashboard — so this landing page stays clean and readable.
+
+> **Page split (LOCKED).** `/ipfs` = **this dashboard** (node status, install, on/off, metrics,
+> gateway, security). `/ipfs/pins` = the **pinset table** ([pm/ipfs.mdx](./ipfs.mdx)) — the "what is
+> actually pinned / import untracked" workhorse, reached from the *Shared files* tile here (and from
+> the left-bar disclosure children). Two pages, one section.
+
+Siblings this spec builds on and does not repeat:
+
+* [pm/ipfs.mdx](./ipfs.mdx) — the **pinset table** (`/ipfs/pins`): one row per pinned CID, tracked vs.
+  untracked, import. The *Shared files* tile is the door to it.
+* [pm/tools.mdx](./tools.mdx) — the **install-tools preflight**. The IPFS install here is the same
+  package-manager install that preflight defines, surfaced on the node's own page.
+* [knowledge/ipfs.mdx](../knowledge/ipfs.mdx) — what a **node / daemon / gateway / pin / reprovide
+  strategy** is, and the [only-our-content rule](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule).
+* [pm/settings.mdx](./settings.mdx) — where the reprovide strategy and public-gateway opt-out live.
+* [pm/left_bar.mdx](./left_bar.mdx) — the nav item; [pm/menus.mdx](./menus.mdx) — drill-in navigation.
+
+---
+
+## 1. Use case
+
+A user runs LargeFileBridge to sync their large, git-ignored files across their own computers over
+IPFS. IPFS is the engine underneath — but most users have **never run an IPFS node** and have no
+mental model of it. When something isn't syncing, the first question is almost always *"is IPFS even
+running?"* Today the answer is buried in a red/green word on the Scans page.
+
+This page exists so that a user can, without leaving the app or opening a terminal:
+
+* **See at a glance** whether IPFS is **installed** and **running** on this computer.
+* **Install it** with one click when it's missing — on whatever OS they're on — and **watch the
+  progress**; and if the automated install can't run, get the **exact command to paste** into a
+  terminal instead.
+* **Turn the node on or off** — because sometimes they just want it off on this machine for a while
+  (battery, bandwidth, privacy, they're travelling) and back on later.
+* **Understand what it's doing** — how many files it's sharing, how much disk it's using, how many of
+  their other computers it's connected to — and **click through** to the detail behind any number.
+* **Trust it** — confirm the node is only serving *their own* content (the only-our-content rule),
+  and fix it in one click if it drifts.
+
+Concrete moments this serves:
+
+* First run on a fresh laptop → *"IPFS isn't installed"* → **Install** → progress → running. Done.
+* "My files aren't showing up on my desktop" → open IPFS → the toggle says **Off** → **Turn on**.
+* "Is my stuff safe / private?" → the security card says **Only your content ✓**, gateway **local-only**.
+* Curiosity → *"812 GB across 1,204 files, 3 of my computers connected"* → click *Shared files* → the
+  pinset.
+
+---
+
+## 2. Goals
+
+1. **Answer "installed? running? should it be?" in under two seconds** — the hero card is legible at a
+   glance, no scrolling, no jargon.
+2. **Make install a one-click, cross-platform, watchable action** — detect macOS / Windows / Linux,
+   drive the right installer, show live progress, and **always** offer a copyable manual command as
+   the fallback that never fails.
+3. **Make on/off a single obvious toggle** — start or stop the daemon from the UI; reflect the real OS
+   state, not a wish.
+4. **Give the right level of dashboard** — a small set of **high-signal metric tiles**, each a door to
+   a deeper page. Clean first, deep on demand.
+5. **Guard privacy by default** — surface the only-our-content posture and fix drift, per the charter.
+6. **Be honest about errors** — every failure state names what happened and the next concrete step.
+7. **Nudge from everywhere** — when the node is missing or off, a small app-wide banner points back
+   here; when it's healthy, that banner is **absent** (no nagging).
+
+Non-goals: this page is **not** the pinset browser (that's [/ipfs/pins](./ipfs.mdx)); it does **not**
+manage individual files; it does **not** turn the machine into a public gateway (charter forbids it).
+
+---
+
+## 3. Audience
+
+* **Primary — the non-technical owner of a few computers.** Wants their videos on all their machines,
+  has never heard of "Kubo" or "a DHT." For them the page is: a light that's green or red, an Install
+  button, an on/off switch, and a couple of reassuring numbers.
+* **Secondary — the tinkerer / power user.** Wants the PeerID, the version, the repo size vs.
+  StorageMax, the reprovide strategy, the gateway URL, and a way to copy the manual install command.
+  They get all of it — in the tiles and the "details" drill-ins — without it cluttering the primary view.
+* **Tertiary — the future server operator.** Same page, `server` mode; install/toggle may be
+  read-only (managed by ops), metrics still shown. Design must not assume localhost-only.
+
+Design implication: **progressive disclosure.** The surface is calm and non-technical; every technical
+fact is present but tucked into a tile subtitle, a tooltip, or a details page.
+
+---
+
+## 4. What we can show for IPFS (the full inventory)
+
+IPFS exposes far more than "files." We deliberately choose a **curated** subset for the dashboard and
+push the rest into drill-ins. The full inventory, and where each lives:
+
+| # | Thing IPFS exposes | Where it comes from (Kubo RPC / CLI) | Shown on dashboard? |
+| --- | --- | --- | --- |
+| 1 | **Installed?** (CLI/binary present) | `which ipfs` / `where ipfs` / RPC reachability | **Hero** — primary |
+| 2 | **Running?** (daemon up) | RPC `id` reachable (health) | **Hero** — the on/off state |
+| 3 | **Version** | `ipfs version` / RPC `version` | Hero subtitle |
+| 4 | **PeerID** (node identity) | RPC `id` → `ID` | Hero (click-to-copy) |
+| 5 | **Shared files** (recursive+direct pins) | RPC `pin/ls` count | **Tile → /ipfs/pins** |
+| 6 | **Blocks / objects** in the repo | RPC `repo/stat` → `NumObjects` | **Tile** |
+| 7 | **Storage used** vs. **StorageMax** | RPC `repo/stat` → `RepoSize` / `StorageMax` | **Tile** (used / max) |
+| 8 | **Connected peers** (swarm) | RPC `swarm/peers` count | **Tile → /peers** |
+| 9 | **Bandwidth** (total in/out, rate) | RPC `stats/bw` | **Tile** (best-effort) |
+| 10 | **Gateway** — on? local-only? URL? kind? | config `Addresses.Gateway` + posture | **Gateway panel → details** |
+| 11 | **Reprovide strategy** (what we announce) | config `Reprovider/Provide.Strategy` | **Security card** |
+| 12 | **GC on?** (incidental cache is transient) | config `Datastore.GCPeriod` | **Security card** |
+| 13 | **Compliant?** (only-our-content) | derived from 10–12 (knowledge/ipfs.mdx §6) | **Security card** (Fix) |
+| 14 | **Repo path / IPFS_PATH** | `repo/stat` → `RepoPath` | Gateway/details drill-in |
+| 15 | **Directories / MFS roots shared** | MFS (`files/stat /`) | Details drill-in (advanced) |
+| 16 | **Addresses** (API addr, swarm addrs) | config `Addresses.*` | Details drill-in (advanced) |
+
+Tiles chosen for the dashboard: **Shared files (5)**, **Storage (7)**, **Blocks (6)**, **Peers (8)**,
+**Bandwidth (9)**. Everything else is hero, security card, gateway panel, or a details drill-in.
+
+---
+
+## 5. UI layout
+
+Standard app frame (256px left bar, [pm/left_bar.mdx](./left_bar.mdx)) + the routed content column.
+The dashboard has four stacked regions: **hero**, **metric tiles**, **gateway panel**, **security
+card**. What renders depends on the node state (§6).
+
+### 5.1 The healthy, running layout
+
+```
+┌────────────┬───────────────────────────────────────────────────────────────────────────┐
+│  LEFT BAR  │  IPFS                                                        ┌──────────┐   │
+│            │                                                              │ ⟳ Refresh│   │
+│ Repos      │                                                              └──────────┘   │
+│ File Sys   ├───────────────────────────────────────────────────────────────────────────┤
+│ Peers      │  ●  IPFS is running                            Kubo v0.29  ·  [  On ⏻ ]     │ ← HERO
+│ IPFS  ◀    │     PeerID 12D3…Kcb (copy)     Installed ✓                                  │
+│  (pins…)   ├───────────────────────────────────────────────────────────────────────────┤
+│ Scans      │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐          │ ← TILES
+│ Settings   │  │ Shared   │ │ Storage  │ │ Blocks   │ │ Peers    │ │ Bandwidth│          │
+│            │  │  1,204   │ │ 812 GB   │ │ 48,190   │ │   3      │ │ ▲12G ▼88G│          │
+│  [account] │  │  files › │ │ /10 GB * │ │          │ │ conn.  › │ │          │          │
+│            │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘          │
+│            ├───────────────────────────────────────────────────────────────────────────┤
+│            │  Gateway   local-only ✓   http://127.0.0.1:8081        [ Details › ]        │ ← GATEWAY
+│            ├───────────────────────────────────────────────────────────────────────────┤
+│            │  🛡  Only your content ✓   Reprovide: pinned ✓  Gateway: local-only ✓  GC on │ ← SECURITY
+└────────────┴───────────────────────────────────────────────────────────────────────────┘
+```
+
+* **Hero** — a status dot + sentence (*"IPFS is running"*), the version, and the **On/Off toggle** on
+  the right. Second line: **PeerID** (click-to-copy) and an **Installed ✓** confirmation.
+* **Tiles** — a responsive grid (wrap on narrow widths). Each tile: a **label**, a **big number**, a
+  short **subtitle/unit**, and a **›** affordance when it drills in. Non-drill tiles have no ›.
+* **Gateway panel** — one line: local-only ✓ (or a red *public* flag), the URL (click-to-copy), and a
+  **Details ›** link.
+* **Security card** — the only-our-content posture ([§8](#8-security-posture-card)), identical model
+  to the one already shipped, kept at the bottom as the trust line.
+
+### 5.2 Tile behavior (LOCKED)
+
+| Tile | Big number | Subtitle | Drills to |
+| --- | --- | --- | --- |
+| **Shared files** | recursive+direct pin count | `files` (+ untracked badge if any) | **`/ipfs/pins`** (pinset table) |
+| **Storage** | `RepoSize` (formatted) | `/ StorageMax` | Gateway/details (repo path) — or none |
+| **Blocks** | `NumObjects` | `blocks` | none (informational) |
+| **Peers** | swarm peer count | `connected` | **`/peers`** (Peers page) |
+| **Bandwidth** | ▲ total out / ▼ total in | rate in/out (best-effort) | none (informational) |
+
+* A tile whose value is **unknown** (RPC didn't answer) shows `—` and a tooltip, never a crash.
+* The **Shared files** tile shows an **accent Untracked badge** (e.g. `24 to import`) when the pinset
+  has untracked pins — the same number the pins page surfaces — so the door advertises the work behind it.
+
+### 5.3 Left-bar disclosure still belongs to the pinset
+
+The IPFS left-bar disclosure children (the **pinning repos**, [pm/ipfs.mdx §2.1](./ipfs.mdx#21-the-ipfs-left-bar-item-expands-into-pinning-repos-locked))
+are a property of the **pinset**, so a child now routes to **`/ipfs/pins?repo=<repoId>`**. The
+disclosure is open while any `/ipfs*` route is active (dashboard or pins). Clicking the **IPFS**
+parent lands on this **dashboard**.
+
+---
+
+## 6. Node states (what renders)
+
+The page is a small state machine over two booleans — **installed** and **running** — plus in-flight
+**install** / **starting** jobs.
+
+| State | Hero shows | Body shows |
+| --- | --- | --- |
+| **Not installed** (no CLI, no daemon) | red dot · *"IPFS isn't installed on this computer"* | the **Install card** (§7) — big primary **Install IPFS** button + what it is / why. No tiles. |
+| **Installing** (job running) | spinner · *"Installing IPFS…"* | the **progress view** (§7.2) — live log lines + phase. |
+| **Installed, stopped** | amber dot · *"IPFS is installed but not running"* | **Turn on** primary button; a slim, dimmed tile row (last-known or `—`). |
+| **Starting** (job running) | spinner · *"Starting the IPFS daemon…"* | progress view (§7.2), phase = starting. |
+| **Running** (healthy) | green dot · *"IPFS is running"* · On/Off toggle | full dashboard (§5.1). |
+| **Unreachable / error** | red dot · *"Can't reach the IPFS node"* | the **error panel** (§9) with cause + retry + manual command. |
+
+The **on/off toggle** is only meaningful once installed. **On** = daemon running; flipping **Off**
+stops the daemon (RPC `shutdown`); flipping **On** starts it (spawn `ipfs daemon`, then poll health).
+Both are **jobs with progress** (§7.2) because starting a daemon isn't instant.
+
+---
+
+## 7. Install & progress (cross-platform, watchable, always-has-a-fallback)
+
+### 7.1 The Install card (state = not installed)
+
+Shown when the `ipfs` CLI/daemon is absent. Contents:
+
+* A one-paragraph, plain-language *"IPFS is the engine that moves your big files between your
+  computers. It runs locally on this machine — it isn't a cloud service."*
+* The detected **platform** (macOS / Windows / Linux) and the **method** we'll use:
+  * **macOS** → Homebrew (`brew install ipfs`) when `brew` is present.
+  * **Windows** → winget (`winget install --id IPFS.Kubo -e`) when `winget` is present.
+  * **Linux** → the available package manager (snap, or the official tarball instructions) — best-effort.
+* A primary **Install IPFS** button → starts the install **job** (§7.2).
+* A secondary, always-present **"Install it yourself"** disclosure with the **exact command**
+  (click-to-copy) for the detected platform — so even if we can't run it, the user is never stuck.
+* If the **package manager itself is missing** (no brew/winget), we **don't** try to install a package
+  manager; we show its official install page + the manual command (mirrors [pm/tools.mdx](./tools.mdx)).
+
+### 7.2 The progress view (install OR start)
+
+Any long action — installing, or starting the daemon — routes into a **progress view** on this page
+(not a modal): a spinner, a **phase label**, and a **live, append-only log** of what's happening
+(`detecting → installing → initializing → starting → done`). Modeled on the app's existing job/scan
+progress pattern (server-side job, polled — so navigating away and back **re-attaches** to the same
+run; closing the tab does not cancel it).
+
+* Phases: **detecting** (find package manager / platform) → **installing** (run the installer,
+  streaming its output) → **initializing** (`ipfs init` if the repo is new) → **starting** (spawn the
+  daemon, wait for health) → **done** (dashboard renders) — or **error** at any step.
+* On **done**, the page flips to the running dashboard automatically.
+* On **error**, the progress view becomes the **error panel** (§9) carrying the failed phase, the
+  captured output tail, and the **manual command** to copy — the guaranteed escape hatch.
+
+### 7.3 Where install can also be triggered
+
+* From **this page's** Install card / Turn-on button.
+* From the **app-wide banner** (§10) on any other page.
+* From the **install-tools preflight** ([pm/tools.mdx](./tools.mdx)) when a scan needs `ipfs` and it's
+  missing. All three drive the **same** install job — never two at once (single-flight).
+
+---
+
+## 8. Security posture card
+
+Unchanged in model from what ships on the pinset page — reproduced here because the dashboard is the
+node's home. It reflects and **guards** the [only-our-content rule](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule):
+
+| Field | Compliant value |
+| --- | --- |
+| **Reprovide** | `pinned` (or `roots`) ✓ — never `all`. |
+| **Gateway** | **local-only** (127.0.0.1) ✓ — never public/recursive. |
+| **GC** | **on** ✓ — incidental third-party cache stays transient. |
+
+If the node announces `all`, or exposes a public/recursive gateway, the card shows a **red banner**
+*"This node is configured to serve more than your own content"* with a **Fix** that restores the
+[defaults](../knowledge/ipfs.mdx#10-concrete-defaults-lfb-should-adopt). The one accepted exception:
+the user **deliberately** flipped the public-gateway [setting](./settings.mdx) on this machine — then
+it's an amber *acknowledged* note, not a red error.
+
+---
+
+## 9. Errors — every failure is a designed state
+
+The page never dead-ends. Each failure names the cause and the next step.
+
+| Error | What we show | Primary action |
+| --- | --- | --- |
+| **CLI missing** | Install card (§7.1) | Install / copy command |
+| **Package manager missing** | "Homebrew/winget isn't installed" + official link + manual command | Copy command / open link |
+| **Install failed** | error panel: failed phase + output tail | Retry · Copy manual command |
+| **`ipfs init` failed** | error panel: init output | Retry · manual `ipfs init` |
+| **Daemon won't start** | error panel: start output (e.g. port 5001 busy, lock held) | Retry · copy log · troubleshooting hint |
+| **Daemon unreachable** (was running, now not) | red hero + "Can't reach the node" | Turn on · Retry · manual `ipfs daemon` |
+| **RPC timeout on a metric** | that tile shows `—` + tooltip; page stays up | Refresh |
+| **Compliance drift** | security red banner | Fix (§8) |
+
+Design rules: an error **replaces only the region it belongs to** (a dead metric tile doesn't blank
+the hero); the **manual command is always reachable** from any install/start failure; nothing is
+auto-retried silently — the user clicks **Retry** (charter consent posture).
+
+---
+
+## 10. The app-wide "IPFS is not running" nudge
+
+Per the prompt: even **outside** the IPFS page, if IPFS is missing or off, the user should be told —
+because nothing will sync and they may not know why.
+
+* A slim **banner** (app frame, above the routed content) appears on **every** page **only when** the
+  node is **not installed** or **not running**. It reads e.g. *"IPFS isn't running — your files can't
+  sync"* with a single button: **Install IPFS** (not installed) or **Start IPFS** (installed, off).
+* The button either starts the install/start **job** in place (with a link into the progress view) or
+  navigates to `/ipfs`.
+* **It must NOT appear when the node is installed and running** — a healthy node is silent. No nagging.
+* It reads a **cheap** node-summary (installed + running) on a slow poll — it must not walk the pinset.
+* On the IPFS page itself the banner is **suppressed** (the page already carries the full story).
+
+---
+
+## 11. Where the data comes from
+
+* A single **GET `/api/ipfs/node`** returns the dashboard payload: installed, running, version,
+  peerId, platform, install hint (the manual command), the metric block (pins, repo stat, swarm,
+  bandwidth), the gateway summary, and the posture (reprovide / gc / compliant / publicGateway).
+  Metric reads are **best-effort and bounded**: a slow or unset value comes back null → the tile shows
+  `—`. Reading is **metadata-only** (like the scan) — it opens no file and moves no bytes.
+* **POST `/api/ipfs/daemon`** `{action:"start"|"stop"}` — drives the on/off toggle; returns the fresh
+  node payload (or kicks a job, below).
+* **POST `/api/ipfs/install`** — starts the install **job** (single-flight); **GET
+  `/api/ipfs/install/status`** — polls the job (phase + log) for the progress view and the banner.
+* The **cheap** summary the banner polls is the same `/api/ipfs/node` narrowed to `{installed,
+  running}` (frontend `select`), so there's no second source of truth.
+* Install/start jobs are **server-side** and detached from the request (re-attachable, cancel-safe on
+  navigation) — same discipline as the scan job.
+
+---
+
+## 12. Acceptance criteria
+
+1. The **IPFS** left-bar item lands on **`/ipfs`** — this **dashboard** — with a hero (installed /
+   running / version / PeerID + on/off toggle), a metric-tile grid, a gateway panel, and the security
+   card. The **pinset table** is a separate page at **`/ipfs/pins`** ([pm/ipfs.mdx](./ipfs.mdx)),
+   reached from the **Shared files** tile and the left-bar disclosure children.
+2. The page renders the correct **state** (§6): not-installed → Install card; installing/starting →
+   progress view; installed-stopped → Turn on; running → full dashboard; unreachable → error panel.
+3. **Install is one click, cross-platform, and watchable**: the page detects macOS/Windows/Linux,
+   drives the platform installer, shows **live progress** (phases + log), and **always** offers a
+   copyable **manual command** fallback (and never tries to install a missing package manager) (§7).
+4. The **on/off toggle** starts/stops the daemon and reflects the **real** node state; both start and
+   stop run as **progress jobs** (§6, §7.2).
+5. **Metric tiles** show shared files, storage (used/max), blocks, connected peers, and bandwidth; each
+   drillable tile navigates (Shared files → `/ipfs/pins`, Peers → `/peers`); an unknown value shows `—`
+   without crashing the page (§5.2).
+6. The **security card** shows reprovide / gateway / GC / compliant and offers a **Fix** that restores
+   only-our-content defaults, with the deliberate public-gateway opt-out rendered amber not red (§8,
+   [knowledge/ipfs.mdx §6/§10](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule)).
+7. **Every failure is a designed state** (§9): CLI missing, package-manager missing, install failed,
+   init failed, daemon won't start, unreachable, metric timeout, compliance drift — each names the
+   cause and a concrete next step, and the manual command is always reachable from install/start
+   failures.
+8. An **app-wide banner** appears on every OTHER page **only when** IPFS is not installed or not
+   running, with an **Install / Start** action, and is **absent** when the node is healthy and
+   **suppressed** on the IPFS page itself (§10); it reads a cheap summary, never the pinset.
+9. Data comes from **`/api/ipfs/node`** (+ `/api/ipfs/daemon`, `/api/ipfs/install`,
+   `/api/ipfs/install/status`); reads are metadata-only and bounded; install/start are server-side,
+   single-flight, re-attachable jobs (§11).
+10. The left-bar **disclosure children** (pinning repos) route to **`/ipfs/pins?repo=<repoId>`** and the
+    disclosure stays open across `/ipfs` and `/ipfs/pins`; the **IPFS parent** lands on this dashboard
+    (§5.3).
+
+<!--
+  This is the IPFS DASHBOARD / node control-panel spec (the left-bar LANDING page at /ipfs), distinct
+  from pm/ipfs.mdx which is the PINSET TABLE (now at /ipfs/pins, reached from the Shared-files tile).
+  LOCKED: the page split (/ipfs dashboard vs /ipfs/pins table); the state machine over installed×running
+  (+ install/start jobs); install is cross-platform (brew/winget/pkg-mgr) with a LIVE progress view and
+  an ALWAYS-present copyable manual-command fallback (never install a missing package manager — mirror
+  tools.mdx); on/off toggle = start/stop the daemon as progress jobs; curated metric tiles (shared files,
+  storage, blocks, peers, bandwidth) each drilling in; security card = only-our-content (reprovide pinned,
+  gateway local-only, GC on) with Fix (knowledge/ipfs.mdx §6/§10); app-wide banner ONLY when not-installed
+  or not-running and NEVER when healthy (suppressed on /ipfs itself). Data: GET /api/ipfs/node (+ daemon,
+  install, install/status). Table/nav conventions come from repos.mdx/menus.mdx/left_bar.mdx — don't restate.
+-->

@@ -179,10 +179,18 @@ export function IpfsPage() {
   return (
     <div>
       <div className="mb-3 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">
-          IPFS
-          {repoName && <span className="font-normal text-black/50"> · {repoName}</span>}
-        </h1>
+        <div>
+          <button
+            onClick={() => navigate({ to: "/ipfs" })}
+            className="mb-0.5 text-xs text-black/50 hover:text-[var(--lfb-primary)]"
+          >
+            ‹ IPFS
+          </button>
+          <h1 className="text-2xl font-bold">
+            Shared files
+            {repoName && <span className="font-normal text-black/50"> · {repoName}</span>}
+          </h1>
+        </div>
         <div className="flex items-center gap-2">
           {untrackedCount > 0 && (
             <button

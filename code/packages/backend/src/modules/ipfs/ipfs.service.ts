@@ -128,6 +128,127 @@ export async function objectSize(cid: string): Promise<number | null> {
   }
 }
 
+// ── Node metrics for the dashboard (ipfs_ui.mdx §4/§5.2) — all best-effort, all nullable ─────
+/** Kubo version string (e.g. "0.29.0") over RPC; null when unreachable. */
+export async function version(): Promise<string | null> {
+  try {
+    const res = await rpc("version");
+    const json = (await res.json()) as { Version?: string };
+    return json.Version ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export interface RepoStat {
+  repoSizeBytes: number | null;
+  storageMaxBytes: number | null;
+  numObjects: number | null;
+  repoPath: string | null;
+}
+
+/** `repo/stat` — bytes on disk, the GC cap, block count, and repo path. Any field may be null. */
+export async function repoStat(): Promise<RepoStat> {
+  try {
+    const res = await rpc("repo/stat");
+    const json = (await res.json()) as {
+      RepoSize?: number;
+      StorageMax?: number;
+      NumObjects?: number;
+      RepoPath?: string;
+    };
+    return {
+      repoSizeBytes: typeof json.RepoSize === "number" ? json.RepoSize : null,
+      storageMaxBytes: typeof json.StorageMax === "number" ? json.StorageMax : null,
+      numObjects: typeof json.NumObjects === "number" ? json.NumObjects : null,
+      repoPath: json.RepoPath ?? null,
+    };
+  } catch {
+    return { repoSizeBytes: null, storageMaxBytes: null, numObjects: null, repoPath: null };
+  }
+}
+
+/** Count of currently-connected swarm peers (`swarm/peers`); null when unreachable. */
+export async function swarmPeerCount(): Promise<number | null> {
+  try {
+    const res = await rpc("swarm/peers");
+    const json = (await res.json()) as { Peers?: unknown[] };
+    return Array.isArray(json.Peers) ? json.Peers.length : 0;
+  } catch {
+    return null;
+  }
+}
+
+export interface Bandwidth {
+  totalIn: number | null;
+  totalOut: number | null;
+  rateIn: number | null;
+  rateOut: number | null;
+}
+
+/** Cumulative + instantaneous bandwidth (`stats/bw`); best-effort, may be all null. */
+export async function bandwidth(): Promise<Bandwidth> {
+  try {
+    const res = await rpc("stats/bw");
+    const json = (await res.json()) as {
+      TotalIn?: number;
+      TotalOut?: number;
+      RateIn?: number;
+      RateOut?: number;
+    };
+    return {
+      totalIn: typeof json.TotalIn === "number" ? json.TotalIn : null,
+      totalOut: typeof json.TotalOut === "number" ? json.TotalOut : null,
+      rateIn: typeof json.RateIn === "number" ? json.RateIn : null,
+      rateOut: typeof json.RateOut === "number" ? json.RateOut : null,
+    };
+  } catch {
+    return { totalIn: null, totalOut: null, rateIn: null, rateOut: null };
+  }
+}
+
+/** Ask the daemon to shut itself down (RPC `shutdown`). Used by the on/off toggle (ipfs_ui.mdx §6). */
+export async function shutdownDaemon(): Promise<void> {
+  await rpc("shutdown");
+}
+
+export interface GatewaySummary {
+  enabled: boolean;
+  localOnly: boolean;
+  url: string | null;
+  addr: string | null;
+}
+
+/** Turn a `/ip4/HOST/tcp/PORT` multiaddr into an http URL, or null when it can't be parsed. */
+function multiaddrToUrl(addr: string): string | null {
+  const m = addr.match(/\/ip[46]\/([^/]+)\/tcp\/(\d+)/);
+  if (!m) return null;
+  const host = m[1] === "::1" || m[1] === "0.0.0.0" ? "127.0.0.1" : m[1];
+  return `http://${host}:${m[2]}`;
+}
+
+/** Gateway posture for the dashboard: is it on, loopback-only, and at what URL. */
+export async function gatewaySummary(): Promise<GatewaySummary> {
+  const cfgAddr = getAppConfig().ipfs.gateway_addr;
+  try {
+    const gwAddr = await getConfigKey("Addresses.Gateway");
+    const gateways = Array.isArray(gwAddr) ? (gwAddr as string[]) : gwAddr ? [String(gwAddr)] : [];
+    const list = gateways.length ? gateways : cfgAddr ? [cfgAddr] : [];
+    const enabled = list.length > 0;
+    const localOnly = enabled && list.every((a) => LOOPBACK.test(a));
+    const addr = list[0] ?? null;
+    return { enabled, localOnly, url: addr ? multiaddrToUrl(addr) : null, addr };
+  } catch {
+    const addr = cfgAddr || null;
+    return {
+      enabled: Boolean(addr),
+      localOnly: addr ? LOOPBACK.test(addr) : true,
+      url: addr ? multiaddrToUrl(addr) : null,
+      addr,
+    };
+  }
+}
+
 /** A snapshot of the node's only-our-content posture for the IPFS page card (ipfs.mdx §3). */
 export interface NodePosture {
   reprovideStrategy: "pinned" | "roots" | "all";

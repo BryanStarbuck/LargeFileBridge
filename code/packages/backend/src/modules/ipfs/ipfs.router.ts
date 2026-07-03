@@ -4,11 +4,36 @@ import { z } from "zod";
 import { requireAllowListed } from "../auth/identify.js";
 import { scanAll } from "../scanner/scanner.service.js";
 import { computeIpfsPage, importPins } from "./ipfs-page.service.js";
+import { nodeStatus, startInstall, getJob, controlDaemon } from "./ipfs-node.service.js";
 import * as ipfs from "./ipfs.service.js";
 import { log } from "../../shared/logging.js";
 
 export const ipfsRouter = Router();
 ipfsRouter.use(requireAllowListed);
+
+// ── The IPFS dashboard (ipfs_ui.mdx): node status, install, on/off toggle ────
+// GET /api/ipfs/node — installed? running? version, peerId, live metrics, gateway, posture.
+ipfsRouter.get("/node", async (_req, res) => {
+  res.json({ ok: true, data: await nodeStatus() });
+});
+
+// POST /api/ipfs/install — start the single-flight install job (progress via /install/status).
+ipfsRouter.post("/install", (_req, res) => {
+  res.json({ ok: true, data: startInstall() });
+});
+
+// GET /api/ipfs/install/status — poll the current install/start/stop job for the progress view.
+ipfsRouter.get("/install/status", (_req, res) => {
+  res.json({ ok: true, data: getJob() });
+});
+
+// POST /api/ipfs/daemon — the on/off toggle: { action: "start" | "stop" }.
+ipfsRouter.post("/daemon", async (req, res) => {
+  const body = z.object({ action: z.enum(["start", "stop"]) }).safeParse(req.body ?? {});
+  if (!body.success) return res.status(400).json({ ok: false, error: body.error.message });
+  log.info("ipfs", `daemon ${body.data.action} requested`);
+  res.json({ ok: true, data: await controlDaemon(body.data.action) });
+});
 
 // GET /api/ipfs — node card + one row per pinned root CID + the pinning-repo groups (left-bar children).
 ipfsRouter.get("/", async (_req, res) => {

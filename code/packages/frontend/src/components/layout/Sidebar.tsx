@@ -80,7 +80,7 @@ export function Sidebar({ user }: { user: CurrentUser }) {
                   return (
                     <Link
                       key={repo.repoId}
-                      to="/ipfs"
+                      to="/ipfs/pins"
                       search={{ repo: repo.repoId }}
                       title={`${repo.name} — ${repo.pinnedCount} pinned`}
                       className="mx-2 my-0.5 flex items-center gap-2 rounded-md py-1.5 pl-9 pr-3 text-sm hover:bg-slate-100"
