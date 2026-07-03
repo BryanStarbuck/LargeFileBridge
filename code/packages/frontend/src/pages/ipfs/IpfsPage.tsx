@@ -5,8 +5,8 @@
 // the answer first, the internals a click away.
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useSearch } from "@tanstack/react-router";
-import { RefreshCw, Copy, Check, DownloadCloud, ShieldCheck } from "lucide-react";
+import { useNavigate, useSearch, Link } from "@tanstack/react-router";
+import { RefreshCw, Copy, Check, DownloadCloud, ShieldCheck, ChevronLeft } from "lucide-react";
 import { toast } from "sonner";
 import type { IpfsPageData, IpfsPinRow, IpfsNodeCard } from "@lfb/shared";
 import { formatBytes } from "@lfb/shared";
