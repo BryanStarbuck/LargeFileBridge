@@ -187,13 +187,18 @@ export function IpfsPage() {
   return (
     <div>
       <PageHeader
+        above={
+          <Link to="/ipfs" className="flex items-center gap-1 text-sm text-black/50 hover:text-black">
+            <ChevronLeft className="h-4 w-4" /> IPFS
+          </Link>
+        }
         title={
           <>
-            IPFS
+            Shared files
             {repoName && <span className="font-normal text-black/50"> · {repoName}</span>}
           </>
         }
-        subtitle="Your local IPFS engine — the peer-to-peer transport that moves your big files between your computers."
+        subtitle="Every file this computer is pinning over IPFS — the ground truth of what's shared across your machines."
         actions={
           <>
             {untrackedCount > 0 && (
