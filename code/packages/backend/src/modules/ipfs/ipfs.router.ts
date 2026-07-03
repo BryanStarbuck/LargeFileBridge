@@ -59,6 +59,21 @@ ipfsRouter.post("/import", async (req, res) => {
   res.json({ ok: true, data: { imported, skipped: Math.max(0, skipped), data } });
 });
 
+// POST /api/ipfs/pin — pin/unpin a single CID (ipfs.mdx §3). Backs the toggle pin control shown
+// wherever a file/CID that can be pinned appears. Reads the state back so the UI settles on truth.
+ipfsRouter.post("/pin", async (req, res) => {
+  const body = z
+    .object({ cid: z.string().min(1), pinned: z.boolean() })
+    .safeParse(req.body ?? {});
+  if (!body.success) return res.status(400).json({ ok: false, error: body.error.message });
+  const { cid, pinned } = body.data;
+  if (pinned) await ipfs.pinAdd(cid);
+  else await ipfs.pinRm(cid);
+  const verified = await ipfs.isPinned(cid);
+  log.info("ipfs", `pin ${pinned ? "add" : "rm"} ${cid} -> pinned=${verified}`);
+  res.json({ ok: true, data: { cid, pinned: verified } });
+});
+
 // POST /api/ipfs/enforce — restore only-our-content defaults on the live node (ipfs.mdx §3.1 Fix).
 ipfsRouter.post("/enforce", async (_req, res) => {
   await ipfs.enforceCompliance();

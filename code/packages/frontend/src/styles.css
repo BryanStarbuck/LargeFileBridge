@@ -5,6 +5,11 @@
   --lfb-primary-tint: rgba(37, 99, 235, 0.1);
   --lfb-border: #e2e8f0;
 
+  /* Pin toggle (ipfs.mdx §3). One control everywhere a file/CID can be pinned:
+     SOLID dark-blue fill = pinned; muted outline = not pinned. */
+  --lfb-pin: #1e40af; /* blue-800 — our dark blue, the "pinned" fill */
+  --lfb-pin-muted: #94a3b8; /* slate-400 — the empty (not-pinned) outline */
+
   /* Health model (use_cases.mdx §1, LOCKED). Fixed / Improvable / Broken.
      One vocabulary, one color language — every page's health color comes from here. */
   --lfb-ok: #16a34a; /* green-600  — Fixed */

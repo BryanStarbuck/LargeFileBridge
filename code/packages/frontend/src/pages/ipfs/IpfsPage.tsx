@@ -14,6 +14,8 @@ import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
 import { EntityKebab } from "../../components/menu/EntityMenu.js";
+import { PinToggle } from "../../components/PinToggle.js";
+import { usePinCid } from "../../components/usePinCid.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { StatusBanner, FixButton } from "../../components/ui/StatusBanner.js";
 import { DiagnosticCard } from "../../components/ui/DiagnosticCard.js";
@@ -31,6 +33,7 @@ export function IpfsPage() {
   const { repo } = useSearch({ strict: false }) as { repo?: string };
   const [untrackedOnly, setUntrackedOnly] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const pin = usePinCid(); // per-CID pin/unpin toggle (ipfs.mdx §3)
 
   const { data, isLoading } = useQuery({ queryKey: ["ipfs"], queryFn: api.ipfs });
 
@@ -80,18 +83,61 @@ export function IpfsPage() {
 
   const columns: LfbColumn<IpfsPinRow>[] = [
     {
-      id: "file",
-      header: "File / CID",
+      // The toggle pin: solid dark-blue = pinned, outline = not. Every pins-page row is a real CID
+      // in the local pinset, so it starts pinned; clicking runs pin add/rm on the node (ipfs.mdx §3).
+      id: "pinned",
+      header: "Pin",
       kind: "text",
-      accessor: (p) => p.file ?? p.cid,
+      sortable: false,
+      filterable: false,
+      accessor: () => "",
+      cell: (p) => {
+        const pinned = pin.isPinned(p.cid, true);
+        return (
+          <PinToggle
+            pinned={pinned}
+            busy={pin.isBusy(p.cid)}
+            disabled={nodeDown}
+            onToggle={() => pin.toggle(p.cid, pinned)}
+          />
+        );
+      },
+    },
+    {
+      id: "file",
+      header: "File name",
+      kind: "text",
+      accessor: (p) => p.file ?? "",
       cell: (p) =>
         p.file ? (
-          <span className="font-medium" title={p.path ?? p.file}>
+          <span className="font-medium" title={p.file}>
             {p.file}
           </span>
         ) : (
-          <CidCell cid={p.cid} />
+          <span className="text-black/30">—</span>
         ),
+    },
+    {
+      id: "path",
+      header: "Path",
+      kind: "text",
+      accessor: (p) => p.path ?? "",
+      cell: (p) =>
+        p.path ? (
+          <span className="text-black/60" title={p.path}>
+            {middleTruncate(p.path, 44)}
+          </span>
+        ) : (
+          <span className="text-black/30">—</span>
+        ),
+    },
+    {
+      // Narrow CID column: show ~10 characters with a middle ellipsis; click to copy the full CID.
+      id: "cid",
+      header: "CID",
+      kind: "text",
+      accessor: (p) => p.cid,
+      cell: (p) => <CidCell cid={p.cid} />,
     },
     {
       id: "size",
@@ -102,8 +148,8 @@ export function IpfsPage() {
       cell: (p) => (p.sizeBytes > 0 ? formatBytes(p.sizeBytes) : "—"),
     },
     {
-      id: "pin",
-      header: "Pin",
+      id: "pintype",
+      header: "Type",
       kind: "enum",
       accessor: (p) => p.pinType,
       filterOptions: PIN_TYPES,
@@ -275,7 +321,7 @@ export function IpfsPage() {
           <DataTable
             data={rows}
             columns={columns}
-            searchKeys={(p) => `${p.file ?? ""} ${p.cid} ${p.unit ?? ""}`}
+            searchKeys={(p) => `${p.file ?? ""} ${p.path ?? ""} ${p.cid} ${p.unit ?? ""}`}
             getRowId={(p) => p.cid}
             onRowClick={(p) => p.path && navigate({ to: "/file", search: { path: p.path } })}
             itemNoun="pinned"
@@ -427,7 +473,8 @@ function TrackedPill({ tracked }: { tracked: "synced" | "path-less" }) {
 }
 
 function CidCell({ cid }: { cid: string }) {
-  return <CopyText text={cid} display={middleTruncate(cid, 24)} mono />;
+  // Narrow by design (charter): show ~10 chars with a middle ellipsis; the full CID is the copy value.
+  return <CopyText text={cid} display={middleTruncate(cid, 10)} mono />;
 }
 
 function CopyText({ text, display, mono }: { text: string; display: string; mono?: boolean }) {

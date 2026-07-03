@@ -16,6 +16,7 @@ import { formatBytes } from "@lfb/shared";
 import { api } from "@/api/client";
 import { Badges } from "@/components/fs/Badges";
 import { EntityMore } from "@/components/menu/EntityMenu";
+import { PinToggle } from "@/components/PinToggle";
 import { patchEntityBadges } from "@/lib/patchEntityBadges";
 import { EntityHeaderMissing } from "./entityShared";
 import { relativeTime, absoluteTime } from "@/lib/format";
@@ -103,6 +104,14 @@ export function MediaViewer({ kind }: { kind: MediaKind }) {
 
       {/* Action-button row (media_viewer.mdx §4) */}
       <div className="mt-3 flex flex-wrap items-center gap-2">
+        {v.repo && !v.flags.neverIpfs && (
+          <PinToggle
+            pinned={v.decision === "sync"}
+            disabled={!ipfsReachable}
+            size={18}
+            onToggle={() => decide.mutate(v.decision === "sync" ? "ignore" : "sync")}
+          />
+        )}
         <IpfsPrimary view={v} decide={decide} ipfsReachable={ipfsReachable} />
         <RepoChip view={v} navigate={navigate} />
         <CompressChip view={v} />

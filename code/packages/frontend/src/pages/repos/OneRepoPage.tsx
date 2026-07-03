@@ -15,6 +15,7 @@ import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
 import { RepoStatusPill, TransferPill } from "../../components/Pill.js";
 import { EntityKebab } from "../../components/menu/EntityMenu.js";
+import { PinToggle } from "../../components/PinToggle.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { StatusBanner, FixButton } from "../../components/ui/StatusBanner.js";
 import { Disclosure } from "../../components/ui/Disclosure.js";
@@ -54,6 +55,28 @@ export function OneRepoPage() {
   const ipfsDown = detail?.ipfs === "unreachable";
 
   const columns: LfbColumn<FileRow>[] = [
+    {
+      // Same toggle pin as everywhere (ipfs.mdx §3): solid dark-blue = pinned (this file is synced
+      // over IPFS), outline = not. Toggling flips the sync⇄ignore decision that governs the pin.
+      id: "pinned",
+      header: "Pin",
+      kind: "text",
+      sortable: false,
+      filterable: false,
+      accessor: () => "",
+      cell: (f) => {
+        const pinned = f.decision === "sync";
+        return (
+          <PinToggle
+            pinned={pinned}
+            disabled={ipfsDown}
+            onToggle={() =>
+              setDecision.mutate({ paths: [f.path], decision: pinned ? "ignore" : "sync" })
+            }
+          />
+        );
+      },
+    },
     {
       id: "path",
       header: "File",

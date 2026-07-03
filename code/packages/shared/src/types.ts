@@ -130,6 +130,14 @@ export interface IpfsImportResult {
   data: IpfsPageData; // fresh page payload after the import
 }
 
+// POST /api/ipfs/pin — pin/unpin a single CID (`ipfs pin add` / `ipfs pin rm`, ipfs.mdx §3).
+// Drives the toggle pin control shown on every file/CID that can be pinned. The returned `pinned`
+// is the VERIFIED state read back from the node, so the UI settles on ground truth after the toggle.
+export interface IpfsPinToggle {
+  cid: string;
+  pinned: boolean;
+}
+
 // ── The IPFS DASHBOARD / node control panel (ipfs_ui.mdx) ────────────────────
 // The landing page at /ipfs: is the node installed & running, an on/off toggle, live metrics,
 // gateway summary, and the only-our-content posture. The pinset table (above) is a drill-in.

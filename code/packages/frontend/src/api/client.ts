@@ -25,6 +25,7 @@ import type {
   IpfsHealth,
   IpfsPageData,
   IpfsImportResult,
+  IpfsPinToggle,
   IpfsNodeStatus,
   IpfsInstallJob,
   IpfsDaemonResult,
@@ -91,6 +92,9 @@ export const api = {
   ipfsRescan: () => unwrap<IpfsPageData>(http.post("/ipfs/rescan")),
   ipfsImport: (body: { cids?: string[]; all?: boolean }) =>
     unwrap<IpfsImportResult>(http.post("/ipfs/import", body)),
+  // Toggle a single CID's pin (ipfs.mdx §3). Returns the VERIFIED state read back from the node.
+  ipfsPin: (body: { cid: string; pinned: boolean }) =>
+    unwrap<IpfsPinToggle>(http.post("/ipfs/pin", body)),
   ipfsEnforce: () => unwrap<IpfsPageData>(http.post("/ipfs/enforce")),
 
   // IPFS dashboard (ipfs_ui.mdx) — node status, install, on/off toggle, install/start progress.
