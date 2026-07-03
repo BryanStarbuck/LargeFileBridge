@@ -229,23 +229,25 @@ function multiaddrToUrl(addr: string): string | null {
 
 /** Gateway posture for the dashboard: is it on, loopback-only, and at what URL. */
 export async function gatewaySummary(): Promise<GatewaySummary> {
-  const cfgAddr = getAppConfig().ipfs.gateway_addr;
-  try {
-    const gwAddr = await getConfigKey("Addresses.Gateway");
-    const gateways = Array.isArray(gwAddr) ? (gwAddr as string[]) : gwAddr ? [String(gwAddr)] : [];
-    const list = gateways.length ? gateways : cfgAddr ? [cfgAddr] : [];
-    const enabled = list.length > 0;
-    const localOnly = enabled && list.every((a) => LOOPBACK.test(a));
-    const addr = list[0] ?? null;
+  // localOnly means "not exposing a PUBLIC gateway": NO gateway at all is the safest state and counts
+  // as local-only (knowledge/ipfs.mdx §6/§8). A gateway bound only to loopback is also local-only.
+  const summarize = (list: string[]): GatewaySummary => {
+    const addrs = list.filter(Boolean);
+    const enabled = addrs.length > 0;
+    const localOnly = !enabled || addrs.every((a) => LOOPBACK.test(a));
+    const addr = addrs[0] ?? null;
     return { enabled, localOnly, url: addr ? multiaddrToUrl(addr) : null, addr };
+  };
+  try {
+    // Authoritative: the LIVE node config. An empty value means it serves no gateway — do NOT fall
+    // back to the app-config default here (that would advertise a gateway URL that isn't served).
+    const gwAddr = await getConfigKey("Addresses.Gateway");
+    const list = Array.isArray(gwAddr) ? gwAddr.map(String) : gwAddr ? [String(gwAddr)] : [];
+    return summarize(list);
   } catch {
-    const addr = cfgAddr || null;
-    return {
-      enabled: Boolean(addr),
-      localOnly: addr ? LOOPBACK.test(addr) : true,
-      url: addr ? multiaddrToUrl(addr) : null,
-      addr,
-    };
+    // Node unreachable — fall back to the configured intent just for display.
+    const cfgAddr = getAppConfig().ipfs.gateway_addr;
+    return summarize(cfgAddr ? [cfgAddr] : []);
   }
 }
 
@@ -268,8 +270,10 @@ export async function nodePosture(): Promise<NodePosture> {
         ? (strat as "pinned" | "roots" | "all")
         : cfg.ipfs.reprovide_strategy;
     const gwAddr = await getConfigKey("Addresses.Gateway");
-    const gateways = Array.isArray(gwAddr) ? (gwAddr as string[]) : gwAddr ? [String(gwAddr)] : [];
-    const gatewayLocalOnly = gateways.length > 0 && gateways.every((a) => LOOPBACK.test(a));
+    const gateways = (Array.isArray(gwAddr) ? gwAddr.map(String) : gwAddr ? [String(gwAddr)] : []).filter(Boolean);
+    // NO gateway is the safest state (nothing served publicly) → local-only. A configured gateway is
+    // local-only iff every address is loopback (knowledge/ipfs.mdx §6/§8).
+    const gatewayLocalOnly = gateways.length === 0 || gateways.every((a) => LOOPBACK.test(a));
     // Best-effort: a non-empty GCPeriod means GC is configured to reclaim incidental third-party
     // cache (knowledge/ipfs.mdx §4). RPC can't observe whether the daemon was launched with
     // --enable-gc, so this reads the intent, not the runtime flag.

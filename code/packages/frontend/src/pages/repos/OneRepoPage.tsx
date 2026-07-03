@@ -1,8 +1,12 @@
-// The per-repo screen (one_repo.mdx): status strip + files table where decisions are made.
+// The per-repo screen (one_repo.mdx + use_cases.mdx §5.4). The StatusBanner here is the UC-2
+// diagnosis engine: "a file didn't show up on my other computer" — it names the FIRST real cause
+// worst-first (IPFS down → synced-but-no-peers → undecided → pending) and hands over the one fix,
+// so a non-expert never has to guess which of the four it was. The files table is unchanged; the old
+// status strip moves into a collapsed "Repo details" disclosure.
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
-import { RefreshCw, Settings, ChevronLeft } from "lucide-react";
+import { RefreshCw, Settings, ChevronLeft, Network, UploadCloud } from "lucide-react";
 import { toast } from "sonner";
 import type { FileRow, Decision, RepoDetail } from "@lfb/shared";
 import { formatBytes } from "@lfb/shared";
@@ -11,6 +15,10 @@ import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
 import { RepoStatusPill, TransferPill } from "../../components/Pill.js";
 import { EntityKebab } from "../../components/menu/EntityMenu.js";
+import { PageHeader } from "../../components/ui/PageHeader.js";
+import { StatusBanner, FixButton } from "../../components/ui/StatusBanner.js";
+import { Disclosure } from "../../components/ui/Disclosure.js";
+import { type Health } from "../../components/ui/health.js";
 import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
 
 const DECISIONS: Decision[] = ["sync", "ignore", "undecided"];
@@ -104,55 +112,51 @@ export function OneRepoPage() {
 
   return (
     <div>
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
+      <PageHeader
+        above={
           <Link to="/" className="flex items-center gap-1 text-sm text-black/50 hover:text-black">
-            <ChevronLeft className="h-4 w-4" /> Repos / <span className="font-semibold text-black">{detail?.name}</span>
+            <ChevronLeft className="h-4 w-4" /> Repos
           </Link>
-          <div className="text-sm text-black/50">{detail?.path}</div>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => navigate({ to: "/repos/$repoId/settings", params: { repoId } })}
-            title="Repo settings"
-            className="rounded-md border border-[var(--lfb-border)] p-2 hover:bg-slate-100"
-          >
-            <Settings className="h-4 w-4" />
-          </button>
-          <button
-            onClick={() => syncNow.mutate(undefined)}
-            disabled={syncNow.isPending || ipfsDown}
-            title={ipfsDown ? "IPFS node unreachable" : "Sync this repo now"}
-            className="flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:opacity-50"
-          >
-            <RefreshCw className={`h-4 w-4 ${syncNow.isPending ? "animate-spin" : ""}`} />
-            {syncNow.isPending ? "Syncing…" : "Sync now"}
-          </button>
-        </div>
-      </div>
+        }
+        title={detail?.name ?? "…"}
+        subtitle={detail?.path}
+        actions={
+          <>
+            <button
+              onClick={() => navigate({ to: "/repos/$repoId/settings", params: { repoId } })}
+              title="Repo settings"
+              className="rounded-md border border-[var(--lfb-border)] p-2 hover:bg-slate-100"
+            >
+              <Settings className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => syncNow.mutate(undefined)}
+              disabled={syncNow.isPending || ipfsDown}
+              title={ipfsDown ? "IPFS node unreachable" : "Sync this repo now"}
+              className="flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:opacity-50"
+            >
+              <RefreshCw className={`h-4 w-4 ${syncNow.isPending ? "animate-spin" : ""}`} />
+              {syncNow.isPending ? "Syncing…" : "Sync now"}
+            </button>
+          </>
+        }
+      />
 
-      {/* Status strip */}
-      <div className="my-3 flex flex-wrap items-center gap-x-6 gap-y-1 rounded-lg border border-[var(--lfb-border)] px-4 py-2 text-sm">
-        <span>Sync <b>{detail?.synced ? "on" : "off"}</b></span>
-        <span className="flex items-center gap-1">Status {detail && <RepoStatusPill status={detail.status} />}</span>
-        <span>Peers <b>{detail?.peerCount ?? 0}</b></span>
-        <span>Last sync <b title={absoluteTime(detail?.lastSyncAt ?? null)}>{relativeTime(detail?.lastSyncAt ?? null)}</b></span>
-        <span className={ipfsDown ? "text-red-600" : "text-green-700"}>
-          IPFS {ipfsDown ? "unreachable" : "ok"}
-        </span>
-      </div>
-
-      {ipfsDown && (
-        <div className="mb-2 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
-          The local IPFS node is unreachable — Sync now and transfers are paused, but decisions still save.
-        </div>
+      {detail && (
+        <RepoVerdict
+          detail={detail}
+          onSyncNow={() => syncNow.mutate(undefined)}
+          syncing={syncNow.isPending}
+          navigate={navigate}
+        />
       )}
 
       {/* Summary counts (quick filters would live here) */}
       {c && (
         <div className="mb-1 text-sm text-black/70">
-          {c.synced + c.pending} Sync · <span className={c.undecided > 0 ? "text-[var(--lfb-primary)] font-medium" : ""}>{c.undecided} Undecided</span> · {c.ignored} Ignore
+          {c.synced + c.pending} Sync ·{" "}
+          <span className={c.undecided > 0 ? "text-[var(--lfb-primary)] font-medium" : ""}>{c.undecided} Undecided</span> ·{" "}
+          {c.ignored} Ignore
         </div>
       )}
 
@@ -190,6 +194,96 @@ export function OneRepoPage() {
         }}
         empty={<p className="text-center text-black/60">No large files found in this repo.</p>}
       />
+
+      {/* Repo details — the old status strip, now the mechanism a click away. */}
+      {detail && (
+        <div className="mt-3">
+          <Disclosure label="Repo details">
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
+              <span>Sync <b>{detail.synced ? "on" : "off"}</b></span>
+              <span className="flex items-center gap-1">Status <RepoStatusPill status={detail.status} /></span>
+              <span>Peers <b>{detail.peerCount}</b></span>
+              <span>Last sync <b title={absoluteTime(detail.lastSyncAt)}>{relativeTime(detail.lastSyncAt)}</b></span>
+              <span style={{ color: ipfsDown ? "var(--lfb-bad)" : "var(--lfb-ok)" }}>
+                IPFS {ipfsDown ? "unreachable" : "ok"}
+              </span>
+            </div>
+          </Disclosure>
+        </div>
+      )}
     </div>
   );
+}
+
+// ── UC-2 diagnosis: name the first real cause, worst-first, and hand over the one fix. ──────────
+function RepoVerdict({
+  detail,
+  onSyncNow,
+  syncing,
+  navigate,
+}: {
+  detail: RepoDetail;
+  onSyncNow: () => void;
+  syncing: boolean;
+  navigate: ReturnType<typeof useNavigate>;
+}) {
+  const ipfsDown = detail.ipfs === "unreachable";
+  const { synced, pending, undecided } = detail.counts;
+  // Files set to sync that aren't on ANY other computer yet — synced locally, but not backed up.
+  const noPeerCount = detail.files.filter((f) => f.decision === "sync" && f.peers.length === 0).length;
+
+  let state: Health = "ok";
+  let headline = "Everything here is synced and backed up";
+  let sub: string | undefined = detail.lastSyncAt
+    ? `Last sync ${relativeTime(detail.lastSyncAt)} · ${detail.peerCount} peer${detail.peerCount === 1 ? "" : "s"}.`
+    : undefined;
+  let action: React.ReactNode = undefined;
+
+  if (ipfsDown) {
+    state = "bad";
+    headline = "Syncing is paused — the IPFS engine on this computer isn't running";
+    sub = "Decisions still save, but no files can move until IPFS starts.";
+    action = (
+      <FixButton state="bad" onClick={() => navigate({ to: "/ipfs" })}>
+        <UploadCloud className="h-4 w-4" /> Open IPFS
+      </FixButton>
+    );
+  } else if (detail.status === "error") {
+    state = "bad";
+    headline = "This repo hit an error on its last sync";
+    sub = "Open the details below, or try Sync now.";
+    action = (
+      <FixButton state="bad" onClick={onSyncNow} disabled={syncing}>
+        <RefreshCw className="h-4 w-4" /> Sync now
+      </FixButton>
+    );
+  } else if (noPeerCount > 0) {
+    state = "warn";
+    headline = `${noPeerCount} synced file${noPeerCount === 1 ? " isn't" : "s aren't"} on any other computer yet`;
+    sub = "They live only on this machine — not backed up. Open LFBridge on your other computer so it can pull them.";
+    action = (
+      <FixButton state="warn" onClick={() => navigate({ to: "/peers" })}>
+        <Network className="h-4 w-4" /> See peers
+      </FixButton>
+    );
+  } else if (undecided > 0) {
+    state = "warn";
+    headline = `${undecided} file${undecided === 1 ? "" : "s"} need${undecided === 1 ? "s" : ""} a decision`;
+    sub = "Choose Sync or Ignore for them in the table below so LFBridge knows what to move.";
+  } else if (pending > 0) {
+    state = "warn";
+    headline = `${pending} file${pending === 1 ? " is" : "s are"} queued to transfer`;
+    sub = "They'll move on the next scheduled sync, or sync them now.";
+    action = (
+      <FixButton state="warn" onClick={onSyncNow} disabled={syncing}>
+        <RefreshCw className="h-4 w-4" /> Sync now
+      </FixButton>
+    );
+  } else if (synced === 0) {
+    state = "neutral";
+    headline = "Nothing set to sync in this repo yet";
+    sub = "Set files to Sync below, or from the File System, to start bridging them.";
+  }
+
+  return <StatusBanner state={state} headline={headline} sub={sub} action={action} />;
 }

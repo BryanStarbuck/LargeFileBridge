@@ -5,6 +5,15 @@
   --lfb-primary-tint: rgba(37, 99, 235, 0.1);
   --lfb-border: #e2e8f0;
 
+  /* Health model (use_cases.mdx §1, LOCKED). Fixed / Improvable / Broken.
+     One vocabulary, one color language — every page's health color comes from here. */
+  --lfb-ok: #16a34a; /* green-600  — Fixed */
+  --lfb-ok-bg: #f0fdf4; /* green-50 */
+  --lfb-warn: #d97706; /* amber-600  — Improvable (an offer, never an alarm) */
+  --lfb-warn-bg: #fffbeb; /* amber-50 */
+  --lfb-bad: #dc2626; /* red-600    — Broken */
+  --lfb-bad-bg: #fef2f2; /* red-50 */
+
   /* File System code-badge palette (directory.mdx §4). White letter on solid fill. */
   --lfb-badge-repo-root: #5b3a1a; /* R  dark brown */
   --lfb-badge-repo-descendant: #8a5a2b; /* r  medium brown (inside a repo) */

@@ -1,10 +1,12 @@
-// The IPFS page (ipfs.mdx): the local pinset as ground truth. A node/security card sits above one
-// TanStack table of pinned root CIDs; untracked pins offer one-click Import; the ?repo search param
-// filters to one pinning repo (the left-bar disclosure children — §2.1).
+// The IPFS page (ipfs.mdx + use_cases.mdx §5.1). Redesigned to lead with the verdict:
+// PageHeader → StatusBanner (running? serving only our content?) → metric tiles → an Improvable
+// "untracked backlog" card → the pinset table (the working surface) → a collapsed "Node details"
+// disclosure for the mechanism (PeerID / reprovide / gateway / GC). Progressive disclosure (§2):
+// the answer first, the internals a click away.
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { RefreshCw, ShieldCheck, ShieldAlert, Copy, Check, DownloadCloud } from "lucide-react";
+import { RefreshCw, Copy, Check, DownloadCloud, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import type { IpfsPageData, IpfsPinRow, IpfsNodeCard } from "@lfb/shared";
 import { formatBytes } from "@lfb/shared";
@@ -12,6 +14,12 @@ import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
 import { EntityKebab } from "../../components/menu/EntityMenu.js";
+import { PageHeader } from "../../components/ui/PageHeader.js";
+import { StatusBanner, FixButton } from "../../components/ui/StatusBanner.js";
+import { DiagnosticCard } from "../../components/ui/DiagnosticCard.js";
+import { Disclosure } from "../../components/ui/Disclosure.js";
+import { StatTile, StatTileRow } from "../../components/ui/StatTile.js";
+import { type Health } from "../../components/ui/health.js";
 import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
 
 const PIN_TYPES = ["recursive", "direct", "mfs"];
@@ -178,159 +186,211 @@ export function IpfsPage() {
 
   return (
     <div>
-      <div className="mb-3 flex items-center justify-between">
-        <div>
-          <button
-            onClick={() => navigate({ to: "/ipfs" })}
-            className="mb-0.5 text-xs text-black/50 hover:text-[var(--lfb-primary)]"
-          >
-            ‹ IPFS
-          </button>
-          <h1 className="text-2xl font-bold">
-            Shared files
+      <PageHeader
+        title={
+          <>
+            IPFS
             {repoName && <span className="font-normal text-black/50"> · {repoName}</span>}
-          </h1>
-        </div>
-        <div className="flex items-center gap-2">
-          {untrackedCount > 0 && (
+          </>
+        }
+        subtitle="Your local IPFS engine — the peer-to-peer transport that moves your big files between your computers."
+        actions={
+          <>
+            {untrackedCount > 0 && (
+              <button
+                onClick={() => doImport.mutate({ all: true })}
+                disabled={doImport.isPending || nodeDown}
+                className="inline-flex items-center gap-1.5 rounded-md border border-[var(--lfb-primary)] px-3 py-1.5 text-sm text-[var(--lfb-primary)] hover:bg-[var(--lfb-primary-tint)] disabled:opacity-40"
+              >
+                <DownloadCloud className="h-4 w-4" /> Import all untracked ({untrackedCount})
+              </button>
+            )}
             <button
-              onClick={() => doImport.mutate({ all: true })}
-              disabled={doImport.isPending || nodeDown}
-              className="inline-flex items-center gap-1.5 rounded-md border border-[var(--lfb-primary)] px-3 py-1.5 text-sm text-[var(--lfb-primary)] hover:bg-[var(--lfb-primary-tint)] disabled:opacity-40"
+              onClick={() => rescan.mutate()}
+              disabled={rescan.isPending || nodeDown}
+              className="inline-flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-40"
             >
-              <DownloadCloud className="h-4 w-4" /> Import all untracked ({untrackedCount})
+              <RefreshCw className={`h-4 w-4 ${rescan.isPending ? "animate-spin" : ""}`} /> Rescan
             </button>
-          )}
-          <button
-            onClick={() => rescan.mutate()}
-            disabled={rescan.isPending || nodeDown}
-            className="inline-flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-40"
-          >
-            <RefreshCw className={`h-4 w-4 ${rescan.isPending ? "animate-spin" : ""}`} /> Rescan
-          </button>
-        </div>
-      </div>
+          </>
+        }
+      />
 
-      {node && <NodeCard node={node} onFix={() => enforce.mutate()} fixing={enforce.isPending} />}
+      {node && <NodeVerdict node={node} onFix={() => enforce.mutate()} fixing={enforce.isPending} />}
+
+      {node && !nodeDown && (
+        <StatTileRow>
+          <StatTile label="Pinned files" value={node.pinnedCount.toLocaleString()} sub={formatBytes(node.pinnedBytes)} />
+          <StatTile label="Tracked" value={node.trackedCount.toLocaleString()} sub="known to LFBridge" />
+          <StatTile
+            label="Untracked"
+            value={node.untrackedCount.toLocaleString()}
+            sub={untrackedCount > 0 ? "click to review" : "all imported"}
+            state={untrackedCount > 0 ? "warn" : "ok"}
+            onClick={untrackedCount > 0 ? () => setUntrackedOnly(true) : undefined}
+            title="Pinned but not yet tracked by LFBridge"
+          />
+        </StatTileRow>
+      )}
+
+      {/* Improvable: the import backlog — an offer, not an alarm. */}
+      {node && !nodeDown && untrackedCount > 0 && (
+        <div className="mb-4">
+          <DiagnosticCard
+            state="warn"
+            title={`${untrackedCount} pinned file${untrackedCount === 1 ? "" : "s"} aren't tracked yet`}
+            summary="LFBridge found pins on this computer that it isn't managing. Import them so they sync and back up like the rest."
+            fix={
+              <FixButton state="warn" onClick={() => doImport.mutate({ all: true })} disabled={doImport.isPending}>
+                <DownloadCloud className="h-4 w-4" /> Import all
+              </FixButton>
+            }
+          >
+            "Tracked" means LFBridge has recorded the file in a repo manifest so it can keep it synced
+            across your computers. Importing is metadata-only — no bytes move, nothing on disk changes.
+          </DiagnosticCard>
+        </div>
+      )}
 
       {nodeDown ? (
-        <div className="mt-6 rounded-lg border border-red-200 bg-red-50 p-6 text-center text-sm text-red-800">
-          The local IPFS (Kubo) node is unreachable, so the pinset can't be read. Start the daemon —
-          or install the IPFS CLI — then Rescan.
-        </div>
+        <DiagnosticCard
+          state="bad"
+          title="Start the IPFS engine to read your pins"
+          summary="The pinset can't be read while the engine is down."
+          defaultOpen
+        >
+          <p className="mb-2">Start the daemon, or install the IPFS (Kubo) CLI, then click Rescan:</p>
+          <pre className="overflow-x-auto rounded bg-slate-100 px-3 py-2 font-mono text-xs text-black">
+            {"# start the daemon\nipfs daemon\n\n# or install it first (macOS)\nbrew install ipfs"}
+          </pre>
+        </DiagnosticCard>
       ) : (
-        <DataTable
-          data={rows}
-          columns={columns}
-          searchKeys={(p) => `${p.file ?? ""} ${p.cid} ${p.unit ?? ""}`}
-          getRowId={(p) => p.cid}
-          onRowClick={(p) => p.path && navigate({ to: "/file", search: { path: p.path } })}
-          itemNoun="pinned"
-          loading={isLoading}
-          selection={{
-            selected,
-            onChange: setSelected,
-            bulk:
-              selected.size > 0 ? (
-                <button
-                  onClick={() => doImport.mutate({ cids: [...selected] })}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-[var(--lfb-primary)] px-2.5 py-1 text-sm text-[var(--lfb-primary)] hover:bg-[var(--lfb-primary-tint)]"
-                >
-                  <DownloadCloud className="h-4 w-4" /> Import selected ({selected.size})
-                </button>
-              ) : undefined,
-          }}
-          rightHeader={
-            <button
-              onClick={() => setUntrackedOnly((v) => !v)}
-              className={`rounded-md border px-2.5 py-1.5 text-sm ${
-                untrackedOnly
-                  ? "border-[var(--lfb-primary)] bg-[var(--lfb-primary-tint)] text-[var(--lfb-primary)]"
-                  : "border-[var(--lfb-border)] hover:bg-slate-100"
-              } ${untrackedCount === 0 ? "opacity-40" : ""}`}
-              disabled={untrackedCount === 0}
-              title="Show only pinned-but-untracked import candidates"
-            >
-              Untracked only
-            </button>
-          }
-          empty={
-            <div className="text-center text-black/60">
-              {repo
-                ? "No pinned files in this repo."
-                : "This node isn't pinning anything yet. Sync a repo to start."}
-            </div>
-          }
-        />
+        <>
+          <h2 className="mb-1 text-sm font-semibold text-black/70">Pinned files</h2>
+          <DataTable
+            data={rows}
+            columns={columns}
+            searchKeys={(p) => `${p.file ?? ""} ${p.cid} ${p.unit ?? ""}`}
+            getRowId={(p) => p.cid}
+            onRowClick={(p) => p.path && navigate({ to: "/file", search: { path: p.path } })}
+            itemNoun="pinned"
+            loading={isLoading}
+            selection={{
+              selected,
+              onChange: setSelected,
+              bulk:
+                selected.size > 0 ? (
+                  <button
+                    onClick={() => doImport.mutate({ cids: [...selected] })}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-[var(--lfb-primary)] px-2.5 py-1 text-sm text-[var(--lfb-primary)] hover:bg-[var(--lfb-primary-tint)]"
+                  >
+                    <DownloadCloud className="h-4 w-4" /> Import selected ({selected.size})
+                  </button>
+                ) : undefined,
+            }}
+            rightHeader={
+              <button
+                onClick={() => setUntrackedOnly((v) => !v)}
+                className={`rounded-md border px-2.5 py-1.5 text-sm ${
+                  untrackedOnly
+                    ? "border-[var(--lfb-primary)] bg-[var(--lfb-primary-tint)] text-[var(--lfb-primary)]"
+                    : "border-[var(--lfb-border)] hover:bg-slate-100"
+                } ${untrackedCount === 0 ? "opacity-40" : ""}`}
+                disabled={untrackedCount === 0}
+                title="Show only pinned-but-untracked import candidates"
+              >
+                Untracked only
+              </button>
+            }
+            empty={
+              <div className="text-center text-black/60">
+                {repo
+                  ? "No pinned files in this repo."
+                  : "This node isn't pinning anything yet. Sync a repo to start."}
+              </div>
+            }
+          />
+
+          {node && <NodeDetails node={node} />}
+        </>
       )}
     </div>
   );
 }
 
-// ── The node-status / security card (ipfs.mdx §3) ──────────────────────────────
-function NodeCard({ node, onFix, fixing }: { node: IpfsNodeCard; onFix: () => void; fixing: boolean }) {
-  const ok = node.health === "ok";
-  // Non-compliant = the node serves more than our own content. Deliberate opt-out (publicGateway) is
-  // an amber "acknowledged" note; anything else is a red error with a Fix (§3.1).
-  const nonCompliant = ok && !node.compliant;
+// ── The verdict banner (use_cases.mdx §5.1 row 2) — worst-first: down > non-compliant > OK. ──────
+function NodeVerdict({ node, onFix, fixing }: { node: IpfsNodeCard; onFix: () => void; fixing: boolean }) {
+  if (node.health === "unreachable") {
+    return (
+      <StatusBanner
+        state="bad"
+        headline="The IPFS engine isn't running"
+        sub="Your files can't move between computers until it starts. Decisions still save; transfers are paused."
+      />
+    );
+  }
+  const nonCompliant = !node.compliant;
   const acknowledged = nonCompliant && node.publicGateway;
-
+  if (nonCompliant) {
+    // Deliberate public-gateway opt-out is an acknowledged Improvable; anything else is Broken.
+    const state: Health = acknowledged ? "warn" : "bad";
+    return (
+      <StatusBanner
+        state={state}
+        headline={
+          acknowledged
+            ? "This computer serves more than your own content (you allowed it)"
+            : "This computer is set to serve other people's content"
+        }
+        sub={
+          acknowledged
+            ? "You changed the public-gateway setting on this machine, so this is allowed."
+            : "LFBridge should serve only your own files — not act as a public gateway for the internet."
+        }
+        action={
+          acknowledged ? undefined : (
+            <FixButton state="bad" onClick={onFix} disabled={fixing}>
+              <ShieldCheck className="h-4 w-4" /> {fixing ? "Fixing…" : "Serve only my content"}
+            </FixButton>
+          )
+        }
+      />
+    );
+  }
   return (
-    <div className="rounded-lg border border-[var(--lfb-border)] bg-white">
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3 text-sm">
-        <Field label="Node">
-          <span className={`inline-flex items-center gap-1.5 ${ok ? "text-green-700" : "text-red-700"}`}>
-            <span className={`h-2 w-2 rounded-full ${ok ? "bg-green-500" : "bg-red-500"}`} />
-            {ok ? "ok" : "unreachable"}
-          </span>
-        </Field>
-        <Field label="PeerID">
-          {node.peerId ? <CopyText text={node.peerId} display={middleTruncate(node.peerId, 16)} /> : "—"}
-        </Field>
-        <Field label="Reprovide">
-          <Posture ok={node.reprovideStrategy !== "all"} label={node.reprovideStrategy} />
-        </Field>
-        <Field label="Gateway">
-          <Posture ok={node.gatewayLocalOnly} label={node.gatewayLocalOnly ? "local-only" : "public"} />
-        </Field>
-        <Field label="GC">
-          <Posture ok={node.gcOn} label={node.gcOn ? "on" : "off"} />
-        </Field>
-        <div className="ml-auto text-black/60">
-          Pinned <b className="text-black">{node.pinnedCount.toLocaleString()}</b> ·{" "}
-          {formatBytes(node.pinnedBytes)} &nbsp; Tracked{" "}
-          <b className="text-black">{node.trackedCount.toLocaleString()}</b> · Untracked{" "}
-          <b className={node.untrackedCount > 0 ? "text-[var(--lfb-primary)]" : "text-black"}>
-            {node.untrackedCount.toLocaleString()}
-          </b>
-        </div>
-      </div>
+    <StatusBanner
+      state="ok"
+      headline="IPFS is running and serving only your own content"
+      sub={`${node.pinnedCount.toLocaleString()} files pinned · ${formatBytes(node.pinnedBytes)}.`}
+    />
+  );
+}
 
-      {nonCompliant && (
-        <div
-          className={`flex items-center gap-2 border-t px-4 py-2 text-sm ${
-            acknowledged
-              ? "border-amber-200 bg-amber-50 text-amber-800"
-              : "border-red-200 bg-red-50 text-red-800"
-          }`}
-        >
-          {acknowledged ? <ShieldCheck className="h-4 w-4" /> : <ShieldAlert className="h-4 w-4" />}
-          <span className="flex-1">
-            {acknowledged
-              ? "This node serves more than your own content — you changed the public-gateway setting on this machine, so this is allowed."
-              : "This node is configured to serve more than your own content."}
-          </span>
-          {!acknowledged && (
-            <button
-              onClick={onFix}
-              disabled={fixing}
-              className="rounded-md bg-red-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
-            >
-              {fixing ? "Fixing…" : "Fix"}
-            </button>
-          )}
+// ── "Node details" — the mechanism, one click away (use_cases.mdx §5.1 step 6). ──────────────────
+function NodeDetails({ node }: { node: IpfsNodeCard }) {
+  return (
+    <div className="mt-3">
+      <Disclosure label="Node details">
+        <div className="flex flex-wrap items-center gap-x-8 gap-y-2 text-sm">
+          <Field label="PeerID">
+            {node.peerId ? <CopyText text={node.peerId} display={middleTruncate(node.peerId, 20)} mono /> : "—"}
+          </Field>
+          <Field label="Reprovide">
+            <Posture ok={node.reprovideStrategy !== "all"} label={node.reprovideStrategy} />
+          </Field>
+          <Field label="Gateway">
+            <Posture ok={node.gatewayLocalOnly} label={node.gatewayLocalOnly ? "local-only" : "public"} />
+          </Field>
+          <Field label="Garbage collection">
+            <Posture ok={node.gcOn} label={node.gcOn ? "on" : "off"} />
+          </Field>
         </div>
-      )}
+        <p className="mt-3 text-xs text-black/45">
+          These control the only-our-content security posture (knowledge/ipfs.mdx §6): reprovide stays
+          off "all", the gateway is bound to loopback only, and GC keeps any incidental third-party
+          cache transient.
+        </p>
+      </Disclosure>
     </div>
   );
 }
@@ -346,7 +406,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function Posture({ ok, label }: { ok: boolean; label: string }) {
   return (
-    <span className={ok ? "text-green-700" : "text-red-700"}>
+    <span style={{ color: ok ? "var(--lfb-ok)" : "var(--lfb-bad)" }}>
       {label} {ok ? "✓" : "✗"}
     </span>
   );
@@ -364,7 +424,6 @@ function TrackedPill({ tracked }: { tracked: "synced" | "path-less" }) {
 function CidCell({ cid }: { cid: string }) {
   return <CopyText text={cid} display={middleTruncate(cid, 24)} mono />;
 }
-
 
 function CopyText({ text, display, mono }: { text: string; display: string; mono?: boolean }) {
   const [copied, setCopied] = useState(false);
