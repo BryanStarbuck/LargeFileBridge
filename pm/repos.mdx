@@ -77,10 +77,10 @@ header**, the **top-right Add repo button**, and the **Repos table** with its co
 │ Repos ◀    ├───────────────────────────────────────────────────────────────────────────┤
 │ Peers      │  search…                                                      ⇅   ⛛        │ ← control row
 │ Sync       ├───────────────────────────────────────────────────────────────────────────┤
-│ Settings   │     Repo        Path             Synced Pending Undec Ignored Peers Last    │
-│            │  ▮  Our_Movies  ~/BGit/…/Movies   128    2       5     40      3   09:14  › │ ← ▮ = solid yellow (bookmarked)
-│            │  ▯  render_farm ~/work/render       0    311      0      0      1   —      › │ ← ▯ = gray outline (not bookmarked)
-│            │  ▮  photos_2026 ~/Pictures/2026    980    0      12      0      2   06:30  › │
+│ Settings   │     Repo        Path             Synced Pending Undec Ignored Peers Last     │
+│            │  ▮  Our_Movies  ~/BGit/…/Movies   128    2       5     40      3   09:14 › ⋮│ ← ▮ = solid yellow (bookmarked)
+│            │  ▯  render_farm ~/work/render       0    311      0      0      1   —     › ⋮│ ← ▯ = gray outline (not bookmarked)
+│            │  ▮  photos_2026 ~/Pictures/2026    980    0      12      0      2   06:30 › ⋮│ ← trailing ⋮ = row kebab (repo catalog)
 │            ├───────────────────────────────────────────────────────────────────────────┤
 │  [account] │  3 repos                                        page 1 / 1        [500 ▾]   │ ← count + pagination
 └────────────┴───────────────────────────────────────────────────────────────────────────┘
@@ -110,8 +110,16 @@ A single control row sits above the table, matching the standard toolbar:
   filter is active (with an optional count). Applying a filter resets to page 1.
 * **Sort icon** (right, icon-only sort glyph — **no text label, no button box**) — opens a dropdown
   listing the sortable columns, each with asc/desc; the icon is **colored** when a sort is active.
-
-Build the filter/sort dropdowns **very well** — match the pattern used by the sister app's
+* **Header-click sort (LOCKED).** In addition to the sort dropdown, **clicking a column header**
+  sorts the table by that column. Clicking the **same** header again **toggles ascending ↔
+  descending** (it does not cycle to "unsorted" — the header always leaves a sort applied; clear it
+  from the dropdown's **Clear sort**). This adds **no new UI** — the header text *is* the control; the
+  active sort column shows a small **caret** (`↑` asc / `↓` desc) beside its label, plus a pointer
+  cursor / hover on sortable headers. Header click and the dropdown share **one** sort state, so a
+  header-driven sort shows as active in the dropdown and vice-versa. **Only sortable columns respond**
+  — every column the sort dropdown lists (including the leading **Bookmark**, whose header sorts
+  bookmarked-first exactly like the dropdown) is clickable; a column with `sortable: false` and the
+  **non-data** trailing chevron / kebab cells do nothing on header click.
 `DataTable` toolbar (search left; icon-only sort/filter popovers right; rounded fills reserved for
 the floating popovers, never the data surface).
 
@@ -132,12 +140,34 @@ Column order, left to right. Numeric columns are right-aligned, `tabular-nums`.
 | 8 | **Last sync** | timestamp | ✓ | ✓ | `lastSyncAt`, relative (`2h ago`) with an absolute tooltip; `—` if never. |
 | 9 | **Status** | enum | ✓ | ✓ | `status` (§4.2) as a colored pill. `filterOptions` = the `RepoStatus` values. |
 | — | *(chevron)* | — | — | — | Trailing **› right chevron** affordance (opens the repo, same as the row click). |
-| — | **`⋯`** | — | — | — | The row **kebab** — the **repo** action catalog ([menus.mdx §3 / §5.1](./menus.mdx#3-the-row--kebab--every-table-has-one)). A control cell: it opens the menu, never the row. Right-click on the row opens the same menu ([menus.mdx §3.1](./menus.mdx#31-right-click-opens-the-same-menu-locked)). |
+| — | **`⋮`** | — | — | — | The row **kebab** — the **repo** action catalog ([menus.mdx §3 / §5.1](./menus.mdx#3-the-row--kebab--every-table-has-one)). A control cell: it opens the menu, never the row. Right-click on the row opens the same menu ([menus.mdx §3.1](./menus.mdx#31-right-click-opens-the-same-menu-locked)). |
 
 ### 3.3 Pagination — LOCKED
 
 * **Default page size 500.** Do **not** default to a small page size. Show the **item count**
   (`N repos`) to the left of the pager. Page-size options: `500 / 1000 / All`.
+
+### 3.3.1 Height — fill the page (LOCKED)
+
+The Repos table has **nothing beneath it** (the table is the last thing on the page), so it takes the
+**full-page-height** house behavior:
+
+* The table's **body scroll region grows to the bottom of the viewport** — no fixed short height, no
+  dead white space below it when the browser window is tall. Bryan runs a **tall** window; a fixed
+  `max-h` table would leave a big empty block at the bottom, which this removes.
+* **The page itself does not scroll.** The **control row** (§3.1) and the **count/pagination footer**
+  (§3.3) stay **pinned**; only the **rows** scroll, inside the table (the `thead` is already
+  `sticky`). The body is the single scroll container the windowing (`performance.mdx` P-01) already
+  reads.
+* **Mechanism.** The scroll container is `flex-1 min-h-0` (fills its flex-column parent) instead of a
+  fixed `max-h`; the page's outer element is a full-height flex column (`flex flex-1 flex-col
+  min-h-0`) with the page header `shrink-0`, so the table is the one element that flexes to fill. The
+  app frame's content column is already `min-h-full` so this height is available on every route.
+* **This is the site-wide default** ([charter Tables rule](../CLAUDE.md)). The **only exception** is a
+  page with content **below** the table — see [one_repo.mdx §3.5](./one_repo.mdx) and
+  [directories.mdx](./directories.mdx) — where the table keeps a **bounded** height so what sits under
+  it stays visible. Content **above** a table (headers, banners, stat tiles) never triggers the
+  exception.
 
 ### 3.4 `ColumnDef` shape
 
@@ -208,7 +238,7 @@ user exactly where they meant to go instead of opening the repo and re-filtering
 
 | Cell | Click target |
 | --- | --- |
-| **`▮` Bookmark** | **Nothing — toggles the favorite** (§8). A control cell like `⋯`: it flips `bookmarked` and **never navigates**. |
+| **`▮` Bookmark** | **Nothing — toggles the favorite** (§8). A control cell like `⋮`: it flips `bookmarked` and **never navigates**. |
 | **Repo** | The repo page (`/repos/$repoId`) — same as the row. |
 | **Path** | The [File System](./directories.mdx) browser revealed at that repo path. |
 | **Synced** | The repo's files table filtered to **transfer = synced**. |
@@ -218,14 +248,14 @@ user exactly where they meant to go instead of opening the repo and re-filtering
 | **Peers** | [Peers](./left_bar.mdx) filtered to this repo (which of your computers pin it). |
 | **Last sync** | The repo page (its status strip / recent activity). |
 | **Status** | The repo page. |
-| **`⋯`** | Opens the **repo action menu** — **never navigates** (§5.2). |
+| **`⋮`** | Opens the **repo action menu** — **never navigates** (§5.2). |
 
 A linking cell shows a pointer cursor + hover emphasis; the counts read as clickable numbers.
 `⌘`/middle-click opens the target in a new context where supported. Cell clicks **never mutate**.
 
-### 5.2 The row `⋯` menu
+### 5.2 The row `⋮` menu
 
-The trailing **`⋯` kebab** opens the **repo** action catalog
+The trailing **`⋮` kebab** opens the **repo** action catalog
 ([menus.mdx §5.1](./menus.mdx#51-repo)) — Open / Open in File System / View pinned on IPFS / Rescan /
 Sync now / Git-ignore big files… / Toggle Synced / Repo settings… / Copy path / **Remove repo**
 (destructive, last). Right-clicking the row opens the same menu
@@ -279,13 +309,13 @@ so it's discoverable. No layout shift between states (same box).
 
 ### 8.2 Interaction (LOCKED)
 
-* **Click toggles** `bookmarked` for that repo. It is a **control cell** — exactly like the `⋯` kebab
+* **Click toggles** `bookmarked` for that repo. It is a **control cell** — exactly like the `⋮` kebab
   (§5.2): the click **stops propagation** and **never opens the repo** or triggers cell navigation.
 * **Optimistic**: the icon flips immediately; the write (§8.3) happens in the background; on failure it
   reverts and shows a toast.
 * **Accessible**: render as a `<button aria-pressed={bookmarked} aria-label="Bookmark this repo">`;
   it is keyboard-focusable and toggles on `Enter`/`Space`. Tooltip: *"Bookmark"* / *"Bookmarked"*.
-* The same toggle is also offered in the repo **`⋯` menu** as *"Bookmark / Remove bookmark"*
+* The same toggle is also offered in the repo **`⋮` menu** as *"Bookmark / Remove bookmark"*
   ([menus.mdx §5.1](./menus.mdx#51-repo)) so it is reachable without hunting for the tiny icon.
 
 ### 8.3 Persistence — it lives in the repo's `config.yaml` (LOCKED)
@@ -334,7 +364,7 @@ big_file_override: { … }
 6. **Clicking a bare part of a row** opens that repo at `/repos/$repoId` ([One repo](./one_repo.mdx));
    the trailing chevron does the same. **Each data cell is additionally a deep link** per §5.1 (counts
    → the repo's files filtered to that slice; Path → File System; Peers → Peers filtered to the repo).
-   The **`⋯` kebab** (and right-click) opens the **repo** action menu ([menus.mdx §5.1](./menus.mdx#51-repo))
+   The **`⋮` kebab** (and right-click) opens the **repo** action menu ([menus.mdx §5.1](./menus.mdx#51-repo))
    and never navigates. The **Synced** count includes files that were **already IPFS-pinned and imported**
    ([ipfs.mdx §4](./ipfs.mdx#4-import--the-load-bearing-feature)).
 7. **+ Add repo** registers a git repo by folder path, validates it is a git working tree, scans its

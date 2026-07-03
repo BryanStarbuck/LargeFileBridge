@@ -122,6 +122,24 @@ These rules are strict — they define where things are allowed to live.
 * **Pagination default: 500 items per page.** Do **not** default to small
   pagination — show the item count before pagination and page at 500 by
   default.
+* **Click-a-header to sort.** Clicking a column header sorts the table by that
+  column; clicking the **same** header again toggles **ascending ↔ descending**.
+  This needs **no new UI** — the header itself is the affordance (a small caret
+  `↑`/`↓` marks the active sort column and direction). It is **in addition to** the
+  sort dropdown above the table; both drive the **same** sort state, so a column
+  sorted by header click shows as active in the dropdown and vice-versa.
+* **Full-page-height tables.** A table with **no content beneath it** fills the
+  **full height of the page**: its body scroll region grows down to the bottom of
+  the viewport so there is **no dead white space** below it when the browser window
+  is tall. The **page does not scroll** in this case — the rows scroll **inside**
+  the table (the header/control row and the count/pagination footer stay pinned;
+  only the body scrolls). This is the **default** for every table across the site.
+  * **The one exception is content underneath the table.** When a page renders
+    anything **below** the table (a details disclosure, a footer summary, a second
+    panel), the table keeps a **bounded height** so that content below stays
+    visible; it does **not** expand to fill the page. Everything **above** a table
+    (headers, stat tiles, banners, filter rows) is unaffected — only content
+    **below** triggers the exception.
 
 ## Compression (a core value)
 

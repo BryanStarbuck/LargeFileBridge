@@ -23,7 +23,9 @@ export function AppShell() {
       <Sidebar user={user ?? FALLBACK} />
       <main className="flex-1 overflow-y-auto">
         <IpfsStatusBanner />
-        <div className="mx-auto max-w-6xl px-8 py-6">
+        {/* min-h-full + flex column so a full-page-height table (repos.mdx §3.3.1) can flex its body
+            down to the bottom of the viewport; long/normal pages still grow and let <main> scroll. */}
+        <div className="mx-auto flex min-h-full max-w-6xl flex-col px-8 py-6">
           <Outlet />
         </div>
       </main>

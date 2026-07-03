@@ -31,6 +31,9 @@ interface DataTableProps<T> {
   getRowId: (row: T) => string;
   onRowClick?: (row: T) => void;
   itemNoun?: string;
+  // The trailing per-row ⋮ kebab (menus.mdx §3) — EVERY table passes one so EVERY row has it. Returns
+  // the row's kebab component (EntityKebab / RepoKebab / PeerKebab / PinKebab / a page-local kebab).
+  rowMenu?: (row: T) => ReactNode;
   rightHeader?: ReactNode; // e.g. + Add repo
   selection?: {
     selected: Set<string>;
@@ -39,6 +42,12 @@ interface DataTableProps<T> {
   };
   loading?: boolean;
   empty?: ReactNode;
+  // Full-page-height rule (repos.mdx §3.3.1 / charter Tables): when true (default), the body scroll
+  // region flexes to fill down to the bottom of the viewport (no dead white space in a tall window);
+  // the page must be a full-height flex column for this to have room. Pass FALSE on any page that
+  // renders content BELOW the table (a details disclosure, a footer summary) so that content stays
+  // visible — then the body keeps a bounded height instead.
+  fillHeight?: boolean;
 }
 
 const PAGE_SIZES = [100, 250, 500]; // P-01: no "All" (Number.MAX_SAFE_INTEGER) footgun.
@@ -51,10 +60,12 @@ export function DataTable<T>({
   getRowId,
   onRowClick,
   itemNoun = "items",
+  rowMenu,
   rightHeader,
   selection,
   loading,
   empty,
+  fillHeight = true,
 }: DataTableProps<T>) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -147,9 +158,11 @@ export function DataTable<T>({
   const colSpan = (selection ? 1 : 0) + tanColumns.length + 1;
 
   return (
-    <div>
+    // Full-page-height (repos.mdx §3.3.1): fill mode makes this a flex column so the body scroll
+    // region below grows to the bottom of the viewport; the control row + footer stay pinned (shrink-0).
+    <div className={fillHeight ? "flex min-h-0 flex-1 flex-col" : ""}>
       {/* Control row (repos.mdx §3.1) */}
-      <div className="flex items-center gap-2 py-2">
+      <div className="flex shrink-0 items-center gap-2 py-2">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-black/40" />
           <input
@@ -252,7 +265,10 @@ export function DataTable<T>({
       ) : rowCount === 0 && empty ? (
         <div className="py-10">{empty}</div>
       ) : (
-        <div ref={scrollRef} className="max-h-[65vh] overflow-auto">
+        <div
+          ref={scrollRef}
+          className={`overflow-auto ${fillHeight ? "min-h-0 flex-1" : "max-h-[65vh]"}`}
+        >
           <table className="w-full text-sm border-collapse">
             <thead className="sticky top-0 z-10 bg-white">
               {table.getHeaderGroups().map((hg) => (
@@ -268,12 +284,32 @@ export function DataTable<T>({
                   )}
                   {hg.headers.map((h) => {
                     const align = (h.column.columnDef.meta as { align?: string } | undefined)?.align;
+                    // Header-click sort (repos.mdx §3.1): click a sortable header to sort by it; click
+                    // again toggles asc ↔ desc. Same logic and same `sorting` state as the Sort dropdown
+                    // (§3.1) so the two stay in lock-step. A small caret marks the active column.
+                    const canSort = h.column.getCanSort();
+                    const dir = sorting.find((x) => x.id === h.column.id);
+                    const toggleSort = () =>
+                      setSorting(dir && !dir.desc ? [{ id: h.column.id, desc: true }] : [{ id: h.column.id, desc: false }]);
                     return (
                       <th
                         key={h.id}
-                        className={`py-2 px-2 font-medium ${align === "right" ? "text-right" : ""}`}
+                        onClick={canSort ? toggleSort : undefined}
+                        aria-sort={dir ? (dir.desc ? "descending" : "ascending") : undefined}
+                        className={`py-2 px-2 font-medium ${align === "right" ? "text-right" : ""} ${
+                          canSort ? "cursor-pointer select-none hover:text-black" : ""
+                        }`}
                       >
-                        {h.isPlaceholder ? null : flexRender(h.column.columnDef.header, h.getContext())}
+                        {h.isPlaceholder ? null : (
+                          <span className={`inline-flex items-center gap-1 ${align === "right" ? "flex-row-reverse" : ""}`}>
+                            {flexRender(h.column.columnDef.header, h.getContext())}
+                            {dir && (
+                              <span className="text-[var(--lfb-primary)]" aria-hidden>
+                                {dir.desc ? "↓" : "↑"}
+                              </span>
+                            )}
+                          </span>
+                        )}
                       </th>
                     );
                   })}
@@ -316,7 +352,15 @@ export function DataTable<T>({
                         </td>
                       );
                     })}
-                    <td className="text-black/30 pr-2">{onRowClick ? "›" : ""}</td>
+                    {/* Trailing control column (menus.mdx §3): the row's ⋮ kebab, right-aligned. The
+                        kebab button stops click propagation, so it opens the menu without opening the
+                        row; the chevron still reads as "this row navigates". */}
+                    <td className="pr-2">
+                      <div className="flex items-center justify-end gap-1">
+                        {onRowClick && <span className="text-black/30">›</span>}
+                        {rowMenu?.(row.original)}
+                      </div>
+                    </td>
                   </tr>
                 );
               })}
@@ -330,8 +374,8 @@ export function DataTable<T>({
         </div>
       )}
 
-      {/* Count + pagination (default 500) */}
-      <div className="flex items-center justify-between py-2 text-sm text-black/60">
+      {/* Count + pagination (default 500) — pinned below the scrolling body in fill mode. */}
+      <div className="flex shrink-0 items-center justify-between py-2 text-sm text-black/60">
         <span>
           {rowCount} {itemNoun}
         </span>

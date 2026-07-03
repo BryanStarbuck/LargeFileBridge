@@ -14,6 +14,7 @@ import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
 import { EntityKebab } from "../../components/menu/EntityMenu.js";
+import { PinKebab } from "../../components/menu/RowKebabs.js";
 import { PinToggle } from "../../components/PinToggle.js";
 import { usePinCid } from "../../components/usePinCid.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
@@ -218,16 +219,6 @@ export function IpfsPage() {
         </span>
       ),
     },
-    {
-      id: "actions",
-      header: "",
-      kind: "text",
-      sortable: false,
-      filterable: false,
-      accessor: () => "",
-      // The row ⋯ kebab (menus.mdx §5.3) — only where the pin resolves to a real local file entity.
-      cell: (p) => (p.path ? <EntityKebab path={p.path} /> : <span className="text-black/20">—</span>),
-    },
   ];
 
   return (
@@ -319,11 +310,17 @@ export function IpfsPage() {
         <>
           <h2 className="mb-1 text-sm font-semibold text-black/70">Pinned files</h2>
           <DataTable
+            // Content below the table (NodeDetails) → bounded height, not full-page
+            // (ipfs.mdx §5 / repos.mdx §3.3.1).
+            fillHeight={false}
             data={rows}
             columns={columns}
             searchKeys={(p) => `${p.file ?? ""} ${p.path ?? ""} ${p.cid} ${p.unit ?? ""}`}
             getRowId={(p) => p.cid}
             onRowClick={(p) => p.path && navigate({ to: "/file", search: { path: p.path } })}
+            // Every row gets a ⋮ (menus.mdx §3): a resolvable pin → the file catalog; an untracked /
+            // path-less pin → the pin catalog (§5.5: Copy CID · Import · Unpin).
+            rowMenu={(p) => (p.path ? <EntityKebab path={p.path} /> : <PinKebab pin={p} />)}
             itemNoun="pinned"
             loading={isLoading}
             selection={{

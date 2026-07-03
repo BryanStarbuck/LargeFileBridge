@@ -29,7 +29,7 @@ Siblings this spec builds on and does **not** repeat:
   Unpin** drive, and the standard **control row** + **pagination default 500** conventions.
 * [IPFS](./ipfs.mdx) — what "in IPFS / pinned" means; pinning here is the same **decision → sync**,
   and the only-our-content posture is unchanged (nothing here turns this machine into a gateway).
-* [Menus](./menus.mdx) — the per-row **`⋯`** kebab / right-click **file** catalog (§5.3) and the two
+* [Menus](./menus.mdx) — the per-row **`⋮`** kebab / right-click **file** catalog (§5.3) and the two
   sticky flags (§6.6); this page renders that catalog, it never invents a different one.
 * [Repos](./repos.mdx) — the house flat/chromeless **DataTable**, the control-row and pagination rules.
 * [scan.mdx](./scan.mdx) / [settings.mdx](./settings.mdx) — the **big-file threshold** that scopes
@@ -76,10 +76,10 @@ The standard app frame (256px left bar), then — inside the File System area �
 │ Peers      │            [In IPFS·Not·Both]                                   ⇅   ⛛       │ ← control row
 │ IPFS       │  ☑ Select all      ⬆ IPFS pin      ⬇ Unpin           3 selected             │ ← action row
 │ Scans      ├───────────────────────────────────────────────────────────────────────────┤
-│ Settings   │  ☐  Name                 Path                              Size   Changed  ⋯ │
-│            │  ☑  final_4k.mov         ~/…/Our_Movies/render/final_4k.mov 8.2GB  2h   C S ⋯│
-│            │  ☑  take_07.mov          ~/…/Our_Movies/render/take_07.mov  6.1GB  5m   C   ⋯│
-│  [account] │  ☐  poster.png           ~/…/art/poster.png                220MB  1d   C   ⋯│
+│ Settings   │  ☐  Name                 Path                              Size   Changed  ⋮ │
+│            │  ☑  final_4k.mov         ~/…/Our_Movies/render/final_4k.mov 8.2GB  2h   C S ⋮│
+│            │  ☑  take_07.mov          ~/…/Our_Movies/render/take_07.mov  6.1GB  5m   C   ⋮│
+│  [account] │  ☐  poster.png           ~/…/art/poster.png                220MB  1d   C   ⋮│
 │            ├───────────────────────────────────────────────────────────────────────────┤
 │            │  173 files                                     page 1 / 1        [500 ▾]     │
 └────────────┴───────────────────────────────────────────────────────────────────────────┘
@@ -87,7 +87,7 @@ The standard app frame (256px left bar), then — inside the File System area �
 
 * The **tab strip** is the only new navigation; both tabs keep the **File System** left-bar item active.
 * The table is the house flat/chromeless **DataTable** style ([repos.mdx §3](./repos.mdx)); rows carry
-  the same right-aligned **code badges** and a trailing **`⋯`** kebab as the column browser.
+  the same right-aligned **code badges** and a trailing **`⋮`** kebab as the column browser.
 
 ---
 
@@ -182,16 +182,29 @@ everywhere ([repos.mdx §3](./repos.mdx)).
 | 3 | **Size** | bytes | ✓ | Human-readable (`8.2 GB`), right-aligned; sorts on raw bytes. The default sort (▼). |
 | 4 | **Changed** | timestamp | ✓ | `modifiedAt`, relative with an absolute tooltip. |
 | — | **badges** | — | — | The right-aligned **code badges** ([directories.mdx §3](./directories.mdx)) — here mostly **C/c** (compress) and **S** (sync/IPFS), plus **r** inside a repo and **i** for list artifacts. |
-| — | **`⋯`** | — | — | The row **kebab** — the **file** action catalog ([menus.mdx §5.3](./menus.mdx)); right-click on the row opens the same menu ([menus.mdx §3.1](./menus.mdx)). Never navigates. |
+| — | **`⋮`** | — | — | The row **kebab** — the **file** action catalog ([menus.mdx §5.3](./menus.mdx)); right-click on the row opens the same menu ([menus.mdx §3.1](./menus.mdx)). Never navigates. |
 
 Pagination **defaults to 500** ([repos.mdx §3.3](./repos.mdx)); the **file count** shows left of the
 pager. The Path column is the widest; Name/Size/Changed stay compact.
+
+**Header-click sort shares the segmented sort control's state.** Clicking a column header sorts by it,
+click-again toggles asc ↔ descending ([repos.mdx §3.1](./repos.mdx)). This is the **same** sort state
+as the **Size · Name · Path** segmented control (§3.2) and the house sort icon (§3.4) — clicking the
+**Size** header is identical to picking **Size** in the segment, and its arrow flips in lock-step. (The
+extra columns **Changed** and any others are sortable by header even though the segment only exposes the
+three primary keys.)
+
+**Height — fills the page.** This page's table is the **last** element on it — the control row and
+action row (§3) sit **above**, and **nothing** sits below the table. So it takes the site-wide
+**full-page-height** default ([repos.mdx §3.3.1](./repos.mdx)): the body scroll region grows to the
+bottom of the viewport (no dead white space when the window is tall), the page doesn't scroll, only the
+rows do. In code: `fillHeight` (the default) on the `DataTable`, inside a full-height flex-column page.
 
 ### 4.2 Cell navigation ([menus.mdx §2](./menus.mdx))
 
 * **Name** / **Path** → **View one file** ([files.mdx](./files.mdx)) for that file.
 * **Size** / **Changed** → View one file (details).
-* The row **`⋯`** and its checkbox never navigate.
+* The row **`⋮`** and its checkbox never navigate.
 
 ---
 
@@ -240,7 +253,7 @@ different *view* of the same file knowledge, not new knowledge.
 2. **Full paths** is **one TanStack table** (house flat/chromeless) whose rows are the **large files
    under a chosen root, gathered recursively** — file **Name** and full absolute **Path** as the two
    lead columns, plus Size, Changed, right-aligned **code badges**, a **select** checkbox, and a
-   trailing **`⋯`** kebab. The root defaults to **home**, with a Home button, a path input, and a
+   trailing **`⋮`** kebab. The root defaults to **home**, with a Home button, a path input, and a
    `?path=` deep link.
 3. The walk is **recursive, metadata-only, Node `fs` only** (no `find`/`du`), honors the **big-file
    threshold** (§1) and the **hard-skip** set, hides dotfiles by default, does not follow symlinks, and
@@ -257,7 +270,7 @@ different *view* of the same file knowledge, not new knowledge.
    sync), **Unpin** (decision → ignore) — acts on checked rows, shows an **N selected** counter, never
    moves or deletes local bytes, and **reports skipped** files (not in a registered repo, or Never
    IPFS) rather than dropping them silently.
-8. Each row's **Name/Path cells deep-link** to [View one file](./files.mdx); the **`⋯`** kebab and
+8. Each row's **Name/Path cells deep-link** to [View one file](./files.mdx); the **`⋮`** kebab and
    right-click open the **file** catalog ([menus.mdx §5.3](./menus.mdx)) and never navigate.
 9. **Pagination defaults to 500** with the file count shown; empty / filtered-empty / truncated /
    loading / bad-root states render per §6; the house **search box** (name + path) and **filter icon**
@@ -269,7 +282,7 @@ different *view* of the same file knowledge, not new knowledge.
 <!--
   Full paths = a SECOND TAB under File System (route /fs/paths), a FLAT recursive TanStack table of the
   LARGE files (>= big-file threshold) under a chosen root — lead columns Name + full absolute Path,
-  per-row checkbox, trailing ⋯ kebab. It is a different VIEW of the same FsEntry knowledge the column
+  per-row checkbox, trailing ⋮ kebab. It is a different VIEW of the same FsEntry knowledge the column
   browser (directories.mdx) returns — NOT new per-file data. Three SEGMENTED CONTROLS: compressed
   (Both·Compressed·Uncompressed, default Both, driven by the C/c badge), sort (Size·Name·Path with
   up/down arrows, default Size ▼, shares state with the house sort icon), IPFS (In IPFS·Not·Both,
@@ -278,7 +291,7 @@ different *view* of the same file knowledge, not new knowledge.
   repo, or with Never IPFS on, are REPORTED as skipped, never silently dropped, and no bytes ever move.
   Backend: GET /api/fs/flat (recursive, metadata-only, Node fs, bounded, honors threshold + hard-skip).
   Reuses badges (directories.mdx §3), control-row + pagination-500 (repos.mdx), pin semantics (ipfs.mdx),
-  the ⋯ file catalog + sticky flags (menus.mdx). Sibling tab: directories.mdx (column browser). When the
+  the ⋮ file catalog + sticky flags (menus.mdx). Sibling tab: directories.mdx (column browser). When the
   badge vocabulary or the decision model changes, it changes in those specs and this tab inherits it.
 -->
 </content>

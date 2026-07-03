@@ -79,10 +79,10 @@ Three regions stacked in the content column: the **header** (repo identity + Syn
 │ Settings   │  128 Sync   ·   5 Undecided   ·   40 Ignore            (summary counts)     │
 │            │  search…                                                     ⇅   ⛛   ⋮bulk │ ← control row
 │            ├───────────────────────────────────────────────────────────────────────────┤
-│            │  ☐  File                     Size   Decision   Status    Peers  Changed      │
-│            │  ☐  render/final_4k.mov      8.2GB  [Sync ▾]   Synced    3      2h ago       │
-│            │  ☐  render/take_07.mov       6.1GB  [Undecid▾] —         0      5m ago  ⚠    │
-│  [account] │  ☐  scratch/proxy.mp4        220MB  [Ignore ▾] —         0      1d ago       │
+│            │  ☐  File                     Size   Decision   Status    Peers  Changed     │
+│            │  ☐  render/final_4k.mov      8.2GB  [Sync ▾]   Synced    3      2h ago    ⋮ │
+│            │  ☐  render/take_07.mov       6.1GB  [Undecid▾] —         0      5m ago  ⚠ ⋮ │
+│  [account] │  ☐  scratch/proxy.mp4        220MB  [Ignore ▾] —         0      1d ago    ⋮ │ ← trailing ⋮ = row kebab (file catalog)
 │            ├───────────────────────────────────────────────────────────────────────────┤
 │            │  173 files                                     page 1 / 1        [500 ▾]     │
 └────────────┴───────────────────────────────────────────────────────────────────────────┘
@@ -103,7 +103,7 @@ Three regions stacked in the content column: the **header** (repo identity + Syn
   `Sync` file this machine has that peers lack, fetch every `Sync` file peers have that this machine
   lacks. States: idle (`Sync now`) → running (`Syncing…`, spinner, disabled) → done (counts + table
   refresh). It never changes any decision.
-* **`⋯` "more" menu** (top-right, next to Sync now) — because this page **is one repo**, it carries the
+* **`⋮` "more" menu** (top-right, next to Sync now) — because this page **is one repo**, it carries the
   **repo entity menu**: the same catalog as a Repos-table row's kebab
   ([menus.mdx §4 / §5.1](./menus.mdx#4-the-entity--more-menu--single-entity-pages)) — Open in File
   System · View pinned on IPFS · Rescan · Sync now · Git-ignore big files… · Toggle Synced · Repo
@@ -132,7 +132,15 @@ participation in it.
 ## 4. The files table (TanStack, house style)
 
 **One row per large git-ignored file** in the repo. Same flat `DataTable` and the same standard
-control row as [Repos §3](./repos.mdx).
+control row as [Repos §3](./repos.mdx) — including **header-click sort** (click a column header to
+sort; click again to toggle asc ↔ desc; [Repos §3.1](./repos.mdx)).
+
+**Height — bounded (the content-below exception).** Unlike Repos, this page renders content **beneath**
+the files table — the **Repo details** disclosure (§3.2 status strip, now a click-away disclosure at
+the bottom of the page). Because something sits **below** the table, it is the **exception** to the
+site-wide full-page-height rule ([Repos §3.3.1](./repos.mdx), [charter Tables rule](../CLAUDE.md)): the
+table keeps a **bounded** height (it does **not** expand to fill the viewport) so the Repo-details
+disclosure below it stays visible. In code this is `fillHeight={false}` on the `DataTable`.
 
 ### 4.1 Summary counts (above the control row)
 
@@ -162,7 +170,7 @@ Identical to the standard toolbar ([Repos §3.1](./repos.mdx)):
 | 5 | **Peers** | int | ✓ | ✓ | How many of your computers hold this file. `0` on a **Sync** file renders red (not backed up yet). |
 | 6 | **CID** | text | ✓ | ✓ | IPFS content id (monospace, middle-truncated, click to copy); blank until the file is a Sync file with a CID. |
 | 7 | **Changed** | timestamp | ✓ | ✓ | `changedAt`, relative with absolute tooltip. |
-| — | **`⋯`** | — | — | — | The row **kebab** — the **file** action catalog ([menus.mdx §5.3](./menus.mdx#53-file)). A control cell: opens the menu, never navigates. Right-click on the row opens the same menu ([menus.mdx §3.1](./menus.mdx#31-right-click-opens-the-same-menu-locked)). |
+| — | **`⋮`** | — | — | — | The row **kebab** — the **file** action catalog ([menus.mdx §5.3](./menus.mdx#53-file)). A control cell: opens the menu, never navigates. Right-click on the row opens the same menu ([menus.mdx §3.1](./menus.mdx#31-right-click-opens-the-same-menu-locked)). |
 
 Pagination: **default 500** ([Repos §3.3](./repos.mdx)); the **file count** shows left of the pager.
 
@@ -180,7 +188,7 @@ Beyond the inline Decision select, each data cell is a deep link
 | **Peers** | [Peers](./left_bar.mdx) filtered to this file (which computers hold it). |
 | **CID** | **Copies** the CID (click-to-copy); an inline affordance opens [IPFS](./ipfs.mdx) filtered to it. Does not navigate away. |
 | **Changed** | View one file. |
-| **`⋯`** | Opens the **file action menu** — never navigates (§4.3). |
+| **`⋮`** | Opens the **file action menu** — never navigates (§4.3). |
 
 The **File** row's kebab (and right-click) is the **file** catalog ([menus.mdx §5.3](./menus.mdx#53-file)):
 View file · Open containing folder · Add to IPFS / Remove from IPFS · Set decision ▸ · Sync now ·
@@ -249,7 +257,7 @@ it.
    Undecided is accent-highlighted when > 0.
 4. The **files table** is one TanStack table, one row per large git-ignored file, flat/chromeless,
    with the standard control row (search left; icon-only filter `⛛` and sort dropdowns right) and
-   columns: select, File, Size, Decision, Status, Peers, CID, Changed, and a trailing **`⋯`** kebab.
+   columns: select, File, Size, Decision, Status, Peers, CID, Changed, and a trailing **`⋮`** kebab.
 5. **Pagination defaults to 500**; the **file count** shows left of the pager.
 6. The **Decision** cell is a per-row inline select (Sync / Ignore / Undecided) that writes
    immediately per §4.5; changing a decision never deletes the user's local file.
@@ -259,10 +267,10 @@ it.
 8. The **Status** column follows the LOCKED transfer-status pill mapping (§4.6); a Sync file with
    Peers = 0 renders the peer count red.
 9. Empty / all-decided / loading / node-unreachable states render per §5.
-10. The header carries a top-right **`⋯` "more" menu** = the **repo** entity catalog
+10. The header carries a top-right **`⋮` "more" menu** = the **repo** entity catalog
     ([menus.mdx §5.1](./menus.mdx#51-repo)), with *Open repo* omitted and *Sync now* also present as the
     primary button (§3.1). Each files-table **data cell is a deep link** per §4.7 (File/Size/Status/
-    Changed → View one file; Peers → Peers filtered to the file; CID copies); the row **`⋯` kebab** (and
+    Changed → View one file; Peers → Peers filtered to the file; CID copies); the row **`⋮` kebab** (and
     right-click) opens the **file** catalog ([menus.mdx §5.3](./menus.mdx#53-file)) and never navigates,
     with compress/convert/ignore gated behind an explicit-click confirm.
 

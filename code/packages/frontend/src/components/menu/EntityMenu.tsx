@@ -9,7 +9,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import {
-  MoreHorizontal,
   MoreVertical,
   FolderOpen,
   FileText,
@@ -27,18 +26,20 @@ import { api } from "@/api/client";
 import { patchEntityBadges } from "@/lib/patchEntityBadges";
 
 // ── The action model ─────────────────────────────────────────────────────────
-interface Action {
+// Exported so the non-path row kebabs (repo / peer / pin — RowKebabs.tsx) and page-local kebabs
+// (e.g. the directory rollup) build the SAME shape and render through the SAME MenuList.
+export interface Action {
   id: string;
   label: string;
   icon?: ReactNode;
-  group: string; // Open | IPFS | Decision | Work | Flag | Copy | Danger
+  group: string; // Open | IPFS | Decision | Work | Config | Flag | Copy | Danger
   danger?: boolean;
   checked?: boolean; // toggle state (Flag group)
   disabled?: boolean;
   onSelect: () => void | Promise<void>;
 }
 
-const GROUP_ORDER = ["Open", "IPFS", "Decision", "Work", "Flag", "Copy", "Danger"];
+const GROUP_ORDER = ["Open", "IPFS", "Decision", "Work", "Config", "Flag", "Copy", "Danger"];
 
 // ── Position ───────────────────────────────────────────────────────────────────
 export interface MenuPos {
@@ -148,7 +149,7 @@ export function EntityMenuAt({
   );
 }
 
-function MenuList({
+export function MenuList({
   actions,
   run,
 }: {
@@ -300,14 +301,24 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
   return a;
 }
 
-// ── Trigger 1: the row/entry ⋯ kebab (menus.mdx §3) ────────────────────────────
-export function EntityKebab({ path, className }: { path: string; className?: string }) {
+// ── The vertical ⋮ kebab button (menus.mdx §3 — LOCKED: always vertical, never horizontal ⋯) ──────
+// The shared trigger used by every row/entry kebab. Clicking it stops row-click propagation and
+// opens `menu` (a render prop given the anchor position + a close callback) as a portaled popover.
+export function KebabButton({
+  menu,
+  title = "Actions",
+  className,
+}: {
+  menu: (pos: MenuPos, onClose: () => void) => ReactNode;
+  title?: string;
+  className?: string;
+}) {
   const [pos, setPos] = useState<MenuPos | null>(null);
   return (
     <>
       <button
         aria-haspopup="menu"
-        title="Actions"
+        title={title}
         onClick={(e) => {
           e.stopPropagation();
           const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -315,10 +326,54 @@ export function EntityKebab({ path, className }: { path: string; className?: str
         }}
         className={`rounded p-1 text-black/50 hover:bg-slate-200 hover:text-black ${className ?? ""}`}
       >
-        <MoreHorizontal className="h-4 w-4" />
+        <MoreVertical className="h-4 w-4" />
       </button>
-      {pos && <EntityMenuAt path={path} pos={pos} onClose={() => setPos(null)} />}
+      {pos && menu(pos, () => setPos(null))}
     </>
+  );
+}
+
+// A kebab over a PREBUILT action list (repo / peer / pin / rollup rows — the row data is already in
+// hand, so no async EntityView fetch is needed). Renders the same grouped MenuList as the path kebab.
+export function ActionsKebab({
+  actions,
+  title,
+  className,
+}: {
+  actions: Action[];
+  title?: string;
+  className?: string;
+}) {
+  const run = (fn: () => void | Promise<void>) => async () => {
+    await fn();
+  };
+  return (
+    <KebabButton
+      title={title}
+      className={className}
+      menu={(pos, onClose) => (
+        <MenuPortal pos={pos} onClose={onClose}>
+          <MenuList
+            actions={actions}
+            run={(fn) => async () => {
+              onClose();
+              await run(fn)();
+            }}
+          />
+        </MenuPortal>
+      )}
+    />
+  );
+}
+
+// ── Trigger 1: the row/entry ⋮ kebab for a file/dir PATH (menus.mdx §3) ─────────
+// Fetches the EntityView lazily when opened (file/dir catalog, §5.2/§5.3).
+export function EntityKebab({ path, className }: { path: string; className?: string }) {
+  return (
+    <KebabButton
+      className={className}
+      menu={(pos, onClose) => <EntityMenuAt path={path} pos={pos} onClose={onClose} />}
+    />
   );
 }
 

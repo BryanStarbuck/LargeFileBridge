@@ -108,6 +108,16 @@ export async function registerRepo(absPath: string): Promise<{ folder: string; r
   return { folder, repoId };
 }
 
+/**
+ * Unregister a repo unit (menus.mdx §5.1 "Remove repo"). Removes ONLY LFB's tracking state — the
+ * unit directory under the state root ({@link repoUnitDir}). It NEVER touches the user's actual repo
+ * folder or any local file on disk (charter / menus.mdx §6.2: local bytes are never deleted by LFB).
+ */
+export function unregisterRepo(folder: string): void {
+  fs.rmSync(repoUnitDir(folder), { recursive: true, force: true });
+  log.info("units", `Unregistered repo unit sync/r/${folder} (local files untouched)`);
+}
+
 // ── Row / detail composition ────────────────────────────────────────────────
 export function computeRepoRow(folder: string): RepoRow {
   const cfg = getRepoConfig(folder);

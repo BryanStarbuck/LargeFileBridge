@@ -6,6 +6,7 @@ import type { PeerRow } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
+import { PeerKebab } from "../../components/menu/RowKebabs.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { StatusBanner } from "../../components/ui/StatusBanner.js";
 import { Disclosure } from "../../components/ui/Disclosure.js";
@@ -39,7 +40,8 @@ export function PeersPage() {
   const empty = !isLoading && (data?.length ?? 0) === 0;
 
   return (
-    <div>
+    // Full-page-height (repos.mdx §3.3.1): flex column so the peers table fills to the bottom.
+    <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="Peers"
         subtitle="Your other computers that keep copies of these files, so nothing lives on just one machine."
@@ -76,6 +78,7 @@ export function PeersPage() {
           )}
           <DataTable data={data ?? []} columns={columns} searchKeys={(p) => `${p.label} ${p.owner}`}
             getRowId={(p) => p.id} itemNoun="peers" loading={isLoading}
+            rowMenu={(p) => <PeerKebab peer={p} />}
             empty={<p className="text-center text-black/60">No peers yet.</p>} />
         </>
       )}

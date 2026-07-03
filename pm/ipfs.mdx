@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — The IPFS Page (Locally-Pinned Content + Import)
-description: The left-bar "IPFS" page — the one screen that shows the truth of this computer's local IPFS node: what it is actually PINNING right now, whether each pinned item is already TRACKED by LargeFileBridge or is pinned-but-untracked, and the node's security posture (only-our-content compliance). Its centerpiece is IMPORT: when LFB lands on a computer that already has files pinned in IPFS (from before LFB, or pinned by hand), those CIDs are discovered by the every-15-minute scheduleTask (which reads `ipfs pin ls`), listed here as "Untracked (pinned)", and offered for one-click import into LFB's tracking — after which they count as Synced. The page is a TanStack table (one row per pinned CID/file) with the standard search + icon-only filter/sort control row, per-row "⋯" kebab (menus.mdx), and cell navigation; above it a node-status/security card that reflects and enforces knowledge/ipfs.mdx §6 (reprovide `pinned`, no public/recursive gateway, GC on) and flags any out-of-compliance config. Requires the IPFS (kubo) CLI, so it links to the install-tools preflight (tools.mdx). Cross-links knowledge/ipfs.mdx (CIDs/pins/only-our-content), scan.mdx (the scheduleTask that reads the pinset), storage.mdx §9 (the manifest/pin model), sync_list.mdx (pinned_by claims are verified, not believed), repos.mdx/one_repo.mdx (where a pinned file also appears), and menus.mdx (row/entity actions).
+description: The left-bar "IPFS" page — the one screen that shows the truth of this computer's local IPFS node: what it is actually PINNING right now, whether each pinned item is already TRACKED by LargeFileBridge or is pinned-but-untracked, and the node's security posture (only-our-content compliance). Its centerpiece is IMPORT: when LFB lands on a computer that already has files pinned in IPFS (from before LFB, or pinned by hand), those CIDs are discovered by the every-15-minute scheduleTask (which reads `ipfs pin ls`), listed here as "Untracked (pinned)", and offered for one-click import into LFB's tracking — after which they count as Synced. The page is a TanStack table (one row per pinned CID/file) with the standard search + icon-only filter/sort control row, per-row "⋮" kebab (menus.mdx), and cell navigation; above it a node-status/security card that reflects and enforces knowledge/ipfs.mdx §6 (reprovide `pinned`, no public/recursive gateway, GC on) and flags any out-of-compliance config. Requires the IPFS (kubo) CLI, so it links to the install-tools preflight (tools.mdx). Cross-links knowledge/ipfs.mdx (CIDs/pins/only-our-content), scan.mdx (the scheduleTask that reads the pinset), storage.mdx §9 (the manifest/pin model), sync_list.mdx (pinned_by claims are verified, not believed), repos.mdx/one_repo.mdx (where a pinned file also appears), and menus.mdx (row/entity actions).
 ---
 
 # LargeFileBridge — The IPFS Page
@@ -46,7 +46,7 @@ Siblings this spec builds on and does not repeat:
   file maps to; [§11](./storage.mdx#11-peersyaml--the-users-other-computers) — peers.
 * [sync_list.mdx §5.1](./sync_list.mdx#51-local-claims-are-verified-not-believed) — a `pinned_by` claim
   about **this** computer is trusted only if `ipfs pin ls` really holds the CID. This page **is** that check, visible.
-* [menus.mdx](./menus.mdx) — the row `⋯` kebab, entity more-menu, and cell-navigation rules.
+* [menus.mdx](./menus.mdx) — the row `⋮` kebab, entity more-menu, and cell-navigation rules.
 * [tools.mdx](./tools.mdx) — the preflight that installs `ipfs`/`ffmpeg` via Homebrew when missing.
 
 ---
@@ -76,9 +76,9 @@ Siblings this spec builds on and does not repeat:
 │  Our_Movies◀  search…                                          [Untracked only]  ⇅  ⛛   │ ← control row
 │  Big_Blender│                                                                            │
 │  Marketing ├───────────────────────────────────────────────────────────────────────────┤
-│ Scans      │  File / CID          Size   Pin    Tracked   Unit         Peers  Seen     ⋯ │
-│ Settings   │  trailer_v4.mp4      734MB  recur  ✓ synced  Our_Movies    3    2h    ›  ⋯ │
-│            │  bafybeih2…          41MB   recur  ✗ import  —             0    —     ›  ⋯ │ ← Untracked → Import
+│ Scans      │  File / CID          Size   Pin    Tracked   Unit         Peers  Seen     ⋮ │
+│ Settings   │  trailer_v4.mp4      734MB  recur  ✓ synced  Our_Movies    3    2h    ›  ⋮ │
+│            │  bafybeih2…          41MB   recur  ✗ import  —             0    —     ›  ⋮ │ ← Untracked → Import
 │  [account] │  1,204 pinned                                   page 1 / 3        [500 ▾]   │
 └────────────┴───────────────────────────────────────────────────────────────────────────┘
 ```
@@ -87,7 +87,7 @@ Siblings this spec builds on and does not repeat:
   and, while active, **expands** to a child list of pinning repos (§2.1).
 * **One TanStack table**, house flat/chromeless style, standard control row
   ([repos.mdx §3.1](./repos.mdx#31-control-row-above-the-table--locked)) — search left; icon-only
-  filter/sort right — and a trailing **`⋯` kebab** column ([menus.mdx §3](./menus.mdx#3-the-row--kebab--every-table-has-one)).
+  filter/sort right — and a trailing **`⋮` kebab** column ([menus.mdx §3](./menus.mdx#3-the-row--kebab--every-table-has-one)).
 
 ### 2.1 The IPFS left-bar item expands into pinning repos (LOCKED)
 
@@ -174,7 +174,15 @@ machine really holds.
 
 ## 5. The table (TanStack, house style)
 
-**One row per pinned root CID.** Same flat `DataTable`, same control row as everywhere.
+**One row per pinned root CID.** Same flat `DataTable`, same control row as everywhere — including
+**header-click sort** (click a column header to sort; click again toggles asc ↔ desc,
+[repos.mdx §3.1](./repos.mdx#31-control-row-above-the-table--locked)).
+
+**Height — bounded (the content-below exception).** This page renders a **node-details** panel
+**beneath** the pins table, so it is the **exception** to the site-wide full-page-height default
+([repos.mdx §3.3.1](./repos.mdx), [charter Tables rule](../CLAUDE.md)): the table keeps a **bounded**
+height (it does not expand to fill the viewport) so the node details below it stay visible. In code,
+`fillHeight={false}` on the `DataTable`.
 
 ### 5.1 Columns
 
@@ -187,7 +195,7 @@ machine really holds.
 | 5 | **Unit** | text | The repo or `computer` unit it belongs to; `—` for untracked. |
 | 6 | **Peers** | int | How many of your computers also pin this CID ([storage §11](./storage.mdx#11-peersyaml--the-users-other-computers)); `0` on a tracked file renders red (not backed up). |
 | 7 | **Seen** | timestamp | Last time the scheduleTask confirmed this pin; relative + absolute tooltip. |
-| — | **`⋯`** | — | The row kebab — the **file** entity catalog ([menus.mdx §5.3](./menus.mdx#53-file)), with **Import** promoted to the top for untracked rows. |
+| — | **`⋮`** | — | The row kebab (vertical three-dot). When the pin **resolves to a local file** it shows the **file** catalog ([menus.mdx §5.3](./menus.mdx#53-file)). When it does **not** — an **untracked** pin or a **path-less** tracked pin — it shows the **pin** catalog ([menus.mdx §5.5](./menus.mdx#55-ipfs-pin-a-pinned-cid--locked)): Copy CID · View on IPFS · **Import** (promoted, untracked only) · Unpin. **Every** row has it, including untracked/path-less rows. |
 
 Pagination **defaults to 500** ([repos §3.3](./repos.mdx#33-pagination--locked)); the **pinned count**
 shows left of the pager. A quick filter **Untracked only** narrows to the import backlog.
@@ -198,7 +206,7 @@ shows left of the pager. A quick filter **Untracked only** narrows to the import
   CID, **copy** (does not navigate away).
 * **Unit** → that [repo](./one_repo.mdx) (or the computer unit's view).
 * **Peers** → [Peers](./left_bar.mdx) filtered to this CID.
-* The **`⋯`** column never navigates (§ menus.mdx §3).
+* The **`⋮`** column never navigates (§ menus.mdx §3).
 
 ---
 
@@ -236,7 +244,7 @@ of the same Tracked rows, so it stays in lock-step with the table with no second
 ## 8. Acceptance criteria
 
 1. A left-bar **IPFS** item opens this page ([left_bar.yaml](./left_bar.yaml)); it is **one TanStack
-   table** (flat/chromeless) with the standard control row and a trailing **`⋯`** kebab column. While
+   table** (flat/chromeless) with the standard control row and a trailing **`⋮`** kebab column. While
    `/ipfs*` is active the item **expands** into a child list of the repos that hold pinned content (§2.1).
 2. The page lists **local pins as ground truth** — one row per pinned root CID, from `ipfs pin ls`,
    with Size, Pin type, **Tracked** (`synced` / `import` / `path-less`), Unit, Peers, and Seen.
@@ -253,7 +261,7 @@ of the same Tracked rows, so it stays in lock-step with the table with no second
    reading the pinset is **metadata-only**, and it **reconciles pins ↔ manifests** so tracked-but-lost
    pins are re-queued and pinned-but-untracked pins become import candidates (§6).
 7. **Cell navigation** and **row/entity menus** follow [menus.mdx](./menus.mdx) (§5.2, §5); the CID cell
-   copies rather than navigating; the `⋯` kebab shows the file catalog with **Import** promoted for
+   copies rather than navigating; the `⋮` kebab shows the file catalog with **Import** promoted for
    untracked rows.
 8. Pagination **defaults to 500** with the pinned count shown; the **Untracked only** quick filter
    narrows to the import backlog; empty/loading/node-unreachable states render per §7.
@@ -277,6 +285,6 @@ of the same Tracked rows, so it stays in lock-step with the table with no second
   the parent clears the filter. Children are a rollup of Tracked rows (the `repos` payload) — dynamic, so
   they are NOT in left_bar.yaml (which stays the flat, static nav source of truth).
   Data comes from the 15-minute scheduleTask reading `ipfs pin ls` (scan.mdx) and reconciling pins↔manifests
-  (sync_list.mdx §5.1). Table conventions (control row, 500 pagination, ⋯ kebab, cell nav) come from
+  (sync_list.mdx §5.1). Table conventions (control row, 500 pagination, ⋮ kebab, cell nav) come from
   repos.mdx + menus.mdx — never restate them. Needs the ipfs CLI → tools.mdx preflight.
 -->

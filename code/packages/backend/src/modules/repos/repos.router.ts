@@ -7,6 +7,7 @@ import {
   computeRepoRow,
   computeRepoDetail,
   registerRepo,
+  unregisterRepo,
   folderForRepoId,
   getRepoConfig,
   updateRepoConfig,
@@ -65,6 +66,15 @@ reposRouter.post("/:repoId/bookmark", async (req, res) => {
   await updateRepoConfig(folder, (c) => ({ ...c, bookmarked: body.data.bookmarked }));
   log.info("repos", `${folder}: bookmarked -> ${body.data.bookmarked}`);
   res.json({ ok: true, data: computeRepoRow(folder) });
+});
+
+// DELETE /api/repos/:repoId — remove repo (unregister, menus.mdx §5.1). Unregisters from LFB ONLY;
+// never deletes the folder or any local file on disk (menus.mdx §6.2). Idempotent.
+reposRouter.delete("/:repoId", (req, res) => {
+  const folder = folderForRepoId(req.params.repoId);
+  if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
+  unregisterRepo(folder);
+  res.json({ ok: true, data: { removed: true } });
 });
 
 // GET /api/repos/:repoId — the One-repo detail (header + status strip + files).

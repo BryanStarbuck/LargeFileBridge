@@ -59,6 +59,9 @@ export const api = {
     unwrap<RepoRow>(http.post(`/repos/${repoId}/bookmark`, { bookmarked })),
   rescan: () => unwrap<RescanResult>(http.post("/repos/rescan")),
   scanStatus: () => unwrap<ScanJob>(http.get("/repos/scan-status")),
+  // Remove repo (unregister, menus.mdx §5.1) — LFB tracking only; never deletes local files.
+  removeRepo: (repoId: string) =>
+    unwrap<{ removed: boolean }>(http.delete(`/repos/${repoId}`)),
 
   repo: (repoId: string) => unwrap<RepoDetail>(http.get(`/repos/${repoId}`)),
   repoFiles: (repoId: string) => unwrap<FileRow[]>(http.get(`/repos/${repoId}/files`)),
@@ -86,6 +89,8 @@ export const api = {
     unwrap<WorkerState>(http.post(`/sync/${worker}/${action}`)),
 
   peers: () => unwrap<PeerRow[]>(http.get("/peers")),
+  // Remove peer (menus.mdx §5.4) — forgets the computer from peers.yaml; touches no remote content.
+  removePeer: (id: string) => unwrap<{ removed: boolean }>(http.delete(`/peers/${id}`)),
 
   // IPFS page (ipfs.mdx) — the local pinset as ground truth + import of untracked pins.
   ipfs: () => unwrap<IpfsPageData>(http.get("/ipfs")),

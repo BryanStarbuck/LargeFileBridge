@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Directories (File System column browser + View one directory)
-description: The combined directory spec, covering BOTH directory surfaces of LargeFileBridge. PART A — The File System (route /files, a.k.a. /fs): a Mac-Finder-column-view (Miller-column) browser that lets the user walk their whole filesystem, one directory level per column, opening a new column to the right each time a directory is clicked. It defaults to the user's HOME directory and works on Mac, Windows, and Linux. Every file and directory row carries, on its far right, a stack of single-letter CODE BADGES — white letter on a solid colored square — that surface what LargeFileBridge knows about it: R/r (repo, brown — uppercase R at a repo root, lowercase r for an ancestor of a repo or any descendant inside a repo), S (sync, bright pink — a file we track and sync), C/c (compress, yellow — bright-yellow C = should be compressed, light-yellow c = already compressed), and i (ipfs, blue — an IPFS list/share artifact, an IPFS-list markdown file, or a directory that publishes such artifacts underneath it). Badges are right-aligned and stack leftward; a row may show zero, one, or several. PART B — View one directory (route /dir?path=<abs>): the single-entity page for ONE directory, reached from any directory row's "View directory" action, from clicking a directory's name/path cell, or by selecting a directory in the File System browser. It shows what LargeFileBridge knows about that one directory — identity (name, absolute path, kind, repo membership), its code badges, a rollup of what's inside (counts of videos-that-can-compress, images-that-can-compress, big-not-ignored files, and big-git-ignored-not-tracked files — the charter's category rollup table), and its two sticky flags (Never IPFS, Do not compress) which apply to everything underneath it; it carries the top-right "⋯" MORE menu rendering the exact same Directory action catalog as that directory's row kebab (menus.mdx §5.2). Part A is implemented by the /api/fs backend module and the FileSystemPage frontend (code_plan.mdx §14) and adds the "File System" nav item to left_bar.yaml; Part B is implemented by the /api/entity backend module and the ViewOneDirectoryPage frontend.
+description: The combined directory spec, covering BOTH directory surfaces of LargeFileBridge. PART A — The File System (route /files, a.k.a. /fs): a Mac-Finder-column-view (Miller-column) browser that lets the user walk their whole filesystem, one directory level per column, opening a new column to the right each time a directory is clicked. It defaults to the user's HOME directory and works on Mac, Windows, and Linux. Every file and directory row carries, on its far right, a stack of single-letter CODE BADGES — white letter on a solid colored square — that surface what LargeFileBridge knows about it: R/r (repo, brown — uppercase R at a repo root, lowercase r for an ancestor of a repo or any descendant inside a repo), S (sync, bright pink — a file we track and sync), C/c (compress, yellow — bright-yellow C = should be compressed, light-yellow c = already compressed), and i (ipfs, blue — an IPFS list/share artifact, an IPFS-list markdown file, or a directory that publishes such artifacts underneath it). Badges are right-aligned and stack leftward; a row may show zero, one, or several. PART B — View one directory (route /dir?path=<abs>): the single-entity page for ONE directory, reached from any directory row's "View directory" action, from clicking a directory's name/path cell, or by selecting a directory in the File System browser. It shows what LargeFileBridge knows about that one directory — identity (name, absolute path, kind, repo membership), its code badges, a rollup of what's inside (counts of videos-that-can-compress, images-that-can-compress, big-not-ignored files, and big-git-ignored-not-tracked files — the charter's category rollup table), and its two sticky flags (Never IPFS, Do not compress) which apply to everything underneath it; it carries the top-right "⋮" MORE menu rendering the exact same Directory action catalog as that directory's row kebab (menus.mdx §5.2). Part A is implemented by the /api/fs backend module and the FileSystemPage frontend (code_plan.mdx §14) and adds the "File System" nav item to left_bar.yaml; Part B is implemented by the /api/entity backend module and the ViewOneDirectoryPage frontend.
 ---
 
 # LargeFileBridge — Directories
@@ -71,7 +71,7 @@ directories — at **one** level of the directory hierarchy.
 Each row shows, left to right: an (optional) folder/file glyph, the **entry name** (middle-truncated
 if long), a flexible spacer, and then the **code badges** pinned to the **far right** (§3).
 
-### 1.1 Row actions — the entity menu (right-click + `⋯`)
+### 1.1 Row actions — the entity menu (right-click + `⋮`)
 
 Even though this page is a *browser*, not a TanStack table, its file/dir rows carry the same **entity
 action menu** as everywhere else ([menus.mdx](./menus.mdx)):
@@ -80,10 +80,10 @@ action menu** as everywhere else ([menus.mdx](./menus.mdx)):
   ([menus.mdx §3.1 / §5.2 / §5.3](./menus.mdx#31-right-click-opens-the-same-menu-locked)) — Open /
   Track-Sync / Rescan / Compress… / Convert… / Git-ignore… / View on IPFS / Copy path, with
   compress/convert/ignore as **explicit-click confirm offers** and no action ever deleting local bytes.
-* Hovering a row reveals a small trailing **`⋯`** affordance that opens the same menu (the
+* Hovering a row reveals a small trailing **`⋮`** affordance that opens the same menu (the
   discoverable companion to right-click).
 * Opening the dedicated **View one file** ([files.mdx](./files.mdx)) or **View one directory**
-  (Part B, §7) page gives that entity's menu as the top-right `⋯`
+  (Part B, §7) page gives that entity's menu as the top-right `⋮`
   ([menus.mdx §4](./menus.mdx#4-the-entity--more-menu--single-entity-pages)).
 
 ---
@@ -287,11 +287,11 @@ so the array is already sorted `[repo, sync, compress, ipfs]` per §3.5.
 8. Each badge has a **hover tooltip** naming it. Dotfiles are hidden by default with a toggle;
    `.git`/`node_modules`/caches never expand.
 9. No shell (`find`/`du`) is used; the listing is Node `fs`, metadata-only for the walk.
-10. **Right-clicking** a file/dir row (and a hover **`⋯`** affordance) opens that entity's action menu
+10. **Right-clicking** a file/dir row (and a hover **`⋮`** affordance) opens that entity's action menu
     ([menus.mdx §3.1/§5](./menus.mdx#31-right-click-opens-the-same-menu-locked)); compress/convert/ignore
     are explicit-click confirm offers and no action deletes local bytes. Opening
     [View one file](./files.mdx) / **View one directory** (Part B, §7) gives the same catalog as a
-    top-right `⋯` more-menu.
+    top-right `⋮` more-menu.
 
 ---
 
@@ -301,12 +301,12 @@ The **View one directory** page is the single-entity page for **one** directory 
 to the File System browser above. Where the browser (Part A) walks the whole tree many directories at
 once, *this* page is one directory as an **entity**: everything LFB knows about it and every action you
 can take on it, reached at `/dir?path=<abs>` from a **View directory** action, a directory-name cell
-click, or a browser selection. The page *is* that directory, so it carries the entity **`⋯` "more"
+click, or a browser selection. The page *is* that directory, so it carries the entity **`⋮` "more"
 menu** ([menus.mdx §4](./menus.mdx)).
 
 Siblings this builds on and does not repeat:
 
-* [Menus](./menus.mdx) — the LOCKED **Directory action catalog** (§5.2), the `⋯` more-menu (§4),
+* [Menus](./menus.mdx) — the LOCKED **Directory action catalog** (§5.2), the `⋮` more-menu (§4),
   right-click (§3.1), and the two sticky flags **Never IPFS** / **Do not compress** (§6.6).
 * **File System** (Part A above) — the **code badges** (§3) and the column browser this links into.
 * [Charter — Category rollup table](../CLAUDE.md) — the count+category rollup shown in §8 (videos to
@@ -317,21 +317,21 @@ Siblings this builds on and does not repeat:
 
 ## 7. Layout
 
-One content column: a **header** (identity + primary button + `⋯`), a **badge/flag strip**, the
+One content column: a **header** (identity + primary button + `⋮`), a **badge/flag strip**, the
 **category rollup table**, and an **inside** summary.
 
 ```
 ┌────────────┬───────────────────────────────────────────────────────────────────────────┐
 │  LEFT BAR  │  ‹ back      render                                ┌──────────────────┐ ┌──┐│
-│            │  ~/BGit/…/Our_Movies/render                        │ Open in File Sys │ │⋯ ││ ← primary + more
+│            │  ~/BGit/…/Our_Movies/render                        │ Open in File Sys │ │⋮ ││ ← primary + more
 │            ├───────────────────────────────────────────────────────────────────────────┤
 │            │   i  r         Never IPFS ◯off      Do not compress ◯off                    │ ← badges + flag switches
 │            ├───────────────────────────────────────────────────────────────────────────┤
-│            │  What's inside                                   Count    Action            │
-│            │  Videos that can be compressed                     27     [ Compress… ]     │
-│            │  Images that can be compressed                     14     [ Compress… ]     │
-│            │  Big files not git-ignored                          3     [ Git-ignore… ]   │
-│            │  Big files git-ignored, not tracked                 9     [ Track / Sync ]  │
+│            │  What's inside                              Count    Action              ⋮ │
+│            │  Videos that can be compressed                27     [ Compress… ]        ⋮ │
+│            │  Images that can be compressed                14     [ Compress… ]        ⋮ │
+│            │  Big files not git-ignored                     3     [ Git-ignore… ]      ⋮ │
+│            │  Big files git-ignored, not tracked            9     [ Track / Sync ]     ⋮ │
 │            ├───────────────────────────────────────────────────────────────────────────┤
 │            │  Directory · inside repo Our_Movies · 53 entries · scanned 2h ago           │
 └────────────┴───────────────────────────────────────────────────────────────────────────┘
@@ -339,8 +339,8 @@ One content column: a **header** (identity + primary button + `⋯`), a **badge/
 
 * **Header** — back affordance, directory **name** title, absolute **path** muted beneath.
 * **Primary button** — **Open in File System** (drill into it in the browser, §1); the rest of the
-  [Directory catalog](./menus.mdx) is under `⋯`.
-* **`⋯` more menu** — the **Directory catalog** ([menus.mdx §5.2](./menus.mdx)) verbatim; **View
+  [Directory catalog](./menus.mdx) is under `⋮`.
+* **`⋮` more menu** — the **Directory catalog** ([menus.mdx §5.2](./menus.mdx)) verbatim; **View
   directory** is omitted (you are on it).
 
 ---
@@ -348,20 +348,45 @@ One content column: a **header** (identity + primary button + `⋯`), a **badge/
 ## 8. The category rollup table (charter) — TanStack, house style
 
 The heart of this page is the charter's **count + category** rollup for everything under this directory
-(a [TanStack `DataTable`](../CLAUDE.md) like all others — search/filter/sort control row, 500 default).
-One row per category, each with a per-row action:
+(a [TanStack `DataTable`](../CLAUDE.md) like all others — search/filter/sort control row, 500 default,
+plus **header-click sort**: click a column header to sort, click again to toggle asc ↔ desc,
+[repos.mdx §3.1](./repos.mdx)). One row per category, each with a per-row action:
 
-| # | Category | Count | Row action |
-| --- | --- | --- | --- |
-| 1 | **Videos that can be compressed** | n | **Compress…** (offer only, [menus.mdx §6.1](./menus.mdx)) |
-| 2 | **Images that can be compressed** | n | **Compress…** (offer only) |
-| 3 | **Big files not git-ignored** | n | **Git-ignore…** (confirm list, never silent) |
-| 4 | **Big files git-ignored, not tracked** | n | **Track / Sync** (add to a sync unit; triage inside) |
+| # | Category | Count | Row action | `⋮` |
+| --- | --- | --- | --- | --- |
+| 1 | **Videos that can be compressed** | n | **Compress…** (offer only, [menus.mdx §6.1](./menus.mdx)) | kebab |
+| 2 | **Images that can be compressed** | n | **Compress…** (offer only) | kebab |
+| 3 | **Big files not git-ignored** | n | **Git-ignore…** (confirm list, never silent) | kebab |
+| 4 | **Big files git-ignored, not tracked** | n | **Track / Sync** (add to a sync unit; triage inside) | kebab |
 
 Clicking a **count** deep-links into the File System browser (§1) at this directory, pre-filtered to
 that category ([menus.mdx §2](./menus.mdx)). When **Do not compress** is on, rows 1–2 still count but
 their **Compress…** action is hidden (the offer is suppressed); when **Never IPFS** is on, row 4's
 **Track / Sync** is hidden (nothing under here may be synced).
+
+**Height — bounded (the content-below exception).** This page renders an **inside summary** footer
+**beneath** the rollup table (§7 layout). Because content sits **below** the table, it is the
+**exception** to the site-wide full-page-height default ([repos.mdx §3.3.1](./repos.mdx), [charter
+Tables rule](../CLAUDE.md)): the rollup table keeps a **bounded** height (it never expands to fill the
+viewport) so the summary below stays visible. In code, `fillHeight={false}` on the `DataTable`. (The
+rollup is only four rows anyway; the fill-height behavior is for the long, scrolling tables.)
+
+### 8.1 The row `⋮` kebab (every row, per [menus.mdx §3](./menus.mdx#3-the-row--kebab--every-table-has-one))
+
+A rollup row is a **category**, not a file/dir/repo/peer entity, so it uses this **page-local** menu
+(the rule in [menus.mdx §3](./menus.mdx) — a non-entity table's kebab contents are defined by the
+owning spec). The trailing vertical **`⋮`** is present on **every** row, even when its inline action is
+hidden (so the column is never blank). Contents by row:
+
+| Row | `⋮` contents |
+| --- | --- |
+| 1–2 (compressible) | **Compress…** (the same offer as the inline button; hidden only when *Do not compress* is on — then the kebab still shows the rest) · **Show matching files** (deep-link to the File System browser filtered to this category) · **Do not compress** (folder-level sticky toggle, [menus.mdx §6.6](./menus.mdx#66-the-two-sticky-flags--never-ipfs--do-not-compress-locked)) |
+| 3 (big, not git-ignored) | **Git-ignore…** (confirm list) · **Show matching files** |
+| 4 (big, git-ignored, not tracked) | **Track / Sync** (hidden when *Never IPFS* is on) · **Show matching files** · **Never IPFS** (folder-level sticky toggle) |
+
+The folder-level sticky toggles in the kebab are the **same state** as the switches in the badge/flag
+strip (§7) — flipping either updates both. Compress / Git-ignore / Track remain **explicit-click
+offers** with their confirm step ([menus.mdx §6.1](./menus.mdx)); the kebab never acts silently.
 
 ---
 
@@ -418,7 +443,7 @@ Neither flag deletes or alters any bytes ([menus.mdx §6.2/§6.6](./menus.mdx)).
 1. `/dir?path=<abs>` renders **one directory's** identity (name title, absolute path muted), its **code
    badges** (§3), and the **category rollup table** (§8) with the four charter categories, each showing
    a count and a per-row action.
-2. The page carries a **top-right `⋯` "more" menu** rendering the **Directory catalog**
+2. The page carries a **top-right `⋮` "more" menu** rendering the **Directory catalog**
    ([menus.mdx §5.2](./menus.mdx)) verbatim (same as the row kebab), with **Open in File System** as the
    visible primary; right-clicking the directory entity opens the same menu ([menus.mdx §3.1](./menus.mdx)).
 3. The rollup is a **TanStack `DataTable`** in the house style; clicking a **count** deep-links into the

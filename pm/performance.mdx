@@ -79,6 +79,14 @@ capped + cooperatively yielding — no exceptions, on any page.**
   No new dependency required — a small `useWindowedRows(count, rowHeight)` hook keyed
   off the scroll container's `scrollTop`. Also **delete the `Number.MAX_SAFE_INTEGER`
   "All" page-size footgun**; cap the page-size menu at sane values.
+- **Height (webapp full-page-height rule).** The windowed body's scroll container
+  is sized `flex-1 min-h-0` so it **fills the page down to the bottom of the
+  viewport** (no fixed `max-h` leaving dead white space when the window is tall),
+  matching P-14 and the [charter Tables rule](../CLAUDE.md). Windowing keys off this
+  same container's live `clientHeight`, so a taller window simply renders a few more
+  rows — never all 500/5000. The one exception is a table with content **beneath**
+  it ([repos.mdx §3.3.1](./repos.mdx)), which stays a **bounded** height; windowing
+  works identically in either case.
 
 ### 🔴 P-02 — Row selection copies the whole Set and re-renders the whole table · T2
 - **Where:** `FullPathsPage.tsx` (`selected: Set<string>`, per-checkbox
@@ -270,7 +278,7 @@ capped + cooperatively yielding — no exceptions, on any page.**
   (`invalidateQueries(["fs"])` + `["repo"]`), and `pages/entity/MediaViewer.tsx`
   `decide.onSuccess` (same two invalidations). Extends P-08, which only patched
   `FullPathsPage`'s pin path.
-- **Symptom:** Toggling one sticky flag or decision from the ⋯ menu invalidates the
+- **Symptom:** Toggling one sticky flag or decision from the ⋮ menu invalidates the
   `["fs", …]` key, which refetches **every open File System column** — each a full
   `listDirectory` walk (now the P-16 endpoint) — plus every `["repo", …]` view, just
   to flip one badge. The mutation already returns the fresh `EntityView`.

@@ -124,11 +124,6 @@ export function OneRepoPage() {
       cell: (f) => f.cid ? <code className="text-xs text-black/60" title={f.cid} onClick={() => navigator.clipboard?.writeText(f.cid!)}>{middleTruncate(f.cid, 16)}</code> : <span className="text-black/20">—</span> },
     { id: "changed", header: "Changed", kind: "timestamp", accessor: (f) => f.changedAt,
       cell: (f) => <span title={absoluteTime(f.changedAt)}>{relativeTime(f.changedAt)}</span> },
-    // Trailing ⋯ kebab — the file entity menu (menus.mdx §3), same catalog as View-one-file.
-    { id: "menu", header: "", kind: "text", sortable: false, filterable: false, align: "right",
-      accessor: () => "",
-      cell: (f) =>
-        detail?.path ? <EntityKebab path={`${detail.path}/${f.path}`} /> : null },
   ];
 
   const c = detail?.counts;
@@ -184,10 +179,15 @@ export function OneRepoPage() {
       )}
 
       <DataTable
+        // Content below the table (the Repo details disclosure) → bounded height, not full-page
+        // (one_repo.mdx §4 / repos.mdx §3.3.1).
+        fillHeight={false}
         data={detail?.files ?? []}
         columns={columns}
         searchKeys={(f) => f.path}
         getRowId={(f) => f.fileId}
+        // Trailing ⋮ kebab — the file entity menu (menus.mdx §3), same catalog as View-one-file.
+        rowMenu={(f) => (detail?.path ? <EntityKebab path={`${detail.path}/${f.path}`} /> : null)}
         itemNoun="files"
         loading={isLoading}
         selection={{

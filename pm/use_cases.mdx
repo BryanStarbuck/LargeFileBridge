@@ -352,7 +352,9 @@ Shared-files page, top to bottom:
    **Disclosure "How to add a computer"** (install LFBridge there, sign in with the same Google
    account, it appears here). Not a blank table.
 3. **Table** — unchanged, but **Last seen** is colored by recency (green recent / amber stale) so the
-   health language reaches here too.
+   health language reaches here too. Every row carries the trailing vertical **`⋮`** kebab — the
+   **peer catalog** ([menus.mdx §5.4](./menus.mdx#54-peer-a-users-other-computer)): **View peer** ·
+   **Copy PeerID** · **Remove peer** (⚠ confirm; forgets the computer, touches no remote content).
 
 ### 5.6 File properties (`/file`) & Directory (`/dir`) pages
 * Add a small **per-entity StatusBanner** at the top under the header: the file's own verdict —
@@ -364,7 +366,9 @@ Shared-files page, top to bottom:
   detail (UC-4).
 * Directory page: the category **rollup table** is the working surface (UC-4/UC-5); its four rows
   already map to the charter categories. Keep, and let each actionable row read as an Improvable
-  offer.
+  offer. Every row also carries the trailing vertical **`⋮`** kebab
+  ([directories.mdx §8.1](./directories.mdx#81-the-row--kebab-every-row-per-menusmdx-3)): the row's
+  offer + **Show matching files** + the relevant folder sticky-flag toggle.
 
 ### 5.7 File System — Column view (`/fs`) & Full paths (`/fs/paths`)
 * Structurally these are already good (Finder columns; flat filterable table). The redesign only
@@ -373,7 +377,9 @@ Shared-files page, top to bottom:
     that explains R/r · S · C/c · i once, so a non-expert isn't stuck guessing. (Badges themselves
     unchanged.)
   * Full-paths keeps its segmented controls + action row. Ensure the "N selected → IPFS pin / Unpin"
-    action row reads in the health language and that skipped files are reported (already true).
+    action row reads in the health language and that skipped files are reported (already true). Every
+    row carries the trailing vertical **`⋮`** kebab (the **file** catalog,
+    [full_paths.mdx §4.1](./full_paths.mdx) / [menus.mdx §5.3](./menus.mdx#53-file)).
 
 ---
 
@@ -381,7 +387,9 @@ Shared-files page, top to bottom:
 
 * **The Home/Repos dashboard** (§5.0) — kept.
 * **All tables stay TanStack tables** with the standard control row and 500-default pagination
-  (charter).
+  (charter). Every row of every table carries the trailing vertical **`⋮`** row kebab
+  ([menus.mdx §3](./menus.mdx#3-the-row--kebab--every-table-has-one)) — three dots up-and-down, never
+  the horizontal `⋯`.
 * **The left bar** — data source of truth stays `pm/left_bar.yaml`; the IPFS disclosure children
   stay.
 * **The charter guardrails** — we never compress, git-ignore, convert, or alter a file unless the

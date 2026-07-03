@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — View one image / View one video
-description: The two viewer-first single-media pages. /image?path=<abs> is the image viewer; /video?path=<abs> is the video viewer. Unlike the properties-first View-one-file page (files.mdx), these pages are dominated by the media itself — a large viewer fills everything below a slim header. Above the viewer sit a thin action-button row (Add/Remove IPFS · repo chip · compressed-state chip · codec chip · the ⋯ more menu) and, below or beside it, a compact property strip and action links. The media plays/loads straight off the user's local disk, streamed through the backend over an authenticated, HTTP-Range endpoint (no file:// URL, no public gateway). This spec defines the shared viewer layout, the streaming + codec-probe backend contract, the action bar, and acceptance criteria for both pages. Implemented by the /api/media backend module and the ViewOneImagePage / ViewOneVideoPage frontend (shared MediaViewer layout).
+description: The two viewer-first single-media pages. /image?path=<abs> is the image viewer; /video?path=<abs> is the video viewer. Unlike the properties-first View-one-file page (files.mdx), these pages are dominated by the media itself — a large viewer fills everything below a slim header. Above the viewer sit a thin action-button row (Add/Remove IPFS · repo chip · compressed-state chip · codec chip · the ⋮ more menu) and, below or beside it, a compact property strip and action links. The media plays/loads straight off the user's local disk, streamed through the backend over an authenticated, HTTP-Range endpoint (no file:// URL, no public gateway). This spec defines the shared viewer layout, the streaming + codec-probe backend contract, the action bar, and acceptance criteria for both pages. Implemented by the /api/media backend module and the ViewOneImagePage / ViewOneVideoPage frontend (shared MediaViewer layout).
 ---
 
 # LargeFileBridge — View one image / View one video
@@ -18,9 +18,9 @@ everything that is not a viewable medium (and is always reachable from a viewer 
 Siblings this builds on and does not repeat:
 
 * [View one file](./files.mdx) — the entity identity, the two sticky flags, the sync/compression/IPFS
-  fact cards, and the top-right `⋯` more menu. The viewer pages reuse that same `EntityView` payload and
-  the same `⋯` menu; they only re-front it around a big media surface.
-* [Menus](./menus.mdx) — the LOCKED **File action catalog** (§5.3) and the `⋯` more-menu (§4). The
+  fact cards, and the top-right `⋮` more menu. The viewer pages reuse that same `EntityView` payload and
+  the same `⋮` menu; they only re-front it around a big media surface.
+* [Menus](./menus.mdx) — the LOCKED **File action catalog** (§5.3) and the `⋮` more-menu (§4). The
   action-button row here is a *promotion* of a few catalog items to visible chips; it never invents new
   actions.
 * [One repo](./one_repo.mdx) — the **decision model** (§1) behind Add/Remove IPFS and the repo chip.
@@ -107,7 +107,7 @@ takes all remaining height), and a **compact property strip + action links** pin
 ```
 ┌────────────┬───────────────────────────────────────────────────────────────────────────┐
 │  LEFT BAR  │  ‹ back   final_4k.mov                                             ┌───┐    │ ← header
-│            │           ~/BGit/…/Our_Movies/render/final_4k.mov                  │ ⋯ │    │
+│            │           ~/BGit/…/Our_Movies/render/final_4k.mov                  │ ⋮ │    │
 │            ├───────────────────────────────────────────────────────────────────┴───┴────┤
 │            │  [ + Add to IPFS ]   ⟨repo: Our_Movies⟩  ⟨looks uncompressed⟩  ⟨H.264 · MP4⟩ │ ← action bar
 │            ├───────────────────────────────────────────────────────────────────────────┤
@@ -125,7 +125,7 @@ takes all remaining height), and a **compact property strip + action links** pin
 ```
 
 * **Header.** Back affordance, the **file name** title, absolute **path** muted beneath, and the same
-  top-right **`⋯` more menu** ([menus.mdx §4](./menus.mdx)) the properties page carries — the full File
+  top-right **`⋮` more menu** ([menus.mdx §4](./menus.mdx)) the properties page carries — the full File
   catalog verbatim.
 * **Action-button row.** A slim strip of the most-relevant catalog items promoted to visible controls
   (§4).
@@ -144,13 +144,13 @@ takes all remaining height), and a **compact property strip + action links** pin
 ## 4. The action-button row (promotion, not invention)
 
 The row promotes a fixed, small set of the File catalog ([menus.mdx §5.3](./menus.mdx)) to visible
-controls; the complete catalog still lives under `⋯`. Left→right:
+controls; the complete catalog still lives under `⋮`. Left→right:
 
 1. **IPFS primary button** — the single most-useful next action, identical rule to
    [files.mdx §3](./files.mdx):
    * in a repo, `neverIpfs` off, decision ≠ sync → **+ Add to IPFS** (a.k.a. *Pin*; sets decision `sync`).
    * decision = sync → **Remove from IPFS** (a.k.a. *Unpin*; sets `ignore`).
-   * not in a repo, or `neverIpfs` on → the button is absent (the `⋯` menu still governs).
+   * not in a repo, or `neverIpfs` on → the button is absent (the `⋮` menu still governs).
 2. **Repo chip** — `⟨repo: <name>⟩`, a link to that repo ([one_repo.mdx](./one_repo.mdx)); "not in a repo"
    when loose (muted, non-link).
 3. **Compressed-state chip** — `⟨looks uncompressed⟩` / `⟨already compressed⟩` from `compressState`
@@ -160,7 +160,7 @@ controls; the complete catalog still lives under `⋯`. Left→right:
 4. **Codec chip** — `⟨H.264 · MP4⟩` from `MediaProbe` (`codec · container`). Unknown codec → just the
    container; unknown both → hidden.
 
-The IPFS button and the compress chip are the **same state** as their `⋯` menu items and the files.mdx
+The IPFS button and the compress chip are the **same state** as their `⋮` menu items and the files.mdx
 switches — flipping one updates the others.
 
 ---
@@ -188,7 +188,7 @@ switches — flipping one updates the others.
 ## 6. Acceptance criteria
 
 1. `/image?path=<abs>` and `/video?path=<abs>` each render the **shared MediaViewer**: slim header
-   (name title + muted absolute path + `⋯`), a thin **action-button row**, a **large viewer surface** that
+   (name title + muted absolute path + `⋮`), a thin **action-button row**, a **large viewer surface** that
    takes all remaining height, and a **compact property strip + action links**.
 2. The medium **plays/loads off the local disk** via the backend stream — never a `file://` URL. Video
    supports **seeking** because `/api/media/raw` answers HTTP **`Range`** (`206` + `Content-Range`); images
@@ -197,7 +197,7 @@ switches — flipping one updates the others.
 3. The **action-button row** shows the IPFS primary (Add/Remove per §4/files.mdx §3), a **repo chip**
    (link, or "not in a repo"), a **compressed-state chip** (from `compressState`, clickable → Compress…
    offer when `should` & not suppressed), and a **codec chip** (`codec · container` from `MediaProbe`,
-   degrading to container-only or hidden when unknown). The top-right `⋯` menu renders the full File
+   degrading to container-only or hidden when unknown). The top-right `⋮` menu renders the full File
    catalog ([menus.mdx §5.3](./menus.mdx)) verbatim.
 4. `MediaProbe` is computed **locally with no shell** (charter): image dimensions + format from the header;
    video container from extension and codec by a bounded fourcc/EBML sniff; unknown fields are `null` and
@@ -210,7 +210,7 @@ switches — flipping one updates the others.
 
 <!--
   View-one-IMAGE (/image) and View-one-VIDEO (/video) viewer-first pages. Shared MediaViewer layout.
-  Reuse EntityView (files.mdx §2) + the ⋯ File catalog (menus.mdx §5.3) — never restate them. The star is
+  Reuse EntityView (files.mdx §2) + the ⋮ File catalog (menus.mdx §5.3) — never restate them. The star is
   a large viewer over a streamed, Range-capable, signed-grant backend endpoint (/api/media) — NOT file://,
   NOT a public gateway (charter). Codec/dimensions come from MediaProbe — a local, no-shell header sniff.
   Action-button row = a promotion of catalog items (IPFS primary, repo chip, compress-state chip, codec

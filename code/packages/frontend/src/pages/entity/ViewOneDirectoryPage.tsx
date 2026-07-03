@@ -1,13 +1,13 @@
 // View one directory (directories.mdx) — the single-entity page for ONE directory: identity + badges
 // + the two sticky flag switches + the charter category rollup table, with the top-right ⋯ "more"
 // menu (menus.mdx §4). Distinct from the File System column browser (directory.mdx).
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
-import { ChevronLeft, FolderOpen, Zap, EyeOff, GitBranch, UploadCloud } from "lucide-react";
+import { ChevronLeft, FolderOpen, Zap, EyeOff, GitBranch, UploadCloud, Ban } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/api/client";
 import { Badges } from "@/components/fs/Badges";
-import { EntityMore } from "@/components/menu/EntityMenu";
+import { EntityMore, ActionsKebab, type Action } from "@/components/menu/EntityMenu";
 import { DataTable } from "@/components/table/DataTable";
 import type { LfbColumn } from "@/components/table/types";
 import { FlagSwitches, EntityHeaderMissing } from "./entityShared";
@@ -24,6 +24,7 @@ interface RollupRow {
 export function ViewOneDirectoryPage() {
   const { path } = useSearch({ strict: false }) as { path?: string };
   const navigate = useNavigate();
+  const qc = useQueryClient();
 
   const { data: v, isLoading } = useQuery({
     queryKey: ["entity", path],
@@ -49,6 +50,36 @@ export function ViewOneDirectoryPage() {
   const compressDir = () => {
     if (!window.confirm(`Compress media inside ${v.name}? This is an offer — nothing changes until it runs.`)) return;
     api.compressEntity(v.path).then(() => toast.success("Compression queued")).catch((e) => toast.error(e.message));
+  };
+
+  // The folder-level sticky flags — same state as the strip switches (directories.mdx §8.1).
+  const toggleFlag = async (patch: { neverIpfs?: boolean; noCompress?: boolean }) => {
+    await api.setEntityFlags(v.path, patch);
+    qc.invalidateQueries({ queryKey: ["entity", v.path] });
+  };
+  const showMatching = () => navigate({ to: "/fs", search: { path: v.path } });
+
+  // The per-row ⋮ kebab for a rollup CATEGORY row (page-local, directories.mdx §8.1): the row's offer
+  // (when live) + "Show matching files" + the relevant folder sticky-flag toggle. Every row has one.
+  const rollupMenu = (row: RollupRow): Action[] => {
+    const a: Action[] = [];
+    if (row.action && row.count > 0 && !row.hidden) {
+      if (row.action === "compress")
+        a.push({ id: "compress", label: "Compress…", group: "Work", icon: <Zap className="h-4 w-4" />, onSelect: compressDir });
+      else if (row.action === "ignore")
+        a.push({ id: "ignore", label: "Git-ignore…", group: "Work", icon: <EyeOff className="h-4 w-4" />,
+          onSelect: () => { toast.message("Git-ignore is offered per file — open in File System to review."); } });
+      else
+        a.push({ id: "track", label: "Track / Sync", group: "Work", icon: <UploadCloud className="h-4 w-4" />, onSelect: showMatching });
+    }
+    a.push({ id: "show", label: "Show matching files", group: "Open", icon: <FolderOpen className="h-4 w-4" />, onSelect: showMatching });
+    if (row.action === "compress")
+      a.push({ id: "no-compress", label: "Do not compress", group: "Flag", icon: <Ban className="h-4 w-4" />,
+        checked: v.flags.noCompress, onSelect: () => toggleFlag({ noCompress: !v.flags.noCompress }) });
+    if (row.action === "track")
+      a.push({ id: "never-ipfs", label: "Never IPFS", group: "Flag", icon: <Ban className="h-4 w-4" />,
+        checked: v.flags.neverIpfs, onSelect: () => toggleFlag({ neverIpfs: !v.flags.neverIpfs }) });
+    return a;
   };
 
   const columns: LfbColumn<RollupRow>[] = [
@@ -120,10 +151,14 @@ export function ViewOneDirectoryPage() {
       {/* Category rollup table */}
       <h2 className="mb-1 text-sm font-medium text-black/70">What's inside</h2>
       <DataTable
+        // Content below the table (the footer summary) → bounded height, not full-page
+        // (directories.mdx §8 / repos.mdx §3.3.1).
+        fillHeight={false}
         data={rows}
         columns={columns}
         searchKeys={(row) => row.category}
         getRowId={(row) => row.id}
+        rowMenu={(row) => <ActionsKebab actions={rollupMenu(row)} />}
         itemNoun="categories"
         empty={<p className="text-center text-black/60">Nothing here needs attention.</p>}
       />

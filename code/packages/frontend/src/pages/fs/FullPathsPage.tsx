@@ -260,11 +260,13 @@ export function FullPathsPage() {
   const rootError = flat.isError ? (flat.error as Error)?.message : null;
 
   return (
-    <div>
+    // Full-page-height (full_paths.mdx §4 / repos.mdx §3.3.1): flex column so the table body flexes to
+    // the bottom of the viewport; the bars above and the pager below stay pinned (shrink-0).
+    <div className="flex min-h-0 flex-1 flex-col">
       <FsTabs />
 
       {/* Root bar */}
-      <div className="flex items-center gap-2 py-2">
+      <div className="flex shrink-0 items-center gap-2 py-2">
         <button
           onClick={() => home.data && setRoot(home.data.home)}
           title="Home directory"
@@ -294,10 +296,10 @@ export function FullPathsPage() {
         </label>
       </div>
 
-      <BadgeLegend className="py-1" />
+      <BadgeLegend className="shrink-0 py-1" />
 
       {/* Control row — segmented controls + house search / sort / filter icons */}
-      <div className="flex flex-wrap items-center gap-3 py-1">
+      <div className="flex shrink-0 flex-wrap items-center gap-3 py-1">
         <div className="relative max-w-xs flex-1">
           <Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-black/40" />
           <input
@@ -417,7 +419,7 @@ export function FullPathsPage() {
       )}
 
       {/* Action row */}
-      <div className="flex flex-wrap items-center gap-2 py-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 py-2">
         <button
           onClick={() => setSelected(new Set(filtered.map((f) => f.path)))}
           className="flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm hover:bg-slate-100"
@@ -442,12 +444,12 @@ export function FullPathsPage() {
       </div>
 
       {flat.data?.truncated && (
-        <div className="mb-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+        <div className="mb-2 shrink-0 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
           Showing the first {files.length} files (walk capped) — narrow the root to see everything.
         </div>
       )}
       {rootError && (
-        <div className="mb-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <div className="mb-2 shrink-0 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
           {rootError}
         </div>
       )}
@@ -462,7 +464,7 @@ export function FullPathsPage() {
           onClear={() => { setCompressed("both"); setIpfs("both"); setSearch(""); setMinSizeMB(""); setPathContains(""); }}
         />
       ) : (
-        <div ref={scrollRef} className="max-h-[65vh] overflow-auto">
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
           <table className="w-full border-collapse text-sm">
             <thead className="sticky top-0 z-10 bg-white">
               <tr className="border-b border-[var(--lfb-border)] text-left text-black/60">
@@ -475,9 +477,28 @@ export function FullPathsPage() {
                 </th>
                 {table.getHeaderGroups()[0].headers.map((h) => {
                   const align = (h.column.columnDef.meta as { align?: string } | undefined)?.align;
+                  // Header-click sort (full_paths.mdx §4 / repos.mdx §3.1): shares the SAME `setSort`
+                  // and `sorting` state as the Size·Name·Path segmented control (§3.2), so clicking a
+                  // header and picking the segment stay in lock-step; click again toggles asc ↔ desc.
+                  const canSort = h.column.getCanSort();
+                  const active = sorting[0]?.id === h.column.id;
                   return (
-                    <th key={h.id} className={`py-2 px-2 font-medium ${align === "right" ? "text-right" : ""}`}>
-                      {flexRender(h.column.columnDef.header, h.getContext())}
+                    <th
+                      key={h.id}
+                      onClick={canSort ? () => setSort(h.column.id) : undefined}
+                      aria-sort={active ? (sorting[0]?.desc ? "descending" : "ascending") : undefined}
+                      className={`py-2 px-2 font-medium ${align === "right" ? "text-right" : ""} ${
+                        canSort ? "cursor-pointer select-none hover:text-black" : ""
+                      }`}
+                    >
+                      <span className={`inline-flex items-center gap-1 ${align === "right" ? "flex-row-reverse" : ""}`}>
+                        {flexRender(h.column.columnDef.header, h.getContext())}
+                        {active && (
+                          <span className="text-[var(--lfb-primary)]" aria-hidden>
+                            {sorting[0]?.desc ? "↓" : "↑"}
+                          </span>
+                        )}
+                      </span>
                     </th>
                   );
                 })}
@@ -537,7 +558,7 @@ export function FullPathsPage() {
 
       {/* Count + pagination (default 500) */}
       {filtered.length > 0 && (
-        <div className="flex items-center justify-between py-2 text-sm text-black/60">
+        <div className="flex shrink-0 items-center justify-between py-2 text-sm text-black/60">
           <span>{filtered.length} files</span>
           <div className="flex items-center gap-3">
             <span>

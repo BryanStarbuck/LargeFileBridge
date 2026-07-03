@@ -8,6 +8,7 @@ import type { RepoRow, RepoStatus } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
+import { RepoKebab } from "../../components/menu/RowKebabs.js";
 import { RepoStatusPill } from "../../components/Pill.js";
 import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
 
@@ -123,8 +124,9 @@ export function ReposPage() {
   ];
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-1">
+    // Full-page-height (repos.mdx §3.3.1): a flex column so the DataTable fills to the bottom.
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="mb-1 flex shrink-0 items-center justify-between">
         <h1 className="text-2xl font-bold">Repos</h1>
         <div className="flex gap-2">
           <button
@@ -150,6 +152,7 @@ export function ReposPage() {
         searchKeys={(r) => `${r.name} ${r.path}`}
         getRowId={(r) => r.repoId}
         onRowClick={(r) => navigate({ to: "/repos/$repoId", params: { repoId: r.repoId } })}
+        rowMenu={(r) => <RepoKebab repo={r} />}
         itemNoun="repos"
         loading={isLoading}
         empty={

@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — View one file
-description: The single-entity page for ONE file (route /file?path=<abs>). Reached from any file row's "View file" action, from clicking a file's name/path cell, or by selecting a file in the File System browser. It shows everything LargeFileBridge knows about that one file — identity (name, absolute path, size, created/modified, kind), its code badges (repo / sync / compress / ipfs), its sync decision + transfer status + CID + which peers hold it, its compression state, and its two sticky flags (Never IPFS, Do not compress). Because the page IS one file, it carries the top-right "⋯" MORE menu that renders the exact same File action catalog as that file's row kebab (menus.mdx §5.3) — plus the most-common action (Add to IPFS) as a visible primary button, and the two sticky flags as labeled switches. This spec defines the layout, the data payload (EntityView), the primary/more split, the flag switches, and the acceptance criteria. Implemented by the /api/entity backend module and the ViewOneFilePage frontend.
+description: The single-entity page for ONE file (route /file?path=<abs>). Reached from any file row's "View file" action, from clicking a file's name/path cell, or by selecting a file in the File System browser. It shows everything LargeFileBridge knows about that one file — identity (name, absolute path, size, created/modified, kind), its code badges (repo / sync / compress / ipfs), its sync decision + transfer status + CID + which peers hold it, its compression state, and its two sticky flags (Never IPFS, Do not compress). Because the page IS one file, it carries the top-right "⋮" MORE menu that renders the exact same File action catalog as that file's row kebab (menus.mdx §5.3) — plus the most-common action (Add to IPFS) as a visible primary button, and the two sticky flags as labeled switches. This spec defines the layout, the data payload (EntityView), the primary/more split, the flag switches, and the acceptance criteria. Implemented by the /api/entity backend module and the ViewOneFilePage frontend.
 ---
 
 # LargeFileBridge — View one file
@@ -9,11 +9,11 @@ The **View one file** page is the single-entity page for **one** file. A file sh
 in LFB — a [repo's files table](./one_repo.mdx), the [File System](./directories.mdx) column browser, the
 [IPFS](./ipfs.mdx) pinned table — and from any of them the **View file** action (or clicking the
 file's name) lands here at `/file?path=<abs>`. The page *is* that file, so it carries the entity
-**`⋯` "more" menu** ([menus.mdx §4](./menus.mdx)).
+**`⋮` "more" menu** ([menus.mdx §4](./menus.mdx)).
 
 Siblings this builds on and does not repeat:
 
-* [Menus](./menus.mdx) — the LOCKED **File action catalog** (§5.3), the `⋯` more-menu (§4), right-click
+* [Menus](./menus.mdx) — the LOCKED **File action catalog** (§5.3), the `⋮` more-menu (§4), right-click
   (§3.1), and the two sticky flags **Never IPFS** / **Do not compress** (§6.6). This page renders that
   catalog; it never invents a different one.
 * [One repo](./one_repo.mdx) — the **decision model** (Sync / Ignore / Undecided, §1) and the
@@ -45,13 +45,13 @@ it renders a medium it offers an **Open image/video viewer** primary (§7) so th
 
 ## 1. Layout
 
-One content column: a **header** (identity + primary button + `⋯` more menu), a **badge/flag strip**,
+One content column: a **header** (identity + primary button + `⋮` more menu), a **badge/flag strip**,
 and stacked **fact cards** (Sync, Compression, IPFS, Fingerprint).
 
 ```
 ┌────────────┬───────────────────────────────────────────────────────────────────────────┐
 │  LEFT BAR  │  ‹ back      final_4k.mov                          ┌─────────────┐  ┌───┐   │
-│            │  ~/BGit/…/Our_Movies/render/final_4k.mov           │ + Add to IPFS│  │ ⋯ │   │ ← primary + more
+│            │  ~/BGit/…/Our_Movies/render/final_4k.mov           │ + Add to IPFS│  │ ⋮ │   │ ← primary + more
 │            │                                                    └─────────────┘  └───┘   │
 │            ├───────────────────────────────────────────────────────────────────────────┤
 │            │   i  C  S  r      Never IPFS ◯off     Do not compress ◯off                  │ ← badges + flag switches
@@ -69,8 +69,8 @@ and stacked **fact cards** (Sync, Compression, IPFS, Fingerprint).
 
 * **Header.** A back affordance, the **file name** as the title, the absolute **path** muted beneath.
 * **Primary button.** The single most-common action is a visible button (see §3); everything else is
-  under `⋯`.
-* **`⋯` more menu.** Opens the **File catalog** ([menus.mdx §5.3](./menus.mdx)) verbatim — the same
+  under `⋮`.
+* **`⋮` more menu.** Opens the **File catalog** ([menus.mdx §5.3](./menus.mdx)) verbatim — the same
   list the file's row kebab shows. Actions that make no sense at this altitude (e.g. **View file** —
   you are already on it) are omitted.
 
@@ -118,14 +118,14 @@ identity, badges, compression heuristic, and both flags.
 
 ## 3. Primary vs. more (LOCKED split)
 
-The page follows [menus.mdx §4](./menus.mdx)'s "one primary, rest under `⋯`" rule:
+The page follows [menus.mdx §4](./menus.mdx)'s "one primary, rest under `⋮`" rule:
 
 * **Primary button** = the single most useful next action for this file's state:
   * `neverIpfs` off **and** decision ≠ sync → **+ Add to IPFS** (sets decision `sync`).
   * decision = sync → **Remove from IPFS** is *not* the primary; **Sync now** is (queue this file).
   * `neverIpfs` on → no IPFS primary; the primary becomes **Compress…** if the file is compressible and
-    `noCompress` is off, else there is no primary button (only `⋯`).
-* Everything from the **File catalog** ([menus.mdx §5.3](./menus.mdx)) is inside `⋯`, including the
+    `noCompress` is off, else there is no primary button (only `⋮`).
+* Everything from the **File catalog** ([menus.mdx §5.3](./menus.mdx)) is inside `⋮`, including the
   primary again (the menu is a complete catalog), with destructive **Stop syncing (untrack/unpin)**
   separated last.
 
@@ -141,7 +141,7 @@ buried in the menu — this is the page where a user manages a file's standing p
 * **Do not compress** — on ⇒ the Compression card drops its **Compress…** offer and the `C` badge is
   suppressed; the card still reports what the file *is* (e.g. "Video · 8.2 GB"), just without the nag.
 
-The `⋯` menu's toggle items and these switches are **the same state** — flipping one updates the other.
+The `⋮` menu's toggle items and these switches are **the same state** — flipping one updates the other.
 
 ---
 
@@ -171,11 +171,11 @@ For non-media files there is no such affordance.
 
 1. `/file?path=<abs>` renders **one file's** identity (name title, absolute path muted), its **code
    badges** ([directories.mdx §3](./directories.mdx)), and stacked fact cards (Sync, Compression, IPFS, File).
-2. The page carries a **top-right `⋯` "more" menu** rendering the **File catalog**
+2. The page carries a **top-right `⋮` "more" menu** rendering the **File catalog**
    ([menus.mdx §5.3](./menus.mdx)) verbatim (the same as the row kebab), destructive item last;
    right-clicking anywhere on the page's entity opens the same menu ([menus.mdx §3.1](./menus.mdx)).
 3. The **primary button** follows §3 (Add to IPFS / Sync now / Compress… / none) based on the file's
-   flags and decision; the primary action also appears inside `⋯`.
+   flags and decision; the primary action also appears inside `⋮`.
 4. Both **sticky flags** (**Never IPFS**, **Do not compress**) show as labeled switches (§4), write
    immediately, stay in sync with the menu toggles, and honor [menus.mdx §6.6](./menus.mdx) (Never IPFS
    forbids sync + hides Add-to-IPFS + suppresses `S`; Do not compress suppresses `C`/the offer; neither
