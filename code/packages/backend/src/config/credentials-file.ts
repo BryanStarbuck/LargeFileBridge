@@ -76,8 +76,12 @@ export function loadGoogleCreds(): GoogleCreds {
     const g = json.large_files_bridge?.google ?? json.google ?? {};
     clientId = clientId || g.clientId || "";
     clientSecret = clientSecret || g.clientSecret || "";
-  } catch {
-    // absence is expected in local dev — not an error
+  } catch (e) {
+    // Absence is expected in local dev — not an error. But a file that EXISTS yet fails to read or
+    // parse (bad JSON / permissions) is a real misconfiguration the user should be told about.
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+      log.warn("auth", `Failed to read/parse Google creds at ${credsFilePath()}: ${(e as Error).message}`);
+    }
   }
   return { clientId, clientSecret };
 }

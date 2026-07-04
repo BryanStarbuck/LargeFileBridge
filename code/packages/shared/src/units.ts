@@ -15,7 +15,16 @@ export const DEFAULT_THRESHOLD_BYTES = DEFAULT_THRESHOLD_VALUE * UNIT_MULTIPLIER
 
 /** value + unit -> resolved bytes (what downstream code compares). */
 export function toBytes(value: number, unit: SizeUnit): number {
-  return Math.round(value * UNIT_MULTIPLIER[unit]);
+  // A bad unit (or a non-finite value from a malformed config/YAML) would otherwise return NaN and
+  // silently poison the big-file threshold comparison downstream — throw so callers catch + log it.
+  const multiplier = UNIT_MULTIPLIER[unit];
+  if (multiplier === undefined) {
+    throw new Error(`toBytes: invalid size unit "${unit}" (expected one of ${SIZE_UNITS.join(", ")})`);
+  }
+  if (!Number.isFinite(value)) {
+    throw new Error(`toBytes: value must be a finite number, got ${value}`);
+  }
+  return Math.round(value * multiplier);
 }
 
 /** Human-readable byte size, e.g. 8.2 GB. Used in the files table (one_repo.mdx §4.3). */

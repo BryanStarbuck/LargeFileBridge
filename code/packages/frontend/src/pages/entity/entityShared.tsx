@@ -5,6 +5,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import type { EntityView } from "@lfb/shared";
 import { api } from "@/api/client";
+import { clientLog } from "../../lib/clientLog.js";
 
 /** The two labeled sticky-flag switches — Never IPFS & Do not compress (menus.mdx §6.6). */
 export function FlagSwitches({ view }: { view: EntityView }) {
@@ -17,7 +18,10 @@ export function FlagSwitches({ view }: { view: EntityView }) {
       qc.invalidateQueries({ queryKey: ["fs"] });
       qc.invalidateQueries({ queryKey: ["repo"] });
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => {
+      clientLog.error("FlagSwitches.setEntityFlags", e);
+      toast.error(e.message);
+    },
   });
   return (
     <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
@@ -71,7 +75,12 @@ export function EntityHeaderMissing({
       <div className="mt-3 flex gap-3 text-sm">
         <button
           className="text-[var(--lfb-primary)]"
-          onClick={() => { navigator.clipboard?.writeText(view.path); toast.success("Path copied"); }}
+          onClick={() => {
+            // Clipboard write can reject (permissions/insecure context) — log it so a silent copy
+            // failure leaves a trail; the optimistic toast stays for the common success path.
+            navigator.clipboard?.writeText(view.path).catch((e) => clientLog.warn("EntityHeaderMissing.copyPath", e));
+            toast.success("Path copied");
+          }}
         >
           Copy path
         </button>

@@ -16,6 +16,11 @@ const IMAGE_EXT = new Set([
 
 /** Lowercased extension incl. the dot (".mp4"), or "" when the name has none. */
 export function fileExt(name: string): string {
+  // Isomorphic + untyped callers (File System cell clicks, JSON payloads) can hand us a non-string;
+  // guard so we throw a clear reason instead of a cryptic "lastIndexOf is not a function".
+  if (typeof name !== "string") {
+    throw new Error(`fileExt: expected a string name, got ${typeof name}`);
+  }
   const i = name.lastIndexOf(".");
   return i > 0 ? name.slice(i).toLowerCase() : "";
 }

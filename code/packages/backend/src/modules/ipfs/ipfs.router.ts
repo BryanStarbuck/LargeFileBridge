@@ -14,7 +14,12 @@ ipfsRouter.use(requireAllowListed);
 // ── The IPFS dashboard (ipfs_ui.mdx): node status, install, on/off toggle ────
 // GET /api/ipfs/node — installed? running? version, peerId, live metrics, gateway, posture.
 ipfsRouter.get("/node", async (_req, res) => {
-  res.json({ ok: true, data: await nodeStatus() });
+  try {
+    res.json({ ok: true, data: await nodeStatus() });
+  } catch (e) {
+    log.error("ipfs", `node status failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
 });
 
 // POST /api/ipfs/install — start the single-flight install job (progress via /install/status).
@@ -32,18 +37,33 @@ ipfsRouter.post("/daemon", async (req, res) => {
   const body = z.object({ action: z.enum(["start", "stop"]) }).safeParse(req.body ?? {});
   if (!body.success) return res.status(400).json({ ok: false, error: body.error.message });
   log.info("ipfs", `daemon ${body.data.action} requested`);
-  res.json({ ok: true, data: await controlDaemon(body.data.action) });
+  try {
+    res.json({ ok: true, data: await controlDaemon(body.data.action) });
+  } catch (e) {
+    log.error("ipfs", `daemon ${body.data.action} failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
 });
 
 // GET /api/ipfs — node card + one row per pinned root CID + the pinning-repo groups (left-bar children).
 ipfsRouter.get("/", async (_req, res) => {
-  res.json({ ok: true, data: await computeIpfsPage() });
+  try {
+    res.json({ ok: true, data: await computeIpfsPage() });
+  } catch (e) {
+    log.error("ipfs", `compute ipfs page failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
 });
 
 // POST /api/ipfs/rescan — manual reconciliation: refresh candidates, then re-read the pinset (ipfs.mdx §6).
 ipfsRouter.post("/rescan", async (_req, res) => {
-  await scanAll("manual");
-  res.json({ ok: true, data: await computeIpfsPage() });
+  try {
+    await scanAll("manual");
+    res.json({ ok: true, data: await computeIpfsPage() });
+  } catch (e) {
+    log.error("ipfs", `rescan failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
 });
 
 // POST /api/ipfs/import — bring untracked pins under tracking (metadata-only, ipfs.mdx §4).
@@ -52,11 +72,16 @@ ipfsRouter.post("/import", async (req, res) => {
     .object({ cids: z.array(z.string()).optional(), all: z.boolean().optional() })
     .safeParse(req.body ?? {});
   if (!body.success) return res.status(400).json({ ok: false, error: body.error.message });
-  const imported = await importPins(body.data);
-  log.info("ipfs", `imported ${imported} untracked pin(s) into tracking`);
-  const data = await computeIpfsPage();
-  const skipped = (body.data.cids?.length ?? 0) - imported;
-  res.json({ ok: true, data: { imported, skipped: Math.max(0, skipped), data } });
+  try {
+    const imported = await importPins(body.data);
+    log.info("ipfs", `imported ${imported} untracked pin(s) into tracking`);
+    const data = await computeIpfsPage();
+    const skipped = (body.data.cids?.length ?? 0) - imported;
+    res.json({ ok: true, data: { imported, skipped: Math.max(0, skipped), data } });
+  } catch (e) {
+    log.error("ipfs", `import pins failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
 });
 
 // POST /api/ipfs/pin — pin/unpin a single CID (ipfs.mdx §3). Backs the toggle pin control shown
@@ -67,16 +92,26 @@ ipfsRouter.post("/pin", async (req, res) => {
     .safeParse(req.body ?? {});
   if (!body.success) return res.status(400).json({ ok: false, error: body.error.message });
   const { cid, pinned } = body.data;
-  if (pinned) await ipfs.pinAdd(cid);
-  else await ipfs.pinRm(cid);
-  const verified = await ipfs.isPinned(cid);
-  log.info("ipfs", `pin ${pinned ? "add" : "rm"} ${cid} -> pinned=${verified}`);
-  res.json({ ok: true, data: { cid, pinned: verified } });
+  try {
+    if (pinned) await ipfs.pinAdd(cid);
+    else await ipfs.pinRm(cid);
+    const verified = await ipfs.isPinned(cid);
+    log.info("ipfs", `pin ${pinned ? "add" : "rm"} ${cid} -> pinned=${verified}`);
+    res.json({ ok: true, data: { cid, pinned: verified } });
+  } catch (e) {
+    log.error("ipfs", `pin ${pinned ? "add" : "rm"} ${cid} failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
 });
 
 // POST /api/ipfs/enforce — restore only-our-content defaults on the live node (ipfs.mdx §3.1 Fix).
 ipfsRouter.post("/enforce", async (_req, res) => {
-  await ipfs.enforceCompliance();
-  log.info("ipfs", "enforced only-our-content defaults on the local node");
-  res.json({ ok: true, data: await computeIpfsPage() });
+  try {
+    await ipfs.enforceCompliance();
+    log.info("ipfs", "enforced only-our-content defaults on the local node");
+    res.json({ ok: true, data: await computeIpfsPage() });
+  } catch (e) {
+    log.error("ipfs", `enforce compliance failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
 });

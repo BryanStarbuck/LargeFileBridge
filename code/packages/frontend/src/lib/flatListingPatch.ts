@@ -4,6 +4,7 @@
 // streaming hook subscribes here, and patchEntityBadges emits here too — so a flag/decision change
 // from a row's ⋯ menu still flips that row's chips immediately, with no re-walk.
 import type { FsBadge } from "@lfb/shared";
+import { clientLog } from "./clientLog.js";
 
 type Subscriber = (path: string, badges: FsBadge[]) => void;
 
@@ -19,5 +20,13 @@ export function subscribeFlatBadgePatch(fn: Subscriber): () => void {
 
 /** Flip one path's badges across every live streamed listing. */
 export function emitFlatBadgePatch(path: string, badges: FsBadge[]): void {
-  for (const fn of subscribers) fn(path, badges);
+  // Isolate each subscriber: a throwing patcher (e.g. a torn-down listing's stale setState) must not
+  // stop the remaining live listings from getting the same badge patch.
+  for (const fn of subscribers) {
+    try {
+      fn(path, badges);
+    } catch (e) {
+      clientLog.error("flatListingPatch.emit", e);
+    }
+  }
 }

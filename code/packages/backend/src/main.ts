@@ -18,6 +18,7 @@ import { ipfsRouter } from "./modules/ipfs/ipfs.router.js";
 import { healthRouter } from "./modules/health/health.router.js";
 import { securityRouter } from "./modules/security/security.router.js";
 import { internalRouter } from "./modules/internal/internal.router.js";
+import { clientLogRouter } from "./modules/clientlog/clientlog.router.js";
 import * as ipfs from "./modules/ipfs/ipfs.service.js";
 import { acquireSingleInstanceLock } from "./shared/single-instance.js";
 import { log } from "./shared/logging.js";
@@ -28,8 +29,9 @@ async function bootstrapState(): Promise<void> {
     if (!c.computer.id) c.computer.id = crypto.randomUUID();
     return c;
   });
-  // Bring the IPFS node into only-our-content compliance (best effort).
-  ipfs.enforceCompliance().catch(() => {});
+  // Bring the IPFS node into only-our-content compliance (best effort — a missing/offline IPFS node
+  // must not block boot, but the failure is worth a trail so a broken compliance run is visible).
+  ipfs.enforceCompliance().catch((e) => log.warn("main", `IPFS compliance enforcement failed: ${(e as Error).message}`));
   const pid = await ipfs.peerId();
   if (pid) await updateAppConfig((c) => ((c.computer.ipfs_peer_id = pid), c));
 }
@@ -105,6 +107,7 @@ async function main(): Promise<void> {
   app.use("/api/peers", peersRouter);
   app.use("/api/ipfs", ipfsRouter);
   app.use("/api/internal", internalRouter);
+  app.use("/api/client-log", clientLogRouter); // browser fault trail -> shared logger -> error.err
 
   // Global error handler -> error.err.
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {

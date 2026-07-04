@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { FsEntry, FlatStreamEvent } from "@lfb/shared";
 import { streamNdjson } from "../../lib/streamNdjson.js";
 import { subscribeFlatBadgePatch } from "../../lib/flatListingPatch.js";
+import { clientLog } from "../../lib/clientLog.js";
 
 export interface StreamedFlatListing {
   files: FsEntry[];
@@ -113,13 +114,16 @@ export function useStreamedFlatListing(root: string | null, hidden: boolean): St
             thresholdBytes: metaRef.current?.thresholdBytes ?? prev.thresholdBytes,
           }));
         } else if (ev.t === "error") {
+          // The backend walk reported a failure mid-stream — surface it to error.err, not just the UI.
           cancelPending();
+          clientLog.error("useStreamedFlatListing.streamError", ev.error);
           setState((prev) => ({ ...prev, error: ev.error, loading: false, done: true }));
         }
       },
     }).catch((e: unknown) => {
       if (ac.signal.aborted) return; // unmount / root change — expected, not an error
       cancelPending();
+      clientLog.error("useStreamedFlatListing.stream", e);
       setState((prev) => ({ ...prev, error: (e as Error).message, loading: false, done: true }));
     });
 

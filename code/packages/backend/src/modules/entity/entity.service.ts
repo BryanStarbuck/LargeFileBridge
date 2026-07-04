@@ -28,6 +28,7 @@ import {
   updateRepoConfig,
   repoIdFromPath,
 } from "../store-model/units.service.js";
+import { log } from "../../shared/logging.js";
 
 export interface ResolvedEntity {
   abs: string;
@@ -204,8 +205,9 @@ function buildDirRollup(dirAbs: string, match: RepoMatch | null): DirRollup {
       if (ent.name.startsWith(".")) continue;
       entryCount++;
     }
-  } catch {
-    /* unreadable → 0 */
+  } catch (e) {
+    // Unreadable dir → entryCount stays 0; not fatal, but worth a trail (permissions / gone).
+    log.warn("entity", `readdir failed for ${dirAbs} (child count): ${(e as Error).message}`);
   }
 
   // Bounded recursive walk for the category counts (shared budget so huge trees stay cheap).
@@ -218,6 +220,8 @@ function buildDirRollup(dirAbs: string, match: RepoMatch | null): DirRollup {
     try {
       dirents = fs.readdirSync(dir, { withFileTypes: true });
     } catch {
+      // Intentional best-effort: an unreadable subdir is skipped so the bounded rollup walk keeps
+      // going. Not logged — this runs per-subdir across huge trees and would flood error.err.
       continue;
     }
     for (const ent of dirents) {
@@ -234,6 +238,8 @@ function buildDirRollup(dirAbs: string, match: RepoMatch | null): DirRollup {
       try {
         size = fs.statSync(abs).size;
       } catch {
+        // Intentional best-effort: a file that vanished/denied mid-walk is skipped. Not logged —
+        // this runs per-file across huge trees and would flood error.err.
         continue;
       }
       const comp = compressInfo(ent.name);

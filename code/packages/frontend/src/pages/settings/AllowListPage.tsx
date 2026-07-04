@@ -8,6 +8,7 @@ import { ChevronLeft } from "lucide-react";
 import { toast } from "sonner";
 import type { SecurityAccess } from "@lfb/shared";
 import { api } from "../../api/client.js";
+import { clientLog } from "../../lib/clientLog.js";
 import {
   AllowListFields,
   isAllowListValid,
@@ -55,7 +56,10 @@ export function AllowListPage() {
           : "Access saved",
       );
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => {
+      clientLog.error("AllowListPage.save", e);
+      toast.error(e.message);
+    },
   });
 
   const valid = isAllowListValid(value);

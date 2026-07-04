@@ -36,7 +36,9 @@ export async function health(): Promise<IpfsHealth> {
   try {
     await rpc("id");
     return "ok";
-  } catch {
+  } catch (e) {
+    // The daemon being off is routine, not a fault — keep it out of error.err (debug only).
+    log.debug("ipfs", `health probe unreachable: ${(e as Error).message}`);
     return "unreachable";
   }
 }
@@ -46,28 +48,41 @@ export async function peerId(): Promise<string | null> {
     const res = await rpc("id");
     const json = (await res.json()) as { ID?: string };
     return json.ID ?? null;
-  } catch {
+  } catch (e) {
+    log.debug("ipfs", `peerId unavailable: ${(e as Error).message}`);
     return null;
   }
 }
 
 /** Add a file and pin it recursively; returns its root CID (ipfs.mdx §3). */
 export async function addFile(absPath: string): Promise<string> {
-  // fs.openAsBlob streams the file rather than buffering it whole into memory.
-  const blob = await (fs as unknown as { openAsBlob(p: string): Promise<Blob> }).openAsBlob(absPath);
-  const form = new FormData();
-  form.append("file", blob, absPath);
-  const res = await rpc("add", { query: { pin: "true", "cid-version": "1" }, body: form });
-  const text = await res.text();
-  // add streams NDJSON; the final line has the root entry.
-  const lines = text.trim().split("\n").filter(Boolean);
-  const last = JSON.parse(lines[lines.length - 1]) as { Hash?: string };
-  if (!last.Hash) throw new Error("ipfs add returned no CID");
-  return last.Hash;
+  try {
+    // fs.openAsBlob streams the file rather than buffering it whole into memory.
+    const blob = await (fs as unknown as { openAsBlob(p: string): Promise<Blob> }).openAsBlob(absPath);
+    const form = new FormData();
+    form.append("file", blob, absPath);
+    const res = await rpc("add", { query: { pin: "true", "cid-version": "1" }, body: form });
+    const text = await res.text();
+    // add streams NDJSON; the final line has the root entry.
+    const lines = text.trim().split("\n").filter(Boolean);
+    const last = JSON.parse(lines[lines.length - 1]) as { Hash?: string };
+    if (!last.Hash) throw new Error("ipfs add returned no CID");
+    return last.Hash;
+  } catch (e) {
+    // A failed add/pin is a real fault (file gone, bad JSON, daemon error) — record it, then rethrow
+    // so the caller still sees the failure.
+    log.error("ipfs", `add ${absPath} failed: ${(e as Error).message}`);
+    throw e;
+  }
 }
 
 export async function pinAdd(cid: string): Promise<void> {
-  await rpc("pin/add", { args: [cid], query: { recursive: "true" } });
+  try {
+    await rpc("pin/add", { args: [cid], query: { recursive: "true" } });
+  } catch (e) {
+    log.error("ipfs", `pin add failed for ${cid}: ${(e as Error).message}`);
+    throw e;
+  }
 }
 
 export async function pinRm(cid: string): Promise<void> {
@@ -83,7 +98,8 @@ export async function isPinned(cid: string): Promise<boolean> {
     const res = await rpc("pin/ls", { args: [cid], query: { type: "recursive" } });
     const json = (await res.json()) as { Keys?: Record<string, unknown> };
     return Boolean(json.Keys && json.Keys[cid]);
-  } catch {
+  } catch (e) {
+    log.debug("ipfs", `isPinned check failed for ${cid}: ${(e as Error).message}`);
     return false;
   }
 }
@@ -123,7 +139,9 @@ export async function objectSize(cid: string): Promise<number | null> {
     const res = await rpc("files/stat", { args: [`/ipfs/${cid}`] });
     const json = (await res.json()) as { CumulativeSize?: number };
     return typeof json.CumulativeSize === "number" ? json.CumulativeSize : null;
-  } catch {
+  } catch (e) {
+    // Best-effort size — an unresolvable CID is expected; keep it out of the fault trail.
+    log.debug("ipfs", `objectSize unavailable for ${cid}: ${(e as Error).message}`);
     return null;
   }
 }
@@ -135,7 +153,8 @@ export async function version(): Promise<string | null> {
     const res = await rpc("version");
     const json = (await res.json()) as { Version?: string };
     return json.Version ?? null;
-  } catch {
+  } catch (e) {
+    log.debug("ipfs", `version unavailable: ${(e as Error).message}`);
     return null;
   }
 }
@@ -163,7 +182,8 @@ export async function repoStat(): Promise<RepoStat> {
       numObjects: typeof json.NumObjects === "number" ? json.NumObjects : null,
       repoPath: json.RepoPath ?? null,
     };
-  } catch {
+  } catch (e) {
+    log.debug("ipfs", `repoStat unavailable: ${(e as Error).message}`);
     return { repoSizeBytes: null, storageMaxBytes: null, numObjects: null, repoPath: null };
   }
 }
@@ -174,7 +194,8 @@ export async function swarmPeerCount(): Promise<number | null> {
     const res = await rpc("swarm/peers");
     const json = (await res.json()) as { Peers?: unknown[] };
     return Array.isArray(json.Peers) ? json.Peers.length : 0;
-  } catch {
+  } catch (e) {
+    log.debug("ipfs", `swarmPeerCount unavailable: ${(e as Error).message}`);
     return null;
   }
 }
@@ -202,7 +223,8 @@ export async function bandwidth(): Promise<Bandwidth> {
       rateIn: typeof json.RateIn === "number" ? json.RateIn : null,
       rateOut: typeof json.RateOut === "number" ? json.RateOut : null,
     };
-  } catch {
+  } catch (e) {
+    log.debug("ipfs", `bandwidth unavailable: ${(e as Error).message}`);
     return { totalIn: null, totalOut: null, rateIn: null, rateOut: null };
   }
 }
@@ -244,8 +266,9 @@ export async function gatewaySummary(): Promise<GatewaySummary> {
     const gwAddr = await getConfigKey("Addresses.Gateway");
     const list = Array.isArray(gwAddr) ? gwAddr.map(String) : gwAddr ? [String(gwAddr)] : [];
     return summarize(list);
-  } catch {
+  } catch (e) {
     // Node unreachable — fall back to the configured intent just for display.
+    log.debug("ipfs", `gatewaySummary falling back to config (node unreachable): ${(e as Error).message}`);
     const cfgAddr = getAppConfig().ipfs.gateway_addr;
     return summarize(cfgAddr ? [cfgAddr] : []);
   }
@@ -279,7 +302,9 @@ export async function nodePosture(): Promise<NodePosture> {
     // --enable-gc, so this reads the intent, not the runtime flag.
     const gcPeriod = String((await getConfigKey("Datastore.GCPeriod")) ?? "").trim();
     return { reprovideStrategy, gatewayLocalOnly, gcOn: gcPeriod.length > 0 };
-  } catch {
+  } catch (e) {
+    // Node unreachable — report the configured intent for the card rather than nothing.
+    log.debug("ipfs", `nodePosture falling back to config (node unreachable): ${(e as Error).message}`);
     return {
       reprovideStrategy: cfg.ipfs.reprovide_strategy,
       gatewayLocalOnly: !cfg.ipfs.public_gateway,
@@ -312,8 +337,9 @@ export async function isCompliant(): Promise<boolean> {
     const strat = String((await getConfigKey("Reprovider.Strategy")) ?? "").toLowerCase();
     // "pinned" or "roots" are compliant; empty defaults to "all" which is NOT.
     return strat === "pinned" || strat === "roots";
-  } catch {
+  } catch (e) {
     // Node unreachable -> we can't verify; treat as non-blocking (health handles the red pill).
+    log.debug("ipfs", `compliance check skipped (node unreachable): ${(e as Error).message}`);
     return false;
   }
 }

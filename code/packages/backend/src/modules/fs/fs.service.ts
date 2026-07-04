@@ -6,6 +6,7 @@ import path from "node:path";
 import type { FsEntry, FsEntryKind, FsListing, FlatFileListing } from "@lfb/shared";
 import { buildBadgeContext, computeBadges, HARD_SKIP } from "./badges.js";
 import { homeDir, resolveDir } from "./paths.js";
+import { log } from "../../shared/logging.js";
 import {
   walkFilesFlatStreaming,
   getListingCached,
@@ -41,7 +42,9 @@ export async function listDirectory(
   let dirents: fs.Dirent[];
   try {
     dirents = fs.readdirSync(dirAbs, { withFileTypes: true });
-  } catch {
+  } catch (e) {
+    // Keep the client-facing message generic, but record the real cause (EACCES/ENOENT/…).
+    log.warn("fs", `readdir failed for ${dirAbs}: ${(e as Error).message}`);
     throw new Error("cannot read directory");
   }
 

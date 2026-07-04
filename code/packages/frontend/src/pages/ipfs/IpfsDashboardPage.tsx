@@ -14,6 +14,7 @@ import type { IpfsNodeStatus, IpfsInstallJob } from "@lfb/shared";
 import { formatBytes } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { middleTruncate } from "../../lib/format.js";
+import { clientLog } from "../../lib/clientLog.js";
 
 export function IpfsDashboardPage() {
   const qc = useQueryClient();
@@ -46,7 +47,7 @@ export function IpfsDashboardPage() {
   const install = useMutation({
     mutationFn: api.ipfsInstall,
     onSuccess: (j) => { qc.setQueryData(["ipfsJob"], j); setDismissedError(false); },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => { clientLog.error("IpfsDashboardPage.install", e); toast.error(e.message); },
   });
   const daemon = useMutation({
     mutationFn: api.ipfsDaemon,
@@ -55,7 +56,7 @@ export function IpfsDashboardPage() {
       qc.setQueryData(["ipfsNode"], r.node);
       setDismissedError(false);
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => { clientLog.error("IpfsDashboardPage.daemon", e); toast.error(e.message); },
   });
 
   const jobActive = job?.status === "running";
@@ -98,7 +99,7 @@ export function IpfsDashboardPage() {
           toggling={daemon.isPending}
           onFix={async () => {
             try { await api.ipfsEnforce(); qc.invalidateQueries({ queryKey: ["ipfsNode"] }); toast.success("Restored only-our-content defaults"); }
-            catch (e) { toast.error((e as Error).message); }
+            catch (e) { clientLog.error("IpfsDashboardPage.enforce", e); toast.error((e as Error).message); }
           }}
         />
       ) : null}
@@ -409,7 +410,7 @@ function CopyText({ text, display, mono, iconOnly }: { text: string; display: st
   const [copied, setCopied] = useState(false);
   return (
     <button
-      onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1200); }}
+      onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(text).catch((err) => clientLog.warn("IpfsDashboardPage.copy", err)); setCopied(true); setTimeout(() => setCopied(false), 1200); }}
       title={`Copy ${text}`}
       className={`inline-flex items-center gap-1 hover:text-[var(--lfb-primary)] ${mono ? "font-mono text-xs" : ""}`}
     >

@@ -16,7 +16,12 @@ export function registerAuthBridge(g: TokenGetter, reload: () => Promise<void>):
 
 http.interceptors.request.use(async (config) => {
   if (getToken) {
-    const token = await getToken().catch(() => null);
+    // Token mint failed — log and proceed unauthenticated (backend may still accept cookie/dev auth).
+    // NOTE: this file is imported BY clientLog, so use console.error here to avoid a circular import.
+    const token = await getToken().catch((e) => {
+      console.error("[axios.getToken]", e);
+      return null;
+    });
     if (token) config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
@@ -28,7 +33,10 @@ http.interceptors.response.use(
     const status = error?.response?.status;
     if (status === 401 && reloadSession && !error.config.__retried) {
       error.config.__retried = true;
-      await reloadSession().catch(() => {});
+      // Re-hydrate failed — log but still retry the request (it will surface its own 401 if truly dead).
+      await reloadSession().catch((e) => {
+        console.error("[axios.reloadSession]", e);
+      });
       return http.request(error.config);
     }
     if (status === 403) toast.error("You don't have permission to do that.");

@@ -50,9 +50,15 @@ function domainTarget(label: string): string {
 export const launchdInstaller: SchedulerInstaller = {
   async install(o) {
     const file = agentPath(o.label);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, renderPlist(o));
-    log.info("schedule", `Installed launchd plist ${file}`);
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, renderPlist(o));
+      log.info("schedule", `Installed launchd plist ${file}`);
+    } catch (e) {
+      // Writing the LaunchAgent is required — surface the fault and rethrow so the caller fails loudly.
+      log.error("schedule", `Failed to write launchd plist ${file}: ${(e as Error).message}`);
+      throw e;
+    }
   },
   async uninstall(label) {
     await this.disable(label);

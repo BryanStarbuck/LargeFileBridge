@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import type { RepoSettings, SizeUnit } from "@lfb/shared";
 import { SIZE_UNITS, toBytes } from "@lfb/shared";
 import { api } from "../../api/client.js";
+import { clientLog } from "../../lib/clientLog.js";
 
 export function RepoSettingsPage() {
   const { repoId } = useParams({ strict: false }) as { repoId: string };
@@ -19,7 +20,10 @@ export function RepoSettingsPage() {
       qc.invalidateQueries({ queryKey: ["repo", repoId] });
       toast.success("Saved");
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => {
+      clientLog.error("RepoSettingsPage.patch", e);
+      toast.error(e.message);
+    },
   });
 
   if (!s) return <div className="text-black/50">Loading…</div>;

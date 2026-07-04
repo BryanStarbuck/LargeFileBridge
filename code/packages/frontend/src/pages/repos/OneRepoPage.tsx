@@ -21,6 +21,7 @@ import { StatusBanner, FixButton } from "../../components/ui/StatusBanner.js";
 import { Disclosure } from "../../components/ui/Disclosure.js";
 import { type Health } from "../../components/ui/health.js";
 import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
+import { clientLog } from "../../lib/clientLog.js";
 
 const DECISIONS: Decision[] = ["sync", "ignore", "undecided"];
 
@@ -40,7 +41,10 @@ export function OneRepoPage() {
     mutationFn: ({ paths, decision }: { paths: string[]; decision: Decision }) =>
       api.setDecision(repoId, paths, decision),
     onSuccess: (d: RepoDetail) => qc.setQueryData(["repo", repoId], d),
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => {
+      clientLog.error("OneRepoPage.setDecision", e);
+      toast.error(e.message);
+    },
   });
 
   const syncNow = useMutation({
@@ -49,7 +53,10 @@ export function OneRepoPage() {
       qc.setQueryData(["repo", repoId], d);
       toast.success("Sync complete");
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => {
+      clientLog.error("OneRepoPage.syncNow", e);
+      toast.error(e.message);
+    },
   });
 
   const ipfsDown = detail?.ipfs === "unreachable";
@@ -121,7 +128,7 @@ export function OneRepoPage() {
     { id: "peers", header: "Peers", kind: "int", align: "right", accessor: (f) => f.peers.length,
       cell: (f) => <span className={f.decision === "sync" && f.peers.length === 0 ? "text-red-600" : ""}>{f.peers.length}</span> },
     { id: "cid", header: "CID", kind: "text", accessor: (f) => f.cid,
-      cell: (f) => f.cid ? <code className="text-xs text-black/60" title={f.cid} onClick={() => navigator.clipboard?.writeText(f.cid!)}>{middleTruncate(f.cid, 16)}</code> : <span className="text-black/20">—</span> },
+      cell: (f) => f.cid ? <code className="text-xs text-black/60" title={f.cid} onClick={() => navigator.clipboard?.writeText(f.cid!).catch((e) => clientLog.warn("OneRepoPage.copyCid", e))}>{middleTruncate(f.cid, 16)}</code> : <span className="text-black/20">—</span> },
     { id: "changed", header: "Changed", kind: "timestamp", accessor: (f) => f.changedAt,
       cell: (f) => <span title={absoluteTime(f.changedAt)}>{relativeTime(f.changedAt)}</span> },
   ];

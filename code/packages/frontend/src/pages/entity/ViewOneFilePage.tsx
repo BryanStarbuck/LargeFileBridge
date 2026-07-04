@@ -15,6 +15,7 @@ import { TransferPill } from "@/components/Pill";
 import { StatusBanner } from "@/components/ui/StatusBanner";
 import { type Health } from "@/components/ui/health";
 import { relativeTime, absoluteTime, middleTruncate } from "@/lib/format";
+import { clientLog } from "@/lib/clientLog";
 
 export function ViewOneFilePage() {
   const { path } = useSearch({ strict: false }) as { path?: string };
@@ -30,7 +31,7 @@ export function ViewOneFilePage() {
   const decide = useMutation({
     mutationFn: (d: Decision) => api.setEntityDecision(path!, d),
     onSuccess: (nv) => qc.setQueryData(["entity", path], nv),
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => { clientLog.error("ViewOneFilePage.setDecision", e); toast.error(e.message); },
   });
 
   if (!path) return <p className="text-black/60">No file selected.</p>;
@@ -101,7 +102,7 @@ export function ViewOneFilePage() {
                 <code
                   className="cursor-pointer text-xs text-black/60"
                   title={`${v.cid} — click to copy`}
-                  onClick={() => { navigator.clipboard?.writeText(v.cid!); toast.success("CID copied"); }}
+                  onClick={() => { navigator.clipboard?.writeText(v.cid!).catch((e) => clientLog.warn("ViewOneFilePage.copyCid", e)); toast.success("CID copied"); }}
                 >
                   {middleTruncate(v.cid, 20)}
                 </code>

@@ -6,6 +6,7 @@
 // user is not yet "authenticated" from /auth/me's point of view.
 import { useEffect, useState } from "react";
 import { authCore } from "../../api/authCore.js";
+import { clientLog } from "../../lib/clientLog.js";
 
 // Module-level guard: React 18 StrictMode double-invokes effects in dev — run the handshake once.
 let ran = false;
@@ -20,6 +21,7 @@ export function SsoCallbackPage() {
       .completeRedirectCallback()
       .then((res) => {
         if (res.error) {
+          clientLog.error("SsoCallbackPage.completeRedirectCallback", res.error);
           setError(res.error.message);
           return;
         }
@@ -29,7 +31,10 @@ export function SsoCallbackPage() {
           : "/";
         window.location.replace(target || "/");
       })
-      .catch(() => window.location.replace("/"));
+      .catch((e) => {
+        clientLog.error("SsoCallbackPage.completeRedirectCallback", e);
+        window.location.replace("/");
+      });
   }, []);
 
   return (

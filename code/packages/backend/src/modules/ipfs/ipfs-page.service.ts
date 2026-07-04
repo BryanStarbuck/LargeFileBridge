@@ -22,6 +22,7 @@ import {
 } from "../store-model/units.service.js";
 import { getAppConfig } from "../store-model/config.service.js";
 import * as ipfs from "./ipfs.service.js";
+import { log } from "../../shared/logging.js";
 
 // What we know about a CID that appears in some manifest (i.e. a Tracked pin).
 interface TrackedInfo {
@@ -40,39 +41,49 @@ function buildTrackedIndex(): Map<string, TrackedInfo> {
   const index = new Map<string, TrackedInfo>();
 
   for (const folder of listRepoFolders()) {
-    const cfg = getRepoConfig(folder);
-    const manifest = getRepoManifest(folder);
-    const status = getRepoStatus(folder);
-    const repoId = repoIdFromPath(cfg.repo.path || folder);
-    const name = cfg.repo.name || folder;
-    const base = cfg.repo.path || "";
-    for (const f of manifest.files) {
-      if (!f.cid) continue;
-      index.set(f.cid, {
-        repoId,
-        unit: name,
-        path: base ? path.join(base, f.path) : f.path || null,
-        size: f.size,
-        peers: f.pinned_by.length,
-        seenAt: status.last_scan_at ?? manifest.generated_at ?? null,
-      });
+    try {
+      const cfg = getRepoConfig(folder);
+      const manifest = getRepoManifest(folder);
+      const status = getRepoStatus(folder);
+      const repoId = repoIdFromPath(cfg.repo.path || folder);
+      const name = cfg.repo.name || folder;
+      const base = cfg.repo.path || "";
+      for (const f of manifest.files) {
+        if (!f.cid) continue;
+        index.set(f.cid, {
+          repoId,
+          unit: name,
+          path: base ? path.join(base, f.path) : f.path || null,
+          size: f.size,
+          peers: f.pinned_by.length,
+          seenAt: status.last_scan_at ?? manifest.generated_at ?? null,
+        });
+      }
+    } catch (e) {
+      // A corrupt/unreadable repo config or manifest shouldn't blank the whole IPFS page — skip it.
+      log.warn("ipfs", `tracked-index build skipped repo ${folder}: ${(e as Error).message}`);
     }
   }
 
   // Computer-unit manifest — path-less imported pins and whole-computer sync entries.
-  const computer = readYaml(COMPUTER_MANIFEST(), ManifestSchema);
-  for (const f of computer.files) {
-    if (!f.cid || index.has(f.cid)) continue;
-    // A path that isn't absolute (e.g. the CID used as a placeholder key) means "no local path".
-    const resolved = f.path && path.isAbsolute(f.path) ? f.path : null;
-    index.set(f.cid, {
-      repoId: null,
-      unit: "computer",
-      path: resolved,
-      size: f.size,
-      peers: f.pinned_by.length,
-      seenAt: computer.generated_at ?? null,
-    });
+  try {
+    const computer = readYaml(COMPUTER_MANIFEST(), ManifestSchema);
+    for (const f of computer.files) {
+      if (!f.cid || index.has(f.cid)) continue;
+      // A path that isn't absolute (e.g. the CID used as a placeholder key) means "no local path".
+      const resolved = f.path && path.isAbsolute(f.path) ? f.path : null;
+      index.set(f.cid, {
+        repoId: null,
+        unit: "computer",
+        path: resolved,
+        size: f.size,
+        peers: f.pinned_by.length,
+        seenAt: computer.generated_at ?? null,
+      });
+    }
+  } catch (e) {
+    // Missing/corrupt computer-unit manifest → proceed with just the repo-derived index.
+    log.warn("ipfs", `tracked-index build skipped computer manifest: ${(e as Error).message}`);
   }
 
   return index;

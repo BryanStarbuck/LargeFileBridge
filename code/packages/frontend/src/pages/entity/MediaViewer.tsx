@@ -20,6 +20,7 @@ import { PinToggle } from "@/components/PinToggle";
 import { patchEntityBadges } from "@/lib/patchEntityBadges";
 import { EntityHeaderMissing } from "./entityShared";
 import { relativeTime, absoluteTime } from "@/lib/format";
+import { clientLog } from "../../lib/clientLog.js";
 
 export function MediaViewer({ kind }: { kind: MediaKind }) {
   const { path } = useSearch({ strict: false }) as { path?: string };
@@ -62,7 +63,10 @@ export function MediaViewer({ kind }: { kind: MediaKind }) {
       patchEntityBadges(qc, nv.path, nv.badges);
       qc.invalidateQueries({ queryKey: ["repo"] });
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => {
+      clientLog.error("MediaViewer.setEntityDecision", e);
+      toast.error(e.message);
+    },
   });
 
   // Route by the file's real kind — never leave the wrong viewer mounted (media_viewer.mdx §5).
@@ -137,7 +141,11 @@ export function MediaViewer({ kind }: { kind: MediaKind }) {
           <LinkBtn icon={<FolderOpen className="h-3.5 w-3.5" />} label="Open folder"
             onClick={() => navigate({ to: "/fs", search: { path: parent } })} />
           <LinkBtn icon={<Copy className="h-3.5 w-3.5" />} label="Copy path"
-            onClick={() => { navigator.clipboard?.writeText(v.path); toast.success("Path copied"); }} />
+            onClick={() => {
+              // Clipboard write can reject (permissions/insecure context) — log the silent failure.
+              navigator.clipboard?.writeText(v.path).catch((e) => clientLog.warn("MediaViewer.copyPath", e));
+              toast.success("Path copied");
+            }} />
           <LinkBtn icon={<FileText className="h-3.5 w-3.5" />} label="View properties"
             onClick={() => navigate({ to: "/file", search: { path: v.path } })} />
           {grant?.url && (
@@ -223,7 +231,9 @@ function ViewerSurface({
           // (performance.mdx P-13); loading="lazy" completes the pair (P-21).
           decoding="async"
           loading="lazy"
-          onError={() => setFailed(true)}
+          // Decode/load failure: swap in the DecodeFailure card AND leave a trail (unsupported codec,
+          // revoked grant, disk read error) so a broken viewer isn't invisible to the fault log.
+          onError={() => { clientLog.warn("MediaViewer.image.decode", `image load failed: ${view.name}`); setFailed(true); }}
           // Click toggles fit ↔ 100%; a pan-drag isn't a click, so suppress the toggle after a drag.
           onClick={() => { if (!drag.current) setZoom((z) => !z); }}
           style={{ imageRendering: "auto", ...CHECKERBOARD }}
@@ -238,7 +248,8 @@ function ViewerSurface({
           src={src}
           controls
           preload="metadata"
-          onError={() => setFailed(true)}
+          // Same as the image path: log the media load/decode failure before falling back to the card.
+          onError={() => { clientLog.warn("MediaViewer.video.decode", `video load failed: ${view.name}`); setFailed(true); }}
           className="max-h-full max-w-full"
         />
       )}
@@ -296,7 +307,9 @@ function canOfferCompress(v: EntityView): boolean {
 /** Fire the confirm-gated compress offer. Shared by the action-row chip and the decode-failure card. */
 function runCompressOffer(v: EntityView): void {
   if (!window.confirm(`Compress ${v.name}? This is an offer — nothing changes until it runs.`)) return;
-  api.compressEntity(v.path).then(() => toast.success("Compression queued")).catch((e: Error) => toast.error(e.message));
+  api.compressEntity(v.path)
+    .then(() => toast.success("Compression queued"))
+    .catch((e: Error) => { clientLog.error("MediaViewer.compressEntity", e); toast.error(e.message); });
 }
 
 // ── Action-bar pieces ────────────────────────────────────────────────────────────

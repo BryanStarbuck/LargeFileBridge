@@ -36,7 +36,12 @@ export function readYaml<S extends ZodTypeAny>(file: string, schema: S): z.outpu
   let raw: string;
   try {
     raw = fs.readFileSync(file, "utf8");
-  } catch {
+  } catch (e) {
+    // A missing file is the normal defaults-on-absence path; but a permission/I/O error would
+    // silently mask real state (and let a later write clobber it), so surface anything but ENOENT.
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+      log.warn("store", `read failed (using defaults): ${file}: ${(e as Error).message}`);
+    }
     return schema.parse({}) as z.output<S>; // defaults-on-absence (our schemas are all objects)
   }
   let parsed: unknown;

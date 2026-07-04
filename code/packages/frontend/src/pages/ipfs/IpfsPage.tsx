@@ -24,6 +24,7 @@ import { Disclosure } from "../../components/ui/Disclosure.js";
 import { StatTile, StatTileRow } from "../../components/ui/StatTile.js";
 import { type Health } from "../../components/ui/health.js";
 import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
+import { clientLog } from "../../lib/clientLog.js";
 
 const PIN_TYPES = ["recursive", "direct", "mfs"];
 const TRACKED = ["synced", "import", "path-less"];
@@ -46,7 +47,7 @@ export function IpfsPage() {
       set(d);
       toast.success("Rescanned the pinset");
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => { clientLog.error("IpfsPage.rescan", e); toast.error(e.message); },
   });
 
   const doImport = useMutation({
@@ -56,7 +57,7 @@ export function IpfsPage() {
       setSelected(new Set());
       toast.success(`Imported ${r.imported} pin${r.imported === 1 ? "" : "s"} into tracking`);
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => { clientLog.error("IpfsPage.import", e); toast.error(e.message); },
   });
 
   const enforce = useMutation({
@@ -65,7 +66,7 @@ export function IpfsPage() {
       set(d);
       toast.success("Restored only-our-content defaults");
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => { clientLog.error("IpfsPage.enforce", e); toast.error(e.message); },
   });
 
   const node = data?.node;
@@ -480,7 +481,7 @@ function CopyText({ text, display, mono }: { text: string; display: string; mono
     <button
       onClick={(e) => {
         e.stopPropagation();
-        navigator.clipboard?.writeText(text);
+        navigator.clipboard?.writeText(text).catch((err) => clientLog.warn("IpfsPage.copy", err));
         setCopied(true);
         setTimeout(() => setCopied(false), 1200);
       }}

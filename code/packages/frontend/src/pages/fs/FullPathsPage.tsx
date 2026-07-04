@@ -42,6 +42,7 @@ import { Badges } from "../../components/fs/Badges.js";
 import { BadgeLegend } from "../../components/fs/BadgeLegend.js";
 import { EntityKebab } from "../../components/menu/EntityMenu.js";
 import { formatBytes, relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
+import { clientLog } from "../../lib/clientLog.js";
 import { useDebounced } from "../../lib/useDebounced.js";
 import { useWindowedRows } from "../../components/table/useWindowedRows.js";
 import { useStreamedFlatListing } from "../../components/table/useStreamedFlatListing.js";
@@ -262,7 +263,7 @@ export function FullPathsPage() {
       // Repo counts change — that endpoint reads status YAML (no filesystem walk), so it's cheap.
       qc.invalidateQueries({ queryKey: ["repos"] });
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => { clientLog.error("FullPathsPage.pin", e); toast.error(e.message); },
   });
 
   const rootError = flat.error;

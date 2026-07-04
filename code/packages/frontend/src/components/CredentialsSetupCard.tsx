@@ -4,6 +4,7 @@
 import { useState } from "react";
 import { Copy, Check, KeyRound } from "lucide-react";
 import type { CredentialsFileInfo } from "@lfb/shared";
+import { clientLog } from "../lib/clientLog.js";
 
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
@@ -15,8 +16,10 @@ function CopyButton({ text, label }: { text: string; label: string }) {
           await navigator.clipboard.writeText(text);
           setCopied(true);
           setTimeout(() => setCopied(false), 1500);
-        } catch {
-          /* clipboard blocked — the value is visible to copy by hand */
+        } catch (e) {
+          // Clipboard blocked (permissions / insecure context) — non-fatal; the value is visible
+          // to copy by hand. Log at warn so the silent failure still leaves a fault trail.
+          clientLog.warn("CredentialsSetupCard.copy", e);
         }
       }}
       className="inline-flex items-center gap-1 rounded border border-[var(--lfb-border)] px-2 py-1 text-xs text-black/60 hover:bg-black/5"

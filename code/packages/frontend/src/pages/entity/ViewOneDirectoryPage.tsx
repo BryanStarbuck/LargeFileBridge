@@ -12,6 +12,7 @@ import { DataTable } from "@/components/table/DataTable";
 import type { LfbColumn } from "@/components/table/types";
 import { FlagSwitches, EntityHeaderMissing } from "./entityShared";
 import { relativeTime } from "@/lib/format";
+import { clientLog, errMessage } from "@/lib/clientLog";
 
 interface RollupRow {
   id: string;
@@ -49,13 +50,18 @@ export function ViewOneDirectoryPage() {
 
   const compressDir = () => {
     if (!window.confirm(`Compress media inside ${v.name}? This is an offer — nothing changes until it runs.`)) return;
-    api.compressEntity(v.path).then(() => toast.success("Compression queued")).catch((e) => toast.error(e.message));
+    api.compressEntity(v.path).then(() => toast.success("Compression queued")).catch((e) => { clientLog.error("ViewOneDirectoryPage.compress", e); toast.error(errMessage(e)); });
   };
 
   // The folder-level sticky flags — same state as the strip switches (directories.mdx §8.1).
   const toggleFlag = async (patch: { neverIpfs?: boolean; noCompress?: boolean }) => {
-    await api.setEntityFlags(v.path, patch);
-    qc.invalidateQueries({ queryKey: ["entity", v.path] });
+    try {
+      await api.setEntityFlags(v.path, patch);
+      qc.invalidateQueries({ queryKey: ["entity", v.path] });
+    } catch (e) {
+      clientLog.error("ViewOneDirectoryPage.toggleFlag", e);
+      toast.error(errMessage(e));
+    }
   };
   const showMatching = () => navigate({ to: "/fs", search: { path: v.path } });
 

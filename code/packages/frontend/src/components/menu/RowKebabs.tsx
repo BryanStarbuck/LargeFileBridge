@@ -23,10 +23,12 @@ import {
 import type { RepoRow, PeerRow, IpfsPinRow } from "@lfb/shared";
 import { api } from "@/api/client";
 import { ActionsKebab, type Action } from "./EntityMenu";
+import { clientLog } from "../../lib/clientLog.js";
 
 // Copy to clipboard with a toast — the shared "copy" action body.
 function copyToClipboard(text: string, label: string) {
-  navigator.clipboard?.writeText(text);
+  // clipboard.writeText can reject (permissions / insecure context) — log the floating promise.
+  navigator.clipboard?.writeText(text).catch((e) => clientLog.warn("RowKebabs.copy", e));
   toast.success(`${label} copied`);
 }
 
@@ -64,9 +66,14 @@ export function RepoKebab({ repo }: { repo: RepoRow }) {
       group: "Work",
       icon: <RefreshCw className="h-4 w-4" />,
       onSelect: async () => {
-        await api.rescan();
-        qc.invalidateQueries({ queryKey: ["scanStatus"] });
-        toast.success("Rescan started");
+        try {
+          await api.rescan();
+          qc.invalidateQueries({ queryKey: ["scanStatus"] });
+          toast.success("Rescan started");
+        } catch (e) {
+          clientLog.error("RowKebabs.rescan", e);
+          toast.error(e instanceof Error ? e.message : "Rescan failed");
+        }
       },
     },
     {
@@ -75,9 +82,14 @@ export function RepoKebab({ repo }: { repo: RepoRow }) {
       group: "Work",
       icon: <UploadCloud className="h-4 w-4" />,
       onSelect: async () => {
-        await api.syncNow(repo.repoId);
-        refreshRepos();
-        toast.success(`Syncing ${repo.name}`);
+        try {
+          await api.syncNow(repo.repoId);
+          refreshRepos();
+          toast.success(`Syncing ${repo.name}`);
+        } catch (e) {
+          clientLog.error("RowKebabs.syncNow", e);
+          toast.error(e instanceof Error ? e.message : "Sync failed");
+        }
       },
     },
     {
@@ -87,9 +99,14 @@ export function RepoKebab({ repo }: { repo: RepoRow }) {
       icon: <ToggleRight className="h-4 w-4" />,
       checked: repo.synced,
       onSelect: async () => {
-        await api.patchRepoSettings(repo.repoId, { synced: !repo.synced });
-        refreshRepos();
-        toast.success(`${repo.name} sync ${repo.synced ? "paused" : "enabled"}`);
+        try {
+          await api.patchRepoSettings(repo.repoId, { synced: !repo.synced });
+          refreshRepos();
+          toast.success(`${repo.name} sync ${repo.synced ? "paused" : "enabled"}`);
+        } catch (e) {
+          clientLog.error("RowKebabs.toggleSynced", e);
+          toast.error(e instanceof Error ? e.message : "Couldn't change sync setting");
+        }
       },
     },
     {
@@ -106,8 +123,13 @@ export function RepoKebab({ repo }: { repo: RepoRow }) {
       icon: <Bookmark className="h-4 w-4" />,
       checked: repo.bookmarked,
       onSelect: async () => {
-        await api.toggleBookmark(repo.repoId, !repo.bookmarked);
-        refreshRepos();
+        try {
+          await api.toggleBookmark(repo.repoId, !repo.bookmarked);
+          refreshRepos();
+        } catch (e) {
+          clientLog.error("RowKebabs.toggleBookmark", e);
+          toast.error(e instanceof Error ? e.message : "Couldn't update bookmark");
+        }
       },
     },
     {
@@ -130,9 +152,14 @@ export function RepoKebab({ repo }: { repo: RepoRow }) {
           )
         )
           return;
-        await api.removeRepo(repo.repoId);
-        refreshRepos();
-        toast.success(`Removed ${repo.name} (files untouched)`);
+        try {
+          await api.removeRepo(repo.repoId);
+          refreshRepos();
+          toast.success(`Removed ${repo.name} (files untouched)`);
+        } catch (e) {
+          clientLog.error("RowKebabs.removeRepo", e);
+          toast.error(e instanceof Error ? e.message : "Couldn't remove repo");
+        }
       },
     },
   ];
@@ -167,9 +194,14 @@ export function PeerKebab({ peer }: { peer: PeerRow }) {
           )
         )
           return;
-        await api.removePeer(peer.id);
-        qc.invalidateQueries({ queryKey: ["peers"] });
-        toast.success(`Removed ${peer.label}`);
+        try {
+          await api.removePeer(peer.id);
+          qc.invalidateQueries({ queryKey: ["peers"] });
+          toast.success(`Removed ${peer.label}`);
+        } catch (e) {
+          clientLog.error("RowKebabs.removePeer", e);
+          toast.error(e instanceof Error ? e.message : "Couldn't remove peer");
+        }
       },
     },
   ];
@@ -190,9 +222,14 @@ export function PinKebab({ pin }: { pin: IpfsPinRow }) {
       group: "IPFS",
       icon: <DownloadCloud className="h-4 w-4" />,
       onSelect: async () => {
-        await api.ipfsImport({ cids: [pin.cid] });
-        refreshIpfs();
-        toast.success("Imported into tracking");
+        try {
+          await api.ipfsImport({ cids: [pin.cid] });
+          refreshIpfs();
+          toast.success("Imported into tracking");
+        } catch (e) {
+          clientLog.error("RowKebabs.ipfsImport", e);
+          toast.error(e instanceof Error ? e.message : "Import failed");
+        }
       },
     });
   }
@@ -216,9 +253,14 @@ export function PinKebab({ pin }: { pin: IpfsPinRow }) {
         )
       )
         return;
-      await api.ipfsPin({ cid: pin.cid, pinned: false });
-      refreshIpfs();
-      toast.success("Unpinned on this computer");
+      try {
+        await api.ipfsPin({ cid: pin.cid, pinned: false });
+        refreshIpfs();
+        toast.success("Unpinned on this computer");
+      } catch (e) {
+        clientLog.error("RowKebabs.unpin", e);
+        toast.error(e instanceof Error ? e.message : "Couldn't unpin");
+      }
     },
   });
   return <ActionsKebab actions={actions} />;

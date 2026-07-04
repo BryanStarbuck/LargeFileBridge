@@ -61,8 +61,9 @@ export function startScan(source: "manual" | "scheduled"): { started: boolean; j
     startedAt: new Date().toISOString(),
     phase: "discovering",
   };
-  // Detach: do NOT await. The walk outlives the request that asked for it.
-  void runJob();
+  // Detach: do NOT await. The walk outlives the request that asked for it. A rejection here would be
+  // an unhandled promise (runJob is fire-and-forget) — catch it so it lands in the fault trail.
+  runJob().catch((e) => log.error("scan", `scan job crashed: ${(e as Error).message}`));
   return { started: true, job: getScanJob() };
 }
 
@@ -113,6 +114,6 @@ async function runJob(): Promise<void> {
       startedAt: new Date().toISOString(),
       phase: "discovering",
     };
-    void runJob();
+    runJob().catch((e) => log.error("scan", `queued rerun scan job crashed: ${(e as Error).message}`));
   }
 }

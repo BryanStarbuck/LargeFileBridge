@@ -47,6 +47,8 @@ securityRouter.post("/setup", loopbackOnly, async (req, res) => {
     if (e instanceof SecurityError) {
       return res.status(e.status).json({ ok: false, error: e.message, code: e.code });
     }
+    // Unexpected failure (config write / auth rebuild) — record it with context before it bubbles up.
+    log.error("security", `First-run setup failed: ${(e as Error).message}`);
     throw e;
   }
 });

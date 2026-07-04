@@ -9,6 +9,7 @@
 // /api request carry a Bearer token — without it a completed login still reads as unauthenticated.
 import { RealAuthCore } from "@auth/react";
 import { registerAuthBridge } from "./axios.js";
+import { clientLog } from "../lib/clientLog.js";
 
 // Coarse pre-filter only (mirrors the backend default); the authoritative allow-list gate is
 // server-side (identify.ts). Used here just to label the Google connection for the sign-in redirect.
@@ -30,8 +31,15 @@ registerAuthBridge(
 // SPA-origin URLs, which the backend allowlists (allowedRedirectOrigins) so the callback lands back
 // on the web app rather than on the API-only backend origin.
 export function startGoogleSignIn(): Promise<void> {
-  return authCore.authenticateWithRedirect({
-    redirectUrl: "/sso-callback",
-    redirectUrlComplete: "/",
-  });
+  // A failed redirect start (SDK/network error) otherwise vanishes; log it, then rethrow so the
+  // caller's UX handling is unchanged.
+  return authCore
+    .authenticateWithRedirect({
+      redirectUrl: "/sso-callback",
+      redirectUrlComplete: "/",
+    })
+    .catch((e) => {
+      clientLog.error("authCore.startGoogleSignIn", e);
+      throw e;
+    });
 }

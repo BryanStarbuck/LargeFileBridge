@@ -31,7 +31,12 @@ internalRouter.post("/run/:worker", async (req, res) => {
     res.json({ ok: true, data: { ran: worker } });
   } catch (e) {
     log.error("internal", `${worker} run failed: ${(e as Error).message}`);
-    if (worker === "sync") await stampRun("sync", false);
+    // Stamp the failed run best-effort — a stamp write error here must not mask the original failure.
+    if (worker === "sync") {
+      await stampRun("sync", false).catch((se) =>
+        log.error("internal", `stamping failed sync run failed: ${(se as Error).message}`),
+      );
+    }
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
 });

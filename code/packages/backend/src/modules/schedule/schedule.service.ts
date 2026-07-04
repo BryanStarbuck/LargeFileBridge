@@ -89,10 +89,17 @@ export async function control(
     logErr: path.join(stateRoot, "error.err"),
   };
 
-  if (action === "install") await inst.install(opts);
-  if (action === "uninstall") await inst.uninstall(label);
-  if (action === "enable") await inst.enable(label);
-  if (action === "disable") await inst.disable(label);
+  // The installer shells out to launchctl / writes the plist — surface any OS-level failure to the
+  // fault trail before it propagates up to the router's 500.
+  try {
+    if (action === "install") await inst.install(opts);
+    if (action === "uninstall") await inst.uninstall(label);
+    if (action === "enable") await inst.enable(label);
+    if (action === "disable") await inst.disable(label);
+  } catch (e) {
+    log.error("schedule", `${kind}: ${action} failed: ${(e as Error).message}`);
+    throw e;
+  }
   log.info("schedule", `${kind}: ${action}`);
 
   await updateAppConfig((c) => {

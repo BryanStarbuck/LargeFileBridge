@@ -11,6 +11,7 @@ import {
   updateSecurity,
   SecurityError,
 } from "../security/security.service.js";
+import { log } from "../../shared/logging.js";
 
 export const settingsRouter = Router();
 settingsRouter.use(requireAllowListed);
@@ -38,7 +39,13 @@ async function toGlobalSettings(): Promise<GlobalSettings> {
 }
 
 settingsRouter.get("/", async (_req, res) => {
-  res.json({ ok: true, data: await toGlobalSettings() });
+  try {
+    res.json({ ok: true, data: await toGlobalSettings() });
+  } catch (e) {
+    // Express 4 won't forward an async rejection — log it and return the error envelope explicitly.
+    log.error("settings", `Load global settings failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
 });
 
 const SettingsPatch = z.object({
@@ -62,22 +69,28 @@ settingsRouter.patch("/", async (req, res) => {
   const patch = SettingsPatch.safeParse(req.body);
   if (!patch.success) return res.status(400).json({ ok: false, error: patch.error.message });
   const p = patch.data;
-  await updateAppConfig((c) => {
-    if (p.bigFile) {
-      c.big_file.threshold_display = { value: p.bigFile.value, unit: p.bigFile.unit };
-      c.big_file.threshold_bytes = toBytes(p.bigFile.value, p.bigFile.unit);
-    }
-    if (p.scannerRoots) c.scanner.roots = p.scannerRoots;
-    if (p.ignoreGlobs) c.scanner.ignore_globs = p.ignoreGlobs;
-    if (p.ipfs) {
-      if (p.ipfs.apiAddr !== undefined) c.ipfs.api_addr = p.ipfs.apiAddr;
-      if (p.ipfs.gatewayAddr !== undefined) c.ipfs.gateway_addr = p.ipfs.gatewayAddr;
-      if (p.ipfs.reprovideStrategy !== undefined) c.ipfs.reprovide_strategy = p.ipfs.reprovideStrategy;
-      if (p.ipfs.publicGateway !== undefined) c.ipfs.public_gateway = p.ipfs.publicGateway;
-    }
-    return c;
-  });
-  res.json({ ok: true, data: await toGlobalSettings() });
+  try {
+    await updateAppConfig((c) => {
+      if (p.bigFile) {
+        c.big_file.threshold_display = { value: p.bigFile.value, unit: p.bigFile.unit };
+        c.big_file.threshold_bytes = toBytes(p.bigFile.value, p.bigFile.unit);
+      }
+      if (p.scannerRoots) c.scanner.roots = p.scannerRoots;
+      if (p.ignoreGlobs) c.scanner.ignore_globs = p.ignoreGlobs;
+      if (p.ipfs) {
+        if (p.ipfs.apiAddr !== undefined) c.ipfs.api_addr = p.ipfs.apiAddr;
+        if (p.ipfs.gatewayAddr !== undefined) c.ipfs.gateway_addr = p.ipfs.gatewayAddr;
+        if (p.ipfs.reprovideStrategy !== undefined) c.ipfs.reprovide_strategy = p.ipfs.reprovideStrategy;
+        if (p.ipfs.publicGateway !== undefined) c.ipfs.public_gateway = p.ipfs.publicGateway;
+      }
+      return c;
+    });
+    res.json({ ok: true, data: await toGlobalSettings() });
+  } catch (e) {
+    // Config write / reload can fail — record it and return the error envelope (Express 4 won't).
+    log.error("settings", `Save global settings failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
 });
 
 // ── Security allow-list editor — the return-visit surface (security.mdx §7.3, §10) ──
@@ -105,6 +118,8 @@ settingsRouter.patch("/security", requireAdmin, async (req, res) => {
     res.json({ ok: true, data: { access, restartRecommended: false } });
   } catch (e) {
     if (e instanceof SecurityError) return res.status(e.status).json({ ok: false, error: e.message, code: e.code });
+    // Unexpected failure (config write / auth rebuild) — record it with context before it bubbles up.
+    log.error("settings", `Security allow-list update failed: ${(e as Error).message}`);
     throw e;
   }
 });

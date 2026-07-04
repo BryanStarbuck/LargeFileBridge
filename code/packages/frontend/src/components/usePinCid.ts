@@ -4,6 +4,7 @@
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../api/client.js";
+import { clientLog } from "../lib/clientLog.js";
 
 export function usePinCid() {
   const [override, setOverride] = useState<Record<string, boolean>>({});
@@ -21,6 +22,7 @@ export function usePinCid() {
       })
       .catch((e: Error) => {
         setOverride((o) => ({ ...o, [cid]: currentlyPinned })); // revert
+        clientLog.error("usePinCid.toggle", e);
         toast.error(e.message);
       })
       .finally(() =>

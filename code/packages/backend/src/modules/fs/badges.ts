@@ -9,6 +9,7 @@ import { getAppConfig } from "../store-model/config.service.js";
 import { listRepoFolders, getRepoConfig, isGitWorkingTree } from "../store-model/units.service.js";
 // One source of truth for the never-descend set — shared with the scanner (scan.mdx §4).
 import { HARD_SKIP } from "../../shared/scan-filters.js";
+import { log } from "../../shared/logging.js";
 
 // IPFS list artifacts (directory.mdx §3.4, ipfs_share_files.mdx §3). Case-insensitive match.
 const IPFS_ARTIFACT_NAMES = new Set(["ipfs.sh", "ipfs.txt", "get_videos.sh"]);
@@ -142,6 +143,8 @@ function containsRepoBelow(dirAbs: string, ctx: FsBadgeContext): boolean {
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
     } catch {
+      // Intentional: an unreadable dir (permissions/transient) during this bounded downward probe
+      // is expected across arbitrary trees — skip it silently rather than flooding the fault trail.
       continue;
     }
     for (const ent of entries) {
@@ -216,7 +219,9 @@ function fileHasIpfsSignal(fileAbs: string): boolean {
   try {
     const text = fs.readFileSync(fileAbs, "utf8").slice(0, IPFS_READ_CAP);
     return IPFS_TEXT_SIGNAL.test(text);
-  } catch {
+  } catch (e) {
+    // Couldn't peek the file for an IPFS signal — treat as "no signal", but leave a trace.
+    log.warn("fs", `ipfs-signal peek failed for ${fileAbs}: ${(e as Error).message}`);
     return false;
   }
 }
@@ -227,6 +232,7 @@ function dirPublishesIpfs(dirAbs: string): boolean {
   try {
     entries = fs.readdirSync(dirAbs, { withFileTypes: true });
   } catch {
+    // Intentional: an unreadable directory simply can't publish an artifact — no signal, no log noise.
     return false;
   }
   for (const ent of entries) {

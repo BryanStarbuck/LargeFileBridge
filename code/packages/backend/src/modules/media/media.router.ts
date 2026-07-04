@@ -15,6 +15,7 @@ mediaRouter.get("/grant", requireAllowListed, (req, res) => {
   try {
     res.json({ ok: true, data: mintGrant(p) });
   } catch (e) {
+    log.warn("media", `grant failed for ${p ?? "<none>"}: ${(e as Error).message}`);
     res.status(400).json({ ok: false, error: (e as Error).message });
   }
 });
@@ -25,6 +26,7 @@ mediaRouter.get("/probe", requireAllowListed, (req, res) => {
   try {
     res.json({ ok: true, data: probeMedia(p) });
   } catch (e) {
+    log.warn("media", `probe failed for ${p ?? "<none>"}: ${(e as Error).message}`);
     res.status(400).json({ ok: false, error: (e as Error).message });
   }
 });
@@ -42,6 +44,7 @@ mediaRouter.get("/raw", (req, res) => {
     const msg = (err as Error).message;
     // A missing file is a 404; a bad/expired token is a 403; anything else a 400.
     const code = msg === "grant expired" || msg === "bad grant" ? 403 : /ENOENT|not a file/.test(msg) ? 404 : 400;
+    log.warn("media", `raw grant rejected (${code}) for ${path ?? "<none>"}: ${msg}`);
     return res.status(code).json({ ok: false, error: msg });
   }
 

@@ -93,8 +93,17 @@ run: setup stop
 dev: setup
     cd {{code}} && pnpm dev
 
-# Stop OUR app only: backend port + our launcher pid + the web port IF it's ours (foreign-safe).
+# Stop OUR app only: backend dev tree + backend port + our launcher pid + the web port IF it's ours.
+# IMPORTANT — reap the `tsx watch` backend FIRST. Killing only the port holder (lsof :be_port) leaves
+# the watch PARENT alive; in watch mode it just respawns a new server child (re-binding the port) or,
+# after a single-instance stand-down, lingers as an orphan that keeps HOLDING backend.lock. A live
+# lock holder makes every future `just run` backend exit(0) on boot — the API never comes up even
+# though `stop` printed "Stopped." This is the orphan swarm the code comments cite as clobbering the
+# saved allow-list. Pattern is repo-scoped (anchored on {{code}}) and matches BOTH the watcher
+# (`… packages/backend/… tsx … watch src/main.ts`) and its server child (`… tsx … src/main.ts`); it
+# never matches this recipe's own shell, which contains {{code}} but not "src/main.ts".
 stop:
+    -@pkill -f "{{code}}.*src/main.ts" 2>/dev/null || true
     -@lsof -ti tcp:{{be_port}} | xargs kill 2>/dev/null || true
     -@node {{webport}} stop >/dev/null 2>&1 || true
     -@test -f {{pidfile}} && kill $(cat {{pidfile}}) 2>/dev/null || true

@@ -11,6 +11,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import type { MediaProbe } from "@lfb/shared";
 import { expandHome } from "../fs/badges.js";
+import { log } from "../../shared/logging.js";
 
 // Per-process signing key. Tokens naturally invalidate on restart — fine for a viewer (media_viewer §2).
 const MEDIA_SECRET = crypto.randomBytes(32);
@@ -140,7 +141,9 @@ export function probeMedia(input: string | undefined): MediaProbe {
       return { ...base, ...sniffVideo(ext, head, tail) };
     }
     return base;
-  } catch {
+  } catch (e) {
+    // Best-effort sniff — an unreadable/short header just yields nulls; not a fault (debug only).
+    log.debug("media", `probe read fell back to defaults for ${abs}: ${(e as Error).message}`);
     return base;
   } finally {
     if (fd !== null) try { fs.closeSync(fd); } catch { /* ignore */ }

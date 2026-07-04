@@ -14,6 +14,7 @@ import { PageHeader } from "../../components/ui/PageHeader.js";
 import { Section } from "../../components/ui/Section.js";
 import { Disclosure } from "../../components/ui/Disclosure.js";
 import { healthColor } from "../../components/ui/health.js";
+import { clientLog } from "../../lib/clientLog.js";
 
 export function SettingsPage() {
   const qc = useQueryClient();
@@ -37,7 +38,10 @@ export function SettingsPage() {
       qc.setQueryData(["settings"], d);
       toast.success("Settings saved");
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => {
+      clientLog.error("SettingsPage.save", e);
+      toast.error(e.message);
+    },
   });
 
   if (!data) return <div className="text-black/50">Loading…</div>;

@@ -42,7 +42,12 @@ export function listRepoFolders(): string[] {
       .readdirSync(reposRoot(), { withFileTypes: true })
       .filter((d) => d.isDirectory())
       .map((d) => d.name);
-  } catch {
+  } catch (e) {
+    // A missing repos root is normal before the first repo is registered — stay quiet on ENOENT.
+    // Anything else (permissions, corrupt state root) is a real fault worth the trail.
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+      log.warn("units", `listRepoFolders failed: ${(e as Error).message}`);
+    }
     return [];
   }
 }
@@ -114,7 +119,14 @@ export async function registerRepo(absPath: string): Promise<{ folder: string; r
  * folder or any local file on disk (charter / menus.mdx §6.2: local bytes are never deleted by LFB).
  */
 export function unregisterRepo(folder: string): void {
-  fs.rmSync(repoUnitDir(folder), { recursive: true, force: true });
+  try {
+    fs.rmSync(repoUnitDir(folder), { recursive: true, force: true });
+  } catch (e) {
+    // force:true already tolerates absence — a throw here means the tracking state couldn't be
+    // removed (e.g. permissions). Surface it before it propagates to the caller.
+    log.error("units", `Unregister repo unit sync/r/${folder} failed: ${(e as Error).message}`);
+    throw e;
+  }
   log.info("units", `Unregistered repo unit sync/r/${folder} (local files untouched)`);
 }
 

@@ -8,6 +8,7 @@ import { ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import type { SecurityConfigPublic } from "@lfb/shared";
 import { api } from "../../api/client.js";
+import { clientLog } from "../../lib/clientLog.js";
 import {
   AllowListFields,
   isAllowListValid,
@@ -42,7 +43,10 @@ export function SecuritySetupPage({ config }: { config: SecurityConfigPublic }) 
       // Advance the <Root> gate: security/config now reports configured:true.
       qc.invalidateQueries({ queryKey: ["securityConfig"] });
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => {
+      clientLog.error("SecuritySetupPage.save", e);
+      toast.error(e.message);
+    },
   });
 
   const valid = isAllowListValid(value);

@@ -23,8 +23,13 @@ reposRouter.use(requireAllowListed);
 
 // GET /api/repos — the Repos table.
 reposRouter.get("/", (_req, res) => {
-  const rows: RepoRow[] = listRepoFolders().map(computeRepoRow);
-  res.json({ ok: true, data: rows });
+  try {
+    const rows: RepoRow[] = listRepoFolders().map(computeRepoRow);
+    res.json({ ok: true, data: rows });
+  } catch (e) {
+    log.error("repos", `list failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
 });
 
 // POST /api/repos — add a repo by folder path.
@@ -63,9 +68,14 @@ reposRouter.post("/:repoId/bookmark", async (req, res) => {
   if (!body.success) return res.status(400).json({ ok: false, error: "bookmarked (boolean) required" });
   const folder = folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
-  await updateRepoConfig(folder, (c) => ({ ...c, bookmarked: body.data.bookmarked }));
-  log.info("repos", `${folder}: bookmarked -> ${body.data.bookmarked}`);
-  res.json({ ok: true, data: computeRepoRow(folder) });
+  try {
+    await updateRepoConfig(folder, (c) => ({ ...c, bookmarked: body.data.bookmarked }));
+    log.info("repos", `${folder}: bookmarked -> ${body.data.bookmarked}`);
+    res.json({ ok: true, data: computeRepoRow(folder) });
+  } catch (e) {
+    log.error("repos", `${folder}: bookmark update failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
 });
 
 // DELETE /api/repos/:repoId — remove repo (unregister, menus.mdx §5.1). Unregisters from LFB ONLY;
@@ -73,24 +83,39 @@ reposRouter.post("/:repoId/bookmark", async (req, res) => {
 reposRouter.delete("/:repoId", (req, res) => {
   const folder = folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
-  unregisterRepo(folder);
-  res.json({ ok: true, data: { removed: true } });
+  try {
+    unregisterRepo(folder);
+    res.json({ ok: true, data: { removed: true } });
+  } catch (e) {
+    log.error("repos", `${folder}: unregister failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
 });
 
 // GET /api/repos/:repoId — the One-repo detail (header + status strip + files).
 reposRouter.get("/:repoId", async (req, res) => {
   const folder = folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
-  const detail = computeRepoDetail(folder, await ipfs.health());
-  res.json({ ok: true, data: detail });
+  try {
+    const detail = computeRepoDetail(folder, await ipfs.health());
+    res.json({ ok: true, data: detail });
+  } catch (e) {
+    log.error("repos", `${folder}: detail failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
 });
 
 // GET /api/repos/:repoId/files — just the file rows.
 reposRouter.get("/:repoId/files", async (req, res) => {
   const folder = folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
-  const detail = computeRepoDetail(folder, await ipfs.health());
-  res.json({ ok: true, data: detail.files });
+  try {
+    const detail = computeRepoDetail(folder, await ipfs.health());
+    res.json({ ok: true, data: detail.files });
+  } catch (e) {
+    log.error("repos", `${folder}: files failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
 });
 
 // PATCH /api/repos/:repoId/files — set a decision on one or many files (bulk).
@@ -106,16 +131,21 @@ reposRouter.patch("/:repoId/files", async (req, res) => {
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
 
   const decision = body.data.decision as Decision;
-  await updateRepoConfig(folder, (c) => {
-    for (const p of body.data.paths) {
-      if (decision === "undecided") delete c.decisions[p];
-      else c.decisions[p] = decision;
-    }
-    return c;
-  });
-  log.info("repos", `${folder}: set ${body.data.paths.length} file(s) -> ${decision}`);
-  const detail = computeRepoDetail(folder, await ipfs.health());
-  res.json({ ok: true, data: detail });
+  try {
+    await updateRepoConfig(folder, (c) => {
+      for (const p of body.data.paths) {
+        if (decision === "undecided") delete c.decisions[p];
+        else c.decisions[p] = decision;
+      }
+      return c;
+    });
+    log.info("repos", `${folder}: set ${body.data.paths.length} file(s) -> ${decision}`);
+    const detail = computeRepoDetail(folder, await ipfs.health());
+    res.json({ ok: true, data: detail });
+  } catch (e) {
+    log.error("repos", `${folder}: file decision update failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
 });
 
 // POST /api/repos/:repoId/sync — Sync now (whole repo or selected files).
@@ -126,18 +156,24 @@ reposRouter.post("/:repoId/sync", async (req, res) => {
   const only = body.success && body.data.paths ? new Set(body.data.paths) : undefined;
   try {
     await syncRepoFolder(folder, only);
+    const detail = computeRepoDetail(folder, await ipfs.health());
+    res.json({ ok: true, data: detail });
   } catch (e) {
-    return res.status(500).json({ ok: false, error: (e as Error).message });
+    log.error("repos", `${folder}: sync failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
   }
-  const detail = computeRepoDetail(folder, await ipfs.health());
-  res.json({ ok: true, data: detail });
 });
 
 // GET /api/repos/:repoId/settings — per-repo settings (repo_settings.mdx).
 reposRouter.get("/:repoId/settings", (req, res) => {
   const folder = folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
-  res.json({ ok: true, data: toRepoSettings(req.params.repoId, folder) });
+  try {
+    res.json({ ok: true, data: toRepoSettings(req.params.repoId, folder) });
+  } catch (e) {
+    log.error("repos", `${folder}: read settings failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
 });
 
 // PATCH /api/repos/:repoId/settings
@@ -147,7 +183,8 @@ reposRouter.patch("/:repoId/settings", async (req, res) => {
   const patch = RepoSettingsPatch.safeParse(req.body);
   if (!patch.success) return res.status(400).json({ ok: false, error: patch.error.message });
   const p = patch.data;
-  await updateRepoConfig(folder, (c) => {
+  try {
+    await updateRepoConfig(folder, (c) => {
     if (p.synced !== undefined) c.synced = p.synced;
     if (p.bigFileOverride) c.big_file_override = { ...c.big_file_override, ...p.bigFileOverride };
     if (p.largeFiles)
@@ -169,7 +206,11 @@ reposRouter.patch("/:repoId/settings", async (req, res) => {
       };
     return c;
   });
-  res.json({ ok: true, data: toRepoSettings(req.params.repoId, folder) });
+    res.json({ ok: true, data: toRepoSettings(req.params.repoId, folder) });
+  } catch (e) {
+    log.error("repos", `${folder}: update settings failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
 });
 
 const RepoSettingsPatch = z.object({

@@ -4,6 +4,7 @@ import type { FlatStreamEvent } from "@lfb/shared";
 import { homeDir, listDirectory, listFilesFlat } from "./fs.service.js";
 import { walkFilesFlatStreaming } from "../fsindex/fsindex.service.js";
 import { requireAllowListed } from "../auth/identify.js";
+import { log } from "../../shared/logging.js";
 
 export const fsRouter = Router();
 fsRouter.use(requireAllowListed);
@@ -44,6 +45,7 @@ fsRouter.get("/flat/stream", async (req, res) => {
     });
     write({ t: "done", truncated: summary.truncated, total: summary.total });
   } catch (e) {
+    log.error("fs", `flat stream walk failed for ${p ?? "<home>"}: ${(e as Error).message}`);
     write({ t: "error", error: (e as Error).message });
   }
   if (!res.writableEnded) res.end();
@@ -56,6 +58,7 @@ fsRouter.get("/flat", async (req, res) => {
   try {
     res.json({ ok: true, data: await listFilesFlat(p, showHidden) });
   } catch (e) {
+    log.warn("fs", `flat listing failed for ${p ?? "<home>"}: ${(e as Error).message}`);
     res.status(400).json({ ok: false, error: (e as Error).message });
   }
 });
@@ -67,6 +70,7 @@ fsRouter.get("/", async (req, res) => {
   try {
     res.json({ ok: true, data: await listDirectory(p, showHidden) });
   } catch (e) {
+    log.warn("fs", `directory listing failed for ${p ?? "<home>"}: ${(e as Error).message}`);
     res.status(400).json({ ok: false, error: (e as Error).message });
   }
 });

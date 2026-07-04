@@ -28,10 +28,18 @@ export const AUTH_ISSUER = "large-file-bridge";
  * with, so minting and verification share one source of truth. Idempotent — safe to call repeatedly.
  */
 export function ensureEmbeddedVerification(): void {
-  configureEmbeddedVerification({
-    sessionSecret: loadOrCreateSecret(authSecretPath()),
-    issuer: AUTH_ISSUER,
-  });
+  try {
+    configureEmbeddedVerification({
+      sessionSecret: loadOrCreateSecret(authSecretPath()),
+      issuer: AUTH_ISSUER,
+    });
+  } catch (e) {
+    // Secret load/create is on-disk I/O; if it fails, embedded token verification is broken — surface
+    // it to the fault trail, then rethrow so the caller (boot / rebuild) fails loudly rather than
+    // silently falling through to the misleading JWKS path.
+    log.error("auth", `Failed to configure embedded verification: ${(e as Error).message}`);
+    throw e;
+  }
 }
 
 // OAF's coarse OIDC domain pre-filter (security.mdx §6.1): company domains ∪ individual-email domains
@@ -83,6 +91,7 @@ function constructAuthFrontend(): RequestHandler {
     log.info("auth", "No Google creds — auth Frontend API not mounted (dev/offline mode).");
     return (_req, _res, next) => next();
   }
+  try {
   const { clientId, clientSecret } = loadGoogleCreds();
   // Over plain-http localhost (cookieSecure=false) we must NOT emit HSTS: the OpenAuthFederated
   // security headers include `Strict-Transport-Security`, which is set on EVERY /api/v1 response —
@@ -116,6 +125,12 @@ function constructAuthFrontend(): RequestHandler {
     `OpenAuthFederated Frontend API mounted at /api/v1 (allowed domains: ${allowedDomains().join(", ") || "none"}).`,
   );
   return middleware as unknown as RequestHandler;
+  } catch (e) {
+    // Building the federated frontend touches on-disk secrets and the OAF SDK; a failure here would
+    // otherwise crash boot (or a live rebuildAuthFrontend) without a fault trail. Log, then rethrow.
+    log.error("auth", `Failed to construct auth Frontend API: ${(e as Error).message}`);
+    throw e;
+  }
 }
 
 /**

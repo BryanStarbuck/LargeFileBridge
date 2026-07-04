@@ -3,19 +3,27 @@
 // CHEAP liveness endpoint (GET /api/health → { ipfs }), never the pinset, and is suppressed on the
 // /ipfs pages (which already tell the full story). The action routes to the IPFS dashboard, where the
 // user installs or starts the node with live progress.
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { AlertTriangle } from "lucide-react";
 import { api } from "../api/client.js";
+import { clientLog } from "../lib/clientLog.js";
 
 export function IpfsStatusBanner() {
   const path = useRouterState({ select: (s) => s.location.pathname });
-  const { data } = useQuery({
+  const { data, error } = useQuery({
     queryKey: ["health"],
     queryFn: api.health,
     refetchInterval: 20_000,
     select: (d) => d.ipfs,
   });
+
+  // The liveness poll fails silently (the banner just won't render) — log it so a broken health
+  // endpoint still leaves a fault trail. Warn, not error: a down node is an expected transient state.
+  useEffect(() => {
+    if (error) clientLog.warn("IpfsStatusBanner.health", error);
+  }, [error]);
 
   // Suppress on the IPFS pages themselves; only nudge when the node isn't answering.
   if (path.startsWith("/ipfs")) return null;

@@ -11,6 +11,7 @@ import type { LfbColumn } from "../../components/table/types.js";
 import { RepoKebab } from "../../components/menu/RowKebabs.js";
 import { RepoStatusPill } from "../../components/Pill.js";
 import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
+import { clientLog } from "../../lib/clientLog.js";
 
 const STATUS_OPTIONS: RepoStatus[] = [
   "up_to_date",
@@ -50,7 +51,10 @@ export function ReposPage() {
       if (!r.started) toast.info("A scan is already running");
       qc.invalidateQueries({ queryKey: ["scanStatus"] });
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => {
+      clientLog.error("ReposPage.rescan", e);
+      toast.error(e.message);
+    },
   });
 
   // Bookmark toggle (repos.mdx §8) — optimistic: flip the row in cache immediately, roll back on error.
@@ -66,6 +70,7 @@ export function ReposPage() {
       return { prev };
     },
     onError: (e: Error, _v, ctx) => {
+      clientLog.error("ReposPage.toggleBookmark", e);
       if (ctx?.prev) qc.setQueryData(["repos"], ctx.prev);
       toast.error(e.message);
     },
@@ -201,7 +206,10 @@ function AddRepoDialog({ onClose }: { onClose: () => void }) {
       qc.invalidateQueries({ queryKey: ["repos"] });
       onClose();
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => {
+      clientLog.error("ReposPage.addRepo", e);
+      toast.error(e.message);
+    },
   });
   return (
     <div className="fixed inset-0 z-20 grid place-items-center bg-black/30" onClick={onClose}>

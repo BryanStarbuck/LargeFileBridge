@@ -16,6 +16,7 @@ entityRouter.get("/", (req, res) => {
   try {
     res.json({ ok: true, data: buildEntityView(p) });
   } catch (e) {
+    log.warn("entity", `buildEntityView failed for ${p ?? "<none>"}: ${(e as Error).message}`);
     res.status(400).json({ ok: false, error: (e as Error).message });
   }
 });
@@ -38,6 +39,7 @@ entityRouter.patch("/flags", async (req, res) => {
     log.info("entity", `flags ${body.data.path}: ${JSON.stringify(body.data)}`);
     res.json({ ok: true, data: view });
   } catch (e) {
+    log.error("entity", `setEntityFlags failed for ${body.data.path}: ${(e as Error).message}`);
     res.status(400).json({ ok: false, error: (e as Error).message });
   }
 });
@@ -53,6 +55,7 @@ entityRouter.post("/decision", async (req, res) => {
     log.info("entity", `decision ${body.data.path} -> ${body.data.decision}`);
     res.json({ ok: true, data: view });
   } catch (e) {
+    log.warn("entity", `setEntityDecision failed for ${body.data.path} -> ${body.data.decision}: ${(e as Error).message}`);
     res.status(409).json({ ok: false, error: (e as Error).message });
   }
 });

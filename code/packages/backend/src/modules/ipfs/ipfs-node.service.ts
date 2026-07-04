@@ -108,7 +108,10 @@ export async function nodeStatus(): Promise<IpfsNodeStatus> {
       ipfs.bandwidth(),
       ipfs.gatewaySummary(),
       // Reuse the pinset page compute for the pin counts so the tile agrees with /ipfs/pins.
-      computeIpfsPage().catch(() => null),
+      computeIpfsPage().catch((e) => {
+        log.warn("ipfs", `node-card pin-count compute failed: ${(e as Error).message}`);
+        return null;
+      }),
     ]);
     version = ver;
     peerId = pid;
@@ -127,7 +130,10 @@ export async function nodeStatus(): Promise<IpfsNodeStatus> {
       bandwidthRateOut: bw.rateOut,
     };
   } else {
-    gateway = await ipfs.gatewaySummary().catch(() => gateway);
+    gateway = await ipfs.gatewaySummary().catch((e) => {
+      log.warn("ipfs", `gateway summary (node down) failed: ${(e as Error).message}`);
+      return gateway;
+    });
   }
 
   const publicGateway = getAppConfig().ipfs.public_gateway;
@@ -217,6 +223,7 @@ function runStreaming(bin: string, args: string[]): Promise<number> {
       child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
     } catch (e) {
       append(`(could not launch ${bin}: ${(e as Error).message})`);
+      log.warn("ipfs", `spawn ${bin} failed: ${(e as Error).message}`);
       return resolve(127);
     }
     const onData = (buf: Buffer) => {
@@ -229,6 +236,7 @@ function runStreaming(bin: string, args: string[]): Promise<number> {
     child.stderr?.on("data", onData);
     child.on("error", (e) => {
       append(`(process error: ${e.message})`);
+      log.warn("ipfs", `process ${bin} errored: ${e.message}`);
       resolve(127);
     });
     child.on("close", (code) => resolve(code ?? 0));
@@ -284,7 +292,9 @@ async function startDaemon(): Promise<boolean> {
   let out: number;
   try {
     out = fs.openSync(outPath, "a");
-  } catch {
+  } catch (e) {
+    // Couldn't open the daemon log file — fall back to inheriting our own stdout rather than fail.
+    log.warn("ipfs", `open daemon log ${outPath} failed: ${(e as Error).message}`);
     out = 1;
   }
   try {
@@ -295,6 +305,7 @@ async function startDaemon(): Promise<boolean> {
     child.unref();
   } catch (e) {
     append(`(could not launch daemon: ${(e as Error).message})`);
+    log.warn("ipfs", `spawn ipfs daemon failed: ${(e as Error).message}`);
     return false;
   }
   append("Waiting for the daemon to come up…");
@@ -337,7 +348,9 @@ export function startInstall(): IpfsInstallJob {
         return fail("Installed, but the daemon didn't come up in time.", "ipfs daemon --enable-gc");
       }
       // Bring the fresh node into only-our-content compliance (best effort).
-      await ipfs.enforceCompliance().catch(() => {});
+      await ipfs.enforceCompliance().catch((e) =>
+        log.warn("ipfs", `enforce compliance after install failed: ${(e as Error).message}`),
+      );
       job.status = "done";
       job.phase = "done";
       job.finishedAt = new Date().toISOString();
@@ -364,6 +377,7 @@ export async function controlDaemon(action: "start" | "stop"): Promise<IpfsDaemo
       await ipfs.shutdownDaemon();
     } catch (e) {
       append(`(shutdown RPC error: ${(e as Error).message})`);
+      log.warn("ipfs", `shutdown RPC error: ${(e as Error).message}`);
     }
     const stopped = await waitForStopped(10_000);
     if (stopped) {
@@ -389,7 +403,9 @@ export async function controlDaemon(action: "start" | "stop"): Promise<IpfsDaemo
       if (!(await startDaemon())) {
         return fail("The daemon didn't come up in time.", "ipfs daemon --enable-gc");
       }
-      await ipfs.enforceCompliance().catch(() => {});
+      await ipfs.enforceCompliance().catch((e) =>
+        log.warn("ipfs", `enforce compliance after start failed: ${(e as Error).message}`),
+      );
       job.status = "done";
       job.phase = "done";
       job.finishedAt = new Date().toISOString();

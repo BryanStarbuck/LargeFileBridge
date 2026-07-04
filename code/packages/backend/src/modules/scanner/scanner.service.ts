@@ -63,8 +63,9 @@ export async function scanAll(
   for (const repoPath of discovered) {
     try {
       await registerRepo(repoPath);
-    } catch {
-      // already registered or not a working tree — fine
+    } catch (e) {
+      // already registered or not a working tree — fine; keep a debug crumb in case it was a real fault.
+      log.debug("scan", `registerRepo(${repoPath}) skipped: ${(e as Error).message}`);
     }
   }
 
@@ -173,7 +174,9 @@ async function walkUnit(root: string, threshold: number, opts: WalkOpts): Promis
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
+    } catch (e) {
+      // Unreadable dir (permissions, vanished mid-walk) — skip its subtree; routine, so debug only.
+      log.debug("scan", `readdir skipped ${dir}: ${(e as Error).message}`);
       continue;
     }
     if ((sinceYield += entries.length) >= YIELD_EVERY) {
@@ -196,7 +199,9 @@ async function walkUnit(root: string, threshold: number, opts: WalkOpts): Promis
       let st: fs.Stats;
       try {
         st = fs.statSync(abs); // metadata only — never open the file (scan.mdx §1)
-      } catch {
+      } catch (e) {
+        // File vanished or is unstattable between readdir and stat — skip it; routine, debug only.
+        log.debug("scan", `stat skipped ${abs}: ${(e as Error).message}`);
         continue;
       }
       const bigEnough = st.size >= threshold;
@@ -312,7 +317,9 @@ async function findGitRepos(root: string, followSymlinks: boolean): Promise<stri
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
+    } catch (e) {
+      // Unreadable dir during git-repo discovery — skip it; routine, so debug only.
+      log.debug("scan", `discovery readdir skipped ${dir}: ${(e as Error).message}`);
       continue;
     }
     for (const ent of entries) {

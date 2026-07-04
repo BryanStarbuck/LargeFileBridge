@@ -2,12 +2,13 @@
 // Color rules: all text black; wordmark + active item + sign-in accent stay accent.
 // The IPFS item is the one DISCLOSURE parent (ipfs.mdx §2.1): while active it expands into a child
 // list of the repos that hold pinned content; a child filters /ipfs to that repo, the parent clears it.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import type { CurrentUser } from "@lfb/shared";
 import { leftBar } from "../../config/left_bar.js";
 import { api } from "../../api/client.js";
+import { clientLog } from "../../lib/clientLog.js";
 import { NavIcon } from "./NavIcon.js";
 
 export function Sidebar({ user }: { user: CurrentUser }) {
@@ -25,12 +26,18 @@ export function Sidebar({ user }: { user: CurrentUser }) {
   // Subscribe to ONLY the pinning-repos slice of the (potentially large) IPFS payload via `select`
   // (performance.mdx P-09), so the sidebar re-renders only when that list changes — not on every pin
   // update. Shares the ["ipfs"] cache with the page, so there's still no extra request.
-  const { data: pinningRepos = [] } = useQuery({
+  const { data: pinningRepos = [], error: pinningReposError } = useQuery({
     queryKey: ["ipfs"],
     queryFn: api.ipfs,
     enabled: onIpfs,
     select: (d) => d.repos,
   });
+
+  // The children fetch fails silently (the disclosure just stays empty) — log it so a broken /ipfs
+  // payload still leaves a fault trail instead of vanishing.
+  useEffect(() => {
+    if (pinningReposError) clientLog.error("Sidebar.pinningRepos", pinningReposError);
+  }, [pinningReposError]);
 
   return (
     <aside

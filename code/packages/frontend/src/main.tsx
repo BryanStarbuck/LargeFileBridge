@@ -10,7 +10,17 @@ import { authCore } from "./api/authCore.js";
 import { SignInPage } from "./pages/sign-in/SignInPage.js";
 import { SsoCallbackPage } from "./pages/sign-in/SsoCallbackPage.js";
 import { SecuritySetupPage } from "./pages/security/SecuritySetupPage.js";
+import { clientLog } from "./lib/clientLog.js";
 import "./styles.css";
+
+// Catch-all fault trail: anything that escapes a component (a thrown render, an un-.catch()'d promise)
+// still reaches error.err via the client-log bridge instead of dying silently in the devtools console.
+window.addEventListener("error", (e) => {
+  clientLog.error("window.error", e.error ?? e.message);
+});
+window.addEventListener("unhandledrejection", (e) => {
+  clientLog.error("window.unhandledrejection", e.reason);
+});
 
 // Boot gate order (security.mdx §3): 1) first-run Security Setup (who may sign in — unauthenticated),
 // 2) sign-in (SignInPage handles the Google-creds-missing card), 3) allow-listed → the app.
@@ -53,11 +63,18 @@ function Root() {
 // Root's hooks always run in the same order (Rules of Hooks).
 const isSsoCallback = window.location.pathname === "/sso-callback";
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      {isSsoCallback ? <SsoCallbackPage /> : <Root />}
-      <Toaster position="bottom-right" richColors />
-    </QueryClientProvider>
-  </StrictMode>,
-);
+// Wrap the initial mount: a failure here (missing #root, a throw during the first render) would leave
+// a blank page with nothing in the fault trail — log it (fatal: the app never came up) then rethrow.
+try {
+  createRoot(document.getElementById("root")!).render(
+    <StrictMode>
+      <QueryClientProvider client={queryClient}>
+        {isSsoCallback ? <SsoCallbackPage /> : <Root />}
+        <Toaster position="bottom-right" richColors />
+      </QueryClientProvider>
+    </StrictMode>,
+  );
+} catch (e) {
+  clientLog.fatal("main.render", e);
+  throw e;
+}

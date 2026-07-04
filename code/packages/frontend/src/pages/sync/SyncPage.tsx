@@ -2,10 +2,12 @@
 // "will my files keep syncing on their own?" — then one DiagnosticCard per background job with a
 // plain purpose line, Installed/On pills, last-run health, control actions, and the launchd mechanics
 // tucked behind the chevron.
+import { useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { WorkerKind, WorkerState } from "@lfb/shared";
 import { api } from "../../api/client.js";
+import { clientLog } from "../../lib/clientLog.js";
 import { relativeTime } from "../../lib/format.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { StatusBanner } from "../../components/ui/StatusBanner.js";
@@ -20,7 +22,12 @@ function workerHealth(s: WorkerState): Health {
 }
 
 export function SyncPage() {
-  const { data } = useQuery({ queryKey: ["syncPage"], queryFn: api.syncPage, refetchInterval: 10_000 });
+  const { data, error } = useQuery({ queryKey: ["syncPage"], queryFn: api.syncPage, refetchInterval: 10_000 });
+  // The Scans payload poll runs every 10s; a fetch failure otherwise stays invisible (no toast on a
+  // background refetch), so mirror it to error.err. Warn (not error) — a transient poll miss self-heals.
+  useEffect(() => {
+    if (error) clientLog.warn("SyncPage.syncPage.poll", error);
+  }, [error]);
   const ipfsDown = data?.ipfs !== "ok";
 
   // The verdict is about the every-15-min transfer job — that's what keeps files moving on their own.
@@ -107,7 +114,11 @@ function WorkerCard({
       qc.invalidateQueries({ queryKey: ["syncPage"] });
       toast.success(`${title} updated`);
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => {
+      // A worker install/uninstall/enable/disable failed — surface to the user AND log to error.err.
+      clientLog.error(`SyncPage.controlWorker.${worker}`, e);
+      toast.error(e.message);
+    },
   });
 
   const h = workerHealth(state);

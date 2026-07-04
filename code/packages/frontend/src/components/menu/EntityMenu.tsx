@@ -24,6 +24,7 @@ import {
 import type { EntityView, Decision } from "@lfb/shared";
 import { api } from "@/api/client";
 import { patchEntityBadges } from "@/lib/patchEntityBadges";
+import { clientLog } from "../../lib/clientLog.js";
 
 // ── The action model ─────────────────────────────────────────────────────────
 // Exported so the non-path row kebabs (repo / peer / pin — RowKebabs.tsx) and page-local kebabs
@@ -122,18 +123,30 @@ export function EntityMenuAt({
     mutationFn: (patch: { neverIpfs?: boolean; noCompress?: boolean }) =>
       api.setEntityFlags(path, patch),
     onSuccess: applyEntity,
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => {
+      clientLog.error("EntityMenu.setFlags", e);
+      toast.error(e.message);
+    },
   });
 
   const decide = useMutation({
     mutationFn: (decision: Decision) => api.setEntityDecision(path, decision),
     onSuccess: applyEntity,
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => {
+      clientLog.error("EntityMenu.setDecision", e);
+      toast.error(e.message);
+    },
   });
 
   const run = (fn: () => void | Promise<void>) => async () => {
     onClose();
-    await fn();
+    // Central safety net: an action's onSelect may reject (a navigate/mutate/clipboard path). Without
+    // this, the rejection is unhandled — log it so it reaches error.err instead of just the console.
+    try {
+      await fn();
+    } catch (e) {
+      clientLog.error("EntityMenu.action", e);
+    }
   };
 
   const actions = view ? buildActions(view, { navigate, flags, decide }) : [];
@@ -197,12 +210,16 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
   const a: Action[] = [];
   const parent = v.path.replace(/[/\\][^/\\]*$/, "") || v.path;
   const copy = (text: string, label: string) => () => {
-    navigator.clipboard?.writeText(text);
+    // clipboard.writeText can reject (permissions / insecure context) — log the floating promise.
+    navigator.clipboard?.writeText(text).catch((e) => clientLog.warn("EntityMenu.copy", e));
     toast.success(`${label} copied`);
   };
   const compress = () => {
     if (!window.confirm(`Compress ${v.name}? This is an offer — nothing changes until it runs.`)) return;
-    api.compressEntity(v.path).then(() => toast.success("Compression queued")).catch((e) => toast.error(e.message));
+    api.compressEntity(v.path).then(() => toast.success("Compression queued")).catch((e) => {
+      clientLog.error("EntityMenu.compress", e);
+      toast.error(e.message);
+    });
   };
 
   if (v.kind === "file") {
@@ -345,7 +362,13 @@ export function ActionsKebab({
   className?: string;
 }) {
   const run = (fn: () => void | Promise<void>) => async () => {
-    await fn();
+    // Safety net for prebuilt actions (repo/peer/pin/rollup) whose onSelect awaits api.* — surface any
+    // rejection to error.err rather than leaving it an unhandled promise rejection.
+    try {
+      await fn();
+    } catch (e) {
+      clientLog.error("EntityMenu.action", e);
+    }
   };
   return (
     <KebabButton

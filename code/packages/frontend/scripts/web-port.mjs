@@ -139,8 +139,10 @@ export async function resolveWebPort(desired = desiredWebPort()) {
 function finish(result) {
   try {
     fs.writeFileSync(PORT_FILE, String(result.port), "utf8");
-  } catch {
-    /* non-fatal: the port file is a convenience for external tooling */
+  } catch (e) {
+    // non-fatal: the port file is a convenience for external tooling — but log so a broken
+    // handoff (justfile/health checks reading a stale port) is diagnosable.
+    console.error(`[web-port] failed to write ${PORT_FILE}:`, e?.message || e);
   }
   return result;
 }
