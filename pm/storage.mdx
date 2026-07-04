@@ -513,6 +513,32 @@ wins). The rule: the state store holds sessions and a signing secret (operationa
 **never** long-lived provider secrets. Because LFB has **no anonymous account** (§4), every session
 record belongs to an allow-listed email.
 
+**Session lifetime — "sign in once, stay signed in ~10 months".** A signed-in user must **not** be
+forced to re-authenticate on a normal cadence — not overnight, not after a week, and **not after a
+server rebuild/restart**. Authentication survives server, browser, and OS restarts because the two
+pieces of durable state above both persist to the state root: the **signing secret**
+(`.auth_session_secret`) is stable across restarts (`loadOrCreateSecret`), and the **session records**
+(`users/<email>/sessions/<sid>.json`) are the authoritative, restart-surviving source of truth
+(`FileSessionStore`). The frontend never depends on a stored access token — on load it re-hydrates
+from the session cookie (`GET /api/v1/client`) and silently mints a fresh short-lived Bearer
+(`POST /api/v1/client/sessions/:id/tokens`).
+
+The lifetime is a **policy LFB sets explicitly** when building the OpenAuthFederated frontend
+(`auth-frontend.ts → createFederatedFrontend`). It **must pass all three** of these — the library's
+defaults (7-day maximum lifetime + **12-hour idle timeout**) are far too short and, left unset, force
+re-login after an overnight gap or a week (the "re-login after restart" bug):
+
+| Option | Value | Why |
+| --- | --- | --- |
+| `sessionTtlSeconds` | `TEN_MONTHS_SECONDS` (`10 * 30 * 24 * 60 * 60` = 300 days) | Absolute maximum session lifetime — the ceiling written into each session record's `expireAt` at creation. |
+| `inactivityTimeoutSeconds` | `TEN_MONTHS_SECONDS` | Idle timeout matches the lifetime, so an idle session is bounded **only** by the 10-month ceiling, never aged out by inactivity. |
+| `accessTokenTtlSeconds` | `15 * 60` (15 min) | Bearer tokens stay short-lived and refresh silently from the session cookie — keeping them short costs nothing and limits a captured token's window. |
+
+This matches the sister apps exactly (EmailDeliveryHero, the_starbucks, all/app). Note the record's
+`expireAt` ceiling is fixed **at session creation** and is not re-extended on token mint (the sliding
+cookie rolls forward, but the durable ceiling does not), so **changing the policy takes full effect on
+the next sign-in**; existing session records keep whatever ceiling they were created with.
+
 **Credentials file — schema, read order, and the setup UI.** The file is read by
 `config/credentials-file.ts` and passed to OpenAuthFederated (`auth-frontend.ts`). Its exact shape:
 

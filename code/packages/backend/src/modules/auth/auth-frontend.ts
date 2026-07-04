@@ -100,6 +100,17 @@ function constructAuthFrontend(): RequestHandler {
   // to the callback silently dies (no TLS server) and sign-in is stuck. HSTS is only meaningful with
   // real TLS, so these hardening headers ride with cookieSecure (on in server mode, off on http).
   const secure = process.env.COOKIE_SECURE === "true";
+  // Session lifetime policy (charter: "authentication should not time out — last 10 months"), decided
+  // here and passed to the library by API. Without these three the library defaults to a 7-day maximum
+  // lifetime AND a 12-hour idle timeout, so a signed-in user is forced to re-authenticate after a short
+  // gap (an overnight break) or a week — which is exactly the re-login-after-restart bug we hit. The
+  // session survives server/browser/OS restarts because the signing secret (authSecretPath) and the
+  // durable session records (FileSessionStore) both persist to the state dir; the only thing that was
+  // aging them out was these short TTLs. Access tokens stay short-lived (15m) and refresh silently from
+  // the session cookie, so shortening THEM costs nothing. Matches the sister apps (EmailDeliveryHero,
+  // the_starbucks, all/app) exactly. inactivityTimeoutSeconds == sessionTtlSeconds so an idle session
+  // is bounded only by the 10-month absolute lifetime, never by inactivity.
+  const TEN_MONTHS_SECONDS = 10 * 30 * 24 * 60 * 60; // 10 months (30-day months) = 300 days = 25,920,000s
   const middleware = createFederatedFrontend({
     connections: [
       {
@@ -115,6 +126,9 @@ function constructAuthFrontend(): RequestHandler {
     sessionSecret: loadOrCreateSecret(authSecretPath()),
     issuer: AUTH_ISSUER,
     cookiePrefix: process.env.AUTH_COOKIE_PREFIX || "oaf_lfb",
+    sessionTtlSeconds: TEN_MONTHS_SECONDS,
+    accessTokenTtlSeconds: 15 * 60,
+    inactivityTimeoutSeconds: TEN_MONTHS_SECONDS,
     sessionStore: new FileSessionStore(resolveStateDir()),
     cookieSecure: secure,
     securityHeaders: secure, // no HSTS/hardening headers over http localhost (see note above)
