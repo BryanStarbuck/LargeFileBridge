@@ -79,8 +79,8 @@ The load-bearing rule the button must honor: **a manual Sync now on one repo pri
 still runs the full pass.** It does the user's repo first (so their result is immediate) and then keeps
 going across every other known unit. It must **never** sync one repo and stop.
 
-The full pass with bounded concurrency, and a manual Sync now that syncs the clicked repo first (as the priority unit) then runs the pass over the remaining units in the background, are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncAll({ priorityDone })` (fan-out via `runPool`), invoked after the priority repo by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/repos/:repoId/sync`
+The full pass over **every repo plus the computer unit**, and a manual Sync now that syncs the clicked repo first (as the priority unit) then runs the pass over the remaining units in the background, are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncAll({ priorityDone })` (repos fan out via `runPool`, then `syncComputerUnit()`; both repo and computer share one generic `runUnitSync` core), invoked after the priority repo by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/repos/:repoId/sync`
 
 ---
 
@@ -112,21 +112,24 @@ Answering with the priority repo's detail immediately, then running the remainde
 Modern machines have **20–30 cores**; syncing units one-at-a-time wastes almost all of them. A sync
 pass is **concurrent by default**:
 
-* **Across units.** Units sync in parallel with a **bounded** pool — default **`cores − 2`** — leaving
-  two cores for the web app and the IPFS node so the UI stays responsive during a big pass. Concurrent
-  unit syncs are safe because every state write goes through the store layer's **per-file mutex + atomic
-  temp-then-rename** ([storage.mdx §15](./storage.mdx#15-the-store-layer-how-code-touches-disk)).
+* **One global budget for all heavy work.** Every add/pin/fetch is drawn through a **single limiter**
+  sized **`cores − 2`**, so total in-flight IPFS operations stay bounded **no matter how units × files
+  multiply**. Two cores are left for the web app and the IPFS node so the UI stays responsive during a
+  big pass. Concurrent state writes are safe because every write goes through the store layer's
+  **per-file mutex + atomic temp-then-rename**
+  ([storage.mdx §15](./storage.mdx#15-the-store-layer-how-code-touches-disk)).
+* **Across units.** Units sync concurrently.
 * **Within a unit.** A unit's independent per-file operations (add + pin new/changed files, fetch
-  missing CIDs) are themselves parallelizable — they are independent IPFS calls — and should fan out
-  under the same bounded pool rather than a strict file-by-file loop. (Ordering within a unit does not
-  matter; each file's manifest row is written independently.)
+  missing CIDs) **fan out in parallel** through the same global limiter — not a strict file-by-file
+  loop. Ordering within a unit does not matter; each file owns a distinct manifest-row key, so the
+  shared in-memory manifest/pinset maps are mutated without collision.
 * **The priority unit** starts immediately; the remainder fan out behind it.
 
 Sequential syncing is a **defect to fix**, not an acceptable baseline. Any place that still loops
-`for … await` over units or files across a pass should be flagged and converted to the bounded pool.
+`for … await` over units or files across a pass should be flagged and converted to the pool/limiter.
 
-The bounded-concurrency pool (`cores − 2`) that fans the pass out across units is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `runPool` + `SYNC_CONCURRENCY` (driven by `os.cpus()`)
+The bounded fan-out — a `cores − 2` pool across units and one shared `cores − 2` limiter that caps ALL per-file add/pin/fetch work — is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `runPool` + `SYNC_CONCURRENCY` (units) and `ipfsLimiter` + `runUnitSync` (per-file `Promise.all` through the limiter)
 
 ---
 

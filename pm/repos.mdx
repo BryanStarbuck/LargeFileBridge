@@ -7,8 +7,10 @@ description: The landing screen (route /) — one TanStack Table listing every g
 
 The **Repos** page is the landing view of LargeFileBridge and the screen users live in. It answers
 one question at a glance: *for every repo on this computer, are my large files in sync across my
-other machines?* It is a header over **one TanStack Table** — one row per managed repo — with the
-standard search / filter / sort control row above it.
+other machines?* It is a header over **one TanStack Table** — **one row per repo, for every git repo on
+this computer** (LFB discovers and knows them all automatically — there is no "managed" opt-in;
+[sync_process.mdx §1](./sync_process.mdx#1-lfb-knows-every-repo--there-is-no-lfb-managed-gate-locked)) —
+with the standard search / filter / sort control row above it.
 
 The left bar's **Repos** item (order 1, icon `FolderGit2`, route `/` — source of truth
 `pm/left_bar.yaml`) lands here. Clicking any repo row opens that repo's per-file screen
@@ -33,7 +35,7 @@ Three terms, used consistently across every spec and every screen:
 
 | Term | Definition |
 | --- | --- |
-| **Repo** | A git repository on this computer that LFBridge manages. It has a local **path**, a **name** (the folder name), a git-ignore that excludes the big files, and a **manifest** (checked into git) listing the large files by path + IPFS CID. |
+| **Repo** | **Any** git repository on this computer. LFBridge **discovers and knows every repo automatically** — a repo is never "unmanaged" ([sync_process.mdx §1](./sync_process.mdx#1-lfb-knows-every-repo--there-is-no-lfb-managed-gate-locked)); IPFS pinning of its bytes is the only opt-in. It has a local **path**, a **name** (the folder name), a git-ignore that excludes the big files, and a **manifest** (checked into git) listing the large files by path + IPFS CID. |
 | **Large file** | A big, git-ignored file inside a repo (video, image, model weights, dataset, render output). LFBridge — not git — is responsible for moving its bytes between your computers. |
 | **Decision** | Per large file, whether LFBridge should move it: **Sync**, **Ignore** (deliberately not synced), or **Undecided** (LFBridge found it but the user has not yet chosen). Defined in full on the [One repo](./one_repo.mdx) screen; the Repos table only shows the **counts** per decision. |
 
@@ -385,7 +387,8 @@ is its **reference implementation**. In short:
 ## 9. Acceptance criteria
 
 1. The brand header shows **"Repos"** as normal text; the left-bar Repos item routes here (`/`).
-2. The page is **one TanStack Table**, flat/chromeless, one row per managed repo, with columns: a
+2. The page is **one TanStack Table**, flat/chromeless, **one row per repo — every git repo on this
+   computer** (all known automatically, no "managed" opt-in), with columns: a
    leading **bookmark toggle**, then Repo, Path, Synced, Pending, Undecided, Ignored, Peers, Last sync,
    Status (in that order), plus a trailing **›** chevron.
 3. The **control row** above the table has a left **search box** and **icon-only** filter (`⛛`) and

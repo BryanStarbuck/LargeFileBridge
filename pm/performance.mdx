@@ -337,6 +337,27 @@ The rAF-coalesced scroll handler that skips re-renders when the window start is 
 - **Fix:** Add `loading="lazy"` to complete P-13. (The real large-image win is the
   backend downscaled-preview endpoint, still a follow-up.)
 
+### 🟠 P-23 — The sync pass synced units one-at-a-time (sequential, ignoring 20–30 cores) · throughput
+- **Where:** `code/packages/backend/src/modules/sync/sync.service.ts` — `syncAll()` was a
+  `for (const folder of listRepoFolders()) { await syncRepoFolder(folder) }` serial loop.
+- **Symptom:** A synchronization is a **full pass** over every known unit
+  ([sync_process.mdx §2](./sync_process.mdx#2-every-synchronization-is-a-full-pass-locked)); syncing
+  100+ repos strictly one-after-another leaves a many-core machine almost idle and makes a manual **Sync
+  now** background pass drag on far longer than it should.
+- **Fix (done):** Fan the pass out on two levels, both capped at `cores − 2`: a `runPool()` across
+  **units** and one shared `ipfsLimiter` across **all per-file** add/pin/fetch work (independent IPFS
+  calls now run under `Promise.all`, not a `for…await` loop). The single limiter keeps total in-flight
+  ops bounded no matter how units × files multiply; the store layer's per-file mutex + atomic writes
+  ([storage.mdx §15](./storage.mdx#15-the-store-layer-how-code-touches-disk)) make concurrent syncs
+  safe. The pass now also covers the **computer unit** (`sync/computer/`), sharing the same generic
+  `runUnitSync` core as repos. Priority + parallelism design is LOCKED in
+  [sync_process.mdx §3/§4](./sync_process.mdx#4-parallelism--many-cores-bounded-concurrency-locked-design).
+- **Follow-up:** Publish the computer unit's manifest over **IPNS** (storage.mdx §9.3) — the transport
+  is not yet built, so its local manifest + pins are written but not yet advertised to peers.
+
+The bounded-concurrency sync pass is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncAll` + `runPool` + `SYNC_CONCURRENCY` (units) and `ipfsLimiter` + `runUnitSync` (per-file) + `syncComputerUnit`
+
 ---
 
 ## Part III — The architecture transformation (streaming background filesystem index)

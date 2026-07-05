@@ -389,8 +389,9 @@ The Peers page (empty-state guidance, per-peer rows, last-seen recency) is imple
 ### 5.6 File properties (`/file`) & Directory (`/dir`) pages
 * Add a small **per-entity StatusBanner** at the top under the header: the file's own verdict —
   *"Synced · backed up on 2 computers"* (green) / *"Set to sync, but on 0 other computers"* (amber) /
-  *"Not tracked — not inside a managed repo"* (neutral) / *"Set to sync but the IPFS engine is
-  down"* (red).
+  *"Not opted into IPFS pinning yet"* (neutral — the file is known/tracked, but its unit is not
+  `synced: true`; see [sync_process.mdx §1](./sync_process.mdx#1-lfb-knows-every-repo--there-is-no-lfb-managed-gate-locked)) /
+  *"Set to sync but the IPFS engine is down"* (red).
 * Keep the existing **Sync / Compression / File** cards, but render them with the shared `Section`
   so they match. The compression card stays an **offer** with the baseline reasoning as chevron
   detail (UC-4).

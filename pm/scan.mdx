@@ -17,7 +17,7 @@ Two scheduled jobs, two cadences, on purpose:
 | Job (scheduleTask) | Cadence | What it does | Where spec'd |
 | --- | --- | --- | --- |
 | **Discovery scheduleTask** (this file) | **every 4 hours** | Deep, whole-filesystem **discovery** — stat every candidate file, find big files + filesystem/repo changes. Metadata only; no IPFS. | this file |
-| **Sync scheduleTask** | every **15 minutes** | Targeted work on **already-known** `synced: true` units — add/update manifests, pin, fetch missing CIDs over IPFS **— and read the local IPFS pinset (`ipfs pin ls`) to reconcile + import already-pinned files** (§2.1). | [storage.mdx §13](./storage.mdx#13-the-background-sync-process--the-transparency-contract) |
+| **Sync scheduleTask** | every **15 minutes** | A **full sync pass** ([sync_process.mdx](./sync_process.mdx)): visit + reconcile **every** known unit; for units the user **opted into IPFS** (`synced: true`) add/update manifests, pin, fetch missing CIDs over IPFS **— and read the local IPFS pinset (`ipfs pin ls`) to reconcile + import already-pinned files** (§2.1). Runs units concurrently (many cores). | [storage.mdx §13](./storage.mdx#13-the-background-sync-process--the-transparency-contract) · [sync_process.mdx](./sync_process.mdx) |
 
 The discovery pass is expensive (it walks the tree and stats many files), so it is throttled to **every
 four hours**. The 15-minute pass is cheap per unit and time-sensitive, so it runs over the small set the

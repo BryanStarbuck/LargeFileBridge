@@ -19,10 +19,12 @@ import {
   type Decision,
   type IpfsHealth,
 } from "@lfb/shared";
+import type { ComputerUnitConfig } from "@lfb/shared";
 import { readYaml, updateYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import {
   reposRoot,
   repoUnitDir,
+  computerUnitDir,
   unitConfigPath,
   unitManifestPath,
   unitStatusPath,
@@ -73,6 +75,28 @@ export function writeRepoStatus(folder: string, status: UnitStatus): void {
 }
 export function writeRepoManifest(folder: string, manifest: Manifest): void {
   writeYaml(unitManifestPath(repoUnitDir(folder)), { ...manifest });
+}
+
+// ── Computer unit reads/writes (storage.mdx §8; sync_process.mdx §2 — part of every full pass) ──
+export function getComputerConfig(): ComputerUnitConfig {
+  return readYaml(unitConfigPath(computerUnitDir()), ComputerUnitConfigSchema);
+}
+export function getComputerManifest(): Manifest {
+  return readYaml(unitManifestPath(computerUnitDir()), ManifestSchema);
+}
+export function getComputerStatus(): UnitStatus {
+  return readYaml(unitStatusPath(computerUnitDir()), UnitStatusSchema);
+}
+export async function updateComputerConfig(
+  mutate: (c: ComputerUnitConfig) => ComputerUnitConfig,
+): Promise<ComputerUnitConfig> {
+  return updateYaml(unitConfigPath(computerUnitDir()), ComputerUnitConfigSchema, mutate);
+}
+export function writeComputerStatus(status: UnitStatus): void {
+  writeYaml(unitStatusPath(computerUnitDir()), { ...status });
+}
+export function writeComputerManifest(manifest: Manifest): void {
+  writeYaml(unitManifestPath(computerUnitDir()), { ...manifest });
 }
 
 /** Resolve a repoId (from the UI) to its state-root folder name. */

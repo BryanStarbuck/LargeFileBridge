@@ -366,8 +366,9 @@ repo:
   path: ~/BGit/Bryan_git/LargeFileBridge      # working-tree root on THIS computer
   remote: https://github.com/BryanStarbuck/LargeFileBridge.git
 
-# THE on/off flag — "what was turned on or off on sync" for this repo
-synced: true                 # false = discovered but ignored; LFB neither pins nor fetches its files
+# THE IPFS-pinning opt-in for this repo (NOT a "managed vs. unmanaged" gate — LFB knows every repo
+# automatically; this flag only decides whether LFB adds/pins/fetches its bytes). See sync_process.mdx §1.
+synced: true                 # false = known & visited every pass, but LFB does not pin/add/fetch its files yet
 
 # Which large files this repo bridges. Defaults mirror the repo's own .gitignore so LFB bridges
 # exactly the big files Git is ignoring; extra include/exclude globs refine it.
@@ -390,9 +391,12 @@ access:
                              # e.g. [bryan@act3ai.com, family.member@example.com]
 ```
 
-* `synced` is the per-repo master toggle. A repo is bridged only when **it** is `synced: true` (a
-  repo the user never wants synced stays discovered-but-off, so a re-scan doesn't keep re-proposing
-  it).
+* `synced` is the per-repo **IPFS-pinning opt-in**, not a visibility gate. LFB **knows and reconciles
+  every repo every pass** regardless ([sync_process.mdx §1](./sync_process.mdx#1-lfb-knows-every-repo--there-is-no-lfb-managed-gate-locked));
+  a repo's bytes are **bridged (added/pinned/fetched)** only when **it** is `synced: true`. A repo the
+  user never wants pinned stays known-but-not-pinned (`synced: false`), so a re-scan keeps understanding
+  it without ever pinning it. A manual **Sync now** is the explicit action that flips it on (§13,
+  sync_process.mdx §5).
 * **"Some need users, some won't."** `access.shared: false` is the common case — the repo is just
   *your* repo across *your* computers; no user list is required. Set `shared: true` and list
   `participants` when a repo is shared with a family member or teammate; only those allow-listed
@@ -483,6 +487,11 @@ sync:
 Same shape as any unit's manifest (§9). Because there is no Git repo to carry it, the computer unit's
 manifest is published over **IPNS** (or a designated peer-shared record) so the user's other
 computers can fetch the current list — see §9.3. `status.yaml` holds last-scan / last-sync / counts.
+
+The computer unit is synced as part of **every full pass** ([sync_process.mdx §2](./sync_process.mdx#2-every-synchronization-is-a-full-pass-locked)),
+through the same generic core as repos (its files carry absolute paths; the IPNS publish is a
+follow-up), in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncComputerUnit()` (shares `runUnitSync`; called by `syncAll`)
 
 ---
 
@@ -768,8 +777,21 @@ Reconciling installed vs on/off against the real launchd state and install/unins
 
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `workerState` / `control` functions
 
-Each background run: rescan (§7) → for every `synced: true` unit, add new/changed large files to IPFS,
-update the manifest (§9), pin locally, fetch any missing CIDs from peers, and write `status.yaml`.
+> **The run mechanics live in [sync_process.mdx](./sync_process.mdx).** This section owns the
+> *transparency contract* (installed vs. on/off, surfaced + controlled from the web app). What a run
+> actually *does* — that a synchronization is always a **full pass** over every known unit, that it
+> runs with **bounded concurrency** across units and files (many cores), that a manual **Sync now**
+> only sets **priority** and never reduces scope, that LFB **knows every repo automatically** while the
+> per-unit `synced` flag gates only the **IPFS byte work** (opt-in), and that a sync is **never a silent
+> no-op** — is defined and LOCKED there. Do not restate or contradict it here.
+
+Each background run is a **full pass** ([sync_process.mdx §2](./sync_process.mdx#2-every-synchronization-is-a-full-pass-locked)):
+rescan (§7) → **visit and reconcile every known unit** (all repos + the computer unit) → for every unit
+the user has **opted into IPFS** (`synced: true`), add new/changed large files to IPFS, update the
+manifest (§9), pin locally, fetch any missing CIDs from peers, and write `status.yaml`. A `synced:
+false` unit is still visited and reconciled — LFB knows it and refreshes its status — but no bytes are
+added/pinned/fetched until the user opts in (sync_process.mdx §1/§5). Units are synced **concurrently**
+(bounded ≈ `cores − 2`), not one-at-a-time (sync_process.mdx §4).
 It also **reads the local IPFS pinset (`ipfs pin ls`) and reconciles it against the manifests** — the
 pinset is the source of truth and `pinned_by` is the stale cache we refresh from it (**§9.5**)
 ([scan.mdx §2.1](./scan.mdx#21-the-15-minute-scheduletask-reads-the-ipfs-pinset-import-already-pinned)):
