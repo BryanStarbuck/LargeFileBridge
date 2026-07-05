@@ -410,6 +410,9 @@ All under `/api`, all typed by `@lfb/shared`. (`/api/v1/*` is the auth middlewar
 8. **Wire + verify** — `pnpm -r build` typechecks; `just run` boots the web app on :2222 + API :8787; sign-in screen
    renders; `/api/health` + `/api/repos` respond; a scan populates the Repos table.
 
+The `lfb` CLI entry (scan/sync/install-agent, also invoked by the launchd trigger) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/cli.ts` — `run()`
+
 **Sequencing note:** steps 2–6 are backend and can proceed while 7 (frontend) is built against the
 frozen `@lfb/shared` types — the two sides only meet at the §10 REST contract.
 
