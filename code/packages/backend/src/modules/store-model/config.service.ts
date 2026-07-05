@@ -1,7 +1,8 @@
 // Typed accessor for the app-level, computer-wide config.yaml (storage.mdx §3, settings.mdx).
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { AppConfigSchema, type AppConfig, type FileFlags } from "@lfb/shared";
-import { readYaml, updateYaml } from "../../shared/store/yaml-store.js";
+import { readYaml, writeYaml, updateYaml } from "../../shared/store/yaml-store.js";
 import { appConfigPath } from "../../shared/store/scopes.js";
 
 export function getAppConfig(): AppConfig {
@@ -9,6 +10,17 @@ export function getAppConfig(): AppConfig {
   // First-run seeding of sensible scanner roots so the app has something to show.
   if (cfg.scanner.roots.length === 0) {
     cfg.scanner.roots = defaultRoots();
+  }
+  // Mint this computer's stable device id on first use — a real UUID, DISTINCT from the IPFS PeerID
+  // (which can change if the keypair is reset). It is the durable key by which this machine is known in
+  // every storage's devices/ registry and in pinned_by (devices.mdx §1). Persist it so it stays stable.
+  if (!cfg.computer.id || cfg.computer.id.trim() === "") {
+    cfg.computer.id = randomUUID();
+    try {
+      writeYaml(appConfigPath(), cfg as unknown as Record<string, unknown>);
+    } catch {
+      /* best-effort persist — a failure just re-mints on the next call until a write succeeds */
+    }
   }
   return cfg;
 }

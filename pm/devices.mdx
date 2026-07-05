@@ -1,0 +1,218 @@
+---
+title: LargeFileBridge — Devices (the per-computer registry + the graft)
+description: The device model. Every computer that carries a storage issues itself a stable unique device ID on first use, and the user gives it a nice human name from the web app (e.g. "bryan-macbook"). Each device records itself as one file in the storage's Syncable Data Location — .lfbridge/devices/<device>.yaml — so the registry of devices TRAVELS with the storage and every computer knows about every other. A device file is SELF-OWNED: a computer writes only its own file and trusts other devices' files as claims (the same trust model as the Sync List). Each device file carries: the device id (changeable in settings) + owner email; the nice name; this device's SYNC SCHEDULE (cadence + the specific times/windows it syncs this storage); and — the load-bearing part — the GRAFT: how the storage's shared, machine-independent directory hierarchy (the mapped source directories, keyed in mapped_dirs.yaml) maps onto THIS computer's local absolute paths, plus where this computer keeps the pulled files and whether it wants each mapped directory at all. The graft is what lets computer 2 pull the right files down to the RIGHT local locations from the SDL's YAML alone. Distinguishes the shared, travelling device registry (this spec, in the SDL) from the machine-local peers.yaml and config.yaml→computer identity (storage_local.mdx, which never travels). Hub siblings: syncable_data_location.mdx (the SDL that holds devices/), storage_local.mdx (this computer's identity + peers), sync_list.mdx (the trust model + pinned_by), storage_settings.mdx (per-computer settings), storage_company.mdx (multi-user companies whose members are devices).
+---
+
+# LargeFileBridge — Devices
+
+A storage is carried by **computers** — a laptop, a home desktop, a studio machine, a server, maybe a
+family member's machine. LFB calls each one a **device**. This spec defines how a device **identifies
+itself**, how the set of devices **travels with the storage**, each device's **sync schedule**, and —
+the piece everything else depends on — the **graft**: how a storage's shared, machine-independent
+directory hierarchy lands on *this* computer's local paths.
+
+The graft is what makes the [seven-step walkthrough](./syncable_data_location.mdx#5-end-to-end-walkthrough--four-computers-one-company-storage)
+work: computer 2 adds the storage's Git repo, reads the YAML, and pulls the right files down to the
+**right local locations** — because each device declared, in the Syncable Data Location, exactly where
+those locations are on it.
+
+Read the shared model first; this spec does not restate it:
+
+* [syncable_data_location.mdx](./syncable_data_location.mdx) — the **SDL** that holds
+  `.lfbridge/devices/` and `.lfbridge/mapped_dirs.yaml`. Devices are one part of the SDL's inventory.
+* [storage_local.mdx](./storage_local.mdx) — this machine's **local** identity (`config.yaml →
+  computer`, §3) and its **`peers.yaml`** (§11). Those are **machine-local and never travel**. The
+  device registry here is the opposite: it is **in the SDL and travels**. §4 reconciles the two.
+* [sync_list.mdx §5](./sync_list.mdx#5-trust--reconciliation-the-load-bearing-rule) — the trust model.
+  A device file is **self-owned**: a computer writes only its own and treats the others as claims.
+
+---
+
+## 1. Device identity — a minted id + a nice name (LOCKED)
+
+Every computer that carries a storage has a **device identity** with two parts:
+
+* **A stable unique device id.** On first use a computer **mints a UUID** — a real id, **distinct from
+  the IPFS PeerID** (the PeerID can change if the IPFS keypair is reset; the device id must not). It is
+  the durable key by which this computer is known across every storage and in every `pinned_by` /
+  `devices/` entry.
+  * **The user can change it in settings.** The id is editable from the web app for the rare case of a
+    collision, a re-imaged machine, or a deliberate rename of identity. Changing it rewrites this
+    device's own `devices/<device>.yaml` (and migrates its `pinned_by` claims) — it never edits another
+    device's file.
+* **A nice human name.** The user names the current computer from the web app — `bryan-macbook`,
+  `studio-tower`, `family-imac`. This is the label shown everywhere (the Storages/Peers UI, `pinned_by`,
+  the `devices/` filename). It defaults to the OS hostname until the user sets a friendly one.
+
+The id lives in this computer's machine-local `config.yaml → computer`
+([storage_local.mdx §3](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical))
+as the **source of truth for who this machine is**, and is **copied into** each storage's
+`devices/<device>.yaml` (§2) so the travelling registry can attribute files to it. The one change this
+spec asks of storage_local: `config.yaml → computer` must carry a **minted `id` (UUID) separate from
+`ipfs_peer_id`**, and the web app must let the user edit the **id** and the **label**.
+
+Minting the stable device UUID on first boot (separate from the IPFS PeerID) and letting the user rename the id + label from the web app is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()` / `updateAppConfig()` (mint `computer.id` when absent), exposed through the global Settings routes.
+
+---
+
+## 2. The device registry lives in the SDL and travels (LOCKED)
+
+Each device records **itself** as one file in the storage's Syncable Data Location:
+
+```
+<SDL>/.lfbridge/devices/
+├── bryan-macbook.yaml     ← written & owned by the macbook
+├── studio-tower.yaml      ← written & owned by the studio tower
+└── family-imac.yaml       ← written & owned by the family imac
+```
+
+Because the registry lives **in the SDL**, it **travels with the storage** — so every computer that
+pulls the storage sees the full set of devices, their schedules, and their grafts. This is how a
+machine knows which *other* computers carry a file (redundancy) and how the UI can show "this storage
+is on your 4 computers."
+
+The filename is the device's **nice name**, sanitized the same way repo/user folder keys are
+([storage_local.mdx §6.1](./storage_local.mdx#61-keying--folder-name)). The authoritative identity
+inside the file is the **`id`**, not the filename (a rename moves the file but keeps the id).
+
+### 2.1 A device file is self-owned (trust)
+
+A computer **writes only its own** `devices/<device>.yaml` and treats every other device file as a
+**claim**, exactly like a `pinned_by` claim in
+[sync_list.mdx §5.1](./sync_list.mdx#51-local-claims-are-verified-not-believed):
+
+* This computer's graft, schedule, and pin claims are **authoritative** for itself and written by it.
+* Another device's file tells us **its** graft and **its** claims — useful for showing where files are
+  and for fetching from that peer, but never something this computer edits or blindly trusts as local
+  truth.
+* A conflict (two files claiming the same id) resolves by the same revision/provenance rules as any
+  other SDL content (sync_list §5.3); the id is the key, the filename is cosmetic.
+
+---
+
+## 3. What a device file carries
+
+```yaml
+# <SDL>/.lfbridge/devices/bryan-macbook.yaml   (written & owned by this device)
+schema_version: 1
+updated_at: 2026-07-05T10:31:00Z
+
+device:
+  id: 4f9c-…                       # the minted UUID (§1) — the durable key; matches config.yaml→computer.id
+  name: bryan-macbook              # the nice name the user set from the web app
+  owner: bryan@act3ai.com          # the allow-listed user this computer belongs to
+  ipfs_peer_id: 12D3KooW…          # for peer dialing (may change; the id above does not)
+
+# ── This device's sync schedule FOR THIS STORAGE (the times/cadence it syncs) ──
+schedule:
+  enabled: true                    # does this device sync this storage at all
+  interval_minutes: 15             # cadence (default matches the 15-min background pass)
+  windows:                         # optional specific times/windows this device prefers to sync
+    - { days: [mon,tue,wed,thu,fri], from: "02:00", to: "04:00" }   # e.g. overnight on a metered link
+  # empty windows = sync on the normal cadence with no time restriction
+
+# ── The GRAFT: how the storage's shared hierarchy maps onto THIS computer's local paths (§4) ──
+graft:
+  # one entry per mapped source directory keyed in mapped_dirs.yaml (syncable_data_location.mdx §3)
+  film_renders:
+    local_path: ~/Movies/act3/renders    # where THIS computer keeps this mapped directory
+    wanted: true                         # does this device want this hierarchy at all
+  photo_library:
+    local_path: /Volumes/Media/act3/pics # a different absolute path than other computers — the point of the graft
+    wanted: true
+  model_weights:
+    local_path: null                     # not grafted here → known-but-absent on this device
+    wanted: false                        # this laptop deliberately does not pull the weights
+```
+
+* **`schedule`** is per-device **and** per-storage: the studio tower might sync a company storage every
+  15 minutes; a metered laptop might restrict it to an overnight window. It layers on top of the global
+  15-minute background pass ([storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract),
+  [sync_process.mdx](./sync_process.mdx)) — the pass still runs, but a storage whose device `schedule`
+  says "not now / not wanted" is visited and reconciled without byte work, honoring the same opt-in
+  discipline as `synced`.
+* **`graft`** has one entry per mapped directory (keyed by `mapped_dirs.yaml`'s `key`, §4).
+
+Writing this device's own file (id, name, schedule, graft) into every storage's `.lfbridge/devices/` and reading the full registry, is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice(storageRoot)` / `readDevices(storageRoot)` (new module; self-owned write, whole-registry read).
+
+---
+
+## 4. The graft — machine-independent hierarchy → local paths (LOCKED)
+
+The graft is the answer to *"the same company storage's directory hierarchy grafts differently into
+each computer's local directory hierarchy."* The storage describes its files with **machine-independent**
+identifiers — a mapped-directory **key** plus a **relative path** under it
+([syncable_data_location.mdx §3](./syncable_data_location.mdx#3-mapped-source-directories--one-storage-many-hierarchies-locked)).
+Each device's graft turns those into **this computer's absolute paths**.
+
+* **Resolution.** For a tracked file `film_renders/shot_012/final_4k.mp4`, this device resolves it to
+  `<graft.film_renders.local_path>/shot_012/final_4k.mp4`. On the macbook that is
+  `~/Movies/act3/renders/shot_012/final_4k.mp4`; on the studio tower it might be
+  `/Volumes/Media/act3/renders/shot_012/final_4k.mp4`. **Same logical file, different local home.**
+* **`wanted: false` / `local_path: null`.** A device can decline a whole mapped hierarchy (a laptop
+  that does not want 200 GB of model weights). Those files stay **known-but-absent** on this device —
+  listed, understood, never fetched here — until the user grafts them.
+* **Never trust the writer's path.** `mapped_dirs.yaml.canonical` is advisory; the graft is the only
+  thing that resolves a file locally, mirroring
+  [sync_list.mdx §4](./sync_list.mdx#4-what-travels-vs-what-stays-local)'s rule that the absolute
+  `identity.path` is the writer's and the reader re-resolves locally.
+* **Pull to the right place.** When the sync pass fetches a marked CID, it writes the bytes to the
+  **grafted** local path (creating parent directories), so computer 2 lands each file where its graft
+  says — the core of walkthrough step 7.
+
+Resolving a tracked file's machine-independent (mapped-dir key + relpath) identity to this device's absolute local path via the graft, and fetching a marked CID to that grafted path, is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `resolveGraftedPath(storageRoot, mappedKey, relPath)`, called by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `runUnitSync()` when placing fetched bytes.
+
+---
+
+## 5. Device registry vs. `peers.yaml` — two lists, one shared, one local (LOCKED)
+
+These are easy to confuse; keep them distinct:
+
+| | **Device registry** (this spec) | **`peers.yaml`** ([storage_local.mdx §11](./storage_local.mdx#11-peersyaml--the-users-other-computers)) |
+| --- | --- | --- |
+| Where | `<SDL>/.lfbridge/devices/<device>.yaml` | `~/T/_large_files_bridge/peers.yaml` |
+| Travels? | **Yes** — in the SDL, per storage | **No** — machine-local |
+| Scope | per storage (a device file per storage) | the whole install (the user's other computers) |
+| Holds | id, name, owner, **schedule**, **graft** | id, label, PeerID, owner, last_seen |
+| Purpose | *how this storage lands on each computer* | *which PeerIDs to dial for any fetch* |
+
+They cross-reference by **device id**: a `devices/` entry's `id` matches a `peers.yaml` entry's `id`, so
+the app can dial the peer (from `peers.yaml`) to fetch a file the device registry says it holds.
+`config.yaml → computer` (storage_local §3) is the **self** row that seeds both.
+
+---
+
+## 6. Acceptance criteria
+
+1. Every computer has a **minted, stable device id (UUID), distinct from its IPFS PeerID**, plus a
+   **user-set nice name**; both are **editable from the web app** (§1). The id lives in
+   `config.yaml → computer` and is copied into each storage's device file.
+2. Each device records **itself** as `<SDL>/.lfbridge/devices/<device>.yaml`; the registry **travels
+   with the storage**, so every computer sees the full set of devices, and a device file is
+   **self-owned** — a computer writes only its own and treats others as claims (§2).
+3. A device file carries the **id + name + owner**, this device's **sync schedule** for this storage
+   (cadence + optional time windows), and the **graft** (§3).
+4. The **graft** maps each mapped source directory (keyed in `mapped_dirs.yaml`) to **this computer's
+   absolute local path**, with `wanted:false` / `local_path:null` meaning known-but-absent here; the
+   sync pass **fetches marked CIDs to the grafted local path**, never to the writer's path (§4).
+5. The travelling **device registry** and the machine-local **`peers.yaml`** are kept distinct and
+   cross-reference by **device id** (§5).
+
+<!--
+  The DEVICE model. §1 identity: a MINTED stable UUID (distinct from the IPFS PeerID) + a user-set nice
+  name, both editable from the web app; source of truth in config.yaml→computer (storage_local §3),
+  copied into each storage's device file. §2 the registry lives IN the SDL (.lfbridge/devices/<name>.yaml)
+  so it TRAVELS per storage; each file is SELF-OWNED (write only your own; others are claims — same trust
+  as sync_list §5). §3 a device file carries id/name/owner + this device's SCHEDULE (cadence + optional
+  time windows) for this storage + the GRAFT. §4 the GRAFT (LOCKED) maps machine-independent identity
+  (mapped-dir key from syncable_data_location §3 + relpath) onto THIS computer's absolute paths;
+  wanted:false/local_path:null = known-but-absent; the sync pass fetches CIDs to the grafted path (never
+  the writer's canonical path, per sync_list §4). §5 device registry (travels, per storage, has
+  schedule+graft) vs peers.yaml (machine-local, whole install, PeerIDs to dial) — cross-ref by device id.
+  New code: storage/devices.service.ts writeSelfDevice/readDevices/resolveGraftedPath, called by
+  sync.service runUnitSync; config.service mints computer.id. Keep in sync with syncable_data_location.mdx
+  (mapped_dirs keys the graft), storage_local.mdx (computer.id + peers.yaml), storage_company.mdx.
+-->

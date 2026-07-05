@@ -697,6 +697,109 @@ export interface StorageAnalyzeResult {
   outputs: string[];       // which analysis YAMLs were written/queued
 }
 
+// ── Mapped source directories (syncable_data_location.mdx §3) ────────────────
+// The SHARED list of source directory hierarchies a company/personal storage covers. `canonical` is the
+// writer's path — advisory only; a reader re-roots each key via its own device graft (devices.mdx §4).
+export interface MappedDir {
+  key: string; // stable id, referenced by every device's graft
+  label: string; // human name shown in the UI
+  canonical: string | null; // the WRITER's path — advisory only
+  recursive: boolean; // the whole subtree is in scope (always true today)
+}
+export interface MappedDirList {
+  schemaVersion: number;
+  mapped: MappedDir[];
+}
+
+// ── Devices — the per-computer registry + the graft (devices.mdx) ────────────
+export interface DeviceScheduleWindow {
+  days: string[];
+  from: string;
+  to: string;
+}
+export interface DeviceSchedule {
+  enabled: boolean;
+  intervalMinutes: number;
+  windows: DeviceScheduleWindow[];
+}
+// One graft entry: how THIS device re-roots one mapped-dir key onto a local path (devices.mdx §4).
+export interface DeviceGraftEntry {
+  localPath: string | null; // where THIS computer keeps this mapped dir (null = known-but-absent here)
+  wanted: boolean; // does this device want this hierarchy at all
+}
+// One device file `<SDL>/.lfbridge/devices/<device>.yaml` (devices.mdx §3) — self-owned per device.
+export interface DeviceRecord {
+  schemaVersion: number;
+  updatedAt: string | null;
+  device: {
+    id: string; // the minted UUID — matches config.yaml→computer.id
+    name: string; // the nice name the user set
+    owner: string | null; // the allow-listed user this computer belongs to
+    ipfsPeerId: string | null; // for peer dialing (may change; id above does not)
+  };
+  schedule: DeviceSchedule;
+  graft: Record<string, DeviceGraftEntry>; // keyed by mapped_dirs.yaml key
+}
+
+// ── Bookmarks (syncable_data_location.mdx §4.4) — travel with the storage ─────
+export interface BookmarksResult {
+  storageId: string;
+  bookmarked: string[]; // relpaths, relative to the storage root / mapped dir
+}
+
+// ── Compression record (syncable_data_location.mdx §4.3) — travels in the SDL ─
+export interface CompressionRecord {
+  source: string; // the CURRENT (compressed) path, relative to the storage root
+  original: { name: string; extension: string; size: number };
+  compressed: { codec: string | null; size: number; ratio: number; at: string };
+}
+
+// ── Per-storage settings (storage_settings.mdx) ─────────────────────────────
+// One backing location (dedicated repo / Google Drive / Dropbox) as the settings page sees it: the
+// machine-local enable flag + resolved local path, plus the proposed default directory LFB offers and
+// whether the connected drive is even present on this computer (storage_settings.mdx §4).
+export interface StorageBackingLocation {
+  enabled: boolean;        // machine-local ON/OFF
+  path: string | null;     // this computer's chosen path (null = use proposedDefault)
+  proposedDefault: string; // the good default directory LFB proposes (never forced — §4.4)
+  available: boolean;      // is this backing target reachable here (Drive/Dropbox linked; repo always true)
+  readOnly?: boolean;      // dedicated repo is pre-satisfied + read-only for a repo storage (§4.1)
+}
+
+// GET /api/storages/:id/settings — the machine-local per-storage config joined with proposed defaults
+// (storage_settings.mdx §5). Identity (name/type/root) is read-only; the rest is configured here.
+export interface StorageSettings {
+  storageId: string;
+  name: string;            // read-only identity (written by discovery — §5)
+  type: StorageType;
+  root: string;
+  lfbridge: {
+    enabled: boolean;      // keep .lfbridge/ on THIS computer (default ON — §3)
+    path: string | null;   // null = default <root>/.lfbridge/ ; else an absolute override
+    defaultPath: string;   // <root>/.lfbridge/ — shown as the placeholder default
+  };
+  backing: {
+    dedicatedRepo: StorageBackingLocation;
+    googleDrive: StorageBackingLocation;
+    dropbox: StorageBackingLocation;
+  };
+}
+
+// PATCH /api/storages/:id/settings — partial update of the machine-local config (§5). Drive/Dropbox
+// paths ALSO write the canonical relative path into storage.yaml clones (handled server-side).
+export interface StorageBackingPatch {
+  enabled?: boolean;
+  path?: string | null;
+}
+export interface StorageSettingsPatch {
+  lfbridge?: { enabled?: boolean; path?: string | null };
+  backing?: {
+    dedicatedRepo?: StorageBackingPatch;
+    googleDrive?: StorageBackingPatch;
+    dropbox?: StorageBackingPatch;
+  };
+}
+
 // ── Generic API envelope for mutations ──────────────────────────────────────
 export interface Ok<T = unknown> {
   ok: true;

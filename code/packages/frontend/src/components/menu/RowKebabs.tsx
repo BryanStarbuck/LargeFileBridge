@@ -21,7 +21,8 @@ import {
   Ban,
   Captions,
 } from "lucide-react";
-import type { RepoRow, PeerRow, IpfsPinRow } from "@lfb/shared";
+import { HardDrive } from "lucide-react";
+import type { RepoRow, PeerRow, IpfsPinRow, StorageRow } from "@lfb/shared";
 import { api } from "@/api/client";
 import { ActionsKebab, type Action } from "./EntityMenu";
 import { runTranscribeTree } from "@/lib/transcribe";
@@ -173,6 +174,44 @@ export function RepoKebab({ repo }: { repo: RepoRow }) {
     },
   ];
 
+  return <ActionsKebab actions={actions} />;
+}
+
+// ── Storage row / storage detail page (storage_settings.mdx §1) ────────────────
+// The storage entity catalog. Its Config group carries "Storage settings…" — the same destination as
+// the gear on the storage detail header (route /storages/$storageId/settings).
+export function StorageKebab({ storage }: { storage: StorageRow }) {
+  const navigate = useNavigate();
+  const actions: Action[] = [
+    {
+      id: "open",
+      label: "Open storage",
+      group: "Open",
+      icon: <HardDrive className="h-4 w-4" />,
+      onSelect: () => navigate({ to: "/storages/$storageId", params: { storageId: storage.id } }),
+    },
+    {
+      id: "browse",
+      label: "Open in File System",
+      group: "Open",
+      icon: <FolderOpen className="h-4 w-4" />,
+      onSelect: () => navigate({ to: "/fs", search: { path: storage.root } }),
+    },
+    {
+      id: "settings",
+      label: "Storage settings…",
+      group: "Config",
+      icon: <Settings className="h-4 w-4" />,
+      onSelect: () => navigate({ to: "/storages/$storageId/settings", params: { storageId: storage.id } }),
+    },
+    {
+      id: "copy-path",
+      label: "Copy path",
+      group: "Copy",
+      icon: <Copy className="h-4 w-4" />,
+      onSelect: () => copyToClipboard(storage.root, "Path"),
+    },
+  ];
   return <ActionsKebab actions={actions} />;
 }
 

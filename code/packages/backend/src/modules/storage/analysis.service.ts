@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { mediaKindForName } from "@lfb/shared";
+import { mediaKindForName, type CompressionRecord } from "@lfb/shared";
 import { log } from "../../shared/logging.js";
 
 const LFBRIDGE_DIR = ".lfbridge";
@@ -58,4 +58,30 @@ export function analyzeFile(root: string, rel: string): string[] {
 
   log.info("storage", `analysis queued (${outputs.join(", ")}) for ${rel} in ${root}`);
   return outputs;
+}
+
+/**
+ * Write the travelling compression record for a file (syncable_data_location.mdx §4.3) into the SDL at
+ * `<root>/.lfbridge/analysis/<relpath>/compression.yaml`. Captures what the file WAS before compression
+ * (original name/extension + size) and the after (codec/size/ratio/at) so every computer that carries the
+ * storage knows the file was compressed, from what, and by how much — without re-deriving anything.
+ */
+export function writeCompressionRecord(root: string, rel: string, record: CompressionRecord): void {
+  const outDir = path.join(root, LFBRIDGE_DIR, ANALYSIS_DIR, rel);
+  fs.mkdirSync(outDir, { recursive: true });
+  writeYaml(path.join(outDir, "compression.yaml"), {
+    source: record.source,
+    original: {
+      name: record.original.name,
+      extension: record.original.extension,
+      size: record.original.size,
+    },
+    compressed: {
+      codec: record.compressed.codec,
+      size: record.compressed.size,
+      ratio: record.compressed.ratio,
+      at: record.compressed.at,
+    },
+  });
+  log.info("storage", `compression record written for ${rel} in ${root}`);
 }

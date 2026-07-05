@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { spawnSync } from "node:child_process";
 import YAML from "yaml";
 import type {
   StorageDescriptor,
@@ -14,13 +15,20 @@ import type {
   StorageDetail,
   StorageType,
   StorageClones,
+  BookmarksResult,
 } from "@lfb/shared";
+import { BookmarksSchema } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import { listRepoFolders } from "../store-model/units.service.js";
 import { expandHome } from "../fs/badges.js";
 import { resolveStateDir } from "../../config/state-dir.js";
+import { readYaml, updateYaml } from "../../shared/store/yaml-store.js";
 import { readStorageIndex, countStorageIndex, indexStorageFiles, LFBRIDGE_DIR } from "./tracking.service.js";
 import { analyzeFile } from "./analysis.service.js";
+// Lazy import cycles with storage-settings.service (ensureBackingLocations) and devices.service
+// (writeSelfDevice) — used only inside functions, never at module-eval time — safe under NodeNext ESM.
+import { readStorageSettings } from "./storage-settings.service.js";
+import { writeSelfDevice } from "./devices.service.js";
 import { log } from "../../shared/logging.js";
 
 const STORAGE_YAML = "storage.yaml";
@@ -125,6 +133,13 @@ export function ensureStorage(root: string, type: StorageType, extras?: Partial<
   if (!safeIsDir(root)) throw new Error(`not a directory: ${root}`);
   fs.mkdirSync(path.join(root, LFBRIDGE_DIR), { recursive: true });
   if (exists(path.join(root, ".git"))) ensureGitignore(root); // keep .lfbridge/ out of commits
+  // Record THIS computer in the storage's travelling device registry (devices.mdx §2). Self-owned write,
+  // best-effort — a device-file failure must never block initializing the storage.
+  try {
+    writeSelfDevice(root);
+  } catch (e) {
+    log.warn("storage", `writeSelfDevice at ${root} failed: ${(e as Error).message}`);
+  }
   const existing = readDescriptor(root);
   if (existing) return existing;
   const base = path.basename(root);
@@ -256,6 +271,16 @@ function findRowById(id: string): StorageRow | null {
   return discoverRows().find((r) => r.id === id) ?? null;
 }
 
+/** Ids of every discovered directory-based storage (excludes repos + local) — the sync pass iterates these. */
+export function listStorageIds(): string[] {
+  return discoverRows().map((r) => r.id);
+}
+
+/** Resolve a storage row by its id (used by the per-storage settings service, storage_settings.mdx §5). */
+export function getStorageRow(id: string): StorageRow | null {
+  return findRowById(id);
+}
+
 export function getStorageDetail(id: string): StorageDetail {
   const storage = findRowById(id);
   if (!storage) throw new Error(`unknown storage: ${id}`);
@@ -286,4 +311,117 @@ export function analyzeStorageFile(id: string, rel: string): { path: string; out
   const storage = findRowById(id);
   if (!storage || storage.type === "local") throw new Error(`cannot analyze in storage: ${id}`);
   return { path: rel, outputs: analyzeFile(storage.root, rel) };
+}
+
+// ── nearest-storage lookup (for callers that only have an absolute file path) ─────────────────────────
+/**
+ * Walk up from an absolute path to the nearest ancestor directory that owns a `.lfbridge/` — that dir is
+ * the storage root the file belongs to (syncable_data_location.mdx §1), or null when the file is under no
+ * storage. Used by the compressor to attach a travelling compression record to the right SDL.
+ */
+export function findStorageRootForPath(absPath: string): string | null {
+  let cur = path.resolve(absPath);
+  try {
+    if (fs.statSync(cur).isFile()) cur = path.dirname(cur);
+  } catch {
+    cur = path.dirname(cur);
+  }
+  for (;;) {
+    if (safeIsDir(path.join(cur, LFBRIDGE_DIR))) return cur;
+    const parent = path.dirname(cur);
+    if (parent === cur) return null;
+    cur = parent;
+  }
+}
+
+// ── bookmarks (syncable_data_location.mdx §4.4) — travel with the storage ─────────────────────────────
+// Starred files are a property of the STORAGE, not the computer, so they live in the SDL
+// (`<root>/.lfbridge/bookmarks.yaml`) and come across in the YAML to every machine that carries it.
+function bookmarksPath(root: string): string {
+  return path.join(root, LFBRIDGE_DIR, "bookmarks.yaml");
+}
+
+/** Read a storage's bookmarked relpaths (defaults-on-absence). */
+export function readBookmarks(storageId: string): BookmarksResult {
+  const row = findRowById(storageId);
+  if (!row || row.type === "local") throw new Error(`no bookmarks for storage: ${storageId}`);
+  const doc = readYaml(bookmarksPath(row.root), BookmarksSchema);
+  return { storageId: row.id, bookmarked: doc.bookmarked };
+}
+
+/** Add or remove one bookmark (idempotent). Returns the fresh list. */
+export async function setBookmark(storageId: string, relPath: string, on: boolean): Promise<BookmarksResult> {
+  const row = findRowById(storageId);
+  if (!row || row.type === "local") throw new Error(`no bookmarks for storage: ${storageId}`);
+  const rel = relPath.trim();
+  if (!rel) throw new Error("path required");
+  const next = await updateYaml(bookmarksPath(row.root), BookmarksSchema, (b) => {
+    const set = new Set(b.bookmarked);
+    if (on) set.add(rel);
+    else set.delete(rel);
+    b.bookmarked = [...set];
+    return b;
+  });
+  return { storageId: row.id, bookmarked: next.bookmarked };
+}
+
+// ── backing locations — materialize enabled mirrors on a sync pass (storage_settings.mdx §6) ──────────
+// For each ENABLED backing location (dedicated repo / Google Drive / Dropbox): create the directory if
+// missing (git init a dedicated repo), ensure its hidden `.lfbridge/` (git-ignored inside a repo), and
+// leave it ready for the mirror update. A DISABLED location is left untouched — never created, never
+// deleted (charter: surface and offer, never act on files unasked). Called per storage from the pass.
+function ensureLfbridgeAt(dir: string): void {
+  try {
+    fs.mkdirSync(path.join(dir, LFBRIDGE_DIR), { recursive: true });
+    if (exists(path.join(dir, ".git"))) ensureGitignore(dir);
+  } catch (e) {
+    log.warn("storage", `ensure .lfbridge at ${dir} failed: ${(e as Error).message}`);
+  }
+}
+
+export function ensureBackingLocations(id: string): void {
+  const storage = findRowById(id);
+  if (!storage || storage.type === "local") return;
+
+  const settings = readStorageSettings(id);
+
+  // The storage's own hidden tracking area at its configured (possibly relocated) location (§3).
+  if (settings.lfbridge.enabled) {
+    const lfDir = settings.lfbridge.path ? expandHome(settings.lfbridge.path) : path.join(storage.root, LFBRIDGE_DIR);
+    try {
+      fs.mkdirSync(lfDir, { recursive: true });
+    } catch (e) {
+      log.warn("storage", `ensure .lfbridge for ${id} at ${lfDir} failed: ${(e as Error).message}`);
+    }
+    if (exists(path.join(storage.root, ".git"))) ensureGitignore(storage.root);
+  }
+
+  // The backing mirrors (§4/§6). Enabled + reachable only.
+  const locations: Array<{ key: string; loc: (typeof settings.backing)[keyof typeof settings.backing]; isRepo: boolean }> = [
+    { key: "dedicated repo", loc: settings.backing.dedicatedRepo, isRepo: true },
+    { key: "Google Drive", loc: settings.backing.googleDrive, isRepo: false },
+    { key: "Dropbox", loc: settings.backing.dropbox, isRepo: false },
+  ];
+  for (const { key, loc, isRepo } of locations) {
+    if (!loc.enabled) continue;
+    if (!loc.available) {
+      log.info("storage", `${id}: ${key} enabled but not reachable on this computer — skipping.`);
+      continue;
+    }
+    const abs = expandHome(loc.path ?? loc.proposedDefault);
+    try {
+      fs.mkdirSync(abs, { recursive: true }); // create-if-missing (§6.1)
+    } catch (e) {
+      log.warn("storage", `${id}: create ${key} dir ${abs} failed: ${(e as Error).message}`);
+      continue;
+    }
+    // A dedicated repo gets `git init`ed if it isn't a working tree yet (§6.1). The repo storage's own
+    // repo is already one, so this is a no-op there.
+    if (isRepo && !exists(path.join(abs, ".git"))) {
+      const r = spawnSync("git", ["init"], { cwd: abs, encoding: "utf8" });
+      if (r.status === 0) log.info("storage", `${id}: git init dedicated repo at ${abs}`);
+      else log.warn("storage", `${id}: git init at ${abs} failed: ${(r.stderr || r.error?.message || "unknown").trim()}`);
+    }
+    ensureLfbridgeAt(abs); // §6.2
+  }
 }

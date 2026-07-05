@@ -30,6 +30,7 @@ import {
   isGitWorkingTree,
 } from "../store-model/units.service.js";
 import { writeCommittedManifest } from "./manifest.service.js";
+import { listStorageIds, ensureBackingLocations } from "../storage/storage.service.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { log } from "../../shared/logging.js";
 
@@ -290,6 +291,25 @@ function syncRepoSafe(folder: string): Promise<void> {
   );
 }
 
+/** Discover storage ids without letting a discovery fault throw the pass. */
+function safeStorageIds(): string[] {
+  try {
+    return listStorageIds();
+  } catch (e) {
+    log.error("sync", `list storages failed: ${(e as Error).message}`);
+    return [];
+  }
+}
+
+/** Ensure one storage's enabled backing locations; contain any per-storage failure. */
+async function ensureBackingSafe(id: string): Promise<void> {
+  try {
+    ensureBackingLocations(id);
+  } catch (e) {
+    log.error("sync", `ensure backing for storage ${id} failed: ${(e as Error).message}`);
+  }
+}
+
 /**
  * The full sync pass over every known unit — every repo PLUS the computer unit — with bounded
  * concurrency (sync_process.mdx §2/§4). `opts.priorityDone` names a unit a caller already synced first
@@ -310,6 +330,10 @@ export async function syncAll(opts: { priorityDone?: string } = {}): Promise<voi
     await syncComputerUnit().catch((e) =>
       log.error("sync", `sync computer unit failed: ${(e as Error).message}`),
     );
+    // Materialize each storage's ENABLED backing locations (storage_settings.mdx §6) — create-if-missing
+    // + ensure .lfbridge/. Bounded by the same limiter as units; per-storage failure is contained so it
+    // never throws the pass.
+    await runPool(safeStorageIds(), SYNC_CONCURRENCY, ensureBackingSafe);
   } finally {
     passInFlight = false;
   }

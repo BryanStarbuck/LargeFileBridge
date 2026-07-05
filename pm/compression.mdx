@@ -212,11 +212,18 @@ brew tools transcode to a **new file**, so the flow per file is:
 4. Move the **original** to the **LFBridge trash** (recoverable), then move the **temp** into the final
    path. When the format changes (PNG → JPEG), the final path takes the new extension; when it stays the
    same format, the path is unchanged.
-5. Record the result against the file's tracking entry: the **compressed** and **uncompressed** hashes +
-   sizes ([charter per-file tracking](../CLAUDE.md); [storages.mdx §4.1](./storages.mdx)).
+5. Record the result in **two** places:
+   * the file's tracking entry — the **compressed** and **uncompressed** hashes + sizes
+     ([charter per-file tracking](../CLAUDE.md); [storages.mdx §4.1](./storages.mdx));
+   * a **compression record** in the storage's Syncable Data Location —
+     `.lfbridge/analysis/<relpath>/compression.yaml` — capturing the **original filename + extension**
+     and the **size before / after**
+     ([syncable_data_location.mdx §4.3](./syncable_data_location.mdx#43-compression-records--original-identity--beforeafter)).
+     Because this record lives in the SDL, it **travels**: every other computer that carries the storage
+     learns the file was compressed, from what, and by how much, and never re-compresses it.
 
 Running the tool to a temp file, verifying, and doing the recoverable replace is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile` (single) / `compressBatch` (many).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile` (single) / `compressBatch` (many); the travelling compression record is written via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/analysis.service.ts` — `writeCompressionRecord()` (new).
 
 ---
 
@@ -248,7 +255,9 @@ Surfacing the codec + compressed-state and the Compress action per file is handl
    specific codecs **per media type** (images / video / audio) in Settings, with **social-media-safe
    defaults** (deny `jpeg2000` / `av1`). **Audio is not compressed** (disabled) for now.
 6. Tools run via a **temp file**; the original is moved to the **LFBridge trash** (recoverable); tracking
-   records the compressed + uncompressed hashes/sizes.
+   records the compressed + uncompressed hashes/sizes, **and** a travelling **compression record**
+   (`.lfbridge/analysis/<relpath>/compression.yaml`) captures the original name/extension + size
+   before/after so other computers never re-compress ([syncable_data_location.mdx §4.3](./syncable_data_location.mdx)).
 7. The **View-one-file** page shows the file's **codec** and **compressed/uncompressed** state.
 
 <!--

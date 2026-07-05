@@ -37,6 +37,8 @@ import type {
   StorageDetail,
   StorageIndexResult,
   StorageAnalyzeResult,
+  StorageSettings,
+  StorageSettingsPatch,
   CompressTools,
   CompressionSettings,
   CompressCheck,
@@ -184,6 +186,11 @@ export const api = {
   indexStorage: (id: string) => unwrap<StorageIndexResult>(http.post(`/storages/${id}/index`)),
   analyzeStorageFile: (id: string, path: string) =>
     unwrap<StorageAnalyzeResult>(http.post(`/storages/${id}/analyze`, { path })),
+  // Per-storage settings (storage_settings.mdx §5): keep .lfbridge/ + where, and the three backing
+  // locations (dedicated repo / Google Drive / Dropbox) each ON/OFF with its own path.
+  storageSettings: (id: string) => unwrap<StorageSettings>(http.get(`/storages/${id}/settings`)),
+  patchStorageSettings: (id: string, patch: StorageSettingsPatch) =>
+    unwrap<StorageSettings>(http.patch(`/storages/${id}/settings`, patch)),
 
   // Media viewer (media_viewer.mdx §2). grant → a short-lived same-origin URL the <img>/<video>
   // element loads (Range-capable); probe → best-effort container/codec/dimensions.

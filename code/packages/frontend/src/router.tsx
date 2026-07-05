@@ -45,6 +45,12 @@ const storagesRoute = createRoute({
   path: "/storages",
   component: lazyRouteComponent(() => import("./pages/storages/StoragesPage.js"), "StoragesPage"),
 });
+// Per-storage settings (storage_settings.mdx): keep .lfbridge/ + where, and the backing locations.
+const storageSettingsRoute = createRoute({
+  getParentRoute: () => appLayout,
+  path: "/storages/$storageId/settings",
+  component: lazyRouteComponent(() => import("./pages/storages/StorageSettingsPage.js"), "StorageSettingsPage"),
+});
 const storageDetailRoute = createRoute({
   getParentRoute: () => appLayout,
   path: "/storages/$storageId",
@@ -136,6 +142,7 @@ const routeTree = rootRoute.addChildren([
     oneRepoRoute,
     peersRoute,
     storagesRoute,
+    storageSettingsRoute,
     storageDetailRoute,
     ipfsRoute,
     ipfsPinsRoute,

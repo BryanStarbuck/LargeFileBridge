@@ -20,6 +20,10 @@ export const computerUnitDir = () => path.join(root(), "sync", "computer");
 export const repoUnitDir = (folder: string) => path.join(root(), "sync", "r", folder);
 export const reposRoot = () => path.join(root(), "sync", "r");
 
+// Per-storage machine-local settings unit (storage_settings.mdx §5): sync/s/<storage_id>/config.yaml.
+export const storageUnitDir = (storageId: string) => path.join(root(), "sync", "s", storageId);
+export const storagesRoot = () => path.join(root(), "sync", "s");
+
 export const unitConfigPath = (dir: string) => path.join(dir, "config.yaml");
 export const unitManifestPath = (dir: string) => path.join(dir, "manifest.yaml");
 export const unitStatusPath = (dir: string) => path.join(dir, "status.yaml");

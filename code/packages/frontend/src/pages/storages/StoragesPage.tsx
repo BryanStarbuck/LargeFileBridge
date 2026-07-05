@@ -11,6 +11,7 @@ import { api } from "@/api/client";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { DataTable } from "@/components/table/DataTable";
 import type { LfbColumn } from "@/components/table/types";
+import { StorageKebab } from "@/components/menu/RowKebabs";
 import { clientLog } from "@/lib/clientLog";
 
 export function StoragesPage() {
@@ -53,12 +54,13 @@ export function StoragesPage() {
     {
       id: "action", header: "", kind: "text", sortable: false, filterable: false, accessor: () => "",
       cell: (s) => (
-        <span onClick={(e) => e.stopPropagation()}>
+        <span className="flex items-center justify-end gap-2" onClick={(e) => e.stopPropagation()}>
           {s.initialized ? (
             <button className="text-sm text-[var(--lfb-primary)] hover:underline" onClick={() => navigate({ to: "/storages/$storageId", params: { storageId: s.id } })}>Open</button>
           ) : (
             <button className="rounded-md border border-[var(--lfb-border)] px-2 py-1 text-xs hover:bg-slate-100" disabled={init.isPending} onClick={() => init.mutate(s.id)}>Initialize</button>
           )}
+          <StorageKebab storage={s} />
         </span>
       ),
     },

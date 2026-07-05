@@ -3,7 +3,7 @@
 // files, and queue media Analysis (transcript / description / visuals-by-time) for a media file.
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
-import { ChevronLeft, RefreshCw, Sparkles, Captions } from "lucide-react";
+import { ChevronLeft, RefreshCw, Sparkles, Captions, Settings } from "lucide-react";
 import { toast } from "sonner";
 import type { StorageFileRow } from "@lfb/shared";
 import { formatBytes, mediaKindForName } from "@lfb/shared";
@@ -88,6 +88,17 @@ export function StorageDetailPage() {
             >
               <RefreshCw className={`h-4 w-4 ${index.isPending ? "animate-spin" : ""}`} /> {index.isPending ? "Indexing…" : "Index files"}
             </button>
+            {/* Per-storage settings gear (storage_settings.mdx §1) — keep .lfbridge/ + backing locations. */}
+            {s && (
+              <Link
+                to="/storages/$storageId/settings"
+                params={{ storageId: s.id }}
+                title="Storage settings"
+                className="flex items-center rounded-md border border-[var(--lfb-border)] p-1.5 text-black/60 hover:bg-slate-100"
+              >
+                <Settings className="h-4 w-4" />
+              </Link>
+            )}
           </div>
         }
       />

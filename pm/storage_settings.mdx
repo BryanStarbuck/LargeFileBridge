@@ -171,6 +171,39 @@ Resolving the effective backing locations for a storage (default directory propo
 
 ---
 
+## 4a. Mapped source directories — the directories that belong to this storage
+
+For a **company** or **personal** storage, this page also carries the **list of source directories** that
+belong to the storage. This is the control the charter's company use case describes: *"in the settings
+for that company storage they can have a list of brief directories … everything recursive is part of that
+company storage."* It is defined in full in
+[syncable_data_location.mdx §3](./syncable_data_location.mdx#3-mapped-source-directories--one-storage-many-hierarchies-locked)
+and [storage_company.mdx §1.1](./storage_company.mdx#11-a-company-maps-a-list-of-source-directories-locked);
+this page is where the user **edits** it.
+
+* **A list, add/remove rows.** The user adds each directory hierarchy that belongs to this storage (a
+  company with seven hierarchies adds seven). Each row is a mapped directory; **everything recursive under
+  it is in scope**. A **[ + Add directory ]** button opens a directory picker; each row has a remove
+  affordance.
+* **Shared list vs. per-computer path (LOCKED, mirrors §2).** The **logical** list of mapped directories
+  is **shared** — it travels in the SDL's `.lfbridge/mapped_dirs.yaml` so every computer agrees on the
+  set (each row has a stable **key** + label). The **absolute local path** of each mapped directory on
+  **this** computer is the **graft**, stored per-device in `.lfbridge/devices/<device>.yaml`
+  ([devices.mdx §4](./devices.mdx#4-the-graft--machine-independent-hierarchy--local-paths-locked)). So on
+  this page the path field for each row edits **this computer's graft**; adding/removing a row edits the
+  **shared** list.
+* **Repo storages have exactly one, implicit mapped directory** — the repo working tree — so this section
+  is shown read-only (or omitted) for a `repo` storage; the mapped-directory model is the generalization
+  of the repo case to a list.
+* Editing the list is what tells the **scanner** which subtrees to walk for this storage's big files
+  ([scan.mdx](./scan.mdx)); nothing is moved — LFB tracks files **in place** and pins the opted-in ones
+  over IPFS.
+
+Reading/writing the shared mapped-directory list (add/remove rows → `.lfbridge/mapped_dirs.yaml`) and this computer's per-row graft path (→ `.lfbridge/devices/<device>.yaml`) is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getMappedDirs()` / `setMappedDirs()`, with the per-device graft written via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`.
+
+---
+
 ## 5. Persistence — the machine-local per-storage config
 
 Everything on this page (except the canonical `clones` paths, which go to `storage.yaml`) writes to a
@@ -305,6 +338,11 @@ The page is a single scrollable settings form (no table beneath it, so it does n
    deleted). Nothing is created merely by saving the form.
 6. Storage **identity** (`storage:` id/name/type/root) is written by discovery and shown **read-only**;
    the user configures behavior, not identity.
+7. For a **company/personal** storage the page edits the **list of mapped source directories** (§4a):
+   add/remove rows edit the **shared** `.lfbridge/mapped_dirs.yaml`; each row's path field edits **this
+   computer's graft** (`.lfbridge/devices/<device>.yaml`). Everything recursive under a mapped directory
+   is in scope; files are tracked **in place** (never relocated). A **repo** storage's single mapped
+   directory (its working tree) is shown read-only.
 
 <!--
   Per-STORAGE settings page (the storage counterpart of repo_settings.mdx). Opened from ONE storage:
@@ -323,5 +361,4 @@ The page is a single scrollable settings form (no table beneath it, so it does n
   google_drive.mdx / dropbox.mdx (the mirrors), sync_process.mdx §2/§4 (the pass), menus.mdx (add a
   storage entity catalog whose Config group carries "Storage settings…").
 -->
-</content>
-</invoke>
+

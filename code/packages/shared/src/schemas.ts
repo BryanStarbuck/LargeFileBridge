@@ -200,6 +200,43 @@ export const ComputerUnitConfigSchema = z.object({
 });
 export type ComputerUnitConfig = z.infer<typeof ComputerUnitConfigSchema>;
 
+// ── per-storage machine-local config.yaml (storage_settings.mdx §5) ─────────
+// sync/s/<storage_id>/config.yaml — the local "settings file" distinct from the SHARED storage.yaml.
+// Holds THIS computer's choices: keep .lfbridge/ + where, and which backing locations are ON + their
+// absolute local paths. The `storage:` block is an identity mirror written by discovery (read-only).
+const StorageBackingSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    path: z.string().nullable().default(null),
+  })
+  .default({});
+export const StorageUnitConfigSchema = z.object({
+  schema_version: z.number().default(1),
+  updated_at: iso.optional(),
+  storage: z
+    .object({
+      id: z.string().default(""),
+      name: z.string().default(""),
+      type: z.enum(["local", "repo", "personal", "company", "community"]).default("personal"),
+      root: z.string().default(""),
+    })
+    .default({}),
+  lfbridge: z
+    .object({
+      enabled: z.boolean().default(true), // keep .lfbridge/ on this computer (default ON — §3)
+      path: z.string().nullable().default(null), // null = default <root>/.lfbridge/
+    })
+    .default({}),
+  backing: z
+    .object({
+      dedicated_repo: StorageBackingSchema,
+      google_drive: StorageBackingSchema,
+      dropbox: StorageBackingSchema,
+    })
+    .default({}),
+});
+export type StorageUnitConfig = z.infer<typeof StorageUnitConfigSchema>;
+
 // ── manifest.yaml (storage.mdx §9.1) ────────────────────────────────────────
 export const ManifestFileSchema = z.object({
   path: z.string(),
@@ -281,6 +318,88 @@ export const SessionRecordSchema = z.object({
   ended_at: iso.nullable().default(null),
 });
 export type SessionRecord = z.infer<typeof SessionRecordSchema>;
+
+// ── mapped_dirs.yaml (syncable_data_location.mdx §3) ────────────────────────
+// The SHARED list of source directory hierarchies a company/personal storage covers. Travels in the
+// SDL (`<root>/.lfbridge/mapped_dirs.yaml`); every device agrees on the SET (stable `key` + label),
+// while each device's graft (devices.mdx) re-roots each key to its own absolute path. `canonical` is
+// the writer's path — advisory only, never trusted by a reader.
+export const MappedDirEntrySchema = z.object({
+  key: z.string(), // stable id, referenced by every device's graft (devices.mdx)
+  label: z.string().default(""), // human name shown in the UI
+  canonical: z.string().nullable().default(null), // the WRITER's path — advisory only; each device re-roots it
+  recursive: z.boolean().default(true), // the whole subtree is in scope (always true today)
+});
+export const MappedDirsSchema = z.object({
+  schema_version: z.number().default(1),
+  updated_at: iso.optional(),
+  mapped: z.array(MappedDirEntrySchema).default([]),
+});
+export type MappedDirs = z.infer<typeof MappedDirsSchema>;
+
+// ── devices/<device>.yaml (devices.mdx §3) ──────────────────────────────────
+// One SELF-OWNED file per computer in the SDL's `.lfbridge/devices/`. Carries this device's identity,
+// its per-storage sync schedule, and the GRAFT — how the storage's machine-independent mapped-dir keys
+// map onto THIS computer's absolute local paths (devices.mdx §4).
+export const DeviceScheduleWindowSchema = z.object({
+  days: z.array(z.string()).default([]), // e.g. ["mon","tue",…]
+  from: z.string().default(""), // "02:00"
+  to: z.string().default(""), // "04:00"
+});
+export const DeviceGraftEntrySchema = z.object({
+  local_path: z.string().nullable().default(null), // where THIS computer keeps this mapped dir (null = absent here)
+  wanted: z.boolean().default(true), // does this device want this hierarchy at all
+});
+export const DeviceFileSchema = z.object({
+  schema_version: z.number().default(1),
+  updated_at: iso.optional(),
+  device: z
+    .object({
+      id: z.string().default(""), // the minted UUID (config.yaml→computer.id) — the durable key
+      name: z.string().default(""), // the nice name the user set from the web app
+      owner: z.string().nullable().default(null), // the allow-listed user this computer belongs to
+      ipfs_peer_id: z.string().nullable().default(null), // for peer dialing (may change; id above does not)
+    })
+    .default({}),
+  schedule: z
+    .object({
+      enabled: z.boolean().default(true), // does this device sync this storage at all
+      interval_minutes: z.number().default(15), // cadence (default matches the 15-min background pass)
+      windows: z.array(DeviceScheduleWindowSchema).default([]), // optional specific times/windows
+    })
+    .default({}),
+  // one entry per mapped source directory keyed in mapped_dirs.yaml (§4)
+  graft: z.record(DeviceGraftEntrySchema).default({}),
+});
+export type DeviceFile = z.infer<typeof DeviceFileSchema>;
+
+// ── bookmarks.yaml (syncable_data_location.mdx §4.4) ────────────────────────
+// The user's starred files, a property of the STORAGE (not the computer), so it travels in the SDL.
+export const BookmarksSchema = z.object({
+  schema_version: z.number().default(1),
+  updated_at: iso.optional(),
+  bookmarked: z.array(z.string()).default([]), // relpaths (relative to the storage root / mapped dir)
+});
+export type BookmarksDoc = z.infer<typeof BookmarksSchema>;
+
+// ── analysis/<relpath>/compression.yaml (syncable_data_location.mdx §4.3) ────
+// The travelling compression record: what a file WAS before it was compressed + the before/after sizes.
+// Written once on an explicit compress, then reused by every computer that carries the storage.
+export const CompressionRecordSchema = z.object({
+  source: z.string(), // the CURRENT (compressed) path, relative to the storage root / mapped dir
+  original: z.object({
+    name: z.string(), // the ORIGINAL filename + extension before compression
+    extension: z.string(), // the original extension (no leading dot)
+    size: z.number(), // bytes BEFORE
+  }),
+  compressed: z.object({
+    codec: z.string().nullable().default(null), // the codec we compressed to (charter: X-safe, never AV1)
+    size: z.number(), // bytes AFTER
+    ratio: z.number(), // after / before
+    at: iso, // when compressed
+  }),
+});
+export type CompressionRecordDoc = z.infer<typeof CompressionRecordSchema>;
 
 // ── per-user config.yaml (storage.mdx §4) ───────────────────────────────────
 export const UserConfigSchema = z.object({

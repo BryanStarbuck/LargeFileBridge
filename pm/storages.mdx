@@ -27,6 +27,12 @@ The five kinds:
 
 Siblings this builds on and does not repeat:
 
+* [syncable_data_location.mdx](./syncable_data_location.mdx) — names the directory-based storage's root as
+  a **Syncable Data Location** (the small travelling text: `.lfbridge/` + Sync List), and defines the
+  **mapped source directories** model (a company/personal storage maps a *list* of hierarchies; the big
+  files stay in place) and the **derived-artifact reuse** economics (generate once, reuse everywhere).
+* [devices.mdx](./devices.mdx) — the **device registry** (`.lfbridge/devices/`) and the per-computer
+  **graft** that resolves mapped directories to local paths; both live inside the `.lfbridge/` area (§4).
 * [storage_local.mdx](./storage_local.mdx) — the state root, app/user config, auth session, `peers.yaml`,
   logs, and the local index. **Local Storage is settings + this machine's bookkeeping; it is not one of
   the directory-based storages** and has no `storage.yaml`.
@@ -80,8 +86,8 @@ The Storages children are **derived** — Personal from the personal storage's p
 Communities by scanning each directory-based storage's `storage.yaml` `type`, and Repos as the fixed link
 to the Repos tab.
 
-Building the Storages tab and its derived children (Personal · Companies · Repos link · Communities) from the discovered `storage.yaml` files is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `listStorages()` (new module) · rendered by the frontend `Sidebar` from `pm/left_bar.yaml`.
+Building the Storages tab and its derived children (Personal · Companies · Repos link · Communities) from the discovered `storage.yaml` files is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `listStoragesPage()` · rendered by the frontend `Sidebar` from `pm/left_bar.yaml`.
 
 ---
 
@@ -121,8 +127,8 @@ clones:
   Block/Recommended/Full backup budget mode).
 * **`clones`** records where, if anywhere, this same hierarchy is mirrored on Google Drive / Dropbox (§5).
 
-Reading and writing `storage.yaml` (atomic, YAML, per-storage) is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `readStorageDescriptor` / `writeStorageDescriptor`.
+Reading and writing `storage.yaml` (atomic, YAML, per-storage) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `readDescriptor` / `writeDescriptor` (+ `ensureStorage`).
 
 ---
 

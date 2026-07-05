@@ -18,6 +18,8 @@ import { mediaKindForName } from "@lfb/shared";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
 import { expandHome } from "../fs/badges.js";
 import { resolveStateDir, ensureDir } from "../../config/state-dir.js";
+import { findStorageRootForPath } from "../storage/storage.service.js";
+import { writeCompressionRecord } from "../storage/analysis.service.js";
 import { log } from "../../shared/logging.js";
 
 // ── settings (compression.mdx §7) ─────────────────────────────────────────────
@@ -335,6 +337,32 @@ export function compressFile(input: string): CompressResult {
     return fail(abs, `replace failed: ${(e as Error).message}`, "failed", beforeBytes);
   }
   log.info("compress", `${abs} → ${finalPath} (${check.targetCodec}) ${beforeBytes}→${afterBytes} bytes`);
+
+  // Best-effort travelling compression record in the owning storage's SDL (syncable_data_location.mdx §4.3).
+  // Wrapped so it can NEVER fail a compression — the bytes are already replaced by this point.
+  try {
+    const storageRoot = findStorageRootForPath(finalPath);
+    if (storageRoot && beforeBytes != null) {
+      const rel = path.relative(storageRoot, finalPath);
+      writeCompressionRecord(storageRoot, rel, {
+        source: rel,
+        original: {
+          name: path.basename(abs),
+          extension: path.extname(abs).replace(/^\./, ""),
+          size: beforeBytes,
+        },
+        compressed: {
+          codec: plan.targetKey,
+          size: afterBytes,
+          ratio: beforeBytes > 0 ? Number((afterBytes / beforeBytes).toFixed(3)) : 0,
+          at: new Date().toISOString(),
+        },
+      });
+    }
+  } catch (e) {
+    log.warn("compress", `compression record skipped: ${(e as Error).message}`);
+  }
+
   return { path: finalPath, status: "compressed", reason: null, beforeBytes, afterBytes, codec: check.targetCodec };
 }
 

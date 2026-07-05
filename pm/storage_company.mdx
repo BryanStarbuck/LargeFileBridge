@@ -17,6 +17,11 @@ Siblings this builds on and does not repeat:
 
 * [storages.mdx](./storages.mdx) — the umbrella: `storage.yaml` (§3), `.lfbridge/` (§4), clones (§5),
   media analysis (§6).
+* [syncable_data_location.mdx](./syncable_data_location.mdx) — the **SDL** model this spec now rests on:
+  the company root is the storage's **Syncable Data Location** (small text that travels), and the big
+  files live in a **list of mapped source directories** (§1.1), not under the root.
+* [devices.mdx](./devices.mdx) — the per-computer **graft** that resolves each mapped directory to this
+  machine's local path (§1.1).
 * [storage_repo.mdx](./storage_repo.mdx) — the canonical directory-based storage; company storage is the
   same shape with a `company` block and a shared (multi-user) audience.
 * [storage_personal.mdx](./storage_personal.mdx) — the single-user private counterpart.
@@ -25,21 +30,49 @@ Siblings this builds on and does not repeat:
 
 ## 1. Anatomy of a company storage
 
+The company root is the storage's **[Syncable Data Location](./syncable_data_location.mdx)** — the small,
+travelling text that describes the storage. The company's **big files are not stored under it**; they
+stay in their natural directories and are brought into scope by a **list of mapped source directories**
+(§1.1).
+
 ```
-~/BGit/Bryan_git/act3_large_files_bridge/     ← ONE company's storage root ("ACT3")
+~/BGit/Bryan_git/act3_large_files_bridge/     ← ONE company's storage root = its Syncable Data Location ("ACT3")
+├── LargeFilesBridge_SyncList.yaml            ← the portable list (sync_list.mdx), committed to git here
 ├── .lfbridge/
 │   ├── storage.yaml        ← name + type: company + company block (storages.mdx §3)
+│   ├── mapped_dirs.yaml     ← §1.1 the company's mapped source directories (syncable_data_location.mdx §3)
 │   ├── files.yaml          ← per-file fingerprint index (storages.mdx §4.1)
 │   ├── manifest.yaml       ← large-file → IPFS CID + pin state
-│   └── analysis/           ← per-file media analysis (storages.mdx §6)
-└── …the company's shared big files…
+│   ├── devices/            ← the device registry + per-device graft (devices.mdx)
+│   ├── bookmarks.yaml      ← bookmarked files, travels (syncable_data_location.mdx §4.4)
+│   └── analysis/           ← per-file media analysis + compression records (storages.mdx §6, SDL §4)
+└── …NO big files here — they live in the MAPPED directories (§1.1)…
 ```
 
-* **Root:** one directory per company, e.g. `~/BGit/Bryan_git/act3_large_files_bridge/`. A user in three
-  companies has three such roots, each its own storage.
-* Because it is **shared across members**, its bytes sync across **the members' computers** over IPFS — a
-  company storage is the multi-user case (peers here include teammates' machines, within the company's
-  allow-list).
+* **Root:** one **SDL** directory per company, e.g. `~/BGit/Bryan_git/act3_large_files_bridge/` — a small
+  Git repo of metadata. A user in three companies has three such roots, each its own storage.
+* Because it is **shared across members**, both the SDL (over Git/backbones) and the mapped big files
+  (over IPFS) sync across **the members' computers** — a company storage is the multi-user case (peers
+  here include teammates' machines, within the company's allow-list).
+
+### 1.1 A company maps a LIST of source directories (LOCKED)
+
+The defining trait of a company storage: in its settings the user lists **the directories of their hard
+drive that belong to this company**, and **everything recursive under each is in scope**. A company with
+seven directory hierarchies adds all seven; LFB scans each subtree for big files, tracks them, pins the
+opted-in ones over IPFS, and stores their derived artifacts in the SDL — **without relocating a single
+byte**.
+
+* The **logical** list travels in `.lfbridge/mapped_dirs.yaml`
+  ([syncable_data_location.mdx §3](./syncable_data_location.mdx#3-mapped-source-directories--one-storage-many-hierarchies-locked));
+  each mapped directory has a stable **key**.
+* The **absolute local path** of each mapped directory is **per-computer** — resolved by that machine's
+  **graft** ([devices.mdx §4](./devices.mdx#4-the-graft--machine-independent-hierarchy--local-paths-locked)).
+  So the same company storage grafts into `~/Movies/act3` on a laptop and `/Volumes/Media/act3` on a
+  tower, and each computer pulls files to its own location.
+* This is the generalization of a **repo** storage (one hierarchy, path-resolved by Git) to **many**
+  hierarchies path-resolved by the device graft. A user adds/removes mapped directories from the
+  company's [storage settings](./storage_settings.mdx).
 
 ---
 
@@ -88,18 +121,30 @@ children under Storages, alongside Personal, the Repos link, and their communiti
 ## 5. Acceptance criteria
 
 1. There is **one company storage per company**, rooted in its own directory (e.g.
-   `~/BGit/Bryan_git/act3_large_files_bridge/`), tracked via a hidden **`.lfbridge/`** at its root.
+   `~/BGit/Bryan_git/act3_large_files_bridge/`), which is the storage's **Syncable Data Location** —
+   small travelling text, tracked via a hidden **`.lfbridge/`** at its root; **no big files live under
+   the root**.
 2. Its `.lfbridge/storage.yaml` has **`name`** + **`type: company`** and a **`company`** block carrying
    **`company_name`** plus company-scoped child properties (division, allow-list, drive anchor, …).
-3. A user may belong to **more than one** company; each is a separate storage and gets its **own child**
+3. A company maps a **list** of source directory hierarchies (`.lfbridge/mapped_dirs.yaml`), each
+   **recursive**; LFB scans each subtree for big files without relocating them, and each computer
+   resolves a mapped directory to its own absolute path via the device **graft**
+   ([devices.mdx §4](./devices.mdx)).
+4. A user may belong to **more than one** company; each is a separate storage and gets its **own child**
    (labeled by `company_name`) in the Storages tab.
-4. It syncs across the **members'** computers over IPFS (within the company allow-list) and often clones to
-   a **shared** Google Drive / Dropbox; `.lfbridge/` holds fingerprints, manifest, and `analysis/` per
-   [storages.mdx §4](./storages.mdx).
+5. It syncs across the **members'** computers — the SDL over Git/backbones, the mapped big files over
+   IPFS (within the company allow-list) — and often clones to a **shared** Google Drive / Dropbox;
+   `.lfbridge/` holds the mapped-dir list, fingerprints, manifest, devices, bookmarks, and `analysis/`
+   per [storages.mdx §4](./storages.mdx) + [syncable_data_location.mdx §2](./syncable_data_location.mdx).
 
 <!--
-  Company storage = a company's SHARED big files, one per company (e.g. ~/BGit/Bryan_git/act3_large_files_bridge/).
-  storage.yaml: name + type: company + company block (company_name + child props like division/allow_list).
-  A user may be in MANY companies → many company storages → one child each in the Storages tab (labeled by
-  company_name). Multi-user: syncs across members' computers; often clones to a SHARED drive. See storages.mdx.
+  Company storage = a company's SHARED big files, one per company. The root (e.g.
+  ~/BGit/Bryan_git/act3_large_files_bridge/) is the storage's SYNCABLE DATA LOCATION (small travelling
+  text: SyncList + .lfbridge/); NO big files live under it. LOCKED (§1.1): a company maps a LIST of source
+  directory hierarchies (mapped_dirs.yaml, everything recursive), resolved per-computer by the device GRAFT
+  (devices.mdx §4) — the generalization of a repo storage (one hierarchy) to many. storage.yaml: name +
+  type: company + company block (company_name + child props like division/allow_list). A user may be in
+  MANY companies → many company storages → one child each in the Storages tab (labeled by company_name).
+  Multi-user: SDL syncs over git/backbones, mapped big files over IPFS; often clones to a SHARED drive.
+  See storages.mdx, syncable_data_location.mdx (SDL + mapped dirs), devices.mdx (graft), storage_settings.mdx.
 -->

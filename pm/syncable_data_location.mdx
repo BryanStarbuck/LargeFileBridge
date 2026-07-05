@@ -1,0 +1,339 @@
+---
+title: LargeFileBridge — The Syncable Data Location (the metadata home a storage syncs through)
+description: The first-class term for WHERE LargeFileBridge keeps everything it knows about a storage so it can travel between the user's computers. A Syncable Data Location (SDL) is the directory that holds the hidden .lfbridge/ tracking area plus the portable Sync List — for a company it is typically its own small Git repo (e.g. ~/BGit/Bryan_git/act3_large_files_bridge/). The SDL is deliberately SEPARATE from the big files it describes: the actual large files live in their natural places on disk (a company maps a LIST of source directory hierarchies — "everything recursive is in scope"), git-ignored and synced over IPFS, while the SDL carries only the small text: the storage descriptor, the per-file fingerprint index, the IPFS manifest/CID list, the device registry (devices/<device>.yaml), the per-file media-analysis outputs (transcription / description / visuals-by-time), the compression records (original name+extension and size before/after), and the bookmarks — all of which are EXPENSIVE-to-generate derived artifacts that are produced once and then reused across every computer and every teammate that carries the storage. Defines the SDL vocabulary, its YAML inventory, the mapped-source-directories model, the derived-artifact reuse economics, and an end-to-end seven-step walkthrough across four computers. Hub for devices.mdx (the device registry + per-device graft), mapped_directories via storage_company.mdx, and derived artifacts via storages.mdx §6 / compression.mdx. Reconciles with storages.mdx (.lfbridge/ §4), storage_local.mdx (the machine-local state root, which is NOT syncable), sync_list.mdx (the portable list the SDL carries), and storage_settings.mdx (where a machine chooses where its SDL lives).
+---
+
+# LargeFileBridge — The Syncable Data Location
+
+Every storage needs a home for the small, portable **text** that describes it — the descriptor, the
+fingerprint index, the IPFS CID list, the device registry, and the expensive-to-generate derived
+artifacts (transcriptions, AI descriptions, compression records, bookmarks). That home is a
+**Syncable Data Location (SDL)**. It is the piece that **travels between the user's computers** and,
+for a shared storage, between **teammates** — so the knowledge and the derived work are produced
+**once** and then reused everywhere.
+
+This spec gives the SDL a name, defines what lives in it, and locks the one idea that makes the whole
+product coherent: **the SDL is separate from the big files it describes.** The bytes stay where they
+naturally live (git-ignored, moved over IPFS); the SDL carries only the small YAML that lets any of
+your computers reconstruct *what should exist, where, and what we already know about it*.
+
+Read the shared model first; this spec does not restate it:
+
+* [storages.mdx](./storages.mdx) — the storage family, the `storage.yaml` descriptor (§3), the hidden
+  **`.lfbridge/`** tracking area (§4), and the per-file **media-analysis** outputs (§6). **The SDL is
+  the directory that contains that `.lfbridge/` plus the Sync List.**
+* [sync_list.mdx](./sync_list.mdx) — the portable `LargeFilesBridge_SyncList.yaml` the SDL carries and
+  the **trust/reconcile** rules a reader applies. The SDL is *where a Sync List lives*; sync_list is
+  *what it says and how it is trusted*.
+* [storage_local.mdx](./storage_local.mdx) — the **machine-local** state root
+  (`~/T/_large_files_bridge/`). That is emphatically **not** an SDL: it is this computer's private
+  bookkeeping and never syncs. The SDL is the opposite — it is the shared, travelling half.
+* [devices.mdx](./devices.mdx) — the **device registry** and the **per-device graft** that live
+  *inside* the SDL (`.lfbridge/devices/`).
+* [storage_settings.mdx](./storage_settings.mdx) — where a computer chooses **where its SDL sits** and
+  which extra backing locations mirror it.
+
+---
+
+## 1. Definition — what a Syncable Data Location IS (LOCKED)
+
+> **Syncable Data Location (SDL).** The directory that holds a storage's hidden **`.lfbridge/`**
+> tracking area **and** its portable **`LargeFilesBridge_SyncList.yaml`** — the small, human-readable
+> text that travels between the user's computers (over Git, IPFS/IPNS, Google Drive, or Dropbox) so
+> every machine agrees on what the storage contains and what is already known about each file. The SDL
+> holds **metadata and derived artifacts, never the primary big-file bytes.**
+
+Three consequences flow from that definition and are LOCKED across specs:
+
+1. **The SDL is small text, and it is versioned/backbone-carried.** For most storages the SDL is its
+   **own little Git repo** — for a company, `~/BGit/Bryan_git/act3_large_files_bridge/`; for the user's
+   personal pile, `~/BGit/Bryan_git/personal_large_files_bridge/`; for a repo storage, the repo itself.
+   Git carries the small files; the SDL is exactly the kind of thing Git is good at. (A storage without
+   a dedicated repo still has an SDL — the `.lfbridge/` area — carried over a
+   [bridge backbone](./sync_list.mdx#1-vocabulary--sync-list--backbone--scope-locked).)
+
+2. **The SDL is not where the big files live.** The large files stay in their **natural directories**
+   on disk — a movie in `~/Movies`, a render tree under a project, a photo library under `~/Pictures`.
+   The SDL only **points at them** (by relative path + CID + fingerprint) and stores what we **derived**
+   from them. This is what lets a company map **many** unrelated directory hierarchies into one storage
+   (§3) without relocating a single byte.
+
+3. **The SDL is per-storage, and a computer can have many.** One SDL per storage; a user in three
+   companies plus their personal files plus every repo has many SDLs at once, each its own
+   `.lfbridge/` + Sync List. Which of a computer's SDLs it keeps `.lfbridge/` for, and where, is a
+   machine-local choice ([storage_settings.mdx §3](./storage_settings.mdx#3-the-hidden-lfbridge-tracking-directory--keep-it-and-where)).
+
+The SDL vs. the machine-local state root is the boundary that never blurs:
+
+| | **Syncable Data Location** (this spec) | **Local Storage** ([storage_local.mdx](./storage_local.mdx)) |
+| --- | --- | --- |
+| Root | the storage's own dir, e.g. `~/BGit/Bryan_git/act3_large_files_bridge/` | `~/T/_large_files_bridge/` |
+| Travels between computers? | **Yes** — that is its entire purpose | **No** — wipe it and a rescan rebuilds it |
+| Holds | descriptor, fingerprints, CID list, devices, derived artifacts, Sync List | this machine's config, auth, `peers.yaml`, logs, local index |
+| Shared with teammates? | Yes, for company/community storages | Never |
+
+---
+
+## 2. What lives in the SDL — the YAML inventory (LOCKED)
+
+Everything in the SDL is **small text** (YAML), so it rides a backbone cheaply and a human can read it.
+The layout, rooted at the SDL:
+
+```
+<SDL root>/                              ← e.g. ~/BGit/Bryan_git/act3_large_files_bridge/
+├── LargeFilesBridge_SyncList.yaml       ← the portable list (sync_list.mdx) — travels via git here
+├── .lfbridge/                           ← the hidden tracking area (storages.mdx §4), git-ignored
+│   ├── storage.yaml                     ← descriptor: name + type + type block (storages.mdx §3)
+│   ├── mapped_dirs.yaml                 ← §3 the source directory hierarchies this storage covers
+│   ├── files.yaml                       ← per-file fingerprint index (storages.mdx §4.1)
+│   ├── manifest.yaml                    ← large-file → IPFS CID + pin state (storage_local.mdx §9)
+│   ├── bookmarks.yaml                   ← §4.4 the user's bookmarked files (travels with the storage)
+│   ├── devices/                         ← the device registry (devices.mdx) — one file per computer
+│   │   ├── bryan-macbook.yaml           ←   that device's id, nice name, schedule, and GRAFT (devices.mdx)
+│   │   └── bryan-studio.yaml
+│   └── analysis/                        ← per-file derived artifacts, keyed by relpath (§4)
+│       └── <relpath>/
+│           ├── transcript.yaml          ←   speech-to-text + time ranges
+│           ├── description.yaml         ←   video summary / image contents
+│           ├── visuals_by_time.yaml     ←   time × visual × story timeline (video)
+│           └── compression.yaml         ←   §4.3 original name/ext + size before/after
+└── …NO big files here — they live in the MAPPED directories (§3)…
+```
+
+| File | Purpose | Owner | Defined in |
+| --- | --- | --- | --- |
+| `LargeFilesBridge_SyncList.yaml` | The portable declaration of what should exist + each CID | reconciled | [sync_list.mdx](./sync_list.mdx) |
+| `.lfbridge/storage.yaml` | Name, type, type block, clones | discovery + settings | [storages.mdx §3](./storages.mdx#3-storageyaml--the-per-storage-descriptor-locked-shape) |
+| `.lfbridge/mapped_dirs.yaml` | The source directory hierarchies mapped into this storage | storage settings | **§3 here** |
+| `.lfbridge/files.yaml` | Per-file fingerprints (hash, size, dates; compressed/uncompressed variants) | tracking | [storages.mdx §4.1](./storages.mdx) |
+| `.lfbridge/manifest.yaml` | path → CID + `pinned_by` | sync pass | [storage_local.mdx §9](./storage_local.mdx) |
+| `.lfbridge/bookmarks.yaml` | The user's starred files (§4.4) | user action | **§4.4 here** |
+| `.lfbridge/devices/<device>.yaml` | Device id, nice name, schedule, graft | each device (self-owned) | [devices.mdx](./devices.mdx) |
+| `.lfbridge/analysis/<relpath>/*.yaml` | Transcript, description, visuals-by-time, compression record | analysis passes | [storages.mdx §6](./storages.mdx) + §4 here |
+
+Only `LargeFilesBridge_SyncList.yaml` (and, for a repo storage, its committed `manifest.yaml`) is
+**committed to Git**; the rest of `.lfbridge/` is **git-ignored** so tracking never bloats commits, yet
+it still travels because the SDL directory itself is mirrored over the chosen backbone(s)
+([storage_settings.mdx §4](./storage_settings.mdx#4-backing-locations--dedicated-repo--google-drive--dropbox)).
+
+Composing the SDL — writing the descriptor, the mapped-dirs list, the fingerprint index, the device registry, and the analysis/compression/bookmark artifacts under one storage root — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureStorage()` / `readDescriptor()` / `writeDescriptor()`, and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `indexStorageFiles()` (the `.lfbridge/` constant `LFBRIDGE_DIR`).
+
+---
+
+## 3. Mapped source directories — one storage, many hierarchies (LOCKED)
+
+A company (or personal) storage does **not** require the user to move their big files into one folder.
+Instead, in the storage's settings the user lists **the directories of their hard drive that belong to
+this storage**, and **everything recursive under each is in scope**. This is the load-bearing model the
+charter's company-storage use case describes: *"their company has eight different directory hierarchies
+in my file system … they add those to that company's storage settings, and then LargeFileBridge scans
+them for the big files."*
+
+* **A mapped directory is a source root.** Its whole subtree (recursively) is part of the storage. LFB
+  scans each for big files, tracks them, pins the ones the user opts into over IPFS, and stores their
+  derived artifacts in the SDL — **without relocating them**.
+* **A storage maps a LIST of them.** Seven mapped directories → one company storage covering all seven
+  subtrees. They can be anywhere on disk and need not share a parent.
+* **The mapped list is shared; the local paths are per-device.** The *logical* list of mapped
+  directories lives in the SDL (`.lfbridge/mapped_dirs.yaml`, below) so every computer agrees on the
+  set. But the **absolute local path** of each mapped directory differs per computer — that per-device
+  resolution is the **graft**, owned by [devices.mdx](./devices.mdx). `mapped_dirs.yaml` records a
+  stable **key** + a **canonical/label** for each; each device's `devices/<device>.yaml` maps that key
+  to its own absolute path.
+
+```yaml
+# <SDL>/.lfbridge/mapped_dirs.yaml — the source hierarchies this storage covers (shared, travels)
+schema_version: 1
+mapped:
+  - key: film_renders            # stable id, referenced by every device's graft (devices.mdx)
+    label: "Film renders"        # human name shown in the UI
+    canonical: ~/Movies/act3/renders   # the WRITER's path — advisory only; each device re-roots it
+    recursive: true              # the whole subtree is in scope (always true today)
+  - key: photo_library
+    label: "Photo library"
+    canonical: ~/Pictures/act3
+  - key: model_weights
+    label: "Model weights"
+    canonical: ~/BGit/act3/WebApp/ai-service/weights
+  # …up to N mapped directories — a company with seven hierarchies has seven entries…
+```
+
+* `canonical` is the path **on the computer that added the mapping** — it is **advisory only**, exactly
+  like `identity.path` in [sync_list.mdx §4](./sync_list.mdx#4-what-travels-vs-what-stays-local). A
+  reader **never** trusts it; it resolves the mapped directory to *this* machine's path through the
+  device graft (devices.mdx). A mapped directory that has no graft on this computer is shown as
+  **unmapped here** (known, but not present on this box) rather than erroring.
+* Big files inside a mapped directory are tracked with **relative paths** (relative to the mapped
+  directory root), so `film_renders/shot_012/final_4k.mp4` resolves under whatever absolute path this
+  device grafts `film_renders` to.
+
+Where this sits relative to the two existing sync units: a **repo** storage's mapped directory is the
+repo working tree (one hierarchy, path-resolved by Git). A **company/personal** storage generalizes
+that to a **list** of hierarchies, path-resolved by the device graft instead of by Git. Both feed the
+same manifest/fingerprint machinery.
+
+Reading and writing the mapped-directory list, and adding/removing a mapped source directory from a storage's settings, is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getMappedDirs()` / `setMappedDirs()` (new; the settings form adds rows, the scanner reads them to know which subtrees to walk for this storage).
+
+---
+
+## 4. Derived artifacts — generate once, reuse everywhere (LOCKED value)
+
+The most valuable thing in the SDL, after the CID list, is the pile of **derived artifacts**: things
+LFB (or an AI pass) computed *from* a big file that are **expensive to produce** and therefore must be
+**produced once and reused** across every computer and every teammate. The SDL is exactly the place to
+keep them, because it travels and it does not disturb the natural directory the source file lives in.
+
+> **The economics rule (LOCKED).** A derived artifact is keyed to its source file's **fingerprint**
+> ([storages.mdx §4.1](./storages.mdx#41-per-file-tracking-metadata-charter)). If the fingerprint is
+> unchanged, the artifact is **never regenerated** — not on this computer, not on another computer that
+> pulls the SDL, not for a teammate on a shared company storage. Transcription and vision passes cost
+> real money and time; paying for them more than once for the same bytes is a defect.
+
+The artifact kinds, all written under `.lfbridge/analysis/<relpath>/`:
+
+### 4.1 Transcript · Description · Visuals-by-time
+These three are defined in [storages.mdx §6](./storages.mdx#6-per-file-media-analysis-transcription--description--visuals-by-time)
+and not restated here — speech-to-text with time ranges; a prose summary (video) / contents (image);
+and a time × visual × story timeline (video). They live in the SDL so a second computer, or a teammate,
+gets them for free.
+
+### 4.2 Why they belong in the SDL, not next to the file
+The natural directory a movie lives in should stay a directory of movies — not get littered with
+`.transcript.yaml` siblings. Putting derived artifacts in the SDL keeps the source tree pristine **and**
+makes the artifacts travel. This is the whole reason the SDL is separate from the mapped directories
+(§3).
+
+### 4.3 Compression records — original identity + before/after
+When LFB compresses a file (only ever on explicit user request — charter), it records **what the file
+was before** so the change is legible on every computer and reversible in intent:
+
+```yaml
+# <SDL>/.lfbridge/analysis/film_renders/shot_012/final.mp4/compression.yaml
+source: film_renders/shot_012/final.mp4    # the CURRENT (compressed) path, relative to its mapped dir
+original:
+  name: final.mov                          # the ORIGINAL filename + extension before compression
+  extension: mov
+  size: 734003200                          # bytes BEFORE
+compressed:
+  codec: h264                              # the codec we compressed to (charter: X-safe, never AV1)
+  size: 118489088                          # bytes AFTER
+  ratio: 0.161                             # after / before
+  at: 2026-07-05T10:09:00Z
+```
+
+* A second computer reading the SDL knows this file was compressed, from what, and by how much —
+  without re-deriving anything. The **`text files … which files/paths have been compressed and what
+  their original file name and extension were before … the file size before and after"** the charter's
+  company use case asks for **are** these compression records.
+* This complements the per-file `files.yaml` compressed/uncompressed **variant hashes**
+  ([storages.mdx §4.1](./storages.mdx)); the fingerprints prove identity, the compression record
+  narrates the human story (old name, old size, new size).
+
+### 4.4 Bookmarks travel with the storage
+A user can **bookmark** (star) any tracked file. Bookmarks are a property of the *storage*, not of the
+computer, so they live in the SDL and **come across in the YAML** to every machine that carries it:
+
+```yaml
+# <SDL>/.lfbridge/bookmarks.yaml
+schema_version: 1
+bookmarked:
+  - film_renders/shot_012/final.mp4
+  - photo_library/hero_8k.png
+```
+
+This is the source of truth behind the **Bookmarked-first** default sort in every table
+([tables.mdx §4](./tables.mdx), [storage_local.mdx §4](./storage_local.mdx) `tables.views`). A file
+bookmarked on the laptop shows bookmarked on the studio machine after the next sync.
+
+Caching every derived artifact against the source file's fingerprint (skip regeneration when the fingerprint is unchanged), and reading/writing the compression record and the bookmarks list, is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/analysis.service.ts` — `analyzeFile()` (fingerprint-keyed skip), with `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `readStorageIndex()` supplying the fingerprint, and a new `bookmarks` accessor in `storage.service.ts`.
+
+---
+
+## 5. End-to-end walkthrough — four computers, one company storage
+
+The charter's canonical use case, told as an SDL story. A user with **four computers** and a company
+with **seven mapped directories**:
+
+1. **Computer 1 maps the seven directories.** In the ACT3 company storage's settings the user adds
+   their seven directory hierarchies ([storage_settings.mdx](./storage_settings.mdx) + §3 here). LFB
+   writes `mapped_dirs.yaml` into the SDL (`act3_large_files_bridge/`) and this computer's graft into
+   `devices/computer-1.yaml` (devices.mdx). A scan of the seven subtrees finds **30 big files**.
+2. **The user pins some to IPFS.** They click to add the 30 big files to IPFS. LFB pins them locally,
+   records each CID in `manifest.yaml`, and marks this computer in `pinned_by`. (Some the user may
+   instead have `ipfs pin add`-ed by hand — both land in the same pinset and are reconciled;
+   [storage_local.mdx §9.5](./storage_local.mdx#95-the-ipfs-pinset-is-the-source-of-truth--pinned_by-is-a-stale-cache).)
+3. **They transcribe a third.** For ~10 of the videos they click **Transcribe**; LFB writes
+   `analysis/<relpath>/transcript.yaml` into the SDL (§4.1).
+4. **They get AI video descriptions.** For the same or other videos they click to generate descriptions
+   / visuals-by-time; those land as `description.yaml` / `visuals_by_time.yaml` in the SDL. Because a
+   **dedicated Git repo** is configured for this company (`act3_large_files_bridge`), all of this is
+   saved into the SDL, not scattered next to the source files.
+5. **Compression records + transcriptions are stored in matching paths.** Any file the user compresses
+   gets its `compression.yaml` (§4.3); every transcription/description sits under a path that **mirrors
+   the file's location within its mapped directory** — so the SDL's `analysis/` tree reads like a
+   shadow of the mapped hierarchy.
+6. **Everything is committed to the SDL and pushed.** The small text (`SyncList`, descriptor, mapped
+   dirs, fingerprints, manifest, devices, analysis, bookmarks) is committed to the
+   `act3_large_files_bridge` repo and pushed. The big bytes never enter Git — they move over IPFS.
+7. **Computer 2 just adds the Git repo.** On a second machine the user clones `act3_large_files_bridge`
+   and points LFB at it (or LFB discovers it). The SDL **synchronizes in**. Now this computer knows,
+   from the YAML alone:
+   * **which files exist and their CIDs** — so it can fetch + `ipfs pin` down exactly the ones marked,
+     to the **correct local locations** via its own device graft (devices.mdx);
+   * **which files were pinned** (via the app or by hand) and by which computers (`pinned_by`);
+   * **which were compressed** (and from what, to what) — no re-compression;
+   * **which have transcriptions and AI descriptions** — no regeneration, no repeat cost (§4);
+   * **which are bookmarked** — starred here too (§4.4).
+   Computers 3 and 4 do the same. The synchronization makes **all** of this happen — pin the right
+   files to the right places, and inherit every derived artifact — from the SDL's small YAML.
+
+The synchronization that reconciles the incoming SDL against this computer's reality — fetching/pinning the marked CIDs to their grafted local paths and inheriting the derived artifacts without regenerating them — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncAll()` (per-unit `runUnitSync`), applying the trust rules of [sync_list.mdx §5](./sync_list.mdx#5-trust--reconciliation-the-load-bearing-rule).
+
+---
+
+## 6. Acceptance criteria
+
+1. **SDL is a named, first-class concept:** the directory holding a storage's `.lfbridge/` + Sync List,
+   which **travels** between the user's computers (and teammates for shared storages). It holds
+   **metadata + derived artifacts, never the primary big-file bytes** (§1). It is distinct from the
+   machine-local, non-syncing state root ([storage_local.mdx](./storage_local.mdx)).
+2. A storage's big files stay in their **natural directories**; a company/personal storage maps a
+   **list** of source directory hierarchies (`mapped_dirs.yaml`), each **recursive**, resolved to
+   per-computer absolute paths by the device **graft** ([devices.mdx](./devices.mdx)) — never by
+   trusting the writer's `canonical` path (§3).
+3. The SDL holds the LOCKED YAML inventory of §2: SyncList, descriptor, mapped dirs, fingerprint index,
+   manifest, devices, analysis, bookmarks — all small text; only the SyncList (and a repo's committed
+   manifest) is committed to Git, the rest of `.lfbridge/` is git-ignored yet travels with the SDL.
+4. **Derived artifacts are generated once and reused everywhere**, keyed to the source fingerprint and
+   never regenerated when it is unchanged — transcript, description, visuals-by-time (§4.1), the
+   **compression record** carrying the original name/extension + size before/after (§4.3), and
+   **bookmarks** that travel with the storage (§4.4).
+5. A second computer that merely **adds the SDL's Git repo** learns from the YAML alone which files to
+   fetch/pin and where (via its graft), which were pinned/compressed/transcribed/described, and which
+   are bookmarked — with **no** re-pinning to the wrong place and **no** regeneration of paid artifacts
+   (§5).
+
+<!--
+  Introduces the LOCKED term "Syncable Data Location" (SDL) = the dir holding a storage's .lfbridge/ +
+  LargeFilesBridge_SyncList.yaml; the small TEXT that travels between computers/teammates. Usually its
+  own little git repo (act3_large_files_bridge / personal_large_files_bridge / a repo storage IS its
+  own SDL). LOCKED: the SDL holds metadata + derived artifacts, NEVER the primary big bytes. Big files
+  stay in their natural dirs; a company/personal storage maps a LIST of source directory hierarchies
+  (mapped_dirs.yaml, everything recursive), resolved per-computer by the device GRAFT (devices.mdx),
+  never by trusting the writer's canonical path (like sync_list.mdx identity.path). §2 YAML inventory:
+  SyncList + .lfbridge/{storage.yaml, mapped_dirs.yaml, files.yaml, manifest.yaml, bookmarks.yaml,
+  devices/, analysis/}. §4 derived-artifact reuse economics: keyed to fingerprint, generated ONCE,
+  reused across computers + teammates (transcript/description/visuals-by-time from storages.mdx §6;
+  compression record = original name/ext + size before/after; bookmarks travel). §5 = the charter's
+  4-computer / 7-mapped-dir walkthrough. Reconciles with: storages.mdx (.lfbridge §4, analysis §6),
+  storage_local.mdx (the machine-local root is NOT an SDL), sync_list.mdx (the portable list + trust),
+  devices.mdx (devices/ + graft), storage_settings.mdx (where the SDL lives + backing locations),
+  storage_company.mdx (the company-storage shape that USES mapped dirs). Code pointers: storage.service
+  ensureStorage/readDescriptor/writeDescriptor, tracking.service indexStorageFiles/LFBRIDGE_DIR,
+  analysis.service analyzeFile (fingerprint-keyed), storage-settings.service getMappedDirs/setMappedDirs
+  (new), sync.service syncAll. Keep in sync with devices.mdx and storage_company.mdx.
+-->
