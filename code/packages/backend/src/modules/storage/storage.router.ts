@@ -13,7 +13,7 @@ import {
   readBookmarks,
   setBookmark,
 } from "./storage.service.js";
-import { readStorageSettings, writeStorageSettings } from "./storage-settings.service.js";
+import { readStorageSettings, writeStorageSettings, getMappedDirsView, patchMappedDirs } from "./storage-settings.service.js";
 
 export const storagesRouter = Router();
 storagesRouter.use(requireAllowListed);

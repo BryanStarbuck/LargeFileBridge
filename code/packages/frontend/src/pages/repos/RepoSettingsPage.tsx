@@ -60,6 +60,12 @@ export function RepoSettingsPage() {
       <Section title="Large-file selection">
         <Toggle label="Follow .gitignore (bridge the git-ignored big files)" checked={s.largeFiles.followGitignore}
           onChange={(v) => patch.mutate({ largeFiles: { ...s.largeFiles, followGitignore: v } })} />
+        <GlobField label="Include globs (force-bridge these even if Git tracks them)"
+          placeholder={"one glob per line, e.g.\nrender/**/*.exr"} value={s.largeFiles.includeGlobs}
+          onSave={(globs) => patch.mutate({ largeFiles: { ...s.largeFiles, includeGlobs: globs } })} />
+        <GlobField label="Exclude globs (never bridge these, even if git-ignored)"
+          placeholder={"one glob per line, e.g.\n**/cache/**"} value={s.largeFiles.excludeGlobs}
+          onSave={(globs) => patch.mutate({ largeFiles: { ...s.largeFiles, excludeGlobs: globs } })} />
       </Section>
 
       <Section title="Pinning / fetch policy">

@@ -264,3 +264,58 @@ export function setMappedDirs(storageId: string, list: Array<Partial<MappedDir>>
   writeYaml(mappedDirsPath(row.root), { schema_version: 1, mapped });
   return readMappedDirsForRoot(row.root);
 }
+
+/**
+ * The mapped-directory ROWS the settings page shows (§4a): the SHARED logical list joined with THIS
+ * device's graft (each row's local path here). Editable only for company/personal storages; a repo
+ * storage's single implicit mapped dir (its working tree) is shown read-only. Lazy-imports the graft
+ * reader to avoid a module-eval import cycle (safe under NodeNext ESM — same pattern used elsewhere here).
+ */
+export async function getMappedDirsView(storageId: string): Promise<MappedDirsView> {
+  const row = requireRow(storageId);
+  const { readSelfGraft } = await import("./devices.service.js");
+  const graft = readSelfGraft(row.root);
+  const editable = row.type === "company" || row.type === "personal";
+  const list = readMappedDirsForRoot(row.root).mapped;
+  const rows: MappedDirRow[] = list.map((m) => {
+    const g = graft[m.key];
+    return {
+      key: m.key,
+      label: m.label,
+      canonical: m.canonical,
+      recursive: m.recursive,
+      localPath: g?.localPath ?? null,
+      wanted: g?.wanted ?? false,
+    };
+  });
+  // A repo storage has exactly one implicit mapped dir — its working tree (the root) — shown read-only.
+  if (!editable && rows.length === 0 && row.type === "repo") {
+    rows.push({ key: "__repo__", label: "(repository working tree)", canonical: row.root, recursive: true, localPath: row.root, wanted: true });
+  }
+  return { storageId: row.id, editable, rows };
+}
+
+/**
+ * Apply a mapped-dirs patch from the settings page (§4a): replace the SHARED list when `mapped` is given
+ * (add/remove rows → mapped_dirs.yaml), and/or set THIS device's graft local path per key (`graft`).
+ * A repo/local storage rejects list edits (its mapped dir is implicit). Returns the fresh joined view.
+ */
+export async function patchMappedDirs(
+  storageId: string,
+  patch: { mapped?: Array<Partial<MappedDir>>; graft?: Record<string, string | null> },
+): Promise<MappedDirsView> {
+  const row = requireRow(storageId);
+  if (patch.mapped !== undefined) {
+    if (row.type !== "company" && row.type !== "personal") {
+      throw new Error(`storage "${row.type}" has an implicit mapped directory — its list is not editable`);
+    }
+    setMappedDirs(storageId, patch.mapped);
+  }
+  if (patch.graft) {
+    const { setSelfGraftPath } = await import("./devices.service.js");
+    for (const [key, localPath] of Object.entries(patch.graft)) {
+      setSelfGraftPath(row.root, key, localPath);
+    }
+  }
+  return getMappedDirsView(storageId);
+}

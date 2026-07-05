@@ -253,15 +253,45 @@ function diffStatus(
 ): UnitStatus {
   const prevByPath = new Map(prev.candidates.map((c) => [c.path, c]));
   const nowByPath = new Map(candidates.map((c) => [c.path, c]));
-  const added: string[] = [];
+  // Files present under the same path in both scans: added (new path), grew, or shrank.
+  const addedPaths: string[] = [];
   const grew: string[] = [];
+  const shrank: string[] = [];
   for (const c of candidates) {
     const p = prevByPath.get(c.path);
-    if (!p) added.push(c.path);
+    if (!p) addedPaths.push(c.path);
     else if (c.size > p.size) grew.push(c.path);
+    else if (c.size < p.size) shrank.push(c.path);
   }
-  const deleted: string[] = [];
-  for (const p of prev.candidates) if (!nowByPath.has(p.path)) deleted.push(p.path);
+  const deletedPaths: string[] = [];
+  for (const p of prev.candidates) if (!nowByPath.has(p.path)) deletedPaths.push(p.path);
+
+  // Move/rename detection (scan.mdx §6 / AC #7): a file that vanished at path A and reappeared at
+  // path B with the SAME size and mtime is a MOVE, not a delete+add — so the sync keeps the existing
+  // pin instead of re-adding bytes. Pure metadata heuristic (size+mtime); never hashes content (§1).
+  const moved: Array<{ from: string; to: string }> = [];
+  const sig = (c: { size: number; modified_at?: string }): string => `${c.size}|${c.modified_at ?? ""}`;
+  const deletedBySig = new Map<string, string[]>();
+  for (const path of deletedPaths) {
+    const p = prevByPath.get(path)!;
+    if (!p.modified_at) continue; // no mtime → can't safely pair; leave it a plain delete
+    const key = sig(p);
+    (deletedBySig.get(key) ?? deletedBySig.set(key, []).get(key)!).push(path);
+  }
+  const pairedDeleted = new Set<string>();
+  const pairedAdded = new Set<string>();
+  for (const toPath of addedPaths) {
+    const c = nowByPath.get(toPath)!;
+    if (!c.modified_at) continue;
+    const bucket = deletedBySig.get(sig(c));
+    const fromPath = bucket?.find((d) => !pairedDeleted.has(d));
+    if (!fromPath) continue;
+    moved.push({ from: fromPath, to: toPath });
+    pairedDeleted.add(fromPath);
+    pairedAdded.add(toPath);
+  }
+  const added = addedPaths.filter((p) => !pairedAdded.has(p));
+  const deleted = deletedPaths.filter((p) => !pairedDeleted.has(p));
 
   return {
     ...prev,
@@ -273,7 +303,7 @@ function diffStatus(
     big_file_bytes: candidates.reduce((s, c) => s + c.size, 0),
     repo_state: repoState === "computer" ? "present" : "present",
     candidates: candidates.map((c) => ({ path: c.path, size: c.size, modified_at: c.modified_at })),
-    changes_since_last_scan: { added, grew, shrank: [], moved: [], deleted },
+    changes_since_last_scan: { added, grew, shrank, moved, deleted },
   };
 }
 
