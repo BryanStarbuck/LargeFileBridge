@@ -22,6 +22,9 @@ This spec builds on the siblings and does not repeat them:
 
 * [Repos](./repos.mdx) — the list this screen drills into; defines the LOCKED vocabulary
   **Repo → Large file → Decision** (§1 there), the `RepoStatus` enum, and the per-repo counts.
+* [sync_process.mdx](./sync_process.mdx) — the **synchronization process** the Sync-now button triggers:
+  every sync is a **full pass**, a repo trigger sets **priority** (not scope), the pass is parallel, and
+  it is never a silent no-op. The button is one trigger of that pass.
 * [Left bar](./left_bar.mdx) — the left navigation (source of truth `pm/left_bar.yaml`).
 * [README](../README.md) — the product charter (git for small files; IPFS/p2p for the big ones).
 
@@ -130,7 +133,7 @@ A single horizontal strip of the repo's live status (read) and its one per-repo 
 
 | Field | Meaning |
 | --- | --- |
-| **Sync** (toggle) | Per-repo on/off. When **off**, LFBridge skips this repo during background syncs; decisions are preserved but no bytes move. The only editable control in the strip. |
+| **Sync** (toggle) | This repo's **IPFS-pinning opt-in** — *not* a "managed vs. unmanaged" switch. When **off**, LFBridge still **knows, visits, and reconciles** this repo every pass ([sync_process.mdx §1/§5](./sync_process.mdx#1-lfb-knows-every-repo--there-is-no-lfb-managed-gate-locked)); it just does not add/pin/fetch its bytes during **background** syncs (a manual **Sync now** flips this on). Decisions are preserved regardless. The only editable control in the strip. |
 | **Status** | The rolled-up `RepoStatus` pill ([Repos §4.2](./repos.mdx)) — up to date / syncing / behind / needs review / error / never. |
 | **Peers** | Count of your computers currently pinning this repo → clicking opens [Peers](./left_bar.mdx) filtered to this repo (peers page is out of scope here). |
 | **Last sync** | Relative time of the last completed sync (absolute on hover). |
@@ -280,8 +283,10 @@ Each file's `transfer` value (synced / pending / na, derived from its decision, 
 ## 6. Acceptance criteria
 
 1. The screen opens at `/repos/$repoId` from a [Repos](./repos.mdx) row click; the header shows the
-   `‹ Repos / <name>` breadcrumb, the absolute path, and a **Sync now** button that syncs only this
-   repo and never changes a decision.
+   `‹ Repos / <name>` breadcrumb, the absolute path, and a **Sync now** button that **prioritizes this
+   repo (synced first) and then runs the full sync pass**
+   ([sync_process.mdx §2/§3](./sync_process.mdx#2-every-synchronization-is-a-full-pass-locked)), never
+   changes a decision, and is never a silent no-op (reports what it actually did).
 2. The **status/settings strip** shows Sync (the one editable per-repo on/off toggle), Status pill,
    Peers, Last sync, and IPFS node health; when the node is unreachable, Sync now is disabled.
 3. The **summary counts** line reads `N Sync · N Undecided · N Ignore`, each a quick-filter;
