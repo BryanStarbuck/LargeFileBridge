@@ -1,6 +1,9 @@
 // Local Kubo/IPFS client over the HTTP RPC (knowledge/ipfs.mdx). Uses fetch, never `curl`.
 // Enforces the only-our-content rule: Reprovider.Strategy = pinned, no public/recursive gateway.
 import fs from "node:fs";
+import path from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import type { IpfsHealth, IpfsPinType } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import { log } from "../../shared/logging.js";
@@ -72,6 +75,36 @@ export async function addFile(absPath: string): Promise<string> {
     // A failed add/pin is a real fault (file gone, bad JSON, daemon error) — record it, then rethrow
     // so the caller still sees the failure.
     log.error("ipfs", `add ${absPath} failed: ${(e as Error).message}`);
+    throw e;
+  }
+}
+
+/**
+ * Materialize a file's bytes by CID to `destPath` — the byte side of "fetch" (sync_process.mdx / storage.mdx
+ * §9). Streams the HTTP RPC `cat` (a single unixfs file — LFB adds one file per CID) to a temp file, then
+ * renames it into place atomically, creating parent dirs. No 15s abort: large media legitimately take a
+ * while; the caller bounds concurrency via the sync limiter. A partial download is cleaned up, never left
+ * as a truncated final file.
+ */
+export async function catToFile(cid: string, destPath: string): Promise<void> {
+  fs.mkdirSync(path.dirname(destPath), { recursive: true });
+  const tmp = `${destPath}.lfb-fetch-${process.pid}-${Date.now()}.tmp`;
+  try {
+    const url = `${apiBase()}/cat?arg=${encodeURIComponent(cid)}`;
+    const res = await fetch(url, { method: "POST" });
+    if (!res.ok || !res.body) {
+      throw new Error(`ipfs cat ${cid} -> ${res.status} ${res.ok ? "empty body" : await res.text()}`);
+    }
+    // res.body is a WHATWG ReadableStream; adapt it to a Node stream and pipe to disk without buffering.
+    await pipeline(Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]), fs.createWriteStream(tmp));
+    fs.renameSync(tmp, destPath);
+  } catch (e) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* temp already gone — ignore */
+    }
+    log.error("ipfs", `cat ${cid} -> ${destPath} failed: ${(e as Error).message}`);
     throw e;
   }
 }
@@ -365,6 +398,25 @@ export async function enforceCompliance(): Promise<void> {
         } else {
           throw e;
         }
+      }
+    }
+    // Restore the gateway to loopback-only (charter no-relay policy; ipfs.mdx §3.1 / ipfs_ui.mdx §8):
+    // a Fix must undo any public/recursive gateway, not just the reprovide strategy. Only rewrite when
+    // the live config actually exposes a non-loopback gateway, so a user's custom loopback PORT is kept.
+    try {
+      const gwAddr = await getConfigKey("Addresses.Gateway");
+      const gateways = (Array.isArray(gwAddr) ? gwAddr.map(String) : gwAddr ? [String(gwAddr)] : []).filter(Boolean);
+      const exposesPublic = gateways.some((a) => !LOOPBACK.test(a));
+      if (exposesPublic) {
+        // Kubo's Addresses.Gateway is a single multiaddr string; rebind it to our loopback default.
+        await setConfigKey("Addresses.Gateway", cfg.ipfs.gateway_addr);
+        log.info("ipfs", `Rebound Addresses.Gateway = ${cfg.ipfs.gateway_addr} (loopback-only, no public gateway).`);
+      }
+    } catch (e) {
+      if (/not found/i.test((e as Error).message)) {
+        log.info("ipfs", "Addresses.Gateway not settable on this Kubo build — skipping gateway enforcement.");
+      } else {
+        throw e;
       }
     }
   } catch (e) {

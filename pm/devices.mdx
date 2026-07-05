@@ -162,8 +162,8 @@ Each device's graft turns those into **this computer's absolute paths**.
   **grafted** local path (creating parent directories), so computer 2 lands each file where its graft
   says — the core of walkthrough step 7.
 
-Resolving a tracked file's machine-independent (mapped-dir key + relpath) identity to this device's absolute local path via the graft, and fetching a marked CID to that grafted path, is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `resolveGraftedPath(storageRoot, mappedKey, relPath)`, called by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `runUnitSync()` when placing fetched bytes.
+Resolving a tracked file's machine-independent (mapped-dir key + relpath) identity to this device's absolute local path via the graft, and **materializing** the fetched bytes there, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `resolveGraftedPath(storageRoot, mappedKey, relPath)`, wired into the sync pass by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncStorageUnit(id)` (via `resolveStorageAbs`, the storage unit's `resolveAbs` in `runUnitSync`; the unit runs in `syncAll` gated by the per-storage `synced` opt-in). The fetch step of `runUnitSync` now pins the CID **and** writes the bytes to the resolved local path via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `catToFile(cid, destPath)` (atomic temp-then-rename, parent dirs created). A mapped dir this device has **not** grafted resolves to `null` and is left **known-but-absent** — never fetched or placed here.
 
 ---
 

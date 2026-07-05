@@ -12,7 +12,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ManifestSchema, type Manifest, type ManifestFile, type UnitStatus, type Decision } from "@lfb/shared";
+import { ManifestSchema, UnitStatusSchema, type Manifest, type ManifestFile, type UnitStatus, type Decision } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import {
   listRepoFolders,
@@ -29,8 +29,11 @@ import {
   writeComputerStatus,
   isGitWorkingTree,
 } from "../store-model/units.service.js";
-import { writeCommittedManifest } from "./manifest.service.js";
-import { listStorageIds, ensureBackingLocations } from "../storage/storage.service.js";
+import { writeCommittedManifest, readCommittedManifest } from "./manifest.service.js";
+import { listStorageIds, ensureBackingLocations, getStorageRow } from "../storage/storage.service.js";
+import { readStorageIndex } from "../storage/tracking.service.js";
+import { writeSelfDevice, resolveGraftedPath } from "../storage/devices.service.js";
+import { getStorageSynced, readMappedDirsForRoot } from "../storage/storage-settings.service.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { log } from "../../shared/logging.js";
 
@@ -82,12 +85,15 @@ async function runPool<T>(items: T[], limit: number, fn: (item: T) => Promise<vo
 // is git for a repo (storage.mdx §9.2) and (for now) a no-op for the computer unit whose IPNS transport
 // (storage.mdx §9.3) is a separate follow-up.
 interface UnitTarget {
-  kind: "repo" | "computer";
+  kind: "repo" | "computer" | "storage";
   name: string;
   label: string;
   decisions: Record<string, Decision>;
   fetchMissing: boolean;
-  resolveAbs: (rel: string) => string;
+  // Resolve a unit-relative path to THIS computer's absolute path, or null when the file is not placeable
+  // here (a storage's mapped dir this device hasn't grafted — known-but-absent, devices.mdx §4). Repo and
+  // computer units always return a string.
+  resolveAbs: (rel: string) => string | null;
   manifest: Manifest;
   status: UnitStatus;
   writeManifest: (m: Manifest) => void;
@@ -126,6 +132,7 @@ async function runUnitSync(t: UnitTarget, onlyPaths?: Set<string>): Promise<void
     toAdd.map(([rel]) =>
       ipfsLimiter.run(async () => {
         const abs = t.resolveAbs(rel);
+        if (abs === null) return; // not placeable here (ungrafted mapped dir) — known-but-absent
         let st: fs.Stats;
         try {
           st = fs.statSync(abs);
@@ -165,19 +172,27 @@ async function runUnitSync(t: UnitTarget, onlyPaths?: Set<string>): Promise<void
     if (t.decisions[rel] !== "sync") byPath.delete(rel);
   }
 
-  // Fetch missing: pin any manifest CID we don't hold yet (rehydrate from peers) — also IN PARALLEL.
+  // Fetch missing: rehydrate any manifest file we don't have ON DISK here yet — pin its CID AND
+  // materialize the bytes to the resolved local path (storage.mdx §9). Byte placement goes through the
+  // unit's `resolveAbs`, so a repo file lands in its working tree, a computer file at its absolute path,
+  // and a storage file at THIS device's grafted local path (devices.mdx §4). All IN PARALLEL, bounded by
+  // the global limiter. A file already on disk needs nothing; a mapped dir not grafted here (abs === null)
+  // is known-but-absent and skipped.
   if (t.fetchMissing) {
     await Promise.all(
       [...byPath.values()].map((entry) =>
         ipfsLimiter.run(async () => {
           if (!entry.cid) return;
           const abs = t.resolveAbs(entry.path);
-          if (fs.existsSync(abs)) return;
-          if (pinset.has(entry.cid)) return; // already pinned locally — nothing to fetch
+          if (abs === null) return; // ungrafted mapped dir — known-but-absent on this computer
+          if (fs.existsSync(abs)) return; // already on disk here — nothing to fetch
           try {
-            await ipfs.pinAdd(entry.cid);
-            pinset.add(entry.cid);
-            log.info("sync", `Fetched+pinned ${entry.path} (${entry.cid})`);
+            if (!pinset.has(entry.cid)) {
+              await ipfs.pinAdd(entry.cid); // hold a local copy first…
+              pinset.add(entry.cid);
+            }
+            await ipfs.catToFile(entry.cid, abs); // …then write the bytes to the resolved local path
+            log.info("sync", `Fetched ${entry.path} -> ${abs} (${entry.cid})`);
           } catch (e) {
             log.warn("sync", `fetch failed for ${entry.path}: ${(e as Error).message}`);
           }
@@ -291,6 +306,82 @@ function syncRepoSafe(folder: string): Promise<void> {
   );
 }
 
+/**
+ * Resolve a storage file's local absolute path through THIS computer's device GRAFT (devices.mdx §4).
+ * A tracked file's machine-independent identity is a mapped-dir KEY + a relpath under it; the graft maps
+ * that key onto this box's absolute path. The first path segment is treated as a mapped-dir key ONLY when
+ * it is a real key in `mapped_dirs.yaml`:
+ *   • known mapped key, grafted here      → the grafted absolute path;
+ *   • known mapped key, NOT grafted here  → null (known-but-absent — don't add/fetch/place it here);
+ *   • not a mapped key (pre-mapped-dir index shape, files under the SDL root) → storage-root-relative.
+ * This is the sync-pass call site the graft resolver was built for (syncable_data_location.mdx §5).
+ */
+function resolveStorageAbs(root: string, rel: string, mappedKeys: Set<string>): string | null {
+  const sep = rel.indexOf(path.sep) >= 0 ? path.sep : "/";
+  const cut = rel.indexOf(sep);
+  if (cut > 0) {
+    const key = rel.slice(0, cut);
+    if (mappedKeys.has(key)) {
+      // A mapped hierarchy: the graft decides where (or whether) it lives here.
+      return resolveGraftedPath(root, key, rel.slice(cut + 1));
+    }
+  }
+  return path.join(root, rel); // pre-mapped-dir model: the file lives under the SDL root
+}
+
+/**
+ * Sync one directory-based storage (personal / company / community) as a unit, placing each file through
+ * this computer's device graft (`resolveStorageAbs` → devices.mdx §4). Repos sync as their own repo
+ * units and the settings-only "local" storage has no bytes, so both are skipped. Byte work is gated by
+ * the per-storage `synced` opt-in (default OFF — charter), mirroring the repo/computer-unit gate
+ * (sync_process.mdx §1): a not-opted-in storage is still known and visited, but nothing is added/pinned/
+ * fetched. Its file list is the tracking index; its manifest is the SDL's `.lfbridge/manifest.yaml`.
+ */
+export async function syncStorageUnit(id: string): Promise<void> {
+  const row = getStorageRow(id);
+  if (!row || row.type === "local" || row.type === "repo") return;
+  const root = expandHome(row.root);
+  if (!getStorageSynced(id)) {
+    log.info("sync", `Skip storage ${id}: synced=false.`);
+    return;
+  }
+  // Ensure this computer's device file (hence its graft) exists so path resolution has something to read.
+  try {
+    writeSelfDevice(root);
+  } catch (e) {
+    log.warn("sync", `writeSelfDevice for storage ${id} failed: ${(e as Error).message}`);
+  }
+  // Every indexed large file is a Sync candidate; its local home is resolved through the graft.
+  const decisions: Record<string, Decision> = {};
+  for (const f of readStorageIndex(root)) decisions[f.path] = "sync";
+
+  // The set of real mapped-dir keys (read once) tells resolveStorageAbs whether a path's first segment is
+  // a grafted hierarchy vs. a plain SDL-relative path.
+  const mappedKeys = new Set(readMappedDirsForRoot(root).mapped.map((m) => m.key));
+
+  await runUnitSync({
+    kind: "storage",
+    name: `storage:${id}`,
+    label: computerLabel(),
+    decisions,
+    fetchMissing: true,
+    resolveAbs: (rel) => resolveStorageAbs(root, rel, mappedKeys),
+    manifest: readCommittedManifest(root), // <root>/.lfbridge/manifest.yaml (same path convention as a repo)
+    status: UnitStatusSchema.parse({}),
+    writeManifest: (m) => writeCommittedManifest(root, m),
+    // Storage units have no status.yaml store yet — status is a no-op (the manifest + pins are still
+    // written and reconciled). A persisted per-storage status is a later follow-up.
+    writeStatus: () => {},
+  });
+}
+
+/** Sync one storage without letting a per-storage fault throw the pass. */
+function syncStorageSafe(id: string): Promise<void> {
+  return syncStorageUnit(id).catch((e) =>
+    log.error("sync", `sync storage ${id} failed: ${(e as Error).message}`),
+  );
+}
+
 /** Discover storage ids without letting a discovery fault throw the pass. */
 function safeStorageIds(): string[] {
   try {
@@ -330,10 +421,15 @@ export async function syncAll(opts: { priorityDone?: string } = {}): Promise<voi
     await syncComputerUnit().catch((e) =>
       log.error("sync", `sync computer unit failed: ${(e as Error).message}`),
     );
+    // Directory-based storages (personal/company/community) are units too: sync each through this
+    // computer's device graft (devices.mdx §4) so its mapped-dir files resolve to the right local paths.
+    // Bounded by the same limiter; per-storage failure is contained.
+    const storageIds = safeStorageIds();
+    await runPool(storageIds, SYNC_CONCURRENCY, syncStorageSafe);
     // Materialize each storage's ENABLED backing locations (storage_settings.mdx §6) — create-if-missing
     // + ensure .lfbridge/. Bounded by the same limiter as units; per-storage failure is contained so it
     // never throws the pass.
-    await runPool(safeStorageIds(), SYNC_CONCURRENCY, ensureBackingSafe);
+    await runPool(storageIds, SYNC_CONCURRENCY, ensureBackingSafe);
   } finally {
     passInFlight = false;
   }

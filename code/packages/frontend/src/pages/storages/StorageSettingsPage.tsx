@@ -42,6 +42,15 @@ export function StorageSettingsPage() {
         <span className="font-mono">{s.root}</span> · type: <span className="capitalize">{s.type}</span>
       </div>
 
+      {/* The IPFS-pinning opt-in — gates whether this storage's mapped-dir bytes are synced over IPFS. */}
+      <Section title="Sync over IPFS" subtitle="When on, this computer adds, pins, and fetches this storage's large files over IPFS, placing each file at its grafted local path. Off by default — LFB never pins content without your say-so.">
+        <Toggle
+          label="Sync this storage's files over IPFS on this computer"
+          checked={s.synced}
+          onChange={(v) => patch.mutate({ synced: v })}
+        />
+      </Section>
+
       {/* §3 the hidden tracking directory */}
       <Section title="Hidden tracking directory">
         <Toggle

@@ -119,6 +119,41 @@ export function readDevices(storageRoot: string): DeviceRecord[] {
 }
 
 /**
+ * Read THIS computer's graft for a storage (mappedKey → { localPath, wanted }). Empty when this device has
+ * no device file yet. Used by the storage settings page (§4a) to show each mapped row's local path here.
+ */
+export function readSelfGraft(storageRoot: string): Record<string, DeviceGraftEntry> {
+  const file = deviceFilePath(storageRoot, selfName());
+  if (!fs.existsSync(file)) return {};
+  try {
+    return toRecord(readYaml(file, DeviceFileSchema)).graft;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Set THIS device's graft local path for one mapped-dir key (devices.mdx §4, storage_settings.mdx §4a) —
+ * a self-owned write into `<SDL>/.lfbridge/devices/<self>.yaml`. A non-empty path sets the local_path and
+ * marks it wanted; clearing it (null/blank) leaves the key known-but-absent here (`local_path:null`,
+ * `wanted:false`). Only ever writes this device's own file; other devices' grafts are untouched.
+ */
+export function setSelfGraftPath(storageRoot: string, mappedKey: string, localPath: string | null): DeviceRecord {
+  const file = deviceFilePath(storageRoot, selfName());
+  fs.mkdirSync(devicesDir(storageRoot), { recursive: true });
+  const doc = readYaml(file, DeviceFileSchema); // defaults-on-absence
+  // Keep this device's identity current even if the file is being created by this edit.
+  const cfg = getAppConfig();
+  if (!doc.device.id) doc.device.id = cfg.computer.id ?? "";
+  if (!doc.device.name) doc.device.name = selfName();
+  const trimmed = localPath?.trim() || null;
+  doc.graft[mappedKey] = { local_path: trimmed, wanted: trimmed !== null };
+  writeYaml(file, doc as unknown as Record<string, unknown>);
+  log.info("storage", `graft "${mappedKey}" → ${trimmed ?? "(absent)"} for self device at ${storageRoot}`);
+  return toRecord(readYaml(file, DeviceFileSchema));
+}
+
+/**
  * Resolve a tracked file's machine-independent identity (mapped-dir key + relpath) to THIS device's absolute
  * local path via its graft (devices.mdx §4). Returns null when the mapped dir is not grafted here (no graft
  * entry, `wanted:false`, or `local_path:null`) — the file is known-but-absent on this computer. Pure resolver.

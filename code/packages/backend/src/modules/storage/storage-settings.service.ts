@@ -8,7 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { StorageUnitConfigSchema, MappedDirsSchema, type StorageUnitConfig } from "@lfb/shared";
-import type { StorageSettings, StorageBackingLocation, StorageSettingsPatch, StorageRow, MappedDir, MappedDirList } from "@lfb/shared";
+import type { StorageSettings, StorageBackingLocation, StorageSettingsPatch, StorageRow, MappedDir, MappedDirList, MappedDirsView, MappedDirRow } from "@lfb/shared";
 import { readYaml, writeYaml, updateYaml } from "../../shared/store/yaml-store.js";
 import { storageUnitDir, unitConfigPath } from "../../shared/store/scopes.js";
 import { expandHome } from "../fs/badges.js";
@@ -130,6 +130,7 @@ export function readStorageSettings(storageId: string): StorageSettings {
     name: row.name,
     type: row.type,
     root: row.root,
+    synced: cfg.synced,
     lfbridge: {
       enabled: cfg.lfbridge.enabled,
       path: cfg.lfbridge.path,
@@ -150,6 +151,7 @@ export async function writeStorageSettings(storageId: string, patch: StorageSett
   await updateYaml(storageConfigPath(storageId), StorageUnitConfigSchema, (c) => {
     // Identity mirror is written from the live row (read-only on the page — §5).
     c.storage = { id: row.id, name: row.name, type: row.type, root: row.root };
+    if (patch.synced !== undefined) c.synced = patch.synced; // the IPFS-pinning opt-in (sync gates byte work on it)
     if (patch.lfbridge) {
       if (patch.lfbridge.enabled !== undefined) c.lfbridge.enabled = patch.lfbridge.enabled;
       if (patch.lfbridge.path !== undefined) c.lfbridge.path = patch.lfbridge.path;
@@ -192,6 +194,19 @@ function applyBacking(
 /** Home-expanded absolute path a backing location resolves to on this computer (proposed default when unset). */
 export function resolveBackingAbsPath(loc: StorageBackingLocation): string {
   return expandHome(loc.path ?? loc.proposedDefault);
+}
+
+/**
+ * This computer's per-storage IPFS-pinning opt-in (the machine-local `synced` flag, default OFF). The sync
+ * pass gates a storage's mapped-dir byte work on this, mirroring the repo/computer-unit `synced` opt-in
+ * (sync_process.mdx §1). Reading a not-yet-configured storage returns the schema default (false).
+ */
+export function getStorageSynced(storageId: string): boolean {
+  try {
+    return readYaml(storageConfigPath(storageId), StorageUnitConfigSchema).synced;
+  } catch {
+    return false;
+  }
 }
 
 // ── mapped source directories (syncable_data_location.mdx §3, storage_settings.mdx §4a) ───────────────

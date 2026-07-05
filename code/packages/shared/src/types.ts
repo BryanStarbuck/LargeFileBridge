@@ -711,6 +711,32 @@ export interface MappedDirList {
   mapped: MappedDir[];
 }
 
+// One mapped-directory ROW as the storage settings page (§4a) shows it: the SHARED logical entry joined
+// with THIS computer's graft (devices.mdx §4) — so the user edits the shared list (add/remove) and this
+// machine's local path (the graft) in one row.
+export interface MappedDirRow {
+  key: string;
+  label: string;
+  canonical: string | null; // the writer's advisory path (shared)
+  recursive: boolean;
+  localPath: string | null;  // THIS device's grafted absolute path (null = not grafted here)
+  wanted: boolean;           // does this device carry this hierarchy at all
+}
+// GET /api/storages/:id/mapped-dirs — the mapped-directory list joined with this device's graft (§4a).
+export interface MappedDirsView {
+  storageId: string;
+  // false for repo/local: a repo's single mapped dir (its working tree) is shown read-only; the list is
+  // editable only for company/personal storages.
+  editable: boolean;
+  rows: MappedDirRow[];
+}
+// PATCH /api/storages/:id/mapped-dirs — set the SHARED list (add/remove rows) and/or THIS device's graft
+// paths. `mapped` replaces the shared list; `graft` maps a row key → this computer's local path.
+export interface MappedDirsPatch {
+  mapped?: Array<Partial<MappedDir>>;
+  graft?: Record<string, string | null>;
+}
+
 // ── Devices — the per-computer registry + the graft (devices.mdx) ────────────
 export interface DeviceScheduleWindow {
   days: string[];
@@ -773,6 +799,7 @@ export interface StorageSettings {
   name: string;            // read-only identity (written by discovery — §5)
   type: StorageType;
   root: string;
+  synced: boolean;         // the per-storage IPFS-pinning opt-in (default OFF) — gates mapped-dir byte work
   lfbridge: {
     enabled: boolean;      // keep .lfbridge/ on THIS computer (default ON — §3)
     path: string | null;   // null = default <root>/.lfbridge/ ; else an absolute override
@@ -792,6 +819,7 @@ export interface StorageBackingPatch {
   path?: string | null;
 }
 export interface StorageSettingsPatch {
+  synced?: boolean;
   lfbridge?: { enabled?: boolean; path?: string | null };
   backing?: {
     dedicatedRepo?: StorageBackingPatch;
