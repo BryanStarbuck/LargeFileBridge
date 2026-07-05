@@ -63,6 +63,10 @@ GET /api/media/raw?path=&e=&t=       (token-gated)   → the bytes, with Range s
 key minted once per backend process (tokens naturally invalidate on restart — acceptable for a viewer).
 Default expiry ≈ 6h so a long viewing session with re-buffers keeps working.
 
+Minting and verifying the short-lived HMAC-signed grant is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/media.service.ts` — `mintGrant` / `verifyGrant` functions
+
 **Raw.** Re-derives + constant-time-compares the HMAC, checks `expMs` is in the future, re-stats the path
 (must be an existing **regular file** — never a directory), sets `Content-Type` from a small extension→MIME
 map, `Accept-Ranges: bytes`, `Content-Disposition: inline`, and:
@@ -71,6 +75,10 @@ map, `Accept-Ranges: bytes`, `Content-Disposition: inline`, and:
 * `Range: bytes=a-b` → `206 Partial Content` with `Content-Range`, `Content-Length` of the slice, streams
   just that slice (`fs.createReadStream(abs, { start, end })`).
 * Unsatisfiable range → `416`.
+
+Verifying the token, parsing the HTTP `Range`, and streaming the byte slice (200 / 206 / 416) is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/media.router.ts` — the `GET /raw` route (with `parseRange` from `media.service.ts`)
 
 **Probe** (`MediaProbe`, `@lfb/shared`). A **best-effort, local-only, no-shell** sniff (charter forbids
 shell/ffprobe). It reads a bounded head (and, for videos, a bounded tail) and reports what it can:
@@ -96,6 +104,10 @@ interface MediaProbe {
 
 Any field we cannot determine is `null`; the UI degrades to "—". The probe never blocks the viewer — the
 media loads from the grant URL regardless of what probe returns.
+
+The local, no-shell container/codec/dimensions sniff (bounded header + tail read) is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/media.service.ts` — `probeMedia` function
 
 ---
 
@@ -139,6 +151,10 @@ takes all remaining height), and a **compact property strip + action links** pin
   **badges**; then text links **Open containing folder** (`/fs`), **Copy path**, **View properties**
   (`/file`), and **Open raw** (opens the grant URL in a new tab — download/native handoff).
 
+The shared viewer-first layout (header, action row, fit-to-fill viewer surface, property strip) is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `MediaViewer` component (with `ViewerSurface`)
+
 ---
 
 ## 4. The action-button row (promotion, not invention)
@@ -162,6 +178,10 @@ controls; the complete catalog still lives under `⋮`. Left→right:
 
 The IPFS button and the compress chip are the **same state** as their `⋮` menu items and the files.mdx
 switches — flipping one updates the others.
+
+Promoting the IPFS primary, repo chip, compressed-state chip, and codec chip to the action row is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `IpfsPrimary` / `RepoChip` / `CompressChip` / `CodecChip` components
 
 ---
 

@@ -32,6 +32,7 @@ import type {
   IpfsDaemonAction,
   ScanJob,
   RescanResult,
+  SessionActivityResult,
 } from "@lfb/shared";
 import { http, unwrap } from "./axios.js";
 
@@ -83,6 +84,10 @@ export const api = {
   allowList: () => unwrap<string[]>(http.get("/settings/allow-list")),
   setAllowList: (emails: string[]) =>
     unwrap<string[]>(http.patch("/settings/allow-list", { emails })),
+
+  // Web-session activity ping (sessions.mdx). Fired on app open + each route render; the server rolls
+  // it into the open session and, on a stale return (>48h), kicks a non-blocking sync.
+  recordActivity: () => unwrap<SessionActivityResult>(http.post("/sessions/activity")),
 
   syncPage: () => unwrap<SyncPageData>(http.get("/sync")),
   controlWorker: (worker: WorkerKind, action: "install" | "uninstall" | "enable" | "disable") =>

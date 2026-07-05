@@ -15,6 +15,9 @@ The **One repo** screen is where the work happens. You reach it by clicking a re
    **Undecided**. Most of the user's time here is spent scanning "how many will sync, how many will
    not, and which ones I still need to decide on."
 
+The One-repo screen is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` component
+
 This spec builds on the siblings and does not repeat them:
 
 * [Repos](./repos.mdx) — the list this screen drills into; defines the LOCKED vocabulary
@@ -103,6 +106,10 @@ Three regions stacked in the content column: the **header** (repo identity + Syn
   `Sync` file this machine has that peers lack, fetch every `Sync` file peers have that this machine
   lacks. States: idle (`Sync now`) → running (`Syncing…`, spinner, disabled) → done (counts + table
   refresh). It never changes any decision.
+
+Sync now — which moves bytes even when the per-repo sync toggle is off, then flips it on — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncRepoFolder` (via `POST /api/repos/:repoId/sync`)
+
 * **`⋮` "more" menu** (top-right, next to Sync now) — because this page **is one repo**, it carries the
   **repo entity menu**: the same catalog as a Repos-table row's kebab
   ([menus.mdx §4 / §5.1](./menus.mdx#4-the-entity--more-menu--single-entity-pages)) — Open in File
@@ -126,6 +133,9 @@ A single horizontal strip of the repo's live status (read) and its one per-repo 
 Note: the app-wide **background sync process** (installed? on/off? the every-15-min `launchd`
 schedule) is the **Sync** left-bar page, not this strip. This strip's toggle is only *this repo's*
 participation in it.
+
+The repo's live status/settings strip values are computed by the backend in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail`
 
 ---
 
@@ -209,6 +219,9 @@ path for triaging many files:
 Selecting the header checkbox selects the whole current page; a "Select all N matching" affordance
 appears when a filter is active, to act on the entire filtered set, not just the page.
 
+Bulk-writing one decision across the selected rows is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` bulk menu (mutated via `setDecision`)
+
 ### 4.5 The Decision select (per row) — the core interaction
 
 Each row's **Decision** cell is an inline select with the three states. Changing it writes
@@ -221,6 +234,9 @@ immediately (optimistic, with rollback on error):
 
 Changing a decision never deletes the user's local file — it only changes what LFBridge *does* with
 it.
+
+Writing a per-file decision (single or bulk) to the repo's `config.yaml` is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `PATCH /api/repos/:repoId/files`
 
 ### 4.6 Transfer status pill (LOCKED)
 

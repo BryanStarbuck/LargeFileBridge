@@ -14,6 +14,9 @@ The left bar's **Repos** item (order 1, icon `FolderGit2`, route `/` — source 
 `pm/left_bar.yaml`) lands here. Clicking any repo row opens that repo's per-file screen
 ([One repo](./one_repo.mdx)).
 
+The Repos page is loaded and rendered as one TanStack table in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `ReposPage` component
+
 This spec builds on the siblings and does not repeat them:
 
 * [README](../README.md) — the product charter: Git tracks the small files; LFBridge moves the big,
@@ -62,6 +65,9 @@ export type RepoStatus =
   | "never";       // repo added, never synced
 ```
 
+The per-repo summary row (`RepoRow`) each table row shows is assembled by the backend in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoRow`
+
 ---
 
 ## 2. Layout
@@ -97,6 +103,9 @@ header**, the **top-right Add repo button**, and the **Repos table** with its co
 ## 3. The table (TanStack, house style)
 
 **All tables are TanStack tables** (charter rule). This is one flat, chromeless `DataTable`:
+
+The rows are served to the table by the backend endpoint in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `GET /api/repos`
 
 ### 3.1 Control row (above the table) — LOCKED
 
@@ -232,6 +241,9 @@ Precedence when several could apply: `error` > `syncing` > `behind` > `needs_rev
 (`cursor-pointer`, hover highlight), routed via TanStack Router; the trailing **›** chevron is the
 visual affordance and goes to the same place.
 
+Whole-row click navigation to the repo's per-file screen is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `ReposPage` `onRowClick` (navigates to `/repos/$repoId`)
+
 **On top of that, each data cell is a deep link** to the most specific view for that cell
 ([menus.mdx §2](./menus.mdx#2-cell-navigation--clicking-a-cell-is-a-deep-link)) — so a click lands the
 user exactly where they meant to go instead of opening the repo and re-filtering by hand:
@@ -276,6 +288,9 @@ this computer with LFBridge:
   [One repo](./one_repo.mdx) screen).
 * A repo already registered is rejected with an inline message (no duplicate rows).
 
+Registering a repo by folder path (and kicking a background rescan) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `POST /api/repos` (calls `registerRepo`)
+
 ---
 
 ## 7. Empty & loading states
@@ -318,6 +333,9 @@ so it's discoverable. No layout shift between states (same box).
 * The same toggle is also offered in the repo **`⋮` menu** as *"Bookmark / Remove bookmark"*
   ([menus.mdx §5.1](./menus.mdx#51-repo)) so it is reachable without hunting for the tiny icon.
 
+The leading ribbon toggle and its optimistic flip are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `BookmarkToggle` (mutated via `ReposPage` `toggleBookmark`)
+
 ### 8.3 Persistence — it lives in the repo's `config.yaml` (LOCKED)
 
 The bookmark is a **local, per-computer** preference (a favorite *this machine's* user set), so it
@@ -339,12 +357,25 @@ big_file_override: { … }
 * **API:** `POST /api/repos/:repoId/bookmark` with `{ bookmarked: boolean }` writes the flag to
   `config.yaml` and returns the updated `RepoRow`. Idempotent; unknown `repoId` → 404.
 
-### 8.4 Sort & filter
+Persisting the bookmark flag to the repo's `config.yaml` is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `POST /api/repos/:repoId/bookmark`
 
-* **Sort** by Bookmark puts **bookmarked repos first** (then the secondary sort, default name). This is
-  the natural way to pull favorites to the top of a 100-repo list.
-* **Filter** = *Bookmarked: yes / no* (boolean) in the standard filter dropdown (§3.1).
+### 8.4 Sort & filter — the shared model ([tables.mdx](./tables.mdx))
+
+The bookmark's sort/filter behavior is the **cross-cutting** one defined once in
+[tables.mdx](./tables.mdx) (bookmarks, promoted filter, multi-level sort, per-user persistence) — Repos
+is its **reference implementation**. In short:
+
+* **Sort is multi-level** (primary / secondary / tertiary — [tables.mdx §3](./tables.mdx#3-multi-level-sort--primary--secondary--tertiary-locked)).
+  The **default** here is **Bookmarked descending first, then repo name** — favorites float to the top
+  of a 100-repo list. The sort dropdown's **1st/2nd/3rd** priority slots let the user re-rank; the
+  choice is **saved per user for this page** and restored next visit.
+* **Filter** — the filter dropdown **promotes a "Bookmarked only" checkbox** to the top
+  ([tables.mdx §2](./tables.mdx#2-the-promoted-bookmarked-only-filter-locked)); the per-column
+  *Bookmarked: yes / no* filter still exists in the standard list (§3.1).
 * Bookmark state is **independent** of `status` — a bookmarked repo still shows its true status pill.
+* **Persistence** — this page's sort + filter are saved in `users/<email>/config.yaml` `tables.views`
+  ([tables.mdx §4](./tables.mdx#4-persistence--sort--filter-saved-per-user-per-page-locked)).
 
 ---
 

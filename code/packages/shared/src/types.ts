@@ -362,6 +362,16 @@ export interface RescanResult {
   job: ScanJob;
 }
 
+// ── Web session activity ping (sessions.mdx) ────────────────────────────────
+// Response to POST /api/sessions/activity. `newSession` is true when this ping STARTED a fresh web
+// session (a return after the 4h idle window); `autoSyncTriggered` is true when that start was on a
+// > 48h-stale machine and a non-blocking syncAll() was fired.
+export interface SessionActivityResult {
+  newSession: boolean;
+  autoSyncTriggered: boolean;
+  lastSyncAt: string | null; // "last synchronized" the staleness check read (ISO), or null if never
+}
+
 // ── Auth (mirrors @auth/backend AuthUser, trimmed) ──────────────────────────
 export interface CurrentUser {
   authenticated: boolean;

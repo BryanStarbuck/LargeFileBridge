@@ -87,6 +87,9 @@ kebab** button. It is the standard, discoverable home for *acting on one row* �
 header **`⋮` bulk menu** (which acts on the *selected set*, [one_repo.mdx §4.4](./one_repo.mdx)): the
 row kebab is the **last cell of each row**, the bulk menu is in the **control row above the table**.
 
+The trailing control column that carries every row's ⋮ kebab is rendered by the shared table in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the `rowMenu` trailing cell).
+
 > **Orientation (LOCKED).** The kebab is always the **vertical** three-dot glyph **`⋮`** — three dots
 > stacked **up-and-down**, never the horizontal **`⋯`**. This holds for every trigger: the row kebab,
 > the right-click menu's affordance, and the single-entity page's "more" button (§4). One glyph,
@@ -109,6 +112,9 @@ row kebab is the **last cell of each row**, the bulk menu is in the **control ro
 * **Keyboard + a11y.** Focusable button (`aria-haspopup="menu"`), arrow-key navigation, `Enter`
   activates, `Esc` closes and returns focus. Each item has a clear label; icons are decorative.
 
+The vertical ⋮ kebab button (stops row-click propagation, opens a portaled popover) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `KebabButton` component.
+
 ### 3.1 Right-click opens the same menu (LOCKED)
 
 Wherever a **file or directory entry** is rendered — a table row, a [File System](./directories.mdx)
@@ -122,6 +128,9 @@ the right-click is the power-user shortcut. They are two triggers for **one** me
 * Right-click **suppresses the browser's native context menu** only over LFB entity rows; elsewhere the
   native menu is untouched.
 * Right-click never *navigates* and never *selects* — it only opens the menu (the kebab discipline, §3).
+
+The pointer-positioned menu (same catalog, clamped on-screen, closes on Esc / outside-click) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `EntityMenuAt` component.
 
 ---
 
@@ -160,6 +169,9 @@ entity.
   definition (§5) — they never drift. If an action makes no sense at the page altitude (e.g. "Open" when
   you are already on the page), it is simply **omitted/disabled**, not a different list.
 
+The single-entity page's top-right ⋮ "more" button, rendering the same catalog as the row kebab, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `EntityMore` component.
+
 ---
 
 ## 5. The per-entity action catalogs (LOCKED)
@@ -182,6 +194,9 @@ don't resolve to a local entity. Each is used verbatim by that entity's **row ke
 | Config | **Repo settings…** | navigate | → [Repo settings](./repo_settings.mdx) (the gear target). |
 | Copy | **Copy path** | copy | Absolute repo path to clipboard. |
 | Danger | **Remove repo (unregister)** | mutate ⚠ | Unregisters from LFB only. **Never deletes the folder or any local file** (§6.2); confirm required. |
+
+The repo action catalog (Open / Work / Config / Copy, and Remove-repo that unregisters only) is built in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `RepoKebab` component.
 
 ### 5.2 Directory (non-repo)
 
@@ -218,6 +233,9 @@ don't resolve to a local entity. Each is used verbatim by that entity's **row ke
 | Copy | **Copy CID** · **Copy path** | copy | CID present only once the file is a Sync file with a CID. |
 | Danger | **Stop syncing (untrack / unpin)** | mutate ⚠ | Removes from the manifest and unpins **on this machine**. **Never deletes the local bytes** (§6.2); confirm required. |
 
+The file action catalog (Add/Remove IPFS, the three-state decision submenu, Compress, Stop syncing) is built in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` function.
+
 ### 5.4 Peer (a user's other computer)
 
 | Group | Action | Kind | Notes |
@@ -225,6 +243,9 @@ don't resolve to a local entity. Each is used verbatim by that entity's **row ke
 | Open | **View peer** | navigate | The peer's detail (which repos/files it pins). |
 | Copy | **Copy PeerID** | copy | The IPFS PeerID ([storage §11](./storage.mdx#11-peersyaml--the-users-other-computers)). |
 | Danger | **Remove peer** | mutate ⚠ | Forget this computer from `peers.yaml`; confirm required. Does not touch remote content. |
+
+The peer action catalog (Copy Peer ID, Remove peer) is built in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `PeerKebab` component.
 
 ### 5.5 IPFS pin (a pinned CID) — LOCKED
 
@@ -243,6 +264,9 @@ rows are not a file/dir/repo/peer, so they use this **pin catalog**, so the row 
 | Copy | **Copy path** | copy | Only when a local path is known. |
 | Danger | **Unpin from this computer** | mutate ⚠ | `ipfs pin rm` on this node — stops this machine serving the CID and lets GC reclaim it. **Never deletes any local file** (the bytes on disk, if any, are untouched, §6.2); confirm required. This is the pin-level twin of the file catalog's **Stop syncing** (§5.3). |
 
+The pin catalog for pinned-CID rows with no local entity (Import into tracking, Copy CID, Unpin) is built in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `PinKebab` component.
+
 Guardrail: unpinning is only ever "stop serving *our own* CID on *this* machine." It never turns the
 node into a public gateway (§6.5) and never deletes local bytes (§6.2).
 
@@ -259,6 +283,9 @@ alpha-channel/functionality warning for a convert) — LFB never compresses, con
 `.gitignore` entry on its own (charter: "Never compress or alter a file unless the user explicitly
 asks"; "Never add a `.gitignore` entry automatically"). Once confirmed, the work runs through the
 progress dock as its `compress` / `ignore` op ([webapp.mdx §11](./webapp.mdx#11-what-shows-up-in-the-dock--the-lfbridge-operation-taxonomy)).
+
+The explicit-click Compress OFFER with its `window.confirm` step (never compresses a file on its own) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` `compress` handler.
 
 ### 6.2 Local bytes are never deleted by LFB
 **Remove repo**, **Stop syncing (untrack/unpin)**, and **Remove peer** change only *LFB's tracking* —
@@ -298,6 +325,9 @@ apply to **either a file or a directory**. They are the user's standing "leave t
 * Both flags are **toggles** in the menu with a check when on, are reflected on the entity's page
   ([files.mdx](./files.mdx) / [directories.mdx](./directories.mdx)) as a labeled switch, and — like every
   mutating action — write immediately and can be flipped back at any time.
+
+The two sticky per-entity toggles — Never IPFS and Do not compress — are built and written in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the `flags` mutation via `api.setEntityFlags`).
 
 ---
 

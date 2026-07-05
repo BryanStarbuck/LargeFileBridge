@@ -36,12 +36,18 @@ unit and its `config.yaml`).
 The gear is the **only** entry to per-repo settings — global settings never expose per-repo controls;
 they only show the global defaults this page can override.
 
+The gear icon that opens this page (navigating to `/repos/$repoId/settings`) lives in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` settings button
+
 ---
 
 ## 2. The settings on this page
 
 The page presents these per-repo settings, each of which either overrides a global default or is
 inherently repo-specific.
+
+The per-repo settings form is rendered and loaded in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/RepoSettingsPage.tsx` — `RepoSettingsPage` component (data via `GET /api/repos/:repoId/settings`)
 
 ### 2.1 Big-file threshold override
 
@@ -148,6 +154,9 @@ access:                        # §2.5 sharing
 * Any field a repo does **not** override falls back to the global default: the threshold falls back to
   [settings.mdx](./settings.mdx) when `big_file_override.enabled` is false; `large_files.min_bytes`
   semantics are subsumed by the threshold-override model.
+
+Writing every field on this page to the repo's `config.yaml` (and mapping it back for the UI) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `PATCH /api/repos/:repoId/settings` (via `updateRepoConfig` / `toRepoSettings`)
 
 ---
 

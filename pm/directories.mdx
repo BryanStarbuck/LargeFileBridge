@@ -71,6 +71,9 @@ directories — at **one** level of the directory hierarchy.
 Each row shows, left to right: an (optional) folder/file glyph, the **entry name** (middle-truncated
 if long), a flexible spacer, and then the **code badges** pinned to the **far right** (§3).
 
+Listing one directory level (Node `fs` only, sorted dirs-first, with per-entry badges) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()`, served by `fs.router.ts` → `GET /api/fs`.
+
 ### 1.1 Row actions — the entity menu (right-click + `⋮`)
 
 Even though this page is a *browser*, not a TanStack table, its file/dir rows carry the same **entity
@@ -85,6 +88,9 @@ action menu** as everywhere else ([menus.mdx](./menus.mdx)):
 * Opening the dedicated **View one file** ([files.mdx](./files.mdx)) or **View one directory**
   (Part B, §7) page gives that entity's menu as the top-right `⋮`
   ([menus.mdx §4](./menus.mdx#4-the-entity--more-menu--single-entity-pages)).
+
+The Miller-column strip — one lazily-fetched column per directory level, drill-down replacing columns to the right — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (and its `FsColumn`).
 
 ---
 
@@ -187,6 +193,9 @@ just paints it onto the raw filesystem so a share site is visible while browsing
 **detect-and-report only** — showing `i` never publishes, rewrites, or turns this machine into a public
 gateway (the only-our-content rule, [knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx), stands).
 
+Detecting the IPFS `i` badge — artifact names, the capped markdown/manifest content peek, and a directory that publishes one underneath — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `fileIsIpfsArtifact()` and `dirPublishesIpfs()`.
+
 ### 3.5 Ordering & stacking (LOCKED)
 
 * Badges are **pinned to the far right** of the row. When a row has several, they **stack leftward**:
@@ -199,6 +208,9 @@ gateway (the only-our-content rule, [knowledge/ipfs.mdx §6](../knowledge/ipfs.m
 * Zero badges is normal and common.
 * Each badge has a **hover tooltip** spelling out its meaning (e.g. "Repo root", "Sync — tracked",
   "Should be compressed", "IPFS share artifact").
+
+Computing the ordered badge list per entry (repo precedence, sync, compress, ipfs — rightmost-first) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `computeBadges()` (with the per-listing `buildBadgeContext()`).
 
 ---
 
@@ -343,6 +355,9 @@ One content column: a **header** (identity + primary button + `⋮`), a **badge/
 * **`⋮` more menu** — the **Directory catalog** ([menus.mdx §5.2](./menus.mdx)) verbatim; **View
   directory** is omitted (you are on it).
 
+Rendering the View-one-directory page — header, badge/flag strip, rollup table, and the `⋮` more menu — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneDirectoryPage.tsx` — `ViewOneDirectoryPage`.
+
 ---
 
 ## 8. The category rollup table (charter) — TanStack, house style
@@ -363,6 +378,9 @@ Clicking a **count** deep-links into the File System browser (§1) at this direc
 that category ([menus.mdx §2](./menus.mdx)). When **Do not compress** is on, rows 1–2 still count but
 their **Compress…** action is hidden (the offer is suppressed); when **Never IPFS** is on, row 4's
 **Track / Sync** is hidden (nothing under here may be synced).
+
+Computing the four charter category counts by a bounded recursive walk is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `buildDirRollup()` (via `buildEntityView()`).
 
 **Height — bounded (the content-below exception).** This page renders an **inside summary** footer
 **beneath** the rollup table (§7 layout). Because content sits **below** the table, it is the
@@ -424,6 +442,9 @@ here they are **directory-scoped** — they cover current and future contents:
   suppressed and the `C` badge is not painted for media below.
 
 Neither flag deletes or alters any bytes ([menus.mdx §6.2/§6.6](./menus.mdx)).
+
+Writing the directory-scoped sticky flags — and clearing `sync` decisions below when Never IPFS turns on — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `setEntityFlags()`.
 
 ---
 

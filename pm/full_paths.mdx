@@ -55,6 +55,9 @@ workflow. So the rows are exactly the files the rest of LFB already cares about:
   **`truncated`** note ("showing the first N — narrow the root") so a capped list never reads as
   complete (charter: no silent truncation).
 
+The recursive, metadata-only, Node-`fs`-only large-file walk (cap, iteration budget, hard-skip, threshold) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fsindex/fsindex.service.ts` — `walkFilesFlatStreaming()` (buffered via `fs.service.ts` → `listFilesFlat()`).
+
 Directories are **never** rows here (this is a file table; the column browser is where directories
 live). The chosen **root** defaults to the OS **home directory**, with a **Home** button and an
 absolute-path input to re-root (and a `?path=` deep link, same as [directories.mdx §1](./directories.mdx)).
@@ -89,6 +92,9 @@ The standard app frame (256px left bar), then — inside the File System area �
 * The table is the house flat/chromeless **DataTable** style ([repos.mdx §3](./repos.mdx)); rows carry
   the same right-aligned **code badges** and a trailing **`⋮`** kebab as the column browser.
 
+The tab strip that switches Column view (`/fs`) and Full paths (`/fs/paths`) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FsTabs.tsx` — `FsTabs`.
+
 ---
 
 ## 3. The control row — segmented controls (LOCKED)
@@ -121,7 +127,11 @@ descending), clicking a different segment makes it the active sort:
   lexicographically.)
 
 This segmented control and the house **sort icon** (below) are the **same** sort state — changing one
-updates the other. Only one column sorts at a time.
+updates the other. The segment sets the **primary** key of the shared **multi-level** sort
+([tables.mdx §3](./tables.mdx#3-multi-level-sort--primary--secondary--tertiary-locked)); the sort icon
+exposes the full **1st/2nd/3rd** priority slots (e.g. Bookmarked → Size → Name). The **page default**
+is **Bookmarked ↓ first, then Size ↓** — bookmarked files float to the top of the list, biggest-first
+within — applied until the user re-ranks (their choice then persists, §3.4).
 
 ### 3.3 IPFS membership filter — `In IPFS · Not · Both` (default **Both**)
 
@@ -137,16 +147,25 @@ file is **pinned / synced** — its decision is **sync** and it carries the pink
 
 ### 3.4 House search + sort/filter icons (charter)
 
-Per the [Tables charter](../CLAUDE.md) every table also carries, in the control row:
+Per the [Tables charter](../CLAUDE.md) and the shared [tables.mdx](./tables.mdx) behavior, the
+control row also carries:
 
 * a **search box** (left) — case-insensitive substring over **name + path**;
-* a single **sort icon** (`⇅`) — opens the house sort dropdown; it is the **same** sort state as the
-  Sort segmented control (§3.2);
-* a single **filter icon** (`⛛`) — opens a small dropdown for the finer filters the segments don't
-  cover (a **min size** and a **name/path contains**); colored when active.
+* a single **sort icon** (`⇅`) — opens the house **multi-level** sort dropdown
+  ([tables.mdx §3](./tables.mdx#3-multi-level-sort--primary--secondary--tertiary-locked)) with
+  **1st/2nd/3rd** priority slots; it is the **same** sort state as the Sort segmented control (§3.2)
+  and header clicks (picking a segment or clicking a header sets the **primary**);
+* a single **filter icon** (`⛛`) — its dropdown **promotes a "Bookmarked only" checkbox** to the top
+  ([tables.mdx §2](./tables.mdx#2-the-promoted-bookmarked-only-filter-locked)), then the finer filters
+  the segments don't cover (a **min size** and a **name/path contains**); colored when active.
 
 The three segmented controls are the **quick filters** (like [one_repo.mdx §4.1](./one_repo.mdx)'s
-summary chips); the icon dropdowns are the fallback for anything finer.
+summary chips); the icon dropdowns are the fallback for anything finer. This page's **sort + filter
+persist per user** in `users/<email>/config.yaml` `tables.views`
+([tables.mdx §4](./tables.mdx#4-persistence--sort--filter-saved-per-user-per-page-locked)).
+
+The client-side derivation of the three segmented filters (from the C/c and S badges) and the shared sort state is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (the `filtered` memo + `setSort()`).
 
 ### 3.5 Action row — `Select all · IPFS pin · Unpin`
 
@@ -165,6 +184,9 @@ checked. Pin/Unpin reuse the per-entity decision endpoint, so — like everywher
 `pinned N, skipped M`), never silently dropped. Both flags apply: a file with **Never IPFS** on
 ([menus.mdx §6.6](./menus.mdx)) is refused by pin and reported as skipped.
 
+Batch pin/unpin over the checked rows (per-entity decision → sync/ignore, skip-and-report) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (the `pin` mutation), backed by `entity.service.ts` → `setEntityDecision()`.
+
 ---
 
 ## 4. The table (TanStack, house style)
@@ -176,11 +198,12 @@ everywhere ([repos.mdx §3](./repos.mdx)).
 
 | # | Column | Kind | Sort | Notes |
 | --- | --- | --- | --- | --- |
-| 0 | **☐ select** | — | — | Row checkbox; header checkbox selects the current page (§3.5). |
-| 1 | **Name** | text | ✓ | The file's base name, bold. Clicking it opens **View one file** ([files.mdx](./files.mdx)). |
-| 2 | **Path** | text | ✓ | The **full absolute path** — the widest column, middle-truncated with the full path on hover/`title`. Clicking opens **View one file**. |
-| 3 | **Size** | bytes | ✓ | Human-readable (`8.2 GB`), right-aligned; sorts on raw bytes. The default sort (▼). |
-| 4 | **Changed** | timestamp | ✓ | `modifiedAt`, relative with an absolute tooltip. |
+| 0 | **`▮` Bookmark** | toggle | ✓ | **Leading** ribbon favorite toggle ([tables.mdx §1](./tables.mdx#1-the-leading-bookmark-favorite-toggle-locked)) — a control cell; flips `bookmarked` (stored in the owning sync unit's `config.yaml`, keyed by path + fingerprint — [tables.mdx §1.1](./tables.mdx#11-where-the-flag-is-stored-per-entity-type-locked)) and never navigates. |
+| 1 | **☐ select** | — | — | Row checkbox; header checkbox selects the current page (§3.5). |
+| 2 | **Name** | text | ✓ | The file's base name, bold. Clicking it opens **View one file** ([files.mdx](./files.mdx)). |
+| 3 | **Path** | text | ✓ | The **full absolute path** — the widest column, middle-truncated with the full path on hover/`title`. Clicking opens **View one file**. |
+| 4 | **Size** | bytes | ✓ | Human-readable (`8.2 GB`), right-aligned; sorts on raw bytes. The default **secondary** sort (▼) — after Bookmarked (§3.2). |
+| 5 | **Changed** | timestamp | ✓ | `modifiedAt`, relative with an absolute tooltip. |
 | — | **badges** | — | — | The right-aligned **code badges** ([directories.mdx §3](./directories.mdx)) — here mostly **C/c** (compress) and **S** (sync/IPFS), plus **r** inside a repo and **i** for list artifacts. |
 | — | **`⋮`** | — | — | The row **kebab** — the **file** action catalog ([menus.mdx §5.3](./menus.mdx)); right-click on the row opens the same menu ([menus.mdx §3.1](./menus.mdx)). Never navigates. |
 
@@ -261,21 +284,25 @@ different *view* of the same file knowledge, not new knowledge.
 4. **Compressed** segmented control (**Both · Compressed · Uncompressed**, default Both) filters rows by
    the **C/c** badge; **Uncompressed** narrows to the bright-yellow **C** ("could compress but isn't").
 5. **Sort** segmented control (label **"Sort:"**, segments **Size · Name · Path**, each with an up/down
-   arrow) drives table sorting; **Size** is the default active segment, defaulting to **▼ biggest on
-   top**; clicking the active segment toggles ▲/▼. It shares one sort state with the house **sort
-   icon** (§3.2/§3.4).
-6. **IPFS** segmented control (**In IPFS · Not · Both**, default Both) filters by pin/sync membership
+   arrow) sets the **primary** key; it shares one **multi-level** sort state with the house **sort
+   icon** (§3.2/§3.4) and header clicks. The house sort dropdown exposes **1st/2nd/3rd** priority slots
+   ([tables.mdx §3](./tables.mdx)); the **page default** is **Bookmarked ↓, then Size ↓**.
+6. The table carries the **shared table behavior** ([tables.mdx](./tables.mdx)): a leading **bookmark**
+   toggle (col 0, stored per file by path + fingerprint in the owning sync unit's `config.yaml`), a
+   **"Bookmarked only"** checkbox promoted to the top of the filter dropdown, and **per-user, per-page
+   persistence** of the sort + filter state in `users/<email>/config.yaml`.
+7. **IPFS** segmented control (**In IPFS · Not · Both**, default Both) filters by pin/sync membership
    (the **S** badge / decision `sync`); **Not** reveals the un-pinned backup candidates.
-7. The **action row** — **Select all** (selects the whole filtered set), **IPFS pin** (decision →
+8. The **action row** — **Select all** (selects the whole filtered set), **IPFS pin** (decision →
    sync), **Unpin** (decision → ignore) — acts on checked rows, shows an **N selected** counter, never
    moves or deletes local bytes, and **reports skipped** files (not in a registered repo, or Never
    IPFS) rather than dropping them silently.
-8. Each row's **Name/Path cells deep-link** to [View one file](./files.mdx); the **`⋮`** kebab and
+9. Each row's **Name/Path cells deep-link** to [View one file](./files.mdx); the **`⋮`** kebab and
    right-click open the **file** catalog ([menus.mdx §5.3](./menus.mdx)) and never navigate.
-9. **Pagination defaults to 500** with the file count shown; empty / filtered-empty / truncated /
+10. **Pagination defaults to 500** with the file count shown; empty / filtered-empty / truncated /
    loading / bad-root states render per §6; the house **search box** (name + path) and **filter icon**
    are present per the [Tables charter](../CLAUDE.md).
-10. Nothing on this page ever turns this machine into a public IPFS gateway or alters local file bytes —
+11. Nothing on this page ever turns this machine into a public IPFS gateway or alters local file bytes —
     pinning is the same only-our-content **decision → sync** as the rest of LFB
     ([ipfs.mdx §4](./ipfs.mdx), [knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx)).
 

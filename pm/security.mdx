@@ -72,6 +72,9 @@ allowListed(email):
   else                                        -> false          # FAIL CLOSED — default deny
 ```
 
+The single live allow decision (companies OR individuals, read fresh every request, fail-closed) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/security/security.service.ts` — `allowListed()`
+
 * **Two independent switches, OR'd.** `allow_companies` covers *domains*; `allow_individuals` covers
   *exact emails*. An email is allowed if **either** switch admits it. A switch that is **off**
   contributes nothing even if its list is non-empty (turning the switch off is a kill-switch that keeps
@@ -88,6 +91,9 @@ allowListed(email):
     allow-listed. Nothing about the user's repos, files, peers, or settings is served otherwise.
   * `requireAdmin` — wraps allow-list **editing**; requires `role:admin` **and** allow-listed; **403**
     otherwise (`settings.mdx §4`).
+
+The two enforcement middlewares (401 for non-listed data access, 403 for non-admin edits) are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/identify.ts` — `requireAllowListed()` / `requireAdmin()`
 
 "Configured" is its own boolean, `access.configured`, set to `true` the instant the Security Setup page
 saves. It is the single fact the frontend gate (§4.1) and the one-time write lock (§8.1) both key on.
@@ -134,6 +140,9 @@ access:
 * No secret lives here — Google **client** id/secret stay out-of-repo
   ([storage.mdx §10](./storage.mdx#10-auth-session--signing-secret-runtime-not-settings)); this block is
   non-secret policy (which domains/emails are allowed).
+
+Reading and writing the app-level `config.yaml → access` block is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()` / `updateAppConfig()`
 
 Inventory row (per storage.mdx §14 rule — every persisted key has a row):
 
@@ -187,6 +196,9 @@ The page LFB renders when `access.configured == false`. It has **no left bar and
 [left_bar.mdx](./left_bar.mdx) entirely, exactly like the Sign-In page. It is reachable **without
 authentication** because there is no user yet; its write path is protected instead by the one-time lock
 and loopback guard of §8.
+
+The first-run Security Setup page component is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/security/SecuritySetupPage.tsx` — `SecuritySetupPage`
 
 ### 4.1 Layout
 
@@ -251,6 +263,9 @@ and loopback guard of §8.
   accounts are supported.
 * Validation: each entry must be a syntactically valid email. Stored lowercased.
 
+The shared two-section form (companies + individuals, add/remove rows, client-side validity) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/AllowListFields.tsx` — `AllowListFields` / `isAllowListValid()`
+
 ### 4.4 Save behavior
 
 * **At least one rule required.** Save is disabled until at least one *enabled* section has at least one
@@ -284,6 +299,9 @@ the operator typed it (`security.service.ts`).
   never holds `allow_companies:true, allowed_domains:[]` (an enabled-but-empty switch is meaningless and
   a foot-gun).
 
+Server-side normalization (trim, `@`-strip, lowercase, regex-validate, de-dupe) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/security/security.service.ts` — `normalizeDomains()` / `normalizeEmails()`
+
 ---
 
 ## 6. How it feeds OpenAuthFederated (OAF)
@@ -310,6 +328,9 @@ oafAllowedDomains =
   `gmail.com`.
 * This set is a **pre-filter only**, not the authority. It may admit *other* `gmail.com` users to the
   OIDC step; the authoritative allow-list (§6.2) is what actually decides.
+
+Computing the coarse OIDC domain pre-filter (company domains ∪ individual-email domains ∪ env) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/security/security.service.ts` — `oafAllowedDomains()`
 
 ### 6.2 Layer 2 — the authoritative allow-list (`identify.ts`, exact)
 
@@ -351,6 +372,9 @@ never leak the allow-list to an unauthenticated caller (§8.3):
 { "ok": true, "data": { "configured": false, "appName": "Large File Bridge" } }
 ```
 
+The public, minimal config payload (`{ configured, appName }` only — no allow-list) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/security/security.service.ts` — `getPublicSecurityConfig()` (served by `securityRouter` `GET /config`)
+
 ### 7.2 `POST /api/security/setup` — one-time, loopback-guarded, unauthenticated
 
 Writes the allow-list **exactly once**. Refused with **409** once `configured` is already `true` (§8.1),
@@ -369,6 +393,9 @@ On success it normalizes (§5), writes `config.yaml → access`, sets `configure
 `{ ok:true, data:{ configured:true, restartRecommended:<bool> } }` (`restartRecommended` true when a new
 company domain was added — §6.3).
 
+The one-time first-run write (normalize, persist, flip `configured:true`) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/security/security.service.ts` — `completeSetup()` (served by `securityRouter` `POST /setup`)
+
 ### 7.3 `GET`/`PATCH /api/settings/security` — admin-only (return visits)
 
 The **only** way to change the allow-list after setup. `GET` returns the full `SecurityAccess`
@@ -376,6 +403,9 @@ The **only** way to change the allow-list after setup. `GET` returns the full `S
 `requireAllowListed` **and** `requireAdmin` (`settings.mdx §4`). `PATCH` re-runs the same normalization
 and the same "at least one rule" guard as setup, so an admin cannot accidentally lock everyone out.
 `configured` stays `true`.
+
+The admin return-visit read/replace of the allow-list is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/settings/settings.router.ts` — `settingsRouter` `GET /security` / `PATCH /security` (calls `updateSecurity()`)
 
 Client wrappers (`api/client.ts`): `api.securityConfig()`, `api.securitySetup(input)`,
 `api.security()`, `api.setSecurity(input)`.
@@ -429,6 +459,9 @@ loopback** (`127.0.0.1` / `::1`), reusing the same guard as the internal worker 
 alternatively pre-seed `config.yaml → access` out-of-band (config file / env) before exposing the port;
 LFB reads that as already-`configured` and never shows the page. `trust proxy` is set to `loopback`
 (`main.ts`) so a spoofed `X-Forwarded-For` cannot fake a loopback address.
+
+The loopback-only guard on the unauthenticated setup write is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/security/security.router.ts` — `loopbackOnly()` (middleware on `POST /setup`)
 
 ### 8.5 Post-auth privilege confusion (enforcement bypass)
 

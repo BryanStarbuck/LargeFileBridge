@@ -36,6 +36,11 @@ This spec builds on its siblings and does not repeat them:
   values appear inside the list's `settings:` and per-repo blocks.
 * [knowledge/ipfs.mdx](../knowledge/ipfs.mdx) — CIDs, pinning, the only-our-content rule that the
   list's IPFS settings must honor.
+* [sessions.mdx](./sessions.mdx) — **when** a sync fires on a user's return. A synchronization does not
+  only run on the 15-minute launchd cadence: when a user **starts a new web session** on a computer that
+  has not synced in **> 48 hours**, LFB auto-kicks a (non-blocking) `syncAll()` so they are not working
+  against stale files. That trigger, the web-session model, and the "last synchronized" definition it
+  reads all live in sessions.mdx.
 
 ---
 
@@ -227,6 +232,9 @@ Any claim the list makes about **this** computer is checked against reality befo
 * This computer's **own filesystem is the source of truth** for what exists here. The list proposes;
   the disk disposes.
 
+Verifying a `pinned_by` claim for this computer against the real IPFS pinset — dropping or refreshing only our own label — is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncRepoFolder()` (checks `ipfs.listPins()`, updates via `setPinClaim()`)
+
 ### 5.2 Absence is NOT deletion (default)
 
 If the incoming list *omits* an entry this computer currently has, that is **not** a delete signal by
@@ -257,6 +265,9 @@ A repo can appear in the computer list (Dropbox/Drive) *and* in its own in-repo 
 the repo's own commits — the computer-list copy is a convenience mirror. Settings still resolve
 per the normal inherit chain (per-repo override → computer `settings` → global `config.yaml`). The
 per-backbone specs restate this from their side.
+
+The per-repo in-repo list that git carries atomically with the repo's own commits is written in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/manifest.service.ts` — `writeCommittedManifest()` (writes `<repo>/.lfbridge/manifest.yaml`)
 
 ### 5.5 Backbone-delivered hazards the reader must expect
 
@@ -299,6 +310,9 @@ and pushes it onto each enabled backbone so peers can reconcile it:
 The security defaults of [knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule)
 are part of `settings.ipfs`: publishing a list never turns this machine into a public gateway/relay,
 and `reprovide_strategy` stays `pinned`.
+
+Writing this computer's own view — with `pinned_by` set only for CIDs it actually pins — and publishing the committed list happen in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncRepoFolder()` (self-only `setPinClaim()`, then `writeCommittedManifest()`)
 
 ---
 

@@ -13,6 +13,7 @@ import { entityRouter } from "./modules/entity/entity.router.js";
 import { mediaRouter } from "./modules/media/media.router.js";
 import { settingsRouter } from "./modules/settings/settings.router.js";
 import { syncRouter } from "./modules/sync/sync.router.js";
+import { sessionsRouter } from "./modules/sessions/sessions.router.js";
 import { peersRouter } from "./modules/peers/peers.router.js";
 import { ipfsRouter } from "./modules/ipfs/ipfs.router.js";
 import { healthRouter } from "./modules/health/health.router.js";
@@ -104,6 +105,7 @@ async function main(): Promise<void> {
   app.use("/api/media", mediaRouter);
   app.use("/api/settings", settingsRouter);
   app.use("/api/sync", syncRouter);
+  app.use("/api/sessions", sessionsRouter); // web-session activity ping + stale-return auto-sync (sessions.mdx)
   app.use("/api/peers", peersRouter);
   app.use("/api/ipfs", ipfsRouter);
   app.use("/api/internal", internalRouter);

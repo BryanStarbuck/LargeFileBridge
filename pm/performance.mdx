@@ -88,6 +88,9 @@ capped + cooperatively yielding — no exceptions, on any page.**
   it ([repos.mdx §3.3.1](./repos.mdx)), which stays a **bounded** height; windowing
   works identically in either case.
 
+Row virtualization/windowing for large tables is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/useWindowedRows.ts` — `useWindowedRows()` hook
+
 ### 🔴 P-02 — Row selection copies the whole Set and re-renders the whole table · T2
 - **Where:** `FullPathsPage.tsx` (`selected: Set<string>`, per-checkbox
   `new Set(selected)`), `DataTable.tsx` (same pattern in the `__select` column),
@@ -127,6 +130,9 @@ capped + cooperatively yielding — no exceptions, on any page.**
 - **Fix (architecture):** Make `listFilesFlat` **async and cooperatively yielding**
   (`await setImmediate` every N entries), exactly like `walkUnit`. The route handler
   `await`s it. Keeps the caps; frees the loop between chunks.
+
+The buffered async flat large-file listing that backs `GET /api/fs/flat` is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listFilesFlat()`
 
 ### 🟠 P-05 — Client does full-dataset filter/sort/paginate on the main thread · T1/T2
 - **Where:** `FullPathsPage.tsx` `filtered = useMemo(files.filter(...))` +
@@ -273,6 +279,9 @@ capped + cooperatively yielding — no exceptions, on any page.**
   with a **single-entry `opendirSync` probe** (read one dirent, close) so the
   disclosure check is O(1) syscalls, not O(children). Router handler `await`s it.
 
+The async, entry-capped one-directory listing with the O(1) `hasChildren` probe is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (and `dirHasChildren()`)
+
 ### 🟠 P-17 — Entity flag/decision changes invalidate `["fs"]`/`["repo"]` → re-walk every open column · T4
 - **Where:** `components/menu/EntityMenu.tsx` `invalidate()`
   (`invalidateQueries(["fs"])` + `["repo"]`), and `pages/entity/MediaViewer.tsx`
@@ -300,6 +309,9 @@ capped + cooperatively yielding — no exceptions, on any page.**
   at most one window recompute per frame — and **skip the state update when the derived
   `start` index hasn't changed** (most scroll deltas stay within the same row), so we
   only re-render when the visible window actually moves.
+
+The rAF-coalesced scroll handler that skips re-renders when the window start is unchanged is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/useWindowedRows.ts` — `useWindowedRows()` scroll listener
 
 ### 🟡 P-19 — Two hand-rolled windowed tables duplicate logic and drift · architecture
 - **Where:** `components/table/DataTable.tsx` and `pages/fs/FullPathsPage.tsx` each
@@ -368,6 +380,9 @@ Two endpoints back the two heaviest pages, and both share the same broken model:
 - **Fix (architecture): a Filesystem Index Service that walks in the background, caches, and
   streams.** See the target design below. `listFilesFlat`/`listDirectory` stop being
   request-synchronous producers of a blob and become **thin readers over a streaming index**.
+
+The background streaming filesystem walk that replaces the walk-per-request blob is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fsindex/fsindex.service.ts` — `walkFilesFlatStreaming()`
 
 ### The target architecture
 
@@ -444,6 +459,9 @@ Five properties, each mapping to an aspect of "performance in all ways":
     walk on `req.on("close")`.
   - `GET /api/fs` unchanged externally but now cache-backed.
 
+The mtime + short-TTL directory-listing cache for the column browser is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fsindex/fsindex.service.ts` — `getListingCached()` / `putListing()`
+
 ### Aspect 2 — The streaming protocol (the cross-package contract)
 
 - **New types in `code/packages/shared/src/types.ts`** (exported via `src/index.ts`):
@@ -455,6 +473,9 @@ Five properties, each mapping to an aspect of "performance in all ways":
   header**, so SSE would bypass `identify.ts`'s allow-list gate. A `fetch()` with a manual
   `Authorization` header + a `ReadableStream` reader gives us streaming *and* the existing auth, and
   streams cleanly through the dev proxy (`code/packages/frontend/vite.config.ts` `/api` → `:8787`).
+
+The NDJSON stream endpoint that emits `meta`/`batch`/`done` events and aborts the walk on client disconnect is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.router.ts` — `fsRouter` `GET /api/fs/flat/stream` handler
 
 ### Aspect 3 — Frontend: asynchronous, non-blocking consumption
 
@@ -476,6 +497,12 @@ Five properties, each mapping to an aspect of "performance in all ways":
 - **Wire `code/packages/frontend/src/pages/fs/FullPathsPage.tsx`** to `useStreamedFlatListing(root,
   showHidden)` instead of `useQuery({ queryKey: ["fsFlat", …] })`. Everything downstream (`filtered`,
   the TanStack model, `useWindowedRows`) already operates on a plain growing `files` array.
+
+The Bearer-authed fetch/NDJSON stream reader is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/streamNdjson.ts` — `streamNdjson()`
+
+The progressive consumer hook (ref-accumulate + rAF-coalesced flush, drop-in for the `useQuery` shape) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/useStreamedFlatListing.ts` — `useStreamedFlatListing()` hook
 
 ### Aspect 4 — Off-main-thread filter/sort (follow-up, specified now)
 
@@ -508,6 +535,10 @@ it becomes load-bearing only for the largest roots.
   (`ScanProgressBar.tsx`) stay. The stream replaces polling for the FS pages entirely.
 - **Optimistic patches, never broad invalidation** (P-08/P-17) — extend the same rule to the stream:
   a flag/decision change patches the in-memory row store, it never restarts a walk.
+
+The pub/sub bridge that delivers optimistic per-entity badge patches to the streamed listing is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/flatListingPatch.ts` — `subscribeFlatBadgePatch()` / `emitFlatBadgePatch()`
+
 - **React Query `select`** to subscribe to the minimum slice (P-09) — audit remaining `useQuery` reads
   for over-subscription (`Sidebar.tsx` done; check `OneRepoPage.tsx`, `IpfsPage.tsx`).
 - **Stale-while-revalidate** at both layers: the backend index serves cached listings instantly and

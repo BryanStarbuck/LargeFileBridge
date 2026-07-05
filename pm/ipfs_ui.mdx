@@ -137,6 +137,9 @@ Standard app frame (256px left bar, [pm/left_bar.mdx](./left_bar.mdx)) + the rou
 The dashboard has four stacked regions: **hero**, **metric tiles**, **gateway panel**, **security
 card**. What renders depends on the node state (§6).
 
+The dashboard shell — hero, metric-tile grid, gateway panel, security card, and the install/progress/error states — is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsDashboardPage.tsx` — `IpfsDashboardPage` component
+
 ### 5.1 The healthy, running layout
 
 ```
@@ -197,6 +200,9 @@ parent lands on this **dashboard**.
 The page is a small state machine over two booleans — **installed** and **running** — plus in-flight
 **install** / **starting** jobs.
 
+Deriving the installed/running booleans, live metrics, gateway summary, and compliance for the dashboard payload is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `nodeStatus()`
+
 | State | Hero shows | Body shows |
 | --- | --- | --- |
 | **Not installed** (no CLI, no daemon) | red dot · *"IPFS isn't installed on this computer"* | the **Install card** (§7) — big primary **Install IPFS** button + what it is / why. No tiles. |
@@ -209,6 +215,9 @@ The page is a small state machine over two booleans — **installed** and **runn
 The **on/off toggle** is only meaningful once installed. **On** = daemon running; flipping **Off**
 stops the daemon (RPC `shutdown`); flipping **On** starts it (spawn `ipfs daemon`, then poll health).
 Both are **jobs with progress** (§7.2) because starting a daemon isn't instant.
+
+Starting or stopping the daemon behind the on/off toggle is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `controlDaemon()`
 
 ---
 
@@ -237,6 +246,9 @@ Any long action — installing, or starting the daemon — routes into a **progr
 (`detecting → installing → initializing → starting → done`). Modeled on the app's existing job/scan
 progress pattern (server-side job, polled — so navigating away and back **re-attaches** to the same
 run; closing the tab does not cancel it).
+
+Detecting the platform, choosing the installer command, and running the single-flight, re-attachable install job is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `startInstall()` (platform/command via `installPlan()`)
 
 * Phases: **detecting** (find package manager / platform) → **installing** (run the installer,
   streaming its output) → **initializing** (`ipfs init` if the repo is new) → **starting** (spawn the
@@ -270,6 +282,9 @@ If the node announces `all`, or exposes a public/recursive gateway, the card sho
 [defaults](../knowledge/ipfs.mdx#10-concrete-defaults-lfb-should-adopt). The one accepted exception:
 the user **deliberately** flipped the public-gateway [setting](./settings.mdx) on this machine — then
 it's an amber *acknowledged* note, not a red error.
+
+Restoring the only-our-content defaults behind the security card's **Fix** is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `enforceCompliance()`
 
 ---
 
@@ -308,6 +323,9 @@ because nothing will sync and they may not know why.
 * It reads a **cheap** node-summary (installed + running) on a slow poll — it must not walk the pinset.
 * On the IPFS page itself the banner is **suppressed** (the page already carries the full story).
 
+The app-wide nudge — polling cheap liveness, suppressing on `/ipfs*`, and hiding when healthy — is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/IpfsStatusBanner.tsx` — `IpfsStatusBanner` component
+
 ---
 
 ## 11. Where the data comes from
@@ -325,6 +343,9 @@ because nothing will sync and they may not know why.
   running}` (frontend `select`), so there's no second source of truth.
 * Install/start jobs are **server-side** and detached from the request (re-attachable, cancel-safe on
   navigation) — same discipline as the scan job.
+
+The dashboard's REST surface (`GET /node`, `POST /daemon`, `POST /install`, `GET /install/status`) is defined in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.router.ts` — the exported `ipfsRouter`
 
 ---
 

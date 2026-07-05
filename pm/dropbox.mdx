@@ -44,6 +44,9 @@ account, not to any one repo. So it carries the **computer-scope** Sync List
 `large_files.scope` is `computer`, covering the global `settings`, every managed `repos:` entry, and
 every non-repo `directories:` entry.
 
+Walking the whole-computer roots — every managed repo unit plus the non-repo computer unit that the computer-scope list covers — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()`
+
 It does **not** carry per-repo lists — those ride the repo over git
 ([repo__list_syns.mdx](./repo__list_syns.mdx)). When a repo appears both in the Dropbox-carried
 computer list and in its own in-repo list, the **in-repo (git) list is authoritative for that repo's
@@ -126,6 +129,9 @@ The resolved backbone root is then `<account root>/LargeFileBridge/` (or whateve
 `settings.backbones.dropbox.root` overrides it to). Enable/disable is
 `settings.backbones.dropbox.enabled` — when `false`, LFB neither reads nor writes Dropbox at all.
 
+Resolving and validating a configured root path (tilde expansion, absolute-path resolution, and the existing-directory check that lets us mark a root unavailable rather than error) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/paths.ts` — `resolveDir()`
+
 ---
 
 ## 4. Dropbox-specific hazards (map each to hub §5.5)
@@ -144,6 +150,9 @@ reject, **never trust blindly**.
 | **Partial / zero-byte mid-sync files** | A file caught mid-download: truncated, zero bytes, invalid YAML | **Reject loudly and keep the previous good copy** ([storage.mdx §15](./storage.mdx#15-the-store-layer-how-code-touches-disk)). A file that fails to parse as the expected `large_files` schema is never trusted. |
 | **Foreign owner** | A peer list whose `origin.owner` is not an allow-listed user | **Never adopt it** ([hub §5.5](./sync_list.mdx#55-backbone-delivered-hazards-the-reader-must-expect)). It is the user's own Dropbox, but only allow-listed owners' lists are reconciled. |
 
+Skipping metadata / junk directories while walking a backbone subtree (the shared hard-skip set that keeps `.dropbox` / `.cache` and similar bookkeeping out of the walk) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts` — `HARD_SKIP`
+
 ---
 
 ## 5. Change detection — watch, then reconcile
@@ -159,6 +168,9 @@ LFB learns that a peer's list changed two ways, both feeding the same reconcile 
   ([storage.mdx §13](./storage.mdx#13-the-background-sync-process--the-transparency-contract), the
   launchd job every 15 min) also **polls** the subtree each run: list peer subfolders, stat each
   `LargeFilesBridge_SyncList.yaml`, and reconcile any whose mtime/size changed since last seen.
+
+Detecting which entries changed since the last poll by comparing each file against the previously recorded size/path set is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `diffStatus()`
 
 When a peer's file changes, LFB **reconciles it** — verifies local claims against the real filesystem
 + IPFS pinset ([hub §5.1](./sync_list.mdx#51-local-claims-are-verified-not-believed)), treats absences

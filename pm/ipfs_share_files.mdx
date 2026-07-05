@@ -180,7 +180,10 @@ videos:
 
 A repo may ship **several** of these at once (e.g. `IPFS.sh` at the root *and* `get_videos.sh` +
 `manifest.yaml` under `static/videos/`). LFB records **each** artifact it finds, its shape, its path,
-and its published URL. Optionally, a companion **React `/ipfs` page** (`src/pages/ipfs.tsx`) renders the
+and its published URL.
+
+Recognizing IPFS list artifacts (`ipfs.sh`/`IPFS.sh`, `ipfs.txt`, `get_videos.sh`, a signal-bearing `manifest.yaml`) and tagging the file/dir with the `ipfs` badge is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `computeBadges()` Optionally, a companion **React `/ipfs` page** (`src/pages/ipfs.tsx`) renders the
 human-facing "help keep these alive" page and an inventory table — LFB treats it as a *presentation*
 surface, not a source of CIDs.
 
@@ -230,6 +233,9 @@ publish an IPFS list, and how?" It records the answer (not a guess to re-derive 
   `manifest.yaml` under a public dir whose entries carry `ipfs_cid` — this is the **decisive** signal.
 * A **symlink** surfacing such a file into `static/` (e.g. `static/IPFS.sh -> ../IPFS.sh`) — confirms
   it is *published*, not just present.
+
+Detecting that a directory publishes an artifact (including the `static/IPFS.sh` symlink convention) is handled in the same badge pass in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `computeBadges()` (directory `ipfs` badge)
 * **DocuSaurus** signals (§3.1) — supporting context + the public URL.
 * **IPFS-gateway `<source>` URLs** in `docs/` (§3.5) — confirms embedded shared media.
 * A public **media directory** with a media-excluding `.gitignore` (§3.4).

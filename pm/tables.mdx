@@ -1,0 +1,247 @@
+---
+title: LargeFileBridge — Tables (bookmarks, filters, multi-level sort & persistence)
+description: The cross-cutting spec for the shared TanStack DataTable control row that every table screen references instead of restating. Three conventions, applied everywhere (Repos, the Full-paths files table, Communities, and every future table). (1) BOOKMARKS — every primary table has a leading ribbon bookmark (favorite) toggle; the flag is a local per-computer preference stored with the entity. (2) PROMOTED "BOOKMARKED" FILTER — the filter dropdown promotes a "Bookmarked only" checkbox to the top; when on, the table shows only bookmarked rows. (3) MULTI-LEVEL SORT — sort is an ordered list of up to three keys (primary / secondary / tertiary); the sort dropdown lists sortable columns on the left with asc/desc, and priority slots (1st / 2nd / 3rd) on the right; assigning a column a priority inserts it there and cascade-demotes the others so no two columns share a priority; the default is Bookmarked first, then the table's natural secondary sort, and it is user-changeable. (4) PERSISTENCE — each page's sort AND filter state is saved per-user, per-page in users/<email>/config.yaml and restored on load. All tables are TanStack tables (charter).
+---
+
+# LargeFileBridge — Tables (bookmarks, filters, multi-level sort & persistence)
+
+Every screen in LFB is built from the same **TanStack `DataTable`** ([menus.mdx](./menus.mdx) §0).
+The charter locks the shared shape: a search box, one **filter** icon, one **sort** icon above the
+table; 500/page; click-a-header to sort; full-page-height. **This file owns the pieces of that shape
+that are the same on every table** so the per-page specs don't restate them:
+
+1. The leading **bookmark** toggle (§1).
+2. The promoted **"Bookmarked only"** filter (§2).
+3. The **multi-level sort** model and its dropdown UI (§3).
+4. **Per-user, per-page persistence** of sort + filter (§4).
+
+The shared control row (search box, filter icon, sort icon), 500/page pagination, click-a-header sort, and full-page-height are all implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component.
+
+**Reference implementation:** [Repos](./repos.mdx) §3 + §8 already implements the control row and the
+bookmark toggle in full detail; this file **generalizes** that pattern to every table and adds the
+multi-level sort and persistence. Where Repos and this file agree, Repos is the worked example; where
+this file adds mechanics (priority slots, persistence), it is the source of truth.
+
+Applies to (every primary/listing table):
+
+* [Repos](./repos.mdx) — the repo list (`/`). *(Reference implementation.)*
+* [Full-paths](./full_paths.mdx) — the flat **files** table of large files under a folder (`/fs/paths`).
+* [Communities](./communities.mdx) — the communities list (`/communities`).
+* Every future listing table inherits this by default.
+
+> The Finder-style **column** browser ([directories.mdx](./directories.mdx)) is a column view, not a
+> flat listing table; the bookmark toggle and multi-level sort apply to the **flat tables** above.
+> Where a column view exposes a sort, it uses the same multi-level model and persists the same way.
+
+---
+
+## 1. The leading bookmark (favorite) toggle (LOCKED)
+
+Every primary table's **leading (column 0)** cell is a **ribbon bookmark** toggle — the exact control
+[Repos §8](./repos.mdx#8-bookmark-favorite--the-leading-ribbon-toggle) defines. Generalized:
+
+* **Glyph & states** — lucide **`Bookmark`** (the banner/ribbon shape). **Solid yellow** = bookmarked;
+  thin **gray outline** (white fill) = not. One `<Bookmark>` with `fill` toggled.
+* **It is a control cell** — clicking it flips `bookmarked` for that row and **never navigates**
+  (exactly like the trailing `⋮` kebab). Also offered in the row `⋮` menu as *"Bookmark / Remove
+  bookmark"*.
+* **Accessible** — `<button aria-pressed={bookmarked} aria-label="Bookmark this <entity>">`,
+  keyboard-focusable, toggles on `Enter`/`Space`, tooltip *"Bookmark" / "Bookmarked"*.
+* **Local, per-computer preference.** A bookmark is a favorite *this machine's user* set — **not**
+  synced to peers, **never** in the shared manifest. It survives rescans (discovery reconciles
+  without clobbering user fields). Default **`false`**.
+
+### 1.1 Where the flag is stored, per entity type (LOCKED)
+
+The flag lives **with the entity**, in the local state tree ([storage.mdx](./storage.mdx)):
+
+| Table | Entity | `bookmarked` stored in |
+| --- | --- | --- |
+| Repos | a repo | `sync/r/<repo>/config.yaml` (Repos §8.3 — already LOCKED). |
+| Communities | a community | `sync/c/<community_id>/config.yaml` (communities.mdx §8). |
+| Full-paths (files) | a large file | a small **bookmark set** in the **owning sync unit's** `config.yaml` (the repo's `sync/r/<repo>/config.yaml`, or `sync/computer/config.yaml` for files outside any repo), keyed by the file's **path + fingerprint** — because a file has no `config.yaml` of its own. |
+
+* **API shape** mirrors Repos: `POST /api/<entity>/:id/bookmark` with `{ bookmarked: boolean }`,
+  idempotent, writes the flag and returns the updated row; unknown id → 404. For files the id is the
+  path/fingerprint key.
+* The scan **never** touches bookmarks — user fields are preserved across re-registration.
+
+---
+
+## 2. The promoted "Bookmarked only" filter (LOCKED)
+
+The charter puts a single **filter** icon above every table. On tables that have bookmarks, the
+filter dropdown **promotes a "Bookmarked only" checkbox to the very top**, above the per-column
+filter rows:
+
+* **`☐ Bookmarked only`** — a checkbox. When **on**, the table is filtered to **only the bookmarked
+  rows**; when off, no bookmark constraint. It ANDs with any other active filters, and (like all
+  filters) resets to page 1 and colors the filter icon when active.
+* It is **promoted** (pinned at the top of the dropdown, visually separated) because favoriting-then-
+  filtering-to-favorites is the primary way a user carves a big list down to what they care about.
+* This is the **filter** counterpart to the **sort** default (§3.4): sort floats bookmarks to the top
+  of the *full* list; this filter hides everything *except* bookmarks. They are independent — a user
+  can do either or both.
+
+The filter icon and the per-column filter dropdown this "Bookmarked only" checkbox is promoted into are rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the `showFilter` popover).
+
+---
+
+## 3. Multi-level sort — primary / secondary / tertiary (LOCKED)
+
+Sort is **not** a single column. It is an **ordered list of up to three sort keys**:
+
+* **Primary** (1st), **Secondary** (2nd), **Tertiary** (3rd). Each key = **(column, direction)**.
+* The table sorts by the primary key, breaking ties with the secondary, then the tertiary.
+* Fewer than three keys is fine (one or two). More than three is not offered — three levels covers
+  every real case and keeps the UI legible.
+
+### 3.1 The sort dropdown UI (LOCKED)
+
+Opening the **sort** icon reveals a two-side dropdown:
+
+* **Left — the sortable columns.** Every sortable column, each with an **asc/desc** control
+  (caret `↑`/`↓`). This is the existing list from the charter's sort dropdown.
+* **Right — the three priority slots.** Three labeled markers per column row: **`1st` `2nd` `3rd`**
+  (a compact priority picker on the right edge of each column's row). The marker that is filled shows
+  that column's current priority; blank means the column is not in the active sort.
+
+```
+ Sort ▾
+ ┌─────────────────────────────────────────────┐
+ │ Column            Dir        Priority        │
+ │ ───────────────────────────────────────────  │
+ │ ▮ Bookmarked      ↓ desc     [1st] 2nd  3rd  │  ← primary (default)
+ │   Name            ↑ asc       1st [2nd] 3rd  │  ← secondary
+ │   Size            ↑ asc       1st  2nd [3rd] │  ← tertiary
+ │   Modified        ↑ asc       1st  2nd  3rd  │  ← not in the sort
+ │   …                                          │
+ │ ───────────────────────────────────────────  │
+ │                              [ Clear sort ]  │
+ └─────────────────────────────────────────────┘
+```
+
+The sort icon and its dropdown of sortable columns with asc/desc controls and the Clear-sort reset are rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the `showSort` popover).
+
+### 3.2 Assigning a priority — insert & cascade-demote (LOCKED)
+
+Clicking a priority marker on a column **inserts that column at that position and shifts the others
+down one**, so **no two columns ever share a priority**:
+
+* Click **`1st`** on a column → it becomes the **primary**; the old primary drops to **secondary**,
+  the old secondary to **tertiary**, and any old tertiary **falls out** of the sort (list capped at
+  three). This is the user's rule verbatim: *"demote everything else down one, so there's no
+  duplicate first priority."*
+* Click **`2nd`** / **`3rd`** → same insertion at that slot; lower slots shift down, capped at three.
+* A column can hold **only one** priority — assigning it a new slot **removes its old slot first**,
+  then inserts (so re-ranking a column that is already in the sort just moves it; it never duplicates).
+* Each key keeps its own **asc/desc**, toggled by its caret independent of priority.
+* **`Clear sort`** empties the list, then the table falls back to the **default** (§3.4).
+
+### 3.3 Header-click stays consistent (LOCKED)
+
+The charter's **click-a-header-to-sort** still holds and drives the **same** state:
+
+* Clicking a column **header** promotes that column to **primary** (`1st`) — cascade-demoting the
+  others exactly as §3.2 — so a header click is a one-click "make this the primary sort."
+* Clicking the **same** header again toggles that key's **asc ↔ desc** (it never cycles to unsorted;
+  clear from the dropdown's **Clear sort**).
+* The active primary column shows the caret (`↑`/`↓`) in its header; the dropdown and the headers
+  share **one** sort state (a header-driven change shows in the dropdown and vice-versa).
+
+Click-a-header-to-sort with the asc↔desc toggle and shared active-column caret, driving the same sort state as the dropdown, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the header `toggleSort`).
+
+### 3.4 The default sort — Bookmarks first (LOCKED default, user-changeable)
+
+Out of the box, every bookmark-bearing table starts with:
+
+* **Primary = Bookmarked, descending** → bookmarked rows float to the **top**.
+* **Secondary = the table's natural sort** (Repos → repo name; Full-paths → path/name; Communities →
+  name). **Tertiary** unset unless the table defines one.
+
+This is only the **default**. The user can re-rank freely (§3.2) — e.g. drop Bookmarked out entirely
+— and their choice is **saved** (§4) and restored next visit. The default applies only when the user
+has no saved sort for that page.
+
+---
+
+## 4. Persistence — sort + filter saved per user, per page (LOCKED)
+
+**Sort and filter state is saved for every page**, per user, and restored on load.
+
+* **Where:** the logged-in user's personal config —
+  `users/<email>/config.yaml`, under the existing **`tables.views`** map
+  ([storage.mdx](./storage.mdx) §4, the tier for per-user "prefs / last view"). **Not** computer-wide,
+  **not** in any sync unit — it is *this user's* view of *this page*.
+* **Keyed by table id.** `tables.views.<tableId>` (`repos`, `files`, `communities`, …). Each entry
+  stores the **ordered sort keys** and the **active filters** (including **Bookmarked only**, and the
+  search text if we choose to persist it).
+
+```yaml
+# users/<email>/config.yaml  (excerpt — see storage.mdx §4 for the full file)
+schema_version: 1
+tables:
+  views:
+    repos:                  # Repos table
+      sort:                 # ordered — index 0 = primary, 1 = secondary, 2 = tertiary
+        - { col: bookmarked, dir: desc }
+        - { col: name,       dir: asc  }
+      filters:
+        bookmarked_only: false
+    files:                  # Full-paths (files) table
+      sort:
+        - { col: bookmarked, dir: desc }
+        - { col: size,       dir: desc }
+      filters:
+        bookmarked_only: true
+    communities:            # Communities table
+      sort:
+        - { col: bookmarked, dir: desc }
+        - { col: name,       dir: asc  }
+      filters:
+        bookmarked_only: false
+        mode: recommended
+```
+
+* **Saved on every change.** Any sort re-rank, direction toggle, or filter change writes that table's
+  `tables.views` entry (atomic write, debounced) — the user never has to "save a view."
+* **Restored on load.** Opening a page applies its saved entry; if none exists, the **default**
+  (§3.4 + no filters) applies and is **not** written until the user actually changes something.
+* **Server mode** — because it is under `users/<email>/`, each allow-listed user carries their own
+  per-page sort/filter; two users on one server do not clobber each other's views.
+* **Distinct from the bookmark flag.** The `bookmarked` flag itself is a per-**entity**, per-computer
+  fact (§1.1); the `tables.views` entry here is the per-**user** view (which sort, which filters). Different
+  owners, different files.
+
+---
+
+## 5. Acceptance criteria
+
+1. **Repos, the Full-paths files table, and Communities** each have a **leading ribbon bookmark
+   toggle** (§1) — a control cell that flips `bookmarked` and never navigates, solid-yellow / gray-
+   outline, mirrored in the row `⋮` menu, default `false`, stored with the entity per §1.1.
+2. The **filter** dropdown on each of those tables **promotes a "Bookmarked only" checkbox** to the
+   top; turning it on shows only bookmarked rows and ANDs with other filters (§2).
+3. **Sort is multi-level:** an ordered primary/secondary/tertiary list; the sort dropdown shows
+   sortable columns (with asc/desc) on the left and **1st/2nd/3rd priority slots** on the right (§3.1).
+4. **Assigning a priority inserts and cascade-demotes** so no two columns share a priority; a column
+   holds only one priority; header-click promotes to primary and shares one state with the dropdown;
+   Clear sort falls back to default (§3.2–§3.3).
+5. The **default sort is Bookmarked-descending first, then the table's natural secondary** — applied
+   only when the user has no saved sort; fully user-changeable (§3.4).
+6. **Sort and filter persist per user, per page** in `users/<email>/config.yaml` `tables.views`, saved
+   on every change and restored on load; the default is not written until the user changes something
+   (§4).
+
+<!--
+  LOCKED: Every primary table has a leading bookmark toggle (per-computer, per-entity flag, §1.1).
+  The filter dropdown promotes "Bookmarked only" (§2). Sort is an ordered list of up to 3 keys with a
+  1st/2nd/3rd priority picker; assign = insert + cascade-demote, no duplicate priority (§3). Default
+  = Bookmarked desc first, then natural secondary; user-changeable (§3.4). Sort+filter persist per
+  user, per page in users/<email>/config.yaml tables.views, saved on every change (§4). Repos (§3,§8)
+  is the reference implementation; this file generalizes it. All tables are TanStack (charter).
+-->

@@ -69,11 +69,22 @@ Left_Nav:
           order: 3
           description: "Your other computers (laptop, desktop, studio, server, family) that pin these files over IPFS."
 
+        # Peers are YOUR computers pinning YOUR files; Communities are OTHER people's
+        # public files you opt into carrying — Get them to watch, or Support them by
+        # rebroadcasting to keep them secure. Explicit per-community opt-in, Block by
+        # default; never a public gateway/relay (charter). See pm/communities.mdx.
+        - id: communities
+          label: "Communities"
+          icon: "Users"
+          route: "/communities"
+          order: 4
+          description: "Publishers of large public files (videos first) you can subscribe to — Get their videos to watch, or Support them by rebroadcasting to keep them secure. Per community: Block / Recommended / Full backup, against a storage budget derived from this computer's free disk outside IPFS. See pm/communities.mdx."
+
         - id: ipfs
           label: "IPFS"
           icon: "Boxes"
           route: "/ipfs"
-          order: 4
+          order: 5
           description: "Your local IPFS node's control panel: is it installed and running, an on/off toggle, live metrics (shared files, storage, peers, bandwidth), the gateway, and the only-our-content security posture. Drills into the pinset table at /ipfs/pins. See pm/ipfs_ui.mdx (dashboard) + pm/ipfs.mdx (pinset)."
 
         # NAMING (pm/menus.mdx / scan.mdx): the scheduled background jobs are
@@ -85,14 +96,14 @@ Left_Nav:
           label: "Scans"
           icon: "RefreshCw"
           route: "/scans"
-          order: 5
+          order: 6
           description: "The scheduled background scan tasks (scheduleTasks): whether each launchd job is installed, on or off, the every-15-min and every-4h schedules, and recent activity."
 
         - id: settings
           label: "Settings"
           icon: "Settings"
           route: "/settings"
-          order: 6
+          order: 7
           description: "Account, allow-list, and IPFS node configuration."
 
       # Footer: account block (avatar/name/Google email) -> popup menu (expands UP).

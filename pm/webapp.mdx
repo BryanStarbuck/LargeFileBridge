@@ -48,6 +48,10 @@ So the Sign-In page is the pre-app gate. It has **no left bar** and **no nav** �
 [left_bar.mdx](./left_bar.mdx) entirely. It is not a routed page; it is what `<Root>` renders in place
 of the router when the gate is closed.
 
+The auth gate that renders `<SignInPage/>` unless the caller is authenticated and allow-listed is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/main.tsx` — `Root()` component
+
 The Sign-In page then asks a **second** question — *is the server even able to sign anyone in?* — via
 `GET /api/health/auth-config`, which returns:
 
@@ -55,6 +59,10 @@ The Sign-In page then asks a **second** question — *is the server even able to
 | --- | --- |
 | `oauthConfigured` | `true` when the backend has **both** a Google client id **and** secret (from env or the credentials file). Drives the "Sign in" button vs. the remediation panel. |
 | `devAuth` | `true` when no creds are set **and** `LFB_DEV_AUTH !== "false"` — the localhost offline bypass (§4). |
+
+The `GET /api/health/auth-config` signal that drives the button vs. the panel is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/health/health.router.ts` — `GET /auth-config` (delegates to `authConfig()`)
 
 ---
 
@@ -68,6 +76,10 @@ The Sign-In page then asks a **second** question — *is the server even able to
 
 Every state's card carries the **correct app identity** (§5): the wordmark **"Large File Bridge"** and
 the tagline **"Sync your large files across your own computers."**
+
+The entry-page component that switches between the sign-in button and the remediation panel is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/sign-in/SignInPage.tsx` — `SignInPage()` component
 
 ---
 
@@ -183,6 +195,10 @@ Resolution in code: `json.large_files_bridge?.google ?? json.google ?? {}`. The 
 preferred because **one `~/.credentials/*.json` file can hold keys for several sibling apps** — namespacing
 under `large_files_bridge` keeps LFB's block from colliding with theirs.
 
+Reading both accepted shapes (with invisible-whitespace repair) is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/credentials-file.ts` — `loadGoogleCreds()`
+
 **This is a secret file.** It holds the OAuth **client secret** and therefore lives **out of the repo**
 and **out of the state store** — never checked in, never inside `~/T/_large_files_bridge/`
 ([storage.mdx §10](./storage.mdx#10-auth-session--signing-secret-runtime-not-settings)). The panel may
@@ -231,6 +247,10 @@ the backend (extend `authConfig()` / the `/api/health/auth-config` payload to in
 values — including a custom `LFB_CREDENTIALS_FILE` or `GOOGLE_REDIRECT_URI`. The panel renders what the
 server reports; it never assumes defaults the server may have overridden.
 
+Reporting the resolved credentials path/filename/existence (without the secret values) is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/credentials-file.ts` — `credentialsFileInfo()`
+
 ---
 
 ## 7. Acceptance criteria
@@ -268,6 +288,10 @@ content-fingerprint pass hashes whole files. None of that is instant, and today 
 signal** while it runs (the current endpoints simply **block** — `POST /api/repos/rescan` awaits
 `scanAll()`, `POST /api/repos/:repoId/sync` awaits `syncRepoFolder()` — and return only when finished;
 `repos.router.ts:43`, `:90`). Part II fixes that.
+
+The blocking handlers Part II reshapes into job-registering endpoints are today in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /rescan` and `POST /:repoId/sync`
 
 We follow the pattern proven in the sister app **EmailDeliveryHero** ([pm/progress_ui.mdx](../../EmailDeliveryHero/pm/progress_ui.mdx)):
 put the "something is happening" feedback **at the bottom**, **bottom-left**, **clear of the left bar**,
@@ -324,6 +348,10 @@ reconfigured:
 | Size | default (~356px wide, `text-sm`) | **~1.8–2× visual weight**: wider card (`--width` ≈ **440px**), larger type (`text-base`), roomier padding. |
 | Left offset | none | **Cleared past the left bar.** The bar is **256px** (`config/left_bar.ts` default `sidebarWidth: "256px"`); the container is pushed to **`left: 272px`** (16px gutter) so a toast **never sits over the nav** — on every route. |
 | `richColors` | on | unchanged (green success / red error). |
+
+The single `<Toaster>` mount this section repositions and enlarges is today in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/main.tsx` — `<Toaster position="bottom-right" richColors />` in the root render
 
 Implementation notes (non-normative, see §14):
 

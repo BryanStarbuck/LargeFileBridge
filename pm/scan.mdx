@@ -70,6 +70,9 @@ payload per the **payload rule** (§4.1) — git-ignored media at *any* size, pl
 big threshold — with a diff against the previous scan (added / grown / shrunk / moved / deleted),
 written to that unit's `status.yaml` (§6). It changes **no** file contents and moves **no** bytes.
 
+The metadata-only discovery pass that stats candidates and never opens files runs in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()` → `walkUnit()` (uses `fs.statSync` only)
+
 ---
 
 ## 2. Cadence — the two scheduleTasks (4-hour discovery + 15-minute pinset)
@@ -106,6 +109,9 @@ being IPFS-pinned locally … make that happen at the 15-minute [interval]."*
   [only-our-content](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule) defaults.
 * **Needs the `ipfs` CLI.** The pinset read requires Kubo; if it is missing the preflight (§4.4)
   records a `needs_tool` gap and the app routes the user to [install it](./tools.mdx).
+
+The 15-minute pass that reads the local pinset and reconciles/refreshes each `pinned_by` claim against the manifests runs in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncRepoFolder()` (reads `ipfs.listPins()`, refreshes via `setPinClaim()`)
 
 ---
 
@@ -158,6 +164,9 @@ A LaunchAgent, distinct from the sync job's plist (`com.largefilebridge.sync`,
 * stdout/stderr flow into the same two log files as the rest of LFB
   ([storage.mdx §12](./storage.mdx#12-logging)).
 
+The Mac launchd LaunchAgent plist is rendered and installed/enabled/disabled via `launchctl` in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/os/launchd.ts` — `launchdInstaller` → `install()` (renders via `renderPlist()`)
+
 ---
 
 ## 4. Roots, discovery, and the mask
@@ -176,6 +185,9 @@ honoring `scanner.ignore_globs` and `follow_symlinks`. In one pass it does three
    unit, never both.
 3. **Flag candidates.** Walk each unit's scope, `stat` every file, and record every file that is a
    large-file-bridge payload (§4.1). Diff against the previous scan to classify each change.
+
+Repo discovery, registering each `.git` working tree, and building the repo mask before the per-unit walk happen in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()` (calls `findGitRepos()` then `registerRepo()`)
 
 The scan **never descends** into `scanner.ignore_globs` (e.g. `**/node_modules/**`, `**/.git/**`,
 `**/.Trash/**`), a unit's own `exclude_globs`, or the **hard-skip directory set** (§4.3) — this is
@@ -198,6 +210,9 @@ A file is a **candidate** (a large-file-bridge payload the scan records) when **
    repo with a followed `.gitignore`, this still requires the file to be git-ignored (a big file that
    is *checked in* is not our payload); the **computer unit** (no gitignore) uses the pure size gate.
 3. **A forced include-glob match** (`large_files.include_globs`) — an explicit user opt-in.
+
+The candidate predicate — git-ignored media at any size, else the size gate, plus forced includes — is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` (`isCandidate`, using `isMediaFile()` from `shared/scan-filters.ts`)
 
 > #### Why this rule exists — the bug it fixes (root-cause note, do not remove)
 >
@@ -230,6 +245,9 @@ The scan reads the resolved threshold for each unit and flags files whose **size
 The scan does **not** define the threshold or its default — it only applies it (§9 Reconciliation).
 The threshold gates cases 2 and 3 of §4.1 only; git-ignored **media** (case 1) ignores it.
 
+Resolving the per-unit effective threshold (repo override else the global default) happens in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `resolveThreshold()`
+
 ### 4.3 The hard-skip directory set (never descend)
 
 Some directories are never walked at all — regenerated build output and dependency/VCS/OS junk. They
@@ -246,6 +264,9 @@ video **twice** — once as `static/videos/x.mp4` and once as the generated `bui
 Build output is ephemeral and regenerated; it is **never** a sync candidate. Skipping these dirs
 removes the phantom duplicates (Intel dropped from 27+build-dupes to a clean **27**) and is also the
 main performance lever on large trees.
+
+The single-source-of-truth hard-skip directory set, shared with the FS-browser badge pass, lives in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts` — `HARD_SKIP`
 
 ### 4.4 Preflight — required tools before a scan (brew-install)
 
@@ -324,6 +345,9 @@ repo_state: present               # present | missing (drive unmounted / repo de
 The web app reads these `status.yaml` files to show, per repo and on the Sync page: last scan time,
 big-file counts, and "N new big files found" badges — all without the scan ever having opened a file.
 
+Diffing against the previous scan and writing the added/grew/deleted change set to each unit's `status.yaml` happens in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `diffStatus()` (persisted via `writeStatus()`)
+
 ---
 
 ## 7. The transparency contract (installed vs. on/off)
@@ -342,6 +366,9 @@ web app is transparent about the scan and lets the user control it:
 
 This surfaces on the **Sync** page alongside the 15-min sync's own installed/on-off state, so the two
 scheduled jobs are visible side by side.
+
+Reading each worker's installed/enabled state reconciled against real launchd state, and the install/uninstall/enable/disable controls, live in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `workerState()` / `control()`
 
 ---
 
@@ -432,6 +459,9 @@ inside, or tied to, the HTTP request that triggered it. This section is the auth
 * The job runner **stamps `scan_process.last_run_at` / `last_run_ok` on completion** (§5) — for **both**
   manual and scheduled runs — reflecting the real finish, not the moment the trigger route returned.
 
+The detached background job — kicked off by a route that returns immediately and never awaits the walk — is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scan-job.ts` — `startScan()` → `runJob()` (Rescan route: `reposRouter.post("/rescan")` in `repos.router.ts`)
+
 ### 10.2 Observable — live progress lives on the server
 
 * The backend holds one **scan job record** (`ScanJob`): `status` (`idle | running | done | error`),
@@ -445,6 +475,9 @@ inside, or tied to, the HTTP request that triggered it. This section is the auth
 * The Repos page's **Rescan button reflects the *server* scan status**, not local mutation state — it
   shows *"Scanning…"* and is disabled whenever a scan is running, even one it did not start.
 
+The single always-mounted progress bar that polls the server job and re-attaches after navigation is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ScanProgressBar.tsx` — `ScanProgressBar` (polls `GET /api/repos/scan-status`, served by `getScanJob()`)
+
 ### 10.3 Single-flight, coalesced, non-blocking
 
 * **One at a time.** `startScan` is single-flight: if a scan is already running it does **not** start a
@@ -457,6 +490,9 @@ inside, or tied to, the HTTP request that triggered it. This section is the auth
   **milliseconds** while a 90-repo / thousands-of-candidates walk is in flight, with `reposDone` and
   `candidatesFound` advancing between polls. The `stat`-only, no-content contract (§1) is unchanged;
   yielding changes only *when* the synchronous stats run, never *what* they read.
+
+Single-flight coalescing and the cooperative event-loop yielding that keeps the app responsive during a walk are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` / `findGitRepos()` (`await yieldToLoop()` every `YIELD_EVERY`; single-flight `rerunQueued` in `scan-job.ts`)
 
 ---
 

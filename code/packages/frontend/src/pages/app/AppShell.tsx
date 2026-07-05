@@ -6,6 +6,7 @@ import { api } from "../../api/client.js";
 import { Sidebar } from "../../components/layout/Sidebar.js";
 import { ScanProgressBar } from "../../components/ScanProgressBar.js";
 import { IpfsStatusBanner } from "../../components/IpfsStatusBanner.js";
+import { useSessionPing } from "../../lib/useSessionPing.js";
 
 const FALLBACK: CurrentUser = {
   authenticated: false,
@@ -18,6 +19,7 @@ const FALLBACK: CurrentUser = {
 
 export function AppShell() {
   const { data: user } = useQuery({ queryKey: ["me"], queryFn: api.me });
+  useSessionPing(); // record web-session activity on open + each navigation (sessions.mdx)
   return (
     <div className="flex h-full">
       <Sidebar user={user ?? FALLBACK} />

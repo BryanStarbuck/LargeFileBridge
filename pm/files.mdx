@@ -114,6 +114,9 @@ interface EntityView {
 a tracked large file in a registered repo to carry a decision). A loose file on disk still gets its
 identity, badges, compression heuristic, and both flags.
 
+Assembling this `EntityView` payload (identity, badges, repo/sync context, compression heuristic, flags) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `buildEntityView()`, served by `entity.router.ts` → `GET /api/entity`.
+
 ---
 
 ## 3. Primary vs. more (LOCKED split)
@@ -129,6 +132,9 @@ The page follows [menus.mdx §4](./menus.mdx)'s "one primary, rest under `⋮`" 
   primary again (the menu is a complete catalog), with destructive **Stop syncing (untrack/unpin)**
   separated last.
 
+Choosing which primary button to show for the file's flags + decision is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneFilePage.tsx` — `ViewOneFilePage` → `pickPrimary()`.
+
 ---
 
 ## 4. The two sticky-flag switches
@@ -143,6 +149,9 @@ buried in the menu — this is the page where a user manages a file's standing p
 
 The `⋮` menu's toggle items and these switches are **the same state** — flipping one updates the other.
 
+Writing the two sticky flags — including the Never IPFS side-effect that demotes `sync` decisions under the path — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `setEntityFlags()`.
+
 ---
 
 ## 7. Open-viewer affordance (media only)
@@ -152,6 +161,9 @@ When this page renders a **medium** (`compressible` is `"image"` or `"video"`), 
 placed first) that navigates to `/image` / `/video` for the same path. This is the one link from the
 properties-first page to its viewer-first sibling; the reverse link is the viewer's **View properties**.
 For non-media files there is no such affordance.
+
+Rendering the media-only Open image/video viewer affordance is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneFilePage.tsx` — `OpenViewer()`.
 
 ---
 

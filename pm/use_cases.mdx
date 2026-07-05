@@ -133,6 +133,9 @@ export type Health = "ok" | "warn" | "bad" | "neutral";
 // healthColor(h) / healthBg(h) / HealthIcon(h) → the color + icon for a state
 ```
 
+The three-state model + rollup rule live in exactly one place in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/health.ts` — `worst()` (plus `healthIcon` / `healthColor` / `healthBg`).
+
 ### 3.2 `StatusBanner`
 The page's **verdict row** (§2 rows 1–2). Full-width rounded panel at the top of a page's content.
 
@@ -141,6 +144,9 @@ The page's **verdict row** (§2 rows 1–2). Full-width rounded panel at the top
 * Right: an optional **primary action** button (the one fix) and/or a small **secondary** link.
 * Background tint follows the state (`--lfb-*-bg`); border follows the state color. A **Fixed**
   banner is quiet (thin green, small dot); a **Broken** banner is unmistakable (red tint).
+
+The verdict-row banner (headline + sub-line + one primary Fix action) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/StatusBanner.tsx` — `StatusBanner` (and `FixButton`).
 
 ### 3.3 `DiagnosticCard`
 A single "here's a thing that might be wrong, and how to fix it" unit. Used in lists on IPFS, Scans,
@@ -152,23 +158,38 @@ Settings, One-repo.
 * **Expandable body (chevron):** the mechanism — exact values, the manual command to run, the
   "why", links to the relevant deeper page. Starts expanded when **bad**, collapsed otherwise.
 
+The "something might be wrong + how to fix it" card is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/DiagnosticCard.tsx` — `DiagnosticCard`.
+
 ### 3.4 `Disclosure`
 Generic chevron section: a clickable summary row (label + optional right-aligned meta) that expands
 to arbitrary children. This is the workhorse for "push detail deeper." Controlled or uncontrolled.
+
+The generic chevron section is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/Disclosure.tsx` — `Disclosure`.
 
 ### 3.5 `StatTile`
 A metric tile for the dashboard-style rows (IPFS, computer rollups): big **value**, small **label**,
 optional **sub** (e.g. a byte size under a count), optional health tint and click-through. Tiles sit
 in a responsive `flex-wrap` / grid row.
 
+The metric tile and its wrapping row are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/StatTile.tsx` — `StatTile` (and `StatTileRow`).
+
 ### 3.6 `PageHeader`
 Consistent page title block: **H1** + optional one-line **subtitle** + a right-aligned **actions**
 slot. Replaces the ad-hoc `flex items-center justify-between` + `h1` repeated on every page so all
 pages share the same top rhythm as the Home dashboard.
 
+The shared page title block is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/PageHeader.tsx` — `PageHeader`.
+
 ### 3.7 `Section`
 A bordered, titled card (`rounded-lg border`), optionally collapsible (wraps `Disclosure`). Settings
 and Repo-settings are built from these; advanced groups are collapsed by default.
+
+The bordered, optionally-collapsible titled card is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/Section.tsx` — `Section`.
 
 ---
 
@@ -309,6 +330,9 @@ Shared-files page, top to bottom:
 6. **"Node details" `Disclosure`** (collapsed) — PeerID (copyable), reprovide strategy, gateway
    binding, GC. The mechanism, one click away. This is where today's strip fields go to live.
 
+The IPFS worst-first verdict banner (down / not-compliant / running-and-compliant) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/IpfsStatusBanner.tsx` — `IpfsStatusBanner`.
+
 ### 5.2 Scans page (`/scans`) — worker transparency
 1. **PageHeader** — "Scans", subtitle *"Background jobs that keep your big files discovered and
    synced on this computer ({computerLabel})."*
@@ -347,6 +371,9 @@ Shared-files page, top to bottom:
    peer count, last sync, IPFS ok) moves here as the mechanism.
 
 ### 5.5 Peers page (`/peers`)
+The Peers page (empty-state guidance, per-peer rows, last-seen recency) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/peers/PeersPage.tsx` — `PeersPage`.
+
 1. **PageHeader** — "Peers", subtitle *"Your other computers that keep copies of these files."*
 2. **Empty state (guided)** — when no peers: a neutral StatusBanner *"No other computers yet"* + a
    **Disclosure "How to add a computer"** (install LFBridge there, sign in with the same Google
@@ -364,6 +391,9 @@ Shared-files page, top to bottom:
 * Keep the existing **Sync / Compression / File** cards, but render them with the shared `Section`
   so they match. The compression card stays an **offer** with the baseline reasoning as chevron
   detail (UC-4).
+The directory category rollup (the four charter category counts) is computed in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `buildDirRollup()` (via the exported `buildEntityView()`).
+
 * Directory page: the category **rollup table** is the working surface (UC-4/UC-5); its four rows
   already map to the charter categories. Keep, and let each actionable row read as an Improvable
   offer. Every row also carries the trailing vertical **`⋮`** kebab

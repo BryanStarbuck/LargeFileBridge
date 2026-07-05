@@ -239,6 +239,17 @@ export const PeersSchema = z.object({
 });
 export type Peers = z.infer<typeof PeersSchema>;
 
+// ── web-session history (sessions.mdx §4) ────────────────────────────────────
+// One usage window measured from page renders — NOT the auth session (storage.mdx §10). `ended_at`
+// is null while open, otherwise it EQUALS `last_activity_at` (the session ends at the last render,
+// not at the moment the 4-hour idle timer fires). Drives the > 48h "stale return" auto-sync.
+export const SessionRecordSchema = z.object({
+  started_at: iso,
+  last_activity_at: iso,
+  ended_at: iso.nullable().default(null),
+});
+export type SessionRecord = z.infer<typeof SessionRecordSchema>;
+
 // ── per-user config.yaml (storage.mdx §4) ───────────────────────────────────
 export const UserConfigSchema = z.object({
   schema_version: z.number().default(1),
@@ -251,5 +262,7 @@ export const UserConfigSchema = z.object({
     })
     .default({}),
   tables: z.record(z.unknown()).default({}),
+  // Last 5 web sessions, newest first (sessions.mdx §4). At most one open (ended_at null), at index 0.
+  sessions: z.array(SessionRecordSchema).default([]),
 });
 export type UserConfig = z.infer<typeof UserConfigSchema>;

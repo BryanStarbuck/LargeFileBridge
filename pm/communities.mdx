@@ -1,0 +1,286 @@
+---
+title: LargeFileBridge — Communities
+description: The Communities page spec. A community is a publisher of large public files (videos first) that a user can subscribe to. Subscribing has two intents — GET their videos (consume for yourself) or SUPPORT them (rebroadcast/pin to keep their content secure and redundant). LFB analyzes this computer's total disk space and its free space OUTSIDE the IPFS datastore, derives a community storage budget and a per-community recommended amount to keep secure, and lets the user set each community's backup mode to one of three states: Block (sync nothing), Recommended (LFB picks a subset that fits the budget — the default), or Full backup (pin the whole library). Stays inside the charter's only-our-content default: rebroadcasting is an explicit, per-community opt-in that pins a chosen publisher's files, never a general public gateway/relay. All tables are TanStack tables. A future opt-in prompt (out of scope now) will ask whether the user will follow our recommended-subset guidelines.
+---
+
+# LargeFileBridge — Communities
+
+A **community** is a publisher of large public files — **videos first**, images second — that a
+user can **subscribe** to. Where [Peers](./storage.mdx) are *your own computers* pinning *your own*
+files, **Communities are other people's content you choose to help carry.** The two are siblings:
+same IPFS-pinning machinery, different owner of the bytes.
+
+Subscribing is an act with an **intent** and a **budget**. This page is where the user:
+
+1. Browses / searches communities and **subscribes**.
+2. Picks, per community, **why** they subscribe — **Get** the videos (consume) and/or **Support**
+   the community (rebroadcast to keep it secure).
+3. Sets, per community, **how much** to keep — **Block**, **Recommended**, or **Full backup** —
+   against a **storage budget** LFB derives from this computer's real free disk space.
+
+> **This is public content, by definition.** Communities only ever carry files a publisher has made
+> **public** (per the charter, LFBridge is *not* for private files). A user rebroadcasting a
+> community is helping keep **already-public** content alive across more machines.
+
+Siblings: [Left bar](./left_bar.mdx) (adds the **Communities** nav item) ·
+[Storage](./storage.mdx) (the state root + sync units this reuses) ·
+[IPFS](./ipfs.mdx) (the local pinset these subscriptions add to) ·
+[Security](./security.mdx) (the only-our-content policy §7 keeps us inside).
+
+---
+
+## 1. Charter compliance — why rebroadcasting is still "only our content" (LOCKED)
+
+The charter's **IPFS gateway / no-relay policy** is strict: by **default** this computer must **not**
+act as a public gateway or relay that bounces or caches **other people's** content or traffic; we
+store, pin, and serve **our own content — nothing else**. Communities touches that line directly, so
+the design is drawn to stay on the safe side of it:
+
+* **Subscribing is an explicit, per-community opt-in.** Nothing is rebroadcast until the user
+  deliberately subscribes to a **named** community and chooses **Support**. This is exactly the
+  "user has gone out of their way" case the charter carves out — and it stays **narrow**: we pin the
+  **specific files of the specific publisher the user chose**, not arbitrary third-party traffic.
+* **We never become a general-purpose gateway/relay.** Pinning a chosen publisher's chosen files is
+  **content storage**, not a relay. We do **not** open the node to forward, cache, or serve content
+  we were not explicitly subscribed to. The default gateway-off posture from
+  [security.mdx](./security.mdx) still holds; Communities does not flip it.
+* **Off by default; blockable always.** Every community defaults to **Block** (§4) until the user
+  acts. The user can return any community to **Block** at any time and its content stops being
+  served.
+* **Flag out-of-compliance.** Per the charter, if the app ever finds itself serving community content
+  the user did **not** subscribe to (e.g. a stale pin after unsubscribing, or a relay setting drifting
+  on), surface it and offer the fix. Rebroadcast never happens silently.
+
+Bottom line: **Support = "pin this publisher's public files to add redundancy," not "run a public
+relay."** That distinction is the thing that keeps Communities compliant, and it is LOCKED.
+
+---
+
+## 2. What a community is
+
+A community record is small, human-readable, and lives in the state tree as YAML (§8). It carries:
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Stable slug (primary key across the app and the URL, e.g. `holon-citizen`). |
+| `name` | Display name. |
+| `publisher` | Who runs it (handle / identity the files are published under). |
+| `description` | One line of what they publish. |
+| `library` | The set of large files the community publishes → each with its IPFS **CID**, size, duration/resolution (for videos), and published date. This is the manifest we sync against. |
+| `totals` | Rolled-up counts and bytes: total items, total size, video count, image count. |
+| `subscription` | The user's choices for this community — **intent** (§3) and **backup mode** (§4). Absent = not subscribed. |
+
+The `library` is the same shape as the large-file manifests in [storage.mdx](./storage.mdx) §9 —
+a list of files mapped to CIDs and pin state — so a community is, mechanically, **just another sync
+unit** whose bytes happen to be owned by someone else.
+
+---
+
+## 3. Subscription intent — Get vs. Support
+
+When a user subscribes, they pick **why** (one or both):
+
+* **Get** — *consume for yourself.* Download/pin the community's videos so **you** can watch them,
+  offline and fast, on your own machine. The value is to *you*.
+* **Support** — *rebroadcast to keep it secure.* Pin the community's content to add **redundancy**
+  across more machines so a publisher losing their copy doesn't lose the work. The value is to the
+  *community's resilience*. (This is the intent that touches §1 — it is an explicit opt-in.)
+
+Intent and backup mode (§4) are **independent axes**: intent says *whose benefit*, backup mode says
+*how much disk*. A user can **Get** on **Recommended**, **Support** on **Full**, etc. Both intents
+draw from the same per-community pin and the same storage budget (§5) — choosing both does not double
+the bytes.
+
+---
+
+## 4. Backup mode — the three states (per community)
+
+Every community sits in exactly **one** of three backup modes. This is the core control on the page:
+
+1. **Block** — *sync nothing.* Do not download or pin any of this community's files. The default for
+   every community until the user acts. A previously-synced community set back to **Block**
+   **unpins** its content (stops rebroadcasting). This is the charter-safe resting state (§1).
+2. **Recommended** — *let LFB choose a subset that fits the budget.* LFB pins the **recommended
+   amount to keep secure** for this community (§5) — a subset of the library selected within the
+   storage budget. **This is the default we steer users toward** once they subscribe.
+3. **Full backup** — *pin the entire library.* Download/pin **every** file the community publishes,
+   ignoring the recommended cap (still bounded by real free disk — §5 headroom is never violated).
+
+The mode is a single control per row (a 3-way segmented control: **Block · Recommended · Full**).
+Changing it re-plans what gets pinned on the next sync and updates the live budget meter (§6).
+
+---
+
+## 5. The storage math — disk space, budget, and the recommended amount
+
+Communities decides *how much* to keep by measuring **this computer's real storage**, not a guess.
+
+### 5.1 What we measure
+
+* **Total disk space** — the capacity of the volume the LFB state root lives on.
+* **Free disk space OUTSIDE IPFS** — the free space that is genuinely available, i.e. **excluding**
+  what the local IPFS datastore already occupies. We report free space as *"room we can still grow
+  into,"* so bytes already committed to our own pins are not double-counted as free.
+* **Reserved headroom** — a floor we never cross. We do **not** fill the disk; a configurable safety
+  margin (default a percentage of total, with an absolute minimum) is always kept free. Every plan is
+  bounded so headroom is preserved — **Full backup included**.
+
+> These are measured with Node's own filesystem APIs (`statfs`/`statvfs`) on the state-root volume —
+> local only, no shell, consistent with the storage-layer rules in [storage.mdx](./storage.mdx).
+
+### 5.2 The community storage budget
+
+The **community storage budget** is the total disk LFB may devote to **all community content
+combined** — the amount the **user is willing to give** to communities.
+
+* LFB proposes a **recommended budget** = `free_outside_ipfs − reserved_headroom`, then a sensible
+  fraction of that (we do not assume the user wants to hand the whole disk to other people's videos).
+* The user can **accept the recommendation or set their own number** (a slider/field bounded by
+  `[0 … free_outside_ipfs − headroom]`). This one number answers the charter question *"how much
+  storage is this user willing to do for community videos."*
+* The budget is **computer-wide** (a property of this machine's disk), stored on the app-level
+  config, not per-user — consistent with sync state being computer-owned in
+  [storage.mdx](./storage.mdx) §2.
+
+### 5.3 The recommended amount to keep secure (per community)
+
+Within the budget, each **Recommended** community gets a **recommended amount to keep secure** — the
+subset LFB would pin for it. The subset is chosen to maximize the value of the bytes:
+
+* Prefer content **most at risk** (fewest other pinners / lowest redundancy) and **most wanted**
+  (newest, most-watched), trimming oldest/most-redundant first when space is tight.
+* Communities in **Full backup** are funded first from the budget; **Recommended** communities then
+  share the remainder, each capped at its recommended amount.
+* If the budget cannot cover everything, LFB **degrades gracefully and says so** — it never silently
+  drops content. The page shows what is pinned vs. deferred and why (over budget / lower priority).
+
+No file is ever compressed or altered to fit — that is a separate, explicit user action (charter).
+
+---
+
+## 6. The page — layout
+
+Top-to-bottom:
+
+1. **Storage header (the budget meter).** A compact panel showing **Total disk**, **Free outside
+   IPFS**, **Reserved headroom**, and the **Community budget** — with a meter of *used vs. budget vs.
+   remaining* and the count of communities in each mode. The budget number is editable here (§5.2).
+   Because content sits **below** it, this header stays a fixed band (it is *above* the table, so the
+   full-height-table rule is unaffected — see below).
+2. **The communities table** — the main surface (§7).
+3. *(No panel below the table by default.)*
+
+---
+
+## 7. The communities table (TanStack)
+
+**All tables are TanStack tables** (charter). This one lists every community — subscribed or
+discoverable — one row each. It uses the **shared table behavior** from
+[tables.mdx](./tables.mdx): a leading **bookmark** toggle, the **promoted "Bookmarked only"** filter,
+**multi-level** (primary/secondary/tertiary) sort, and **per-user, per-page persistence** of sort +
+filter.
+
+Control row above the table (charter pattern, matching **SysRaps**):
+
+* A **search** box (by name / publisher / description).
+* One **filter** icon → dropdown. It **promotes "Bookmarked only"** to the top
+  ([tables.mdx §2](./tables.mdx#2-the-promoted-bookmarked-only-filter-locked)), then per-column
+  filters (by mode: Block / Recommended / Full; by intent: Get / Support; by "subscribed only").
+* One **sort** icon → **multi-level** dropdown with **1st/2nd/3rd** priority slots
+  ([tables.mdx §3](./tables.mdx#3-multi-level-sort--primary--secondary--tertiary-locked)), driving the
+  **same** state as header clicks. **Default sort: Bookmarked first, then community name.**
+
+Columns:
+
+| Column | Shows |
+| --- | --- |
+| **`▮` Bookmark** | **Leading** ribbon favorite toggle ([tables.mdx §1](./tables.mdx#1-the-leading-bookmark-favorite-toggle-locked)) — a control cell; flips `bookmarked` (stored in `sync/c/<community_id>/config.yaml`, §8) and never navigates. |
+| **Community** | Name + publisher + one-line description. |
+| **Library** | Item count and total size (e.g. `142 videos · 88 GB`). |
+| **Intent** | **Get** / **Support** toggles (both allowed) — §3. |
+| **Backup mode** | The 3-way **Block · Recommended · Full** control — §4. |
+| **Keeping secure** | For this community: bytes currently pinned vs. its target (recommended amount, or full-library size). A small meter. |
+| **Redundancy** | How many known pinners already carry it (informs the "most at risk" recommendation). |
+
+Table behavior (all charter defaults):
+
+* **Pagination default 500 / page**; item count shown above pagination.
+* **Click-a-header to sort**; click again toggles asc/desc; a caret `↑`/`↓` marks the active column;
+  the header and the sort dropdown share one sort state.
+* **Full-page-height:** with nothing rendered beneath it, the table body fills to the bottom of the
+  viewport and the **rows** scroll inside it (header/control row + count/pagination footer pinned);
+  the page itself does not scroll. (The storage header in §6 is *above* the table, so it does not
+  trigger the "content below" exception.)
+* **Persistence:** this page's sort + filter (including **Bookmarked only** and the sort priority
+  order) are saved per user in `users/<email>/config.yaml` `tables.views` and restored on load
+  ([tables.mdx §4](./tables.mdx#4-persistence--sort--filter-saved-per-user-per-page-locked)).
+
+---
+
+## 8. State & storage
+
+A community subscription is a **sync unit** like any other (see [storage.mdx](./storage.mdx) §5–§9),
+stored **computer-wide** (owned by the machine, not the logged-in user):
+
+```
+~/T/_large_files_bridge/
+├── config.yaml                 # + community_budget: the machine's community storage budget (§5.2)
+└── sync/
+    └── c/                      # one folder PER SUBSCRIBED COMMUNITY (mirrors sync/r/<repo>/)
+        └── <community_id>/
+            ├── config.yaml     #   intent (get/support) + backup_mode (block|recommended|full) + bookmarked
+            ├── manifest.yaml   #   the community library → CID + local pin state
+            └── status.yaml     #   machine-written last-scan / last-sync cache
+```
+
+* `sync/c/<community_id>/` mirrors `sync/r/<repo_name>/` — same three files, same store layer, same
+  atomic writes. A community is mechanically a repo-shaped sync unit whose bytes are someone else's.
+* `config.yaml` (app-level) gains **`community_budget`** — the single computer-wide budget number.
+* **Block** communities may keep a record (so the choice sticks) but hold **no pins**.
+
+---
+
+## 9. Future — the "will you follow our guidelines?" prompt (OUT OF SCOPE NOW)
+
+> **Not built now — captured so we don't lose it.** Later, LFB will **prompt the user** asking
+> whether they will **follow our recommended-subset guidelines** — i.e. let LFB choose *which* files
+> to keep secure for the communities they support (the **Recommended** logic of §5.3), rather than
+> each user hand-picking. A community stays healthiest when its supporters spread coverage the way we
+> recommend instead of everyone pinning the same few popular files. This prompt, and any coordination
+> logic behind it, is **explicitly deferred** — this spec only defines the manual Block / Recommended
+> / Full controls above.
+
+---
+
+## 10. Acceptance criteria
+
+1. A **Communities** item appears in the left bar (`pm/left_bar.yaml`), routing to `/communities`.
+2. The page shows a **storage header**: total disk, **free space outside IPFS**, reserved headroom,
+   and the editable **community budget** — measured from the real volume, computed as
+   `free_outside_ipfs − headroom` for the recommendation.
+3. Each community has an **intent** (Get and/or Support) and a **backup mode** that is exactly one of
+   **Block · Recommended · Full**, defaulting to **Block** until the user acts.
+4. **Recommended** pins a subset within the budget (the *recommended amount to keep secure*); **Full**
+   pins the whole library; **Block** pins nothing and unpins anything previously synced. Reserved
+   **headroom is never violated**, including under Full.
+5. The community list is a **TanStack table** with the standard control row (search + one filter icon
+   + one sort icon), 500/page default, full-page height (rows scroll inside; page does not), and the
+   **shared table behavior** ([tables.mdx](./tables.mdx)): a leading **bookmark** toggle, a promoted
+   **"Bookmarked only"** filter, **multi-level** (1st/2nd/3rd) sort defaulting to **Bookmarked first,
+   then name**, and **per-user, per-page persistence** of sort + filter.
+6. Rebroadcasting stays **charter-compliant** (§1): it is a per-community opt-in that pins a chosen
+   publisher's public files only — never a general public gateway/relay — and the node's
+   only-our-content default is not flipped.
+7. Subscriptions persist as computer-wide sync units under `sync/c/<community_id>/`, and the budget
+   persists as `community_budget` in the app-level `config.yaml`.
+8. The "will you follow our guidelines?" prompt is **not** implemented (§9) — only the manual
+   Block/Recommended/Full controls exist in this version.
+
+<!--
+  LOCKED: §1 — Support/rebroadcast is an explicit, narrow, per-community opt-in that pins a chosen
+  publisher's PUBLIC files; it is content storage, NOT a public gateway/relay, and does not flip the
+  only-our-content default (charter). Default mode is Block. The three backup states are exactly
+  Block / Recommended / Full. Budget = free-outside-IPFS minus headroom; headroom is never crossed.
+  Communities are computer-wide sync units (sync/c/<id>/), mirroring sync/r/<repo>/. The follow-our-
+  guidelines prompt (§9) is deferred. All tables are TanStack (charter).
+-->

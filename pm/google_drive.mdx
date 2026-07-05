@@ -43,6 +43,9 @@ It is the **whole-computer** counterpart to the per-repo git backbone: Drive syn
 folder, not any one repo, so it carries the list that spans the *whole machine*. It is a peer of the
 Dropbox backbone — same shape, different vendor and different hazards.
 
+Walking a whole-computer directory root (every repo unit plus the non-repo computer unit that spans the machine) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()`
+
 Enable/disable and the mount override live in the hub schema at
 `large_files.settings.backbones.google_drive` (`enabled`, `root`) — [§6](#6-configuration).
 
@@ -87,6 +90,9 @@ The `<computer_label>` folder name is a convenience for humans and for the write
 authoritative writer identity is always `origin.computer_id` **inside** the file, never the folder
 name (hub [§3](./sync_list.mdx#3-the-file--largefilesbridge_synclistyaml)).
 
+Resolving and validating a mount/subfolder path (tilde expansion, absolute-path resolution, and the existing-directory check) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/paths.ts` — `resolveDir()`
+
 ---
 
 ## 3. Google Drive for Desktop specifics
@@ -124,6 +130,9 @@ The list changes underneath us whenever Google syncs in a peer's newer copy. LFB
   [§5](./sync_list.mdx#5-trust--reconciliation-the-load-bearing-rule)). A detected change is an
   *untrusted input*, not a command.
 
+Detecting which files changed since the last poll by diffing the current stat set against the previously recorded one is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `diffStatus()`
+
 ---
 
 ## 5. Drive-specific hazards
@@ -140,6 +149,9 @@ prevents most, but the reader must still tolerate all of them.
 | **`.tmp` / partial mid-sync files** | Drive writes then swaps; a half-written or `.tmp` file may be visible momentarily. | **Reject and keep the previous good copy** ([storage.mdx §15](./storage.mdx#15-the-store-layer-how-code-touches-disk)); anything that fails schema parse is not trusted. |
 | **Metadata cruft** | `desktop.ini`, `.DS_Store`, `.tmp.drivedownload`, `.driveupload`, and other Drive/OS scratch files appear beside the list. | **Ignore** — only files named exactly `LargeFilesBridge_SyncList.yaml` are candidates; everything else is skipped. |
 | **Clock skew** | Machine clocks differ; Drive's own timestamps are not authoritative. | Resolve by **revision, then content, then time** (hub [§5.3](./sync_list.mdx#53-conflicts-resolve-by-revision-then-content-then-time)); `written_at` is a last resort only. |
+
+Skipping OS / metadata junk directories while walking the mount (the shared hard-skip set that keeps `.cache`, `Caches`, and similar scratch dirs out of the walk) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts` — `HARD_SKIP`
 
 ---
 
@@ -171,6 +183,9 @@ the hub. It is **not** re-specified here:
   posture) → LFB neither writes to nor reads from Drive.
 * `root: null` → derive the default from the allow-listed owner's `GoogleDrive-<email>` mount +
   `/My Drive/LargeFileBridge`.
+
+Reading the app-level `config.yaml` (and seeding default scan roots when none are configured) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()`
 
 ---
 

@@ -279,3 +279,14 @@ they have been **reduced in pixel resolution**, **compressed**, or **converted**
   exact per-file hashes above.
 
 
+
+It is a good thing when our product specifications in the PM directory (those.mdx files) have the full file path from the tilde directory to the code file and then the class inside and the method name that primarily implements something.
+
+For product specifications, it should be talking about functionality, and then it should say something brief like "implemented in" or "it might be a matter of important action X" and say what that is, and then "does processing Y in code:" and then gives the full file path from the tilde directory to those directories and gives the file name of the source code. It then might give the name of the class: and then the method. 
+
+This is a very good, important pattern we always want to do with our specifications. The idea there is that, when the Parts Management MDX files are describing, you might say, "When we're in area A of our product, when we're in condition B, we need to check C, and if D is true, then we need to carry out action E." In that case, they would then say the place where we do A, and then look at B, C, D, and E in this code: and then you give that file path in the class there. That's a very, very good thing to do, because we're connecting the product management over to the spec.
+
+What I did there was that we're only needing two separate lines to do this. Reference one says what functionality is being handled by that code we're calling out, and then it uses another line to give that file path and then class name in the method name. It doesn't have to add more than that. That way, it's not disruptive to the park specification, and we're making the purpose occasion mostly about defining what needs to happen, why, where, and what the goals are. Having it where it calls out where the code is is only two lines, and that connects them, but it doesn't bloat the spec and 
+
+Make sure the part specifications all have this throughout, every time it's appropriate to point out where that code exists to handle that. 
+

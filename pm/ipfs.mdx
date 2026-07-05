@@ -16,6 +16,9 @@ around *repos and files LFB already manages*. This one starts from the **IPFS pi
 ([`ipfs pin ls`](../knowledge/ipfs.mdx#3-pinning--telling-ipfs-to-keep-a-file)) and shows it back —
 including content that is **pinned but not yet tracked by LFB**, so the user can **import** it.
 
+Reading the local pinset (`ipfs pin ls`) as metadata-only ground truth is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `listPins()`
+
 Three jobs:
 
 1. **Show local pins as ground truth.** One row per pinned CID (and its file, when known), whether LFB
@@ -121,6 +124,9 @@ node** (a repo with zero pins never appears). This turns the left bar into the p
 A single horizontal card that reflects the node **and** its only-our-content compliance. It is read
 mostly, but it is where a non-compliant node is **flagged and fixable**.
 
+Reading the reprovide strategy, gateway posture, and GC state for the card is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `nodePosture()`
+
 | Field | Meaning | Compliant value |
 | --- | --- | --- |
 | **Node** | Is the local Kubo daemon reachable? | `ok` (green) / `unreachable` (red — Rescan/imports disabled, tooltip). |
@@ -139,6 +145,9 @@ to the [defaults](../knowledge/ipfs.mdx#10-concrete-defaults-lfb-should-adopt) (
 gateway bound to `127.0.0.1`, GC on). The only accepted exception is when the user **deliberately**
 changed the [global setting](./settings.mdx#4-the-rest-of-the-global-settings-surface) away from the
 default — then the banner is an amber *acknowledged* note, not a red error.
+
+Restoring the only-our-content defaults when the user clicks **Fix** is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `enforceCompliance()` (exposed by the `POST /enforce` handler in `ipfs.router.ts`)
 
 ---
 
@@ -166,6 +175,9 @@ A CID that cannot be resolved to any local path is still importable as a **path-
 rules](./sync_list.mdx#51-local-claims-are-verified-not-believed) then treat it as *known* content this
 machine really holds.
 
+Importing untracked pins into tracking (metadata-only — record the CID in the computer-unit manifest, never re-fetch or re-pin) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-page.service.ts` — `importPins()`
+
 > Import is the **inverse** of the untrust rule: a `pinned_by: [this-computer]` claim is only ever
 > written for CIDs `ipfs pin ls` truly holds ([sync_list §5.1](./sync_list.mdx#51-local-claims-are-verified-not-believed)).
 > This page's Untracked rows are exactly the CIDs held-but-unclaimed; importing makes the claim honest.
@@ -177,6 +189,9 @@ machine really holds.
 **One row per pinned root CID.** Same flat `DataTable`, same control row as everywhere — including
 **header-click sort** (click a column header to sort; click again toggles asc ↔ desc,
 [repos.mdx §3.1](./repos.mdx#31-control-row-above-the-table--locked)).
+
+The pinset table, its columns, the node verdict/details, and the Import controls are rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsPage.tsx` — `IpfsPage` component
 
 **Height — bounded (the content-below exception).** This page renders a **node-details** panel
 **beneath** the pins table, so it is the **exception** to the site-wide full-page-height default
@@ -221,6 +236,9 @@ which now includes **reading `ipfs pin ls`** and reconciling it against the mani
 * Every pinned CID **not** in any manifest → **Untracked (pinned)** — surfaced here for import.
 * Reading the pinset is **metadata-only** (like the rest of the scan, [scan.mdx §1](./scan.mdx#1-what-the-scan-does--and-deliberately-does-not-do)):
   it lists pins and sizes; it opens no file and moves no bytes.
+
+Reconciling the pinset against the manifests — classifying each row as `synced` / `import` / `path-less`, computing the tracked/untracked totals, and rolling up the pinning-repo groups — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-page.service.ts` — `computeIpfsPage()`
 
 Manual **Rescan** (top-right) runs the same reconciliation now. Both manual and scheduled runs report an
 `import`-eligible count and appear in the progress dock ([webapp.mdx §11/§12](./webapp.mdx#11-what-shows-up-in-the-dock--the-lfbridge-operation-taxonomy)).

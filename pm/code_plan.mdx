@@ -110,6 +110,9 @@ auth middleware `app.use("/api/v1", buildAuthFrontend(cfg))`, mounts each featur
 a global error handler → `error.err`, listens on `server.backend_port`. Modules below are plain
 `Router` + `service` files (not Nest modules) but map 1:1 to the same responsibilities.
 
+The Express bootstrap (helmet, CORS, auth middleware, feature-router mounts, global error handler) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts` — `main()`
+
 ```
 packages/backend/src/
 ├── main.ts                      # bootstrap (above)
@@ -196,6 +199,9 @@ that POSTs to the internal route (sister precedent), so the worker runs in the a
 `rename`; per-file async mutex for read-modify-write; returns typed **defaults on absence** (no error,
 no first-run write); **Zod-validates on read**, rejecting malformed files loudly (storage.mdx §15).
 
+The atomic YAML store (tmp→fsync→rename, per-file mutex, defaults-on-absence, schema-validate-on-read) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `readYaml()` / `writeYaml()` / `updateYaml()`
+
 **Three scopes** (`scopes.ts`):
 
 * **App scope** — `config.yaml`, `peers.yaml` at the state root.
@@ -242,6 +248,12 @@ plist honors the on/off toggle. `schedule.service.ts` fronts an OS-agnostic `ins
 primary; systemd/Windows secondary behind the same interface). The launchd `ProgramArguments` run
 `node deploy/launchd/run-worker.mjs {scan|sync}`, which POSTs the loopback-only
 `/api/internal/run/<worker>` route — the actual work runs in the app's TypeScript.
+
+The metadata-only discovery walk (the 4-hour scan worker: repo discovery, mask, big-file stat, diff) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()`
+
+The detached, single-flight background scan job runner (kicks the walk off the request, coalesces reruns) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scan-job.ts` — `startScan()`
 
 ---
 

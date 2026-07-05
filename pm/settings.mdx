@@ -55,6 +55,9 @@ The threshold renders as **one number input with a unit dropdown on its right**:
 * The pair (value + unit) is the human-facing form; LFB **stores the resolved byte count** in
   `config.yaml` so all downstream code compares plain bytes.
 
+The value + unit threshold control (and the resolved-bytes helper text) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` — `SettingsPage`
+
 ### 1.2 Units — MB / GB / TB
 
 | Unit | Multiplier (binary, matching `storage.mdx` byte fields) | Example value → bytes |
@@ -83,6 +86,9 @@ This `big_file` block is the authoritative home of the threshold. It **supersede
 `sync_process.large_file_min_bytes` / per-repo `large_files.min_bytes` defaults in
 [storage.mdx §3/§6](./storage.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical), which
 should be re-pointed at this value (see [scan.mdx §9](./scan.mdx#9-reconciliation-with-existing-specs)).
+
+Saving the threshold — resolving value+unit to `threshold_bytes` and persisting the `big_file` block — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/settings/settings.router.ts` — `settingsRouter` `PATCH /` (uses `toBytes()` into `updateAppConfig()`)
 
 ---
 
@@ -151,6 +157,9 @@ concerns live. Each is specified elsewhere; the page groups them into sections:
 
 Global settings write to the app `config.yaml`; account/appearance settings write to the per-user
 `users/<email>/config.yaml`.
+
+The admin-gated allow-list editor surface (companies + individuals) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/AllowListPage.tsx` — `AllowListPage` (backed by `settingsRouter` `PATCH /security`, gated by `requireAdmin()`)
 
 ---
 

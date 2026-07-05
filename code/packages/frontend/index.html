@@ -6,6 +6,15 @@
     <!-- Stable ownership marker: lets the port resolver tell OUR web server apart from a
          foreign process squatting on the port (code_plan.mdx §2, port collision policy). -->
     <meta name="x-app" content="large-file-bridge" />
+    <!-- Favicon lives in public/ (served at web root by Vite). To switch to a different
+         option, copy any file from public/favicons/ over public/favicon.ico — see the
+         README in that folder for the catalog of alternatives.
+         NOTE: an ICO-only <link> is unreliable in Chrome (it often skips it on localhost).
+         We ship a 32x32 PNG alongside the .ico — Chrome prefers the PNG — plus an
+         apple-touch-icon. Regenerate the PNGs from favicon.ico with `sips` if you swap it. -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>Large File Bridge</title>
   </head>
   <body>

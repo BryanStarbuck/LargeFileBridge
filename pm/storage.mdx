@@ -70,6 +70,10 @@ Nothing under the state root is ever committed to the repo — it is the boundar
 runtime data. (The one thing that *is* committed lives inside each **watched repo**, not here: the
 portable in-repo manifest of §9.)
 
+Resolving the state root and the `LFB_STATE_DIR` / `LFB_LOG_DIR` overrides is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveStateDir` function
+
 ---
 
 ## 2. Directory layout
@@ -197,6 +201,10 @@ Secrets never go here — Google client credentials come from env or the out-of-
 (§10); the auth signing secret is its own file. `config.yaml` holds only non-secret ports, flags, and
 settings.
 
+Reading and updating the app-level `config.yaml` (with first-run default scanner roots) is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig` / `updateAppConfig` functions
+
 ---
 
 ## 4. Per-logged-in-user storage — the per-user requirement
@@ -233,14 +241,49 @@ ui:
   density: compact
   last_route: /sync          # restore the user where they left off
 
-# Remembered per-table sort/filter, keyed by table id (e.g. the repos table)
+# Remembered per-table sort/filter, keyed by table id, saved on every change and restored on load.
+# The sort is an ORDERED list (multi-level): index 0 = primary, 1 = secondary, 2 = tertiary.
+# The default (Bookmarked-first) is applied in code and only WRITTEN here once the user changes it.
+# Canonical shape + behavior: pm/tables.mdx §4.
 tables:
   views:
     repos:
-      sort: { col: name, dir: asc }
+      sort:
+        - { col: bookmarked, dir: desc }   # primary — favorites float to the top
+        - { col: name,       dir: asc  }   # secondary
       filters:
+        bookmarked_only: false             # the promoted "Bookmarked only" checkbox (tables.mdx §2)
         synced: { op: eq, value: true }
+    files:                                 # the Full-paths files table (full_paths.mdx)
+      sort:
+        - { col: bookmarked, dir: desc }
+        - { col: size,       dir: desc }
+      filters: { bookmarked_only: true }
+    communities:                           # the Communities table (communities.mdx)
+      sort:
+        - { col: bookmarked, dir: desc }
+        - { col: name,       dir: asc  }
+      filters: { bookmarked_only: false, mode: recommended }
+
+# Last 5 web sessions, newest first — usage windows measured from page renders, NOT the auth
+# session (§10). Drives the "stale return" auto-sync: starting a new session on a computer that
+# has not synced in > 48h automatically kicks off a background sync. Full spec: sessions.mdx.
+sessions:
+  - started_at:       2026-07-05T15:00:00.000Z
+    last_activity_at: 2026-07-05T15:42:10.000Z
+    ended_at:         null                       # OPEN — inside the 4-hour idle window
+  - started_at:       2026-07-04T09:03:00.000Z
+    last_activity_at: 2026-07-04T11:20:00.000Z
+    ended_at:         2026-07-04T11:20:00.000Z   # closed; end == last render, not the 4h timer's time
 ```
+
+The `sessions:` block is a small usage history — **not** the auth session (§10). A "web session" is a
+window of page-render activity; it starts on the first render after a quiet spell and is discontinued
+once 4 hours pass with no render (back-dated to the last render). Its purpose is freshness: when a new
+session starts on a machine that has not synchronized in **more than 48 hours**, LFB **automatically
+kicks off a (non-blocking) synchronization** so the user is not working against stale files. The full
+model — the 4-hour idle timer, the retroactive end time, the five-session cap, and the auto-sync
+trigger — lives in [sessions.mdx](./sessions.mdx).
 
 ### Email → directory policy
 
@@ -248,6 +291,10 @@ tables:
 * Store it **verbatim as the folder name** (`bryan@act3ai.com`) so the tree is human-browsable.
 * **Sanitize defensively:** reject/strip any `/`, `\`, `..`, or NUL before using the value as a path
   segment. It comes from a trusted JWT, but we never build a path from an unsanitized string.
+
+Reading and lazily updating each user's personal `config.yaml` is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/user-config.service.ts` — `getUserConfig` / `updateUserConfig` functions
 
 ---
 
@@ -351,6 +398,10 @@ access:
   `participants` when a repo is shared with a family member or teammate; only those allow-listed
   emails' computers pin it. This is the per-repo realization of the app-wide allow-list (§4).
 
+Registering a discovered repo as a `sync/r/<repo_name>/` unit (validating it is a git working tree, sanitizing/disambiguating the folder name, seeding `synced: false`) is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `registerRepo` function
+
 ### 6.3 `sync/r/<repo_name>/manifest.yaml`
 
 The local cache of the repo's large-file manifest — see §9 for the full manifest shape and how it is
@@ -379,6 +430,10 @@ A backend scanner (TypeScript-on-Node) periodically walks the `scanner.roots` (�
 
 The scanner runs on demand (a "Rescan" action in the web app) and as part of the background sync
 process (§13).
+
+Walking the scanner roots to discover repos, register each unit, and build the computer-unit mask is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll` function
 
 ---
 
@@ -465,7 +520,9 @@ files:
   entry is updated and the old CID is unpinned (subject to retention). This is how "up-to-date" works
   across computers.
 * **`pinned_by`** is the redundancy record — if a file is pinned by ≥1 other computer, losing this
-  laptop loses nothing. The web app surfaces any file pinned by only one computer as at-risk.
+  laptop loses nothing. The web app surfaces any file pinned by only one computer as at-risk. It is a
+  **cache of claims, not truth**: only *this* computer's own entry is locally verifiable, and it is
+  verified/refreshed against the real IPFS pinset on every sync (§9.5).
 
 ### 9.2 Repo manifests travel via Git (the elegant part)
 
@@ -494,6 +551,55 @@ loose (non-repo) large files in sync without any repository.
   repo's committed copy is the portable source of truth, the state-root copy is the cache).
 * Unpinning of superseded CIDs follows a retention window (keep the previous CID for a grace period so
   a mid-sync peer can still fetch it), recorded in `status.yaml`.
+
+### 9.5 The IPFS pinset is the source of truth — `pinned_by` is a stale cache
+
+Whether a file is **pinned** has exactly one authoritative answer: the **local IPFS pinset**, as the
+CLI/daemon reports it (`ipfs pin ls`). That pinset is **primary storage** for pin state. LFB's own
+record — the `pinned_by` list in every `manifest.yaml` — is a **secondary, stale-by-design cache**: a
+fingerprint of what the pinset looked like the last time we looked, never the thing itself.
+
+**There is only one pinset, and the CLI owns it.** There is no separate "LFB-pinned" versus
+"CLI-pinned" state — a file `ipfs pin add`ed on the command line and a file pinned through our web app
+land in the *same* pinset and are indistinguishable. That matters because the pinset changes **behind
+our back**: while LFB is shut down, or between runs, the user (or another tool, or IPFS garbage
+collection) freely runs `ipfs pin add` / `ipfs pin rm`, adds files, and drops pins. So the instant we
+persist "this computer pins CID X" into a manifest, that claim may already be false. We therefore
+**never** treat our stored pin state as truth — we **re-derive it from the pinset**.
+
+Two rules fall out of this, and the code must honor both:
+
+* **Read from the pinset, refresh the cache — at sync time.** A synchronization is exactly the moment
+  LFB *learns from the filesystem which CIDs are really pinned and which are not*, then rewrites the
+  cache to match. Each sync reads the pinset once (`ipfs pin ls`) and, for every tracked CID,
+  reconciles **this computer's** membership in `pinned_by`:
+  * really pinned → this computer stays in (or is added to) `pinned_by`;
+  * **not** really pinned → this computer's label is **dropped** from `pinned_by` (the cache was
+    stale); and if the file is still decided `sync`, the CID is **re-pinned** so reality catches up to
+    intent.
+  An "unchanged" manifest entry (same size, same CID) is **not assumed** to still be pinned — it is
+  verified against the pinset like any other. This is the local half of
+  [sync_list §5.1](./sync_list.mdx#51-local-claims-are-verified-not-believed): a `pinned_by` claim
+  about *this* computer is believed only if `pin ls` actually holds the CID.
+
+* **Write to the pinset, not just to the cache — on a pin action.** When the user chooses **Pin** in
+  the web app, LFB must **actually pin at the IPFS level** (`ipfs pin add`); **Unpin** actually runs
+  `ipfs pin rm`. The cache is updated **only after reading the state back** from the pinset, so the UI
+  settles on ground truth, never on optimism. A pin control that merely flipped a stored flag would be
+  a lie the next `pin ls` exposes.
+
+Because pin state is a cache, the UI **must not show stale data**. Any surface that reports whether a
+file is pinned resolves it from the **live pinset**, not from `pinned_by` — the IPFS page already
+composes its rows from `pin ls` and only *labels* a pinned CID with what the manifests know about it
+([ipfs.mdx §4](./ipfs.mdx#4-import--the-load-bearing-feature)). `pinned_by` survives solely as the
+cross-computer redundancy record (§9.1): a list of *claims*, refreshed each sync, of which only this
+computer's own entry is ever locally verifiable. Claims about **peer** computers cannot be checked
+from here — they are carried forward from the last reconciled Sync List and re-confirmed only when
+that peer republishes ([sync_list §5.1](./sync_list.mdx#51-local-claims-are-verified-not-believed)).
+
+Reading the live IPFS pinset once per sync and reconciling each `pinned_by` claim against it (re-pinning lost CIDs still decided `sync`) is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncRepoFolder` function (via `setPinClaim`)
 
 ---
 
@@ -538,6 +644,10 @@ This matches the sister apps exactly (EmailDeliveryHero, the_starbucks, all/app)
 `expireAt` ceiling is fixed **at session creation** and is not re-extended on token mint (the sliding
 cookie rolls forward, but the durable ceiling does not), so **changing the policy takes full effect on
 the next sign-in**; existing session records keep whatever ceiling they were created with.
+
+Setting the 10-month session lifetime policy and wiring the on-disk signing secret + `FileSessionStore` into OpenAuthFederated is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/auth-frontend.ts` — `constructAuthFrontend` function
 
 **Credentials file — schema, read order, and the setup UI.** The file is read by
 `config/credentials-file.ts` and passed to OpenAuthFederated (`auth-frontend.ts`). Its exact shape:
@@ -613,6 +723,10 @@ Two append-only flat files **directly at the state root** (no `logs/` subdirecto
 * Everything that can go wrong — a failed IPFS pin, an unreachable peer, a store-write failure, a
   scan error — lands in `error.err` with enough context (unit, path, CID) to act on it.
 
+Writing the two rolling logs (everything to `log.log`; WARN/ERROR/FATAL also to `error.err`; rotation; never throwing) is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `log` object
+
 ---
 
 ## 13. The background sync process — the transparency contract
@@ -642,12 +756,18 @@ The web app (first priority per `CLAUDE.md`) provides transparency and control:
   `sync_process.enabled` and loads/unloads the launchd job accordingly. Installing / uninstalling the
   plist is a separate explicit action.
 
+Reconciling installed vs on/off against the real launchd state and install/uninstall/enable/disable from the web app is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `workerState` / `control` functions
+
 Each background run: rescan (§7) → for every `synced: true` unit, add new/changed large files to IPFS,
 update the manifest (§9), pin locally, fetch any missing CIDs from peers, and write `status.yaml`.
-It also **reads the local IPFS pinset (`ipfs pin ls`) and reconciles it against the manifests**
+It also **reads the local IPFS pinset (`ipfs pin ls`) and reconciles it against the manifests** — the
+pinset is the source of truth and `pinned_by` is the stale cache we refresh from it (**§9.5**)
 ([scan.mdx §2.1](./scan.mdx#21-the-15-minute-scheduletask-reads-the-ipfs-pinset-import-already-pinned)):
 manifest CIDs that are really pinned confirm this computer's `pinned_by` claim; manifest CIDs whose pin
-was lost are re-queued; **pinned CIDs absent from every manifest become "import" candidates** surfaced on
+was lost have this computer's stale claim **dropped** and, if still decided `sync`, are **re-pinned**;
+**pinned CIDs absent from every manifest become "import" candidates** surfaced on
 the [IPFS page](./ipfs.mdx#4-import--the-load-bearing-feature) — importing one is metadata-only and makes
 that already-pinned file **count as Synced**. Before the run, the
 [tools preflight](./scan.mdx#42-preflight--required-tools-before-a-scan-brew-install) checks that `ipfs`
@@ -707,6 +827,10 @@ paths, parsing, atomic writes, or the local-vs-server difference.
 
 The store is isolated behind an interface so a later move to a real database is a single-module
 change; services never touch the filesystem directly.
+
+Atomic write-temp-then-rename, the per-file mutex, defaults-on-absence, and schema-validate-on-read are handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `readYaml` / `writeYaml` / `updateYaml` functions
 
 ---
 

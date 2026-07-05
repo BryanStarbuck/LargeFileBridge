@@ -73,6 +73,9 @@ tools that action needs (`<tool> --version` on `PATH`, cached briefly):
   is missing and why the pending action needs it, with the pending action **remembered** so it resumes
   after install ("Install `ipfs`, then continue the scan").
 
+The on-`PATH` presence probe (`command -v` / `where`, never a shell alias) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `hasBinary()` (surfaced via `nodeStatus()`).
+
 The preflight is also reachable **any time** from a **Tools** status link (Settings / the IPFS card)
 so the user can install optional tools proactively, not only when blocked.
 
@@ -106,6 +109,9 @@ so the user can install optional tools proactively, not only when blocked.
 * **Package-manager row.** Detect the platform's manager (`brew` on Mac). Show found + path, or **not
   found** with the **official install instructions** — LFB **does not auto-install Homebrew** (it is a
   system-level change; show the command, let the user run it). Once brew exists, the tool rows enable.
+
+The per-platform package manager, exact command, and copyable manual command are derived in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `installPlan()`.
 * **One row per tool** — status (`● v<ver>` installed / `✗ missing` / `(via <formula>)` when provided by
   another), what LFB uses it for + level (required/optional), the **exact install command** shown as
   copy-able text, and a **Install** button that runs it.

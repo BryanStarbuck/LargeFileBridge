@@ -84,6 +84,9 @@ The `.lfbridge/` directory holds the committed, git-tracked artifacts for this r
   committed file plus this computer's live pin state. The committed file is the **portable source of
   truth**; the state-root copy is derived.
 
+The committed in-repo list file (currently `.lfbridge/manifest.yaml`) is written by code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/manifest.service.ts` — `writeCommittedManifest` (path from `committedManifestPath`)
+
 ---
 
 ## 3. Reconciliation with storage.mdx §9.2
@@ -106,6 +109,9 @@ bare manifest. `publish_manifest` ([repo_settings.mdx §2.4](./repo_settings.mdx
 writing the widened artifact. Existing bare `manifest.yaml` files are read and migrated in place on
 the next publish.
 
+The `publish_manifest` toggle that writes this committed file on each sync is wired in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncRepoFolder` (the `cfg.sync.publish_manifest` publish block)
+
 ---
 
 ## 4. Transport is git — the asynchronous change is a `git pull`
@@ -123,6 +129,9 @@ input the hub trust model governs — it is a set of **claims, never ground trut
 * After a pull, LFB reads the committed list, reconciles it against this computer's filesystem + IPFS
   pinset (hub §5), and fetches any CID it lacks over IPFS — exactly the flow storage.mdx §9.2
   describes, now driven by the widened list.
+
+Reading the committed list that a `git pull` delivered is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/manifest.service.ts` — `readCommittedManifest`
 
 ---
 
@@ -216,6 +225,9 @@ repo with this backbone enabled, LFB regenerates the in-repo list:
 * Serialize **deterministically** (§6) and write **atomically** (temp-then-rename,
   [storage.mdx §15](./storage.mdx#15-the-store-layer-how-code-touches-disk)) so a concurrent reader or
   a git operation never sees a half-written file.
+
+The atomic temp-then-rename write that keeps readers and git from seeing a half-written file is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `writeYaml`
 
 Then the file is **committed + pushed by the user's normal git workflow**. **LFB writes the file but
 does NOT force git commits/pushes unless explicitly configured to** — it respects the user's git

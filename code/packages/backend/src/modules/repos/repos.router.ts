@@ -155,7 +155,7 @@ reposRouter.post("/:repoId/sync", async (req, res) => {
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   const only = body.success && body.data.paths ? new Set(body.data.paths) : undefined;
   try {
-    await syncRepoFolder(folder, only);
+    await syncRepoFolder(folder, only, { manual: true });
     const detail = computeRepoDetail(folder, await ipfs.health());
     res.json({ ok: true, data: detail });
   } catch (e) {
