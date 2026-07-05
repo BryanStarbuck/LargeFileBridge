@@ -485,6 +485,12 @@ column by column):
   Badges are returned **ordered rightmost-first** — `[repo?, sync?, compress?, ipfs?]` — so the
   frontend renders array order right-to-left (directories.mdx §3.5).
 
+The File System column-browser REST routes are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.router.ts` — `fsRouter` (`GET /api/fs`, `GET /api/fs/home`)
+
+The one-directory-level listing (readdir + stat + per-entry code badges) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()`
+
 ### 14.2 Shared types (`@lfb/shared`)
 
 `FsBadge` (the seven-value union), `FsEntry`, and `FsListing` from directories.mdx §5 live in

@@ -129,6 +129,9 @@ The per-platform package manager, exact command, and copyable manual command are
   ([webapp.mdx §11](./webapp.mdx#11-what-shows-up-in-the-dock--the-lfbridge-operation-taxonomy)) —
   "Installing ipfs" with a spinner, ffmpeg/brew output streamed to a detail/log line; success re-probes
   and flips the row to `● v<ver>`, failure raises an error toast with the captured stderr.
+
+The explicit-click install as a single-flight, re-attachable dock job (streamed output, re-probe on success) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `startInstall()`.
 * **After Kubo installs**, LFB may offer the first-run **`ipfs init`** and starting the daemon (the
   same steps the real `get_videos.sh` installers do, [ipfs_share_files.mdx §3.3](./ipfs_share_files.mdx#33-the-ipfs-list-artifact--three-learned-shapes)),
   each as its own explicit step — still never turning on a public/recursive gateway
