@@ -2,7 +2,7 @@
 // this machine (always injected — never an empty table), the machine-local peers.yaml, and the travelling
 // devices/ registry across every storage, unioned by id and disambiguated. Read-only aggregate.
 import { Router } from "express";
-import { deviceRows } from "../storage/devices.service.js";
+import { deviceRows, deviceRow } from "../storage/devices.service.js";
 import { requireAllowListed } from "../auth/identify.js";
 import { log } from "../../shared/logging.js";
 
@@ -14,6 +14,18 @@ devicesRouter.get("/", async (_req, res) => {
     res.json({ ok: true, data: await deviceRows() });
   } catch (e) {
     log.error("peers", `devices list failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// One device by id — the "View one device" page (devices.mdx §6). 404 on a stale/unknown id.
+devicesRouter.get("/:id", async (req, res) => {
+  try {
+    const row = await deviceRow(req.params.id);
+    if (!row) return res.status(404).json({ ok: false, error: "device not found" });
+    res.json({ ok: true, data: row });
+  } catch (e) {
+    log.error("peers", `device fetch failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
 });

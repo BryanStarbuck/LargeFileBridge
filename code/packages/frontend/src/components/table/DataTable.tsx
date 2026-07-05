@@ -176,6 +176,11 @@ export function DataTable<T>({
   // select cell + data cells + trailing chevron cell
   const colSpan = (selection ? 1 : 0) + tanColumns.length + 1;
 
+  // Fixed column widths (charter Tables / devices.mdx §6): when any column declares a `width`, switch to
+  // a fixed table layout and emit a <colgroup> so wide-enough columns keep their width instead of being
+  // squeezed. Columns with no width share what's left. The leading select + trailing kebab get their own.
+  const hasWidths = columns.some((c) => c.width);
+
   return (
     // Full-page-height (repos.mdx §3.3.1): fill mode makes this a flex column so the body scroll
     // region below grows to the bottom of the viewport; the control row + footer stay pinned (shrink-0).
@@ -331,7 +336,16 @@ export function DataTable<T>({
           ref={scrollRef}
           className={`overflow-auto ${fillHeight ? "min-h-0 flex-1" : "max-h-[65vh]"}`}
         >
-          <table className="w-full text-sm border-collapse">
+          <table className={`w-full text-sm border-collapse ${hasWidths ? "table-fixed" : ""}`}>
+            {hasWidths && (
+              <colgroup>
+                {selection && <col style={{ width: "2rem" }} />}
+                {columns.map((c) => (
+                  <col key={c.id} style={c.width ? { width: c.width } : undefined} />
+                ))}
+                <col style={{ width: "3rem" }} />
+              </colgroup>
+            )}
             <thead className="sticky top-0 z-10 bg-white">
               {table.getHeaderGroups().map((hg) => (
                 <tr key={hg.id} className="border-b border-[var(--lfb-border)] text-left text-black/60">

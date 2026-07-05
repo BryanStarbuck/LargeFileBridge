@@ -64,6 +64,29 @@ const ATTRS: Array<(hw: DeviceHardware) => string | null> = [
   fmtHost,
 ];
 
+/**
+ * A few salient, human hardware facts for one device, in display order (devices.mdx §6): the model
+ * first, then the specs that USED to be their own table columns (screen, chip, RAM, disk). Now that
+ * those columns are gone, the Devices table rolls these into the Device cell — the disambiguated name
+ * plus this descriptor. Unknown facts are skipped, so a bare/headless device returns a short list (or
+ * `[]`). Pure — the backend and any client build the identical descriptor.
+ */
+export function deviceDescriptor(hw: DeviceHardware | null | undefined): string[] {
+  if (!hw) return [];
+  const out: string[] = [];
+  const model = hw.marketingName || hw.modelName;
+  if (model) out.push(model);
+  const screen = fmtScreen(hw);
+  if (screen) out.push(screen);
+  const chip = fmtChip(hw);
+  if (chip) out.push(chip);
+  const ram = fmtRam(hw);
+  if (ram) out.push(`${ram} RAM`);
+  const disk = fmtDisk(hw);
+  if (disk) out.push(`${disk} disk`);
+  return out;
+}
+
 // The minimal shape disambiguateDevices needs from a device row.
 export interface Disambiguatable {
   name: string; // the nice name

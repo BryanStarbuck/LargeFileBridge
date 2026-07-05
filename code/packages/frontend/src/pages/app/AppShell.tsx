@@ -21,9 +21,16 @@ export function AppShell() {
   const { data: user } = useQuery({ queryKey: ["me"], queryFn: api.me });
   useSessionPing(); // record web-session activity on open + each navigation (sessions.mdx)
   // The media viewer pages (/image, /video, /audio) run FULL-WIDTH so the action bar can use the whole
-  // column instead of leaving side gutters (media_viewer.mdx §4.1). Every other route keeps max-w-6xl.
+  // column instead of leaving side gutters (media_viewer.mdx §4.1). The Devices / Peers table also runs
+  // full-width so its fixed-width columns get room to breathe (devices.mdx §6). Every other route keeps
+  // max-w-6xl.
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const fullWidth = pathname === "/image" || pathname === "/video" || pathname === "/audio";
+  const fullWidth =
+    pathname === "/image" ||
+    pathname === "/video" ||
+    pathname === "/audio" ||
+    pathname === "/devices" ||
+    pathname.startsWith("/device/");
   return (
     <div className="flex h-full">
       <Sidebar user={user ?? FALLBACK} />

@@ -390,6 +390,7 @@ export type ProgressKind =
   | "pin"
   | "publish"
   | "compress"
+  | "transcribe"
   | "hash"
   | "fingerprint"
   | "ignore"

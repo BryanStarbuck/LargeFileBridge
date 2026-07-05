@@ -147,6 +147,7 @@ const VERBS: Record<ProgressKind, string> = {
   pin: "Pinning",
   publish: "Publishing",
   compress: "Compressing",
+  transcribe: "Transcribing",
   hash: "Hashing",
   fingerprint: "Fingerprinting",
   ignore: "Ignoring",

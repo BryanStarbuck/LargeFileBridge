@@ -26,3 +26,10 @@ export function middleTruncate(s: string, max = 48): string {
   const keep = Math.floor((max - 1) / 2);
   return `${s.slice(0, keep)}…${s.slice(s.length - keep)}`;
 }
+
+// A long IPFS Peer ID shown as its first 8 + `…` + last 8 characters (devices.mdx §6): enough to
+// recognise both ends while keeping the column narrow. Short ids (≤17 chars) pass through untouched.
+export function truncatePeerId(id: string, edge = 8): string {
+  if (id.length <= edge * 2 + 1) return id;
+  return `${id.slice(0, edge)}…${id.slice(-edge)}`;
+}

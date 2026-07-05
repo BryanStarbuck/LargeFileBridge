@@ -10,6 +10,7 @@ import { mediaKindForName } from "@lfb/shared";
 import { Transcriber } from "../../tools/transcribe/Transcribe.js";
 import { expandHome } from "../fs/badges.js";
 import { getStorageDetail } from "../storage/storage.service.js";
+import { track } from "../progress/progress.registry.js";
 import { log } from "../../shared/logging.js";
 
 // The parallel hidden hierarchy under a storage root (Transcribe.mdx §3). Single constant — rename here
@@ -90,8 +91,13 @@ export function readTranscript(input: string): TranscriptView | null {
   }
 }
 
-/** Transcribe ONE media file into the parallel `.transcribe/` hierarchy (§1). */
-export function transcribeOne(input: string, overwrite = false): TranscribeResult {
+/**
+ * Transcribe ONE media file into the parallel `.transcribe/` hierarchy (§1). ASYNC and non-blocking —
+ * the underlying engine spawns ffmpeg/whisper without freezing the event loop (§5.1). The actual run is
+ * wrapped in a progress-registry job (kind "transcribe") so the web app's progress dock shows a live,
+ * determinate card — even for a run this browser tab did not start (webapp.mdx §12/§14).
+ */
+export async function transcribeOne(input: string, overwrite = false): Promise<TranscribeResult> {
   const abs = path.resolve(expandHome(input.trim()));
   const name = path.basename(abs);
 
@@ -106,7 +112,11 @@ export function transcribeOne(input: string, overwrite = false): TranscribeResul
   }
   ensureTranscribeIgnored(root);
 
-  const r = engine.transcribeToFile(abs, transcriptPath);
+  const r = await track("transcribe", name, (report) =>
+    engine.transcribeToFile(abs, transcriptPath, ({ fraction }) =>
+      report({ done: Math.round(fraction * 100), total: 100, unit: "%" }),
+    ),
+  );
   const status: TranscribeResult["status"] =
     r.status === "transcribed" ? "transcribed" : r.status === "no_audio" ? "no_audio" : r.status === "tool_missing" ? "tool_missing" : "failed";
   if (status === "transcribed") log.info("transcribe", `${abs} → ${transcriptPath} (${r.words ?? 0} words)`);
@@ -114,19 +124,20 @@ export function transcribeOne(input: string, overwrite = false): TranscribeResul
 }
 
 /** Transcribe a selected set of files (§2.3). Never throws — each file reports its own outcome. */
-export function transcribeMany(inputs: string[], overwrite = false): TranscribeBatchResult {
-  const results = inputs.map((p) => {
+export async function transcribeMany(inputs: string[], overwrite = false): Promise<TranscribeBatchResult> {
+  const results: TranscribeResult[] = [];
+  for (const p of inputs) {
     try {
-      return transcribeOne(p, overwrite);
+      results.push(await transcribeOne(p, overwrite));
     } catch (e) {
-      return result(p, "failed", null, null, (e as Error).message);
+      results.push(result(p, "failed", null, null, (e as Error).message));
     }
-  });
+  }
   return summarize(results);
 }
 
 /** Transcribe ALL audio/video under a directory or repo working tree (§2.4). */
-export function transcribeTree(input: string, overwrite = false): TranscribeBatchResult {
+export async function transcribeTree(input: string, overwrite = false): Promise<TranscribeBatchResult> {
   const abs = path.resolve(expandHome(input.trim()));
   if (!exists(abs)) return summarize([result(abs, "failed", null, null, "path not found")]);
   const media = walkMedia(abs);
@@ -135,7 +146,7 @@ export function transcribeTree(input: string, overwrite = false): TranscribeBatc
 }
 
 /** Transcribe ALL audio/video in a storage, resolved by its Storages-row id (§2.4). */
-export function transcribeStorageById(id: string, overwrite = false): TranscribeBatchResult {
+export async function transcribeStorageById(id: string, overwrite = false): Promise<TranscribeBatchResult> {
   const detail = getStorageDetail(id); // throws for unknown id (router maps to 404)
   if (detail.storage.type === "local") {
     return summarize([result(detail.storage.root, "skipped", null, null, "local storage holds no media")]);

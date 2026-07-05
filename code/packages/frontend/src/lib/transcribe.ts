@@ -7,8 +7,9 @@ import type { TranscribeResult, TranscribeBatchResult } from "@lfb/shared";
 import { api } from "@/api/client";
 import { clientLog } from "./clientLog.js";
 
-/** One-file outcome → a human line (Transcribe.mdx §1/§4). */
-function msgOne(r: TranscribeResult): string {
+/** One-file outcome → a human line (Transcribe.mdx §1/§4). Exported so the useTranscribeFile hook and
+ *  the Media Viewer report the SAME honest per-status text. */
+export function transcribeMsgOne(r: TranscribeResult): string {
   switch (r.status) {
     case "transcribed":
       return `Transcribed — ${r.words ?? 0} words`;
@@ -42,7 +43,7 @@ export function runTranscribeFile(path: string, name: string, opts?: { overwrite
     loading: `Transcribing ${name}…`,
     success: (r) => {
       opts?.onDone?.();
-      return msgOne(r);
+      return transcribeMsgOne(r);
     },
     error: errMsg("transcribe.file"),
   });

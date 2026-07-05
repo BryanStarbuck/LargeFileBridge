@@ -25,7 +25,8 @@ import { api } from "@/api/client";
 import { Badges } from "@/components/fs/Badges";
 import { EntityMore, type Action } from "@/components/menu/EntityMenu";
 import { OverflowActionBar, type BarItem } from "@/components/menu/OverflowActionBar";
-import { runTranscribeFile } from "@/lib/transcribe";
+import { useTranscribeFile } from "@/lib/useTranscribeFile";
+import { TranscribeSetupCard } from "@/components/TranscribeSetupCard";
 import { runDescribeFile } from "@/lib/describe";
 import { runOsOpen } from "@/lib/os";
 import { patchEntityBadges } from "@/lib/patchEntityBadges";
@@ -195,6 +196,8 @@ function ActionBar({
     queryFn: () => api.transcript(v.path),
     enabled: kind === "audio" || kind === "video",
   });
+  // Async, non-blocking transcription with an instant pending state (Transcribe.mdx §5.1).
+  const transcribe = useTranscribeFile(v.path, v.name);
 
   const flags = useMutation({
     mutationFn: (patch: { neverIpfs?: boolean; noCompress?: boolean }) => api.setEntityFlags(v.path, patch),
@@ -317,14 +320,14 @@ function ActionBar({
     ],
   });
 
-  // Transcribe — audio + video (Transcribe.mdx §2.1).
+  // Transcribe — audio + video (Transcribe.mdx §2.1). Pending flips the button to a spinner instantly.
   if (kind === "audio" || kind === "video") {
-    const label = transcript ? "Re-transcribe" : "Transcribe…";
-    const run = () => runTranscribeFile(v.path, v.name, { overwrite: !!transcript, onDone: () => qc.invalidateQueries({ queryKey: ["transcript", v.path] }) });
+    const label = transcribe.isPending ? "Transcribing…" : transcript ? "Re-transcribe" : "Transcribe…";
+    const run = () => transcribe.run(!!transcript);
     items.push({
       key: "transcribe", priority: 60,
-      bar: <Btn icon={<Captions className="h-4 w-4" />} label={label} onClick={run} />,
-      menu: [{ id: "transcribe", group: "Work", label, icon: <Captions className="h-4 w-4" />, onSelect: run }],
+      bar: <Btn icon={<Captions className="h-4 w-4" />} label={label} onClick={run} disabled={transcribe.isPending} />,
+      menu: [{ id: "transcribe", group: "Work", label, icon: <Captions className="h-4 w-4" />, disabled: transcribe.isPending, onSelect: run }],
     });
   }
 
@@ -404,12 +407,14 @@ function MediaAnalysis({
   const { data: description } = useQuery({
     queryKey: ["description", v.path], queryFn: () => api.description(v.path), enabled: canDescribe,
   });
-  const { data: tools } = useQuery({
+  const { data: tools, refetch: refetchTools, isFetching: toolsFetching } = useQuery({
     queryKey: ["transcribe-tools"], queryFn: () => api.transcribeTools(), enabled: canTranscribe, staleTime: 60 * 1000,
   });
   const { data: providers } = useQuery({
     queryKey: ["describe-providers"], queryFn: () => api.describeProviders(), enabled: canDescribe, staleTime: 60 * 1000,
   });
+  // Async, non-blocking transcription with an instant pending state (Transcribe.mdx §5.1).
+  const transcribe = useTranscribeFile(v.path, v.name);
 
   const tabs: Array<{ id: "transcription" | "description"; label: string; present: boolean }> = [
     ...(canTranscribe ? [{ id: "transcription" as const, label: "Transcription", present: !!transcript }] : []),
@@ -456,17 +461,22 @@ function MediaAnalysis({
               mono
               body={transcript.text}
               meta={<>Transcript · <button className="text-[var(--lfb-primary)] hover:underline" onClick={() => navigate({ to: "/file", search: { path: transcript.transcriptPath } })}>open file</button></>}
-              onRegenerate={() => runTranscribeFile(v.path, v.name, { overwrite: true, onDone: () => qc.invalidateQueries({ queryKey: ["transcript", v.path] }) })}
+              busy={transcribe.isPending}
+              onRegenerate={() => transcribe.run(true)}
             />
+          ) : tools && !tools.whisper ? (
+            // Local tools missing — show install commands + a Re-check button so the user can fix it and
+            // run again without reloading (Transcribe.mdx §5.2). No credentials/cloud involved.
+            <TranscribeSetupCard tools={tools} rechecking={toolsFetching} onRecheck={() => void refetchTools()} />
           ) : (
             <GeneratePane
               icon={<Captions className="h-8 w-8 text-black/30" />}
               title="No transcript yet"
-              blurb="Transcribe the audio locally with Whisper — nothing leaves this computer."
-              disabled={!!tools && !tools.whisper}
-              disabledHint="Whisper isn't installed. Run `pipx install openai-whisper` (and `brew install ffmpeg`), then reload."
+              blurb="Transcribe the audio locally with Whisper — nothing leaves this computer. No account or credentials needed."
               cta="Generate transcript"
-              onGenerate={() => runTranscribeFile(v.path, v.name, { onDone: () => qc.invalidateQueries({ queryKey: ["transcript", v.path] }) })}
+              busy={transcribe.isPending}
+              busyLabel="Transcribing…"
+              onGenerate={() => transcribe.run(false)}
             />
           )
         )}
@@ -497,13 +507,17 @@ function MediaAnalysis({
   );
 }
 
-function AnalysisBody({ body, meta, mono, onRegenerate }: { body: string; meta: React.ReactNode; mono?: boolean; onRegenerate: () => void }) {
+function AnalysisBody({ body, meta, mono, onRegenerate, busy }: { body: string; meta: React.ReactNode; mono?: boolean; onRegenerate: () => void; busy?: boolean }) {
   return (
     <div>
       <div className="mb-2 flex items-center justify-between text-xs text-black/45">
         <span>{meta}</span>
-        <button className="flex items-center gap-1 text-[var(--lfb-primary)] hover:underline" onClick={onRegenerate}>
-          <RefreshCw className="h-3.5 w-3.5" /> Regenerate
+        <button
+          className="flex items-center gap-1 text-[var(--lfb-primary)] hover:underline disabled:opacity-50"
+          onClick={onRegenerate}
+          disabled={busy}
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} /> {busy ? "Regenerating…" : "Regenerate"}
         </button>
       </div>
       <pre className={`max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-lg border border-[var(--lfb-border)] bg-slate-50 px-4 py-3 text-sm text-black/80 ${mono ? "font-mono" : ""}`}>
@@ -514,7 +528,7 @@ function AnalysisBody({ body, meta, mono, onRegenerate }: { body: string; meta: 
 }
 
 function GeneratePane({
-  icon, title, blurb, cta, onGenerate, disabled, disabledHint,
+  icon, title, blurb, cta, onGenerate, disabled, disabledHint, busy, busyLabel,
 }: {
   icon: React.ReactNode;
   title: string;
@@ -523,6 +537,8 @@ function GeneratePane({
   onGenerate: () => void;
   disabled?: boolean;
   disabledHint?: string;
+  busy?: boolean;
+  busyLabel?: string;
 }) {
   return (
     <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-[var(--lfb-border)] px-6 py-10 text-center">
@@ -531,12 +547,13 @@ function GeneratePane({
       <div className="max-w-md text-sm text-black/55">{blurb}</div>
       <button
         onClick={onGenerate}
-        disabled={disabled}
+        disabled={disabled || busy}
         className="mt-1 flex items-center gap-2 rounded-md bg-[var(--lfb-primary)] px-4 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50"
       >
-        <Sparkles className="h-4 w-4" /> {cta}
+        {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} {busy ? busyLabel ?? "Working…" : cta}
       </button>
-      {disabled && disabledHint && <div className="max-w-md text-xs text-amber-700">{disabledHint}</div>}
+      {busy && <div className="max-w-md text-xs text-black/50">Running locally — this can take a few minutes for a long video. You can leave this tab; progress shows in the dock.</div>}
+      {disabled && !busy && disabledHint && <div className="max-w-md text-xs text-amber-700">{disabledHint}</div>}
     </div>
   );
 }

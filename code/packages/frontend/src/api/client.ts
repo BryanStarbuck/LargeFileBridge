@@ -132,6 +132,8 @@ export const api = {
   peers: () => unwrap<PeerRow[]>(http.get("/peers")),
   // The Devices / Peers table (devices.mdx §6) — self + peers.yaml + registry, unioned & disambiguated.
   devices: () => unwrap<DeviceRow[]>(http.get("/devices")),
+  // One device by id — the "View one device" page (devices.mdx §6).
+  device: (id: string) => unwrap<DeviceRow>(http.get(`/devices/${encodeURIComponent(id)}`)),
   // Remove peer (menus.mdx §5.4) — forgets the computer from peers.yaml; touches no remote content.
   removePeer: (id: string) => unwrap<{ removed: boolean }>(http.delete(`/peers/${id}`)),
 

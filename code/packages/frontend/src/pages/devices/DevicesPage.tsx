@@ -1,10 +1,15 @@
 // Devices / Peers — every computer that carries your files (devices.mdx §6). The row set ALWAYS
 // includes THIS computer (auto-seeded by the backend), so the table is never empty; when it's the only
 // row we still nudge the user to add a second machine. Each device is identified by its hardware
-// fingerprint (model, year, screen, disk, RAM) so two similar Macs are told apart by the "Device" column,
-// whose label is disambiguated server-side (device-naming.ts). Last-seen recency is health-coloured.
+// fingerprint; the model/screen/chip/RAM/disk facts that used to be their own columns are now rolled
+// into the DEVICE cell (a descriptor subtitle under the name), so the table stays narrow and the other
+// columns get the width they need (devices.mdx §6). A row click opens that device's "View one device"
+// page; the IPFS Peer ID cell copies to the clipboard.
 import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
+import { toast } from "sonner";
 import type { DeviceRow } from "@lfb/shared";
+import { deviceDescriptor } from "@lfb/shared";
 import { Laptop, Monitor, Server, HardDrive } from "lucide-react";
 import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
@@ -14,7 +19,8 @@ import { PageHeader } from "../../components/ui/PageHeader.js";
 import { StatusBanner } from "../../components/ui/StatusBanner.js";
 import { Disclosure } from "../../components/ui/Disclosure.js";
 import { healthColor, type Health } from "../../components/ui/health.js";
-import { relativeTime } from "../../lib/format.js";
+import { relativeTime, truncatePeerId } from "../../lib/format.js";
+import { clientLog } from "../../lib/clientLog.js";
 
 // Recent = green, a bit stale = amber, long gone / never = neutral.
 function seenHealth(iso: string | null): Health {
@@ -26,12 +32,6 @@ function seenHealth(iso: string | null): Health {
   return "neutral";
 }
 
-// Whole-GB → human size ("512 GB", "1 TB").
-function fmtGb(gb: number | null): string {
-  if (gb == null) return "—";
-  return gb >= 1000 ? `${+(gb / 1000).toFixed(gb % 1000 === 0 ? 0 : 1)} TB` : `${gb} GB`;
-}
-
 function KindIcon({ kind }: { kind: string }) {
   const cls = "h-4 w-4 text-black/60";
   if (kind === "laptop") return <Laptop className={cls} />;
@@ -40,7 +40,14 @@ function KindIcon({ kind }: { kind: string }) {
   return <HardDrive className={cls} />;
 }
 
+// Copy the full Peer ID to the clipboard (the cell only shows a truncated 8…8 form). Stops row-click.
+function copyPeerId(id: string) {
+  navigator.clipboard?.writeText(id).catch((e) => clientLog.warn("DevicesPage.copyPeerId", e));
+  toast.success("Peer ID copied");
+}
+
 export function DevicesPage() {
+  const navigate = useNavigate();
   const { data, isLoading } = useQuery({ queryKey: ["devices"], queryFn: api.devices });
   const rows = data ?? [];
   const onlySelf = !isLoading && rows.length === 1 && rows[0]?.isSelf;
@@ -50,22 +57,34 @@ export function DevicesPage() {
       id: "device",
       header: "Device",
       kind: "text",
+      width: "28rem",
       accessor: (d) => d.displayLabel,
-      cell: (d) => (
-        <span className="flex items-center gap-2">
-          <span className="font-medium">{d.displayLabel}</span>
-          {d.isSelf && (
-            <span className="rounded-full bg-[var(--lfb-primary)]/10 px-2 py-0.5 text-xs text-[var(--lfb-primary)]">
-              This computer
+      cell: (d) => {
+        // The removed Model/Year/Screen/Disk/RAM columns now live here as a compact descriptor line so
+        // the machine is still recognisable at a glance (devices.mdx §6).
+        const descriptor = deviceDescriptor(d.hardware);
+        return (
+          <span className="flex flex-col">
+            <span className="flex items-center gap-2">
+              <span className="truncate font-medium">{d.displayLabel}</span>
+              {d.isSelf && (
+                <span className="shrink-0 rounded-full bg-[var(--lfb-primary)]/10 px-2 py-0.5 text-xs text-[var(--lfb-primary)]">
+                  This computer
+                </span>
+              )}
             </span>
-          )}
-        </span>
-      ),
+            {descriptor.length > 0 && (
+              <span className="truncate text-xs text-black/50">{descriptor.join(" · ")}</span>
+            )}
+          </span>
+        );
+      },
     },
     {
       id: "kind",
       header: "Kind",
       kind: "enum",
+      width: "8rem",
       accessor: (d) => d.hardware?.kind ?? "",
       filterOptions: ["laptop", "desktop", "server"],
       cell: (d) => (
@@ -76,30 +95,50 @@ export function DevicesPage() {
       ),
     },
     {
-      id: "model",
-      header: "Model",
+      // Owner = the logged-in OS username of that computer (devices.mdx §6): the fingerprint's `username`
+      // (for THIS machine, whoever is signed in here), falling back to the allow-listed email if unknown.
+      id: "owner",
+      header: "Owner",
       kind: "text",
-      accessor: (d) => d.hardware?.marketingName || d.hardware?.modelName || "",
-      cell: (d) => <span>{d.hardware?.marketingName || d.hardware?.modelName || "—"}</span>,
+      width: "12rem",
+      accessor: (d) => d.hardware?.username || d.owner || "",
+      cell: (d) => <span>{d.hardware?.username || d.owner || "—"}</span>,
     },
-    { id: "year", header: "Year", kind: "int", accessor: (d) => d.hardware?.year ?? null,
-      cell: (d) => <span>{d.hardware?.year ?? "—"}</span> },
-    { id: "screen", header: "Screen", kind: "int", align: "right", accessor: (d) => d.hardware?.screenInches ?? null,
-      cell: (d) => <span>{d.hardware?.screenInches != null ? `${d.hardware.screenInches}″` : "—"}</span> },
-    { id: "disk", header: "Disk", kind: "int", align: "right", accessor: (d) => d.hardware?.diskTotalGb ?? null,
-      cell: (d) => <span>{fmtGb(d.hardware?.diskTotalGb ?? null)}</span> },
-    { id: "ram", header: "RAM", kind: "int", align: "right", accessor: (d) => d.hardware?.ramGb ?? null,
-      cell: (d) => <span>{fmtGb(d.hardware?.ramGb ?? null)}</span> },
-    { id: "owner", header: "Owner", kind: "text", accessor: (d) => d.owner ?? "" },
-    { id: "peerId", header: "IPFS Peer ID", kind: "text", accessor: (d) => d.ipfsPeerId ?? "",
-      cell: (d) => <code className="text-xs text-black/60">{d.ipfsPeerId ?? "—"}</code> },
-    { id: "lastSeen", header: "Last seen", kind: "timestamp", accessor: (d) => d.lastSeen,
+    {
+      id: "peerId",
+      header: "IPFS Peer ID",
+      kind: "text",
+      width: "12rem",
+      accessor: (d) => d.ipfsPeerId ?? "",
+      cell: (d) =>
+        d.ipfsPeerId ? (
+          <code
+            title={`${d.ipfsPeerId} — click to copy`}
+            onClick={(e) => {
+              e.stopPropagation();
+              copyPeerId(d.ipfsPeerId!);
+            }}
+            className="cursor-pointer text-xs text-black/60 hover:text-[var(--lfb-primary)]"
+          >
+            {truncatePeerId(d.ipfsPeerId)}
+          </code>
+        ) : (
+          <span className="text-black/20">—</span>
+        ),
+    },
+    {
+      id: "lastSeen",
+      header: "Last seen",
+      kind: "timestamp",
+      width: "10rem",
+      accessor: (d) => d.lastSeen,
       cell: (d) =>
         d.isSelf ? (
           <span style={{ color: healthColor("ok") }}>now</span>
         ) : (
           <span style={{ color: healthColor(seenHealth(d.lastSeen)) }}>{relativeTime(d.lastSeen)}</span>
-        ) },
+        ),
+    },
   ];
 
   const otherCount = rows.filter((d) => !d.isSelf).length;
@@ -132,9 +171,13 @@ export function DevicesPage() {
         data={rows}
         columns={columns}
         searchKeys={(d) =>
-          `${d.displayLabel} ${d.owner ?? ""} ${d.hardware?.marketingName ?? ""} ${d.hardware?.username ?? ""}`
+          `${d.displayLabel} ${d.owner ?? ""} ${d.hardware?.marketingName ?? ""} ${d.hardware?.username ?? ""} ${d.ipfsPeerId ?? ""}`
         }
         getRowId={(d) => d.id || d.displayLabel}
+        // Row click → the device's "View one device" page (devices.mdx §6). Skip rows with no stable id.
+        onRowClick={(d) => {
+          if (d.id) navigate({ to: "/device/$deviceId", params: { deviceId: d.id } });
+        }}
         itemNoun="devices"
         loading={isLoading}
         // Only peers.yaml entries can be "removed"; self and registry rows are not forgettable here.

@@ -39,6 +39,12 @@ const devicesRoute = createRoute({
   path: "/devices",
   component: lazyRouteComponent(() => import("./pages/devices/DevicesPage.js"), "DevicesPage"),
 });
+// View one device (devices.mdx §6) — full identity + hardware fingerprint + per-device actions.
+const oneDeviceRoute = createRoute({
+  getParentRoute: () => appLayout,
+  path: "/device/$deviceId",
+  component: lazyRouteComponent(() => import("./pages/devices/ViewOneDevicePage.js"), "ViewOneDevicePage"),
+});
 // Storages (storages.mdx): the map of every storage you belong to, and one storage's detail.
 const storagesRoute = createRoute({
   getParentRoute: () => appLayout,
@@ -153,6 +159,7 @@ const routeTree = rootRoute.addChildren([
     repoSettingsRoute,
     oneRepoRoute,
     devicesRoute,
+    oneDeviceRoute,
     storagesRoute,
     storageSettingsRoute,
     storageDetailRoute,

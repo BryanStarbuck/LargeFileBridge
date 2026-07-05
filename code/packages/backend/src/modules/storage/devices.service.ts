@@ -235,15 +235,17 @@ export async function deviceRows(): Promise<DeviceRow[]> {
   const selfId = cfg.computer.id ?? "";
   const acc = new Map<string, RowAccum>();
 
-  // 1. self — always present.
+  // 1. self — always present. Owner is the logged-in OS user of THIS computer (devices.mdx §6): the
+  // hardware fingerprint's username, which is exactly "who is signed in here" — not an email.
+  const selfHw = hwDocToCamel(cfg.computer.hardware);
   acc.set(selfId || "self", {
     id: selfId,
     name: cfg.computer.label || "this-computer",
     isSelf: true,
-    owner: null,
+    owner: selfHw.username || null,
     ipfsPeerId: cfg.computer.ipfs_peer_id ?? null,
     lastSeen: new Date().toISOString(), // this computer is here right now
-    hardware: hwDocToCamel(cfg.computer.hardware),
+    hardware: selfHw,
     storageCount: 0,
     source: "self",
   });
@@ -317,4 +319,13 @@ export async function deviceRows(): Promise<DeviceRow[]> {
   );
   const labels = disambiguateDevices(rows.map((r) => ({ name: r.name, hardware: r.hardware })));
   return rows.map((r, i) => ({ ...r, displayLabel: labels[i] }));
+}
+
+/**
+ * One device row by its id (devices.mdx §6) — the aggregate the "View one device" page reads. Built on
+ * `deviceRows()` so it sees the SAME disambiguated label + union the table shows; returns null when no
+ * device carries that id (a stale link).
+ */
+export async function deviceRow(id: string): Promise<DeviceRow | null> {
+  return (await deviceRows()).find((r) => r.id === id) ?? null;
 }
