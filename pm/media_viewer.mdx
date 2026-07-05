@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — View one file (image / video / audio viewer)
-description: The viewer-first single-media pages — the "View one file" experience for playable media. /image?path=<abs> is the image viewer; /video?path=<abs> is the video viewer; /audio?path=<abs> is the audio player. Unlike the properties-first View-one-file page (files.mdx), these pages are dominated by the media itself — a large viewer fills the bottom ~70% of the screen and auto-sizes to fit while keeping aspect ratio. Stacked above it, top to bottom: the file's absolute path, the file NAME as the big page title, a row of action buttons (Compress · Move · Delete · Add/Remove IPFS · Open folder …), and a property grid of ~4–5 columns × 2–3 rows of label/value pairs sized to sit above a 16:9 medium. The media plays/loads straight off the user's local disk, streamed through the backend over an authenticated, HTTP-Range endpoint (no file:// URL, no public gateway). This spec defines the shared viewer layout, the streaming + codec-probe backend contract, the per-type action set, and acceptance criteria for all three viewers. Implemented by the /api/media + /api/entity backend modules and the ViewOneImagePage / ViewOneVideoPage / ViewOneAudioPage frontend (shared MediaViewer layout).
+description: The viewer-first single-media pages — the "View one file" experience for playable media. /image?path=<abs> is the image viewer; /video?path=<abs> is the video viewer; /audio?path=<abs> is the audio player. These pages run full-width (no side gutters) and are dominated by the media itself — a bounded stage auto-sizes it to fit while keeping aspect ratio. Stacked top to bottom: the file's absolute path, the file NAME as the big page title, a FULL-WIDTH overflow action bar (as many buttons as fit — IPFS primary · Compress · Open: in browser · on Mac · Open folder: in browser · on Mac · Transcribe · Copy path · View properties · Move — with the rest, plus Never-publish-via-IPFS / Do-not-compress / Delete, folded into a trailing More menu by priority), a property grid, the media stage, and a two-tab analysis panel (Transcription · AI description) each with a ✓ when its content exists and a Generate button when empty. The media plays/loads straight off the user's local disk, streamed through the backend over an authenticated, HTTP-Range endpoint (no file:// URL, no public gateway); Open on Mac/PC/Linux hands a file/folder to the host OS default handler on localhost. This spec defines the shared viewer layout, the streaming + codec-probe backend contract, the full-width overflow action bar, the OS hand-off + Open compounds, and the Transcription/AI-description analysis tabs. Implemented by the /api/media + /api/entity + /api/fs + /api/describe backend modules and the ViewOneImagePage / ViewOneVideoPage / ViewOneAudioPage frontend (shared MediaViewer layout).
 ---
 
 # LargeFileBridge — View one file (image / video / audio viewer)
@@ -120,51 +120,68 @@ The local, no-shell container/codec/dimensions sniff (bounded header + tail read
 
 ---
 
-## 3. Layout (shared `MediaViewer`) — the fixed vertical stack
+## 3. Layout (shared `MediaViewer`) — the vertical stack
 
-One column, **five bands stacked top → bottom**. The order is deliberate: the small identifying text
-is at the top, and the **media dominates the bottom ~70%** of the screen. The bands, top to bottom:
+The media-viewer routes (`/image`, `/video`, `/audio`) run **full-width** — the app shell drops its
+normal `max-w-6xl` centered column for these three routes so the content uses the **whole** width next
+to the left bar, with no side gutters. This gives the action bar (§4) the entire width to lay out
+buttons before folding any into **More**. Widening only the viewer routes is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell` (`max-w-none` for `/image` · `/video` · `/audio`, `max-w-6xl` otherwise)
+
+One column, **six bands stacked top → bottom**. The order is deliberate: the small identifying text
+is at the top, the **media is the star in the middle**, and the analysis tabs sit at the bottom. The
+bands, top to bottom:
 
 1. **Full path** — the file's absolute path in small, muted, monospaced text. This is the very top line.
 2. **File name** — the title of the page, in **large** text (it is the biggest text on the page).
-3. **Action buttons** — a row of link/button actions (Compress · Move · Delete · Add/Remove IPFS ·
-   Open folder · Copy path · View properties · Open raw), plus the `⋮` more menu at the right (§4).
+3. **Action bar** — the **full-width overflow action bar** (§4): as many action buttons as FIT
+   (IPFS primary · Compress · Open: in browser · on Mac · Open folder: in browser · on Mac ·
+   Transcribe · Copy path · View properties · Move), with anything that doesn't fit — plus the sticky
+   flag/danger extras — folded into a trailing **More** menu. The top-right `⋮` still carries the
+   complete File catalog.
 4. **Property grid** — **~4–5 columns wide × 2–3 rows tall** of `Label : value` pairs (§3.1). It is
    kept short (few rows) on purpose so it sits neatly above a 16:9 medium without crowding it out.
-5. **Media surface** — the **star**: the bottom **~70%** of the content area. The image/video/audio
-   **auto-sizes to fit the window** and **zooms up to fill** while **keeping its aspect ratio** (a 16:9
-   medium letterboxes into the band). It never upscales past 100% for an image by default.
+5. **Media surface** — the **star**: a **bounded stage** (`~58vh`, min `340px`). The image/video/audio
+   **auto-sizes to fit** the stage and **zooms up to fill** while **keeping its aspect ratio** (a 16:9
+   medium letterboxes into the band). It never upscales past 100% for an image by default. Its height is
+   bounded (not fill-to-viewport) precisely because band 6 sits beneath it — the "content underneath"
+   exception in the charter's table rule applies here to the media stage.
+6. **Analysis tabs** — the **Transcription · AI description** tabs (§6): each carries a ✓ when its
+   content exists, defaults to whichever is available (preferring transcription), and offers a
+   **Generate** button when the active tab has nothing yet. The page scrolls to reveal this band.
 
 ```
 ┌────────────┬───────────────────────────────────────────────────────────────────────────┐
 │  LEFT BAR  │  ~/BGit/…/Our_Movies/render/final_4k.mov                            ┌───┐   │ ← 1 full path
 │            │  final_4k.mov                                                       │ ⋮ │   │ ← 2 NAME (title)
 │            │                                                                     └───┘   │
-│            │  [⚡ Compress]  [↷ Move]  [🗑 Delete]  [+ Add to IPFS]  [Open folder] [Copy]  │ ← 3 action buttons
+│            │ [+ Add to IPFS][⚡Compress] Open: in browser · on Mac  Open folder: … [More▾]│ ← 3 overflow action bar (full width)
 │            ├───────────────────────────────────────────────────────────────────────────┤
 │            │  Size    8.2 GB     Dimensions 3840×2160   Codec  H.264 · MP4   Repo Our_M… │ ← 4 property grid
 │            │  Modified 2h ago    Created  May 1         Compress looks uncompressed  …    │   (~4–5 cols × 2–3 rows)
 │            ├───────────────────────────────────────────────────────────────────────────┤
-│            │                                                                             │
 │            │                     ┌───────────────────────────────┐                       │
-│            │                     │                               │                       │
-│            │                     │        ▶  video / image        │  ← MEDIA (~70%, fits) │
-│            │                     │                               │                       │
+│            │                     │        ▶  video / image        │  ← MEDIA (bounded stage)
 │            │                     └───────────────────────────────┘                       │
-│            │                                                                             │
+│            ├───────────────────────────────────────────────────────────────────────────┤
+│            │  ✓ Transcription   ○ AI description                                          │ ← 6 analysis tabs
+│            │  ────────────────                                                            │
+│            │  [ transcript / description text, or a Generate button ]                    │
 └────────────┴───────────────────────────────────────────────────────────────────────────┘
 ```
 
 * **1 Full path.** The absolute path, muted + monospaced, click-to-copy. Truncates with a tooltip on
   overflow. The one line that lets a user confirm exactly which file on disk they are looking at.
 * **2 File name.** The basename as the page **title**, large. A small back affordance sits just above it.
-* **3 Action buttons.** The per-type action set (§4). The `⋮` more menu (top-right) still carries the
-  **complete** File catalog ([menus.mdx §4](./menus.mdx)) verbatim — the buttons are a promotion of the
-  most-used items, never the only way to reach an action.
+* **3 Action bar.** The full-width **overflow** action set (§4): the buttons that fit, then a trailing
+  **More** menu holding the overflow plus the sticky flag/danger extras. The `⋮` more menu (top-right)
+  still carries the **complete** File catalog ([menus.mdx §4](./menus.mdx)) verbatim — the bar is a
+  promotion of the most-used items, never the only way to reach an action.
 * **4 Property grid.** See §3.1.
-* **5 Media surface.** Dark/neutral backdrop, the medium centered and scaled **to fit** the band while
-  preserving aspect ratio (letterboxed). It grows to fill the ~70% band in a tall window and shrinks in a
-  short one — no dead space, no overflow of the page.
+* **5 Media surface.** Dark/neutral backdrop, the medium centered and scaled **to fit** the bounded
+  stage while preserving aspect ratio (letterboxed). It fills the stage in a tall window and shrinks in a
+  short one — no dead space; band 6 sits below it and the page scrolls to reach it.
   * **Image viewer:** `<img>` from the grant URL, object-fit contain. Click toggles **fit ↔ 100%**
     (pan by drag when zoomed). A checkerboard shows through real transparency.
   * **Video viewer:** `<video controls>` from the grant URL (native controls: play/scrub/volume/fullscreen).
@@ -187,65 +204,95 @@ whose value is unknown shows `—` (or is omitted) rather than stretching the gr
 Audio swaps **Dimensions** for **Duration** and drops the image/video-only cells (§4). The grid never
 grows past ~3 rows — extra facts live in the `⋮` menu or the properties page, so the media keeps its space.
 
-### 3.2 Height behavior (LOCKED)
+### 3.2 Height behavior
 
-The page is a **full-height flex column** that does **not** itself scroll. Bands 1–4 take their natural
-height (`shrink-0`); the **media surface takes all remaining height** — which is ~70% of the content area
-in a typical tall window. The media element is `max-h-full max-w-full object-contain`, so it always fits
-inside that band regardless of the window size. When the window is short, the media band shrinks with it;
-it never pushes the page into a scroll.
+The page is a **flex column** that grows with its content. Bands 1–4 take their natural height; the
+**media surface is a bounded stage** (`h-[58vh] min-h-[340px]`) so band 6 (the analysis tabs) always has
+a place beneath it. The media element is `max-h-full max-w-full object-contain`, so it always fits inside
+the stage regardless of window size. Because band 6 lives below the media, the page **scrolls** (the app
+shell's `<main>` owns the scroll) when the combined height exceeds the viewport — this is the charter's
+"content underneath" exception to the fill-to-viewport rule. Earlier this viewer filled ~70% of the
+viewport with the media alone; adding the always-present analysis tabs made a bounded stage the correct
+default.
 
-The shared viewer-first layout — the five-band stack (path · name · actions · property grid · fit-to-fill
-media surface) — is handled in code:
+The shared viewer-first layout — the six-band stack (path · name · overflow action bar · property grid ·
+bounded media stage · analysis tabs) — is handled in code:
 
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `MediaViewer` component (with `PropertyGrid` and `ViewerSurface`)
 
 ---
 
-## 4. The action buttons (band 3) — a per-type action set
+## 4. The action bar (band 3) — a full-width, priority-ordered overflow row
 
-Band 3 is a row of **action buttons** — the same operations a user reaches by right-clicking the file
-or opening its `⋮` kebab, promoted to visible buttons. **Think of them as the file's context-menu items
-laid out as buttons.** The complete catalog still lives under the `⋮` more menu at the right; the buttons
-are the most-used items, and **the set is customized by media type** (image vs. audio vs. video).
+Band 3 is a **full-width overflow action bar** — the same operations a user reaches by right-clicking
+the file or opening its `⋮` kebab, promoted to visible buttons. **Think of them as the file's
+context-menu items laid out as buttons.** Because the viewer runs full-width (§3), the bar has the whole
+column to work with; it shows **as many buttons as fit** and folds the rest into a trailing **More**
+menu. The set is customized by media type (image vs. audio vs. video), and the top-right `⋮` still
+carries the complete catalog.
 
-### 4.1 The shared actions (all three types)
+### 4.1 Overflow & priority (how the bar decides what to show)
+
+Every action carries a **priority**. When the row is too narrow for all of them, the **lowest-priority**
+items overflow into **More** first, so the most important actions stay visible the longest. A hidden
+mirror row measures each button's natural width off-screen and a `ResizeObserver` tracks the available
+width, so the fit is recomputed whenever the window (or the button set) changes — no layout thrash. The
+priority order, highest → lowest: **IPFS primary** (100) · **Compress** (90) · **Open** (85) ·
+**Open folder** (75) · **Transcribe** (60) · **Copy path** (40) · **View properties** (30) · **Move**
+(20). The trailing **More** menu always holds the overflow **plus** the sticky **extras** that are never
+buttons: **Never publish via IPFS** (flag toggle), **Do not compress** (flag toggle), **Copy CID**
+(when a CID exists), and **Delete…** (danger). "Open raw" is no longer its own button — it is the
+**Open: in browser** half of the Open compound (§4.2).
+
+The width-measuring overflow bar (fit the highest-priority buttons, fold the rest into **More**) is
+handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/OverflowActionBar.tsx` — `OverflowActionBar` (with the `fit()` greedy solver + `MoreButton`)
+
+### 4.2 The shared actions (all three types)
 
 * **⚡ Compress** — the compress **offer** (explicit-click, confirm — charter §6.1; never automatic).
-  Shown when the file "should" compress and **Do not compress** is off; otherwise it renders as a muted
-  state chip (`already compressed` / `looks uncompressed` suppressed). Same state as the `⋮` item and the
+  Shown when the file "should" compress and **Do not compress** is off. Same state as the `⋮` item and the
   files.mdx switch — flipping one updates the others.
-* **↷ Move** — move/rename the file to a new location on disk (§4.4). Confirm-gated. This is an explicit,
-  user-initiated file operation.
-* **🗑 Delete** — remove the file (§4.4). **Recoverable**: LFBridge moves it to its own trash rather than
-  hard-unlinking, and confirms first. This is the one destructive-looking action; it never silently
-  loses bytes.
 * **+ Add to IPFS / Remove from IPFS** — the IPFS primary, identical rule to [files.mdx §3](./files.mdx):
   in a repo with `neverIpfs` off and decision ≠ sync → **Add to IPFS** (Pin; sets `sync`); decision =
   sync → **Remove from IPFS** (Unpin; sets `ignore`); not in a repo or `neverIpfs` on → absent.
-* **Open folder** (`/fs`) · **Copy path** · **View properties** (`/file`) · **Open raw** (the grant URL
-  in a new tab — download / native-app handoff).
+* **Open:** a **compound** control — the word "Open:" is not clickable; it is followed by up to two
+  clickable sub-actions: **in browser** (opens the raw bytes via the signed grant URL in a new tab — the
+  former "Open raw") · **on {label}** (hands the file to the host OS default handler — Preview/QuickTime/
+  the native app). The **on {label}** half reads **on Mac / on PC / on Linux** by platform and is present
+  only when OS hand-off is possible here (localhost). See [os_open.mdx](./os_open.mdx).
+* **Open folder:** the same **compound** — **in browser** navigates the in-app **File System** tab
+  (`/fs?path=<parent>`) · **on {label}** opens **Finder / Explorer** at the containing directory
+  ([os_open.mdx](./os_open.mdx)). The label is not clickable.
+* **Transcribe / Re-transcribe** — audio + video only; runs Whisper locally
+  ([Transcribe.mdx](./Transcribe.mdx)). Also reachable as the Transcription tab's Generate button (§6).
+* **Copy path** · **View properties** (`/file`) · **↷ Move** (§4.5).
+* **In the More menu:** **Never publish via IPFS** (the `neverIpfs` sticky flag — forbids the sync
+  decision), **Do not compress** (the `noCompress` sticky flag), **Copy CID**, and **🗑 Delete…**
+  (recoverable move-to-trash, confirm-gated — §4.5).
 
-### 4.2 Type-specific actions (think like a PM)
+### 4.3 Type-specific actions (think like a PM)
 
 The set is **customized by type** — the actions that only make sense for one medium appear only there:
 
 | Action | Image | Audio | Video | Notes |
 | --- | --- | --- | --- | --- |
 | ⚡ Compress | ✓ | — | ✓ | Charter compresses **video** (primary) and **image** (secondary); audio is out of scope, so no Compress on the audio player. |
-| ↷ Convert to compressible… | ✓ | — | — | PNG/BMP/TIFF → JPEG/WebP with the alpha-channel safety check ([menus.mdx §6.4](./menus.mdx)); image-only. |
+| Transcribe / Re-transcribe | — | ✓ | ✓ | Whisper, local; also the Transcription tab's Generate (§6). Not shown for images. |
+| AI description (Generate) | ✓ | — | ✓ | Image + video only, in the AI-description tab (§6, [ai_description.mdx](./ai_description.mdx)). |
 | Fit ↔ 100% / zoom | ✓ | — | — | Image-only viewer control (click the image). |
 | Play / pause / scrub | — | ✓ | ✓ | Native `<video>` / `<audio>` transport — audio and video only. |
-| ↷ Move · 🗑 Delete · IPFS · Copy path · Open folder · Open raw | ✓ | ✓ | ✓ | The shared set (§4.1) — every type. |
+| Open (in browser · on Mac) · Open folder · Copy path · View properties · Move · Delete · IPFS | ✓ | ✓ | ✓ | The shared set (§4.2) — every type. |
 
-### 4.3 Property-grid facts by type
+### 4.4 Property-grid facts by type
 
 The property grid (§3.1) also flexes by type: **image** shows Dimensions; **video** shows Dimensions +
 Codec + Compress-state; **audio** shows **Duration** (read from the media element's metadata) instead of
 Dimensions, and drops Codec/Compress. Repo · Peers · Decision · Size · Created · Modified · Badges are
 shared across all three.
 
-### 4.4 Move & Delete — the backend contract (explicit, guarded, recoverable)
+### 4.5 Move & Delete — the backend contract (explicit, guarded, recoverable)
 
 Move and Delete are the only actions here that change the file on disk, so they are **explicit-click,
 confirm-gated**, and **guarded** — a direct honoring of the charter ("never alter a file unless the user
@@ -266,12 +313,17 @@ POST /api/entity/delete  { path: <abs> }                → { trashed: true, res
 Moving (guarded rename) and deleting (recoverable move-to-trash, never `unlink`) a single file are handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `moveEntity` / `deleteEntity` functions (routed by `entity.router.ts` `POST /move` · `POST /delete`)
 
-### 4.5 Where the action row is built
+### 4.6 Where the action bar is built
 
-Promoting the type-specific action set (Compress · Move · Delete · IPFS primary · Open folder / Copy /
-View properties / Open raw), the repo/compress/codec chips, and the `⋮` more menu to band 3 is handled in code:
+Building the priority-ordered `BarItem[]` (IPFS primary · Compress · Open + Open-folder compounds ·
+Transcribe · Copy path · View properties · Move) plus the More `extras` (Never publish via IPFS · Do not
+compress · Copy CID · Delete), and rendering them through the overflow bar, is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` (with `IpfsPrimary` / `CompressChip` / `MoveButton` / `DeleteButton`)
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` (with `IpfsPrimary` / `OpenCompound`) rendering `OverflowActionBar`
+
+The `Open` / `Open folder` "in browser · on {label}" compound control is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `OpenCompound` (OS half via `runOsOpen` in `code/packages/frontend/src/lib/os.ts`; see [os_open.mdx](./os_open.mdx))
 
 ---
 
@@ -287,9 +339,10 @@ View properties / Open raw), the repo/compress/codec chips, and the `⋮` more m
   the **name-based** kind, not `compressible`, or an audio file would wrongly fall through to `/file`.)
 * **Decode/playback failure:** the browser element failed to render the bytes (unsupported codec —
   e.g. HEVC/ProRes in a browser that can't decode it). Show an inline notice over the viewer: "This
-  browser can't play this file's codec (`<codec>`)." with **Open raw** (hand off to the OS) and, for video
-  that looks uncompressed, the **Compress…** offer as the suggested fix — bytes are never altered without
-  the user asking.
+  browser can't play this file's codec (`<codec>`)." with **Open raw / hand off to the OS** (the grant URL,
+  which the OS can then hand to a native app — see also **Open: on {label}**, §4.2) and, for video that
+  looks uncompressed, the **Compress…** offer as the suggested fix — bytes are never altered without the
+  user asking.
 * **Loading:** skeleton header + action row + a shimmering viewer block; the grant + probe fetch in
   parallel; the media element mounts as soon as the grant URL resolves (probe fills the codec chip later).
 * **IPFS node unreachable:** the IPFS button disables with a tooltip (parity with one_repo.mdx §5); the
@@ -297,22 +350,57 @@ View properties / Open raw), the repo/compress/codec chips, and the `⋮` more m
 
 ---
 
-## 6. Acceptance criteria
+## 6. The analysis tabs (band 6) — Transcription · AI description
+
+Beneath the media stage sits a **two-tab analysis panel**. It gives every media file a place to hold —
+and generate — its **transcript** and its **AI description**, the two things that make a large media file
+searchable and understandable without opening it.
+
+* **Which tabs show.** **Transcription** appears for **video + audio** (media that can have speech);
+  **AI description** appears for **video + image** (visual media). So a **video** shows **both** tabs, an
+  **audio** file shows only **Transcription**, and an **image** shows only **AI description**.
+* **The ✓ availability marker.** Each tab carries a check when its content already exists on disk (a
+  transcript at `<storageRoot>/.transcribe/<rel>.txt`; a description at
+  `<storageRoot>/.lfbridge/analysis/<rel>/description.yaml`). An empty tab shows an outlined placeholder.
+* **Default tab.** The panel opens on the tab that has content, **preferring Transcription** when both
+  are present; if neither has content it opens on the first tab. The user's click overrides this.
+* **Content vs. Generate.** When the active tab has content, the panel shows it (transcript in monospace;
+  description as prose) with a small **Regenerate** link. When it is empty, it shows a **Generate** button:
+  * **Transcription → Generate transcript** runs Whisper **locally** ([Transcribe.mdx](./Transcribe.mdx)).
+    Disabled with an install hint when `whisper` isn't present.
+  * **AI description → Generate description** runs a vision provider ([ai_description.mdx](./ai_description.mdx)).
+    Disabled with a "add an API key" hint when no provider is configured; the copy notes that **video is
+    uploaded to Gemini** (the only provider that describes video) and an image to the configured provider.
+
+The two-tab analysis panel (availability ✓, default-tab rule, content vs. Generate) is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `MediaAnalysis` (with `AnalysisBody` / `GeneratePane`; launchers `runTranscribeFile` in `lib/transcribe.ts` and `runDescribeFile` in `lib/describe.ts`)
+
+See [ai_description.mdx](./ai_description.mdx) for the provider adapters, the per-kind prompt files, the
+storage YAML, and the settings (Tools) surface; see [Transcribe.mdx](./Transcribe.mdx) for the transcript
+engine and placement.
+
+---
+
+## 7. Acceptance criteria
 
 1. `/image?path=<abs>`, `/video?path=<abs>`, and `/audio?path=<abs>` each render the **shared MediaViewer**
-   as the **five-band vertical stack** (§3), top → bottom: **full path** · **file name (large title)** ·
-   **action buttons + `⋮`** · **property grid (~4–5 cols × 2–3 rows)** · **media surface**. The media
-   occupies the bottom **~70%** and **auto-sizes to fit** the window while **keeping aspect ratio**; the
-   page itself does not scroll.
+   as the **six-band vertical stack** (§3), top → bottom: **full path** · **file name (large title)** ·
+   **full-width overflow action bar + `⋮`** · **property grid (~4–5 cols × 2–3 rows)** · **bounded media
+   stage** · **analysis tabs**. The viewer routes run **full-width** (no side gutters); the media
+   **auto-sizes to fit** the stage while **keeping aspect ratio**; the page **scrolls** to reveal the
+   analysis tabs when needed.
 2. The medium **plays/loads off the local disk** via the backend stream — never a `file://` URL. Video and
    audio support **seeking** because `/api/media/raw` answers HTTP **`Range`** (`206` + `Content-Range`);
    images load whole. The stream is reachable only through a **short-lived signed grant** minted for an
    allow-listed session; the raw endpoint refuses expired/forged tokens and any non-file path.
-3. The **action buttons** (band 3) are a **per-type set** (§4): all three show **Move**, **Delete**
-   (recoverable, confirm-gated), the **IPFS primary** (Add/Remove per files.mdx §3), Open folder / Copy path
-   / View properties / Open raw; **image + video** additionally show **Compress** (offer), image also
-   **Convert to compressible…**; audio shows neither Compress nor Convert. The top-right `⋮` menu renders
-   the full File catalog ([menus.mdx §5.3](./menus.mdx)) verbatim.
+3. The **action bar** (band 3) is a **full-width overflow row** (§4): it shows the highest-priority buttons
+   that fit and folds the rest — plus the sticky extras (**Never publish via IPFS**, **Do not compress**,
+   **Copy CID**, **Delete…**) — into a trailing **More** menu; the lowest-priority items overflow first.
+   **Open** and **Open folder** are compound "in browser · on {label}" controls, the **on {label}** half
+   present only on localhost ([os_open.mdx](./os_open.mdx)). Image + video additionally show **Compress**;
+   audio shows neither Compress nor AI description. The top-right `⋮` menu renders the full File catalog
+   ([menus.mdx §5.3](./menus.mdx)) verbatim.
 4. The **property grid** (band 4) shows the type-appropriate facts: Size · Modified · Created · Repo ·
    Peers · Decision · Badges for all; **Dimensions + Codec + Compress** for image/video; **Duration** for
    audio. Unknown cells show `—`; the grid never exceeds ~3 rows.
@@ -325,6 +413,15 @@ View properties / Open raw), the repo/compress/codec chips, and the `⋮` more m
 7. Error/empty states render per §5 (not-found card, kind-based wrong-route redirect incl. audio,
    decode-failure notice with Open-raw + Compress offer, loading skeleton, node-unreachable). No bytes are
    ever altered or destroyed without an explicit click + confirm.
+8. The **analysis tabs** (band 6) show **Transcription** for audio/video and **AI description** for
+   image/video (a video shows both), each with a ✓ when its content exists on disk. The panel defaults to
+   the tab with content (preferring Transcription); an empty tab offers a **Generate** button —
+   **Generate transcript** (local Whisper) or **Generate description** (a vision provider), each disabled
+   with a clear hint when its dependency (whisper / an API key) is absent. See [Transcribe.mdx](./Transcribe.mdx)
+   and [ai_description.mdx](./ai_description.mdx).
+9. **Open on {Mac/PC/Linux}** is present only on localhost and hands the file/folder to the host OS
+   default handler; in server mode (or for a non-loopback caller) the "on {label}" halves are hidden and
+   only "in browser" remains ([os_open.mdx](./os_open.mdx)).
 
 <!--
   View-one-IMAGE (/image) and View-one-VIDEO (/video) viewer-first pages. Shared MediaViewer layout.

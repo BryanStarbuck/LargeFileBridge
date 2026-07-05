@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
-import type { GlobalSettings, SizeUnit, CompressMediaPrefs, CompressQuality } from "@lfb/shared";
+import type { GlobalSettings, SizeUnit, CompressMediaPrefs, CompressQuality, DescribeAiProviderConfig } from "@lfb/shared";
 import { SIZE_UNITS, toBytes } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { CredentialsSetupCard } from "../../components/CredentialsSetupCard.js";
@@ -156,6 +156,98 @@ export function SettingsPage() {
       </Section>
 
       <CompressionSettingsSection />
+
+      <AiProvidersSection />
+    </div>
+  );
+}
+
+// ── AI description providers (ai_description.mdx §5/§6) — API keys + default provider ────────────────
+function AiProvidersSection() {
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ["ai-config"], queryFn: api.aiConfig });
+  const save = useMutation({
+    mutationFn: (patch: Parameters<typeof api.setAiConfig>[0]) => api.setAiConfig(patch),
+    onSuccess: (d) => {
+      qc.setQueryData(["ai-config"], d);
+      qc.invalidateQueries({ queryKey: ["describe-providers"] });
+      toast.success("AI settings saved");
+    },
+    onError: (e: Error) => { clientLog.error("Settings.aiConfig", e); toast.error(e.message); },
+  });
+  if (!data) return null;
+
+  return (
+    <Section
+      title="AI description providers"
+      subtitle="Vision models used to describe images & videos. Keys stay on this computer (config.yaml or environment). Only Gemini describes video."
+    >
+      <label className="mb-3 flex items-center gap-2 text-sm">
+        Default provider
+        <select
+          className="rounded border border-[var(--lfb-border)] px-2 py-1"
+          value={data.provider}
+          onChange={(e) => save.mutate({ provider: e.target.value as typeof data.provider })}
+        >
+          <option value="auto">Auto (first available)</option>
+          {data.providers.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+        </select>
+      </label>
+      <div className="space-y-3">
+        {data.providers.map((p) => <AiProviderRow key={p.id} p={p} onSave={(patch) => save.mutate({ [p.id]: patch })} />)}
+      </div>
+      <p className="mt-2 text-xs text-black/50">
+        A key set here is stored in <code>config.yaml</code>. Leave a field blank to fall back to the
+        environment variable (<code>GEMINI_API_KEY</code> / <code>XAI_API_KEY</code> / <code>OPENAI_API_KEY</code>).
+      </p>
+    </Section>
+  );
+}
+
+function AiProviderRow({ p, onSave }: { p: DescribeAiProviderConfig; onSave: (patch: { apiKey?: string; model?: string }) => void }) {
+  const [key, setKey] = useState("");
+  const [model, setModel] = useState(p.model);
+  useEffect(() => { setModel(p.model); }, [p.model]);
+  const status = p.available ? (p.usingEnv ? "from env" : "configured") : "no key";
+  return (
+    <div className="rounded-md border border-[var(--lfb-border)] p-3">
+      <div className="mb-2 flex items-center gap-2 text-sm">
+        <span className="w-32 font-medium">{p.label}</span>
+        <span className="w-24" style={{ color: healthColor(p.available ? "ok" : "warn") }}>
+          {p.available ? "● " : "✗ "}{status}
+        </span>
+        <span className="text-xs text-black/45">describes {p.supports.join(" + ")}</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <input
+          type="password"
+          placeholder={p.hasConfigKey ? "•••••••• (stored — type to replace)" : "API key"}
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          className="w-64 rounded border border-[var(--lfb-border)] px-2 py-1 font-mono text-xs"
+        />
+        <input
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          className="w-40 rounded border border-[var(--lfb-border)] px-2 py-1 font-mono text-xs"
+          title="Model id"
+        />
+        <button
+          onClick={() => { onSave({ ...(key ? { apiKey: key } : {}), model }); setKey(""); }}
+          className="rounded-md bg-[var(--lfb-primary)] px-3 py-1 text-white"
+        >
+          Save
+        </button>
+        {p.hasConfigKey && (
+          <button
+            onClick={() => onSave({ apiKey: "" })}
+            className="rounded-md border border-[var(--lfb-border)] px-3 py-1 text-black/60"
+            title="Clear the stored key (fall back to env)"
+          >
+            Clear
+          </button>
+        )}
+      </div>
     </div>
   );
 }

@@ -1,15 +1,19 @@
 ---
-title: LargeFileBridge — Devices (the per-computer registry + the graft)
-description: The device model. Every computer that carries a storage issues itself a stable unique device ID on first use, and the user gives it a nice human name from the web app (e.g. "bryan-macbook"). Each device records itself as one file in the storage's Syncable Data Location — .lfbridge/devices/<device>.yaml — so the registry of devices TRAVELS with the storage and every computer knows about every other. A device file is SELF-OWNED: a computer writes only its own file and trusts other devices' files as claims (the same trust model as the Sync List). Each device file carries: the device id (changeable in settings) + owner email; the nice name; this device's SYNC SCHEDULE (cadence + the specific times/windows it syncs this storage); and — the load-bearing part — the GRAFT: how the storage's shared, machine-independent directory hierarchy (the mapped source directories, keyed in mapped_dirs.yaml) maps onto THIS computer's local absolute paths, plus where this computer keeps the pulled files and whether it wants each mapped directory at all. The graft is what lets computer 2 pull the right files down to the RIGHT local locations from the SDL's YAML alone. Distinguishes the shared, travelling device registry (this spec, in the SDL) from the machine-local peers.yaml and config.yaml→computer identity (storage_local.mdx, which never travels). Hub siblings: syncable_data_location.mdx (the SDL that holds devices/), storage_local.mdx (this computer's identity + peers), sync_list.mdx (the trust model + pinned_by), storage_settings.mdx (per-computer settings), storage_company.mdx (multi-user companies whose members are devices).
+title: LargeFileBridge — Devices / Peers (the per-computer registry + the graft)
+description: The device model. Every computer that carries a storage issues itself a stable unique device ID (a minted UUID) on first use, kept in ~/T local storage AND copied into every synced storage, and the user gives it a nice human name from the web app (e.g. "bryan-macbook"). Each device also records a HARDWARE FINGERPRINT — Mac model + year, screen size (14"/16"), disk size, RAM, chip, logged-in username / home directory — which the app uses to (a) auto-name a new computer and (b) DISAMBIGUATE two similar machines by appending only the attributes that differ (two MacBook Pros → one shows "(14-inch)", the other "(16-inch)"). The Devices / Peers left-bar page shows a TanStack table of every device; it ALWAYS auto-seeds THIS computer so the table is never empty. Each device records itself as one file in the storage's Syncable Data Location — .lfbridge/devices/<device>.yaml — so the registry of devices TRAVELS with the storage and every computer knows about every other. A device file is SELF-OWNED: a computer writes only its own file and trusts other devices' files as claims (the same trust model as the Sync List). Each device file carries: the device id (changeable in settings) + owner email; the nice name; the hardware fingerprint; this device's SYNC SCHEDULE (cadence + the specific times/windows it syncs this storage); and — the load-bearing part — the GRAFT: how the storage's shared, machine-independent directory hierarchy (the mapped source directories, keyed in mapped_dirs.yaml) maps onto THIS computer's local absolute paths, plus where this computer keeps the pulled files and whether it wants each mapped directory at all. The graft is what lets computer 2 pull the right files down to the RIGHT local locations from the SDL's YAML alone. Distinguishes the shared, travelling device registry (this spec, in the SDL) from the machine-local peers.yaml and config.yaml→computer identity (storage_local.mdx, which never travels). Hub siblings: syncable_data_location.mdx (the SDL that holds devices/), storage_local.mdx (this computer's identity + peers), sync_list.mdx (the trust model + pinned_by), storage_settings.mdx (per-computer settings), storage_company.mdx (multi-user companies whose members are devices), left_bar.mdx (the "Devices / Peers" nav item).
 ---
 
-# LargeFileBridge — Devices
+# LargeFileBridge — Devices / Peers
 
 A storage is carried by **computers** — a laptop, a home desktop, a studio machine, a server, maybe a
-family member's machine. LFB calls each one a **device**. This spec defines how a device **identifies
-itself**, how the set of devices **travels with the storage**, each device's **sync schedule**, and —
-the piece everything else depends on — the **graft**: how a storage's shared, machine-independent
-directory hierarchy lands on *this* computer's local paths.
+family member's machine. LFB calls each one a **device**; because these devices **pin one another's
+files over IPFS** they are also **peers**, and the left-bar page is labelled **"Devices / Peers"**
+([left_bar.mdx §3](./left_bar.mdx#3-the-app-bar-main-navigation)). This spec defines how a device
+**identifies itself** (a minted id + a **hardware fingerprint**), how the app **auto-names** a computer
+and **disambiguates** similar machines, how the set of devices **travels with the storage** and is
+shown in the **Devices / Peers table** (which always seeds *this* computer so it is never empty), each
+device's **sync schedule**, and — the piece everything else depends on — the **graft**: how a storage's
+shared, machine-independent directory hierarchy lands on *this* computer's local paths.
 
 The graft is what makes the [seven-step walkthrough](./syncable_data_location.mdx#5-end-to-end-walkthrough--four-computers-one-company-storage)
 work: computer 2 adds the storage's Git repo, reads the YAML, and pulls the right files down to the
@@ -41,8 +45,24 @@ Every computer that carries a storage has a **device identity** with two parts:
     device's own `devices/<device>.yaml` (and migrates its `pinned_by` claims) — it never edits another
     device's file.
 * **A nice human name.** The user names the current computer from the web app — `bryan-macbook`,
-  `studio-tower`, `family-imac`. This is the label shown everywhere (the Storages/Peers UI, `pinned_by`,
-  the `devices/` filename). It defaults to the OS hostname until the user sets a friendly one.
+  `studio-tower`, `family-imac`. This is the label shown everywhere (the Devices / Peers UI, `pinned_by`,
+  the `devices/` filename). It is **auto-seeded from the hardware fingerprint** (§7 — e.g.
+  `bryan-macbook-pro` from the logged-in user + the Mac model) rather than the bare OS hostname, and the
+  user can rename it any time.
+* **A hardware fingerprint.** Alongside the id and name, each device records a small set of **hardware
+  facts** that identify the *physical machine* — Mac model + year, screen size (14″/16″), disk size,
+  RAM, chip, and the **logged-in username / home directory**. The fingerprint is what lets the app
+  **auto-name** a new computer (§7) and, more importantly, **disambiguate** two similar machines by
+  appending only the attributes that differ (§8) — two MacBook Pros become `bryan-macbook-pro (14-inch)`
+  and `bryan-macbook-pro (16-inch)`. It is collected locally with **no networking** (§7).
+
+The id is the **random code** the user asked for: it is minted once and then stored in **two places at
+once** — this computer's **`~/T/_large_files_bridge/config.yaml`** (the machine-local source of truth,
+which never travels) **and** copied into **every synced storage's** `.lfbridge/devices/<device>.yaml`
+(which travels through the storage's Git repo — the Act3 company storage, the Personal storage, etc.).
+So the same device id is present both locally under `~/T` and in the Dropbox/Google-Drive/Git-synced
+storages, and any computer reading a storage can match the array of `devices/*.yaml` entries against its
+own local `config.yaml → computer.id` to answer **"which of these devices is *me*?"** (§9).
 
 The id lives in this computer's machine-local `config.yaml → computer`
 ([storage_local.mdx §3](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical))
@@ -103,6 +123,24 @@ device:
   name: bryan-macbook              # the nice name the user set from the web app
   owner: bryan@act3ai.com          # the allow-listed user this computer belongs to
   ipfs_peer_id: 12D3KooW…          # for peer dialing (may change; the id above does not)
+  # The HARDWARE FINGERPRINT (§7) — travels so OTHER computers can identify & disambiguate this one
+  hardware:
+    platform: darwin               # os.platform()
+    kind: laptop                   # laptop | desktop | server (derived from the model + server mode)
+    hostname: Bryans-MacBook-Pro   # os.hostname()
+    username: bryan                # os.userInfo().username — the logged-in OS user
+    home_dir: /Users/bryan         # os.homedir() — the ~ dir; which user this machine belongs to
+    model_identifier: Mac14,7      # `sysctl -n hw.model` — e.g. Mac14,7
+    model_name: MacBook Pro        # system_profiler SPHardwareDataType → Model Name
+    marketing_name: "MacBook Pro (14-inch, 2023)"   # resolved from the model table (§7); "" if unknown
+    year: 2023                     # from the model table
+    chip: Apple M2 Pro             # system_profiler → Chip / Processor Name
+    arch: arm64                    # os.arch()
+    cpu_cores: 12                  # os.cpus().length
+    ram_gb: 32                     # round(os.totalmem() / 1e9)
+    disk_total_gb: 1000            # fs.statfsSync('/') total, in GB
+    screen_inches: 14              # built-in display size (model table; null on a headless server)
+    screen_count: 1                # SPDisplaysDataType resolution count
 
 # ── This device's sync schedule FOR THIS STORAGE (the times/cadence it syncs) ──
 schedule:
@@ -185,11 +223,151 @@ the app can dial the peer (from `peers.yaml`) to fetch a file the device registr
 
 ---
 
-## 6. Acceptance criteria
+## 6. The Devices / Peers page (the table)
+
+The **Devices / Peers** left-bar item ([left_bar.mdx §3](./left_bar.mdx#3-the-app-bar-main-navigation),
+route `/devices`) opens a **TanStack table** — one row per computer that carries your files — built to the
+project table contract ([tables.mdx](./tables.mdx), CLAUDE.md → *Tables*): a search box + a single
+filter icon + a single sort icon above it, click-a-header to sort, 500/page, full-page-height (nothing
+renders beneath it). The table answers, at a glance, **"which of my computers hold my files, which one
+am I on, and how do I tell the similar ones apart?"**
+
+**Columns (in order):**
+
+| Column | Source | Notes |
+| --- | --- | --- |
+| **Device** | disambiguated display label (§8) | The nice name, plus any suffix needed to tell it from a similar machine (`bryan-macbook-pro (14-inch)`). A **"This computer"** chip marks the self row. |
+| **Kind** | `hardware.kind` | laptop / desktop / server icon + label. |
+| **Model** | `hardware.marketing_name` \|\| `model_name` | e.g. *MacBook Pro (14-inch, 2023)*. |
+| **Year** | `hardware.year` | Mac model year; blank if unknown. |
+| **Screen** | `hardware.screen_inches` | `14″` / `16″`; blank on a headless server. |
+| **Disk** | `hardware.disk_total_gb` | total volume size (bytes-formatted). |
+| **RAM** | `hardware.ram_gb` | installed memory. |
+| **Owner** | `device.owner` | the allow-listed Google email (§storage_company). |
+| **IPFS Peer ID** | `device.ipfs_peer_id` | truncated `code`; for peer dialing. |
+| **Last seen** | recency | health-coloured (green < 24h, amber < 7d, neutral older / never). |
+
+**Self always present, never an empty table.** The page **auto-seeds this computer** (§9): the row set
+is the union of *this device* (always injected from `config.yaml → computer` + the fingerprint) with the
+machine-local `peers.yaml` and the travelling `devices/*.yaml` registries across every storage, keyed by
+device **id**. If the user has only ever run LFB on one machine, the table still shows exactly one row —
+**this** one — with the empty-state guidance ("add a second computer") below it. There is never a
+"no devices" state.
+
+Aggregating the device rows the page shows — inject self from config, union `peers.yaml` and each storage's `devices/` registry by id, and disambiguate — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `deviceRows()` (self-seed + union), served by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/peers/peers.router.ts` — `GET /api/devices`. The table itself is `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` — `DevicesPage` (the disambiguated **Device** column comes from `disambiguateDevices()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/device-naming.ts`).
+
+---
+
+## 7. The hardware fingerprint — identify the physical machine (no networking)
+
+The fingerprint is the set of **hardware facts** that make one physical computer recognizable and
+distinct from another. LFB collects it **entirely locally** — it must **never** phone home (the same
+no-networking rule the charter puts on perceptual hashing). It is collected **once on first run**, cached
+in-process, and persisted into `config.yaml → computer.hardware`; a device's own fingerprint is copied
+into each storage's `devices/<device>.yaml` (§3) so *other* computers can see and disambiguate it.
+
+**What we collect and how (macOS-first, graceful elsewhere):**
+
+* From Node's `os`/`fs` (always available, no spawn): `platform`, `arch`, `hostname`, **`username`**
+  (`os.userInfo().username`), **`home_dir`** (`os.homedir()` — the `~` directory that says *which user*),
+  `cpu_cores` (`os.cpus().length`), `ram_gb` (`os.totalmem()`), `disk_total_gb` (`fs.statfsSync('/')`).
+* From macOS tooling, best-effort with a short timeout (skipped/blank off darwin): `model_identifier`
+  (`sysctl -n hw.model` → `Mac14,7`), `model_name` + `chip` (`system_profiler SPHardwareDataType`),
+  `screen_count` (`system_profiler SPDisplaysDataType`).
+* From a **built-in model table** (§8's data file): `marketing_name`, `year`, and built-in
+  `screen_inches`, resolved from `model_identifier`. macOS exposes the identifier but not a clean
+  marketing string, so the table supplies "MacBook Pro (14-inch, 2023)" and the 14″ screen size. An
+  unknown identifier degrades gracefully (marketing_name `""`, year/screen `null`) — the raw
+  `model_name` still shows.
+* **`kind`** is derived: `MacBook*` → **laptop**; `Macmini`/`iMac`/`MacStudio`/`MacPro` → **desktop**;
+  `server` mode (`config.server.mode`, [storage_local.mdx §3](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical))
+  or a headless Linux host with no display → **server**.
+
+Collecting the fingerprint locally (os/fs + guarded `sysctl`/`system_profiler`, cached, no network) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/hardware.service.ts` — `collectHardware()` / `getHardware()`, with the model→marketing/year/screen lookup in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/hardware-models.ts`. Seeding `config.yaml → computer.hardware` (and the default nice name) on first run is done in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()`.
+
+---
+
+## 8. Auto-naming & disambiguation — combine only what differs (LOCKED)
+
+Two problems, one algorithm. **(a) Auto-naming**: a fresh computer needs a sensible default name so the
+user is never staring at `this-computer`. **(b) Disambiguation**: when the user owns two similar
+machines, the UI must tell them apart *without* the user hand-labeling each.
+
+* **Default name** = `<username>-<model-slug>` — the logged-in user plus the model, lower-kebab:
+  `bryan` + `MacBook Pro` → **`bryan-macbook-pro`**. Falls back to the hostname when the model is
+  unknown. This is the seed value; the user may rename it (§1).
+* **Disambiguation** runs across the **whole device set** shown in the table. Group devices whose
+  **base display** collides (same nice name, or same `username` + `model_name`). Within a colliding
+  group, find which fingerprint attributes actually **differ** across its members and append **only
+  those**, in a fixed **priority order** until each label is unique:
+
+  1. **screen size** (`14-inch` vs `16-inch`) — the most human, checked first;
+  2. **model year** (`2021` vs `2023`);
+  3. **disk size** (`512 GB` vs `1 TB`);
+  4. **RAM** (`16 GB` vs `32 GB`);
+  5. **chip** (`M1 Pro` vs `M2 Pro`);
+  6. **hostname** (last-resort tie-break, always unique enough).
+
+  The rule the user stated verbatim: *if the hard-drive sizes are the same you don't include disk; if
+  the screen sizes differ you do include screen; if the years differ but the screens match you put the
+  year in the title.* Attributes that are **identical across the group are never shown** — the label
+  stays as short as possible while being unique. A device with no colliding twin shows its bare nice
+  name with **no** suffix.
+
+Deriving the default name and the disambiguated display labels is pure logic in code (shared so the backend and any client agree):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/device-naming.ts` — `defaultDeviceName(hardware)` and `disambiguateDevices(devices)`. The built-in model→(marketing/year/screen) facts they lean on live in `hardware-models.ts` (§7). The human companion write-up of the attributes + the priority ladder is `~/BGit/Bryan_git/LargeFileBridge/knowledge/device_identification.md`.
+
+---
+
+## 9. Auto-seed — the registry is never empty (LOCKED)
+
+The table must **never** be empty and the user must **never** have to add "this computer" by hand. Two
+guarantees:
+
+* **This computer is always a row.** `deviceRows()` (§6) injects the self device from
+  `config.yaml → computer` + the fingerprint even before any storage exists, so the very first launch on
+  a brand-new machine shows exactly one row — **this** one, tagged *This computer*.
+* **The self device is written into every storage.** Whenever a storage is created, indexed, or synced,
+  this computer writes its own `devices/<device>.yaml` (self-owned, §2.1). So a storage that somehow has
+  a `devices/` dir with no entry for the current machine is **healed** on the next pass — the current
+  device is auto-added rather than left missing.
+* **"Which one is me?"** is answered by matching each `devices/*.yaml` `id` against this machine's local
+  `config.yaml → computer.id` (§1). Exactly one row is the self row; the rest are peers.
+
+Guaranteeing the self row (config-seeded) and self-writing into each storage's registry is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `deviceRows()` (config-seeded self) and `writeSelfDevice(storageRoot)` (called from `storage.service.ts` on storage create/index/sync).
+
+---
+
+## 10. Synchronization — the identity travels, the machine facts follow
+
+The whole point is that this data **stays synchronized across the user's computers**. The mechanism is
+already the SDL's Git-backed travel ([syncable_data_location.mdx](./syncable_data_location.mdx)):
+
+* A device's **id, nice name, fingerprint, schedule, and graft** live in its self-owned
+  `devices/<device>.yaml`, which is committed to the storage's Git repo and (optionally) mirrored to
+  Google Drive / Dropbox. When any computer pulls the storage, it gets the **full up-to-date array of
+  devices** — every other machine's identity and hardware included.
+* Because writes are **self-owned** (§2.1), two computers editing the storage at once touch **different
+  files** and never collide; a stale claim is reconciled by the same revision rules as the rest of the
+  SDL ([sync_list.mdx §5.3](./sync_list.mdx#53-conflict-resolution)).
+* The machine-local half — `config.yaml → computer` (id, label, **fingerprint**) and `peers.yaml` —
+  **does not** travel (it is *this* machine's truth), but its id is the join key that stitches the local
+  and travelling halves together (§5).
+
+Net effect: rename a computer or upgrade its disk on one machine, and the next sync carries the new nice
+name / fingerprint to every other computer's Devices / Peers table.
+
+---
+
+## 11. Acceptance criteria
 
 1. Every computer has a **minted, stable device id (UUID), distinct from its IPFS PeerID**, plus a
-   **user-set nice name**; both are **editable from the web app** (§1). The id lives in
-   `config.yaml → computer` and is copied into each storage's device file.
+   **user-set nice name** (auto-seeded from the fingerprint) and a **hardware fingerprint**; the id and
+   name are **editable from the web app** (§1). The id lives in `config.yaml → computer` **under `~/T`**
+   and is copied into **each storage's** device file — present both locally and in the synced storages.
 2. Each device records **itself** as `<SDL>/.lfbridge/devices/<device>.yaml`; the registry **travels
    with the storage**, so every computer sees the full set of devices, and a device file is
    **self-owned** — a computer writes only its own and treats others as claims (§2).
@@ -200,19 +378,41 @@ the app can dial the peer (from `peers.yaml`) to fetch a file the device registr
    sync pass **fetches marked CIDs to the grafted local path**, never to the writer's path (§4).
 5. The travelling **device registry** and the machine-local **`peers.yaml`** are kept distinct and
    cross-reference by **device id** (§5).
+6. The **Devices / Peers** page (`/devices`) renders a **TanStack table** (search + filter + sort icons,
+   header-click sort, 500/page, full-page-height) with the identity columns — Device, Kind, Model, Year,
+   Screen, Disk, RAM, Owner, IPFS Peer ID, Last seen — and marks the self row **"This computer"** (§6).
+7. Every device records a **hardware fingerprint** collected **entirely locally, no networking** — Mac
+   model/year, screen size, disk, RAM, chip, and logged-in **username / home_dir** — persisted to
+   `config.yaml → computer.hardware` and copied into each `devices/<device>.yaml` (§7).
+8. A fresh computer **auto-names** itself `<username>-<model-slug>`; similar machines are
+   **disambiguated** by appending **only the attributes that differ**, in the fixed priority order
+   screen → year → disk → RAM → chip → hostname (§8).
+9. The registry is **never empty**: `deviceRows()` always injects **this computer** (config-seeded) and
+   the app auto-writes the self device into every storage; "which one is me?" resolves by matching the
+   device id against `config.yaml → computer.id` (§9).
+10. The device identity + fingerprint **synchronize** across the user's computers via the SDL's
+    Git-backed travel; self-owned writes never collide (§10).
 
 <!--
-  The DEVICE model. §1 identity: a MINTED stable UUID (distinct from the IPFS PeerID) + a user-set nice
-  name, both editable from the web app; source of truth in config.yaml→computer (storage_local §3),
-  copied into each storage's device file. §2 the registry lives IN the SDL (.lfbridge/devices/<name>.yaml)
-  so it TRAVELS per storage; each file is SELF-OWNED (write only your own; others are claims — same trust
-  as sync_list §5). §3 a device file carries id/name/owner + this device's SCHEDULE (cadence + optional
-  time windows) for this storage + the GRAFT. §4 the GRAFT (LOCKED) maps machine-independent identity
-  (mapped-dir key from syncable_data_location §3 + relpath) onto THIS computer's absolute paths;
-  wanted:false/local_path:null = known-but-absent; the sync pass fetches CIDs to the grafted path (never
-  the writer's canonical path, per sync_list §4). §5 device registry (travels, per storage, has
-  schedule+graft) vs peers.yaml (machine-local, whole install, PeerIDs to dial) — cross-ref by device id.
-  New code: storage/devices.service.ts writeSelfDevice/readDevices/resolveGraftedPath, called by
-  sync.service runUnitSync; config.service mints computer.id. Keep in sync with syncable_data_location.mdx
-  (mapped_dirs keys the graft), storage_local.mdx (computer.id + peers.yaml), storage_company.mdx.
+  The DEVICE / PEERS model. §1 identity: a MINTED stable UUID (distinct from the IPFS PeerID) + a
+  user-set nice name (auto-seeded from the fingerprint) + a HARDWARE FINGERPRINT; id/name editable from
+  the web app; source of truth in config.yaml→computer (storage_local §3) UNDER ~/T, copied into each
+  storage's device file (so the "random code" is both local AND synced). §2 the registry lives IN the SDL
+  (.lfbridge/devices/<name>.yaml) so it TRAVELS per storage; each file is SELF-OWNED (write only your own;
+  others are claims — same trust as sync_list §5). §3 a device file carries id/name/owner + HARDWARE +
+  this device's SCHEDULE (cadence + optional time windows) + the GRAFT. §4 the GRAFT (LOCKED) maps
+  machine-independent identity (mapped-dir key from syncable_data_location §3 + relpath) onto THIS
+  computer's absolute paths; wanted:false/local_path:null = known-but-absent; the sync pass fetches CIDs
+  to the grafted path (never the writer's canonical path, per sync_list §4). §5 device registry (travels)
+  vs peers.yaml (machine-local) — cross-ref by device id. §6 the Devices/Peers PAGE = a TanStack table
+  (identity columns; self row tagged "This computer"); deviceRows() unions self+peers+registry. §7 the
+  HARDWARE FINGERPRINT collected LOCALLY (no network) via os/fs + guarded sysctl/system_profiler + a
+  model table (hardware-models.ts). §8 auto-name <username>-<model-slug> + DISAMBIGUATE by only the
+  differing attrs, priority screen>year>disk>ram>chip>hostname (device-naming.ts). §9 auto-seed: never an
+  empty table (self always injected; self-written into every storage). §10 it all SYNCHRONIZES via the
+  SDL git travel. New code: storage/devices.service.ts (writeSelfDevice/readDevices/resolveGraftedPath/
+  deviceRows), storage/hardware.service.ts + hardware-models.ts, shared/device-naming.ts, peers.router
+  GET /api/devices, DevicesPage.tsx table; config.service mints computer.id + seeds computer.hardware.
+  Keep in sync with syncable_data_location.mdx (mapped_dirs keys the graft), storage_local.mdx
+  (computer.id/hardware + peers.yaml), left_bar.mdx/yaml (the "Devices / Peers" item), storage_company.mdx.
 -->

@@ -54,7 +54,7 @@ export interface MenuPos {
 }
 
 // The floating menu itself, portaled to <body> and clamped on-screen.
-function MenuPortal({ pos, onClose, children }: { pos: MenuPos; onClose: () => void; children: ReactNode }) {
+export function MenuPortal({ pos, onClose, children }: { pos: MenuPos; onClose: () => void; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const [adj, setAdj] = useState<MenuPos>(pos);
 
@@ -328,7 +328,7 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
   // Sticky flags (menus.mdx §6.6) — same on file and directory.
   a.push({
     id: "never-ipfs",
-    label: "Never IPFS",
+    label: "Never publish via IPFS",
     group: "Flag",
     icon: <Ban className="h-4 w-4" />,
     checked: v.flags.neverIpfs,

@@ -175,7 +175,7 @@ function RunningDashboard({
           label="Peers"
           value={num(m.peersConnected)}
           sub="connected"
-          onClick={() => navigate({ to: "/peers" })}
+          onClick={() => navigate({ to: "/devices" })}
         />
         <Tile
           icon={<ArrowUpDown className="h-4 w-4" />}

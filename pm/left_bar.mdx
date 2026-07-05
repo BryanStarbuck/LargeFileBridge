@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Left Bar
-description: The left navigation bar specification — the human companion to pm/left_bar.yaml (the machine source of truth the frontend imports raw). Defines the "Large File Bridge" wordmark (spaces between the three words), the LOCKED color rules (all left-bar text black; the brand accent stays accent; medium grey becomes black), the single app bar, every nav item (Repos, File System, Peers, Communities, IPFS, Scans, Settings), the bottom account slot, active/hover states, and permission gates.
+description: The left navigation bar specification — the human companion to pm/left_bar.yaml (the machine source of truth the frontend imports raw). Defines the "Large File Bridge" wordmark (spaces between the three words), the LOCKED color rules (all left-bar text black; the brand accent stays accent; medium grey becomes black), the single app bar, every nav item (Repos, Storages, File System, Devices / Peers, Communities, IPFS, Scans, Settings), the bottom account slot, active/hover states, and permission gates.
 ---
 
 # LargeFileBridge — Left Bar
@@ -80,7 +80,7 @@ A flat, ordered list under the wordmark; the account slot pinned to the bottom. 
 | 1 | **Repos** | `FolderGit2` | `/` | Every git repo on this computer (all known automatically — no "managed" opt-in), with its large-file sync counts and status ([Repos](./repos.mdx)). The dedicated long list; the Storages tab links here. |
 | 2 | **Storages** | `HardDrive` | `/storages` | The **map of every large-file storage you belong to** ([storages.mdx](./storages.mdx)): a grouping tab whose **children** are **Personal** ([storage_personal.mdx](./storage_personal.mdx)), **one per Company** ([storage_company.mdx](./storage_company.mdx), labeled by company name — derived at runtime), a **Repos** child that routes to the Repos tab (not a long list), and the opted-in **Communities** ([storage_community.mdx](./storage_community.mdx)). Local settings/config is the DB replacement and is **not** listed here ([storage_local.mdx](./storage_local.mdx)). |
 | 3 | **File System** | `Columns3` | `/fs` | A Finder-style **column browser** of the whole filesystem, rooted at the home directory, with per-entry **code badges** (R/r repo, S sync, C/c compress, i IPFS) ([File System](./directories.mdx)). |
-| 4 | **Peers** | `Network` | `/peers` | Your other computers that pin these files over IPFS — laptop, desktop, studio, server, family. |
+| 4 | **Devices / Peers** | `Network` | `/devices` | The registry of every **computer** that carries your files — this Mac, a laptop, a studio tower, a server, a family iMac — pinning one another's files over IPFS. **Always shows at least this computer** (auto-seeded, never an empty table); each row is a device identified by its **hardware fingerprint** so similar machines are told apart ([devices.mdx](./devices.mdx)). The label is literally **"Devices / Peers"** — *Devices* is the noun, *Peers* is retained because the devices pin each other. |
 | 5 | **Communities** | `Users` | `/communities` | Publishers of large **public** files (videos first) you subscribe to — **Get** their videos to watch, or **Support** them by rebroadcasting to keep them secure. Per community: **Block / Recommended / Full backup** against a disk budget ([Communities](./communities.mdx)). Opting in materializes a [community storage](./storage_community.mdx). |
 | 6 | **IPFS** | `Boxes` | `/ipfs` | What the local IPFS node is actually pinning — tracked vs. **pinned-but-untracked** content (import already-pinned files) and the node's only-our-content security posture ([IPFS](./ipfs.mdx)). |
 | 7 | **Scans** | `RefreshCw` | `/scans` | The scheduled background **scan tasks** ("scheduleTasks"): each `launchd` job's installed / on-off state, the every-15-min and every-4h schedules, and recent activity ([scan.mdx](./scan.mdx)). |
@@ -143,10 +143,12 @@ Resolving a nav item's lucide icon by name (unknown name renders nothing) is han
    and the Sign-in accent.
 4. The bar renders its content **from `pm/left_bar.yaml`** — items, order, icons, routes, labels,
    and gates; no hard-coded copies in components.
-5. The app bar lists exactly: Repos, File System, Peers, Communities, IPFS, Scans, Settings — in that
-   order. (The **Scans** item is the renamed former **Sync** item — the scheduleTasks surface;
-   §naming note. **Communities** — [communities.mdx](./communities.mdx) — is the opt-in page for
-   carrying other publishers' public files.)
+5. The app bar lists exactly: Repos, Storages, File System, **Devices / Peers**, Communities, IPFS,
+   Scans, Settings — in that order. (The **Devices / Peers** item is the renamed former **Peers** item
+   — its label reads literally *"Devices / Peers"* and it opens the device registry in
+   [devices.mdx](./devices.mdx). The **Scans** item is the renamed former **Sync** item — the
+   scheduleTasks surface; §naming note. **Communities** — [communities.mdx](./communities.mdx) — is the
+   opt-in page for carrying other publishers' public files.)
 6. Active state matches by route (exact `/`, prefix otherwise); gated items are hidden without the
    claim; hover shows the light-grey fill without changing text color.
 7. The account slot sits at the bottom, is always signed-in (no anonymous state), and its popup

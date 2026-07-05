@@ -678,6 +678,92 @@ export interface TranscriptView {
   text: string;
 }
 
+// ── OS hand-off (os_open.mdx) ───────────────────────────────────────────────
+// GET /api/fs/platform — what the "Open on {label}" buttons need. `os` is the host family; `label` is
+// the word the button shows ("Mac" | "PC" | "Linux"); `canOpenInOS` is true only when hand-off is
+// possible here (backend in local mode + a loopback request).
+export interface PlatformInfo {
+  os: "mac" | "windows" | "linux" | "other";
+  label: string;
+  canOpenInOS: boolean;
+}
+// POST /api/fs/os-open result — the file/folder handed to the host OS default handler.
+export interface OsOpenResult {
+  opened: boolean;
+  path: string;
+  isDir: boolean;
+  via: string; // the platform label used ("Mac"/"PC"/"Linux")
+}
+
+// ── AI description (ai_description.mdx) ──────────────────────────────────────
+// Only images and videos are AI-described (audio is covered by transcription).
+export type DescribeKind = "image" | "video";
+
+// One vision provider the app can call (ai_description.mdx §5). `available` = an API key is resolvable
+// on this machine (config or env); `supports` = which media kinds this provider can describe.
+export interface DescribeProvider {
+  id: "gemini" | "grok" | "openai";
+  label: string;
+  available: boolean;
+  supports: MediaKind[];
+}
+// GET /api/describe/providers — the provider matrix + whether any provider is usable at all.
+export interface DescribeProvidersStatus {
+  providers: DescribeProvider[];
+  defaultProvider: string; // "auto" | a provider id
+  anyAvailable: boolean;
+}
+// An existing generated description read back for a media file (GET /api/describe/file).
+export interface DescribeView {
+  mediaPath: string;
+  descriptionPath: string; // the description.yaml under <storageRoot>/.lfbridge/analysis/<rel>/
+  text: string; // the human-readable description body
+  model: string | null; // the exact model id used (e.g. "gemini-2.0-flash")
+  generatedAt: string | null; // ISO
+}
+// The result of generating one description (POST /api/describe/file). Reports truthfully per file.
+export interface DescribeResult {
+  path: string;
+  status: "described" | "skipped" | "no_provider" | "unsupported" | "failed";
+  descriptionPath: string | null;
+  model: string | null;
+  reason: string | null;
+}
+// The per-kind prompt as the settings/viewer surface sees it (GET /api/describe/prompt).
+export interface DescribePromptView {
+  kind: DescribeKind;
+  text: string;
+  isOverride: boolean; // true = a per-computer edited copy is in use; false = the shipped default
+  path: string; // where the in-use prompt lives (override path or the shipped default)
+}
+
+// The editable AI config the global Settings page reads/writes (GET/PATCH /api/describe/config). The
+// raw API key is NEVER returned — only whether one is configured, and from where (config vs env).
+export interface DescribeAiProviderConfig {
+  id: "gemini" | "grok" | "openai";
+  label: string;
+  supports: MediaKind[];
+  model: string;
+  hasConfigKey: boolean; // a key is stored in config.yaml for this provider
+  usingEnv: boolean; // no config key, but a matching env var is present
+  available: boolean; // a usable key resolves (config OR env)
+}
+export interface DescribeAiConfig {
+  provider: "auto" | "gemini" | "grok" | "openai"; // the default provider ("auto" = first available)
+  providers: DescribeAiProviderConfig[];
+}
+// PATCH body — apiKey "" clears the config key (falls back to env); undefined leaves it unchanged.
+export interface DescribeAiProviderPatch {
+  apiKey?: string | null;
+  model?: string;
+}
+export interface DescribeAiConfigPatch {
+  provider?: "auto" | "gemini" | "grok" | "openai";
+  gemini?: DescribeAiProviderPatch;
+  grok?: DescribeAiProviderPatch;
+  openai?: DescribeAiProviderPatch;
+}
+
 // ── Storages (storages.mdx) ─────────────────────────────────────────────────
 // The family of large-file storages. "local" is settings/config (the DB replacement, storage_local.mdx);
 // the other four are directory hierarchies with a storage.yaml + hidden .lfbridge/ (storages.mdx §1).
@@ -874,6 +960,27 @@ export interface DeviceGraftEntry {
   localPath: string | null; // where THIS computer keeps this mapped dir (null = known-but-absent here)
   wanted: boolean; // does this device want this hierarchy at all
 }
+// The hardware fingerprint that identifies a physical computer (devices.mdx §7). camelCase mirror of
+// DeviceHardwareSchema. Collected locally (no network); travels in each device file so other computers
+// can identify & disambiguate this one.
+export interface DeviceHardware {
+  platform: string; // darwin | linux | win32
+  kind: string; // laptop | desktop | server (derived)
+  hostname: string;
+  username: string; // logged-in OS user
+  homeDir: string; // the ~ dir — which user this machine belongs to
+  modelIdentifier: string; // hw.model, e.g. Mac14,7
+  modelName: string; // "MacBook Pro"
+  marketingName: string; // "MacBook Pro (14-inch, 2023)" — "" if unknown
+  year: number | null;
+  chip: string; // "Apple M2 Pro"
+  arch: string; // arm64
+  cpuCores: number | null;
+  ramGb: number | null;
+  diskTotalGb: number | null;
+  screenInches: number | null; // built-in display size
+  screenCount: number | null;
+}
 // One device file `<SDL>/.lfbridge/devices/<device>.yaml` (devices.mdx §3) — self-owned per device.
 export interface DeviceRecord {
   schemaVersion: number;
@@ -883,9 +990,26 @@ export interface DeviceRecord {
     name: string; // the nice name the user set
     owner: string | null; // the allow-listed user this computer belongs to
     ipfsPeerId: string | null; // for peer dialing (may change; id above does not)
+    hardware: DeviceHardware; // the fingerprint (devices.mdx §7)
   };
   schedule: DeviceSchedule;
   graft: Record<string, DeviceGraftEntry>; // keyed by mapped_dirs.yaml key
+}
+
+// One row in the Devices / Peers table (devices.mdx §6). The aggregate the page shows: this computer
+// (always injected — the table is never empty), the machine-local peers.yaml, and the travelling
+// devices/ registry across every storage, unioned by device id and disambiguated.
+export interface DeviceRow {
+  id: string; // device UUID (or the peers.yaml id when only a peer entry exists)
+  name: string; // the nice name
+  displayLabel: string; // the disambiguated label (device-naming.ts) — name + only the differing attrs
+  isSelf: boolean; // is this THIS computer? (matches config.yaml→computer.id)
+  owner: string | null;
+  ipfsPeerId: string | null;
+  lastSeen: string | null;
+  hardware: DeviceHardware | null; // null for a bare peers.yaml entry with no fingerprint yet
+  storageCount: number; // how many storages' registries list this device
+  source: "self" | "registry" | "peer"; // where the row was sourced from
 }
 
 // ── Bookmarks (syncable_data_location.mdx §4.4) — travel with the storage ─────

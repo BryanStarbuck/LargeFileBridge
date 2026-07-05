@@ -1,0 +1,256 @@
+---
+title: LargeFileBridge — Open on Mac / PC / Linux (OS hand-off)
+description: The OS hand-off feature — the "Open on {label}" action that hands a local file OR folder to the host operating system's DEFAULT handler so it opens in its native desktop app. On the media viewer and File System pages the web front end asks the (localhost) backend to run the platform's open verb — `open` on macOS, `cmd /c start` on Windows, `xdg-open` on Linux — so a video opens in QuickTime/VLC, an image in Preview/the default viewer, and a folder opens in Finder/Explorer. This is LOCALHOST-ONLY by design: it is refused unless the backend runs in `local` mode AND the request arrived on loopback (127.0.0.1/::1), because a hosted server must never launch a desktop app for a remote visitor. The path is confined to the same allow-roots + secret-stash denylist as every other filesystem route, and the child process is spawned detached + unref'd so a long-lived GUI app never ties up the Node event loop. The front end pairs it with an in-browser open: "Open: in browser · on {label}" streams the bytes in a new tab, and "Open folder: in browser · on {label}" navigates the in-app File System tab vs. opening Finder/Explorer. The OS half is hidden whenever hand-off is not possible (server mode / non-loopback). Implemented by the /api/fs/platform + /api/fs/os-open backend endpoints and the OpenCompound controls in the shared MediaViewer.
+---
+
+# LargeFileBridge — Open on Mac / PC / Linux (OS hand-off)
+
+`LargeFileBridge` runs in the browser, but the files it manages sit on the user's **local disk**.
+Often the right thing to do with a file is **not** to view it inside the web app but to hand it to the
+**real desktop app** for its type — open a `.mov` in QuickTime or VLC, a `.png` in Preview, a folder in
+Finder/Explorer. The **OS hand-off** feature does exactly that: a small **"Open on {label}"** control
+(where `{label}` is **Mac**, **PC**, or **Linux**) that asks the localhost backend to run the host OS's
+**default-handler open verb** for a local file or folder.
+
+Two things make this feature worth its own spec: **why it is deliberately localhost-only** (§1 — a hosted
+server must never launch a desktop app for a remote visitor), and **how the front end pairs the OS
+hand-off with an in-browser "open"** (§5 — the `Open: in browser · on {label}` compound control).
+
+Siblings this builds on and does not repeat:
+
+* [media_viewer.mdx](./media_viewer.mdx) — the shared **View one file** viewer whose action bar (band 3)
+  carries the `Open` and `Open folder` compound controls this spec defines. This file is **authoritative**
+  for the OS-open half of those controls.
+* [security.mdx](./security.mdx) / the allow-root module — the same **allow-roots + secret-stash denylist**
+  that confines every filesystem route confines this one too (§4).
+* [directories.mdx](./directories.mdx) / [full_paths.mdx](./full_paths.mdx) — the File System pages that
+  reach the same `/api/fs/os-open` endpoint to reveal a file/folder in Finder/Explorer.
+
+---
+
+## 1. Why localhost-only (the core constraint) — LOCKED
+
+Opening a file in the host OS's desktop app is only **meaningful**, and only **safe**, when the browser
+and the backend are the **same physical machine**. If the app is ever served from a real server, a remote
+visitor's browser click must **never** cause the server to launch QuickTime, Preview, or Finder on the
+server box — that would be both useless to the visitor and a foothold for abuse.
+
+So OS hand-off is refused unless **both** are true:
+
+1. The backend is running in **`local` mode** (`config server.mode === "local"`), and
+2. the HTTP request arrived on **loopback** — `127.0.0.1`, `::1`, or `::ffff:127.0.0.1`.
+
+When either is false, the endpoint returns **403** and, crucially, the front end **hides the OS button
+entirely** (§6) so the user is never offered an action that cannot work. This is the same posture as the
+charter's IPFS no-relay default: the app does only what is safe on **this** machine, for **this** user,
+and a hosted deployment silently drops the desktop-only affordance rather than exposing it.
+
+The localhost gate (backend in `local` mode AND a loopback request) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/os-open.ts` — `isLocalRequest(req)` (consulted by both `platformInfo` and `openInOs`).
+
+> **This never breaks the charter.** Hand-off only ever opens a file the user **could already open**
+> themselves in Finder — it reads no new bytes, sends nothing over the network, and touches only the
+> user's own local files inside the allow-roots. It is unrelated to IPFS gateway/relay behavior.
+
+---
+
+## 2. The backend contract (`/api/fs`) — two endpoints
+
+Both live in the File System router and are allow-list-gated like every data route; the open verb adds
+the localhost gate on top.
+
+```
+GET  /api/fs/platform                 (allow-listed)      → PlatformInfo
+POST /api/fs/os-open   { path }        (allow-listed + localhost) → OsOpenResult
+       403 when not localhost · 404 when the path is missing · 400 otherwise
+```
+
+### 2.1 `GET /api/fs/platform` → `PlatformInfo`
+
+The front end calls this once to learn **which desktop it is talking to** and **whether hand-off is
+possible here**, so it can label and show/hide the OS buttons.
+
+```ts
+interface PlatformInfo {
+  os: "mac" | "windows" | "linux" | "other";
+  label: string;      // "Mac" | "PC" | "Linux" | "this computer"
+  canOpenInOS: boolean; // true only when local mode + loopback (§1)
+}
+```
+
+Reporting the platform family, the human label, and whether hand-off is possible is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/os-open.ts` — `platformInfo(req)` (wrapping `platformFamily()` + `isLocalRequest(req)`), served by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.router.ts` — the `GET /platform` route.
+
+### 2.2 `POST /api/fs/os-open { path }` → `OsOpenResult`
+
+Given an absolute file **or** directory path, run the platform's default-handler open verb on it. The
+result reports what was opened and by which platform:
+
+```ts
+interface OsOpenResult {
+  opened: boolean;
+  path: string;   // the resolved absolute path that was opened
+  isDir: boolean; // true when a folder was opened (Finder/Explorer), false for a file
+  via: string;    // the platform label used ("Mac" / "PC" / "Linux")
+}
+```
+
+Status codes are chosen so the front end can react precisely: **403** = not localhost (the button should
+not even be shown), **404** = the file/folder no longer exists at that path, **400** = any other refusal
+(missing/blank path, outside the allow-roots, spawn failure).
+
+Handing a local file/folder to the OS default handler (localhost guard → confine → stat → spawn detached) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/os-open.ts` — `openInOs(req, input)`, routed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.router.ts` — the `POST /os-open` route (which maps the thrown reason to 403 / 404 / 400).
+
+---
+
+## 3. Platform detection & the Mac / PC / Linux label
+
+The OS family is read from Node's `os.platform()` and mapped to both a machine key and the **human word**
+the button shows, so a Mac user sees **"on Mac"**, a Windows user **"on PC"**, and a Linux user **"on
+Linux"** (an unknown platform degrades to **"this computer"**):
+
+| `os.platform()` | `os` key | `label` | Open verb run |
+| --- | --- | --- | --- |
+| `darwin` | `mac` | **Mac** | `open <path>` |
+| `win32` | `windows` | **PC** | `cmd /c start "" <path>` |
+| `linux` | `linux` | **Linux** | `xdg-open <path>` |
+| *(other)* | `other` | this computer | `xdg-open <path>` (fallback) |
+
+> The Windows form is `cmd /c start "" <path>` — the empty `""` is `start`'s window-title argument, so a
+> **quoted path is not mistaken for the title**. macOS `open` and Linux `xdg-open` take the path directly.
+> In every case the **OS**, not LFBridge, decides which app opens the file — we never name an app.
+
+The family → key + label mapping and the per-platform open command are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/os-open.ts` — `platformFamily()` and `openCommand(abs)`.
+
+---
+
+## 4. Confinement & security guarantees
+
+The open verb is the same-trust equivalent of a filesystem read, so it inherits **every** filesystem
+guardrail and adds one process-hygiene rule:
+
+* **Confined to the allow-roots.** The incoming path is `path.resolve`d (with `~` expanded) and then run
+  through **`assertAllowedPath`** — the identical allow-roots check + **secret-stash denylist** used by
+  every other fs route. LFBridge will **never** `open` `~/.ssh`, a credentials stash, or anything outside
+  the configured roots; those raise before any process is spawned.
+* **Must exist as a real path.** The target is `stat`ed first; a missing path is a clear **"file not
+  found"** (→ 404) rather than a silent no-op or a spawn error.
+* **Detached + non-blocking.** The child is spawned **`detached: true`, `stdio: "ignore"`, then
+  `unref()`'d**, so a long-lived GUI app (VLC left open for an hour) can **never** tie up the Node event
+  loop or hold the HTTP request open. A spawn error is logged and surfaced as a 400, never crashes the
+  server.
+* **Explicit user action only.** Hand-off happens only on a deliberate click; nothing here runs on a
+  timer, during a scan, or during a background sync.
+
+The path confinement (`assertAllowedPath` + secret-stash denylist), the existence check, and the detached/unref'd spawn are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/os-open.ts` — `openInOs(req, input)` (calling `assertAllowedPath` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/allow-root.ts`).
+
+---
+
+## 5. The frontend "Open" and "Open folder" compound controls
+
+On the shared **[Media Viewer](./media_viewer.mdx)** action bar (band 3), OS hand-off is not a lone
+button — it is the **OS half of a two-choice compound control** so the user can always pick *where* the
+thing opens. The control renders as a labeled unit whose **label is not clickable** and whose one or two
+sub-actions are:
+
+```
+┌──────────────────────────────────────────────┐
+│  ⎋ Open:  in browser · on Mac                 │   ← the file: raw bytes in a new tab, OR the OS app
+├──────────────────────────────────────────────┤
+│  📂 Open folder:  in browser · on Mac         │   ← the dir: the in-app File System tab, OR Finder
+└──────────────────────────────────────────────┘
+```
+
+* **`Open: in browser · on {label}`** — **in browser** opens the file's **raw streamed bytes** (the
+  signed `/api/media/raw` grant, [media_viewer.mdx §2](./media_viewer.mdx)) in a **new browser tab**;
+  **on {label}** hands the file to the desktop app (QuickTime/VLC/Preview/…).
+* **`Open folder: in browser · on {label}`** — this is the important distinction:
+  * **in browser** navigates the app's **in-app File System tab** to the file's parent directory
+    (`/fs?path=<dir>`, [directories.mdx](./directories.mdx)) — you stay inside LFBridge.
+  * **on {label}** opens that **same directory in Finder/Explorer** via `/api/fs/os-open` — you leave for
+    the native file manager.
+
+Each half calls a thin launcher that wraps the API in a toast (spinner → honest result: *"Opened file on
+Mac"* / *"Opened folder on Mac"*, or the error message).
+
+The two compound controls (the `OpenCompound` unit + the `Open` / `Open folder` bar items, with the
+in-browser vs. on-{label} halves) are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `OpenCompound` component and the `open` / `open-folder` items in `ActionBar`.
+
+The OS-open launcher (toast wrapper over the API) and the API client methods are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/os.ts` — `runOsOpen(path, name)`; `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `api.platform()` and `api.osOpen(path)`.
+
+### 5.1 Overflow into "More"
+
+The action bar is an **overflow bar**: when the window is too narrow to show every button, the
+lowest-priority items **fold into a trailing "More" menu** rather than wrapping or clipping. The `Open`
+and `Open folder` compounds carry a mid-range priority, and when they overflow, their **in-browser** and
+**on-{label}** halves reappear as **separate menu items** (`Open raw in browser`, `Open on Mac`, `Open
+folder in browser`, `Open folder on Mac`) — the OS entries still gated by `canOpenInOS`. Nothing is lost
+to a narrow window; it only changes shape.
+
+The priority-based overflow into the "More" menu is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/OverflowActionBar.tsx` — `OverflowActionBar`.
+
+---
+
+## 6. Empty & disabled states
+
+* **Server mode / non-loopback → OS buttons hidden.** When `platform.canOpenInOS` is false, the front end
+  renders the compounds with the **on-{label}** half **absent** — `Open` shows only **in browser**, and
+  `Open folder` shows only **in browser**. The user is never offered a hand-off that would 403. (When the
+  platform query has not yet resolved, `canOpenInOS` is treated as false — fail closed.)
+* **No grant yet.** Until the media grant URL resolves, `Open`'s **in browser** half is omitted (there is
+  nothing to open raw yet); `Open folder` in-browser is always available because it needs only the path.
+* **Path vanished (404).** If the file/folder was moved/deleted between render and click, the toast
+  reports the backend's **"file not found"** rather than appearing to succeed.
+* **Refused (403).** Should a stale client somehow POST when hand-off is disallowed, the backend returns
+  403 and the toast shows *"Opening in the desktop OS is only available on localhost"* — no desktop app
+  is launched.
+
+---
+
+## 7. Acceptance criteria
+
+1. The **`Open: in browser · on {label}`** and **`Open folder: in browser · on {label}`** compound
+   controls appear on the shared **Media Viewer** action bar; `{label}` is **Mac**, **PC**, or **Linux**
+   from `GET /api/fs/platform`.
+2. **`on {label}`** hands the file/folder to the host OS default handler (`open` / `cmd /c start` /
+   `xdg-open`) so it opens in the native desktop app (Preview/QuickTime/VLC) or **Finder/Explorer** for a
+   folder; **`in browser`** for a folder navigates the **in-app File System tab** (`/fs?path=<dir>`), and
+   for a file opens the **raw streamed bytes** in a new tab — the two are distinct destinations.
+3. OS hand-off is **localhost-only**: `POST /api/fs/os-open` is refused with **403** unless the backend is
+   in `local` mode **and** the request came from loopback, and the front end **hides the on-{label} half**
+   whenever `platform.canOpenInOS` is false (server mode / non-loopback).
+4. The path is **confined** to the same allow-roots + secret-stash denylist as every fs route
+   (`assertAllowedPath`); a missing path returns **404**; any other refusal returns **400**. LFBridge
+   never opens a secret stash or a path outside the roots.
+5. The child process is spawned **detached + `unref()`'d** so a long-lived GUI app never blocks the Node
+   event loop or the HTTP request; a spawn failure is logged and returned as 400, never a crash.
+6. When the action bar is too narrow, `Open` / `Open folder` **fold into the "More" menu** as their
+   individual in-browser / on-{label} items (OS items still gated by `canOpenInOS`); nothing is dropped.
+7. Hand-off is **always an explicit user action** on **this** machine's own local files — it reads no new
+   bytes, sends nothing over the network, and is unrelated to IPFS gateway/relay behavior (charter).
+
+<!--
+  OS hand-off = "Open on Mac / PC / Linux": hand a local file/folder to the host OS default handler.
+  LOCKED:
+  (§1) LOCALHOST-ONLY. Refused unless backend server.mode === "local" AND request is loopback
+       (127.0.0.1/::1). A hosted server must NEVER launch a desktop app for a remote visitor. Front end
+       HIDES the on-{label} half when platform.canOpenInOS is false (fail closed).
+  (§2) Contract: GET /api/fs/platform → PlatformInfo{os,label,canOpenInOS}; POST /api/fs/os-open {path} →
+       OsOpenResult{opened,path,isDir,via}. 403 not-localhost / 404 missing / 400 otherwise.
+  (§3) open verbs: mac `open`, windows `cmd /c start "" <path>`, linux `xdg-open`. label = Mac/PC/Linux.
+  (§4) confined via assertAllowedPath (allow-roots + secret-stash denylist); stat first; spawn
+       detached+unref'd so a GUI app never blocks Node.
+  (§5) Frontend compounds: "Open: in browser · on {label}" (raw grant tab vs OS app) and "Open folder: in
+       browser · on {label}" (in-app /fs?path=<dir> tab vs Finder/Explorer). OpenCompound in MediaViewer.
+       lib/os.ts runOsOpen; api.platform()/api.osOpen(). Overflow → "More" (OverflowActionBar).
+  Code pointers: fs/os-open.ts (platformFamily/isLocalRequest/platformInfo/openCommand/openInOs),
+  fs/fs.router.ts (GET /platform, POST /os-open), fs/allow-root.ts (assertAllowedPath), shared/types.ts
+  (PlatformInfo, OsOpenResult), frontend lib/os.ts, api/client.ts, MediaViewer OpenCompound/ActionBar.
+  Keep in sync with media_viewer.mdx §4 (action bar) — that file references this one for the OS-open half.
+-->

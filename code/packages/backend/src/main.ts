@@ -15,11 +15,13 @@ import { settingsRouter } from "./modules/settings/settings.router.js";
 import { syncRouter } from "./modules/sync/sync.router.js";
 import { sessionsRouter } from "./modules/sessions/sessions.router.js";
 import { peersRouter } from "./modules/peers/peers.router.js";
+import { devicesRouter } from "./modules/peers/devices.router.js";
 import { ipfsRouter } from "./modules/ipfs/ipfs.router.js";
 import { storagesRouter } from "./modules/storage/storage.router.js";
 import { communitiesRouter } from "./modules/communities/communities.router.js";
 import { compressRouter } from "./modules/compress/compression.router.js";
 import { transcribeRouter } from "./modules/transcribe/transcribe.router.js";
+import { describeRouter } from "./modules/describe/describe.router.js";
 import { healthRouter } from "./modules/health/health.router.js";
 import { progressRouter } from "./modules/progress/progress.router.js";
 import { securityRouter } from "./modules/security/security.router.js";
@@ -114,11 +116,13 @@ async function main(): Promise<void> {
   app.use("/api/sync", syncRouter);
   app.use("/api/sessions", sessionsRouter); // web-session activity ping + stale-return auto-sync (sessions.mdx)
   app.use("/api/peers", peersRouter);
+  app.use("/api/devices", devicesRouter); // the Devices / Peers table: self + peers + registry (devices.mdx §6)
   app.use("/api/ipfs", ipfsRouter);
   app.use("/api/storages", storagesRouter); // the Storages tab: discover/init/index/analyze (storages.mdx)
   app.use("/api/communities", communitiesRouter); // the Communities page: budget + subscribe (communities.mdx)
   app.use("/api/compress", compressRouter); // compression engine: tools/settings/check/file/batch (compression.mdx)
   app.use("/api/transcribe", transcribeRouter); // transcription engine: tools/file/batch/tree/storage (Transcribe.mdx)
+  app.use("/api/describe", describeRouter); // AI description: providers/file/prompt (ai_description.mdx)
   app.use("/api/internal", internalRouter);
   app.use("/api/client-log", clientLogRouter); // browser fault trail -> shared logger -> error.err
 

@@ -4,6 +4,35 @@ import { z } from "zod";
 
 const iso = z.string();
 
+// ── hardware fingerprint (devices.mdx §7) ───────────────────────────────────
+// The facts that identify a PHYSICAL computer, collected ENTIRELY LOCALLY (never over the network).
+// Lives on `config.yaml → computer.hardware` (this machine) and is copied into each device file
+// (`devices/<device>.yaml → device.hardware`) so OTHER computers can identify & disambiguate this one.
+// Everything is optional/defaulted — off macOS (or when a probe fails) fields stay blank/null and the
+// UI degrades gracefully.
+export const DeviceHardwareSchema = z
+  .object({
+    platform: z.string().default(""), // os.platform(): darwin | linux | win32
+    kind: z.string().default(""), // laptop | desktop | server (derived, devices.mdx §7)
+    hostname: z.string().default(""), // os.hostname()
+    username: z.string().default(""), // os.userInfo().username — the logged-in OS user
+    home_dir: z.string().default(""), // os.homedir() — the ~ dir; which user this machine belongs to
+    model_identifier: z.string().default(""), // `sysctl -n hw.model` → Mac14,7
+    model_name: z.string().default(""), // system_profiler SPHardwareDataType → Model Name
+    marketing_name: z.string().default(""), // resolved from the model table, e.g. "MacBook Pro (14-inch, 2023)"
+    year: z.number().nullable().default(null), // model year (from the model table)
+    chip: z.string().default(""), // system_profiler → Chip / Processor Name
+    arch: z.string().default(""), // os.arch()
+    cpu_cores: z.number().nullable().default(null), // os.cpus().length
+    ram_gb: z.number().nullable().default(null), // round(os.totalmem() / 1e9)
+    disk_total_gb: z.number().nullable().default(null), // fs.statfsSync('/') total, in GB
+    screen_inches: z.number().nullable().default(null), // built-in display size (model table)
+    screen_count: z.number().nullable().default(null), // SPDisplaysDataType resolution count
+  })
+  .default({});
+// On-disk (snake_case) shape. The camelCase UI mirror is `DeviceHardware` in types.ts.
+export type DeviceHardwareDoc = z.infer<typeof DeviceHardwareSchema>;
+
 // ── app-level config.yaml (storage.mdx §3 + settings.mdx §1.3) ──────────────
 export const AppConfigSchema = z.object({
   schema_version: z.number().default(1),
@@ -21,6 +50,7 @@ export const AppConfigSchema = z.object({
       id: z.string().optional(),
       label: z.string().default("this-computer"),
       ipfs_peer_id: z.string().nullable().default(null),
+      hardware: DeviceHardwareSchema, // this machine's fingerprint (devices.mdx §7) — seeded on first run
     })
     .default({}),
   ipfs: z
@@ -75,6 +105,34 @@ export const AppConfigSchema = z.object({
         .default({}),
       preserve_resolution: z.boolean().default(true), // LOCKED on (compression.mdx §5)
       replace_original_to_trash: z.boolean().default(true), // recoverable replace (compression.mdx §8)
+    })
+    .default({}),
+  // AI description providers (ai_description.mdx §5). Vision models the app may call to describe a local
+  // image/video. Keys are OPTIONAL here — an empty key falls back to the matching env var
+  // (GEMINI_API_KEY / XAI_API_KEY / OPENAI_API_KEY). `provider` = "auto" picks the first available that
+  // supports the media kind. This is the ONE deliberate external network path; generation is always an
+  // explicit user action (charter: separate from the local-only perceptual-fingerprint feature).
+  ai: z
+    .object({
+      provider: z.enum(["auto", "gemini", "grok", "openai"]).default("auto"),
+      gemini: z
+        .object({
+          api_key: z.string().nullable().default(null),
+          model: z.string().default("gemini-2.0-flash"),
+        })
+        .default({}),
+      grok: z
+        .object({
+          api_key: z.string().nullable().default(null),
+          model: z.string().default("grok-2-vision-1212"),
+        })
+        .default({}),
+      openai: z
+        .object({
+          api_key: z.string().nullable().default(null),
+          model: z.string().default("gpt-4o"),
+        })
+        .default({}),
     })
     .default({}),
   sync_process: z
@@ -380,6 +438,7 @@ export const DeviceFileSchema = z.object({
       name: z.string().default(""), // the nice name the user set from the web app
       owner: z.string().nullable().default(null), // the allow-listed user this computer belongs to
       ipfs_peer_id: z.string().nullable().default(null), // for peer dialing (may change; id above does not)
+      hardware: DeviceHardwareSchema, // this device's fingerprint (devices.mdx §7) — travels with the SDL
     })
     .default({}),
   schedule: z

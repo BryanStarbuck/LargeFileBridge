@@ -8,6 +8,7 @@ import type {
   GlobalSettings,
   SyncPageData,
   PeerRow,
+  DeviceRow,
   CurrentUser,
   Decision,
   WorkerKind,
@@ -56,6 +57,15 @@ import type {
   TranscribeResult,
   TranscribeBatchResult,
   TranscriptView,
+  PlatformInfo,
+  OsOpenResult,
+  DescribeKind,
+  DescribeProvidersStatus,
+  DescribeView,
+  DescribeResult,
+  DescribePromptView,
+  DescribeAiConfig,
+  DescribeAiConfigPatch,
 } from "@lfb/shared";
 import { http, unwrap } from "./axios.js";
 
@@ -120,6 +130,8 @@ export const api = {
     unwrap<WorkerState>(http.post(`/sync/${worker}/${action}`)),
 
   peers: () => unwrap<PeerRow[]>(http.get("/peers")),
+  // The Devices / Peers table (devices.mdx §6) — self + peers.yaml + registry, unioned & disambiguated.
+  devices: () => unwrap<DeviceRow[]>(http.get("/devices")),
   // Remove peer (menus.mdx §5.4) — forgets the computer from peers.yaml; touches no remote content.
   removePeer: (id: string) => unwrap<{ removed: boolean }>(http.delete(`/peers/${id}`)),
 
@@ -146,6 +158,10 @@ export const api = {
     unwrap<FsListing>(
       http.get("/fs", { params: { ...(path ? { path } : {}), ...(hidden ? { hidden: "1" } : {}) } }),
     ),
+  // OS hand-off (os_open.mdx) — the host platform label + whether "Open on {label}" is possible here,
+  // and the localhost-only action that opens a local file/folder in the desktop OS default handler.
+  platform: () => unwrap<PlatformInfo>(http.get("/fs/platform")),
+  osOpen: (path: string) => unwrap<OsOpenResult>(http.post("/fs/os-open", { path })),
   // Full paths — the flat, recursive large-file table (full_paths.mdx).
   fsFlat: (path?: string, hidden = false) =>
     unwrap<FlatFileListing>(
@@ -183,6 +199,23 @@ export const api = {
     unwrap<TranscribeBatchResult>(http.post("/transcribe/tree", { path, overwrite })),
   transcribeStorage: (id: string, overwrite = false) =>
     unwrap<TranscribeBatchResult>(http.post(`/transcribe/storage/${id}`, { overwrite })),
+  // AI description (ai_description.mdx). Provider status, read an existing description, generate one (the
+  // external vision call), and read/customize/save/reset the per-kind prompt files.
+  describeProviders: () => unwrap<DescribeProvidersStatus>(http.get("/describe/providers")),
+  description: (path: string) => unwrap<DescribeView | null>(http.get("/describe/file", { params: { path } })),
+  describeFile: (path: string, opts?: { overwrite?: boolean; provider?: "auto" | "gemini" | "grok" | "openai" }) =>
+    unwrap<DescribeResult>(http.post("/describe/file", { path, ...(opts ?? {}) })),
+  describePrompt: (kind: DescribeKind) => unwrap<DescribePromptView>(http.get("/describe/prompt", { params: { kind } })),
+  customizeDescribePrompt: (kind: DescribeKind) =>
+    unwrap<DescribePromptView>(http.post("/describe/prompt/customize", { kind })),
+  saveDescribePrompt: (kind: DescribeKind, text: string) =>
+    unwrap<DescribePromptView>(http.put("/describe/prompt", { kind, text })),
+  resetDescribePrompt: (kind: DescribeKind) =>
+    unwrap<DescribePromptView>(http.delete("/describe/prompt", { params: { kind } })),
+  // AI provider config for the global Settings page — default provider + per-provider API key + model.
+  // Reads return the key SOURCE (config/env), never the raw key; a "" apiKey clears the config key.
+  aiConfig: () => unwrap<DescribeAiConfig>(http.get("/describe/config")),
+  setAiConfig: (patch: DescribeAiConfigPatch) => unwrap<DescribeAiConfig>(http.patch("/describe/config", patch)),
   // Move (guarded rename) + Delete (recoverable move-to-trash) a single file — media_viewer.mdx §4.4.
   moveEntity: (path: string, dest: string) =>
     unwrap<{ moved: boolean; path: string }>(http.post("/entity/move", { path, dest })),

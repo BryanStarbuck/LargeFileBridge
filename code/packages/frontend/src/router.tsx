@@ -34,10 +34,10 @@ const oneRepoRoute = createRoute({
   path: "/repos/$repoId",
   component: lazyRouteComponent(() => import("./pages/repos/OneRepoPage.js"), "OneRepoPage"),
 });
-const peersRoute = createRoute({
+const devicesRoute = createRoute({
   getParentRoute: () => appLayout,
-  path: "/peers",
-  component: lazyRouteComponent(() => import("./pages/peers/PeersPage.js"), "PeersPage"),
+  path: "/devices",
+  component: lazyRouteComponent(() => import("./pages/devices/DevicesPage.js"), "DevicesPage"),
 });
 // Storages (storages.mdx): the map of every storage you belong to, and one storage's detail.
 const storagesRoute = createRoute({
@@ -152,7 +152,7 @@ const routeTree = rootRoute.addChildren([
     reposRoute,
     repoSettingsRoute,
     oneRepoRoute,
-    peersRoute,
+    devicesRoute,
     storagesRoute,
     storageSettingsRoute,
     storageDetailRoute,

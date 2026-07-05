@@ -5,10 +5,20 @@
 // storage's machine-independent mapped-dir keys onto THIS computer's absolute local paths. Node fs only.
 import fs from "node:fs";
 import path from "node:path";
-import { DeviceFileSchema, type DeviceFile, type DeviceRecord, type DeviceGraftEntry } from "@lfb/shared";
+import {
+  DeviceFileSchema,
+  disambiguateDevices,
+  type DeviceFile,
+  type DeviceRecord,
+  type DeviceGraftEntry,
+  type DeviceHardware,
+  type DeviceHardwareDoc,
+  type DeviceRow,
+} from "@lfb/shared";
 import { readYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import { repoFolderKey } from "../../shared/store/sanitize.js";
 import { getAppConfig } from "../store-model/config.service.js";
+import { peerRows } from "../store-model/peers.service.js";
 // Lazy import cycle with storage-settings.service (used only inside functions, never at module-eval time)
 // — safe under NodeNext ESM, same pattern as storage.service <-> storage-settings.service.
 import { readMappedDirsForRoot } from "./storage-settings.service.js";
@@ -33,6 +43,28 @@ function selfName(): string {
   return getAppConfig().computer.label || "this-computer";
 }
 
+/** Map the on-disk (snake_case) hardware fingerprint to the camelCase UI mirror (devices.mdx §7). */
+function hwDocToCamel(h: DeviceHardwareDoc): DeviceHardware {
+  return {
+    platform: h.platform,
+    kind: h.kind,
+    hostname: h.hostname,
+    username: h.username,
+    homeDir: h.home_dir,
+    modelIdentifier: h.model_identifier,
+    modelName: h.model_name,
+    marketingName: h.marketing_name,
+    year: h.year,
+    chip: h.chip,
+    arch: h.arch,
+    cpuCores: h.cpu_cores,
+    ramGb: h.ram_gb,
+    diskTotalGb: h.disk_total_gb,
+    screenInches: h.screen_inches,
+    screenCount: h.screen_count,
+  };
+}
+
 /** Map the on-disk (snake_case) device doc to the camelCase API record. */
 function toRecord(doc: DeviceFile): DeviceRecord {
   return {
@@ -43,6 +75,7 @@ function toRecord(doc: DeviceFile): DeviceRecord {
       name: doc.device.name,
       owner: doc.device.owner,
       ipfsPeerId: doc.device.ipfs_peer_id,
+      hardware: hwDocToCamel(doc.device.hardware),
     },
     schedule: {
       enabled: doc.schedule.enabled,
@@ -75,6 +108,9 @@ export function writeSelfDevice(storageRoot: string, opts?: { owner?: string | n
     name,
     owner: opts?.owner ?? current.device.owner ?? null,
     ipfs_peer_id: cfg.computer.ipfs_peer_id ?? null,
+    // Copy THIS machine's fingerprint into the travelling registry so other computers can identify &
+    // disambiguate it (devices.mdx §7). Self-owned — only ever this device's own file.
+    hardware: cfg.computer.hardware,
   };
   if (!existed) {
     // A fresh device file: the default schedule matches the 15-min background pass (devices.mdx §3).
@@ -170,4 +206,115 @@ export function resolveGraftedPath(storageRoot: string, mappedKey: string, relPa
   const g = doc.graft[mappedKey];
   if (!g || !g.wanted || !g.local_path) return null;
   return path.join(expandHome(g.local_path), relPath);
+}
+
+// A mutable accumulator row before disambiguation (devices.mdx §6).
+interface RowAccum {
+  id: string;
+  name: string;
+  isSelf: boolean;
+  owner: string | null;
+  ipfsPeerId: string | null;
+  lastSeen: string | null;
+  hardware: DeviceHardware | null;
+  storageCount: number;
+  source: "self" | "registry" | "peer";
+}
+
+/**
+ * The rows the Devices / Peers page shows (devices.mdx §6, §9). Unions three sources by device id:
+ *   1. THIS computer — ALWAYS injected from config.yaml→computer + the fingerprint, so the table is
+ *      NEVER empty and always tags exactly one row "This computer".
+ *   2. the machine-local peers.yaml (bare rows: id/label/peer-id/owner/last-seen, no fingerprint).
+ *   3. the travelling devices/ registry across EVERY storage (carries other computers' fingerprints).
+ * Then applies the disambiguation labels (device-naming.ts) so similar machines are told apart. The
+ * storage list is imported lazily to avoid a module-eval cycle (storage.service imports writeSelfDevice).
+ */
+export async function deviceRows(): Promise<DeviceRow[]> {
+  const cfg = getAppConfig();
+  const selfId = cfg.computer.id ?? "";
+  const acc = new Map<string, RowAccum>();
+
+  // 1. self — always present.
+  acc.set(selfId || "self", {
+    id: selfId,
+    name: cfg.computer.label || "this-computer",
+    isSelf: true,
+    owner: null,
+    ipfsPeerId: cfg.computer.ipfs_peer_id ?? null,
+    lastSeen: new Date().toISOString(), // this computer is here right now
+    hardware: hwDocToCamel(cfg.computer.hardware),
+    storageCount: 0,
+    source: "self",
+  });
+
+  // 2. peers.yaml — the user's other computers (no fingerprint on these bare entries).
+  try {
+    for (const p of peerRows()) {
+      if (p.id === selfId) continue; // self already injected
+      const existing = acc.get(p.id);
+      if (existing) {
+        existing.owner ??= p.owner;
+        existing.ipfsPeerId ??= p.ipfsPeerId;
+        existing.lastSeen ??= p.lastSeen;
+      } else {
+        acc.set(p.id, {
+          id: p.id,
+          name: p.label,
+          isSelf: false,
+          owner: p.owner,
+          ipfsPeerId: p.ipfsPeerId,
+          lastSeen: p.lastSeen,
+          hardware: null,
+          storageCount: 0,
+          source: "peer",
+        });
+      }
+    }
+  } catch (e) {
+    log.warn("storage", `deviceRows: peers.yaml read failed: ${(e as Error).message}`);
+  }
+
+  // 3. the travelling registry across every (non-local) storage.
+  try {
+    const { listStorageIds, getStorageRow } = await import("./storage.service.js");
+    for (const id of listStorageIds()) {
+      const row = getStorageRow(id);
+      if (!row || row.type === "local") continue;
+      for (const rec of readDevices(row.root)) {
+        const rid = rec.device.id || `${rec.device.name}@${id}`;
+        const isSelf = !!selfId && rid === selfId;
+        const existing = acc.get(isSelf ? selfId : rid);
+        if (existing) {
+          existing.storageCount += 1;
+          // Enrich: registry carries the fingerprint peers.yaml lacks; never overwrite the self identity.
+          if (!existing.hardware && rec.device.hardware.platform) existing.hardware = rec.device.hardware;
+          existing.owner ??= rec.device.owner;
+          existing.ipfsPeerId ??= rec.device.ipfsPeerId;
+          if (!existing.isSelf && rec.device.name) existing.name = rec.device.name;
+        } else {
+          acc.set(rid, {
+            id: rid,
+            name: rec.device.name || "device",
+            isSelf,
+            owner: rec.device.owner,
+            ipfsPeerId: rec.device.ipfsPeerId,
+            lastSeen: rec.updatedAt,
+            hardware: rec.device.hardware.platform ? rec.device.hardware : null,
+            storageCount: 1,
+            source: "registry",
+          });
+        }
+      }
+    }
+  } catch (e) {
+    log.warn("storage", `deviceRows: registry union failed: ${(e as Error).message}`);
+  }
+
+  // Order: self first, then by name; then disambiguate similar machines (devices.mdx §8).
+  const rows = [...acc.values()].sort((a, b) =>
+    a.isSelf === b.isSelf ? a.name.localeCompare(b.name) : a.isSelf ? -1 : 1,
+  );
+  const labels = disambiguateDevices(rows.map((r) => ({ name: r.name, hardware: r.hardware })));
+  return rows.map((r, i) => ({ ...r, displayLabel: labels[i] }));
 }

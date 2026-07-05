@@ -137,6 +137,19 @@ The explicit-click install as a single-flight, re-attachable dock job (streamed 
   each as its own explicit step — still never turning on a public/recursive gateway
   ([knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule)).
 
+### 4.2 AI description providers + prompts
+
+The Tools page also hosts the **AI description** panel: a status row per vision provider (Gemini · Grok ·
+OpenAI — each shown **configured** or **no key**, with the env var to set), and a per-kind **prompt
+editor** (image / video) with **Save (customize)** and **Reset to default**. Unlike `ipfs`/`ffmpeg`,
+these are **not** installed CLIs — they are remote API keys (config or env), and this is the ONE
+deliberate external-network path (charter). The full contract — adapters, key resolution, the shipped
+prompt files + per-computer override, the storage YAML, and the charter/privacy posture — lives in
+[ai_description.mdx](./ai_description.mdx).
+
+The provider-status + prompt-editor panel is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/ToolsPage.tsx` — `AiDescriptionSection`.
+
 ---
 
 ## 5. Cross-platform

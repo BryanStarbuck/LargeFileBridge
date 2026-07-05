@@ -302,7 +302,7 @@ The IPFS surface is split in two, and the redesign treats them differently:
   Running → tiles + security), each with a plain-English headline and the one primary action, and a
   live progress/error view for install/start jobs. It is **kept** as the IPFS landing and, like the
   Home dashboard, is the reference the Shared-files page is brought in line with. (Its metric tiles
-  drill into `/ipfs/pins` and `/peers`; its security card fixes non-compliance in place.)
+  drill into `/ipfs/pins` and `/devices`; its security card fixes non-compliance in place.)
 * **Shared files (`/ipfs/pins`)** — the pinset table, reached from the dashboard's "Shared files"
   tile. This is where the StatusBanner + tiles + node-details redesign below applies.
 
@@ -373,9 +373,9 @@ The IPFS worst-first verdict banner (down / not-compliant / running-and-complian
 The UC-2 worst-first diagnosis banner (IPFS down / undecided files / synced-but-no-peers / pending, each with its one fix) is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `RepoVerdict` (renders `StatusBanner`).
 
-### 5.5 Peers page (`/peers`)
+### 5.5 Devices / Peers page (`/devices`)
 The Peers page (empty-state guidance, per-peer rows, last-seen recency) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/peers/PeersPage.tsx` — `PeersPage`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` — `DevicesPage`.
 
 1. **PageHeader** — "Peers", subtitle *"Your other computers that keep copies of these files."*
 2. **Empty state (guided)** — when no peers: a neutral StatusBanner *"No other computers yet"* + a
@@ -452,3 +452,83 @@ The directory category rollup (the four charter category counts) is computed in 
 * **AC-7** The shared components (`StatusBanner`, `DiagnosticCard`, `Disclosure`, `StatTile`,
   `PageHeader`, `Section`) are used by IPFS, Scans, Settings, One-repo, Peers, and the entity pages,
   so the app feels like one product with the Home dashboard.
+
+---
+
+## 8. Media-viewer use-case flows (OS hand-off & AI analysis)
+
+These journeys live on the **View one file** media viewer ([media_viewer.mdx](./media_viewer.mdx)) and
+its companion features: opening a file in its **real desktop app** ([os_open.mdx](./os_open.mdx)), and
+turning a media file into **searchable text** — a **transcript** ([Transcribe.mdx](./Transcribe.mdx)) or
+an **AI description** ([ai_description.mdx](./ai_description.mdx)). Same UC format as §4: the user's
+question, where the app answers it, and what they see.
+
+### UC-9 — "I want to watch this video in QuickTime / VLC, not in the browser tab."
+* **Enters:** the video viewer (`/video?path=…`) on their Mac.
+* **Sees:** the action bar's **`Open: in browser · on Mac`** compound control. Clicking **on Mac** hands
+  the file to the OS default handler — QuickTime/VLC opens the clip natively — and a toast confirms
+  *"Opened file on Mac."* Clicking **in browser** instead opens the raw streamed bytes in a new tab.
+* **Note:** the **on Mac** half only appears on a **localhost** app (local mode + loopback); on a hosted
+  instance it is hidden and only **in browser** shows (os_open.mdx §1, §6).
+
+### UC-10 — "Show me this file in Finder so I can work with it alongside other files."
+* **Enters:** any media viewer.
+* **Sees:** the **`Open folder: in browser · on Mac`** compound. **on Mac** opens the file's **parent
+  directory in Finder/Explorer**; **in browser** instead navigates the **in-app File System tab**
+  (`/fs?path=<dir>`) so they stay inside LFBridge. Two clearly different destinations, one control
+  (os_open.mdx §5).
+
+### UC-11 — "My window is narrow and I can't see all the buttons."
+* **Enters:** a media viewer in a small or split window.
+* **Sees:** the action bar is an **overflow bar** — the lowest-priority buttons **fold into a trailing
+  "More" (⋯) menu** instead of wrapping or clipping. **Move**, **View properties**, then the **Open** /
+  **Open folder** compounds overflow first; inside **More** their in-browser and on-{label} halves appear
+  as separate items (the OS items still gated to localhost). Nothing is lost — the row just changes shape
+  (os_open.mdx §5.1).
+
+### UC-12 — "What is said in this recording? I need it as text."
+* **Enters:** an audio or video viewer.
+* **Sees:** the bottom **Transcription** tab. If no transcript exists yet, a **Generate transcript**
+  pane explains it runs **locally with Whisper — nothing leaves this computer**. Clicking it transcribes
+  and fills the tab with the text (with an **open file** link to the `.txt`). If Whisper isn't installed,
+  the button is disabled with the exact `pipx install openai-whisper` / `brew install ffmpeg` hint
+  (Transcribe.mdx §2.1).
+
+### UC-13 — "Describe what's in this video so I can find it later without re-watching it."
+* **Enters:** a video viewer.
+* **Sees:** the **AI description** tab with a **Generate description** pane that states plainly the
+  **video is uploaded to the provider (Gemini)** — the one deliberate network upload, on an explicit
+  click only. Generating returns a hyper-detailed description (overview, shot-by-shot timeline,
+  cinematography shot sizes, per-person head-to-toe, location guess) stored beside the file so the
+  Storage table's **description** indicator lights up (ai_description.mdx §1–§3, §7). **Only Gemini**
+  describes video, so a Gemini key must be present.
+
+### UC-14 — "Describe this photo — I don't have a Gemini key, just OpenAI."
+* **Enters:** an image viewer.
+* **Sees:** the **AI description** tab. An **image** can be described by **any** provider —
+  **OpenAI (gpt-4o)** or **Grok** as well as Gemini — so with an OpenAI key configured, **Generate
+  description** works; the pane notes the image is uploaded to the provider. Over the **18MB** inline cap,
+  it fails with a *"compress it first"* message rather than uploading (ai_description.mdx §3.1, §3.3).
+
+### UC-15 — "This video already has a transcript AND a description — let me flip between them."
+* **Enters:** a described-and-transcribed video viewer.
+* **Sees:** both tabs carry a **✓** (content exists). The panel **defaults to Transcription** (the
+  preferred tab when it has content), and a click switches to **AI description**; the chosen tab sticks
+  for the session. An image shows only the AI-description tab; an audio file only Transcription
+  (ai_description.mdx §1).
+
+### UC-16 — "I want the AI descriptions to always call out the license plates and street signs."
+* **Enters:** **Settings → Tools**, the **AI description** section.
+* **Sees:** a **video / image** prompt toggle and the in-use prompt in an editable textarea. Editing and
+  **Save (customize)** writes a **per-computer override** (the marker flips to *"customized on this
+  computer"*); that text is then sent to the provider in place of the shipped default. **Reset to
+  default** reverts it. The change is local — it only chooses which prompt text is sent
+  (ai_description.mdx §4.2, §6).
+
+### UC-17 — "I clicked Generate description and it's greyed out. Now what?"
+* **Enters:** the AI-description tab with **no provider configured**.
+* **Sees (disabled state, not a dead end):** the **Generate** button is disabled with a plain hint —
+  *"No AI provider is configured. Add a Gemini, Grok, or OpenAI API key in Settings → Tools (or export
+  GEMINI_API_KEY / XAI_API_KEY / OPENAI_API_KEY), then reload."* **Settings → Tools** shows each provider
+  as **● configured** or **✗ no key** with the exact env var / config key to add, and reminds them **only
+  Gemini describes video**. Adding a key and reloading enables the button (ai_description.mdx §6, §8).

@@ -1,8 +1,10 @@
 // REST for the File System column browser (directory.mdx §1, code_plan.mdx §14).
 import { Router } from "express";
+import { z } from "zod";
 import type { FlatStreamEvent } from "@lfb/shared";
 import { homeDir, listDirectory, listFilesFlat } from "./fs.service.js";
 import { walkFilesFlatStreaming } from "../fsindex/fsindex.service.js";
+import { platformInfo, openInOs } from "./os-open.js";
 import { requireAllowListed } from "../auth/identify.js";
 import { log } from "../../shared/logging.js";
 
@@ -12,6 +14,27 @@ fsRouter.use(requireAllowListed);
 // GET /api/fs/home — the default root the browser opens on (the OS home directory).
 fsRouter.get("/home", (_req, res) => {
   res.json({ ok: true, data: { home: homeDir() } });
+});
+
+// GET /api/fs/platform — the host OS family + label ("Mac"/"PC"/"Linux") and whether the OS-open
+// hand-off is possible here (local mode + loopback). Drives the "Open on {label}" buttons (os_open.mdx).
+fsRouter.get("/platform", (req, res) => {
+  res.json({ ok: true, data: platformInfo(req) });
+});
+
+// POST /api/fs/os-open { path } — hand a local file OR folder to the host OS default handler. Localhost-
+// only, confined to the allow-roots (os_open.mdx §3). Explicit user action; never runs on its own.
+fsRouter.post("/os-open", (req, res) => {
+  const body = z.object({ path: z.string().min(1) }).safeParse(req.body);
+  if (!body.success) return res.status(400).json({ ok: false, error: "path required" });
+  try {
+    res.json({ ok: true, data: openInOs(req, body.data.path) });
+  } catch (e) {
+    const msg = (e as Error).message;
+    const code = /only available on localhost/.test(msg) ? 403 : /not found/.test(msg) ? 404 : 400;
+    log.warn("fs", `os-open rejected (${code}): ${msg}`);
+    res.status(code).json({ ok: false, error: msg });
+  }
 });
 
 // GET /api/fs/flat/stream?path=<abs>&hidden=1 — the flat large-file listing delivered as an NDJSON

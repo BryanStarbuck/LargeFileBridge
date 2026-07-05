@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type { IpfsNodeStatus, IpfsInstallJob, CompressTools } from "@lfb/shared";
+import type { IpfsNodeStatus, IpfsInstallJob, CompressTools, DescribeKind } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { Section } from "../../components/ui/Section.js";
@@ -113,7 +113,105 @@ export function ToolsPage() {
           </pre>
         )}
       </Section>
+
+      <AiDescriptionSection />
     </div>
+  );
+}
+
+// ── AI description providers + prompt editor (ai_description.mdx §5/§4) ──────────────
+// Shows which vision providers are configured on this machine (Gemini/Grok/OpenAI, from config or env)
+// and lets the user CUSTOMIZE the per-kind prompt files. Saving writes a per-computer override that is
+// then used in place of the shipped default; Reset reverts to the default.
+const ENV_HINT: Record<string, string> = {
+  gemini: "GEMINI_API_KEY (or GOOGLE_API_KEY)",
+  grok: "XAI_API_KEY (or GROK_API_KEY)",
+  openai: "OPENAI_API_KEY",
+};
+
+function AiDescriptionSection() {
+  const qc = useQueryClient();
+  const { data: providers } = useQuery({ queryKey: ["describe-providers"], queryFn: () => api.describeProviders() });
+  const [kind, setKind] = useState<DescribeKind>("video");
+  const { data: prompt } = useQuery({ queryKey: ["describe-prompt", kind], queryFn: () => api.describePrompt(kind) });
+
+  const [draft, setDraft] = useState<string | null>(null);
+  useEffect(() => { setDraft(null); }, [kind]); // reset the editor when the kind toggles
+  const value = draft ?? prompt?.text ?? "";
+
+  const save = useMutation({
+    mutationFn: () => api.saveDescribePrompt(kind, value),
+    onSuccess: (v) => { qc.setQueryData(["describe-prompt", kind], v); setDraft(null); toast.success("Prompt saved (customized on this computer)"); },
+    onError: (e: Error) => { clientLog.error("ToolsPage.savePrompt", e); toast.error(e.message); },
+  });
+  const reset = useMutation({
+    mutationFn: () => api.resetDescribePrompt(kind),
+    onSuccess: (v) => { qc.setQueryData(["describe-prompt", kind], v); setDraft(null); toast.success("Prompt reset to the shipped default"); },
+    onError: (e: Error) => { clientLog.error("ToolsPage.resetPrompt", e); toast.error(e.message); },
+  });
+
+  return (
+    <Section title="AI description" subtitle="Vision providers used to describe images & videos, and the prompt sent to them.">
+      <div className="mb-4 divide-y divide-[var(--lfb-border)]">
+        {(providers?.providers ?? []).map((p) => (
+          <div key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-sm">
+            <span className="w-32 shrink-0 font-medium">{p.label}</span>
+            <span className="w-24 shrink-0" style={{ color: healthColor(p.available ? "ok" : "warn") }}>
+              {p.available ? "● configured" : "✗ no key"}
+            </span>
+            <span className="min-w-0 flex-1 text-black/55">
+              describes {p.supports.join(" + ")}
+              {!p.available && <> — set <code className="text-xs">{ENV_HINT[p.id]}</code> or add it in config.yaml</>}
+            </span>
+          </div>
+        ))}
+        {providers && !providers.anyAvailable && (
+          <p className="pt-2 text-xs text-amber-700">
+            No provider is configured — AI description is disabled until you add at least one API key. Only Gemini describes video.
+          </p>
+        )}
+      </div>
+
+      <div className="mb-2 flex items-center gap-2">
+        <span className="text-sm font-medium">Prompt for</span>
+        {(["video", "image"] as DescribeKind[]).map((k) => (
+          <button
+            key={k}
+            onClick={() => setKind(k)}
+            className={`rounded-md border px-2.5 py-1 text-xs capitalize ${kind === k ? "border-[var(--lfb-primary)] bg-[var(--lfb-primary)]/10 text-[var(--lfb-primary)]" : "border-[var(--lfb-border)] text-black/60"}`}
+          >
+            {k}
+          </button>
+        ))}
+        {prompt && (
+          <span className="ml-auto text-xs text-black/45">{prompt.isOverride ? "customized on this computer" : "shipped default"}</span>
+        )}
+      </div>
+      <textarea
+        value={value}
+        onChange={(e) => setDraft(e.target.value)}
+        spellCheck={false}
+        className="h-64 w-full rounded-lg border border-[var(--lfb-border)] bg-white p-3 font-mono text-xs text-black/80"
+      />
+      <div className="mt-2 flex items-center gap-2">
+        <button
+          disabled={save.isPending || draft === null}
+          onClick={() => save.mutate()}
+          className="rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:opacity-50"
+        >
+          {save.isPending ? "Saving…" : "Save (customize)"}
+        </button>
+        {prompt?.isOverride && (
+          <button
+            disabled={reset.isPending}
+            onClick={() => reset.mutate()}
+            className="rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm text-black/60 disabled:opacity-50"
+          >
+            Reset to default
+          </button>
+        )}
+      </div>
+    </Section>
   );
 }
 

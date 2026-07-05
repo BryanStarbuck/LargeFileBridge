@@ -1,12 +1,14 @@
 // Typed accessor for the app-level, computer-wide config.yaml (storage.mdx §3, settings.mdx).
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { AppConfigSchema, type AppConfig, type FileFlags } from "@lfb/shared";
+import { AppConfigSchema, type AppConfig, type FileFlags, defaultDeviceName } from "@lfb/shared";
 import { readYaml, writeYaml, updateYaml } from "../../shared/store/yaml-store.js";
 import { appConfigPath } from "../../shared/store/scopes.js";
+import { collectHardware } from "../storage/hardware.service.js";
 
 export function getAppConfig(): AppConfig {
   const cfg = readYaml(appConfigPath(), AppConfigSchema);
+  let dirty = false;
   // First-run seeding of sensible scanner roots so the app has something to show.
   if (cfg.scanner.roots.length === 0) {
     cfg.scanner.roots = defaultRoots();
@@ -16,10 +18,37 @@ export function getAppConfig(): AppConfig {
   // every storage's devices/ registry and in pinned_by (devices.mdx §1). Persist it so it stays stable.
   if (!cfg.computer.id || cfg.computer.id.trim() === "") {
     cfg.computer.id = randomUUID();
+    dirty = true;
+  }
+  // Seed this machine's HARDWARE FINGERPRINT once (devices.mdx §7) — collected locally, no network. The
+  // empty `platform` is the "not yet collected" signal (the schema default is a blank object).
+  if (!cfg.computer.hardware.platform) {
+    try {
+      cfg.computer.hardware = collectHardware();
+      dirty = true;
+    } catch {
+      /* collection is best-effort; a failure just retries on the next call */
+    }
+  }
+  // Auto-seed a friendly device name from the fingerprint (devices.mdx §8) instead of leaving the bare
+  // "this-computer" placeholder. The user can rename it any time from the web app.
+  if (!cfg.computer.label || cfg.computer.label === "this-computer") {
+    const hw = cfg.computer.hardware;
+    const name = defaultDeviceName({
+      username: hw.username,
+      modelName: hw.model_name,
+      hostname: hw.hostname,
+    });
+    if (name && name !== "this-computer") {
+      cfg.computer.label = name;
+      dirty = true;
+    }
+  }
+  if (dirty) {
     try {
       writeYaml(appConfigPath(), cfg as unknown as Record<string, unknown>);
     } catch {
-      /* best-effort persist — a failure just re-mints on the next call until a write succeeds */
+      /* best-effort persist — a failure just re-seeds on the next call until a write succeeds */
     }
   }
   return cfg;

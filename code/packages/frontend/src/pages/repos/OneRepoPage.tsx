@@ -345,8 +345,8 @@ function RepoVerdict({
     headline = `${noPeerCount} synced file${noPeerCount === 1 ? " isn't" : "s aren't"} on any other computer yet`;
     sub = "They live only on this machine — not backed up. Open LFBridge on your other computer so it can pull them.";
     action = (
-      <FixButton state="warn" onClick={() => navigate({ to: "/peers" })}>
-        <Network className="h-4 w-4" /> See peers
+      <FixButton state="warn" onClick={() => navigate({ to: "/devices" })}>
+        <Network className="h-4 w-4" /> See devices
       </FixButton>
     );
   } else if (undecided > 0) {

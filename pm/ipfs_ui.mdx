@@ -116,7 +116,7 @@ push the rest into drill-ins. The full inventory, and where each lives:
 | 5 | **Shared files** (recursive+direct pins) | RPC `pin/ls` count | **Tile → /ipfs/pins** |
 | 6 | **Blocks / objects** in the repo | RPC `repo/stat` → `NumObjects` | **Tile** |
 | 7 | **Storage used** vs. **StorageMax** | RPC `repo/stat` → `RepoSize` / `StorageMax` | **Tile** (used / max) |
-| 8 | **Connected peers** (swarm) | RPC `swarm/peers` count | **Tile → /peers** |
+| 8 | **Connected peers** (swarm) | RPC `swarm/peers` count | **Tile → /devices** |
 | 9 | **Bandwidth** (total in/out, rate) | RPC `stats/bw` | **Tile** (best-effort) |
 | 10 | **Gateway** — on? local-only? URL? kind? | config `Addresses.Gateway` + posture | **Gateway panel → details** |
 | 11 | **Reprovide strategy** (what we announce) | config `Reprovider/Provide.Strategy` | **Security card** |
@@ -182,7 +182,7 @@ The gateway posture/URL summary shown in this panel is read in code:
 | **Shared files** | recursive+direct pin count | `files` (+ untracked badge if any) | **`/ipfs/pins`** (pinset table) |
 | **Storage** | `RepoSize` (formatted) | `/ StorageMax` | Gateway/details (repo path) — or none |
 | **Blocks** | `NumObjects` | `blocks` | none (informational) |
-| **Peers** | swarm peer count | `connected` | **`/peers`** (Peers page) |
+| **Peers** | swarm peer count | `connected` | **`/devices`** (Devices / Peers page) |
 | **Bandwidth** | ▲ total out / ▼ total in | rate in/out (best-effort) | none (informational) |
 
 * A tile whose value is **unknown** (RPC didn't answer) shows `—` and a tooltip, never a crash.
@@ -366,7 +366,7 @@ The dashboard's REST surface (`GET /node`, `POST /daemon`, `POST /install`, `GET
 4. The **on/off toggle** starts/stops the daemon and reflects the **real** node state; both start and
    stop run as **progress jobs** (§6, §7.2).
 5. **Metric tiles** show shared files, storage (used/max), blocks, connected peers, and bandwidth; each
-   drillable tile navigates (Shared files → `/ipfs/pins`, Peers → `/peers`); an unknown value shows `—`
+   drillable tile navigates (Shared files → `/ipfs/pins`, Peers → `/devices`); an unknown value shows `—`
    without crashing the page (§5.2).
 6. The **security card** shows reprovide / gateway / GC / compliant and offers a **Fix** that restores
    only-our-content defaults, with the deliberate public-gateway opt-out rendered amber not red (§8,

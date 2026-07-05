@@ -1,11 +1,13 @@
 // The shared, viewer-first layout for View-one-image (/image), View-one-video (/video), and
 // View-one-audio (/audio) — the "View one file" experience for playable media (media_viewer.mdx §3).
-// It renders as a FIVE-BAND vertical stack, top → bottom (media_viewer.mdx §3):
+// It renders as a vertical stack, top → bottom (media_viewer.mdx §3):
 //   1. full path (muted, monospaced)      2. file NAME (large page title)
-//   3. action buttons + the ⋮ more menu   4. the property grid (~4–5 cols × 2–3 rows)
-//   5. the media surface (the star — bottom ~70%, auto-fits, keeps aspect ratio)
+//   3. the FULL-WIDTH overflow action bar (buttons that don't fit fold into "More" — §4.1)
+//   4. the property grid (~4–5 cols × 2–3 rows)
+//   5. the media surface (the star — a bounded, aspect-fit stage)
+//   6. the analysis tabs: Transcription · AI description (§6)
 //
-// The medium plays/loads off local disk via the backend stream — never file:// — through a short-lived
+// The media plays/loads off local disk via the backend stream — never file:// — through a short-lived
 // signed grant (GET /api/media/grant) that the <img>/<video>/<audio> element loads from /api/media/raw.
 // Video/audio seek because that endpoint honors HTTP Range (media_viewer.mdx §1–§2).
 import { useEffect, useRef, useState } from "react";
@@ -13,16 +15,19 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 import {
   ChevronLeft, UploadCloud, DownloadCloud, FolderOpen, Copy, FileText, ExternalLink, Zap,
-  Move, Trash2, Music, Captions,
+  Move, Trash2, Music, Captions, Sparkles, Monitor, Ban, RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { EntityView, Decision, MediaKind } from "@lfb/shared";
+import type { EntityView, Decision, MediaKind, PlatformInfo } from "@lfb/shared";
 import { formatBytes, mediaKindForName } from "@lfb/shared";
 import type { CompressResult } from "@lfb/shared";
 import { api } from "@/api/client";
 import { Badges } from "@/components/fs/Badges";
-import { EntityMore } from "@/components/menu/EntityMenu";
+import { EntityMore, type Action } from "@/components/menu/EntityMenu";
+import { OverflowActionBar, type BarItem } from "@/components/menu/OverflowActionBar";
 import { runTranscribeFile } from "@/lib/transcribe";
+import { runDescribeFile } from "@/lib/describe";
+import { runOsOpen } from "@/lib/os";
 import { patchEntityBadges } from "@/lib/patchEntityBadges";
 import { EntityHeaderMissing } from "./entityShared";
 import { relativeTime, absoluteTime } from "@/lib/format";
@@ -66,6 +71,12 @@ export function MediaViewer({ kind }: { kind: MediaKind }) {
     queryFn: () => api.health(),
     staleTime: 30 * 1000,
   });
+  // Host platform + whether "Open on {label}" hand-off is possible here (os_open.mdx).
+  const { data: platform } = useQuery({
+    queryKey: ["platform"],
+    queryFn: () => api.platform(),
+    staleTime: 60 * 60 * 1000,
+  });
   const ipfsReachable = health?.ipfs !== "unreachable";
 
   const decide = useMutation({
@@ -97,7 +108,7 @@ export function MediaViewer({ kind }: { kind: MediaKind }) {
   if (!v.exists) return <EntityHeaderMissing view={v} navigate={navigate} />;
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex flex-col">
       {/* Band 1 — full path (the very top line), then band 2 — the file NAME as the large title. */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -124,12 +135,13 @@ export function MediaViewer({ kind }: { kind: MediaKind }) {
         </div>
       </div>
 
-      {/* Band 3 — the per-type action buttons (media_viewer.mdx §4). */}
+      {/* Band 3 — the FULL-WIDTH overflow action bar (media_viewer.mdx §4). */}
       <ActionBar
         view={v}
         kind={kind}
         grantUrl={grant?.url ?? null}
         ipfsReachable={ipfsReachable}
+        platform={platform ?? null}
         decide={decide}
         navigate={navigate}
       />
@@ -137,8 +149,8 @@ export function MediaViewer({ kind }: { kind: MediaKind }) {
       {/* Band 4 — the property grid (~4–5 cols × 2–3 rows). */}
       <PropertyGrid view={v} kind={kind} probe={probe ?? null} duration={duration} navigate={navigate} />
 
-      {/* Band 5 — the media surface: the star, fills all remaining height (~70%). */}
-      <div className="mt-3 min-h-0 flex-1">
+      {/* Band 5 — the media surface: the star. Bounded so band 6 (the analysis tabs) sits below it. */}
+      <div className="mt-3 h-[58vh] min-h-[340px]">
         <ViewerSurface
           kind={kind}
           src={grant?.url ?? null}
@@ -147,6 +159,9 @@ export function MediaViewer({ kind }: { kind: MediaKind }) {
           onDuration={setDuration}
         />
       </div>
+
+      {/* Band 6 — Transcription · AI description tabs (media_viewer.mdx §6). */}
+      <MediaAnalysis view={v} kind={kind} navigate={navigate} />
     </div>
   );
 }
@@ -157,6 +172,7 @@ function ActionBar({
   kind,
   grantUrl,
   ipfsReachable,
+  platform,
   decide,
   navigate,
 }: {
@@ -164,17 +180,30 @@ function ActionBar({
   kind: MediaKind;
   grantUrl: string | null;
   ipfsReachable: boolean;
+  platform: PlatformInfo | null;
   decide: { mutate: (d: Decision) => void };
   navigate: ReturnType<typeof useNavigate>;
 }) {
   const qc = useQueryClient();
   const parent = v.path.replace(/[/\\][^/\\]*$/, "") || v.path;
+  const canOs = platform?.canOpenInOS ?? false;
+  const osLabel = platform?.label ?? "Mac";
 
-  // Existing transcript (Transcribe.mdx §2.1) — drives the Transcribe/Re-transcribe label + View-transcript link.
+  // Existing transcript (Transcribe.mdx §2.1) — drives the Transcribe/Re-transcribe label.
   const { data: transcript } = useQuery({
     queryKey: ["transcript", v.path],
     queryFn: () => api.transcript(v.path),
     enabled: kind === "audio" || kind === "video",
+  });
+
+  const flags = useMutation({
+    mutationFn: (patch: { neverIpfs?: boolean; noCompress?: boolean }) => api.setEntityFlags(v.path, patch),
+    onSuccess: (nv) => {
+      qc.setQueryData(["entity", v.path], nv);
+      patchEntityBadges(qc, nv.path, nv.badges);
+      qc.invalidateQueries({ queryKey: ["repo"] });
+    },
+    onError: (e: Error) => { clientLog.error("MediaViewer.flags", e); toast.error(e.message); },
   });
 
   // Move (guarded rename) — on success, re-point the viewer to the new path (media_viewer.mdx §4.4).
@@ -220,7 +249,6 @@ function ActionBar({
     if (!window.confirm(`Compress ${v.name}? Medium quality, same resolution — the original moves to LFBridge trash (recoverable).`)) return;
     compress.mutate();
   };
-
   const onMove = () => {
     const dest = window.prompt("Move file to (absolute path):", v.path);
     if (!dest || dest.trim() === v.path) return;
@@ -230,53 +258,285 @@ function ActionBar({
     if (!window.confirm(`Move ${v.name} to LFBridge trash?\nThis is recoverable — the file is moved to the trash folder, not erased.`)) return;
     del.mutate();
   };
+  const copyPath = () => {
+    navigator.clipboard?.writeText(v.path).catch((e) => clientLog.warn("MediaViewer.copyPath", e));
+    toast.success("Path copied");
+  };
+  const openRawInBrowser = () => { if (grantUrl) window.open(grantUrl, "_blank", "noopener"); };
+  const openFolderInBrowser = () => navigate({ to: "/fs", search: { path: parent } });
+
+  // ── Build the priority-ordered action items (media_viewer.mdx §4.1). ──
+  const items: BarItem[] = [];
+
+  // IPFS primary (Add/Remove) — highest priority. Skipped for a not-in-sync file that's flagged Never-IPFS.
+  const ipfsNode = <IpfsPrimary view={v} decide={decide} ipfsReachable={ipfsReachable} />;
+  if (v.repo && !(v.decision !== "sync" && v.flags.neverIpfs)) {
+    const isSync = v.decision === "sync";
+    items.push({
+      key: "ipfs", priority: 100, bar: ipfsNode,
+      menu: [{ id: "ipfs", group: "IPFS", label: isSync ? "Remove from IPFS" : "Add to IPFS",
+        icon: isSync ? <DownloadCloud className="h-4 w-4" /> : <UploadCloud className="h-4 w-4" />,
+        disabled: !ipfsReachable, onSelect: () => decide.mutate(isSync ? "ignore" : "sync") }],
+    });
+  }
+
+  // Compress — image + video only (charter; audio out of scope). Offer, confirm-gated.
+  if ((kind === "image" || kind === "video") && canOfferCompress(v)) {
+    items.push({
+      key: "compress", priority: 90,
+      bar: <Btn tone="warn" icon={<Zap className="h-4 w-4" />} label="Compress…" onClick={onCompress} disabled={compress.isPending} />,
+      menu: [{ id: "compress", group: "Work", label: "Compress…", icon: <Zap className="h-4 w-4" />, onSelect: onCompress }],
+    });
+  }
+
+  // Open: [in browser] · [on {label}] — the raw bytes in a new browser tab, or the OS default app.
+  items.push({
+    key: "open", priority: 85,
+    bar: (
+      <OpenCompound icon={<ExternalLink className="h-4 w-4" />} label="Open"
+        browser={grantUrl ? { label: "in browser", onClick: openRawInBrowser } : null}
+        os={canOs ? { label: `on ${osLabel}`, onClick: () => runOsOpen(v.path, v.name) } : null} />
+    ),
+    menu: [
+      ...(grantUrl ? [{ id: "open-browser", group: "Open", label: "Open raw in browser", icon: <ExternalLink className="h-4 w-4" />, onSelect: openRawInBrowser }] : []),
+      ...(canOs ? [{ id: "open-os", group: "Open", label: `Open on ${osLabel}`, icon: <Monitor className="h-4 w-4" />, onSelect: () => runOsOpen(v.path, v.name) }] : []),
+    ],
+  });
+
+  // Open folder: [in browser] · [on {label}] — the File System tab, or Finder/Explorer at the directory.
+  items.push({
+    key: "open-folder", priority: 75,
+    bar: (
+      <OpenCompound icon={<FolderOpen className="h-4 w-4" />} label="Open folder"
+        browser={{ label: "in browser", onClick: openFolderInBrowser }}
+        os={canOs ? { label: `on ${osLabel}`, onClick: () => runOsOpen(parent, "folder") } : null} />
+    ),
+    menu: [
+      { id: "folder-browser", group: "Open", label: "Open folder in browser", icon: <FolderOpen className="h-4 w-4" />, onSelect: openFolderInBrowser },
+      ...(canOs ? [{ id: "folder-os", group: "Open", label: `Open folder on ${osLabel}`, icon: <Monitor className="h-4 w-4" />, onSelect: () => runOsOpen(parent, "folder") }] : []),
+    ],
+  });
+
+  // Transcribe — audio + video (Transcribe.mdx §2.1).
+  if (kind === "audio" || kind === "video") {
+    const label = transcript ? "Re-transcribe" : "Transcribe…";
+    const run = () => runTranscribeFile(v.path, v.name, { overwrite: !!transcript, onDone: () => qc.invalidateQueries({ queryKey: ["transcript", v.path] }) });
+    items.push({
+      key: "transcribe", priority: 60,
+      bar: <Btn icon={<Captions className="h-4 w-4" />} label={label} onClick={run} />,
+      menu: [{ id: "transcribe", group: "Work", label, icon: <Captions className="h-4 w-4" />, onSelect: run }],
+    });
+  }
+
+  // Copy path.
+  items.push({
+    key: "copy-path", priority: 40,
+    bar: <LinkBtn icon={<Copy className="h-3.5 w-3.5" />} label="Copy path" onClick={copyPath} />,
+    menu: [{ id: "copy-path", group: "Copy", label: "Copy path", icon: <Copy className="h-4 w-4" />, onSelect: copyPath }],
+  });
+
+  // View properties.
+  items.push({
+    key: "view-props", priority: 30,
+    bar: <LinkBtn icon={<FileText className="h-3.5 w-3.5" />} label="View properties" onClick={() => navigate({ to: "/file", search: { path: v.path } })} />,
+    menu: [{ id: "view-props", group: "Open", label: "View properties", icon: <FileText className="h-4 w-4" />, onSelect: () => navigate({ to: "/file", search: { path: v.path } }) }],
+  });
+
+  // Move — lowest priority; overflows first.
+  items.push({
+    key: "move", priority: 20,
+    bar: <Btn icon={<Move className="h-4 w-4" />} label="Move…" onClick={onMove} disabled={move.isPending} />,
+    menu: [{ id: "move", group: "Work", label: "Move…", icon: <Move className="h-4 w-4" />, onSelect: onMove }],
+  });
+
+  // Extras — never buttons; always live in the "More" menu (media_viewer.mdx §4.1 / §5).
+  const extras: Action[] = [
+    { id: "never-ipfs", group: "Flag", label: "Never publish via IPFS", icon: <Ban className="h-4 w-4" />, checked: v.flags.neverIpfs, onSelect: () => flags.mutate({ neverIpfs: !v.flags.neverIpfs }) },
+    { id: "no-compress", group: "Flag", label: "Do not compress", icon: <Ban className="h-4 w-4" />, checked: v.flags.noCompress, onSelect: () => flags.mutate({ noCompress: !v.flags.noCompress }) },
+    ...(v.cid ? [{ id: "copy-cid", group: "Copy", label: "Copy CID", icon: <Copy className="h-4 w-4" />, onSelect: () => { navigator.clipboard?.writeText(v.cid!).catch((e) => clientLog.warn("MediaViewer.copyCid", e)); toast.success("CID copied"); } }] : []),
+    { id: "delete", group: "Danger", label: "Delete…", danger: true, icon: <Trash2 className="h-4 w-4" />, onSelect: onDelete },
+  ];
+
+  return <OverflowActionBar items={items} extras={extras} />;
+}
+
+// A compound "label: [in browser] · [on Mac]" control (media_viewer.mdx §4.2). The label is not
+// clickable; each of the one/two sub-actions is. Rendered as one unit in the overflow bar.
+function OpenCompound({
+  icon, label, browser, os,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  browser: { label: string; onClick: () => void } | null;
+  os: { label: string; onClick: () => void } | null;
+}) {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm">
+      <span className="flex items-center gap-1 text-black/50">{icon}{label}:</span>
+      {browser && (
+        <button className="text-[var(--lfb-primary)] hover:underline" onClick={browser.onClick}>{browser.label}</button>
+      )}
+      {browser && os && <span className="text-black/25">·</span>}
+      {os && (
+        <button className="text-[var(--lfb-primary)] hover:underline" onClick={os.onClick}>{os.label}</button>
+      )}
+    </span>
+  );
+}
+
+// ── Band 6: the analysis tabs (Transcription · AI description — media_viewer.mdx §6) ──
+function MediaAnalysis({
+  view: v,
+  kind,
+  navigate,
+}: {
+  view: EntityView;
+  kind: MediaKind;
+  navigate: ReturnType<typeof useNavigate>;
+}) {
+  const qc = useQueryClient();
+  const canTranscribe = kind === "video" || kind === "audio"; // has (or may have) audio to transcribe
+  const canDescribe = kind === "video" || kind === "image"; // AI-describable media
+
+  const { data: transcript } = useQuery({
+    queryKey: ["transcript", v.path], queryFn: () => api.transcript(v.path), enabled: canTranscribe,
+  });
+  const { data: description } = useQuery({
+    queryKey: ["description", v.path], queryFn: () => api.description(v.path), enabled: canDescribe,
+  });
+  const { data: tools } = useQuery({
+    queryKey: ["transcribe-tools"], queryFn: () => api.transcribeTools(), enabled: canTranscribe, staleTime: 60 * 1000,
+  });
+  const { data: providers } = useQuery({
+    queryKey: ["describe-providers"], queryFn: () => api.describeProviders(), enabled: canDescribe, staleTime: 60 * 1000,
+  });
+
+  const tabs: Array<{ id: "transcription" | "description"; label: string; present: boolean }> = [
+    ...(canTranscribe ? [{ id: "transcription" as const, label: "Transcription", present: !!transcript }] : []),
+    ...(canDescribe ? [{ id: "description" as const, label: "AI description", present: !!description }] : []),
+  ];
+
+  // Default tab: prefer Transcription when it has content, else the first tab that has content, else the
+  // first tab (media_viewer.mdx §6). The user's explicit choice (below) wins once set.
+  const [active, setActive] = useState<"transcription" | "description" | null>(null);
+  const activeId =
+    active && tabs.some((t) => t.id === active)
+      ? active
+      : tabs.find((t) => t.id === "transcription" && t.present)?.id ??
+        tabs.find((t) => t.present)?.id ??
+        tabs[0]?.id ??
+        null;
+
+  if (tabs.length === 0) return null;
 
   return (
-    <div className="mt-3 flex flex-wrap items-center gap-2">
-      {/* Compress — image + video only (charter; audio is out of scope). Offer, confirm-gated. */}
-      {(kind === "image" || kind === "video") && canOfferCompress(v) && (
-        <Btn tone="warn" icon={<Zap className="h-4 w-4" />} label="Compress…" onClick={onCompress} disabled={compress.isPending} />
-      )}
-      {/* Transcribe — audio + video (Transcribe.mdx §2.1). Writes to <storageRoot>/.transcribe/<relpath>.txt. */}
-      {(kind === "audio" || kind === "video") && (
-        <Btn
-          icon={<Captions className="h-4 w-4" />}
-          label={transcript ? "Re-transcribe" : "Transcribe…"}
-          onClick={() =>
-            runTranscribeFile(v.path, v.name, {
-              overwrite: !!transcript,
-              onDone: () => qc.invalidateQueries({ queryKey: ["transcript", v.path] }),
-            })
-          }
-        />
-      )}
-      {/* IPFS primary (Add/Remove) — same rule as files.mdx §3. */}
-      <IpfsPrimary view={v} decide={decide} ipfsReachable={ipfsReachable} />
-      {/* Move + Delete — every type (media_viewer.mdx §4.1). */}
-      <Btn icon={<Move className="h-4 w-4" />} label="Move…" onClick={onMove} disabled={move.isPending} />
-      <Btn tone="danger" icon={<Trash2 className="h-4 w-4" />} label="Delete…" onClick={onDelete} disabled={del.isPending} />
+    <div className="mt-4">
+      {/* Tab strip — a ✓ marks a tab that already has content (media_viewer.mdx §6). */}
+      <div className="flex items-center gap-1 border-b border-[var(--lfb-border)]">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setActive(t.id)}
+            className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm ${
+              activeId === t.id
+                ? "border-[var(--lfb-primary)] font-medium text-black"
+                : "border-transparent text-black/55 hover:text-black"
+            }`}
+          >
+            <span className={`flex h-4 w-4 items-center justify-center rounded-full text-[10px] ${t.present ? "bg-emerald-500 text-white" : "border border-black/20 text-transparent"}`}>✓</span>
+            {t.label}
+          </button>
+        ))}
+      </div>
 
-      {/* Utility links — every type. */}
-      <span className="mx-1 h-5 w-px bg-[var(--lfb-border)]" />
-      <LinkBtn icon={<FolderOpen className="h-3.5 w-3.5" />} label="Open folder"
-        onClick={() => navigate({ to: "/fs", search: { path: parent } })} />
-      <LinkBtn icon={<Copy className="h-3.5 w-3.5" />} label="Copy path"
-        onClick={() => {
-          navigator.clipboard?.writeText(v.path).catch((e) => clientLog.warn("MediaViewer.copyPath", e));
-          toast.success("Path copied");
-        }} />
-      <LinkBtn icon={<FileText className="h-3.5 w-3.5" />} label="View properties"
-        onClick={() => navigate({ to: "/file", search: { path: v.path } })} />
-      {transcript && (
-        <LinkBtn icon={<Captions className="h-3.5 w-3.5" />} label="View transcript"
-          onClick={() => navigate({ to: "/file", search: { path: transcript.transcriptPath } })} />
-      )}
-      {grantUrl && (
-        <a href={grantUrl} target="_blank" rel="noreferrer"
-          className="flex items-center gap-1 text-sm text-[var(--lfb-primary)] hover:underline">
-          <ExternalLink className="h-3.5 w-3.5" /> Open raw
-        </a>
-      )}
+      <div className="py-4">
+        {activeId === "transcription" && (
+          transcript ? (
+            <AnalysisBody
+              mono
+              body={transcript.text}
+              meta={<>Transcript · <button className="text-[var(--lfb-primary)] hover:underline" onClick={() => navigate({ to: "/file", search: { path: transcript.transcriptPath } })}>open file</button></>}
+              onRegenerate={() => runTranscribeFile(v.path, v.name, { overwrite: true, onDone: () => qc.invalidateQueries({ queryKey: ["transcript", v.path] }) })}
+            />
+          ) : (
+            <GeneratePane
+              icon={<Captions className="h-8 w-8 text-black/30" />}
+              title="No transcript yet"
+              blurb="Transcribe the audio locally with Whisper — nothing leaves this computer."
+              disabled={!!tools && !tools.whisper}
+              disabledHint="Whisper isn't installed. Run `pipx install openai-whisper` (and `brew install ffmpeg`), then reload."
+              cta="Generate transcript"
+              onGenerate={() => runTranscribeFile(v.path, v.name, { onDone: () => qc.invalidateQueries({ queryKey: ["transcript", v.path] }) })}
+            />
+          )
+        )}
+
+        {activeId === "description" && (
+          description ? (
+            <AnalysisBody
+              body={description.text}
+              meta={<>AI description{description.model ? ` · ${description.model}` : ""}{description.generatedAt ? ` · ${relativeTime(description.generatedAt)}` : ""}</>}
+              onRegenerate={() => runDescribeFile(v.path, v.name, { overwrite: true, onDone: () => qc.invalidateQueries({ queryKey: ["description", v.path] }) })}
+            />
+          ) : (
+            <GeneratePane
+              icon={<Sparkles className="h-8 w-8 text-black/30" />}
+              title="No AI description yet"
+              blurb={kind === "video"
+                ? "Generate a hyper-detailed description with a vision model. Video is uploaded to the provider (Gemini)."
+                : "Generate a hyper-detailed description with a vision model. The image is uploaded to the provider."}
+              disabled={!!providers && !providers.anyAvailable}
+              disabledHint="No AI provider is configured. Add a Gemini, Grok, or OpenAI API key in Settings → Tools (or export GEMINI_API_KEY / XAI_API_KEY / OPENAI_API_KEY), then reload."
+              cta="Generate description"
+              onGenerate={() => runDescribeFile(v.path, v.name, { onDone: () => qc.invalidateQueries({ queryKey: ["description", v.path] }) })}
+            />
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AnalysisBody({ body, meta, mono, onRegenerate }: { body: string; meta: React.ReactNode; mono?: boolean; onRegenerate: () => void }) {
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between text-xs text-black/45">
+        <span>{meta}</span>
+        <button className="flex items-center gap-1 text-[var(--lfb-primary)] hover:underline" onClick={onRegenerate}>
+          <RefreshCw className="h-3.5 w-3.5" /> Regenerate
+        </button>
+      </div>
+      <pre className={`max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-lg border border-[var(--lfb-border)] bg-slate-50 px-4 py-3 text-sm text-black/80 ${mono ? "font-mono" : ""}`}>
+        {body}
+      </pre>
+    </div>
+  );
+}
+
+function GeneratePane({
+  icon, title, blurb, cta, onGenerate, disabled, disabledHint,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  blurb: string;
+  cta: string;
+  onGenerate: () => void;
+  disabled?: boolean;
+  disabledHint?: string;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-[var(--lfb-border)] px-6 py-10 text-center">
+      {icon}
+      <div className="font-medium text-black">{title}</div>
+      <div className="max-w-md text-sm text-black/55">{blurb}</div>
+      <button
+        onClick={onGenerate}
+        disabled={disabled}
+        className="mt-1 flex items-center gap-2 rounded-md bg-[var(--lfb-primary)] px-4 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <Sparkles className="h-4 w-4" /> {cta}
+      </button>
+      {disabled && disabledHint && <div className="max-w-md text-xs text-amber-700">{disabledHint}</div>}
     </div>
   );
 }
@@ -300,7 +560,7 @@ function PropertyGrid({
     : probe?.codec ?? probe?.container ?? null;
 
   // Build the cells in a fixed order; each flexes by type (media_viewer.mdx §4.3). Skip unknowns rather
-  // than stretch the grid — it must stay ~2–3 rows so the media keeps its ~70%.
+  // than stretch the grid — it must stay ~2–3 rows so the media keeps its stage.
   const cells: Array<{ label: string; node: React.ReactNode }> = [];
   cells.push({ label: "Size", node: v.sizeBytes != null ? formatBytes(v.sizeBytes) : "—" });
   if (kind === "audio") {
@@ -535,7 +795,7 @@ function IpfsPrimary({
 }) {
   if (!v.repo) return null;
   const isSync = v.decision === "sync";
-  // Not-in-sync + Never-IPFS → no primary button (the ⋯ menu still governs).
+  // Not-in-sync + Never-IPFS → no primary button (the More menu still governs).
   if (!isSync && v.flags.neverIpfs) return null;
   const disabledProps = ipfsReachable
     ? {}
@@ -544,7 +804,7 @@ function IpfsPrimary({
     <button
       {...disabledProps}
       onClick={() => decide.mutate("ignore")}
-      className="flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm text-black/70 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+      className="flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm text-black/70 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
     >
       <DownloadCloud className="h-4 w-4" /> Remove from IPFS
     </button>
@@ -552,7 +812,7 @@ function IpfsPrimary({
     <button
       {...disabledProps}
       onClick={() => decide.mutate("sync")}
-      className="flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50"
+      className="flex shrink-0 items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50"
     >
       <UploadCloud className="h-4 w-4" /> Add to IPFS
     </button>
@@ -582,7 +842,7 @@ function Btn({
     <button
       onClick={onClick}
       disabled={disabled}
-      className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-50 ${cls}`}
+      className={`flex shrink-0 items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-50 ${cls}`}
     >
       {icon} {label}
     </button>
@@ -591,7 +851,7 @@ function Btn({
 
 function LinkBtn({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
   return (
-    <button onClick={onClick} className="flex items-center gap-1 text-sm text-[var(--lfb-primary)] hover:underline">
+    <button onClick={onClick} className="flex shrink-0 items-center gap-1 text-sm text-[var(--lfb-primary)] hover:underline">
       {icon} {label}
     </button>
   );

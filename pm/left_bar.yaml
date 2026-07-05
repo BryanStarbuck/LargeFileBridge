@@ -26,7 +26,7 @@ Left_Nav:
     # ==========================================================================
     - Location: app
       name: "LargeFileBridge — Main Left Bar"
-      description: "Primary navigation: Repos, File System, Peers, Sync, Settings."
+      description: "Primary navigation: Repos, Storages, File System, Devices / Peers, Communities, IPFS, Scans, Settings."
       auth_system: "openauth_federated"
       sidebar_width: 256px
 
@@ -90,14 +90,20 @@ Left_Nav:
           order: 3
           description: "Browse your whole filesystem two ways: a Finder-style column view (/fs) and a flat Full-paths table (/fs/paths) of the large files under a folder. Each row shows code badges: R/r repo (brown), S sync (pink), C/c compress (yellow), i IPFS (blue). Defaults to your home directory. See pm/directories.mdx + pm/full_paths.mdx."
 
-        - id: peers
-          label: "Peers"
+        # DEVICES / PEERS (pm/devices.mdx). The registry of every COMPUTER that carries your files —
+        # this Mac, a laptop, a studio tower, a server, a family iMac. The page ALWAYS shows at least
+        # THIS computer (auto-seeded from config.yaml→computer, never an empty table). Each row is a
+        # device identified by its hardware fingerprint (model, year, screen size, disk, RAM, chip) so
+        # two similar MacBook Pros disambiguate by the attributes that differ. "Devices" is the noun;
+        # "Peers" stays in the label because these devices pin one another's files over IPFS.
+        - id: devices
+          label: "Devices / Peers"
           icon: "Network"
-          route: "/peers"
+          route: "/devices"
           order: 4
-          description: "Your other computers (laptop, desktop, studio, server, family) that pin these files over IPFS."
+          description: "Every computer that carries your files — this Mac, your laptop, a studio tower, a server, a family iMac — pinning one another's files over IPFS. Always shows at least this computer. Each device is identified by its hardware (model, year, screen size, disk, RAM) so similar machines are told apart."
 
-        # Peers are YOUR computers pinning YOUR files; Communities are OTHER people's
+        # Devices/Peers are YOUR computers pinning YOUR files; Communities are OTHER people's
         # public files you opt into carrying — Get them to watch, or Support them by
         # rebroadcasting to keep them secure. Explicit per-community opt-in, Block by
         # default; never a public gateway/relay (charter). See pm/communities.mdx.
