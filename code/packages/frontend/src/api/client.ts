@@ -2,6 +2,7 @@
 import type {
   RepoRow,
   RepoDetail,
+  SyncNowResult,
   FileRow,
   RepoSettings,
   GlobalSettings,
@@ -32,6 +33,7 @@ import type {
   IpfsDaemonAction,
   ScanJob,
   RescanResult,
+  ProgressListResult,
   SessionActivityResult,
   StoragesPageData,
   StorageDetail,
@@ -39,6 +41,12 @@ import type {
   StorageAnalyzeResult,
   StorageSettings,
   StorageSettingsPatch,
+  MappedDirsView,
+  MappedDirsPatch,
+  CommunitiesPageData,
+  CommunityStorageMath,
+  CommunitySubscription,
+  CommunitySubscriptionPatch,
   CompressTools,
   CompressionSettings,
   CompressCheck,
@@ -75,6 +83,9 @@ export const api = {
     unwrap<RepoRow>(http.post(`/repos/${repoId}/bookmark`, { bookmarked })),
   rescan: () => unwrap<RescanResult>(http.post("/repos/rescan")),
   scanStatus: () => unwrap<ScanJob>(http.get("/repos/scan-status")),
+  // Progress dock (webapp.mdx §12 source B) — every in-flight server-side job (registry + active scan),
+  // so a launchd or other-tab sync/scan still shows a card. Polled by the ProgressProvider.
+  progress: () => unwrap<ProgressListResult>(http.get("/progress")),
   // Remove repo (unregister, menus.mdx §5.1) — LFB tracking only; never deletes local files.
   removeRepo: (repoId: string) =>
     unwrap<{ removed: boolean }>(http.delete(`/repos/${repoId}`)),
@@ -84,7 +95,7 @@ export const api = {
   setDecision: (repoId: string, paths: string[], decision: Decision) =>
     unwrap<RepoDetail>(http.patch(`/repos/${repoId}/files`, { paths, decision })),
   syncNow: (repoId: string, paths?: string[]) =>
-    unwrap<RepoDetail>(http.post(`/repos/${repoId}/sync`, paths ? { paths } : {})),
+    unwrap<SyncNowResult>(http.post(`/repos/${repoId}/sync`, paths ? { paths } : {})),
 
   repoSettings: (repoId: string) => unwrap<RepoSettings>(http.get(`/repos/${repoId}/settings`)),
   patchRepoSettings: (repoId: string, patch: Partial<Record<string, unknown>>) =>
@@ -191,6 +202,19 @@ export const api = {
   storageSettings: (id: string) => unwrap<StorageSettings>(http.get(`/storages/${id}/settings`)),
   patchStorageSettings: (id: string, patch: StorageSettingsPatch) =>
     unwrap<StorageSettings>(http.patch(`/storages/${id}/settings`, patch)),
+  // Mapped source directories (storage_settings.mdx §4a): the shared list of hierarchies a company/personal
+  // storage covers, joined with THIS computer's per-row graft path.
+  storageMappedDirs: (id: string) => unwrap<MappedDirsView>(http.get(`/storages/${id}/mapped-dirs`)),
+  patchStorageMappedDirs: (id: string, patch: MappedDirsPatch) =>
+    unwrap<MappedDirsView>(http.patch(`/storages/${id}/mapped-dirs`, patch)),
+
+  // Communities (communities.mdx). The page payload (storage-math header + rows), the machine-wide
+  // budget, and one community's subscription (intent + Block/Recommended/Full backup mode + bookmark).
+  communities: () => unwrap<CommunitiesPageData>(http.get("/communities")),
+  setCommunityBudget: (bytes: number | null) =>
+    unwrap<CommunityStorageMath>(http.put("/communities/budget", { bytes })),
+  patchCommunity: (id: string, patch: CommunitySubscriptionPatch) =>
+    unwrap<CommunitySubscription>(http.patch(`/communities/${id}`, patch)),
 
   // Media viewer (media_viewer.mdx §2). grant → a short-lived same-origin URL the <img>/<video>
   // element loads (Range-capable); probe → best-effort container/codec/dimensions.

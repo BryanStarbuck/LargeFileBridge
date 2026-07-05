@@ -159,6 +159,11 @@ export function ReposPage() {
         onRowClick={(r) => navigate({ to: "/repos/$repoId", params: { repoId: r.repoId } })}
         rowMenu={(r) => <RepoKebab repo={r} />}
         itemNoun="repos"
+        // Default sort (tables.mdx §3.4): bookmarked repos float to the top, then by name.
+        defaultSort={[
+          { id: "bookmark", desc: true },
+          { id: "name", desc: false },
+        ]}
         loading={isLoading}
         empty={
           <button onClick={() => setShowAdd(true)} className="mx-auto block rounded-lg border-2 border-dashed border-[var(--lfb-border)] px-8 py-10 text-black/60">

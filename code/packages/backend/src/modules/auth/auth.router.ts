@@ -3,6 +3,13 @@ import { Router } from "express";
 import type { AuthConfig, CurrentUser } from "@lfb/shared";
 import { currentUser } from "./current-user.js";
 import { hasGoogleCreds, credentialsFileInfo } from "../../config/credentials-file.js";
+import { allowedDomains } from "./auth-frontend.js";
+
+// The EXACT redirect URI to register on the Google Cloud OAuth client (webapp.mdx §3.2 item 3) — built
+// from the API port 8787, mirroring auth-frontend.ts. Single source so the panel can never drift.
+function resolvedRedirectUri(): string {
+  return process.env.GOOGLE_REDIRECT_URI || "http://localhost:8787/api/v1/oauth_callback";
+}
 
 export const authRouter = Router();
 
@@ -32,11 +39,15 @@ export function authConfig(includeSensitive: boolean): AuthConfig {
       oauthConfigured: configured,
       devAuth: false, // never echo dev-bypass state to a non-loopback caller
       credentialsFile: { ...info, path: "", filename: "", directory: "", schemaExample: {} },
+      redirectUri: "", // redacted for a remote caller, like the creds path
+      allowedDomains: [],
     };
   }
   return {
     oauthConfigured: configured,
     devAuth: !configured && process.env.LFB_DEV_AUTH === "true",
     credentialsFile: info,
+    redirectUri: resolvedRedirectUri(),
+    allowedDomains: allowedDomains(),
   };
 }

@@ -41,10 +41,36 @@ function detectGoogleDriveBase(): string | null {
   }
 }
 
-/** The connected Dropbox base, or null if Dropbox isn't present here. */
+/**
+ * The connected Dropbox base, or null if Dropbox isn't present here. Resolution order follows
+ * dropbox.mdx §3: (1) `~/.dropbox/info.json` — Dropbox's OWN authoritative record of each linked
+ * account's real root (`personal`/`business` → `path`), which correctly handles `~/Dropbox (Personal)`,
+ * `~/Dropbox (Company)`, and Business paths; then (2) the common hard-coded fallbacks.
+ */
 function detectDropboxBase(): string | null {
+  // (1) Authoritative: Dropbox writes each account's real root path into ~/.dropbox/info.json.
+  try {
+    const info = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".dropbox", "info.json"), "utf8")) as Record<
+      string,
+      { path?: string }
+    >;
+    for (const acct of ["personal", "business"] as const) {
+      const p = info[acct]?.path;
+      if (p) {
+        try {
+          if (fs.statSync(p).isDirectory()) return p;
+        } catch {
+          /* recorded but not present on this machine */
+        }
+      }
+    }
+  } catch {
+    /* no info.json (Dropbox not installed / not linked) — fall through to the candidates */
+  }
+  // (2) Fallbacks for the common default layouts.
   const candidates = [
     path.join(os.homedir(), "Dropbox"),
+    path.join(os.homedir(), "Dropbox (Personal)"),
     path.join(os.homedir(), "Library", "CloudStorage", "Dropbox"),
   ];
   for (const c of candidates) {

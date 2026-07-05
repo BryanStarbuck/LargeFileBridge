@@ -1,4 +1,4 @@
-import { StrictMode } from "react";
+import { StrictMode, type CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
@@ -10,8 +10,16 @@ import { authCore } from "./api/authCore.js";
 import { SignInPage } from "./pages/sign-in/SignInPage.js";
 import { SsoCallbackPage } from "./pages/sign-in/SsoCallbackPage.js";
 import { SecuritySetupPage } from "./pages/security/SecuritySetupPage.js";
+import { ProgressProvider } from "./progress/ProgressContext.js";
+import { ProgressDock } from "./components/ProgressDock.js";
+import { leftBar } from "./config/left_bar.js";
 import { clientLog } from "./lib/clientLog.js";
 import "./styles.css";
+
+// The bottom-left offset that clears the left bar for BOTH the toast stack and the progress dock
+// (webapp.mdx §9/§10). 256px bar + 16px gutter, tracked from the yaml-driven width so a bar-width
+// change in config/left_bar.ts moves both surfaces together.
+const BAR_CLEAR_LEFT = `calc(${leftBar.sidebarWidth} + 16px)`;
 
 // Catch-all fault trail: anything that escapes a component (a thrown render, an un-.catch()'d promise)
 // still reaches error.err via the client-log bridge instead of dying silently in the devtools console.
@@ -55,7 +63,14 @@ function Root() {
   if (!authReady || meLoading)
     return <div className="grid h-full place-items-center text-black/40">Loading…</div>;
   if (!me?.authenticated || !me.allowListed) return <SignInPage />;
-  return <RouterProvider router={router} />;
+  // Signed-in app: the progress dock overlays every screen and shares one active-job set with the
+  // pages' optimistic run() (webapp.mdx §10/§12). Both live inside QueryClientProvider (from the mount).
+  return (
+    <ProgressProvider>
+      <RouterProvider router={router} />
+      <ProgressDock />
+    </ProgressProvider>
+  );
 }
 
 // The OpenAuthFederated redirect lands on /sso-callback first; finish that handshake outside the
@@ -70,7 +85,17 @@ try {
     <StrictMode>
       <QueryClientProvider client={queryClient}>
         {isSsoCallback ? <SsoCallbackPage /> : <Root />}
-        <Toaster position="bottom-right" richColors />
+        {/* Toasts: bottom-left, ~2× larger, offset clear of the 256px left bar (webapp.mdx §9). The
+            inline `left` (from the yaml-driven bar width) overrides sonner's stylesheet position so the
+            stack never sits over the nav; --width enlarges the card and text-base/roomier padding give
+            it ~2× visual weight. The progress dock (bottom: 88px) stacks above this toast row
+            (bottom: 16px) so the two never collide. */}
+        <Toaster
+          position="bottom-left"
+          richColors
+          style={{ "--width": "440px", left: BAR_CLEAR_LEFT } as CSSProperties}
+          toastOptions={{ className: "text-base", style: { padding: "14px 16px" } }}
+        />
       </QueryClientProvider>
     </StrictMode>,
   );

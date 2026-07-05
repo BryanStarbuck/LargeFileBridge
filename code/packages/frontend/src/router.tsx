@@ -56,6 +56,12 @@ const storageDetailRoute = createRoute({
   path: "/storages/$storageId",
   component: lazyRouteComponent(() => import("./pages/storages/StorageDetailPage.js"), "StorageDetailPage"),
 });
+// Communities (communities.mdx): discover/subscribe to public-file publishers, a budget meter + table.
+const communitiesRoute = createRoute({
+  getParentRoute: () => appLayout,
+  path: "/communities",
+  component: lazyRouteComponent(() => import("./pages/communities/CommunitiesPage.js"), "CommunitiesPage"),
+});
 // The IPFS dashboard / node control panel (ipfs_ui.mdx): install, on/off, metrics, gateway, security.
 const ipfsRoute = createRoute({
   getParentRoute: () => appLayout,
@@ -88,6 +94,12 @@ const settingsRoute = createRoute({
   getParentRoute: () => appLayout,
   path: "/settings",
   component: lazyRouteComponent(() => import("./pages/settings/SettingsPage.js"), "SettingsPage"),
+});
+// The install-tools preflight (tools.mdx): CLI tool status + one-click install, reached from Settings.
+const toolsRoute = createRoute({
+  getParentRoute: () => appLayout,
+  path: "/tools",
+  component: lazyRouteComponent(() => import("./pages/settings/ToolsPage.js"), "ToolsPage"),
 });
 const fsRoute = createRoute({
   getParentRoute: () => appLayout,
@@ -144,11 +156,13 @@ const routeTree = rootRoute.addChildren([
     storagesRoute,
     storageSettingsRoute,
     storageDetailRoute,
+    communitiesRoute,
     ipfsRoute,
     ipfsPinsRoute,
     scansRoute,
     allowListRoute,
     settingsRoute,
+    toolsRoute,
     fsRoute,
     fsPathsRoute,
     viewFileRoute,

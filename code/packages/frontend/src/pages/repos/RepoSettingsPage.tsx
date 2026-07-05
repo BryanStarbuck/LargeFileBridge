@@ -1,4 +1,5 @@
 // Per-repo settings (repo_settings.mdx) — reached via the gear icon on the One-repo screen.
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "@tanstack/react-router";
 import { ChevronLeft } from "lucide-react";
@@ -77,8 +78,34 @@ export function RepoSettingsPage() {
       <Section title="Sharing">
         <Toggle label="Shared with other allow-listed participants" checked={s.access.shared}
           onChange={(v) => patch.mutate({ access: { ...s.access, shared: v } })} />
+        {s.access.shared && (
+          <GlobField label="Participant emails (their computers also pin this repo)"
+            placeholder={"one email per line, e.g.\nfamily@gmail.com"} value={s.access.participants}
+            onSave={(emails) => patch.mutate({ access: { ...s.access, participants: emails.map((e) => e.toLowerCase()) } })} />
+        )}
       </Section>
     </div>
+  );
+}
+
+// A newline-separated list editor (globs, participant emails). Local draft, saved on blur so a
+// patch fires once per edit rather than per keystroke; blank lines are dropped.
+function GlobField({ label, value, placeholder, onSave }: {
+  label: string; value: string[]; placeholder: string; onSave: (rows: string[]) => void;
+}) {
+  const [draft, setDraft] = useState(value.join("\n"));
+  useEffect(() => { setDraft(value.join("\n")); }, [value]);
+  const commit = () => {
+    const rows = draft.split("\n").map((r) => r.trim()).filter(Boolean);
+    if (rows.join("\n") !== value.join("\n")) onSave(rows);
+  };
+  return (
+    <label className="mt-2 block text-sm">
+      <span className="mb-1 block text-black/70">{label}</span>
+      <textarea value={draft} placeholder={placeholder} rows={2} onBlur={commit}
+        onChange={(e) => setDraft(e.target.value)}
+        className="w-full rounded border border-[var(--lfb-border)] px-2 py-1 font-mono text-xs" />
+    </label>
   );
 }
 

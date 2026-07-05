@@ -17,6 +17,12 @@ export const HARD_SKIP = new Set([
   ".Trash",
   ".cache",
   "Caches",
+  // cloud-backbone bookkeeping — Dropbox/Google-Drive metadata that must never be walked or synced
+  // (dropbox.mdx §4, google_drive.mdx §5). These are the vendors' own scratch dirs, not payload.
+  ".dropbox",
+  ".dropbox.cache",
+  ".tmp.drivedownload",
+  ".driveupload",
   // build outputs (generated — regenerated on demand, so never a sync candidate)
   "build",
   "dist",

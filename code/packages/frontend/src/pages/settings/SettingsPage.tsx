@@ -130,8 +130,9 @@ export function SettingsPage() {
               ? "This computer serves only your own content — it is not a public gateway for the internet. This is the secure default."
               : "This computer is serving more than your own content. It will be corrected on the next sync (or fix it now from the IPFS page)."}
         </p>
-        <div className="mt-2">
+        <div className="mt-2 flex gap-4">
           <Link to="/ipfs" className="text-sm text-[var(--lfb-primary)]">Open IPFS →</Link>
+          <Link to="/tools" className="text-sm text-[var(--lfb-primary)]">Command-line tools →</Link>
         </div>
         <div className="mt-2">
           <Disclosure label="Node addresses & policy">

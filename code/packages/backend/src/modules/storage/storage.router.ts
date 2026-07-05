@@ -93,6 +93,42 @@ storagesRouter.patch("/:id/settings", async (req, res) => {
   }
 });
 
+// GET /api/storages/:id/mapped-dirs — the shared mapped-directory list joined with this device's graft
+// (storage_settings.mdx §4a). Editable only for company/personal; repo shows its working tree read-only.
+storagesRouter.get("/:id/mapped-dirs", async (req, res) => {
+  try {
+    res.json({ ok: true, data: await getMappedDirsView(req.params.id) });
+  } catch (e) {
+    res.status(404).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// PATCH /api/storages/:id/mapped-dirs — replace the shared list (add/remove rows) and/or set this
+// device's per-row graft path (storage_settings.mdx §4a).
+const MappedDirsPatch = z.object({
+  mapped: z
+    .array(
+      z.object({
+        key: z.string().optional(),
+        label: z.string().optional(),
+        canonical: z.string().nullable().optional(),
+        recursive: z.boolean().optional(),
+      }),
+    )
+    .optional(),
+  graft: z.record(z.string(), z.string().nullable()).optional(),
+});
+storagesRouter.patch("/:id/mapped-dirs", async (req, res) => {
+  const patch = MappedDirsPatch.safeParse(req.body);
+  if (!patch.success) return res.status(400).json({ ok: false, error: patch.error.message });
+  try {
+    res.json({ ok: true, data: await patchMappedDirs(req.params.id, patch.data) });
+  } catch (e) {
+    log.warn("storage", `mapped-dirs ${req.params.id} failed: ${(e as Error).message}`);
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
 // GET /api/storages/:id/bookmarks — the storage's bookmarked relpaths (syncable_data_location.mdx §4.4).
 storagesRouter.get("/:id/bookmarks", (req, res) => {
   try {

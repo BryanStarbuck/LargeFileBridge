@@ -24,6 +24,11 @@ export const reposRoot = () => path.join(root(), "sync", "r");
 export const storageUnitDir = (storageId: string) => path.join(root(), "sync", "s", storageId);
 export const storagesRoot = () => path.join(root(), "sync", "s");
 
+// Per-community subscription unit (communities.mdx §8): sync/c/<community_id>/{config,manifest,status}.yaml.
+// A community is mechanically a repo-shaped sync unit whose bytes are someone else's.
+export const communityUnitDir = (communityId: string) => path.join(root(), "sync", "c", communityId);
+export const communitiesRoot = () => path.join(root(), "sync", "c");
+
 export const unitConfigPath = (dir: string) => path.join(dir, "config.yaml");
 export const unitManifestPath = (dir: string) => path.join(dir, "manifest.yaml");
 export const unitStatusPath = (dir: string) => path.join(dir, "status.yaml");

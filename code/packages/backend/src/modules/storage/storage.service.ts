@@ -158,6 +158,17 @@ export function ensureStorage(root: string, type: StorageType, extras?: Partial<
   return desc;
 }
 
+/**
+ * Register a Git repo as a repo storage (storage_repo.mdx §2): place `storage.yaml` (name = repo folder
+ * name, type: repo, repo_root) and the hidden `.lfbridge/` at the repo root, and add `.lfbridge/` to the
+ * repo's `.gitignore` so tracking never bloats commits. Idempotent — an existing descriptor is returned
+ * unchanged. Thin, repo-typed wrapper over `ensureStorage`; the entry point the repos module calls when a
+ * repo is registered/discovered.
+ */
+export function ensureRepoStorage(repoRoot: string): StorageDescriptor {
+  return ensureStorage(repoRoot, "repo", { repo: { repoRoot } });
+}
+
 function ensureGitignore(root: string): void {
   const gi = path.join(root, ".gitignore");
   let body = "";

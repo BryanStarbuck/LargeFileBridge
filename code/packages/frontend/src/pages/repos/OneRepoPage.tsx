@@ -8,7 +8,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
 import { RefreshCw, Settings, ChevronLeft, Network, UploadCloud } from "lucide-react";
 import { toast } from "sonner";
-import type { FileRow, Decision, RepoDetail } from "@lfb/shared";
+import type { FileRow, Decision, RepoDetail, SyncCounts, SyncNowResult } from "@lfb/shared";
 import { formatBytes, viewerRouteForName } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
@@ -24,6 +24,17 @@ import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js"
 import { clientLog } from "../../lib/clientLog.js";
 
 const DECISIONS: Decision[] = ["sync", "ignore", "undecided"];
+
+/** Human summary of what a sync run actually did — the honest counts, never a fixed string (sync_process.mdx §6). */
+function syncSummary(c: SyncCounts): string {
+  if (c.eligible === 0) return "Nothing to sync — no files marked Sync";
+  const parts: string[] = [];
+  if (c.added) parts.push(`${c.added} added`);
+  if (c.fetched) parts.push(`${c.fetched} fetched`);
+  if (c.skipped) parts.push(`${c.skipped} already up-to-date`);
+  if (c.failed) parts.push(`${c.failed} failed`);
+  return parts.length ? `Sync done — ${parts.join(", ")}` : "Nothing to sync — no files marked Sync";
+}
 
 export function OneRepoPage() {
   const { repoId } = useParams({ strict: false }) as { repoId: string };
@@ -49,9 +60,13 @@ export function OneRepoPage() {
 
   const syncNow = useMutation({
     mutationFn: (paths?: string[]) => api.syncNow(repoId, paths),
-    onSuccess: (d: RepoDetail) => {
-      qc.setQueryData(["repo", repoId], d);
-      toast.success("Sync complete");
+    onSuccess: (r: SyncNowResult) => {
+      qc.setQueryData(["repo", repoId], r.detail);
+      // Report what the run ACTUALLY did, never a blanket "complete" (sync_process.mdx §6): an honest
+      // "nothing to sync" for a no-op, real counts otherwise, and an error toast when only failures occurred.
+      const summary = syncSummary(r.counts);
+      if (r.counts.failed > 0 && r.counts.added === 0 && r.counts.fetched === 0) toast.error(summary);
+      else toast.success(summary);
     },
     onError: (e: Error) => {
       clientLog.error("OneRepoPage.syncNow", e);

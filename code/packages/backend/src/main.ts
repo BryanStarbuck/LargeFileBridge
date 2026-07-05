@@ -17,9 +17,11 @@ import { sessionsRouter } from "./modules/sessions/sessions.router.js";
 import { peersRouter } from "./modules/peers/peers.router.js";
 import { ipfsRouter } from "./modules/ipfs/ipfs.router.js";
 import { storagesRouter } from "./modules/storage/storage.router.js";
+import { communitiesRouter } from "./modules/communities/communities.router.js";
 import { compressRouter } from "./modules/compress/compression.router.js";
 import { transcribeRouter } from "./modules/transcribe/transcribe.router.js";
 import { healthRouter } from "./modules/health/health.router.js";
+import { progressRouter } from "./modules/progress/progress.router.js";
 import { securityRouter } from "./modules/security/security.router.js";
 import { internalRouter } from "./modules/internal/internal.router.js";
 import { clientLogRouter } from "./modules/clientlog/clientlog.router.js";
@@ -102,6 +104,7 @@ async function main(): Promise<void> {
 
   app.use("/api/auth", authRouter);
   app.use("/api/health", healthRouter);
+  app.use("/api/progress", progressRouter); // the progress dock's server-side job set (webapp.mdx §12)
   app.use("/api/security", securityRouter); // first-run allow-list (unauthenticated; loopback-guarded)
   app.use("/api/repos", reposRouter);
   app.use("/api/fs", fsRouter);
@@ -113,6 +116,7 @@ async function main(): Promise<void> {
   app.use("/api/peers", peersRouter);
   app.use("/api/ipfs", ipfsRouter);
   app.use("/api/storages", storagesRouter); // the Storages tab: discover/init/index/analyze (storages.mdx)
+  app.use("/api/communities", communitiesRouter); // the Communities page: budget + subscribe (communities.mdx)
   app.use("/api/compress", compressRouter); // compression engine: tools/settings/check/file/batch (compression.mdx)
   app.use("/api/transcribe", transcribeRouter); // transcription engine: tools/file/batch/tree/storage (Transcribe.mdx)
   app.use("/api/internal", internalRouter);

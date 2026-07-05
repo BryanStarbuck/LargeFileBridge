@@ -134,8 +134,25 @@ export const AppConfigSchema = z.object({
       }),
     )
     .default({}),
+  // The single computer-wide storage budget LFB may devote to ALL community content combined
+  // (communities.mdx §5.2). Bytes. null = not yet set → the service proposes a recommendation.
+  community_budget: z.number().nullable().default(null),
 });
 export type AppConfig = z.infer<typeof AppConfigSchema>;
+
+// ── per-community subscription config (communities.mdx §8) ──────────────────
+// `sync/c/<community_id>/config.yaml`: the user's per-community choices — intent (get/support) +
+// backup mode (block|recommended|full) + the leading bookmark toggle. Computer-wide (owned by the
+// machine, not the logged-in user), mirroring the repo/storage sync units.
+export const CommunitySubscriptionSchema = z.object({
+  schema_version: z.number().default(1),
+  updated_at: iso.optional(),
+  get: z.boolean().default(false),
+  support: z.boolean().default(false),
+  backup_mode: z.enum(["block", "recommended", "full"]).default("block"),
+  bookmarked: z.boolean().default(false),
+});
+export type CommunitySubscriptionConfig = z.infer<typeof CommunitySubscriptionSchema>;
 
 // ── per-repo config.yaml (storage.mdx §6.2 + repo_settings.mdx) ─────────────
 export const RepoUnitConfigSchema = z.object({

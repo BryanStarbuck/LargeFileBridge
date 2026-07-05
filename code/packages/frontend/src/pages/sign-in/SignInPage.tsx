@@ -21,7 +21,12 @@ export function SignInPage() {
           <p className="mb-6 mt-1 text-center text-sm text-black/60">
             Sync your large files across your own computers.
           </p>
-          <CredentialsSetupCard info={data.credentialsFile} devAuth={data.devAuth} />
+          <CredentialsSetupCard
+            info={data.credentialsFile}
+            redirectUri={data.redirectUri}
+            allowedDomains={data.allowedDomains}
+            devAuth={data.devAuth}
+          />
         </div>
       </div>
     );

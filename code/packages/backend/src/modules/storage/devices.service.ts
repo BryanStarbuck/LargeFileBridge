@@ -5,7 +5,7 @@
 // storage's machine-independent mapped-dir keys onto THIS computer's absolute local paths. Node fs only.
 import fs from "node:fs";
 import path from "node:path";
-import { DeviceFileSchema, type DeviceFile, type DeviceRecord } from "@lfb/shared";
+import { DeviceFileSchema, type DeviceFile, type DeviceRecord, type DeviceGraftEntry } from "@lfb/shared";
 import { readYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import { repoFolderKey } from "../../shared/store/sanitize.js";
 import { getAppConfig } from "../store-model/config.service.js";

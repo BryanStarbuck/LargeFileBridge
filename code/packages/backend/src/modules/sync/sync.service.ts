@@ -12,7 +12,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ManifestSchema, UnitStatusSchema, type Manifest, type ManifestFile, type UnitStatus, type Decision } from "@lfb/shared";
+import { ManifestSchema, UnitStatusSchema, type Manifest, type ManifestFile, type UnitStatus, type Decision, type SyncCounts } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import {
   listRepoFolders,
@@ -66,6 +66,11 @@ const ipfsLimiter = new Limiter(SYNC_CONCURRENCY);
 
 let passInFlight = false;
 
+/** A fresh, all-zero sync tally — the honest baseline for a no-op run (sync_process.mdx §6). */
+function zeroCounts(): SyncCounts {
+  return { eligible: 0, added: 0, pinned: 0, fetched: 0, skipped: 0, failed: 0 };
+}
+
 /** Run `fn` over `items` with at most `limit` in flight at once. Each item's failure is contained. */
 async function runPool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
   let cursor = 0;
@@ -102,16 +107,20 @@ interface UnitTarget {
   preflightError?: () => string | null;
 }
 
-async function runUnitSync(t: UnitTarget, onlyPaths?: Set<string>): Promise<void> {
+async function runUnitSync(t: UnitTarget, onlyPaths?: Set<string>): Promise<SyncCounts> {
+  // Tally what this run actually does so the caller can report the truth, never a fixed "complete"
+  // string (sync_process.mdx §6). Incremented inside the parallel closures below — safe because JS runs
+  // each synchronous span between awaits atomically, so counter bumps never interleave.
+  const counts = zeroCounts();
   const missing = t.preflightError?.();
   if (missing) {
     markUnitError(t, missing);
-    return;
+    return counts;
   }
   const health = await ipfs.health();
   if (health !== "ok") {
     markUnitError(t, "IPFS node unreachable");
-    return;
+    return counts;
   }
   await ipfs.enforceCompliance();
 
@@ -128,6 +137,7 @@ async function runUnitSync(t: UnitTarget, onlyPaths?: Set<string>): Promise<void
   const toAdd = Object.entries(t.decisions).filter(
     ([rel, decision]) => decision === "sync" && (!onlyPaths || onlyPaths.has(rel)),
   );
+  counts.eligible = toAdd.length;
   await Promise.all(
     toAdd.map(([rel]) =>
       ipfsLimiter.run(async () => {
@@ -146,6 +156,7 @@ async function runUnitSync(t: UnitTarget, onlyPaths?: Set<string>): Promise<void
         const unchanged = existing?.cid && existing.size === st.size && pinset.has(existing.cid);
         if (unchanged) {
           setPinClaim(existing!, t.label, true);
+          counts.skipped++; // eligible but already up-to-date + still pinned (§6 truthful "nothing changed")
           return;
         }
         try {
@@ -159,8 +170,11 @@ async function runUnitSync(t: UnitTarget, onlyPaths?: Set<string>): Promise<void
             sha256: null,
             pinned_by: [t.label],
           });
+          counts.added++;
+          counts.pinned++; // add pins recursively, so an add is also a pin
           log.info("sync", `Added+pinned ${rel} -> ${cid}`);
         } catch (e) {
+          counts.failed++;
           log.error("sync", `add failed for ${rel}: ${(e as Error).message}`);
         }
       }),
@@ -190,10 +204,13 @@ async function runUnitSync(t: UnitTarget, onlyPaths?: Set<string>): Promise<void
             if (!pinset.has(entry.cid)) {
               await ipfs.pinAdd(entry.cid); // hold a local copy first…
               pinset.add(entry.cid);
+              counts.pinned++;
             }
             await ipfs.catToFile(entry.cid, abs); // …then write the bytes to the resolved local path
+            counts.fetched++;
             log.info("sync", `Fetched ${entry.path} -> ${abs} (${entry.cid})`);
           } catch (e) {
+            counts.failed++;
             log.warn("sync", `fetch failed for ${entry.path}: ${(e as Error).message}`);
           }
         }),
@@ -225,7 +242,11 @@ async function runUnitSync(t: UnitTarget, onlyPaths?: Set<string>): Promise<void
   }
 
   t.writeStatus({ ...t.status, last_sync_at: new Date().toISOString(), last_error: null });
-  log.info("sync", `Synced ${t.name}: ${next.files.length} file(s).`);
+  log.info(
+    "sync",
+    `Synced ${t.name}: ${next.files.length} file(s) — added ${counts.added}, fetched ${counts.fetched}, pinned ${counts.pinned}, skipped ${counts.skipped}, failed ${counts.failed}.`,
+  );
+  return counts;
 }
 
 /**
@@ -242,19 +263,19 @@ export async function syncRepoFolder(
   folder: string,
   onlyPaths?: Set<string>,
   opts: { manual?: boolean } = {},
-): Promise<void> {
+): Promise<SyncCounts> {
   const cfg = getRepoConfig(folder);
   if (!cfg.synced) {
     if (!opts.manual) {
       log.info("sync", `Skip ${folder}: synced=false.`);
-      return;
+      return zeroCounts(); // background scheduler respects the opt-in — an honest no-op tally
     }
     await updateRepoConfig(folder, (c) => ({ ...c, synced: true }));
     cfg.synced = true;
     log.info("sync", `${folder}: manual Sync now — enabling background sync (synced=true).`);
   }
   const repoPath = expandHome(cfg.repo.path);
-  await runUnitSync(
+  return runUnitSync(
     {
       kind: "repo",
       name: folder,
@@ -300,10 +321,12 @@ export async function syncComputerUnit(): Promise<void> {
   });
 }
 
-function syncRepoSafe(folder: string): Promise<void> {
-  return syncRepoFolder(folder).catch((e) =>
-    log.error("sync", `sync ${folder} failed: ${(e as Error).message}`),
-  );
+async function syncRepoSafe(folder: string): Promise<void> {
+  try {
+    await syncRepoFolder(folder);
+  } catch (e) {
+    log.error("sync", `sync ${folder} failed: ${(e as Error).message}`);
+  }
 }
 
 /**

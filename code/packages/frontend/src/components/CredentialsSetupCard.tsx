@@ -33,9 +33,13 @@ function CopyButton({ text, label }: { text: string; label: string }) {
 
 export function CredentialsSetupCard({
   info,
+  redirectUri,
+  allowedDomains,
   devAuth = false,
 }: {
   info: CredentialsFileInfo;
+  redirectUri?: string;
+  allowedDomains?: string[];
   devAuth?: boolean;
 }) {
   const schema = JSON.stringify(info.schemaExample, null, 2);
@@ -85,10 +89,43 @@ export function CredentialsSetupCard({
         </p>
       </div>
 
+      {/* Exact redirect URI to register on the Google Cloud OAuth client (webapp.mdx §3.2 item 3) —
+          built from the API port 8787, not the web port. Must match VERBATIM or Google rejects it. */}
+      {redirectUri && (
+        <div className="mt-4">
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-xs font-medium uppercase tracking-wide text-black/50">
+              Register this redirect URI on the OAuth client
+            </span>
+            <CopyButton text={redirectUri} label="redirect URI" />
+          </div>
+          <code className="block break-all rounded-md border border-[var(--lfb-border)] bg-white px-3 py-2 font-mono text-sm">
+            {redirectUri}
+          </code>
+          <p className="mt-1 text-xs text-black/50">
+            Add it verbatim under the client’s “Authorized redirect URIs” — it uses the API port (8787),
+            not the web app port.
+          </p>
+        </div>
+      )}
+
+      {/* Restart nudge (webapp.mdx §3.2 item 4): credentials are read at boot, so a restart is required. */}
+      <p className="mt-4 text-sm text-black/70">
+        Then <b>restart the backend</b> and reload this page.
+      </p>
+
+      {allowedDomains && allowedDomains.length > 0 && (
+        <p className="mt-2 text-xs text-black/50">
+          Sign-in will accept a Google account on{" "}
+          <span className="font-mono">{allowedDomains.join(", ")}</span> that is also on the allow-list.
+        </p>
+      )}
+
       <p className="mt-4 text-xs text-black/50">
         Alternatively, set <span className="font-mono">GOOGLE_CLIENT_ID</span> and{" "}
         <span className="font-mono">GOOGLE_CLIENT_SECRET</span> in the environment (they take
-        precedence over the file).
+        precedence over the file), or — on localhost only — run with{" "}
+        <span className="font-mono">LFB_DEV_AUTH=true</span> to bypass sign-in for offline development.
         {devAuth && " Local dev mode is active, so the app is usable without sign-in for now."}
       </p>
     </div>

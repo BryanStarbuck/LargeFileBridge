@@ -6,9 +6,9 @@
 // the next sync pass (§6). Matches RepoSettingsPage's Section/Toggle styling.
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "@tanstack/react-router";
-import { ChevronLeft, Info } from "lucide-react";
+import { ChevronLeft, Info, Plus, X } from "lucide-react";
 import { toast } from "sonner";
-import type { StorageSettings, StorageSettingsPatch, StorageBackingLocation } from "@lfb/shared";
+import type { StorageSettings, StorageSettingsPatch, StorageBackingLocation, MappedDirsView, MappedDir } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { clientLog } from "../../lib/clientLog.js";
 
@@ -94,7 +94,91 @@ export function StorageSettingsPage() {
           <Info className="h-3.5 w-3.5" /> Directories are created and updated on the next sync pass.
         </p>
       </Section>
+
+      {/* §4a mapped source directories — the hierarchies this company/personal storage covers. Shown
+          read-only for a repo storage (its single implicit mapped dir is the working tree). */}
+      {(s.type === "company" || s.type === "personal" || s.type === "repo") && <MappedDirsSection storageId={storageId} />}
     </div>
+  );
+}
+
+// §4a The list of source directory hierarchies that belong to this storage. Add/remove rows edit the
+// SHARED list (mapped_dirs.yaml); each row's path field edits THIS computer's graft. Everything recursive
+// under a mapped directory is in scope; files are tracked in place (never relocated).
+function MappedDirsSection({ storageId }: { storageId: string }) {
+  const qc = useQueryClient();
+  const { data: v } = useQuery({ queryKey: ["storageMappedDirs", storageId], queryFn: () => api.storageMappedDirs(storageId) });
+  const patch = useMutation({
+    mutationFn: (p: { mapped?: Array<Partial<MappedDir>>; graft?: Record<string, string | null> }) => api.patchStorageMappedDirs(storageId, p),
+    onSuccess: (d: MappedDirsView) => {
+      qc.setQueryData(["storageMappedDirs", storageId], d);
+      toast.success("Saved");
+    },
+    onError: (e: Error) => { clientLog.error("StorageSettingsPage.mappedDirs", e); toast.error(e.message); },
+  });
+
+  if (!v) return null;
+  // The full shared list as MappedDir rows — the base we mutate for add/remove/label edits.
+  const asMapped = (): Array<Partial<MappedDir>> => v.rows.map((r) => ({ key: r.key, label: r.label, canonical: r.canonical, recursive: r.recursive }));
+
+  return (
+    <Section
+      title="Mapped source directories"
+      subtitle={
+        v.editable
+          ? "The directories on this computer that belong to this storage. Everything recursive under each is in scope; files are tracked in place and never moved. The list is shared across your computers; each path below is this computer's location."
+          : "A repo storage covers exactly one directory — its working tree — shown here read-only."
+      }
+    >
+      {v.rows.length === 0 && <p className="text-xs text-black/40">No directories mapped yet.</p>}
+      {v.rows.map((r) => (
+        <div key={r.key} className="mb-3 border-b border-[var(--lfb-border)] pb-3 last:mb-0 last:border-0 last:pb-0">
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              defaultValue={r.label}
+              key={`label-${r.key}-${r.label}`}
+              placeholder="Label"
+              disabled={!v.editable}
+              className="w-40 rounded border border-[var(--lfb-border)] px-2 py-1 text-xs disabled:bg-slate-50 disabled:text-black/40"
+              onBlur={(e) => {
+                if (e.target.value !== r.label) patch.mutate({ mapped: asMapped().map((m) => (m.key === r.key ? { ...m, label: e.target.value } : m)) });
+              }}
+              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+            />
+            <input
+              type="text"
+              defaultValue={r.localPath ?? ""}
+              key={`path-${r.key}-${r.localPath ?? ""}`}
+              placeholder="this computer's path for this directory"
+              disabled={!v.editable}
+              className="w-full rounded border border-[var(--lfb-border)] px-2 py-1 font-mono text-xs disabled:bg-slate-50 disabled:text-black/40"
+              onBlur={(e) => {
+                if (e.target.value !== (r.localPath ?? "")) patch.mutate({ graft: { [r.key]: e.target.value || null } });
+              }}
+              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+            />
+            {v.editable && (
+              <button
+                title="Remove this directory"
+                className="flex items-center rounded p-1 text-black/40 hover:bg-slate-100 hover:text-red-600"
+                onClick={() => patch.mutate({ mapped: asMapped().filter((m) => m.key !== r.key) })}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+      ))}
+      {v.editable && (
+        <button
+          className="mt-2 flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm text-black/70 hover:bg-slate-100"
+          onClick={() => patch.mutate({ mapped: [...asMapped(), { label: "New directory", canonical: null, recursive: true }] })}
+        >
+          <Plus className="h-4 w-4" /> Add directory
+        </button>
+      )}
+    </Section>
   );
 }
 

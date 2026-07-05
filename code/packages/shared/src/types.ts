@@ -71,6 +71,24 @@ export interface RepoDetail {
 
 export type IpfsHealth = "ok" | "unreachable";
 
+// What a single sync run actually DID — so the UI reports the truth, never a fixed "complete" string
+// (sync_process.mdx §6). `eligible` is how many files were marked "sync" this run: 0 means there was
+// nothing to sync (an honest no-op), not a failure.
+export interface SyncCounts {
+  eligible: number; // files marked "sync" this run (0 ⇒ nothing to sync)
+  added: number; // files newly added to IPFS this run
+  pinned: number; // files this run ensured a local pin for (added + fetched-and-pinned)
+  fetched: number; // missing files materialized from a peer this run
+  skipped: number; // eligible files already up-to-date (unchanged + still pinned)
+  failed: number; // files whose add/pin/fetch errored
+}
+
+// The POST /repos/:id/sync response: the refreshed repo detail plus what THIS run did (sync_process.mdx §6).
+export interface SyncNowResult {
+  detail: RepoDetail;
+  counts: SyncCounts;
+}
+
 // ── The IPFS page (ipfs.mdx) — the local pinset as ground truth ──────────────
 // One row per pinned ROOT CID (indirect blocks rolled under their root — ipfs.mdx §1).
 export type IpfsPinType = "recursive" | "direct" | "mfs";
@@ -362,6 +380,40 @@ export interface RescanResult {
   job: ScanJob;
 }
 
+// ── Progress dock (webapp.mdx §10–§12) ──────────────────────────────────────
+// The app-shell progress dock's operation taxonomy (webapp.mdx §11). One small card type; the VERB
+// and any progress detail come from the job's kind. Both browser-initiated (optimistic) and
+// server-side background-worker (launchd scan/sync) jobs flow through the same dock.
+export type ProgressKind =
+  | "scan"
+  | "sync"
+  | "pin"
+  | "publish"
+  | "compress"
+  | "hash"
+  | "fingerprint"
+  | "ignore"
+  | "import"
+  | "install";
+
+// One in-flight job as reported by GET /api/progress (server-side) or held optimistically in the
+// browser. `done`/`total` are present only for DETERMINATE jobs (a bar is drawn); `unit` labels the
+// numbers ("MB", "files", "%").
+export interface ProgressJob {
+  id: string;
+  kind: ProgressKind;
+  target: string; // repo name or file basename shown after the verb
+  startedAt: string; // ISO
+  done?: number; // determinate progress numerator
+  total?: number; // determinate progress denominator
+  unit?: string; // "MB" | "files" | "%" | …
+}
+
+// GET /api/progress → the union of all in-flight jobs (registry + the active discovery scan).
+export interface ProgressListResult {
+  jobs: ProgressJob[];
+}
+
 // ── Web session activity ping (sessions.mdx) ────────────────────────────────
 // Response to POST /api/sessions/activity. `newSession` is true when this ping STARTED a fresh web
 // session (a return after the 4h idle window); `autoSyncTriggered` is true when that start was on a
@@ -399,6 +451,13 @@ export interface AuthConfig {
   oauthConfigured: boolean;
   devAuth: boolean;
   credentialsFile: CredentialsFileInfo;
+  // The EXACT Google OAuth redirect URI to register on the Cloud client (webapp.mdx §3.2/§6) — the
+  // GOOGLE_REDIRECT_URI default is built from the API port 8787, not the web port. Empty for a
+  // non-loopback caller (redacted like the creds path). The remediation panel shows this verbatim.
+  redirectUri: string;
+  // The Google Workspace domain(s) a sign-in must be on (context in the panel — webapp.mdx §3.2).
+  // Empty for a non-loopback caller.
+  allowedDomains: string[];
 }
 
 // ── File System column browser (directory.mdx) ──────────────────────────────
@@ -666,6 +725,68 @@ export interface StoragesPageData {
   companies: StorageRow[];
   communities: StorageRow[];
   repos: { count: number; route: string };
+}
+
+// ── Communities (communities.mdx) ───────────────────────────────────────────
+// A community is a publisher of large PUBLIC files a user can subscribe to. Subscribing carries an
+// INTENT (Get and/or Support) and a BACKUP MODE (Block · Recommended · Full). Rebroadcasting stays
+// charter-compliant: an explicit, per-community opt-in that pins a chosen publisher's public files —
+// never a general public gateway/relay (communities.mdx §1).
+export type CommunityBackupMode = "block" | "recommended" | "full";
+
+// The per-community subscription choices (communities.mdx §3–§4). Persisted computer-wide under
+// `sync/c/<community_id>/config.yaml`.
+export interface CommunitySubscription {
+  get: boolean;       // intent: consume the videos for yourself (§3)
+  support: boolean;   // intent: rebroadcast/pin to keep the community secure (§3)
+  backupMode: CommunityBackupMode; // Block · Recommended · Full (§4), default Block
+  bookmarked: boolean;             // leading bookmark toggle (tables.mdx §1)
+}
+
+// The rolled-up library of one community (communities.mdx §2 `library`/`totals`).
+export interface CommunityLibrary {
+  items: number;      // total files
+  videos: number;
+  images: number;
+  totalBytes: number; // sum of the library's file sizes
+}
+
+// One community as the Communities table sees it (communities.mdx §7).
+export interface CommunityRow {
+  id: string;                 // stable slug — primary key + URL (communities.mdx §2)
+  name: string;
+  publisher: string | null;
+  description: string | null;
+  root: string;               // the on-disk community storage root (storage_community.mdx)
+  library: CommunityLibrary;
+  subscription: CommunitySubscription;
+  keepingSecureBytes: number; // bytes currently pinned for this community
+  targetBytes: number;        // its target (recommended amount, or full-library size)
+  redundancy: number | null;  // known pinners already carrying it (null = unknown)
+}
+
+// The storage math header (communities.mdx §5/§6) — measured from the real state-root volume.
+export interface CommunityStorageMath {
+  totalDiskBytes: number;         // capacity of the volume the state root lives on (§5.1)
+  freeOutsideIpfsBytes: number;   // free space genuinely available, excluding the IPFS datastore (§5.1)
+  reservedHeadroomBytes: number;  // the floor we never cross (§5.1)
+  communityBudgetBytes: number;   // the amount devoted to ALL community content combined (§5.2)
+  recommendedBudgetBytes: number; // proposal = free_outside_ipfs − headroom, then a sensible fraction (§5.2)
+  usedBytes: number;              // bytes currently pinned across all communities (meter numerator, §6)
+}
+
+// GET /api/communities — the Communities page payload (communities.mdx §6).
+export interface CommunitiesPageData {
+  math: CommunityStorageMath;
+  communities: CommunityRow[];
+}
+
+// PATCH /api/communities/:id — partial update of one community's subscription (communities.mdx §3–§4).
+export interface CommunitySubscriptionPatch {
+  get?: boolean;
+  support?: boolean;
+  backupMode?: CommunityBackupMode;
+  bookmarked?: boolean;
 }
 
 // GET /api/storages/:id — one storage's detail: its descriptor + the tracked files.

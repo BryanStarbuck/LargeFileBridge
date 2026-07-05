@@ -48,6 +48,10 @@ interface DataTableProps<T> {
   // renders content BELOW the table (a details disclosure, a footer summary) so that content stays
   // visible — then the body keeps a bounded height instead.
   fillHeight?: boolean;
+  // The default multi-level sort (tables.mdx §3.4) — an ordered list of up to three keys applied on
+  // first load and restored by "Clear sort". Bookmark-bearing tables pass Bookmarked-desc first, then
+  // their natural secondary (e.g. Repos → [{bookmark,desc},{name,asc}]). Omitted → no default sort.
+  defaultSort?: SortingState;
 }
 
 const PAGE_SIZES = [100, 250, 500]; // P-01: no "All" (Number.MAX_SAFE_INTEGER) footgun.
@@ -66,8 +70,11 @@ export function DataTable<T>({
   loading,
   empty,
   fillHeight = true,
+  defaultSort,
 }: DataTableProps<T>) {
-  const [sorting, setSorting] = useState<SortingState>([]);
+  // Multi-level sort (tables.mdx §3): the TanStack `sorting` array IS the ordered primary/secondary/
+  // tertiary list — index 0 = primary. The dropdown priority slots and header clicks both drive it.
+  const [sorting, setSorting] = useState<SortingState>(() => defaultSort ?? []);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [search, setSearch] = useState(""); // controlled input value (instant)
   const globalFilter = useDebounced(search, 200); // what the table actually filters on (P-05)
@@ -122,6 +129,18 @@ export function DataTable<T>({
 
   const filtersActive = columnFilters.length > 0;
   const sortActive = sorting.length > 0;
+
+  // Promoted "Bookmarked only" filter (tables.mdx §2): if the caller declares a leading `bookmark`
+  // column (enum yes/no, as Repos does), the filter dropdown pins a "Bookmarked only" checkbox at the
+  // very top. Turning it on ANDs a `bookmark === "yes"` column filter; the column is then hidden from
+  // the per-column filter list below (no duplicate control). Absent that column, nothing changes.
+  const bookmarkColId = columns.find((c) => c.id === "bookmark")?.id;
+  const bookmarkOnly = !!bookmarkColId && columnFilters.some((f) => f.id === bookmarkColId && f.value === "yes");
+  const setBookmarkOnly = (on: boolean) =>
+    setColumnFilters((prev) => {
+      const rest = prev.filter((f) => f.id !== bookmarkColId);
+      return on ? [...rest, { id: bookmarkColId!, value: "yes" }] : rest;
+    });
   const rowCount = table.getFilteredRowModel().rows.length;
   const pageRows = table.getRowModel().rows;
 
@@ -197,24 +216,54 @@ export function DataTable<T>({
         {rightHeader}
       </div>
 
+      {/* Multi-level sort dropdown (tables.mdx §3.1): each sortable column shows its asc/desc caret on
+          the left and 1st/2nd/3rd priority markers on the right. Clicking a marker inserts the column
+          at that slot and cascade-demotes the rest (no two columns share a priority, list capped at 3).
+          Clear sort falls back to the caller's defaultSort (§3.2/§3.4). */}
       {showSort && (
         <Popover>
+          <div className="flex items-center justify-between px-3 pb-1 pt-0.5 text-[11px] uppercase tracking-wide text-black/40">
+            <span>Column</span>
+            <span>Priority</span>
+          </div>
           {columns
             .filter((c) => c.sortable ?? true)
             .map((c) => {
-              const s = sorting.find((x) => x.id === c.id);
+              const idx = sorting.findIndex((x) => x.id === c.id);
+              const s = idx >= 0 ? sorting[idx] : undefined;
               return (
-                <button
-                  key={c.id}
-                  className="flex w-full items-center justify-between px-3 py-1.5 text-sm hover:bg-slate-100 rounded"
-                  onClick={() => setSorting(s && !s.desc ? [{ id: c.id, desc: true }] : [{ id: c.id, desc: false }])}
-                >
-                  <span>{c.header}</span>
-                  <span className="text-black/50">{s ? (s.desc ? "↓ desc" : "↑ asc") : ""}</span>
-                </button>
+                <div key={c.id} className="flex w-full items-center gap-2 px-3 py-1 text-sm">
+                  <span className="flex-1 truncate">{c.header}</span>
+                  <button
+                    className={`w-14 shrink-0 text-left ${s ? "text-black/60" : "text-black/25"}`}
+                    disabled={!s}
+                    onClick={() => setSorting((prev) => toggleDir(prev, c.id))}
+                    title={s ? "Toggle ascending / descending" : "Assign a priority first"}
+                  >
+                    {s ? (s.desc ? "↓ desc" : "↑ asc") : "—"}
+                  </button>
+                  <div className="flex shrink-0 gap-0.5">
+                    {[0, 1, 2].map((slot) => (
+                      <button
+                        key={slot}
+                        onClick={() => setSorting((prev) => assignPriority(prev, c.id, slot, s?.desc ?? false))}
+                        className={`rounded px-1.5 py-0.5 text-[11px] ${
+                          idx === slot
+                            ? "bg-[var(--lfb-primary)] text-white"
+                            : "text-black/40 hover:bg-slate-100"
+                        }`}
+                      >
+                        {["1st", "2nd", "3rd"][slot]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               );
             })}
-          <button className="w-full px-3 py-1.5 text-sm text-[var(--lfb-primary)]" onClick={() => setSorting([])}>
+          <button
+            className="w-full px-3 py-1.5 text-left text-sm text-[var(--lfb-primary)]"
+            onClick={() => setSorting(defaultSort ?? [])}
+          >
             Clear sort
           </button>
         </Popover>
@@ -222,8 +271,21 @@ export function DataTable<T>({
 
       {showFilter && (
         <Popover>
+          {bookmarkColId && (
+            <>
+              <label className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={bookmarkOnly}
+                  onChange={(e) => setBookmarkOnly(e.target.checked)}
+                />
+                Bookmarked only
+              </label>
+              <div className="my-1 border-t border-[var(--lfb-border)]" />
+            </>
+          )}
           {columns
-            .filter((c) => c.filterable ?? true)
+            .filter((c) => (c.filterable ?? true) && c.id !== bookmarkColId)
             .map((c) => {
               const current = columnFilters.find((f) => f.id === c.id)?.value ?? "";
               return (
@@ -284,13 +346,13 @@ export function DataTable<T>({
                   )}
                   {hg.headers.map((h) => {
                     const align = (h.column.columnDef.meta as { align?: string } | undefined)?.align;
-                    // Header-click sort (repos.mdx §3.1): click a sortable header to sort by it; click
-                    // again toggles asc ↔ desc. Same logic and same `sorting` state as the Sort dropdown
-                    // (§3.1) so the two stay in lock-step. A small caret marks the active column.
+                    // Header-click sort (repos.mdx §3.1 / tables.mdx §3.3): clicking a header promotes
+                    // that column to PRIMARY (1st), cascade-demoting the others; clicking the same header
+                    // (already primary) toggles its asc ↔ desc. Same `sorting` state as the Sort dropdown
+                    // so the two stay in lock-step. A small caret marks each column in the active sort.
                     const canSort = h.column.getCanSort();
                     const dir = sorting.find((x) => x.id === h.column.id);
-                    const toggleSort = () =>
-                      setSorting(dir && !dir.desc ? [{ id: h.column.id, desc: true }] : [{ id: h.column.id, desc: false }]);
+                    const toggleSort = () => setSorting((prev) => promoteToPrimary(prev, h.column.id));
                     return (
                       <th
                         key={h.id}
@@ -414,6 +476,29 @@ export function DataTable<T>({
       </div>
     </div>
   );
+}
+
+// ── Multi-level sort helpers (tables.mdx §3.2) ──────────────────────────────────
+// Assign `id` to priority `slot` (0=1st,1=2nd,2=3rd): drop any existing occurrence of `id`, insert it
+// at `slot`, and cap at three — so lower-priority columns cascade down one and no two ever share a
+// slot (the user's rule: "demote everything else down one, so there's no duplicate first priority").
+function assignPriority(sorting: SortingState, id: string, slot: number, desc: boolean): SortingState {
+  const without = sorting.filter((s) => s.id !== id);
+  without.splice(slot, 0, { id, desc });
+  return without.slice(0, 3);
+}
+
+// Toggle asc↔desc for a column already in the sort, keeping its priority slot unchanged.
+function toggleDir(sorting: SortingState, id: string): SortingState {
+  return sorting.map((s) => (s.id === id ? { ...s, desc: !s.desc } : s));
+}
+
+// Header click (tables.mdx §3.3): if the column is already primary, flip its direction; otherwise make
+// it primary (slot 0), preserving its direction if it was already in the sort, and cascade-demote.
+function promoteToPrimary(sorting: SortingState, id: string): SortingState {
+  if (sorting[0]?.id === id) return [{ id, desc: !sorting[0].desc }, ...sorting.slice(1)];
+  const existing = sorting.find((s) => s.id === id);
+  return assignPriority(sorting, id, 0, existing?.desc ?? false);
 }
 
 function setColumnFilter(
