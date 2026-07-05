@@ -160,13 +160,51 @@ export async function syncRepoFolder(
   log.info("sync", `Synced ${folder}: ${next.files.length} file(s).`);
 }
 
-export async function syncAll(): Promise<void> {
-  for (const folder of listRepoFolders()) {
-    try {
-      await syncRepoFolder(folder);
-    } catch (e) {
-      log.error("sync", `sync ${folder} failed: ${(e as Error).message}`);
+// A synchronization is always a FULL PASS over every known unit — never one repo in isolation
+// (sync_process.mdx §2). A repo-scoped trigger (a manual "Sync now") only sets PRIORITY: that repo
+// syncs first, then the pass continues across the rest. The pass fans out with BOUNDED CONCURRENCY so
+// a 20–30-core machine syncs many repos at once instead of one-at-a-time (sync_process.mdx §4). We
+// leave 2 cores free to keep the web app and IPFS node responsive; the store layer's per-file mutex
+// (storage.mdx §15) makes concurrent unit syncs safe. A module-level guard collapses overlapping
+// passes so rapid Sync-now clicks or an overlapping scheduleTask never stack duplicate work.
+const SYNC_CONCURRENCY = Math.max(1, (os.cpus()?.length ?? 4) - 2);
+let passInFlight = false;
+
+/** Run `fn` over `items` with at most `limit` in flight at once. Each item's failure is contained. */
+async function runPool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    while (cursor < items.length) {
+      const item = items[cursor++]!;
+      await fn(item);
     }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
+function syncOne(folder: string): Promise<void> {
+  return syncRepoFolder(folder).catch((e) =>
+    log.error("sync", `sync ${folder} failed: ${(e as Error).message}`),
+  );
+}
+
+/**
+ * The full sync pass over every known unit, with bounded concurrency (sync_process.mdx §2/§4).
+ * `opts.priorityDone` names a unit a caller already synced first (a manual Sync now) so we do not
+ * sync it twice — the pass then covers the remaining units. Overlapping passes are collapsed by the
+ * in-flight guard; the priority unit itself is always synced by its caller, never gated by the guard.
+ */
+export async function syncAll(opts: { priorityDone?: string } = {}): Promise<void> {
+  if (passInFlight) {
+    log.info("sync", "Full sync pass already running — skipping duplicate.");
+    return;
+  }
+  passInFlight = true;
+  try {
+    const rest = listRepoFolders().filter((f) => f !== opts.priorityDone);
+    await runPool(rest, SYNC_CONCURRENCY, syncOne);
+  } finally {
+    passInFlight = false;
   }
 }
 
