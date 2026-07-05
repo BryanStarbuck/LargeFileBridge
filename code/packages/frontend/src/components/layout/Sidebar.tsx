@@ -20,6 +20,24 @@ export function Sidebar({ user }: { user: CurrentUser }) {
 
   const isActive = (route: string) => (route === "/" ? path === "/" : path.startsWith(route));
   const onIpfs = path.startsWith("/ipfs");
+  const onStorages = path.startsWith("/storages");
+
+  // Storages disclosure children (storages.mdx §2): Personal · one per Company (DERIVED) · Repos → Repos
+  // tab · Communities. Fetched only while the Storages section is active; shares the ["storages"] cache.
+  const { data: storages, error: storagesError } = useQuery({
+    queryKey: ["storages"],
+    queryFn: api.storages,
+    enabled: onStorages,
+  });
+  useEffect(() => {
+    if (storagesError) clientLog.error("Sidebar.storages", storagesError);
+  }, [storagesError]);
+  const storageChildren: { key: string; label: string; route: string }[] = [
+    { key: "personal", label: "Personal", route: storages?.personal?.route ?? "/storages/personal" },
+    ...(storages?.companies ?? []).map((c) => ({ key: c.id, label: c.name, route: c.route })),
+    { key: "repos", label: "Repos", route: "/" },
+    { key: "communities", label: "Communities", route: "/communities" },
+  ];
 
   // Left-bar children (ipfs.mdx §2.1): the repos that actually hold pins. Fetched only while the IPFS
   // section is active; shares the ["ipfs"] cache with the page so there's no extra request.
@@ -59,8 +77,10 @@ export function Sidebar({ user }: { user: CurrentUser }) {
         {leftBar.navItems.map((item) => {
           const active = isActive(item.route);
           const isIpfs = item.id === "ipfs";
+          const isStorages = item.id === "storages";
           // The IPFS parent is "selected" (unfiltered) only when on /ipfs with no ?repo filter.
-          const parentSelected = isIpfs ? onIpfs && !activeRepo : active;
+          // The Storages parent is "selected" only on the /storages index, not a child detail page.
+          const parentSelected = isIpfs ? onIpfs && !activeRepo : isStorages ? path === "/storages" : active;
           return (
             <div key={item.id}>
               <Link
@@ -78,7 +98,31 @@ export function Sidebar({ user }: { user: CurrentUser }) {
                 {isIpfs && onIpfs && pinningRepos.length > 0 && (
                   <NavIcon name="ChevronDown" className="h-3.5 w-3.5 text-black/40" />
                 )}
+                {isStorages && onStorages && (
+                  <NavIcon name="ChevronDown" className="h-3.5 w-3.5 text-black/40" />
+                )}
               </Link>
+
+              {/* Storages disclosure children (storages.mdx §2): Personal · companies · Repos · Communities. */}
+              {isStorages && onStorages &&
+                storageChildren.map((child) => {
+                  const childActive = path === child.route || (child.route !== "/" && path.startsWith(child.route));
+                  return (
+                    <Link
+                      key={child.key}
+                      to={child.route}
+                      title={child.label}
+                      className="mx-2 my-0.5 flex items-center gap-2 rounded-md py-1.5 pl-9 pr-3 text-sm hover:bg-slate-100"
+                      style={
+                        childActive
+                          ? { color: "var(--lfb-primary)", background: "var(--lfb-primary-tint)", fontWeight: 500 }
+                          : { color: "#000" }
+                      }
+                    >
+                      <span className="flex-1 truncate">{child.label}</span>
+                    </Link>
+                  );
+                })}
 
               {/* IPFS disclosure children — pinning repos that filter the table (ipfs.mdx §2.1). */}
               {isIpfs && onIpfs &&

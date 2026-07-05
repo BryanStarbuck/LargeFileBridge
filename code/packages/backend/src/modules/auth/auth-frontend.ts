@@ -99,18 +99,23 @@ function constructAuthFrontend(): RequestHandler {
   // (~2 years) and then force-upgrades http://localhost:8787/... to https, so Google's redirect back
   // to the callback silently dies (no TLS server) and sign-in is stuck. HSTS is only meaningful with
   // real TLS, so these hardening headers ride with cookieSecure (on in server mode, off on http).
-  const secure = process.env.COOKIE_SECURE === "true";
+  // cookieSecure policy (security audit finding 5). Secure cookies are MANDATORY in server mode (real
+  // TLS) — we never rely on the operator remembering to flip an env flag for prod. Only local http
+  // dev may run without Secure, and even then only because HSTS/Secure over plain-http localhost
+  // breaks the Google OAuth callback (see note above). So: server mode → always Secure; local mode →
+  // off (the env flag can no longer accidentally ship a non-Secure cookie to production).
+  const isLocal = getAppConfig().server.mode === "local";
+  const secure = isLocal ? process.env.COOKIE_SECURE === "true" : true;
   // Session lifetime policy (charter: "authentication should not time out — last 10 months"), decided
-  // here and passed to the library by API. Without these three the library defaults to a 7-day maximum
-  // lifetime AND a 12-hour idle timeout, so a signed-in user is forced to re-authenticate after a short
-  // gap (an overnight break) or a week — which is exactly the re-login-after-restart bug we hit. The
-  // session survives server/browser/OS restarts because the signing secret (authSecretPath) and the
-  // durable session records (FileSessionStore) both persist to the state dir; the only thing that was
-  // aging them out was these short TTLs. Access tokens stay short-lived (15m) and refresh silently from
-  // the session cookie, so shortening THEM costs nothing. Matches the sister apps (EmailDeliveryHero,
-  // the_starbucks, all/app) exactly. inactivityTimeoutSeconds == sessionTtlSeconds so an idle session
-  // is bounded only by the 10-month absolute lifetime, never by inactivity.
+  // here and passed to the library by API. The absolute maximum lifetime stays long so a returning user
+  // is not forced to re-authenticate after an overnight break; the session survives server/browser/OS
+  // restarts because the signing secret (authSecretPath) and the durable session records
+  // (FileSessionStore) both persist to the state dir. Access tokens stay short-lived (15m) and refresh
+  // silently from the session cookie. Security audit finding 8: a real INACTIVITY timeout is now set
+  // (was disabled at == the absolute lifetime), so an idle/stolen session ages out in weeks, not the
+  // full 10 months, while revocation via FileSessionStore covers offboarding.
   const TEN_MONTHS_SECONDS = 10 * 30 * 24 * 60 * 60; // 10 months (30-day months) = 300 days = 25,920,000s
+  const IDLE_TIMEOUT_SECONDS = 14 * 24 * 60 * 60; // 14-day inactivity timeout (real idle expiry)
   const middleware = createFederatedFrontend({
     connections: [
       {
@@ -128,7 +133,11 @@ function constructAuthFrontend(): RequestHandler {
     cookiePrefix: process.env.AUTH_COOKIE_PREFIX || "oaf_lfb",
     sessionTtlSeconds: TEN_MONTHS_SECONDS,
     accessTokenTtlSeconds: 15 * 60,
-    inactivityTimeoutSeconds: TEN_MONTHS_SECONDS,
+    inactivityTimeoutSeconds: IDLE_TIMEOUT_SECONDS,
+    // Workspace-gated deployment (charter): require the Google-asserted hosted-domain (hd) claim, so
+    // membership is proven cryptographically, not inferred from the email suffix (security audit
+    // finding 3). A consumer account lacking hd is rejected even if its email domain is allow-listed.
+    requireHostedDomain: true,
     sessionStore: new FileSessionStore(resolveStateDir()),
     cookieSecure: secure,
     securityHeaders: secure, // no HSTS/hardening headers over http localhost (see note above)

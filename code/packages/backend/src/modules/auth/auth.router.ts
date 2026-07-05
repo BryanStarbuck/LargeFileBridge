@@ -19,14 +19,24 @@ authRouter.get("/me", (req, res) => {
   res.json({ ok: true, data: out });
 });
 
-// GET /api/health/auth-config — mounted under /api/health by the health router below.
-// Includes credentialsFile setup guidance (path/filename/schema) so a fresh computer can be told
-// exactly which file to create. Never returns the secret values themselves.
-export function authConfig(): AuthConfig {
+// GET /api/health/auth-config — mounted under /api/health. Security audit finding 9: only a LOOPBACK
+// caller (this machine, doing first-run setup) gets the sensitive setup guidance — the on-disk
+// credentials-file path and the dev-bypass state. A non-loopback / remote caller gets only the
+// oauthConfigured boolean, with the path/filename/directory redacted and devAuth never disclosed
+// (which would confirm the unauthenticated-admin bypass is active). Secret VALUES are never returned.
+export function authConfig(includeSensitive: boolean): AuthConfig {
   const configured = hasGoogleCreds();
+  const info = credentialsFileInfo();
+  if (!includeSensitive) {
+    return {
+      oauthConfigured: configured,
+      devAuth: false, // never echo dev-bypass state to a non-loopback caller
+      credentialsFile: { ...info, path: "", filename: "", directory: "", schemaExample: {} },
+    };
+  }
   return {
     oauthConfigured: configured,
-    devAuth: !configured && process.env.LFB_DEV_AUTH !== "false",
-    credentialsFile: credentialsFileInfo(),
+    devAuth: !configured && process.env.LFB_DEV_AUTH === "true",
+    credentialsFile: info,
   };
 }

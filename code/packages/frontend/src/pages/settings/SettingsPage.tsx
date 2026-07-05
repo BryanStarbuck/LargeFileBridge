@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
-import type { GlobalSettings, SizeUnit } from "@lfb/shared";
+import type { GlobalSettings, SizeUnit, CompressMediaPrefs, CompressQuality } from "@lfb/shared";
 import { SIZE_UNITS, toBytes } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { CredentialsSetupCard } from "../../components/CredentialsSetupCard.js";
@@ -153,6 +153,74 @@ export function SettingsPage() {
           <Link to="/settings/allow-list" className="text-[var(--lfb-primary)]">Manage access →</Link>
         </p>
       </Section>
+
+      <CompressionSettingsSection />
+    </div>
+  );
+}
+
+// ── Compression (compression.mdx §7) — per-media codec allow/deny + quality ─────────────────────────
+const QUALITIES: CompressQuality[] = ["low", "medium", "high", "lossless"];
+
+function CompressionSettingsSection() {
+  const qc = useQueryClient();
+  const { data: s } = useQuery({ queryKey: ["compress-settings"], queryFn: api.compressSettings });
+  const { data: tools } = useQuery({ queryKey: ["compress-tools"], queryFn: api.compressTools });
+  const save = useMutation({
+    mutationFn: (patch: Parameters<typeof api.setCompressSettings>[0]) => api.setCompressSettings(patch),
+    onSuccess: (ns) => { qc.setQueryData(["compress-settings"], ns); toast.success("Compression settings saved"); },
+    onError: (e: Error) => { clientLog.error("Settings.compress", e); toast.error(e.message); },
+  });
+  if (!s) return null;
+  const missing = tools ? Object.entries(tools).filter(([, v]) => !v).map(([k]) => k) : [];
+
+  return (
+    <Section title="Compression" subtitle="Per-media codec preferences. Medium quality, resolution always preserved. Deny codecs some social sites don't support.">
+      {(["images", "video"] as const).map((m) => (
+        <MediaPrefRow key={m} media={m} prefs={s[m]} onSave={(patch) => save.mutate({ [m]: { ...s[m], ...patch } })} />
+      ))}
+      <p className="mt-2 text-xs text-black/50">Audio compression is disabled for now (planned later).</p>
+      {tools && missing.length > 0 && (
+        <p className="mt-1 text-xs text-amber-700">
+          Tools not installed: {missing.join(", ")} — <code>brew install ffmpeg imagemagick oxipng webp mozjpeg</code>
+        </p>
+      )}
+    </Section>
+  );
+}
+
+function MediaPrefRow({ media, prefs, onSave }: { media: "images" | "video"; prefs: CompressMediaPrefs; onSave: (patch: Partial<CompressMediaPrefs>) => void }) {
+  const [prefer, setPrefer] = useState(prefs.prefer.join(", "));
+  const [deny, setDeny] = useState(prefs.deny.join(", "));
+  const parse = (s: string) => s.split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+  return (
+    <div className="mb-3 rounded-md border border-[var(--lfb-border)] p-3">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+        <span className="w-16 font-medium capitalize">{media}</span>
+        <label className="flex items-center gap-1.5">
+          <input type="checkbox" checked={prefs.enabled} onChange={(e) => onSave({ enabled: e.target.checked })} /> Enabled
+        </label>
+        <label className="flex items-center gap-1.5">
+          Quality
+          <select className="rounded border border-[var(--lfb-border)] px-1 py-0.5" value={prefs.quality} onChange={(e) => onSave({ quality: e.target.value as CompressQuality })}>
+            {QUALITIES.map((q) => <option key={q} value={q}>{q}</option>)}
+          </select>
+        </label>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2 text-sm">
+        <label className="flex items-center gap-1.5">
+          Prefer
+          <input className="w-48 rounded border border-[var(--lfb-border)] px-1 py-0.5" value={prefer}
+            onChange={(e) => setPrefer(e.target.value)} onBlur={() => onSave({ prefer: parse(prefer) })}
+            title="Ordered target codecs; first allowed + available wins" />
+        </label>
+        <label className="flex items-center gap-1.5">
+          Deny
+          <input className="w-40 rounded border border-[var(--lfb-border)] px-1 py-0.5" value={deny}
+            onChange={(e) => setDeny(e.target.value)} onBlur={() => onSave({ deny: parse(deny) })}
+            title="Codecs never chosen (e.g. jpeg2000, av1)" />
+        </label>
+      </div>
     </div>
   );
 }

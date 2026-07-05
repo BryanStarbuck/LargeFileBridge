@@ -1,0 +1,134 @@
+---
+title: LargeFileBridge — Repo Storage
+description: The Repo storage spec. A repo storage is any Git repository on the machine that LFBridge tracks large files for. Its root is the repo root (e.g. ~/BGit/xyz/), and its tracking lives in a hidden .lfbridge/ folder in that same root (~/BGit/xyz/.lfbridge/), git-ignored, holding a storage.yaml descriptor (name + type: repo + repo_root), a per-file fingerprint index (files.yaml), the large-file → IPFS CID manifest, and per-file media-analysis outputs (transcript / description / visuals-by-time). This is the canonical directory-based storage: git carries the small files + a committed manifest, IPFS carries the big git-ignored bytes across the user's computers, and the repo may also clone to Google Drive / Dropbox. Sibling of storage_personal / storage_company / storage_community; shares the storage.yaml schema and .lfbridge/ layout defined in storages.mdx. Links to repos.mdx / one_repo.mdx (the repos list + per-repo screen) which are the UI over this storage.
+---
+
+# LargeFileBridge — Repo Storage
+
+A **repo storage** is the most common kind: **any Git repository on the machine** that LFBridge tracks
+large files for. It is the **canonical directory-based storage** — the other three (personal / company /
+community) follow the same shape.
+
+Read the shared model first: the storage family, the `storage.yaml` schema, the `.lfbridge/` tracking
+layout, cloud clones, and media analysis are all defined once in **[storages.mdx](./storages.mdx)**. This
+spec covers only what is **specific to a repo storage**; it does not restate the shared parts.
+
+Siblings this builds on and does not repeat:
+
+* [storages.mdx](./storages.mdx) — the umbrella: `storage.yaml` (§3), `.lfbridge/` (§4), clones (§5),
+  media analysis (§6).
+* [Repos](./repos.mdx) / [One repo](./one_repo.mdx) — the **UI over a repo storage**: the repos list and
+  the per-repo screen where the user makes the Sync / Ignore / Undecided decision per large file.
+* [storage_local.mdx](./storage_local.mdx) — the local index/manifest model and the IPFS pin model this
+  reuses; **Local Storage stays settings/config**, the authoritative per-repo tracking is here.
+
+---
+
+## 1. Anatomy of a repo storage
+
+```
+~/BGit/xyz/                 ← the repo root = the storage root ("XYZ")
+├── .git/                   ← Git (small files + the committed manifest travel here)
+├── .gitignore             ← lists .lfbridge/ AND the large files (they sync via IPFS, not Git)
+├── .lfbridge/              ← hidden per-storage tracking area (storages.mdx §4) — git-ignored
+│   ├── storage.yaml        ← descriptor: name + type: repo + repo_root (storages.mdx §3)
+│   ├── files.yaml          ← per-file fingerprint index (storages.mdx §4.1)
+│   ├── manifest.yaml       ← large-file → IPFS CID + pin state (storage_local.mdx §9)
+│   └── analysis/           ← per-file media analysis (storages.mdx §6)
+└── …the repo's tracked + git-ignored files…
+```
+
+* The **storage root is the repo root** — there is no separate directory; a repo *is* the storage.
+* The tracking area is **`~/BGit/xyz/.lfbridge/`** — inside the repo, hidden, and **git-ignored** so it
+  never bloats commits. (Contrast: the small **committed** manifest of [storage_local.mdx §9.2](./storage_local.mdx)
+  still lives in-repo and travels via Git; `.lfbridge/` is the *local* working tracking area.)
+* `storage.yaml` here is minimal — see §2.
+
+---
+
+## 2. `storage.yaml` for a repo
+
+```yaml
+# ~/BGit/xyz/.lfbridge/storage.yaml
+name: "XYZ"                 # defaults to the repo folder name; user-editable
+type: repo
+created: 2026-05-01T10:12:00Z
+repo:
+  repo_root: "~/BGit/xyz"   # the Git repo this storage tracks
+clones:
+  google_drive: null        # or "My Drive/LFB/XYZ" once mirrored (storages.mdx §5)
+  dropbox: null
+```
+
+* **`name`** defaults to the repo folder name (`xyz` → `XYZ`) and is user-editable in
+  [Repo settings](./repo_settings.mdx).
+* **`type: repo`** with a **`repo`** block naming the `repo_root`. A repo storage never carries a
+  `company`/`community`/`personal` block.
+
+Placing `storage.yaml` (and `.lfbridge/`) at the repo root when a repo is registered, and adding `.lfbridge/` to the repo `.gitignore`, is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureRepoStorage(repoRoot)`.
+
+---
+
+## 3. What "tracking a repo" means here
+
+A repo storage is the on-disk backing for everything the [One repo](./one_repo.mdx) screen shows:
+
+* **Discovery** — the scanner finds every Git repo under the configured roots
+  ([storage_local.mdx §7](./storage_local.mdx), [scan.mdx](./scan.mdx)); each becomes a repo storage.
+* **Per-file decision** — Sync / Ignore / Undecided per large git-ignored file
+  ([one_repo.mdx §1](./one_repo.mdx#1-the-decision-model-locked)); the decisions persist in the repo
+  storage's config/manifest.
+* **Per-file fingerprints** — `.lfbridge/files.yaml` records hash + size + created + modified, and the
+  compressed/uncompressed variant hashes for media ([storages.mdx §4.1](./storages.mdx)), so LFB knows what
+  changed since last sync.
+* **IPFS bytes** — `Sync` files are pinned and moved between the user's computers over IPFS
+  ([storage_local.mdx §9](./storage_local.mdx)); the small committed manifest travels via Git so a fresh
+  clone knows what to fetch.
+
+The repos list and per-repo UI over this storage are rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (served by `repos.router.ts`).
+
+---
+
+## 4. Media analysis + cloud clones (per repo)
+
+* A repo storage can produce the [storages.mdx §6](./storages.mdx) **media-analysis** outputs for its
+  video/image files into `~/BGit/xyz/.lfbridge/analysis/<relpath>/` — transcript (speech + time),
+  description (video summary / image contents), visuals-and-action-by-time (time × visual × story). They
+  are git-ignored artifacts that ride along with the storage.
+* A repo storage **may also clone** to Google Drive / Dropbox ([storages.mdx §5](./storages.mdx)) — the
+  same repo hierarchy mirrored to a cloud drive as a second, human-reachable copy — recorded in the
+  `clones` block.
+
+---
+
+## 5. Where it shows in the UI
+
+* In the **[Storages](./storages.mdx#2-the-storages-left-bar-tab)** left-bar tab, repos are represented by
+  the single **Repos** child, which routes to the dedicated **[Repos](./repos.mdx)** tab (the Storages tab
+  does not re-list every repo).
+* The **[Repos](./repos.mdx)** tab is the long list; each row opens its **[One repo](./one_repo.mdx)**
+  screen — the working UI over one repo storage.
+
+---
+
+## 6. Acceptance criteria
+
+1. Any Git repo LFB tracks is a **repo storage** whose **root is the repo root** (`~/BGit/xyz/`) and whose
+   tracking lives in a hidden, **git-ignored** **`~/BGit/xyz/.lfbridge/`**.
+2. Its `.lfbridge/storage.yaml` has **`name`** (default = repo folder name), **`type: repo`**, and a
+   **`repo`** block with `repo_root`; no other type block.
+3. `.lfbridge/` holds the per-file fingerprint index (hash + size + dates; compressed/uncompressed variant
+   hashes for media), the IPFS manifest, and the `analysis/` outputs — matching [storages.mdx §4](./storages.mdx).
+4. `Sync` files move between the user's computers over **IPFS**; the small committed manifest travels via
+   **Git**; the repo may also mirror to **Google Drive / Dropbox** per its `clones` block.
+5. The repo storage is surfaced through the **Repos** tab (long list + per-repo screen) and the **Repos**
+   child of the Storages tab; it is **not** individually listed inside the Storages tab.
+
+<!--
+  Repo storage = any Git repo. Storage root = repo root (~/BGit/xyz/); tracking = ~/BGit/xyz/.lfbridge/
+  (git-ignored): storage.yaml (name + type: repo + repo_root), files.yaml fingerprints, manifest.yaml,
+  analysis/. Reuses the shared model from storages.mdx (don't restate it). UI = repos.mdx + one_repo.mdx.
+  The Storages tab represents all repos with ONE "Repos" child that links to the Repos tab.
+-->

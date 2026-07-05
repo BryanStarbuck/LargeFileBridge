@@ -11,48 +11,64 @@ import crypto from "node:crypto";
 import path from "node:path";
 import type { MediaProbe } from "@lfb/shared";
 import { expandHome } from "../fs/badges.js";
+import { assertAllowedPath } from "../fs/allow-root.js";
 import { log } from "../../shared/logging.js";
 
 // Per-process signing key. Tokens naturally invalidate on restart — fine for a viewer (media_viewer §2).
 const MEDIA_SECRET = crypto.randomBytes(32);
-const GRANT_TTL_MS = 6 * 60 * 60 * 1000; // ≈6h — outlives a long viewing session's re-buffers.
+// Short grant TTL (security audit finding 10): the URL is a bearer capability (a plain <img>/<video>
+// can't send a Bearer header), so keep the window small — minutes, enough to (re)buffer a viewing
+// session — rather than the old ≈6h that turned a leaked URL into a long-lived read capability.
+const GRANT_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 export interface ResolvedFile {
   abs: string;
   size: number;
 }
 
-/** Resolve to an existing REGULAR file (never a directory), or throw. Shared by grant + raw. */
+/** Resolve to an existing REGULAR file (never a directory), confined to the allow-roots, or throw.
+ *  Shared by grant + raw (security audit finding 2 — never stream a file outside the browse roots). */
 export function resolveMediaFile(input: string | undefined): ResolvedFile {
   const raw = (input && input.trim()) || "";
   if (!raw) throw new Error("path required");
   const abs = path.resolve(expandHome(raw));
   if (abs.includes("\0")) throw new Error("invalid path");
-  const st = fs.statSync(abs); // throws ENOENT → 404 upstream
+  const confined = assertAllowedPath(abs); // throws "path not allowed" for an out-of-root/secret path
+  const st = fs.statSync(confined); // throws ENOENT → 404 upstream
   if (!st.isFile()) throw new Error("not a file");
-  return { abs, size: st.size };
+  return { abs: confined, size: st.size };
 }
 
 // ── Signed grants ──────────────────────────────────────────────────────────────
-function sign(abs: string, expMs: number): string {
-  return crypto.createHmac("sha256", MEDIA_SECRET).update(`${abs}\n${expMs}`).digest("hex");
+// The grant binds the absolute path, the expiry, AND the minting session id (security audit
+// finding 10): a tampered sid changes the signature, so a grant is scoped to the session that minted
+// it and can't be silently re-attributed.
+function sign(abs: string, expMs: number, sid: string): string {
+  return crypto.createHmac("sha256", MEDIA_SECRET).update(`${abs}\n${expMs}\n${sid}`).digest("hex");
 }
 
-/** Mint a same-origin, Range-capable URL for one file. Caller must be allow-listed (router gates it). */
-export function mintGrant(input: string | undefined): { url: string } {
+/** Mint a same-origin, Range-capable URL for one file. Caller must be allow-listed (router gates it);
+ *  `sid` is the caller's session id, bound into the signed grant. */
+export function mintGrant(input: string | undefined, sid: string | null): { url: string } {
   const { abs } = resolveMediaFile(input);
+  const session = sid || "anon";
   const expMs = Date.now() + GRANT_TTL_MS;
-  const t = sign(abs, expMs);
-  const qs = new URLSearchParams({ path: abs, e: String(expMs), t });
+  const t = sign(abs, expMs, session);
+  const qs = new URLSearchParams({ path: abs, e: String(expMs), s: session, t });
   return { url: `/api/media/raw?${qs.toString()}` };
 }
 
 /** Verify a raw request's token. Returns the resolved file, or throws on expiry/forgery/missing file. */
-export function verifyGrant(input: string | undefined, e: string | undefined, t: string | undefined): ResolvedFile {
-  const file = resolveMediaFile(input); // also re-checks it's still a real file
+export function verifyGrant(
+  input: string | undefined,
+  e: string | undefined,
+  s: string | undefined,
+  t: string | undefined,
+): ResolvedFile {
+  const file = resolveMediaFile(input); // also re-checks it's still a real file (and still confined)
   const expMs = Number(e);
   if (!Number.isFinite(expMs) || expMs < Date.now()) throw new Error("grant expired");
-  const expected = sign(file.abs, expMs);
+  const expected = sign(file.abs, expMs, s || "anon");
   const got = (t || "").trim();
   if (got.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(got), Buffer.from(expected))) {
     throw new Error("bad grant");

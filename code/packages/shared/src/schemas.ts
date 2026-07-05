@@ -45,6 +45,38 @@ export const AppConfigSchema = z.object({
         .default({}),
     })
     .default({}),
+  // Compression preferences (compression.mdx §7). Per-media codec allow/deny + quality. Defaults chosen
+  // for social-media compatibility (deny jpeg2000 for images, av1 for video). Audio disabled for now.
+  compression: z
+    .object({
+      images: z
+        .object({
+          enabled: z.boolean().default(true),
+          quality: z.enum(["low", "medium", "high", "lossless"]).default("medium"),
+          prefer: z.array(z.string()).default(["jpeg", "webp"]),
+          deny: z.array(z.string()).default(["jpeg2000"]),
+        })
+        .default({}),
+      video: z
+        .object({
+          enabled: z.boolean().default(true),
+          quality: z.enum(["low", "medium", "high", "lossless"]).default("medium"),
+          prefer: z.array(z.string()).default(["h264", "hevc"]),
+          deny: z.array(z.string()).default(["av1"]),
+        })
+        .default({}),
+      audio: z
+        .object({
+          enabled: z.boolean().default(false), // audio not compressed for now (compression.mdx §1)
+          quality: z.enum(["low", "medium", "high", "lossless"]).default("medium"),
+          prefer: z.array(z.string()).default(["aac"]),
+          deny: z.array(z.string()).default([]),
+        })
+        .default({}),
+      preserve_resolution: z.boolean().default(true), // LOCKED on (compression.mdx §5)
+      replace_original_to_trash: z.boolean().default(true), // recoverable replace (compression.mdx §8)
+    })
+    .default({}),
   sync_process: z
     .object({
       installed: z.boolean().default(false),

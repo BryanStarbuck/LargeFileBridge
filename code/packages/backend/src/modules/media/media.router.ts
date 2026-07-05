@@ -4,16 +4,18 @@
 import fs from "node:fs";
 import { Router } from "express";
 import { requireAllowListed } from "../auth/identify.js";
+import { currentUser } from "../auth/current-user.js";
 import { log } from "../../shared/logging.js";
 import { mintGrant, probeMedia, verifyGrant, mimeFor, parseRange } from "./media.service.js";
 
 export const mediaRouter = Router();
 
-// GET /api/media/grant?path=<abs> — mint a short-lived signed URL (allow-listed).
+// GET /api/media/grant?path=<abs> — mint a short-lived signed URL (allow-listed), bound to the
+// caller's session id (security audit finding 10).
 mediaRouter.get("/grant", requireAllowListed, (req, res) => {
   const p = typeof req.query.path === "string" ? req.query.path : undefined;
   try {
-    res.json({ ok: true, data: mintGrant(p) });
+    res.json({ ok: true, data: mintGrant(p, currentUser(req).sessionId) });
   } catch (e) {
     log.warn("media", `grant failed for ${p ?? "<none>"}: ${(e as Error).message}`);
     res.status(400).json({ ok: false, error: (e as Error).message });
@@ -35,11 +37,12 @@ mediaRouter.get("/probe", requireAllowListed, (req, res) => {
 mediaRouter.get("/raw", (req, res) => {
   const path = typeof req.query.path === "string" ? req.query.path : undefined;
   const e = typeof req.query.e === "string" ? req.query.e : undefined;
+  const s = typeof req.query.s === "string" ? req.query.s : undefined;
   const t = typeof req.query.t === "string" ? req.query.t : undefined;
 
   let file: { abs: string; size: number };
   try {
-    file = verifyGrant(path, e, t);
+    file = verifyGrant(path, e, s, t);
   } catch (err) {
     const msg = (err as Error).message;
     // A missing file is a 404; a bad/expired token is a 403; anything else a 400.

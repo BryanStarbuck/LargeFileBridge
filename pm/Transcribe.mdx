@@ -1,0 +1,270 @@
+---
+title: LargeFileBridge — Transcribe (audio & video → text)
+description: The transcription feature. LFBridge transcribes AUDIO files (MP3, WAV, FLAC, M4A, AAC, OGG, …) and VIDEO files (MP4, MOV, MKV, WEBM, … — the audio track is demuxed to MP3 with ffmpeg first), turning speech into a plain-text transcript. Entry points span every scale: transcribe ONE file (its ⋮ kebab / right-click "Transcribe…", or the Transcribe button on the open MP3/MP4 in the Media Viewer), a FEW selected files, or ALL audio/video under a DIRECTORY, a REPO, or a whole STORAGE ("Transcribe all files…"). Transcripts are NOT stored in the local state dir — they live in a PARALLEL hidden hierarchy under the OWNING storage's own root: a dot-directory (e.g. .transcribe/) that recreates the same relative directory path down to the media file, storing the transcript beside the mirrored name (render/talk.mp3 → <storageRoot>/.transcribe/render/talk.mp3.txt). The transcription engine is COPIED into this repo's code tools directory (we do NOT reuse the ACT3-internal copy) and is called IN-PROCESS as a class from the web app — never by shelling out to `node Transcribe.js`. It drives the local `whisper` (+ `ffmpeg`) binaries, entirely on-machine (no network). Sibling of storages.mdx (the storage roots + the .lfbridge tracking area), media_viewer.mdx (the open-one-file view whose action bar gains Transcribe), menus.mdx (the ⋮ catalogs that gain Transcribe / Transcribe all files), and compression.mdx (the sibling "drive a local media tool over a file" engine this mirrors).
+---
+
+# LargeFileBridge — Transcribe (audio & video → text)
+
+LFBridge can **transcribe** the speech in a media file to a **plain-text transcript**. It works on
+**audio** (MP3, WAV, FLAC, M4A, AAC, OGG, …) and on **video** (MP4, MOV, MKV, WEBM, … — the audio
+track is demuxed to MP3 first), so any file whose "what was said" matters becomes searchable, quotable
+text.
+
+Two things make this spec worth pinning down: **where transcripts are stored** (a parallel hidden
+hierarchy under the storage's own root — §3), and **how the engine runs** (a copy of our `Transcribe`
+tool called **in-process** as a class, never shelled out — §5).
+
+Siblings this builds on and does not repeat:
+
+* [storages.mdx](./storages.mdx) — the storage roots a transcript hierarchy hangs under, and the
+  `.lfbridge/` tracking area (§6 media analysis). Transcribe is the **authoritative** spec for how the
+  transcript **files** are laid out; where `storages.mdx §6` sketched a `transcript.yaml` under
+  `.lfbridge/analysis/`, **this file supersedes that for transcripts** (§3.3).
+* [media_viewer.mdx](./media_viewer.mdx) — the open-one-file view; its action bar gains a **Transcribe**
+  button for audio/video (§2).
+* [menus.mdx](./menus.mdx) — the ⋮ kebab / right-click catalogs; the **file** catalog gains
+  **Transcribe…**, the **directory/repo/storage** catalogs gain **Transcribe all files…** (§2).
+* [compression.mdx](./compression.mdx) — the sibling engine that drives a local media tool over a file
+  (offer → confirm → run → report). Transcribe mirrors its shape (a `tools`/`file`/`batch` REST surface,
+  in-process `spawnSync` of a brew/pip binary).
+
+---
+
+## 1. What it does (the loop)
+
+For one media file, transcription is:
+
+1. **Classify** the file as audio or video by name ([media.ts `mediaKindForName`](../code/packages/shared/src/media.ts)).
+   Anything else is skipped with a clear reason.
+2. **Demux if video** — a video/container is not directly digestible by Whisper, so its audio track is
+   extracted to a temporary MP3 with **ffmpeg** (`-vn -acodec libmp3lame`). A video with **no audio
+   stream** writes a short "no audio to transcribe" placeholder instead of failing.
+3. **Transcribe** the audio with **Whisper** (`whisper --model base --language en`), preferring the
+   Apple-Silicon **MPS** GPU with an automatic **CPU fallback** when MPS emits garbage (the sanity check
+   the copied engine already carries).
+4. **Write the transcript** — a plain-text file with a small metadata header (source name, timestamp,
+   model) — into the **parallel `.transcribe/` hierarchy** under the owning storage root (§3).
+5. **Report truthfully** — word count on success; an honest skip/error otherwise (never a silent
+   "done"; the [sync_process.mdx §6](./sync_process.mdx#6-never-a-silent-no-op--report-truthfully-locked-learned-from-a-defect)
+   rule applies here too).
+
+Transcription is **always an explicit user action** — like compression, LFBridge **offers**, it never
+transcribes a file on its own.
+
+The per-file loop (classify → ffmpeg demux → whisper → write transcript → report) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `transcribeOne()`.
+
+---
+
+## 2. Entry points (every scale)
+
+Transcription is reachable everywhere a media file, or a bag of them, is visible. The same backend
+serves all of them.
+
+### 2.1 One file — the Media Viewer button
+
+Open an MP3 / MP4 (or any audio/video) in the **[Media Viewer](./media_viewer.mdx)**; its action bar
+(band 3) shows a **Transcribe…** button (for `kind` audio or video). Running it writes the transcript
+and toasts the word count; when a transcript already exists the button reads **Re-transcribe** and a
+**View transcript** link opens the `.txt` on the `/file` viewer.
+
+The Media-Viewer Transcribe button (and the View-transcript link) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` (calls `api.transcribeFile` / `api.transcript`).
+
+### 2.2 One file — the ⋮ kebab / right-click
+
+Every audio/video row (File System, repo files, storage files) and its single-entity page carry a
+**Transcribe…** item in the **Work** group of the entity ⋮ catalog
+([menus.mdx §5.3](./menus.mdx#5-the-per-entity-action-catalogs-locked)).
+
+### 2.3 A few files — selection
+
+A multi-select of media rows transcribes the selected set (the batch endpoint), mirroring the bulk
+Compress path.
+
+### 2.4 All files under a directory / repo / storage — "Transcribe all files…"
+
+* **Directory** — the directory ⋮ catalog gains **Transcribe all files…**, which walks the directory for
+  audio/video and transcribes each.
+* **Repo** — the repo row / one-repo page ⋮ ([menus.mdx §5.1](./menus.mdx)) gains **Transcribe all
+  files…** over the repo's working tree.
+* **Storage** — the storage detail page ([storages.mdx §2](./storages.mdx)) gains a **Transcribe all**
+  action over the whole storage.
+
+The kebab/menu items (`Transcribe…` on a file, `Transcribe all files…` on a directory / repo / storage) are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (file + directory) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `RepoKebab` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage`.
+
+---
+
+## 3. Where transcripts are stored — the parallel `.transcribe/` hierarchy (LOCKED)
+
+Transcripts do **not** go in the Local state dir, and they do **not** sit loose next to the media. They
+live in a **parallel hidden hierarchy under the owning storage's own root** — the storage for that
+storage *type* ([storages.mdx](./storages.mdx)), not `~/T/_large_files_bridge/`.
+
+### 3.1 The layout
+
+Under the storage root sits a **dot-directory** (a hidden folder). Inside it, LFBridge **recreates the
+same relative directory path** down to the media file, and stores the transcript under the **same file
+name** (the media file's name + `.txt`):
+
+```
+<storage root>/
+├── render/
+│   └── talk.mp3                         ← the real media file
+└── .transcribe/                         ← the parallel hidden hierarchy (the "dot" dir)
+    └── render/                          ← same relative path, recreated
+        └── talk.mp3.txt                 ← the transcript (media name + .txt)
+```
+
+So for a file at **`render/talk.mp3`** (relative to the storage root), the transcript is written to
+**`<storage root>/.transcribe/render/talk.mp3.txt`**. The `.transcribe/` tree is a **mirror by depth**:
+the number of directories down from the storage root is preserved exactly, so a transcript is always
+findable from its media file's relative path and vice-versa.
+
+> **The directory name.** This spec uses **`.transcribe/`** (self-documenting for the feature). The
+> product owner referred to it loosely as `.flac/`; the name is a **single constant** — rename it in one
+> place if desired. What is LOCKED is the *shape*: a hidden dot-directory at the storage root that
+> mirrors the relative path and keeps the media's own file name.
+
+### 3.2 Keeping the media name
+
+The transcript keeps the **media file's full name** plus `.txt` (`talk.mp3.txt`, not `talk.txt`) so that
+`talk.mp3` and `talk.wav` in the same folder never collide — each maps to a distinct transcript. The
+`.txt` body opens in the ordinary `/file` viewer like any other text file.
+
+### 3.3 Relationship to `.lfbridge/analysis/`
+
+[storages.mdx §6](./storages.mdx#6-per-file-media-analysis-transcription--description--visuals-by-time)
+sketched transcripts as `transcript.yaml` under `.lfbridge/analysis/<relpath>/`. **This spec is
+authoritative for the transcript files** and uses the simpler, human-openable **`.transcribe/<relpath>.txt`**
+layout above. The `.lfbridge/analysis/` area remains the home of the *other* analysis outputs
+(description, visuals-by-time); when the analysis index needs to note that a transcript exists, it points
+at the `.transcribe/` path rather than duplicating the text.
+
+### 3.4 Finding the storage root + git-ignore
+
+The owning storage root is the **nearest ancestor** of the media file that is a storage — a directory
+carrying a `storage.yaml`, a `.lfbridge/`, or a `.git/` (a repo is a storage). When none is found, the
+media file's own directory is used as the base, so a stray file still gets a `.transcribe/` beside it.
+The `.transcribe/` directory is **git-ignored** (added alongside the existing `.lfbridge/` ignore) so
+transcripts never bloat commits; the bytes sync over IPFS with the rest of the storage.
+
+Resolving the owning storage root and the parallel transcript path (`<root>/.transcribe/<relpath>.txt`), and ensuring `.transcribe/` is git-ignored, are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `resolveStorageRoot()` / `resolveTranscriptPath()` (constant `TRANSCRIBE_DIR`).
+
+---
+
+## 4. What a transcript file contains
+
+A transcript is plain UTF-8 text: a short metadata header, a divider, then the transcript body.
+
+```
+Transcription of: talk.mp3
+Generated on: 2026-07-05 09:41:00
+Model used: whisper-base (language: en)
+============================================================
+
+Welcome back to the show. Today we're talking about …
+```
+
+A video with **no audio stream** yields a one-line placeholder (`[No audio stream — nothing to
+transcribe]`) so a re-run over a tree can skip it cheaply. Results are **idempotent by path**: an
+existing transcript is reported as "already transcribed" unless the caller asks to overwrite
+(Re-transcribe).
+
+---
+
+## 5. The engine — copied in, called in-process (LOCKED)
+
+The transcription engine is our existing **`Transcribe.js`** tool (canonically
+`~/BGit/all/tools/Transcription/Transcribe.js`, and a copy in the ACT3-internal web app). LFBridge does
+**not** reuse the ACT3-internal copy and does **not** bounce through the command line or spawn a separate
+`node` process to run it. Instead:
+
+* The engine is **copied into this repo's own code `tools/` subdirectory** and adapted to TypeScript as a
+  **class** with a callable method (no `process.argv`, no `process.exit`, no top-level auto-run). We own
+  our copy; upstream changes are pulled in by re-copying, not by importing across repos.
+* The web-app backend **imports the class and calls it directly, in-process** — one function call, a
+  structured result back. This is the same discipline as
+  [compression.mdx](./compression.mdx): drive the local media binary from inside the Node process.
+
+* **It still drives the local `whisper` and `ffmpeg` binaries** via `spawnSync` — those are the actual
+  transcription/demux tools (Whisper is a Python CLI). "In-process" means *we don't shell out to our own
+  Node script*; invoking the underlying `whisper`/`ffmpeg` executables is expected and mirrors how
+  `compression.service.ts` invokes `ffmpeg`/`magick`.
+* **Entirely local — no network.** Whisper runs on-machine; nothing about the media or the transcript
+  leaves the computer (charter alignment: only-our-content, no phone-home).
+* **Tools may be missing.** If `whisper` or `ffmpeg` is not installed, the engine returns a clear
+  `toolMissing` result with the install hint (`pipx install openai-whisper`, `brew install ffmpeg`) —
+  it does **not** silently no-op and does **not** auto-install behind a web request.
+
+The copied in-process engine (ffmpeg demux + Whisper with the MPS→CPU fallback and English sanity check, returning a structured result instead of logging/exiting) lives in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — class `Transcriber`, methods `toolStatus()` / `transcribeToFile()`.
+
+---
+
+## 6. REST surface
+
+Allow-list-gated like every data route, mirroring `compression.router.ts`:
+
+| Method + path | Body / query | What |
+| --- | --- | --- |
+| `GET /api/transcribe/tools` | — | Are `whisper` + `ffmpeg` installed (drives the disabled state + install hint). |
+| `GET /api/transcribe/file?path=<abs>` | — | The existing transcript for a media file (text + transcript path), or `null`. |
+| `POST /api/transcribe/file` | `{ path, overwrite? }` | Transcribe ONE file → the `.transcribe/` hierarchy. |
+| `POST /api/transcribe/batch` | `{ paths[], overwrite? }` | Transcribe a selected set. |
+| `POST /api/transcribe/tree` | `{ path, overwrite? }` | Transcribe ALL audio/video under a directory or repo. |
+| `POST /api/transcribe/storage/:id` | `{ overwrite? }` | Transcribe ALL audio/video in a storage. |
+
+The transcription REST surface (tools / read-transcript / file / batch / tree / storage) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.router.ts` — `transcribeRouter`, mounted at `/api/transcribe` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts`.
+
+> **Long-running note.** Whisper is slow (minutes per file). Like `compressBatch`, the tree/storage
+> endpoints run **synchronously** per file through the engine for the first implementation; a future
+> enhancement is a background job queue with progress. Each file reports its own result so a tree run
+> returns honest per-file counts (transcribed / skipped / failed).
+
+---
+
+## 7. Acceptance criteria
+
+1. LFBridge transcribes **audio** (MP3, WAV, FLAC, M4A, AAC, OGG, …) and **video** (MP4, MOV, MKV,
+   WEBM, … — audio demuxed via ffmpeg first) to a **plain-text transcript**; non-media files are skipped
+   with a reason; a video with no audio yields a placeholder.
+2. **Entry points at every scale:** the **Media Viewer** Transcribe button on an open audio/video; a
+   **Transcribe…** item in the file ⋮ kebab / right-click / more-menu; a selected-set batch; and
+   **Transcribe all files…** on a **directory**, a **repo**, and a **storage**.
+3. Transcripts are stored in a **parallel hidden `.transcribe/` hierarchy under the owning storage's own
+   root** (not the Local state dir), **recreating the media file's relative directory path** and keeping
+   the media's own name (`render/talk.mp3` → `<root>/.transcribe/render/talk.mp3.txt`). `.transcribe/`
+   is git-ignored.
+4. The **owning storage root** is the nearest ancestor with `storage.yaml` / `.lfbridge/` / `.git/`;
+   when none exists, the file's own directory is the base.
+5. The engine is **copied into this repo's `tools/` directory** (the ACT3-internal copy is **not**
+   reused) and is **called in-process as a class** — never by shelling out to `node Transcribe.js`; it
+   still invokes the local `whisper` + `ffmpeg` binaries and runs **entirely on-machine (no network)**.
+6. Missing `whisper`/`ffmpeg` produces a clear **tool-missing** result with an install hint (no silent
+   no-op, no auto-install behind a request); every run **reports truthfully** (word count on success,
+   honest skip/error otherwise).
+7. Transcription is **always an explicit user action** — LFBridge offers, never transcribes on its own.
+
+<!--
+  Transcribe = audio+video → plain-text transcript. LOCKED:
+  (§3) transcripts live in a PARALLEL hidden hierarchy under the OWNING STORAGE ROOT: <root>/.transcribe/
+       <relpath>.txt — recreate the media file's relative dir path, keep the media name + .txt. NOT the
+       local state dir. Dir name is a single constant (.transcribe/; owner said ".flac/" loosely — the
+       SHAPE is locked, not the literal name). git-ignore .transcribe/. Supersedes storages.mdx §6's
+       transcript.yaml sketch for transcripts.
+  (§5) engine = our Transcribe.js COPIED into code/packages/backend/src/tools/transcribe/Transcribe.ts as
+       a TS class, called IN-PROCESS (no `node Transcribe.js`, no reuse of ACT3-internal copy). Still
+       spawns local whisper+ffmpeg; entirely on-machine, no network. Missing tools → clear toolMissing.
+  (§2) entry points: MediaViewer button, file ⋮ Transcribe…, batch, dir/repo/storage "Transcribe all
+       files…". Always explicit user action (like compression.mdx).
+  Code pointers: transcribe.service.ts (transcribeOne/transcribeTree/resolveStorageRoot/resolveTranscriptPath),
+  transcribe.router.ts (/api/transcribe tools|file|batch|tree|storage), tools/transcribe/Transcribe.ts
+  (Transcriber.transcribeToFile), MediaViewer ActionBar, EntityMenu buildActions, RowKebabs RepoKebab,
+  StorageDetailPage. Mirrors compression.mdx's engine+router shape. Keep in sync with media_viewer.mdx §4
+  (action bar) and menus.mdx §5 (add Transcribe to the file + dir catalogs).
+-->
+</content>

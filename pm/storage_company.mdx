@@ -1,0 +1,105 @@
+---
+title: LargeFileBridge — Company Storage
+description: The Company storage spec. A shared pile of a company's large files, one directory-based storage per company, e.g. ~/BGit/Bryan_git/act3_large_files_bridge/. Each carries a storage.yaml with name + type: company + a company block (company_name and company-scoped child properties) and a hidden .lfbridge/ area (fingerprint index, IPFS manifest, media-analysis outputs). A user may belong to MORE THAN ONE company, so several company storages can coexist; each appears as its own child in the Storages left-bar tab (labeled by company name). Company storages sync across the members' computers over IPFS and often also clone to a shared Google Drive / Dropbox. Sibling of storage_repo / storage_personal / storage_community; shares the storage.yaml schema and .lfbridge/ layout defined in storages.mdx.
+---
+
+# LargeFileBridge — Company Storage
+
+**Company storage** is a **shared pile of a company's large files** — the big media/assets a team needs
+in common. There is **one company storage per company**, and a user may belong to **more than one
+company**, so several can coexist on the same machine.
+
+Read the shared model first: the storage family, the `storage.yaml` schema, the `.lfbridge/` tracking
+layout, cloud clones, and media analysis are defined once in **[storages.mdx](./storages.mdx)**. This spec
+covers only what is **specific to company storage**.
+
+Siblings this builds on and does not repeat:
+
+* [storages.mdx](./storages.mdx) — the umbrella: `storage.yaml` (§3), `.lfbridge/` (§4), clones (§5),
+  media analysis (§6).
+* [storage_repo.mdx](./storage_repo.mdx) — the canonical directory-based storage; company storage is the
+  same shape with a `company` block and a shared (multi-user) audience.
+* [storage_personal.mdx](./storage_personal.mdx) — the single-user private counterpart.
+
+---
+
+## 1. Anatomy of a company storage
+
+```
+~/BGit/Bryan_git/act3_large_files_bridge/     ← ONE company's storage root ("ACT3")
+├── .lfbridge/
+│   ├── storage.yaml        ← name + type: company + company block (storages.mdx §3)
+│   ├── files.yaml          ← per-file fingerprint index (storages.mdx §4.1)
+│   ├── manifest.yaml       ← large-file → IPFS CID + pin state
+│   └── analysis/           ← per-file media analysis (storages.mdx §6)
+└── …the company's shared big files…
+```
+
+* **Root:** one directory per company, e.g. `~/BGit/Bryan_git/act3_large_files_bridge/`. A user in three
+  companies has three such roots, each its own storage.
+* Because it is **shared across members**, its bytes sync across **the members' computers** over IPFS — a
+  company storage is the multi-user case (peers here include teammates' machines, within the company's
+  allow-list).
+
+---
+
+## 2. `storage.yaml` for a company
+
+```yaml
+# ~/BGit/Bryan_git/act3_large_files_bridge/.lfbridge/storage.yaml
+name: "ACT3 Company Files"
+type: company
+created: 2026-05-01T10:12:00Z
+company:
+  company_name: "ACT3 AI"     # which company — the label shown in the Storages tab
+  # company-scoped child properties:
+  division: "Film"            # optional
+  allow_list: ["bryan@whitehatengineering.com", "…"]   # who may carry this storage
+  drive_folder: "Shared drives/ACT3"                    # optional shared-drive anchor
+clones:
+  google_drive: "Shared drives/ACT3/LFB"   # a company storage often mirrors to a SHARED drive
+  dropbox: null
+```
+
+* **`type: company`** with a **`company`** block. **`company_name`** names which company; child properties
+  scope the storage (division, allow-list of members, shared-drive anchor, …).
+* A user in multiple companies has **multiple** company storages, each with its own `company_name`.
+
+---
+
+## 3. Media analysis + cloud clones
+
+Company storage produces the [storages.mdx §6](./storages.mdx) **media-analysis** outputs into
+`.lfbridge/analysis/` — and because these are shared, a teammate who pulls the storage gets the
+transcript / description / visuals-by-time without re-running them. A company storage **often clones to a
+shared Google Drive / Dropbox** ([storages.mdx §5](./storages.mdx)) so members without LFB can still reach
+the files; recorded in the `clones` block.
+
+---
+
+## 4. Where it shows in the UI
+
+In the **[Storages](./storages.mdx#2-the-storages-left-bar-tab)** left-bar tab, **each company gets its
+own child**, labeled by **`company_name`**. A user in ACT3 and two other companies sees three company
+children under Storages, alongside Personal, the Repos link, and their communities.
+
+---
+
+## 5. Acceptance criteria
+
+1. There is **one company storage per company**, rooted in its own directory (e.g.
+   `~/BGit/Bryan_git/act3_large_files_bridge/`), tracked via a hidden **`.lfbridge/`** at its root.
+2. Its `.lfbridge/storage.yaml` has **`name`** + **`type: company`** and a **`company`** block carrying
+   **`company_name`** plus company-scoped child properties (division, allow-list, drive anchor, …).
+3. A user may belong to **more than one** company; each is a separate storage and gets its **own child**
+   (labeled by `company_name`) in the Storages tab.
+4. It syncs across the **members'** computers over IPFS (within the company allow-list) and often clones to
+   a **shared** Google Drive / Dropbox; `.lfbridge/` holds fingerprints, manifest, and `analysis/` per
+   [storages.mdx §4](./storages.mdx).
+
+<!--
+  Company storage = a company's SHARED big files, one per company (e.g. ~/BGit/Bryan_git/act3_large_files_bridge/).
+  storage.yaml: name + type: company + company block (company_name + child props like division/allow_list).
+  A user may be in MANY companies → many company storages → one child each in the Storages tab (labeled by
+  company_name). Multi-user: syncs across members' computers; often clones to a SHARED drive. See storages.mdx.
+-->

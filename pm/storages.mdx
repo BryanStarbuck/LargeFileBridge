@@ -1,0 +1,258 @@
+---
+title: LargeFileBridge — Storages (the umbrella)
+description: The umbrella spec for LargeFileBridge "storages". A storage is a place LFBridge tracks and syncs large files. There are five kinds — Local (this computer's settings/config, the database replacement), Repo (any Git repo, tracked in a hidden .lfbridge/ folder in the repo root), Personal (the user's own personal_large_files_bridge directory), Company (one directory per company), and Community (one per community the user chooses to help / download / share). Every directory-based storage is a real directory hierarchy with a storage.yaml at its root declaring its name + type (and type-specific properties like company_name or community), plus a hidden .lfbridge/ tracking area holding the per-file fingerprint index and per-file media-analysis outputs (transcription, description, visuals-and-action-by-time YAML for video; content description for images). Storages sync between the user's computers over IPFS and often also keep a clone in Google Drive and Dropbox. This spec defines the storage family, the Storages left-bar tab and its children, the shared storage.yaml schema, the .lfbridge/ tracking layout, the media-analysis outputs, and how a user belongs to many storages at once. Sibling specs: storage_local.mdx, storage_repo.mdx, storage_personal.mdx, storage_company.mdx, storage_community.mdx.
+---
+
+# LargeFileBridge — Storages (the umbrella)
+
+A **storage** is a place LargeFileBridge (LFB) **tracks and syncs large files**. This is the umbrella
+spec: it defines the **family** of storages, the shared **`storage.yaml`** schema, the hidden
+**`.lfbridge/`** tracking layout, the per-file **media-analysis** outputs, and the **Storages** left-bar
+tab. Each kind then has its own detail spec.
+
+A person is normally involved with **more than one storage at once** — several **communities**, one or
+more **companies**, and their own **personal** files — plus every **repo** on the machine, all sitting on
+top of this computer's **local** settings. The whole point of the Storages tab is to make that
+multiplicity legible in one place.
+
+The five kinds:
+
+| Storage | Type | Root directory | Detail spec |
+| --- | --- | --- | --- |
+| **Local** | `local` | `~/T/_large_files_bridge/` (settings/config; the DB replacement — **no** `storage.yaml`) | [storage_local.mdx](./storage_local.mdx) |
+| **Repo** | `repo` | any Git repo root, e.g. `~/BGit/xyz/` → tracking in `~/BGit/xyz/.lfbridge/` | [storage_repo.mdx](./storage_repo.mdx) |
+| **Personal** | `personal` | `~/BGit/Bryan_git/personal_large_files_bridge/` | [storage_personal.mdx](./storage_personal.mdx) |
+| **Company** | `company` | one per company, e.g. `~/BGit/Bryan_git/act3_large_files_bridge/` | [storage_company.mdx](./storage_company.mdx) |
+| **Community** | `community` | one per community the user helps / downloads / shares | [storage_community.mdx](./storage_community.mdx) |
+
+Siblings this builds on and does not repeat:
+
+* [storage_local.mdx](./storage_local.mdx) — the state root, app/user config, auth session, `peers.yaml`,
+  logs, and the local index. **Local Storage is settings + this machine's bookkeeping; it is not one of
+  the directory-based storages** and has no `storage.yaml`.
+* [Communities](./communities.mdx) — the *subscribe/consume/support* model for other people's public
+  files. A **Community storage** (here) is the on-disk hierarchy a community subscription materializes to.
+* [Repos](./repos.mdx) / [One repo](./one_repo.mdx) — the repos list and per-repo screen. A **repo is one
+  kind of storage**; the Storages tab links to the Repos tab rather than re-listing every repo.
+* [README](../README.md) / [CLAUDE.md](../CLAUDE.md) — the charter: git for small files, IPFS for big
+  ones; per-file tracking metadata (hashes, size, dates, compressed/uncompressed variants); only-our-content.
+
+---
+
+## 1. Local vs. directory-based storages (LOCKED)
+
+Two categories, and they play different roles:
+
+* **Local Storage** (`local`) is **this computer's own settings, configuration, and bookkeeping** — the
+  **database replacement** ([storage_local.mdx](./storage_local.mdx)). It does not itself sync between
+  computers; wipe it and a rescan rebuilds it.
+* **Directory-based storages** (`repo` · `personal` · `company` · `community`) are **real directory
+  hierarchies that hold the shared large files**. They:
+  1. carry a **`storage.yaml`** at their root (§3) declaring name + type + type-specific properties,
+  2. carry a hidden **`.lfbridge/`** tracking area at their root (§4) — the per-file fingerprint index and
+     the per-file media-analysis outputs,
+  3. **sync between the user's computers over IPFS** (git for the small files + manifest; IPFS for the
+     bytes — charter), and
+  4. **often also have a clone in Google Drive and/or Dropbox** (§5) — the same hierarchy mirrored to a
+     cloud drive as a second, human-reachable copy.
+
+The one boundary that never blurs: **Local holds settings; the directory-based storages hold files.**
+
+---
+
+## 2. The Storages left-bar tab
+
+The left bar gains a **Storages** entry (source of truth `pm/left_bar.yaml`, human companion
+[left_bar.mdx](./left_bar.mdx)). It is a grouping tab whose **children** are the storages this user
+belongs to — so the multiplicity is visible at a glance:
+
+* **Personal** → the user's [Personal storage](./storage_personal.mdx).
+* **One child per Company** → each [Company storage](./storage_company.mdx) the user is in (label = the
+  company name).
+* **Repos** → **does not** list every repo here; clicking it routes to the dedicated **[Repos](./repos.mdx)
+  tab**, which owns the long list. (The Storages tab is the *map of storage kinds*, not the repo list.)
+* **Communities** → the [Community storages](./storage_community.mdx) the user has opted into — the ones
+  they chose to **download** for themselves or **share** to help keep secure. (The separate top-level
+  **[Communities](./communities.mdx)** tab remains the place to *discover and subscribe*; the Storages
+  child is the *on-disk result*.)
+
+The Storages children are **derived** — Personal from the personal storage's presence, Companies +
+Communities by scanning each directory-based storage's `storage.yaml` `type`, and Repos as the fixed link
+to the Repos tab.
+
+Building the Storages tab and its derived children (Personal · Companies · Repos link · Communities) from the discovered `storage.yaml` files is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `listStorages()` (new module) · rendered by the frontend `Sidebar` from `pm/left_bar.yaml`.
+
+---
+
+## 3. `storage.yaml` — the per-storage descriptor (LOCKED shape)
+
+Every **directory-based** storage has a **`storage.yaml`** at the **root of its directory**. It declares
+the storage's identity and its type-specific properties. Local Storage has none (it is not a directory
+storage).
+
+```yaml
+# <storage root>/storage.yaml
+name: "ACT3 Company Files"      # human name shown in the Storages tab
+type: company                   # local | repo | personal | company | community
+created: 2026-05-01T10:12:00Z
+# ── Type-specific block (exactly one, matching `type`) ────────────────────────
+company:                        # present when type: company
+  company_name: "ACT3 AI"
+  # …company-scoped properties (division, drive folder id, allow-list, …)
+community:                      # present when type: community
+  id: "holon-citizen"           # which community (stable key; matches communities.mdx)
+  role: support                 # download | share | support — why the user carries it
+  # …community-scoped child properties (publisher pubkey, budget mode, …)
+personal: {}                    # present when type: personal (usually empty / user prefs)
+repo:                           # present when type: repo
+  repo_root: "~/BGit/xyz"       # the Git repo this storage tracks
+# ── Optional cloud mirrors (§5) ───────────────────────────────────────────────
+clones:
+  google_drive: "My Drive/LFB/ACT3"     # relative path inside the connected Drive, or null
+  dropbox: "Apps/LFB/ACT3"              # relative path inside Dropbox, or null
+```
+
+* **`name`** and **`type`** are required on every storage. **Exactly one** type-specific block is present,
+  matching `type`.
+* **Company** carries **`company_name`** plus company-scoped child properties.
+* **Community** carries **`community`** naming **which** community (its stable id, matching
+  [communities.mdx](./communities.mdx)) plus community-scoped child properties (e.g. the publisher and the
+  Block/Recommended/Full backup budget mode).
+* **`clones`** records where, if anywhere, this same hierarchy is mirrored on Google Drive / Dropbox (§5).
+
+Reading and writing `storage.yaml` (atomic, YAML, per-storage) is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `readStorageDescriptor` / `writeStorageDescriptor`.
+
+---
+
+## 4. `.lfbridge/` — the hidden per-storage tracking area
+
+Alongside `storage.yaml`, each directory-based storage keeps a hidden **`.lfbridge/`** folder at its root
+(for a **repo**, that is `~/BGit/xyz/.lfbridge/`). It holds everything LFB knows about the files in *this*
+storage — kept **out of Git** (add `.lfbridge/` to the repo's `.gitignore`) so tracking never bloats
+commits, while the small committed manifest still travels with the code.
+
+```
+<storage root>/
+├── storage.yaml                 # §3 descriptor
+├── .lfbridge/
+│   ├── files.yaml               # per-file fingerprint index (§4.1)
+│   ├── manifest.yaml            # large-file → IPFS CID + pin state (storage_local.mdx §9)
+│   └── analysis/                # per-file media-analysis outputs (§6)
+│       └── <relpath>/
+│           ├── transcript.yaml
+│           ├── description.yaml
+│           └── visuals_by_time.yaml
+└── …the storage's actual files…
+```
+
+### 4.1 Per-file tracking metadata (charter)
+
+`.lfbridge/files.yaml` records, per file, enough to tell whether it changed since last seen — a **hash**
+(fingerprint), **size**, **created**, and **modified**. Compressible media (video/image) carry **two**
+hashes, **compressed** and **uncompressed**, nested under the file entry (charter — see the CLAUDE.md
+"Per-file tracking metadata" example). This is the same shape whatever the storage type:
+
+```yaml
+files:
+  render/final_4k.mp4:
+    size: 734003200
+    created: 2026-05-01T10:12:00Z
+    modified: 2026-06-18T14:33:00Z
+    hashes:
+      uncompressed: { hash: <fingerprint>, size: 734003200 }
+      compressed:   { hash: <fingerprint>, size: 118489088 }
+    analysis: [transcript, description, visuals_by_time]   # which §6 outputs exist
+```
+
+Writing the per-file fingerprint index (hash + size + dates; compressed/uncompressed variant hashes for media) is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `indexStorageFiles`.
+
+---
+
+## 5. Cloud clones (Google Drive / Dropbox)
+
+A directory-based storage's **IPFS copy is the primary sync path** between the user's computers, but a
+storage will **sometimes also have a clone in Google Drive and/or Dropbox** — the same directory
+hierarchy mirrored into a cloud drive as a second, human-reachable, non-IPFS copy. The `clones` block in
+`storage.yaml` (§3) records the relative path of that mirror in each connected drive (or `null`).
+
+This reuses the existing Drive/Dropbox integration specs — [google_drive.mdx](./google_drive.mdx) and
+[dropbox.mdx](./dropbox.mdx) — applied per storage: a storage may be pinned over IPFS, mirrored to Drive,
+mirrored to Dropbox, or any combination. The clones are **mirrors, not the source of truth**; the
+`.lfbridge/` index + IPFS manifest remain authoritative.
+
+---
+
+## 6. Per-file media analysis (transcription · description · visuals-by-time)
+
+For a file in a storage — **especially a video** — LFB can run analysis passes whose outputs are written
+as **YAML** under `.lfbridge/analysis/<relpath>/`. These are **generated artifacts** that travel with the
+storage, so any of the user's computers (or a teammate on a company/community storage) gets them without
+re-running. Each pass is an explicit, opt-in operation (never automatic on bytes — charter §6.1 spirit).
+
+The passes:
+
+* **Transcript** (`transcript.yaml`) — **speech-to-text** of what people are *saying* in a video (or in
+  an audio file), with time ranges. This is the "what was said" track.
+* **Description** (`description.yaml`) — a prose **summary/description** of the file: for a **video**, what
+  it is about; for an **image**, **what is in the image** (a content description). The "what is it" track.
+* **Visuals & action by time** (`visuals_by_time.yaml`) — primarily for **video**: a timeline of
+  **time ranges** with, for each, **what is visually going on** and **what is going on story-wise** — so
+  the material can be re-used or re-created (think cinematography beats/shots). The "what is happening,
+  when" track.
+
+```yaml
+# .lfbridge/analysis/render/final_4k.mp4/visuals_by_time.yaml
+source: render/final_4k.mp4
+segments:
+  - start: "00:00:00"
+    end:   "00:00:06"
+    visual: "Wide desert dawn; single figure walks camera-left to -right."
+    story:  "Establishing the journey; isolation."
+  - start: "00:00:06"
+    end:   "00:00:14"
+    visual: "Cut to close-up, dust on face; hard side light."
+    story:  "Cost of the journey registers on the character."
+```
+
+* **Images** get **Description** (what's in the image); Transcript and Visuals-by-time are video/audio
+  concepts and are skipped for a still image.
+* The results are cached against the file's fingerprint (§4.1) — re-running is skipped when the hash is
+  unchanged.
+
+Running the analysis passes and writing the per-file YAML outputs into `.lfbridge/analysis/` is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/analysis.service.ts` — `analyzeFile` (dispatches transcript / description / visuals-by-time by media kind).
+
+---
+
+## 7. Acceptance criteria
+
+1. There are **five storage kinds** — `local`, `repo`, `personal`, `company`, `community` — each with a
+   detail spec; **Local** is settings/config (the DB replacement, no `storage.yaml`), the other four are
+   directory hierarchies that hold the shared files.
+2. Every **directory-based** storage has a **`storage.yaml`** at its root declaring **`name`** + **`type`**
+   and **exactly one** type-specific block; **company** carries `company_name`, **community** carries which
+   `community` (+ child props), each with type-scoped properties.
+3. Every directory-based storage has a hidden **`.lfbridge/`** at its root (for a repo, `~/BGit/xyz/.lfbridge/`)
+   holding the per-file fingerprint index (hash + size + dates; compressed/uncompressed variant hashes for
+   media), the IPFS manifest, and the `analysis/` outputs — all git-ignored.
+4. A user can belong to **many** storages at once (multiple communities + companies + personal + every
+   repo). The **Storages** left-bar tab shows them: **Personal**, one child **per company**, a **Repos**
+   child that routes to the Repos tab (not a long list), and the opted-in **Communities**.
+5. Storages sync between the user's computers over **IPFS** and **may also** clone to **Google Drive** and
+   **Dropbox** (recorded in `storage.yaml` `clones`); the clones are mirrors, not the source of truth.
+6. **Media analysis** can produce, per file under `.lfbridge/analysis/`: a **transcript** (speech +
+   time), a **description** (video summary / image contents), and **visuals-and-action-by-time** (time
+   ranges × visual × story) — video gets all three, images get description only; results cache against the
+   file fingerprint.
+
+<!--
+  Umbrella for the storage family. Local = settings/config (DB replacement, storage_local.mdx). The four
+  directory-based storages (repo/personal/company/community) each carry storage.yaml (name + type + type
+  block) + a hidden .lfbridge/ (files.yaml fingerprints, manifest.yaml, analysis/). They sync over IPFS
+  and may also mirror to Google Drive / Dropbox. The Storages left-bar tab groups Personal + Companies +
+  a Repos link + opted-in Communities. Media analysis writes transcript/description/visuals_by_time YAML.
+  Sibling detail specs: storage_local, storage_repo, storage_personal, storage_company, storage_community.
+-->

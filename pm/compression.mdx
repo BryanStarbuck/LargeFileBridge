@@ -1,0 +1,262 @@
+---
+title: LargeFileBridge — Compression
+description: How LargeFileBridge compresses IMAGE and VIDEO files (audio is out of scope for now, planned later). Compression is always an explicit, user-chosen action — never automatic — and can be run on one file, several checked files, or every file in the current table filter. It uses quality-controllable brew-installed command-line tools (ffmpeg for video; ImageMagick / oxipng / cwebp / mozjpeg for images) run at a MEDIUM quality level — never maximum-aggression — preferring LOSSLESS re-encoding where that applies, so files shrink without visible quality loss. Two hard invariants: (1) the output must keep the SAME aspect ratio and the SAME pixel resolution — we never downscale; and (2) before compressing we run an ALPHA-CHANNEL SAFETY CHECK — if a PNG's alpha is actually used, or a video's format carries a used alpha channel, we refuse a target codec that would drop it (unless the chosen codec preserves alpha). PNG typically converts to JPEG (or JPEG 2000 when better, unless the user denied it). Settings let the user allow/deny specific codecs per media type (images / video / eventually audio) with good, social-media-safe defaults. The View-one-file page shows which codec a file is compressed with and whether it is compressed. Tools run via a temp file, then replace the original (the original goes to LFBridge trash — recoverable). Implemented by the /api/compress backend module and the media viewer / repo table / settings frontend.
+---
+
+# LargeFileBridge — Compression
+
+Compression is a **core value** ([charter](../CLAUDE.md#compression-a-core-value)): many large files people
+sync are **uncompressed when they don't need to be**. LFBridge finds those and, **only when the user
+asks**, compresses them — **images** and **video** (audio is out of scope for now, planned later).
+
+This spec defines the compression **engine**: the quality-controllable brew tools we drive, the
+medium-quality / prefer-lossless policy, the two hard invariants (resolution-preserving + alpha-safety),
+the codec preference settings, and how the user triggers it on one / many / a whole filter.
+
+Siblings this builds on and does not repeat:
+
+* [charter — Compression](../CLAUDE.md) — the product rules: video first / image second; never alter a
+  file unless the user asks; the learned uncompressed-vs-compressed size baselines; the PNG alpha-check
+  requirement; the two-hash (compressed/uncompressed) per-file tracking.
+* [Menus](./menus.mdx) — the **Compress…** and **Convert to compressible…** catalog items (explicit-click
+  offers with a confirm, §6.1). This spec is what those items run.
+* [View one file / media viewer](./media_viewer.mdx) — where a single file's **codec + compressed state**
+  are shown and the **Compress** button lives (§4).
+* [One repo](./one_repo.mdx) — the files table where the user **checks several** files or **compresses the
+  whole current filter** (§4.4 bulk actions).
+* [Settings](./settings.mdx) — where the **codec allow/deny per media type** preferences live.
+
+---
+
+## 1. Principles (LOCKED)
+
+1. **Never automatic.** LFBridge never compresses on its own. The user clicks **Compress** on a file, or
+   selects several / a whole table filter and clicks compress. Charter §6.1.
+2. **Medium quality, prefer lossless.** We target a **medium** quality level — not maximum-aggression that
+   throws away visible quality. Where a **lossless** re-encoding applies (e.g. recompressing a PNG, or a
+   lossless WebP), we use it: the file won't shrink as much, but **no quality is lost**. Tools are always
+   invoked with an **explicit quality parameter** — we only use brew tools that let us **control the
+   quality level** (so it never silently maxes out compression).
+3. **Never change the pixels' size.** The output MUST keep the **same aspect ratio** and the **same pixel
+   resolution** as the input. **We never downscale.** This is verified after encoding (§5) — a size change
+   aborts the operation.
+4. **Alpha safety first.** Before compressing we run the **alpha-channel safety check** (§6). If real
+   transparency would be lost, we refuse (or steer to an alpha-preserving codec).
+5. **Recoverable.** Compression replaces the file via a **temp file**, and the original is moved to the
+   **LFBridge trash** (recoverable) — never hard-deleted.
+6. **Audio is out of scope** for now (planned later). The engine and settings carry an audio slot, but it
+   is disabled by default.
+
+---
+
+## 2. The brew tools (quality-controllable)
+
+We only use tools where the **quality level is an input we control**. Detected on PATH at runtime; a
+missing tool degrades the relevant operation with a clear "install X" message (never a silent fail).
+
+| Media | Tool (brew) | Role | Quality control |
+| --- | --- | --- | --- |
+| **Video** | `ffmpeg` | transcode video | `-crf <n>` (lower = higher quality); medium ≈ CRF 20–23 for H.264 |
+| **Image** | `ImageMagick` (`magick`) | convert / re-encode, read dimensions + alpha | `-quality <n>` (≈ 85 medium); `identify` for `%w %h` + `%[opaque]` |
+| **Image (PNG)** | `oxipng` | **lossless** PNG recompression (same pixels) | lossless levels; never changes pixels |
+| **Image (WebP)** | `cwebp` | WebP encode (lossy `-q` or `-lossless`) | `-q <n>` / `-lossless` |
+| **Image (JPEG)** | `mozjpeg` (`cjpeg`) / `jpegoptim` | better/lossless JPEG (re)encode | `-quality <n>` / `--max=<n>` |
+| **Probe** | `ffprobe` | video dimensions + `pix_fmt` (alpha detection) | n/a |
+
+`brew install ffmpeg imagemagick oxipng webp mozjpeg jpegoptim` provides the full set. The engine picks
+per file from what's installed.
+
+Detecting installed tools (which of ffmpeg/ffprobe/magick/oxipng/cwebp/cjpeg/jpegoptim are on PATH) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `detectTools`.
+
+---
+
+## 3. What we do per file (the plan)
+
+The engine builds a **plan** for a file from its kind + the user's codec preferences (§7), then runs it.
+
+### 3.1 Images
+
+* **PNG / BMP / TIFF / GIF (lossless source):**
+  * If the user's quality is **lossless**, or the file stays PNG → **`oxipng`** lossless recompression
+    (same pixels, smaller file).
+  * Otherwise **convert to a compressible format** — normally **PNG → JPEG** at medium quality. If the
+    user prefers/allows it and it is genuinely better, **JPEG 2000** (`.jp2`) may be used instead; a user
+    can **deny JPEG 2000** in settings and it is then never chosen.
+  * **Alpha guard:** JPEG has **no alpha**. If a PNG's alpha is actually used (§6), we do **not** convert
+    to JPEG — we either keep PNG (lossless recompress) or, when the user allows it, target **lossless
+    WebP** (which preserves alpha).
+* **JPEG / WebP (already lossy):** re-encode at medium quality with `mozjpeg`/`cwebp` only when it yields a
+  real gain; otherwise report **"already compressed — no gain"** and change nothing.
+
+### 3.2 Video
+
+* **`ffmpeg`** transcode to the user's preferred codec (default **H.264**, social-media-safe — §7) at a
+  **medium CRF**, **preserving resolution** (no `-vf scale`, no `-s`). Audio stream copied through.
+* **Alpha guard:** if the source video carries a **used** alpha channel (§6.2) and the target codec does
+  **not** preserve alpha, we refuse — or, if the user's preferences include an alpha-preserving codec, we
+  steer to it.
+
+Building the per-file plan (source kind → tool + target codec + quality, honoring allow/deny prefs) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `planCompression`.
+
+---
+
+## 4. How the user triggers it (one / many / whole filter)
+
+Compression is always user-initiated ([menus.mdx §6.1](./menus.mdx)):
+
+* **One file** — the **Compress** button on the [View-one-file / media viewer](./media_viewer.mdx#4-the-action-buttons-band-3-a-per-type-action-set),
+  or **Compress…** in the file's `⋮` / right-click menu ([menus.mdx §5.3](./menus.mdx#53-file)).
+* **Several checked files** — check rows in a table and use the bulk `⋮` → **Compress selected**
+  ([one_repo.mdx §4.4](./one_repo.mdx)).
+* **The whole current filter** — a **Compress all in filter** action compresses **every file currently
+  shown by the table's search/filter**, not just the visible page. The UI states the count first
+  ("Compress 27 files?") and confirms.
+
+Every path runs the same engine, the same alpha check, and the same resolution verification per file, and
+reports per-file results (compressed / skipped-no-gain / blocked-alpha / failed).
+
+---
+
+## 5. The resolution-preserving verification (LOCKED)
+
+After encoding to the temp file and **before** replacing the original, the engine **re-measures the
+output's width × height** and compares to the input:
+
+* **Equal** → proceed (move original to trash, move temp into place).
+* **Different** → **abort**: delete the temp, leave the original untouched, and report
+  "compression changed the resolution — refused". We never ship a downscaled file.
+
+We also require the output to be **smaller** than the input; if it isn't, we keep the original and report
+**"no gain"**.
+
+Verifying the output keeps the same width × height (and is smaller) before any replacement is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `verifyOutput` (dimensions via `ffprobe` / `magick identify`).
+
+---
+
+## 6. The alpha-channel safety check (LOCKED)
+
+Before **every** compression we check whether real **transparency** would be lost.
+
+### 6.1 Images (PNG etc.)
+
+* Having an alpha *channel* is not the same as *using* it. We check whether the alpha is **actually
+  used** — i.e. any pixel is non-opaque. With ImageMagick: `magick identify -format '%[opaque]'` returns
+  `True` when the image is fully opaque (alpha unused) and `False` when transparency is present.
+* If alpha **is** used and the target format has **no alpha** (JPEG / JPEG 2000), we **do not** convert —
+  we keep PNG (lossless recompress) or target an alpha-preserving format (lossless WebP) when allowed, and
+  **warn the user** that a JPEG conversion would lose transparency.
+* If alpha is **not** used, converting PNG → JPEG is safe.
+* If we **cannot determine** alpha usage (tool missing), we treat it as **possibly used** and refuse the
+  lossy-to-no-alpha conversion — fail safe.
+
+### 6.2 Video (which formats carry alpha)
+
+Most delivery codecs have **no** alpha; a few do. We check the source's pixel format (`ffprobe` `pix_fmt`
+— an alpha format looks like `yuva420p`, `rgba`, `bgra`, `argb`…) and the target codec's capability:
+
+* **Alpha-capable (may carry used transparency):** **ProRes 4444 / 4444 XQ** (in MOV), **QuickTime
+  Animation (RLE)**, **QuickTime PNG**, **VP8 / VP9 with alpha** (in WebM), **FFV1**, **GoPro CineForm**,
+  uncompressed RGBA. (Verified 2026; a web check can refresh this list.)
+* **No alpha (typical delivery, social-media-safe):** **H.264 / AVC**, **H.265 / HEVC** (main profiles),
+  **MPEG-4**, most **MP4**. **AV1** alpha support is niche/inconsistent — we treat it as no-alpha for
+  safety.
+* **Rule:** if the source `pix_fmt` indicates a **used** alpha channel and the target codec is in the
+  *no-alpha* set, **refuse** — unless the user's preferences select an alpha-preserving target (e.g. VP9
+  alpha in WebM), in which case we use that.
+
+Running the alpha safety check (PNG `%[opaque]`; video `pix_fmt` vs. target codec alpha capability) before any compression is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `alphaSafety`.
+
+---
+
+## 7. Codec preference settings (per media type)
+
+[Settings](./settings.mdx) carries a **Compression** section letting the user say, **per media type**
+(images / video / **audio** — audio disabled for now), which codecs they **want** and which they **never
+want**. The reason to deny a technically-best codec is often **social-media compatibility**: the newest,
+smallest codec may not be supported by the sites the user posts to.
+
+Settings, per media type:
+
+* **Enabled** — may this media type be compressed at all.
+* **Quality** — `low | medium | high | lossless` (default **medium**; prefer lossless where it applies).
+* **Prefer** — ordered list of target codecs; the first one that is **allowed** and **available** wins.
+* **Deny** — codecs the user never wants chosen (e.g. **JPEG 2000** for images, **AV1** for video).
+
+Good defaults (chosen for **social-media compatibility**):
+
+| Media | Quality | Prefer (in order) | Deny (default) |
+| --- | --- | --- | --- |
+| **Images** | medium | `jpeg`, `webp` (lossless WebP for alpha) | `jpeg2000` |
+| **Video** | medium | `h264`, `hevc` | `av1` |
+| **Audio** (disabled) | medium | `aac` | — |
+
+Global toggles: **preserve resolution** (LOCKED on — §5) and **replace-original-to-trash** (recoverable —
+on).
+
+Reading/writing the per-media codec allow/deny + quality preferences is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.router.ts` — `GET/PATCH /api/compress/settings` (persisted in the app `config.yaml` `compression` block).
+
+---
+
+## 8. Running a tool (temp file → replace)
+
+brew tools transcode to a **new file**, so the flow per file is:
+
+1. Build the plan (§3) and run the **alpha check** (§6) — abort with a clear reason if unsafe.
+2. Transcode to a **temp file** (under the state dir's temp area).
+3. **Verify** output resolution == input and output < input (§5) — abort (delete temp) otherwise.
+4. Move the **original** to the **LFBridge trash** (recoverable), then move the **temp** into the final
+   path. When the format changes (PNG → JPEG), the final path takes the new extension; when it stays the
+   same format, the path is unchanged.
+5. Record the result against the file's tracking entry: the **compressed** and **uncompressed** hashes +
+   sizes ([charter per-file tracking](../CLAUDE.md); [storages.mdx §4.1](./storages.mdx)).
+
+Running the tool to a temp file, verifying, and doing the recoverable replace is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile` (single) / `compressBatch` (many).
+
+---
+
+## 9. Showing compression state (View one file)
+
+The [media viewer](./media_viewer.mdx) shows, per file, **which codec it is compressed with** and
+**whether it is compressed or not** — the property grid's **Codec** cell (from `MediaProbe`) and
+**Compress** cell (`compressState`), and the action-row **Compress** button (offered only when the file
+"should" compress and the media type is enabled). This is the read-out side of everything above.
+
+Surfacing the codec + compressed-state and the Compress action per file is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `PropertyGrid` (Codec / Compress cells) + `ActionBar` (Compress button).
+
+---
+
+## 10. Acceptance criteria
+
+1. Compression runs **only** on explicit user action — one file, several checked files, or **every file in
+   the current table filter** — never automatically.
+2. It uses **quality-controllable brew tools** (`ffmpeg`, ImageMagick, `oxipng`, `cwebp`, `mozjpeg`) at a
+   **medium** quality, **preferring lossless** where it applies; a missing tool degrades with an
+   "install X" message, not a silent fail.
+3. The output **always keeps the same aspect ratio and pixel resolution** (verified after encoding; a size
+   change aborts). We **never downscale**.
+4. Before compressing, the **alpha-channel safety check** runs: a **used** PNG alpha blocks JPEG/JPEG-2000
+   conversion (keep PNG / lossless WebP); a **used** video alpha blocks a no-alpha target codec — unless
+   the chosen codec preserves alpha. Undeterminable alpha fails safe (refuse).
+5. **PNG → JPEG** by default; **JPEG 2000** only when better **and** not denied; the user can **deny**
+   specific codecs **per media type** (images / video / audio) in Settings, with **social-media-safe
+   defaults** (deny `jpeg2000` / `av1`). **Audio is not compressed** (disabled) for now.
+6. Tools run via a **temp file**; the original is moved to the **LFBridge trash** (recoverable); tracking
+   records the compressed + uncompressed hashes/sizes.
+7. The **View-one-file** page shows the file's **codec** and **compressed/uncompressed** state.
+
+<!--
+  Compression engine for IMAGE + VIDEO (audio later). Explicit user action only (one / checked / whole
+  filter). Quality-controllable brew tools (ffmpeg, ImageMagick, oxipng, cwebp, mozjpeg) at MEDIUM quality,
+  prefer lossless. TWO invariants: keep same aspect ratio + pixel resolution (never downscale, verified);
+  and alpha-channel safety check (PNG %[opaque]; video pix_fmt vs target codec alpha capability). PNG→JPEG
+  default; JPEG2000 optional; per-media codec allow/deny in Settings with social-media-safe defaults
+  (deny jpeg2000/av1). Temp-file → verify → recoverable replace (original to trash). View-one-file shows
+  codec + compressed state. Code: /api/compress (compression.service.ts + compression.router.ts).
+-->

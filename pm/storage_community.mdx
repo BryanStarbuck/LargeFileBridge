@@ -1,0 +1,116 @@
+---
+title: LargeFileBridge — Community Storage
+description: The Community storage spec. The on-disk hierarchy a community subscription materializes to — one directory-based storage per community the user chooses to help. Each carries a storage.yaml with name + type: community + a community block (which community by stable id, the role = download/share/support, and community-scoped child properties like the publisher and the Block/Recommended/Full-backup budget mode) and a hidden .lfbridge/ area (fingerprint index, IPFS manifest, media-analysis outputs). A user may belong to more than one community, so several community storages can coexist; the opted-in ones appear as children in the Storages left-bar tab. Community storages carry OTHER people's public files the user chose to download for themselves or share/rebroadcast to keep secure — always an explicit per-community opt-in, never a public gateway (charter). Pairs with communities.mdx (the discover/subscribe UI); sibling of storage_repo / storage_personal / storage_company; shares the storage.yaml schema and .lfbridge/ layout defined in storages.mdx.
+---
+
+# LargeFileBridge — Community Storage
+
+**Community storage** is the **on-disk result of a community subscription** — one directory-based storage
+per community the user chooses to **help**. Where [Personal](./storage_personal.mdx) and
+[Company](./storage_company.mdx) storages hold **your / your team's** files, a community storage holds
+**other people's public files** the user opted into carrying — to **download** for themselves or to
+**share / rebroadcast** and help keep secure.
+
+Read the shared model first: the storage family, the `storage.yaml` schema, the `.lfbridge/` tracking
+layout, cloud clones, and media analysis are defined once in **[storages.mdx](./storages.mdx)**. This spec
+covers only what is **specific to community storage**.
+
+Siblings this builds on and does not repeat:
+
+* [storages.mdx](./storages.mdx) — the umbrella: `storage.yaml` (§3), `.lfbridge/` (§4), clones (§5),
+  media analysis (§6).
+* [Communities](./communities.mdx) — the **discover/subscribe UI**: a community is a publisher of large
+  public files; subscribing has two intents — **Get** (consume) or **Support** (rebroadcast/pin), against
+  a per-community Block / Recommended / Full-backup budget. **A community storage is what that
+  subscription materializes to on disk.**
+* [storage_repo.mdx](./storage_repo.mdx) — the canonical directory-based storage shape this reuses.
+
+---
+
+## 1. Anatomy of a community storage
+
+```
+<community storage root>/          ← one per community the user helps
+├── .lfbridge/
+│   ├── storage.yaml        ← name + type: community + community block (storages.mdx §3)
+│   ├── files.yaml          ← per-file fingerprint index (storages.mdx §4.1)
+│   ├── manifest.yaml       ← large-file → IPFS CID + pin state
+│   └── analysis/           ← per-file media analysis (storages.mdx §6)
+└── …the community's public files this user carries…
+```
+
+* **One root per community.** A user helping three communities has three such storages.
+* It carries **other people's** content — always an **explicit, per-community opt-in** that pins a chosen
+  publisher's files; **never** a general public gateway/relay (charter: only-our-content default).
+* How much of the library is carried is governed by the community's **budget mode** from
+  [communities.mdx](./communities.mdx): **Block** (nothing), **Recommended** (a budget-fitting subset — the
+  default), or **Full backup** (the whole library).
+
+---
+
+## 2. `storage.yaml` for a community
+
+```yaml
+# <community storage root>/.lfbridge/storage.yaml
+name: "HolonCitizen — backups"
+type: community
+created: 2026-05-01T10:12:00Z
+community:
+  id: "holon-citizen"        # WHICH community — stable key, matches communities.mdx
+  role: support              # download (consume) | share (rebroadcast) | support
+  # community-scoped child properties:
+  publisher: "npub1…"        # the publisher's identity (e.g. Nostr pubkey)
+  budget_mode: recommended   # block | recommended | full  (communities.mdx)
+clones:
+  google_drive: null
+  dropbox: null
+```
+
+* **`type: community`** with a **`community`** block. **`id`** names **which** community (its stable key,
+  matching [communities.mdx](./communities.mdx)); **`role`** records **why** the user carries it —
+  **download** (for themselves), **share** (rebroadcast to help), or **support**. Child properties scope it
+  (publisher identity, budget mode).
+* A user in multiple communities has **multiple** community storages, each with its own `community.id`.
+
+---
+
+## 3. Media analysis + cloud clones
+
+Community storage can produce the [storages.mdx §6](./storages.mdx) **media-analysis** outputs (transcript
+/ description / visuals-by-time) into `.lfbridge/analysis/` for the videos it carries — useful for search
+and re-use. Cloud **clones** are supported ([storages.mdx §5](./storages.mdx)) but usually left off, since
+the point of a community storage is IPFS rebroadcast, not a private mirror.
+
+---
+
+## 4. Where it shows in the UI
+
+* The separate top-level **[Communities](./communities.mdx)** tab remains where the user **discovers and
+  subscribes** (Block / Recommended / Full backup).
+* In the **[Storages](./storages.mdx#2-the-storages-left-bar-tab)** left-bar tab, the **opted-in
+  communities** appear as children — the ones the user chose to **download** or **share** — so a community
+  the user actively carries shows up in their map of storages alongside Personal, Companies, and the Repos
+  link.
+
+---
+
+## 5. Acceptance criteria
+
+1. A community subscription the user opts into materializes as a **community storage** — one directory per
+   community — tracked via a hidden **`.lfbridge/`** at its root.
+2. Its `.lfbridge/storage.yaml` has **`name`** + **`type: community`** and a **`community`** block naming
+   **which** community (`id`), the **`role`** (download / share / support), and community-scoped child
+   properties (publisher, budget mode).
+3. A user may help **more than one** community; each is a separate storage; the **opted-in** ones appear as
+   children in the Storages tab. Discovery/subscription stays on the [Communities](./communities.mdx) tab.
+4. It carries **other people's** public files by **explicit opt-in**, pinned/rebroadcast over IPFS within
+   the community's budget mode — **never** a public gateway (charter). `.lfbridge/` holds fingerprints,
+   manifest, and `analysis/` per [storages.mdx §4](./storages.mdx).
+
+<!--
+  Community storage = the on-disk result of a Communities subscription; other people's public files the
+  user opted to download or share/rebroadcast. One per community. storage.yaml: name + type: community +
+  community block (id = which community, role = download/share/support, publisher, budget_mode). Explicit
+  opt-in, IPFS rebroadcast within budget, never a public gateway (charter). Pairs with communities.mdx
+  (discover/subscribe); opted-in ones show as children of the Storages tab. Shared model in storages.mdx.
+-->

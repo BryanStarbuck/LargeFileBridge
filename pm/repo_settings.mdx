@@ -11,12 +11,12 @@ exactly the settings that are allowed to differ between repos; anything a repo d
 back to the global values on [settings.mdx](./settings.mdx).
 
 Everything here writes to that repo's own config,
-`sync/r/<repo_name>/config.yaml` ([storage.mdx §6.2](./storage.mdx#62-syncrrepo_nameconfigyaml)) —
+`sync/r/<repo_name>/config.yaml` ([storage_local.mdx §6.2](./storage_local.mdx#62-syncrrepo_nameconfigyaml)) —
 never to the global `config.yaml`.
 
 Siblings: [settings.mdx](./settings.mdx) (the global defaults this page can override) ·
 [scan.mdx](./scan.mdx) (applies the effective per-repo threshold) ·
-[storage.mdx §6](./storage.mdx#6-syncrrepo_name--the-per-repo-sync-unit-primary) (the per-repo sync
+[storage_local.mdx §6](./storage_local.mdx#6-syncrrepo_name--the-per-repo-sync-unit-primary) (the per-repo sync
 unit and its `config.yaml`).
 
 ---
@@ -80,7 +80,7 @@ Resolving this per-repo effective threshold (the override when enabled, else the
 ### 2.2 Synced on / off (the master toggle)
 
 * A single toggle: **is this repo synced?** (`config.yaml → synced`,
-  [storage.mdx §6.2](./storage.mdx#62-syncrrepo_nameconfigyaml)).
+  [storage_local.mdx §6.2](./storage_local.mdx#62-syncrrepo_nameconfigyaml)).
 * **Default: OFF** — a newly discovered repo is registered but **not** bridged until the user opts in,
   so a scan never bridges data without consent. `true` = LFB bridges this repo's big files; `false` =
   discovered-but-ignored (a re-scan won't keep re-proposing it).
@@ -102,12 +102,12 @@ How this computer participates for this repo (`config.yaml → sync`):
 * **Fetch missing** (default on) — this computer fetches from peers any manifest CID it lacks.
 * **Publish manifest** (default on) — write the committed in-repo manifest
   (`<repo>/.lfbridge/manifest.yaml`) so Git carries it to your other computers
-  ([storage.mdx §9.2](./storage.mdx#92-repo-manifests-travel-via-git-the-elegant-part)).
+  ([storage_local.mdx §9.2](./storage_local.mdx#92-repo-manifests-travel-via-git-the-elegant-part)).
 
 ### 2.5 Sharing — "some repos need users, some don't"
 
 Who participates in this repo (`config.yaml → access`,
-[storage.mdx §6.2](./storage.mdx#62-syncrrepo_nameconfigyaml)):
+[storage_local.mdx §6.2](./storage_local.mdx#62-syncrrepo_nameconfigyaml)):
 
 * **Private** (default) — `shared: false`. Just *your* repo across *your own* computers; no user list.
 * **Shared** — `shared: true` + a list of allow-listed **participant** emails whose computers also pin
@@ -118,7 +118,7 @@ Who participates in this repo (`config.yaml → access`,
 ## 3. Persistence — one repo config file
 
 Everything above writes to the single per-repo config
-([storage.mdx §6.2](./storage.mdx#62-syncrrepo_nameconfigyaml)):
+([storage_local.mdx §6.2](./storage_local.mdx#62-syncrrepo_nameconfigyaml)):
 
 ```yaml
 # ~/T/_large_files_bridge/sync/r/<repo_name>/config.yaml

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { authConfig } from "../auth/auth.router.js";
+import { isLoopback } from "../../shared/loopback.js";
 import { log } from "../../shared/logging.js";
 
 export const healthRouter = Router();
@@ -16,9 +17,10 @@ healthRouter.get("/", async (_req, res) => {
   }
 });
 
-healthRouter.get("/auth-config", (_req, res) => {
+healthRouter.get("/auth-config", (req, res) => {
   try {
-    res.json({ ok: true, data: authConfig() });
+    // Only a loopback caller (local first-run setup) sees the creds-file path + dev-bypass state.
+    res.json({ ok: true, data: authConfig(isLoopback(req)) });
   } catch (e) {
     log.error("health", `auth-config read failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: "auth-config unavailable" });

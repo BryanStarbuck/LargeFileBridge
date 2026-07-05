@@ -533,6 +533,170 @@ export interface MediaGrant {
   url: string; // e.g. "/api/media/raw?path=…&e=<expMs>&t=<hmac>" — same-origin, Range-capable
 }
 
+// ── Compression (compression.mdx) ───────────────────────────────────────────
+export type CompressQuality = "low" | "medium" | "high" | "lossless";
+export type CompressMedia = "images" | "video" | "audio";
+
+// Per-media codec preferences (compression.mdx §7).
+export interface CompressMediaPrefs {
+  enabled: boolean;
+  quality: CompressQuality;
+  prefer: string[]; // ordered target codecs; first allowed+available wins
+  deny: string[];   // codecs the user never wants chosen
+}
+export interface CompressionSettings {
+  images: CompressMediaPrefs;
+  video: CompressMediaPrefs;
+  audio: CompressMediaPrefs;
+  preserveResolution: boolean; // LOCKED on — never downscale (compression.mdx §5)
+  replaceOriginalToTrash: boolean; // recoverable replace (compression.mdx §8)
+}
+
+// Which brew tools are on PATH (compression.mdx §2).
+export interface CompressTools {
+  ffmpeg: boolean;
+  ffprobe: boolean;
+  magick: boolean; // ImageMagick (magick or convert)
+  oxipng: boolean;
+  cwebp: boolean;
+  cjpeg: boolean; // mozjpeg
+  jpegoptim: boolean;
+}
+
+// The dry-run plan + safety verdict for a file (compression.mdx §3/§6) — drives the pre-compress warning.
+export interface CompressCheck {
+  path: string;
+  media: CompressMedia | null; // null = not a compressible media file
+  eligible: boolean;           // media type enabled + a tool available + not already best
+  action: string;              // human summary, e.g. "PNG → JPEG (medium)" / "lossless PNG recompress"
+  targetCodec: string | null;
+  alphaUsed: boolean | null;   // null = undeterminable
+  alphaSafe: boolean;          // false → would drop used transparency (blocked)
+  warning: string | null;      // e.g. "converting would lose transparency"
+  toolMissing: string | null;  // a required tool that isn't installed
+}
+
+// The result of compressing one file (compression.mdx §8).
+export interface CompressResult {
+  path: string;               // final path (may have a new extension after a format conversion)
+  status: "compressed" | "skipped" | "blocked" | "failed";
+  reason: string | null;      // why skipped/blocked/failed
+  beforeBytes: number | null;
+  afterBytes: number | null;
+  codec: string | null;       // the codec the output was written with
+}
+export interface CompressBatchResult {
+  results: CompressResult[];
+}
+
+// ── Transcribe (Transcribe.mdx) ─────────────────────────────────────────────
+// Which underlying binaries the transcription engine needs are installed (§6 GET /transcribe/tools).
+export interface TranscribeTools {
+  whisper: boolean;
+  ffmpeg: boolean;
+  ffprobe: boolean;
+}
+// The result of transcribing one media file (Transcribe.mdx §1). transcriptPath = the .txt written into
+// the parallel <storageRoot>/.transcribe/<relpath>.txt hierarchy (§3).
+export interface TranscribeResult {
+  path: string;               // the media file transcribed
+  status: "transcribed" | "skipped" | "no_audio" | "tool_missing" | "failed";
+  transcriptPath: string | null;
+  words: number | null;       // word count of the transcript body (success only)
+  reason: string | null;      // why skipped / no_audio / tool_missing / failed
+}
+// A tree / batch / storage run — the per-file results plus honest counts (Transcribe.mdx §6).
+export interface TranscribeBatchResult {
+  results: TranscribeResult[];
+  transcribed: number;
+  skipped: number;
+  failed: number;
+}
+// An existing transcript read back for a media file (Transcribe.mdx §6 GET /transcribe/file).
+export interface TranscriptView {
+  mediaPath: string;
+  transcriptPath: string;
+  text: string;
+}
+
+// ── Storages (storages.mdx) ─────────────────────────────────────────────────
+// The family of large-file storages. "local" is settings/config (the DB replacement, storage_local.mdx);
+// the other four are directory hierarchies with a storage.yaml + hidden .lfbridge/ (storages.mdx §1).
+export type StorageType = "local" | "repo" | "personal" | "company" | "community";
+
+// Where, if anywhere, a storage's hierarchy is also mirrored (storages.mdx §5). null = not mirrored.
+export interface StorageClones {
+  googleDrive: string | null;
+  dropbox: string | null;
+}
+
+// The `storage.yaml` descriptor at a directory-based storage's root (storages.mdx §3). Exactly one
+// type-specific block is populated, matching `type`.
+export interface StorageDescriptor {
+  name: string;
+  type: StorageType;
+  created: string | null;
+  company: { companyName: string; [k: string]: unknown } | null;
+  community: { id: string; role: "download" | "share" | "support"; [k: string]: unknown } | null;
+  personal: Record<string, unknown> | null;
+  repo: { repoRoot: string } | null;
+  clones: StorageClones;
+}
+
+// One storage as the Storages page / left-bar tab sees it (storages.mdx §2).
+export interface StorageRow {
+  id: string;              // stable id: "personal" · "local" · community id · a path hash for companies
+  name: string;
+  type: StorageType;
+  root: string;            // absolute root dir ("" for local)
+  companyName: string | null;
+  communityId: string | null;
+  initialized: boolean;    // has a storage.yaml (false = a detected candidate not yet set up)
+  hasLfbridge: boolean;    // has the hidden .lfbridge/ tracking area
+  fileCount: number | null;// large files in the fingerprint index (null until indexed)
+  clones: StorageClones;
+  route: string;           // where the row / left-bar child links
+}
+
+// GET /api/storages — the Storages tab/page payload (storages.mdx §2). Repos are represented by a link,
+// not a list (the Repos tab owns the long list — storage_repo.mdx §5).
+export interface StoragesPageData {
+  local: StorageRow;
+  personal: StorageRow | null;
+  companies: StorageRow[];
+  communities: StorageRow[];
+  repos: { count: number; route: string };
+}
+
+// GET /api/storages/:id — one storage's detail: its descriptor + the tracked files.
+export interface StorageDetail {
+  storage: StorageRow;
+  descriptor: StorageDescriptor | null;
+  files: StorageFileRow[];
+}
+
+// One row of a storage's .lfbridge/files.yaml fingerprint index (storages.mdx §4.1).
+export interface StorageFileRow {
+  path: string;            // relative to the storage root
+  sizeBytes: number;
+  modifiedAt: string | null;
+  createdAt: string | null;
+  fingerprint: string | null;
+  compressible: "video" | "image" | null;
+  analysis: string[];      // which §6 outputs exist: "transcript" | "description" | "visuals_by_time"
+}
+
+// POST /api/storages/:id/index — result of (re)building the fingerprint index.
+export interface StorageIndexResult {
+  indexed: number;
+}
+
+// POST /api/storages/:id/analyze — result of queuing media analysis for one file (storages.mdx §6).
+export interface StorageAnalyzeResult {
+  path: string;
+  outputs: string[];       // which analysis YAMLs were written/queued
+}
+
 // ── Generic API envelope for mutations ──────────────────────────────────────
 export interface Ok<T = unknown> {
   ok: true;

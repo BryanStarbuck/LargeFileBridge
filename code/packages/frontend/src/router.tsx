@@ -39,6 +39,17 @@ const peersRoute = createRoute({
   path: "/peers",
   component: lazyRouteComponent(() => import("./pages/peers/PeersPage.js"), "PeersPage"),
 });
+// Storages (storages.mdx): the map of every storage you belong to, and one storage's detail.
+const storagesRoute = createRoute({
+  getParentRoute: () => appLayout,
+  path: "/storages",
+  component: lazyRouteComponent(() => import("./pages/storages/StoragesPage.js"), "StoragesPage"),
+});
+const storageDetailRoute = createRoute({
+  getParentRoute: () => appLayout,
+  path: "/storages/$storageId",
+  component: lazyRouteComponent(() => import("./pages/storages/StorageDetailPage.js"), "StorageDetailPage"),
+});
 // The IPFS dashboard / node control panel (ipfs_ui.mdx): install, on/off, metrics, gateway, security.
 const ipfsRoute = createRoute({
   getParentRoute: () => appLayout,
@@ -124,6 +135,8 @@ const routeTree = rootRoute.addChildren([
     repoSettingsRoute,
     oneRepoRoute,
     peersRoute,
+    storagesRoute,
+    storageDetailRoute,
     ipfsRoute,
     ipfsPinsRoute,
     scansRoute,

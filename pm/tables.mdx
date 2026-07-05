@@ -54,7 +54,7 @@ Every primary table's **leading (column 0)** cell is a **ribbon bookmark** toggl
 
 ### 1.1 Where the flag is stored, per entity type (LOCKED)
 
-The flag lives **with the entity**, in the local state tree ([storage.mdx](./storage.mdx)):
+The flag lives **with the entity**, in the local state tree ([storage_local.mdx](./storage_local.mdx)):
 
 | Table | Entity | `bookmarked` stored in |
 | --- | --- | --- |
@@ -178,14 +178,14 @@ has no saved sort for that page.
 
 * **Where:** the logged-in user's personal config —
   `users/<email>/config.yaml`, under the existing **`tables.views`** map
-  ([storage.mdx](./storage.mdx) §4, the tier for per-user "prefs / last view"). **Not** computer-wide,
+  ([storage_local.mdx](./storage_local.mdx) §4, the tier for per-user "prefs / last view"). **Not** computer-wide,
   **not** in any sync unit — it is *this user's* view of *this page*.
 * **Keyed by table id.** `tables.views.<tableId>` (`repos`, `files`, `communities`, …). Each entry
   stores the **ordered sort keys** and the **active filters** (including **Bookmarked only**, and the
   search text if we choose to persist it).
 
 ```yaml
-# users/<email>/config.yaml  (excerpt — see storage.mdx §4 for the full file)
+# users/<email>/config.yaml  (excerpt — see storage_local.mdx §4 for the full file)
 schema_version: 1
 tables:
   views:

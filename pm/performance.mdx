@@ -348,11 +348,11 @@ The rAF-coalesced scroll handler that skips re-renders when the window start is 
   **units** and one shared `ipfsLimiter` across **all per-file** add/pin/fetch work (independent IPFS
   calls now run under `Promise.all`, not a `for…await` loop). The single limiter keeps total in-flight
   ops bounded no matter how units × files multiply; the store layer's per-file mutex + atomic writes
-  ([storage.mdx §15](./storage.mdx#15-the-store-layer-how-code-touches-disk)) make concurrent syncs
+  ([storage_local.mdx §15](./storage_local.mdx#15-the-store-layer-how-code-touches-disk)) make concurrent syncs
   safe. The pass now also covers the **computer unit** (`sync/computer/`), sharing the same generic
   `runUnitSync` core as repos. Priority + parallelism design is LOCKED in
   [sync_process.mdx §3/§4](./sync_process.mdx#4-parallelism--many-cores-bounded-concurrency-locked-design).
-- **Follow-up:** Publish the computer unit's manifest over **IPNS** (storage.mdx §9.3) — the transport
+- **Follow-up:** Publish the computer unit's manifest over **IPNS** (storage_local.mdx §9.3) — the transport
   is not yet built, so its local manifest + pins are written but not yet advertised to peers.
 
 The bounded-concurrency sync pass is in code:

@@ -20,10 +20,15 @@ import {
   Copy,
   Check,
   RefreshCw,
+  Move,
+  Trash2,
+  Captions,
 } from "lucide-react";
 import type { EntityView, Decision } from "@lfb/shared";
+import { mediaKindForName, viewerRouteForName } from "@lfb/shared";
 import { api } from "@/api/client";
 import { patchEntityBadges } from "@/lib/patchEntityBadges";
+import { runTranscribeFile, runTranscribeTree } from "@/lib/transcribe";
 import { clientLog } from "../../lib/clientLog.js";
 
 // ── The action model ─────────────────────────────────────────────────────────
@@ -149,7 +154,7 @@ export function EntityMenuAt({
     }
   };
 
-  const actions = view ? buildActions(view, { navigate, flags, decide }) : [];
+  const actions = view ? buildActions(view, { navigate, flags, decide, qc }) : [];
 
   return (
     <MenuPortal pos={pos} onClose={onClose}>
@@ -204,6 +209,7 @@ interface Ctx {
   navigate: ReturnType<typeof useNavigate>;
   flags: { mutate: (p: { neverIpfs?: boolean; noCompress?: boolean }) => void };
   decide: { mutate: (d: Decision) => void };
+  qc: ReturnType<typeof useQueryClient>;
 }
 
 function buildActions(v: EntityView, ctx: Ctx): Action[] {
@@ -215,18 +221,50 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
     toast.success(`${label} copied`);
   };
   const compress = () => {
-    if (!window.confirm(`Compress ${v.name}? This is an offer — nothing changes until it runs.`)) return;
-    api.compressEntity(v.path).then(() => toast.success("Compression queued")).catch((e) => {
-      clientLog.error("EntityMenu.compress", e);
-      toast.error(e.message);
-    });
+    if (!window.confirm(`Compress ${v.name}? Medium quality, same resolution — the original moves to LFBridge trash (recoverable).`)) return;
+    api.compressFile(v.path)
+      .then((r) => {
+        if (r.status === "compressed") toast.success(`Compressed → ${r.codec ?? "smaller"}`);
+        else if (r.status === "blocked") toast.error(`Blocked: ${r.reason ?? "unsafe"}`);
+        else if (r.status === "skipped") toast(`Not compressed: ${r.reason ?? "no gain"}`);
+        else toast.error(`Failed: ${r.reason ?? "error"}`);
+        refreshLists();
+        ctx.qc.invalidateQueries({ queryKey: ["entity", v.path] });
+      })
+      .catch((e) => { clientLog.error("EntityMenu.compress", e); toast.error(e.message); });
+  };
+  const refreshLists = () => {
+    ctx.qc.invalidateQueries({ queryKey: ["fs"] });
+    ctx.qc.invalidateQueries({ queryKey: ["repo"] });
+  };
+  // Move… (menus.mdx §5.3 Work) — guarded rename; on success re-point to the file's viewer at its new path.
+  const move = () => {
+    const dest = window.prompt("Move file to (absolute path):", v.path);
+    if (!dest || dest.trim() === v.path) return;
+    api.moveEntity(v.path, dest.trim()).then((r) => {
+      toast.success("File moved");
+      refreshLists();
+      const name = r.path.slice(r.path.lastIndexOf("/") + 1);
+      ctx.navigate({ to: viewerRouteForName(name), search: { path: r.path } });
+    }).catch((e) => { clientLog.error("EntityMenu.move", e); toast.error(e.message); });
+  };
+  // Delete… (menus.mdx §5.3 Danger) — RECOVERABLE: moves to LFBridge trash, never unlinks.
+  const del = () => {
+    if (!window.confirm(`Move ${v.name} to LFBridge trash?\nThis is recoverable — the file is moved to the trash folder, not erased.`)) return;
+    api.deleteEntity(v.path).then(() => {
+      toast.success("Moved to LFBridge trash");
+      refreshLists();
+      ctx.navigate({ to: "/fs", search: { path: parent } });
+    }).catch((e) => { clientLog.error("EntityMenu.delete", e); toast.error(e.message); });
   };
 
   if (v.kind === "file") {
-    // Open. A viewable medium opens its viewer first (media_viewer.mdx); properties stay reachable.
-    if (v.compressible === "image" || v.compressible === "video") {
-      const to = v.compressible === "image" ? "/image" : "/video";
-      const label = v.compressible === "image" ? "View image" : "View video";
+    // Open. A viewable medium opens its viewer first (media_viewer.mdx) by KIND (image/video/audio);
+    // properties stay reachable. Audio isn't a "compressible" kind, so route from the name, not compressible.
+    const mkind = mediaKindForName(v.name); // "image" | "video" | "audio" | null
+    if (mkind) {
+      const to = mkind === "image" ? "/image" : mkind === "video" ? "/video" : "/audio";
+      const label = mkind === "image" ? "View image" : mkind === "video" ? "View video" : "View audio";
       a.push({ id: "view", label, group: "Open", icon: <FileText className="h-4 w-4" />,
         onSelect: () => ctx.navigate({ to, search: { path: v.path } }) });
       a.push({ id: "view-props", label: "View properties", group: "Open", icon: <FileText className="h-4 w-4" />,
@@ -266,6 +304,13 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
     if (v.compressible && v.compressState !== "done" && !v.flags.noCompress) {
       a.push({ id: "compress", label: "Compress…", group: "Work", icon: <Zap className="h-4 w-4" />, onSelect: compress });
     }
+    // Transcribe… — audio/video only (Transcribe.mdx §2.2). Writes to <storageRoot>/.transcribe/<relpath>.txt.
+    if (mkind === "audio" || mkind === "video") {
+      a.push({ id: "transcribe", label: "Transcribe…", group: "Work", icon: <Captions className="h-4 w-4" />,
+        onSelect: () => runTranscribeFile(v.path, v.name, { onDone: refreshLists }) });
+    }
+    // Move… — guarded rename of the file (media_viewer.mdx §4.4). Explicit; relocates real bytes.
+    a.push({ id: "move", label: "Move…", group: "Work", icon: <Move className="h-4 w-4" />, onSelect: move });
   } else {
     // Directory
     a.push({ id: "view", label: "View directory", group: "Open", icon: <Folder className="h-4 w-4" />,
@@ -275,6 +320,9 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
     if (!v.flags.noCompress) {
       a.push({ id: "compress-dir", label: "Compress videos/images inside…", group: "Work", icon: <Zap className="h-4 w-4" />, onSelect: compress });
     }
+    // Transcribe all audio/video under this directory (Transcribe.mdx §2.4).
+    a.push({ id: "transcribe-dir", label: "Transcribe all files…", group: "Work", icon: <Captions className="h-4 w-4" />,
+      onSelect: () => runTranscribeTree(v.path, v.name, refreshLists) });
   }
 
   // Sticky flags (menus.mdx §6.6) — same on file and directory.
@@ -313,6 +361,10 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
         }
       },
     });
+  }
+  // Delete… — RECOVERABLE (moves to LFBridge trash, never unlink — menus.mdx §5.3 / media_viewer.mdx §4.4).
+  if (v.kind === "file") {
+    a.push({ id: "delete", label: "Delete…", group: "Danger", danger: true, icon: <Trash2 className="h-4 w-4" />, onSelect: del });
   }
 
   return a;

@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — The Sync List & Bridge Backbones
-description: The hub spec for the Sync List — the portable, human-readable YAML file (LargeFilesBridge_SyncList.yaml) that declares what LargeFileBridge should sync, and travels between a user's computers over a "bridge backbone." Defines the two scopes of list (one per COMPUTER, one per REPO), the single top-level YAML key `large_files` and its level-2 children (`settings`, `repos`, `directories`) that nest four-to-six levels deep, and the provenance/origin block that stamps who wrote each revision and when. Its centerpiece is the TRUST rule: because a backbone (Dropbox, Google Drive, or the git repo) may deliver a Sync List that was written on another computer and synced in asynchronously, THIS computer must NEVER treat an incoming list as ground truth — it reconciles the list against its own filesystem reality per-entry, verifies local claims against the local IPFS pinset, treats absences as untrusted (not deletes), and resolves conflicts by revision + content (CID/sha256). Names the three bridge backbones and links to their per-backbone specs (dropbox.mdx, google_drive.mdx, repo__list_syns.mdx), and reconciles the whole model with the on-disk state in storage.mdx (per-unit config.yaml + manifest.yaml, the committed in-repo manifest, and the IPNS transport).
+description: The hub spec for the Sync List — the portable, human-readable YAML file (LargeFilesBridge_SyncList.yaml) that declares what LargeFileBridge should sync, and travels between a user's computers over a "bridge backbone." Defines the two scopes of list (one per COMPUTER, one per REPO), the single top-level YAML key `large_files` and its level-2 children (`settings`, `repos`, `directories`) that nest four-to-six levels deep, and the provenance/origin block that stamps who wrote each revision and when. Its centerpiece is the TRUST rule: because a backbone (Dropbox, Google Drive, or the git repo) may deliver a Sync List that was written on another computer and synced in asynchronously, THIS computer must NEVER treat an incoming list as ground truth — it reconciles the list against its own filesystem reality per-entry, verifies local claims against the local IPFS pinset, treats absences as untrusted (not deletes), and resolves conflicts by revision + content (CID/sha256). Names the three bridge backbones and links to their per-backbone specs (dropbox.mdx, google_drive.mdx, repo__list_syns.mdx), and reconciles the whole model with the on-disk state in storage_local.mdx (per-unit config.yaml + manifest.yaml, the committed in-repo manifest, and the IPNS transport).
 ---
 
 # LargeFileBridge — The Sync List & Bridge Backbones
@@ -29,7 +29,7 @@ syncs files between your computers. LFB supports three, each with its own spec:
 
 This spec builds on its siblings and does not repeat them:
 
-* [storage.mdx](./storage.mdx) — where state lives on disk (per-unit `config.yaml` + `manifest.yaml`,
+* [storage_local.mdx](./storage_local.mdx) — where state lives on disk (per-unit `config.yaml` + `manifest.yaml`,
   the committed in-repo manifest, peers, the state root). The Sync List is the **portable, backbone-
   carried composition** of that state; [§7](#7-reconciliation-with-storagemdx) maps the two.
 * [settings.mdx](./settings.mdx) / [repo_settings.mdx](./repo_settings.mdx) — the settings whose
@@ -69,12 +69,12 @@ There are two kinds of Sync List, and they ride different backbones:
   the global `settings`, every managed `repos:` entry, and every non-repo `directories:` entry. It is
   what a **whole-computer backbone** carries — **Dropbox** or **Google Drive** — because those tools
   sync a folder that belongs to the user's account, not to any one repo. This is the file-based
-  alternative to the IPNS transport in [storage.mdx §9.3](./storage.mdx#93-computer-manifests-travel-via-ipns).
+  alternative to the IPNS transport in [storage_local.mdx §9.3](./storage_local.mdx#93-computer-manifests-travel-via-ipns).
 
 * **The per-repo Sync List (scope: `repo`).** One per repo. It covers exactly one repo and lives
   **inside that repo**, so `git pull` carries it to your other computers for free. This is the **repo
   (git) backbone** ([repo__list_syns.mdx](./repo__list_syns.mdx)) and it is the same idea as the
-  committed manifest in [storage.mdx §9.2](./storage.mdx#92-repo-manifests-travel-via-git-the-elegant-part),
+  committed manifest in [storage_local.mdx §9.2](./storage_local.mdx#92-repo-manifests-travel-via-git-the-elegant-part),
   widened to the full `large_files` hierarchy.
 
 ```
@@ -140,25 +140,25 @@ large_files:                              # LEVEL 1 — the single top-level key
 
   # ─────────────────────────────────────── LEVEL 2: repos ────────────────────────────────────────
   repos:                                  # every managed repo — deep hierarchy below
-    largefilebridge:                      # LEVEL 3 — the repo key (sanitized name; storage.mdx §6.1)
+    largefilebridge:                      # LEVEL 3 — the repo key (sanitized name; storage_local.mdx §6.1)
       identity:                           # LEVEL 4 — the source of truth for WHAT this repo is
         name: LargeFileBridge
         remote: https://github.com/BryanStarbuck/LargeFileBridge.git
         path: ~/BGit/Bryan_git/LargeFileBridge   # working tree ON THE WRITING COMPUTER (may differ here)
-      synced: true                        # this repo's master toggle (storage.mdx §6.2)
+      synced: true                        # this repo's master toggle (storage_local.mdx §6.2)
       settings:                           # LEVEL 4 — per-repo overrides (else inherit settings above)
         big_file_override: { enabled: false, value: 100, unit: MB }
         access: { shared: false, participants: [] }
       files:                              # LEVEL 4 — the large-file entries (LEVEL 5 fields)
         - path: pm/big/demo_v3.mp4        # relative to the repo working tree
-          cid: bafybeigd…                 # IPFS content id (storage.mdx §9.1)
+          cid: bafybeigd…                 # IPFS content id (storage_local.mdx §9.1)
           size: 734003200
           sha256: 9f2c…
           modified_at: 2026-07-01T09:14:02Z
           pinned_by: [bryan-macbook, bryan-studio]   # LEVEL 6
 
   # ──────────────────────────────────── LEVEL 2: directories ─────────────────────────────────────
-  directories:                            # non-repo large files — the computer-unit remainder (storage.mdx §8)
+  directories:                            # non-repo large files — the computer-unit remainder (storage_local.mdx §8)
     pictures_2026:                        # LEVEL 3 — a directory key
       path: ~/Pictures/2026
       synced: true
@@ -208,7 +208,7 @@ is* by looking.
 Paths are stored **relative** to their unit root (repo working tree, or a directory root) so a list
 written where a repo lives at `~/BGit/…` still applies on a machine where it lives at
 `~/work/…`. The absolute `identity.path` is the *writer's* path and is advisory only — the reader
-resolves the repo by `remote` + local discovery ([storage.mdx §6.1](./storage.mdx#61-keying--folder-name)),
+resolves the repo by `remote` + local discovery ([storage_local.mdx §6.1](./storage_local.mdx#61-keying--folder-name)),
 never by trusting the incoming absolute path.
 
 ---
@@ -277,7 +277,7 @@ Because Dropbox/Drive/git each mangle files in their own way, the reader must to
   `... (1).yaml`, `...-conflicted.yaml`. Detect, quarantine, reconcile as an additional untrusted
   input, never load blindly.
 * **Partial / zero-byte / mid-write files** — a file that fails to parse as the expected schema is
-  **rejected loudly** and the previous good copy is retained ([storage.mdx §15](./storage.mdx#15-the-store-layer-how-code-touches-disk)),
+  **rejected loudly** and the previous good copy is retained ([storage_local.mdx §15](./storage_local.mdx#15-the-store-layer-how-code-touches-disk)),
   never trusted.
 * **Clock skew & re-ordering** — see §5.3; never rely on `written_at` alone.
 * **Foreign files** — never adopt a Sync List whose `origin.owner` is not an allow-listed user for
@@ -287,7 +287,7 @@ Because Dropbox/Drive/git each mangle files in their own way, the reader must to
 
 Reconciling the same list twice yields the same result; reconciling never deletes local bytes without
 an explicit `state: removed` (§5.2) and, for a content fork (§5.3.2), never at all without the user.
-The output of reconciliation is written through the [storage.mdx §15](./storage.mdx#15-the-store-layer-how-code-touches-disk)
+The output of reconciliation is written through the [storage_local.mdx §15](./storage_local.mdx#15-the-store-layer-how-code-touches-disk)
 store layer (atomic, schema-validated), which is where the trusted, reconciled truth lives.
 
 ---
@@ -316,22 +316,22 @@ Writing this computer's own view — with `pinned_by` set only for CIDs it actua
 
 ---
 
-## 7. Reconciliation with storage.mdx
+## 7. Reconciliation with storage_local.mdx
 
 The Sync List does not replace the on-disk model — it is its **portable projection**. The mapping:
 
-| Sync List (portable) | storage.mdx (on-disk) |
+| Sync List (portable) | storage_local.mdx (on-disk) |
 | --- | --- |
 | `large_files.settings` | app `config.yaml` + the global `settings.mdx` values |
 | `large_files.repos.<key>` | one `sync/r/<repo_name>/` unit (`config.yaml` + `manifest.yaml`) |
 | `large_files.directories.<key>` | the `sync/computer/` unit (`config.yaml` + `manifest.yaml`) |
-| a file entry (`path`/`cid`/`size`/`sha256`/`pinned_by`) | a `manifest.yaml` file row ([storage.mdx §9.1](./storage.mdx#91-manifest-shape-per-sync-unit)) |
+| a file entry (`path`/`cid`/`size`/`sha256`/`pinned_by`) | a `manifest.yaml` file row ([storage_local.mdx §9.1](./storage_local.mdx#91-manifest-shape-per-sync-unit)) |
 | `origin` / `revision` | new provenance this spec adds; `status.yaml` records the last reconciled revision per peer |
 
-Transport mapping: the **repo (git) backbone** is [storage.mdx §9.2](./storage.mdx#92-repo-manifests-travel-via-git-the-elegant-part)
+Transport mapping: the **repo (git) backbone** is [storage_local.mdx §9.2](./storage_local.mdx#92-repo-manifests-travel-via-git-the-elegant-part)
 (the committed `<repo>/.lfbridge/…` file — the per-repo Sync List *is* that committed artifact, widened
 to the `large_files` hierarchy). The **Dropbox / Google Drive backbones** are the file-based
-alternative to [storage.mdx §9.3](./storage.mdx#93-computer-manifests-travel-via-ipns)'s IPNS transport
+alternative to [storage_local.mdx §9.3](./storage_local.mdx#93-computer-manifests-travel-via-ipns)'s IPNS transport
 for the computer-scope list. IPNS and a file-backbone can both be enabled; they reconcile through the
 same §5 rules.
 
@@ -358,7 +358,7 @@ same §5 rules.
    **idempotent and non-destructive** (§5.6).
 7. Publishing bumps `revision`, stamps `written_at`, writes **only self-verifiable `pinned_by`**
    claims, writes atomically, and honors the IPFS only-our-content defaults (§6).
-8. The model maps cleanly onto [storage.mdx](./storage.mdx) (§7): the list is the portable projection
+8. The model maps cleanly onto [storage_local.mdx](./storage_local.mdx) (§7): the list is the portable projection
    of the per-unit `config.yaml` + `manifest.yaml`; git carries the repo list, Dropbox/Drive carry the
    computer list, alongside (not instead of) the existing committed-manifest / IPNS transports.
 9. Each of the three backbones has its own spec — [dropbox.mdx](./dropbox.mdx),
@@ -372,6 +372,6 @@ same §5 rules.
   and above all the §5 trust model (incoming lists are reconciled, never applied — verify local
   claims, absence != delete, conflicts by revision then content then time). dropbox.mdx,
   google_drive.mdx, and repo__list_syns.mdx are the three bridge backbones and must reference this
-  file rather than restate it. Reconciles with storage.mdx (§7) — the list is the portable projection
+  file rather than restate it. Reconciles with storage_local.mdx (§7) — the list is the portable projection
   of the on-disk per-unit config.yaml + manifest.yaml.
 -->

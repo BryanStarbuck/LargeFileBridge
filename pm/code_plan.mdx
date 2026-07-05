@@ -14,7 +14,7 @@ This is the **engineering plan** for LargeFileBridge (LFB). It reads every spec 
 > disagree on layout, this file wins. Code goes **only** in the peer `code/` directory
 > (charter rule); this plan lives in `pm/`.
 
-Source specs this plan implements: [storage.mdx](./storage.mdx) · [scan.mdx](./scan.mdx) ·
+Source specs this plan implements: [storage_local.mdx](./storage_local.mdx) · [scan.mdx](./scan.mdx) ·
 [settings.mdx](./settings.mdx) · [repo_settings.mdx](./repo_settings.mdx) ·
 [sync_list.mdx](./sync_list.mdx) · [dropbox.mdx](./dropbox.mdx) ·
 [google_drive.mdx](./google_drive.mdx) · [repo__list_syns.mdx](./repo__list_syns.mdx) ·
@@ -27,7 +27,7 @@ Source specs this plan implements: [storage.mdx](./storage.mdx) · [scan.mdx](./
 ## 1. What we learned from the sister apps (and adopt verbatim)
 
 Both `~/BGit/all/app/` and `~/BGit/Bryan_git/EmailDeliveryHero/` converge on the same shape, and
-[storage.mdx §intro](./storage.mdx) already says LFB follows it. We adopt it, renamed to the `lfb`
+[storage_local.mdx §intro](./storage_local.mdx) already says LFB follows it. We adopt it, renamed to the `lfb`
 prefix:
 
 | Convention | Sister-app precedent | LFB adoption |
@@ -80,7 +80,7 @@ code/
 └── justfile is at repo root (../justfile), sister-style
 ```
 
-Ports (from [storage.mdx §3](./storage.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)):
+Ports (from [storage_local.mdx §3](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)):
 the **web app** — the browser-facing page server — **always defaults to :2222** (Vite). The backend
 REST API is **8787** (`/api`); Vite proxies `/api` → `http://localhost:8787`. The IPFS *gateway*
 defaults to :8080 in Kubo, which no longer collides with the UI now that the web app lives on :2222;
@@ -125,11 +125,11 @@ packages/backend/src/
 │   └── state-dir.ts             # resolveStateDir()/resolveLogDir() — LFB_STATE_DIR → ~/T/_large_files_bridge → /tmp
 │
 ├── shared/
-│   ├── logging/                 # AppLogger singleton → log.log + error.err (rolling, 5MiB×5) — storage.mdx §12
+│   ├── logging/                 # AppLogger singleton → log.log + error.err (rolling, 5MiB×5) — storage_local.mdx §12
 │   ├── store/
 │   │   ├── yaml-store.ts        # YamlStore<T>: atomic write, per-file mutex, defaults-on-absence, schema-validate
-│   │   ├── scopes.ts            # appStore / userStore(email) / unitStore(unitKey) — the three scopes (storage.mdx §15)
-│   │   └── sanitize.ts          # sanitizeSegment/Filename — reject / \ .. NUL (storage.mdx §4, §6.1)
+│   │   ├── scopes.ts            # appStore / userStore(email) / unitStore(unitKey) — the three scopes (storage_local.mdx §15)
+│   │   └── sanitize.ts          # sanitizeSegment/Filename — reject / \ .. NUL (storage_local.mdx §4, §6.1)
 │   ├── current-user.decorator.ts# @CurrentUser() + AuthUser + DEFAULT_USER (no-anon: DEFAULT_USER only identifies)
 │   └── all-exceptions.filter.ts
 │
@@ -156,7 +156,7 @@ packages/backend/src/
 │   │   ├── mask.ts              #   attribute each path to exactly one unit (repo subtree vs computer remainder)
 │   │   └── diff.ts              #   added/grew/shrank/moved(size+mtime)/deleted → status.yaml
 │   │
-│   ├── sync/                    # storage.mdx §13 — the 15-minute byte-mover
+│   ├── sync/                    # storage_local.mdx §13 — the 15-minute byte-mover
 │   │   ├── sync.service.ts      #   per synced unit: add→CID→pin→update manifest→fetch missing→status.yaml
 │   │   ├── manifest.service.ts  #   read/write manifest.yaml + committed <repo>/.lfbridge/manifest.yaml (§9.2)
 │   │   └── synclist.service.ts  #   LargeFilesBridge_SyncList.yaml publish + RECONCILE (sync_list.mdx §5 trust model)
@@ -193,11 +193,11 @@ that POSTs to the internal route (sister precedent), so the worker runs in the a
 
 ---
 
-## 4. Storage / store layer (implements storage.mdx)
+## 4. Storage / store layer (implements storage_local.mdx)
 
 `YamlStore<T>` (sister `yaml-store.ts` extended): serialize → unique `*.pid.seq.tmp` → `fsync` →
 `rename`; per-file async mutex for read-modify-write; returns typed **defaults on absence** (no error,
-no first-run write); **Zod-validates on read**, rejecting malformed files loudly (storage.mdx §15).
+no first-run write); **Zod-validates on read**, rejecting malformed files loudly (storage_local.mdx §15).
 
 The atomic YAML store (tmp→fsync→rename, per-file mutex, defaults-on-absence, schema-validate-on-read) is in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `readYaml()` / `writeYaml()` / `updateYaml()`
@@ -206,19 +206,19 @@ The atomic YAML store (tmp→fsync→rename, per-file mutex, defaults-on-absence
 
 * **App scope** — `config.yaml`, `peers.yaml` at the state root.
 * **User scope** — `users/<email>/config.yaml`, `users/<email>/sessions/` — created lazily; email
-  lowercased + sanitized; **no `default`/anon key** (storage.mdx §4).
+  lowercased + sanitized; **no `default`/anon key** (storage_local.mdx §4).
 * **Unit scope** — `sync/computer/{config,manifest,status}.yaml` and
   `sync/r/<repo_name>/{config,manifest,status}.yaml`. The unit opener is what makes sync state
   computer-wide (outside `users/`).
 
-Every persisted file matches the storage.mdx §14 inventory; the Zod schemas live in `@lfb/shared` so
+Every persisted file matches the storage_local.mdx §14 inventory; the Zod schemas live in `@lfb/shared` so
 BE and FE agree on shape. `big_file.threshold_bytes` (settings.mdx) supersedes the legacy
 `large_file_min_bytes` / `large_files.min_bytes` fields (scan.mdx §9 reconciliation) — the shared
 `resolveThreshold(unit, appConfig)` is the single source.
 
 ---
 
-## 5. The two sync units (implements storage.mdx §5–§9)
+## 5. The two sync units (implements storage_local.mdx §5–§9)
 
 * **Repo unit (PRIMARY)** — one per discovered git repo. Identity `{name, path, remote}` written by
   the scanner; `synced` master toggle (default **off**); `large_files.follow_gitignore` seeds the
@@ -234,7 +234,7 @@ as at-risk.
 
 ---
 
-## 6. The two scheduled workers + transparency contract (scan.mdx + storage.mdx §13)
+## 6. The two scheduled workers + transparency contract (scan.mdx + storage_local.mdx §13)
 
 | Worker | Cadence | Job | launchd label | Config block |
 | --- | --- | --- | --- | --- |
@@ -278,7 +278,7 @@ shows the red IPFS pill (one_repo.mdx §3.2), disables Sync-now, and lets decisi
 
 ---
 
-## 8. Authentication — OpenAuthFederated (charter + storage.mdx §4/§10)
+## 8. Authentication — OpenAuthFederated (charter + storage_local.mdx §4/§10)
 
 Consumed exactly as both sisters do, via pnpm `link:` to
 `~/BGit/Bryan_git/OpenAuthFederated/code/packages/{auth-backend,auth-react}`. **Embedded mode** — the
@@ -326,7 +326,7 @@ packages/frontend/src/
 │   ├── repos/RepoSettingsPage.tsx # route "/repos/$repoId/settings" — gear icon target (repo_settings.mdx)
 │   ├── fs/FileSystemPage.tsx    # route "/files" — Finder-style column browser + code badges (directories.mdx)
 │   ├── peers/PeersPage.tsx      # route "/peers"
-│   ├── sync/SyncPage.tsx        # route "/sync" — both workers' installed/on-off + activity (scan.mdx §7, storage.mdx §13)
+│   ├── sync/SyncPage.tsx        # route "/sync" — both workers' installed/on-off + activity (scan.mdx §7, storage_local.mdx §13)
 │   └── settings/SettingsPage.tsx + AllowListPage.tsx  # route "/settings" (settings.mdx)
 ├── components/
 │   ├── fs/{ColumnBrowser,FsColumn,FsRow,Badges}.tsx  # Miller-column browser + the code-badge chips (directories.mdx §3)
@@ -367,9 +367,9 @@ All under `/api`, all typed by `@lfb/shared`. (`/api/v1/*` is the auth middlewar
 | `GET/PATCH /settings/allow-list` | allow-listed emails (`role:admin`) | settings.mdx §4 |
 | `GET /fs?path=…` | one directory level for the column browser: `FsEntry[]` with code badges | directories.mdx §1,§3,§5 |
 | `GET /fs/home` | the default root (OS home dir) the browser opens on | directories.mdx §1 |
-| `GET /peers` | the user's other computers | storage.mdx §11 |
-| `GET /sync` | both workers' installed/enabled + last-run + activity | scan.mdx §7, storage.mdx §13 |
-| `POST /sync/:worker/{install,uninstall,enable,disable}` | control a worker (`worker` ∈ scan\|sync) | storage.mdx §13 |
+| `GET /peers` | the user's other computers | storage_local.mdx §11 |
+| `GET /sync` | both workers' installed/enabled + last-run + activity | scan.mdx §7, storage_local.mdx §13 |
+| `POST /sync/:worker/{install,uninstall,enable,disable}` | control a worker (`worker` ∈ scan\|sync) | storage_local.mdx §13 |
 | `GET /auth/me` · `GET /health` · `GET /health/auth-config` · `POST /client-error` | plumbing | §8 |
 | `POST /internal/run/:worker` | loopback-only launchd trigger | §6 |
 
@@ -381,7 +381,7 @@ All under `/api`, all typed by `@lfb/shared`. (`/api/v1/*` is the auth middlewar
 
 | Spec | Primary code |
 | --- | --- |
-| storage.mdx (state root, 3 scopes, 2 units, manifest, store layer) | `shared/store/*`, `store-model/*`, `sync/manifest.service.ts` |
+| storage_local.mdx (state root, 3 scopes, 2 units, manifest, store layer) | `shared/store/*`, `store-model/*`, `sync/manifest.service.ts` |
 | scan.mdx (4h metadata-only discovery, mask, diff, plist) | `scanner/*`, `schedule/os/launchd.ts`, `deploy/launchd/*scan*` |
 | settings.mdx (big-file threshold MB/GB/TB, per-repo override) | `settings/*`, `@lfb/shared/units.ts`, `SettingsPage.tsx` |
 | repo_settings.mdx (gear → per-repo config) | `repos/*settings*`, `RepoSettingsPage.tsx` |
@@ -427,7 +427,7 @@ as correct-but-minimal and are called out honestly rather than hidden:
   first-class; the Dropbox/Drive file-copy adapters implement the same backbone interface but are the
   second wave (sync_list.mdx §5 trust rules already apply to all three).
 * **IPNS computer-unit transport** — implemented against Kubo `name publish/resolve`; latency/tuning
-  (storage.mdx §17 open question) revisited after the repo (git) path is proven.
+  (storage_local.mdx §17 open question) revisited after the repo (git) path is proven.
 * **Compression + perceptual-hash detection** (charter "core value" + PhotoDNA-style local matching)
   — the **learned size-baseline YAML** and the compress/convert *offers* are a dedicated later
   milestone; nothing compresses or alters a file without explicit user action, ever. The category

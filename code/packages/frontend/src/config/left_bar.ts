@@ -4,6 +4,12 @@ import { clientLog } from "../lib/clientLog.js";
 // Vite ?raw import; fs.allow grants read access to the repo root (vite.config.ts).
 import rawYaml from "../../../../../pm/left_bar.yaml?raw";
 
+export interface NavChild {
+  id: string;
+  label: string;
+  route: string;
+  description?: string;
+}
 export interface NavItem {
   id: string;
   label: string;
@@ -11,6 +17,7 @@ export interface NavItem {
   route: string;
   order: number;
   description?: string;
+  children?: NavChild[]; // static disclosure children (e.g. Storages → Personal/Repos/Communities)
 }
 export interface AccountMenuItem {
   id: string;
@@ -40,6 +47,7 @@ interface RawBar {
     route: string;
     order: number;
     description?: string;
+    children?: Array<{ id: string; label: string; route: string; description?: string }>;
   }>;
   footer?: Array<{
     menu_items?: Array<{

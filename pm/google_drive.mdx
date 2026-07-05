@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Google Drive Backbone
-description: How Google Drive carries the COMPUTER-scope Sync List (LargeFilesBridge_SyncList.yaml) between a user's own computers. Google Drive is one of the three bridge backbones (siblings: dropbox.mdx and repo__list_syns.mdx; hub: sync_list.mdx) — it is "the road," the Sync List is "the cargo." Defines the load-bearing LOCKED rule that ONLY the small YAML list ever enters Google Drive, never the large files themselves (IPFS carries the bytes; big files in Drive would defeat the product's purpose). Specifies the per-computer subfolder path convention under the macOS Google Drive for Desktop CloudStorage mount (~/Library/CloudStorage/GoogleDrive-<owner-email>/My Drive/LargeFileBridge/<computer_label>/), so each machine WRITES only its own file and READS all peers' files then reconciles per hub §5. Covers Google Drive for Desktop specifics (Stream vs Mirror modes, online-only placeholders, multiple accounts each mounting as GoogleDrive-<email>, My Drive vs Shared Drives), the enable/disable + root override in large_files.settings.backbones.google_drive, the Drive-specific hazards mapped back to hub §5.5 (conflicting copies, placeholder "content missing", selective/partial sync spurious absences, .tmp/partial mid-sync files, desktop.ini/.DS_Store cruft, clock skew), fsevents change detection with a poll fallback, atomic publishing that bumps revision + stamps written_at + writes only self-verifiable pinned_by, the desktop-client-mount (no OAuth) auth note with the Drive API as a future/server-mode alternative, and the privacy posture (Google is a third party; the list is metadata — paths + CIDs — never bytes, never secrets; only allow-listed owners are adopted). References sync_list.mdx and storage.mdx rather than restating them.
+description: How Google Drive carries the COMPUTER-scope Sync List (LargeFilesBridge_SyncList.yaml) between a user's own computers. Google Drive is one of the three bridge backbones (siblings: dropbox.mdx and repo__list_syns.mdx; hub: sync_list.mdx) — it is "the road," the Sync List is "the cargo." Defines the load-bearing LOCKED rule that ONLY the small YAML list ever enters Google Drive, never the large files themselves (IPFS carries the bytes; big files in Drive would defeat the product's purpose). Specifies the per-computer subfolder path convention under the macOS Google Drive for Desktop CloudStorage mount (~/Library/CloudStorage/GoogleDrive-<owner-email>/My Drive/LargeFileBridge/<computer_label>/), so each machine WRITES only its own file and READS all peers' files then reconciles per hub §5. Covers Google Drive for Desktop specifics (Stream vs Mirror modes, online-only placeholders, multiple accounts each mounting as GoogleDrive-<email>, My Drive vs Shared Drives), the enable/disable + root override in large_files.settings.backbones.google_drive, the Drive-specific hazards mapped back to hub §5.5 (conflicting copies, placeholder "content missing", selective/partial sync spurious absences, .tmp/partial mid-sync files, desktop.ini/.DS_Store cruft, clock skew), fsevents change detection with a poll fallback, atomic publishing that bumps revision + stamps written_at + writes only self-verifiable pinned_by, the desktop-client-mount (no OAuth) auth note with the Drive API as a future/server-mode alternative, and the privacy posture (Google is a third party; the list is metadata — paths + CIDs — never bytes, never secrets; only allow-listed owners are adopted). References sync_list.mdx and storage_local.mdx rather than restating them.
 ---
 
 # LargeFileBridge — Google Drive Backbone
@@ -18,8 +18,8 @@ the two scopes, the `origin`/`revision` provenance, or the trust model — those
   [§5 Trust & reconciliation](./sync_list.mdx#5-trust--reconciliation-the-load-bearing-rule).
 * **Sibling backbones:** [dropbox.mdx](./dropbox.mdx) (whole-computer, file-based, like this one),
   [repo__list_syns.mdx](./repo__list_syns.mdx) (per-repo, over git).
-* **On-disk state:** [storage.mdx](./storage.mdx) — where the reconciled truth lands; this backbone
-  is the file-based alternative to [storage.mdx §9.3](./storage.mdx#93-computer-manifests-travel-via-ipns)'s
+* **On-disk state:** [storage_local.mdx](./storage_local.mdx) — where the reconciled truth lands; this backbone
+  is the file-based alternative to [storage_local.mdx §9.3](./storage_local.mdx#93-computer-manifests-travel-via-ipns)'s
   IPNS transport for the whole-computer list.
 * **IPFS security:** [../knowledge/ipfs.mdx](../knowledge/ipfs.mdx) — the only-our-content rule.
 
@@ -68,7 +68,7 @@ uses for Google Drive access. The canonical location is:
 
 * `<owner-email>` — the account whose Drive is mounted; it MUST be an **allow-listed owner**
   ([§7](#7-auth), hub [§5.5](./sync_list.mdx#55-backbone-delivered-hazards-the-reader-must-expect)).
-* `<computer_label>` — this machine's label (`config.yaml → computer.label`, [storage.mdx §3](./storage.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)),
+* `<computer_label>` — this machine's label (`config.yaml → computer.label`, [storage_local.mdx §3](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)),
   e.g. `bryan-macbook`.
 * Filename is verbatim `LargeFilesBridge_SyncList.yaml` — "Files" is plural (hub [§1](./sync_list.mdx#1-vocabulary--sync-list--backbone--scope-locked)).
 
@@ -120,7 +120,7 @@ The list changes underneath us whenever Google syncs in a peer's newer copy. LFB
 
 * **fsevents watch** on the `LargeFileBridge/` subtree of the mount, **debounced** (Drive can touch a
   file several times as it finishes syncing), plus a **periodic poll fallback** — the background sync
-  process ([storage.mdx §13](./storage.mdx#13-the-background-sync-process--the-transparency-contract),
+  process ([storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract),
   every 15 min) re-lists peer subfolders regardless, because file watchers on a network-backed mount
   are not fully reliable.
 * In **Stream files** mode, a watch may not fire on a placeholder until the bytes are pulled. LFB may
@@ -146,7 +146,7 @@ prevents most, but the reader must still tolerate all of them.
 | **Conflicting copies** | Two devices touch the same path; Drive keeps a second copy, often `...(1).yaml` or a `name (bryan-macbook's conflicted copy).yaml`. Per-computer subfolders make this rare, but not impossible. | Quarantine, treat as an **additional untrusted input**, reconcile — never load blindly (hub §5.5). |
 | **Online-only placeholders** | Stream mode shows a file that is not materialized → spurious **"content missing"**. | **Materialize before reading** ([§3](#3-google-drive-for-desktop-specifics)); a placeholder is absent, not empty. |
 | **Selective / partial sync** | A machine excludes `LargeFileBridge/` from sync, or is mid-sync → a peer's list is missing. | **Absence is NOT delete** (hub [§5.2](./sync_list.mdx#52-absence-is-not-deletion-default)); record known-but-absent, wait. |
-| **`.tmp` / partial mid-sync files** | Drive writes then swaps; a half-written or `.tmp` file may be visible momentarily. | **Reject and keep the previous good copy** ([storage.mdx §15](./storage.mdx#15-the-store-layer-how-code-touches-disk)); anything that fails schema parse is not trusted. |
+| **`.tmp` / partial mid-sync files** | Drive writes then swaps; a half-written or `.tmp` file may be visible momentarily. | **Reject and keep the previous good copy** ([storage_local.mdx §15](./storage_local.mdx#15-the-store-layer-how-code-touches-disk)); anything that fails schema parse is not trusted. |
 | **Metadata cruft** | `desktop.ini`, `.DS_Store`, `.tmp.drivedownload`, `.driveupload`, and other Drive/OS scratch files appear beside the list. | **Ignore** — only files named exactly `LargeFilesBridge_SyncList.yaml` are candidates; everything else is skipped. |
 | **Clock skew** | Machine clocks differ; Drive's own timestamps are not authoritative. | Resolve by **revision, then content, then time** (hub [§5.3](./sync_list.mdx#53-conflicts-resolve-by-revision-then-content-then-time)); `written_at` is a last resort only. |
 
@@ -179,7 +179,7 @@ the hub. It is **not** re-specified here:
 # Full schema + levels: sync_list.mdx §3 / §3.1. This backbone moves the file; it never rewrites it.
 ```
 
-* `enabled: false` (default per [storage.mdx §3](./storage.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)
+* `enabled: false` (default per [storage_local.mdx §3](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)
   posture) → LFB neither writes to nor reads from Drive.
 * `root: null` → derive the default from the allow-listed owner's `GoogleDrive-<email>` mount +
   `/My Drive/LargeFileBridge`.
@@ -208,7 +208,7 @@ transport changes.
 * **Google is a third party.** What LFB puts on Drive is **metadata only** — paths and IPFS **CIDs**,
   plus `settings`, `origin`, and `pinned_by` claims. **Never bytes. Never secrets.** No auth tokens,
   no `.auth_session_secret`, no provider credentials (those stay in
-  [storage.mdx §10](./storage.mdx#10-auth-session--signing-secret-runtime-not-settings)) ever touch
+  [storage_local.mdx §10](./storage_local.mdx#10-auth-session--signing-secret-runtime-not-settings)) ever touch
   Drive.
 * **Only-our-content still holds.** Publishing a list here never turns this machine into a public
   IPFS gateway or relay; `settings.ipfs.reprovide_strategy` stays `pinned` — see
@@ -231,7 +231,7 @@ subfolder** so peers can reconcile it. Per hub [§6](./sync_list.mdx#6-publishin
   peer claims are copied forward from the last reconciled truth, not invented.
 * **Atomic temp-then-rename** — serialize to a unique `*.tmp` in the same subfolder, then rename over
   `LargeFilesBridge_SyncList.yaml`, so a syncing peer never sees a half-written file
-  ([storage.mdx §15](./storage.mdx#15-the-store-layer-how-code-touches-disk)).
+  ([storage_local.mdx §15](./storage_local.mdx#15-the-store-layer-how-code-touches-disk)).
 * Write only when `settings.backbones.google_drive.enabled` is true, only to **our own**
   `<computer_label>/` subfolder ([§2](#2-path-convention--one-subfolder-per-computer-locked)).
 * **Note:** writing into a **streamed placeholder folder triggers an upload** — the rename lands
@@ -274,6 +274,6 @@ subfolder** so peers can reconcile it. Per hub [§6](./sync_list.mdx#6-publishin
   ~/Library/CloudStorage/GoogleDrive-<owner-email>/My Drive/LargeFileBridge/<computer_label>/ (write
   own, read peers); use My Drive not Shared Drives; desktop-mount auth (no OAuth); metadata-only /
   allow-listed-owner-only. This file REFERENCES sync_list.mdx (schema, two scopes, origin/revision,
-  and above all the §5 trust/reconciliation model) and storage.mdx / knowledge/ipfs.mdx rather than
+  and above all the §5 trust/reconciliation model) and storage_local.mdx / knowledge/ipfs.mdx rather than
   restating them — it must never redefine the schema or the trust rules.
 -->

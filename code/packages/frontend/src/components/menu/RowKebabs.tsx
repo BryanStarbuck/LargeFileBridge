@@ -19,10 +19,12 @@ import {
   Copy,
   Trash2,
   Ban,
+  Captions,
 } from "lucide-react";
 import type { RepoRow, PeerRow, IpfsPinRow } from "@lfb/shared";
 import { api } from "@/api/client";
 import { ActionsKebab, type Action } from "./EntityMenu";
+import { runTranscribeTree } from "@/lib/transcribe";
 import { clientLog } from "../../lib/clientLog.js";
 
 // Copy to clipboard with a toast — the shared "copy" action body.
@@ -91,6 +93,13 @@ export function RepoKebab({ repo }: { repo: RepoRow }) {
           toast.error(e instanceof Error ? e.message : "Sync failed");
         }
       },
+    },
+    {
+      id: "transcribe",
+      label: "Transcribe all files…",
+      group: "Work",
+      icon: <Captions className="h-4 w-4" />,
+      onSelect: () => runTranscribeTree(repo.path, repo.name),
     },
     {
       id: "toggle-synced",

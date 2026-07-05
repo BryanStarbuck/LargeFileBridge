@@ -51,6 +51,32 @@ function domainOf(email: string): string {
   return at >= 0 ? email.slice(at + 1).toLowerCase() : "";
 }
 
+// Public/consumer email providers that must NEVER widen OAF's OIDC domain pre-filter (security audit
+// finding 4). Allow-listing one individual foo@gmail.com previously added "gmail.com" to
+// allowedDomains, admitting ALL gmail accounts at the library layer. Individuals are still enforced by
+// the authoritative exact-email gate (allowListed) in identify.ts; their consumer domain never joins
+// the domain allowlist.
+const CONSUMER_DOMAINS = new Set([
+  "gmail.com",
+  "googlemail.com",
+  "yahoo.com",
+  "ymail.com",
+  "outlook.com",
+  "hotmail.com",
+  "live.com",
+  "msn.com",
+  "icloud.com",
+  "me.com",
+  "mac.com",
+  "aol.com",
+  "proton.me",
+  "protonmail.com",
+  "gmx.com",
+  "mail.com",
+  "zoho.com",
+  "yandex.com",
+]);
+
 /** Explicit ops/dev override only — never a silent default that would breach default-deny (§2). */
 function envDomains(): string[] {
   return normalizeDomains((process.env.AUTH_ALLOWED_DOMAINS || "").split(","));
@@ -74,12 +100,22 @@ export function securityConfigured(): boolean {
   return getAppConfig().access.configured === true;
 }
 
-/** Coarse OIDC pre-filter for OpenAuthFederated (security.mdx §6.1) — boot-captured. */
+/** Coarse OIDC pre-filter for OpenAuthFederated (security.mdx §6.1) — boot-captured.
+ *  Only VERIFIED CORPORATE domains belong here (security audit finding 4): company allow-list domains
+ *  and the explicit env override. Individual allow-list entries are NOT expanded to their email domain
+ *  — a consumer domain like gmail.com would otherwise admit every account at that provider. Individuals
+ *  are enforced by the exact-email allowListed() gate in identify.ts instead. As a defense-in-depth
+ *  belt, a corporate individual's domain may join the filter, but a known consumer domain never does. */
 export function oafAllowedDomains(): string[] {
   const a = getAppConfig().access;
   const set = new Set<string>();
   if (a.allow_companies) for (const d of a.allowed_domains) set.add(d.toLowerCase());
-  if (a.allow_individuals) for (const e of a.allowed_emails) set.add(domainOf(e));
+  if (a.allow_individuals) {
+    for (const e of a.allowed_emails) {
+      const d = domainOf(e);
+      if (d && !CONSUMER_DOMAINS.has(d)) set.add(d); // never widen the gate to a public provider
+    }
+  }
   for (const d of envDomains()) set.add(d);
   return [...set].filter(Boolean);
 }

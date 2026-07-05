@@ -4,7 +4,7 @@ import helmet from "helmet";
 import cors from "cors";
 import crypto from "node:crypto";
 import { getAppConfig, updateAppConfig } from "./modules/store-model/config.service.js";
-import { buildAuthFrontend } from "./modules/auth/auth-frontend.js";
+import { buildAuthFrontend, allowedRedirectOrigins } from "./modules/auth/auth-frontend.js";
 import { identify } from "./modules/auth/identify.js";
 import { authRouter } from "./modules/auth/auth.router.js";
 import { reposRouter } from "./modules/repos/repos.router.js";
@@ -16,6 +16,9 @@ import { syncRouter } from "./modules/sync/sync.router.js";
 import { sessionsRouter } from "./modules/sessions/sessions.router.js";
 import { peersRouter } from "./modules/peers/peers.router.js";
 import { ipfsRouter } from "./modules/ipfs/ipfs.router.js";
+import { storagesRouter } from "./modules/storage/storage.router.js";
+import { compressRouter } from "./modules/compress/compression.router.js";
+import { transcribeRouter } from "./modules/transcribe/transcribe.router.js";
 import { healthRouter } from "./modules/health/health.router.js";
 import { securityRouter } from "./modules/security/security.router.js";
 import { internalRouter } from "./modules/internal/internal.router.js";
@@ -44,16 +47,17 @@ function configuredOrigins(): string[] {
   return merged.length ? merged : ["http://localhost:2222"];
 }
 
-// The web app defaults to :2222 but may increment past a foreign process (code_plan.mdx §2 port
-// collision policy). In LOCAL mode we therefore accept ANY localhost origin so a moved web port
-// still reaches the API; in SERVER mode we fail closed to the configured origin list only.
-const LOCALHOST_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+// CORS origin gate (security audit finding 6). The web app defaults to :2222 but may increment past a
+// foreign process (code_plan.mdx §2). We must NOT reflect ANY localhost origin with credentials — a
+// hostile page on any other localhost port could otherwise drive credentialed calls. Instead we pin to
+// an explicit allowlist: the configured origins PLUS, in local mode, the frontend port BAND
+// (frontend_port..+16 on both loopback hostnames — the same set the auth redirect uses). Server mode
+// fails closed to the configured origins only.
 function corsOrigin(): cors.CorsOptions["origin"] {
-  const allowlist = new Set(configuredOrigins());
-  const local = getAppConfig().server.mode === "local";
   return (origin, cb) => {
-    if (!origin) return cb(null, true); // same-origin / curl — no browser origin to check
-    if (allowlist.has(origin) || (local && LOCALHOST_ORIGIN.test(origin))) return cb(null, true);
+    if (!origin) return cb(null, true); // no Origin header → same-origin or non-browser (curl); CORS is browser-only
+    const allowlist = new Set([...configuredOrigins(), ...allowedRedirectOrigins()]);
+    if (allowlist.has(origin)) return cb(null, true);
     cb(new Error(`origin not allowed: ${origin}`));
   };
 }
@@ -108,6 +112,9 @@ async function main(): Promise<void> {
   app.use("/api/sessions", sessionsRouter); // web-session activity ping + stale-return auto-sync (sessions.mdx)
   app.use("/api/peers", peersRouter);
   app.use("/api/ipfs", ipfsRouter);
+  app.use("/api/storages", storagesRouter); // the Storages tab: discover/init/index/analyze (storages.mdx)
+  app.use("/api/compress", compressRouter); // compression engine: tools/settings/check/file/batch (compression.mdx)
+  app.use("/api/transcribe", transcribeRouter); // transcription engine: tools/file/batch/tree/storage (Transcribe.mdx)
   app.use("/api/internal", internalRouter);
   app.use("/api/client-log", clientLogRouter); // browser fault trail -> shared logger -> error.err
 
@@ -118,7 +125,13 @@ async function main(): Promise<void> {
     res.status(500).json({ ok: false, error: "internal error" });
   });
 
-  const server = app.listen(port, () => log.info("main", `LargeFileBridge API listening on :${port}`));
+  // Bind loopback-only in local mode (security audit finding 1): the API must NOT be reachable from
+  // the local network in the default offline posture. Server mode binds all interfaces (override with
+  // HOST) because it is meant to be reached remotely — and it fails closed to real sign-in.
+  const host = isLocal ? "127.0.0.1" : process.env.HOST || "0.0.0.0";
+  const server = app.listen(port, host, () =>
+    log.info("main", `LargeFileBridge API listening on ${host}:${port}`),
+  );
   // With the single-instance lock held, an EADDRINUSE here means a FOREIGN process owns the port —
   // fail with a clear one-line message instead of an unhandled listen-error stack trace.
   server.on("error", (err: NodeJS.ErrnoException) => {

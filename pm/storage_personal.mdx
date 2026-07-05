@@ -1,0 +1,99 @@
+---
+title: LargeFileBridge — Personal Storage
+description: The Personal storage spec. A user's own personal large files, rooted at ~/BGit/Bryan_git/personal_large_files_bridge/, tracked as a directory-based storage with a storage.yaml (name + type: personal) and a hidden .lfbridge/ area at its root (fingerprint index, IPFS manifest, media-analysis outputs). Unlike a repo storage it need not be a Git repository — it is the user's private pile of big files (videos, images, archives) synced across their own computers over IPFS, and optionally mirrored to Google Drive / Dropbox. There is exactly one personal storage per user. Sibling of storage_repo / storage_company / storage_community; shares the storage.yaml schema and .lfbridge/ layout defined in storages.mdx. Appears as the "Personal" child of the Storages left-bar tab.
+---
+
+# LargeFileBridge — Personal Storage
+
+**Personal storage** is the user's own private pile of big files — videos, images, archives — that they
+sync across **their own** computers. There is exactly **one** personal storage per user.
+
+Read the shared model first: the storage family, the `storage.yaml` schema, the `.lfbridge/` tracking
+layout, cloud clones, and media analysis are defined once in **[storages.mdx](./storages.mdx)**. This spec
+covers only what is **specific to personal storage**.
+
+Siblings this builds on and does not repeat:
+
+* [storages.mdx](./storages.mdx) — the umbrella: `storage.yaml` (§3), `.lfbridge/` (§4), clones (§5),
+  media analysis (§6).
+* [storage_repo.mdx](./storage_repo.mdx) — the canonical directory-based storage; personal storage is the
+  same shape with a `personal` block and no requirement to be a Git repo.
+* [Communities](./communities.mdx) — *other people's* files; personal storage is the opposite: **your own**
+  private files, not shared with anyone else.
+
+---
+
+## 1. Anatomy of the personal storage
+
+```
+~/BGit/Bryan_git/personal_large_files_bridge/     ← the personal storage root
+├── .lfbridge/
+│   ├── storage.yaml        ← name + type: personal (storages.mdx §3)
+│   ├── files.yaml          ← per-file fingerprint index (storages.mdx §4.1)
+│   ├── manifest.yaml       ← large-file → IPFS CID + pin state
+│   └── analysis/           ← per-file media analysis (storages.mdx §6)
+└── …the user's personal big files…
+```
+
+* **Root:** `~/BGit/Bryan_git/personal_large_files_bridge/` (the `{personal_storage_root}`; the leading
+  path follows the user's `~/BGit/Bryan_git/` convention).
+* It **need not be a Git repo** — unlike a [repo storage](./storage_repo.mdx), it can be a plain directory
+  hierarchy of big files. The `.lfbridge/` tracking area still lives at its root.
+
+---
+
+## 2. `storage.yaml` for personal
+
+```yaml
+# ~/BGit/Bryan_git/personal_large_files_bridge/.lfbridge/storage.yaml
+name: "My Personal Files"
+type: personal
+created: 2026-05-01T10:12:00Z
+personal: {}                # usually empty / a place for personal preferences
+clones:
+  google_drive: null        # e.g. "My Drive/LFB/Personal" once mirrored (storages.mdx §5)
+  dropbox: null             # e.g. "Apps/LFB/Personal"
+```
+
+* **`type: personal`** with a (usually empty) **`personal`** block. Its content is the user's own — no
+  `company`/`community` identity.
+* Because it is **private to one user**, it never has a shared allow-list the way a company/community
+  storage might — it syncs only across **this user's** computers (peers — [storage_local.mdx §11](./storage_local.mdx)).
+
+---
+
+## 3. Media analysis + cloud clones
+
+Personal storage produces the same [storages.mdx §6](./storages.mdx) **media-analysis** outputs into
+`.lfbridge/analysis/` (transcript / description / visuals-by-time for video; description for images) and
+may **clone** to Google Drive / Dropbox ([storages.mdx §5](./storages.mdx)) — recorded in the `clones`
+block. Everything stays private to the user's own accounts and computers.
+
+---
+
+## 4. Where it shows in the UI
+
+In the **[Storages](./storages.mdx#2-the-storages-left-bar-tab)** left-bar tab, personal storage is the
+**Personal** child. It sits alongside the user's company children, the Repos link, and their opted-in
+communities — one row in the map of everything this user syncs.
+
+---
+
+## 5. Acceptance criteria
+
+1. A user has **exactly one** personal storage, rooted at `~/BGit/Bryan_git/personal_large_files_bridge/`,
+   tracked via a hidden **`.lfbridge/`** at its root.
+2. Its `.lfbridge/storage.yaml` has **`name`** + **`type: personal`** and a (usually empty) `personal`
+   block; no `company`/`community`/`repo` block.
+3. It **need not** be a Git repo; it holds the fingerprint index, IPFS manifest, and `analysis/` outputs
+   per [storages.mdx §4](./storages.mdx).
+4. It syncs **only across the user's own computers** over IPFS and may clone to Google Drive / Dropbox; it
+   is never shared with other users.
+5. It appears as the **Personal** child of the Storages tab.
+
+<!--
+  Personal storage = the user's OWN private big files. Root ~/BGit/Bryan_git/personal_large_files_bridge/.
+  Need not be a Git repo. storage.yaml: name + type: personal + (empty) personal block. .lfbridge/ per
+  storages.mdx. Private to this user's computers; optional Drive/Dropbox clone. Shows as the "Personal"
+  child of the Storages tab. Don't restate the shared model — see storages.mdx.
+-->

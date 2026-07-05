@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Repo (Git) Backbone
-description: The per-repo Sync List backbone — the git repo itself as the transport that carries a repo-scope LargeFilesBridge_SyncList.yaml between the user's computers. The list lives INSIDE the repo at <repo>/.lfbridge/LargeFilesBridge_SyncList.yaml, is committed to git, and travels on every git pull/merge — the most private backbone (no third party at all) and the DEFAULT for repos. This spec reconciles that committed file with storage.mdx §9.2: this list SUPERSEDES and absorbs the bare <repo>/.lfbridge/manifest.yaml — the list's files: block equals the old manifest rows plus settings + origin/revision provenance, widened to the full large_files hierarchy. LOCKED rules: the big files stay git-ignored and only the small committed list travels via git (git carries the list, IPFS carries the bytes — NEVER commit the large files); scope is repo (exactly one entry under repos:, no directories:, paths relative to the repo working tree); .gitignore must NOT ignore .lfbridge/; the list is written DETERMINISTICALLY (file entries sorted by path, stable key order) so independent edits on two computers merge cleanly and only genuine conflicts collide; git MERGE CONFLICT markers must be detected, the file quarantined and REFUSED (never load a half-merged list), then reconciled per hub §5.3; absence after a merge is NOT a delete (hub §5.2); a pull that brings a peer revision behind this machine's real state is reconciled by verifying local claims (hub §5.1); and the in-repo git list is AUTHORITATIVE for that repo's files (hub §5.4). Enabled per-repo via publish_manifest (repo_settings.mdx §2.4) and settings.backbones.repo_git.enabled. LFB writes the file but does not force git commits unless configured — it respects the user's git workflow.
+description: The per-repo Sync List backbone — the git repo itself as the transport that carries a repo-scope LargeFilesBridge_SyncList.yaml between the user's computers. The list lives INSIDE the repo at <repo>/.lfbridge/LargeFilesBridge_SyncList.yaml, is committed to git, and travels on every git pull/merge — the most private backbone (no third party at all) and the DEFAULT for repos. This spec reconciles that committed file with storage_local.mdx §9.2: this list SUPERSEDES and absorbs the bare <repo>/.lfbridge/manifest.yaml — the list's files: block equals the old manifest rows plus settings + origin/revision provenance, widened to the full large_files hierarchy. LOCKED rules: the big files stay git-ignored and only the small committed list travels via git (git carries the list, IPFS carries the bytes — NEVER commit the large files); scope is repo (exactly one entry under repos:, no directories:, paths relative to the repo working tree); .gitignore must NOT ignore .lfbridge/; the list is written DETERMINISTICALLY (file entries sorted by path, stable key order) so independent edits on two computers merge cleanly and only genuine conflicts collide; git MERGE CONFLICT markers must be detected, the file quarantined and REFUSED (never load a half-merged list), then reconciled per hub §5.3; absence after a merge is NOT a delete (hub §5.2); a pull that brings a peer revision behind this machine's real state is reconciled by verifying local claims (hub §5.1); and the in-repo git list is AUTHORITATIVE for that repo's files (hub §5.4). Enabled per-repo via publish_manifest (repo_settings.mdx §2.4) and settings.backbones.repo_git.enabled. LFB writes the file but does not force git commits unless configured — it respects the user's git workflow.
 ---
 
 # LargeFileBridge — Repo (Git) Backbone
@@ -24,7 +24,7 @@ This spec does **not** restate the hub. It references it:
 * [sync_list.mdx](./sync_list.mdx) — the Sync List schema, the `large_files` hierarchy, the two
   scopes, the `origin`/`revision` provenance, and the [§5 trust/reconciliation model](./sync_list.mdx#5-trust--reconciliation-the-load-bearing-rule).
   Read §5 before writing any code that consumes an in-repo list.
-* [storage.mdx §9.2](./storage.mdx#92-repo-manifests-travel-via-git-the-elegant-part) — the committed
+* [storage_local.mdx §9.2](./storage_local.mdx#92-repo-manifests-travel-via-git-the-elegant-part) — the committed
   `<repo>/.lfbridge/manifest.yaml`. This backbone is that transport, **widened** to the full
   `large_files` hierarchy; [§3](#3-reconciliation-with-storagemdx-92) reconciles the two explicitly.
 * [repo_settings.mdx §2.4](./repo_settings.mdx#24-pinning--fetch-policy) — the per-repo
@@ -80,7 +80,7 @@ The `.lfbridge/` directory holds the committed, git-tracked artifacts for this r
   explicit un-ignore (`!/.lfbridge/`) so the list is always tracked. LFB verifies on scan that
   `.lfbridge/LargeFilesBridge_SyncList.yaml` is not ignored and warns loudly if it is.
 * The state-root copy (`sync/r/<repo_name>/manifest.yaml`,
-  [storage.mdx §6.3](./storage.mdx#62-syncrrepo_nameconfigyaml)) remains the **local cache** of this
+  [storage_local.mdx §6.3](./storage_local.mdx#62-syncrrepo_nameconfigyaml)) remains the **local cache** of this
   committed file plus this computer's live pin state. The committed file is the **portable source of
   truth**; the state-root copy is derived.
 
@@ -89,13 +89,13 @@ The committed in-repo list file (currently `.lfbridge/manifest.yaml`) is written
 
 ---
 
-## 3. Reconciliation with storage.mdx §9.2
+## 3. Reconciliation with storage_local.mdx §9.2
 
-[storage.mdx §9.2](./storage.mdx#92-repo-manifests-travel-via-git-the-elegant-part) describes a bare
+[storage_local.mdx §9.2](./storage_local.mdx#92-repo-manifests-travel-via-git-the-elegant-part) describes a bare
 committed `<repo>/.lfbridge/manifest.yaml` — path → CID + pin state, carried by git. **This
 per-repo Sync List supersedes and absorbs that file.** The mapping is exact:
 
-| storage.mdx §9.2 (`.lfbridge/manifest.yaml`) | This spec (`.lfbridge/LargeFilesBridge_SyncList.yaml`) |
+| storage_local.mdx §9.2 (`.lfbridge/manifest.yaml`) | This spec (`.lfbridge/LargeFilesBridge_SyncList.yaml`) |
 | --- | --- |
 | the manifest `files:` rows (`path`/`cid`/`size`/`sha256`/`modified_at`/`pinned_by`) | `large_files.repos.<key>.files[]` — the **same rows**, unchanged in shape |
 | *(no provenance)* | the `origin` block — `computer_id`/`label`/`owner`/`written_at`/`revision` (hub §3) |
@@ -127,7 +127,7 @@ input the hub trust model governs — it is a set of **claims, never ground trut
   * `settings.backbones.repo_git.enabled: true` (the list's own backbone flag, hub §3), **and**
   * `publish_manifest: true` on that repo ([repo_settings.mdx §2.4](./repo_settings.mdx#24-pinning--fetch-policy)).
 * After a pull, LFB reads the committed list, reconciles it against this computer's filesystem + IPFS
-  pinset (hub §5), and fetches any CID it lacks over IPFS — exactly the flow storage.mdx §9.2
+  pinset (hub §5), and fetches any CID it lacks over IPFS — exactly the flow storage_local.mdx §9.2
   describes, now driven by the widened list.
 
 Reading the committed list that a `git pull` delivered is handled in code:
@@ -223,7 +223,7 @@ repo with this backbone enabled, LFB regenerates the in-repo list:
   CIDs it actually pins right now (hub §5.1); peer claims are copied forward from the last reconciled
   truth, never invented.
 * Serialize **deterministically** (§6) and write **atomically** (temp-then-rename,
-  [storage.mdx §15](./storage.mdx#15-the-store-layer-how-code-touches-disk)) so a concurrent reader or
+  [storage_local.mdx §15](./storage_local.mdx#15-the-store-layer-how-code-touches-disk)) so a concurrent reader or
   a git operation never sees a half-written file.
 
 The atomic temp-then-rename write that keeps readers and git from seeing a half-written file is in code:
@@ -333,7 +333,7 @@ large_files:
    an explicit un-ignore if a broad rule would swallow it) and warns loudly if it is ignored.
 3. The list is **`scope: repo`** with **exactly one entry under `repos:`**, **no `directories:`
    block**, and paths **relative to the repo working tree** (hub §2, §4).
-4. This committed file **supersedes and absorbs** [storage.mdx §9.2](./storage.mdx#92-repo-manifests-travel-via-git-the-elegant-part)'s
+4. This committed file **supersedes and absorbs** [storage_local.mdx §9.2](./storage_local.mdx#92-repo-manifests-travel-via-git-the-elegant-part)'s
    bare `<repo>/.lfbridge/manifest.yaml`: its `files:` block equals the old manifest rows **plus**
    `settings` + `origin`/`revision`, widened to the `large_files` hierarchy; bare manifests are
    migrated on next publish.
@@ -361,7 +361,7 @@ large_files:
   sync_list.mdx). It does NOT restate the Sync List schema, the large_files hierarchy, the two scopes,
   the origin/revision provenance, or the §5 trust model — it references sync_list.mdx for all of them.
   LOCKED here: the committed file lives at <repo>/.lfbridge/LargeFilesBridge_SyncList.yaml and
-  SUPERSEDES storage.mdx §9.2's bare manifest.yaml (files == manifest rows + settings + provenance,
+  SUPERSEDES storage_local.mdx §9.2's bare manifest.yaml (files == manifest rows + settings + provenance,
   widened to large_files); the big files stay git-ignored, only the small list is committed (git
   carries the list, IPFS carries the bytes); .gitignore must not ignore .lfbridge/; scope: repo with
   exactly one repos: entry and no directories:; transport is git pull/merge, enabled via
@@ -370,5 +370,5 @@ large_files:
   detected/quarantined/refused then reconciled per hub §5.3; absence != delete (§5.2); verify local
   claims (§5.1); the in-repo git list is AUTHORITATIVE for that repo's files (§5.4); LFB writes the
   file but does NOT force git commits/pushes (respect the user's git workflow; CLAUDE.md forbids auto
-  branch/push). Reconciles with storage.mdx §9.2 rather than restating it.
+  branch/push). Reconciles with storage_local.mdx §9.2 rather than restating it.
 -->

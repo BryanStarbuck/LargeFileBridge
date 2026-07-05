@@ -1,0 +1,378 @@
+// The compression engine (compression.mdx). Drives quality-controllable brew tools (ffmpeg / ImageMagick
+// / oxipng / cwebp / mozjpeg) to shrink IMAGE and VIDEO files at MEDIUM quality (prefer lossless), with
+// two hard invariants: keep the same aspect ratio + pixel resolution (never downscale — §5), and run the
+// alpha-channel safety check first (§6). Runs to a temp file, verifies, then does a recoverable replace
+// (original → LFBridge trash). Audio is out of scope for now. Explicit-user-action only (charter §6.1).
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import type {
+  CompressionSettings,
+  CompressMediaPrefs,
+  CompressMedia,
+  CompressTools,
+  CompressCheck,
+  CompressResult,
+} from "@lfb/shared";
+import { mediaKindForName } from "@lfb/shared";
+import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
+import { expandHome } from "../fs/badges.js";
+import { resolveStateDir, ensureDir } from "../../config/state-dir.js";
+import { log } from "../../shared/logging.js";
+
+// ── settings (compression.mdx §7) ─────────────────────────────────────────────
+export function getCompressionSettings(): CompressionSettings {
+  const c = getAppConfig().compression;
+  const map = (m: { enabled: boolean; quality: CompressMediaPrefs["quality"]; prefer: string[]; deny: string[] }): CompressMediaPrefs => ({
+    enabled: m.enabled,
+    quality: m.quality,
+    prefer: m.prefer,
+    deny: m.deny,
+  });
+  return {
+    images: map(c.images),
+    video: map(c.video),
+    audio: map(c.audio),
+    preserveResolution: c.preserve_resolution,
+    replaceOriginalToTrash: c.replace_original_to_trash,
+  };
+}
+
+export async function setCompressionSettings(patch: Partial<CompressionSettings>): Promise<CompressionSettings> {
+  await updateAppConfig((cfg) => {
+    const applyMedia = (dst: { enabled: boolean; quality: string; prefer: string[]; deny: string[] }, src?: Partial<CompressMediaPrefs>) => {
+      if (!src) return;
+      if (src.enabled !== undefined) dst.enabled = src.enabled;
+      if (src.quality !== undefined) dst.quality = src.quality;
+      if (src.prefer !== undefined) dst.prefer = src.prefer;
+      if (src.deny !== undefined) dst.deny = src.deny;
+    };
+    applyMedia(cfg.compression.images, patch.images);
+    applyMedia(cfg.compression.video, patch.video);
+    applyMedia(cfg.compression.audio, patch.audio);
+    if (patch.preserveResolution !== undefined) cfg.compression.preserve_resolution = patch.preserveResolution;
+    if (patch.replaceOriginalToTrash !== undefined) cfg.compression.replace_original_to_trash = patch.replaceOriginalToTrash;
+    return cfg;
+  });
+  return getCompressionSettings();
+}
+
+// ── tool detection (compression.mdx §2) ────────────────────────────────────────
+function onPath(bin: string): boolean {
+  try {
+    return spawnSync("which", [bin], { encoding: "utf8" }).status === 0;
+  } catch {
+    return false;
+  }
+}
+export function detectTools(): CompressTools {
+  return {
+    ffmpeg: onPath("ffmpeg"),
+    ffprobe: onPath("ffprobe"),
+    magick: onPath("magick") || onPath("convert"),
+    oxipng: onPath("oxipng"),
+    cwebp: onPath("cwebp"),
+    cjpeg: onPath("cjpeg"),
+    jpegoptim: onPath("jpegoptim"),
+  };
+}
+function magickBin(): string {
+  return onPath("magick") ? "magick" : "convert";
+}
+
+// ── probes (dimensions + alpha) ────────────────────────────────────────────────
+function run(bin: string, args: string[], timeoutMs = 10 * 60 * 1000): { code: number | null; out: string; err: string } {
+  const r = spawnSync(bin, args, { encoding: "utf8", timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 });
+  return { code: r.status, out: r.stdout ?? "", err: r.stderr ?? "" };
+}
+
+function imageDims(abs: string, tools: CompressTools): { w: number; h: number } | null {
+  if (!tools.magick) return null;
+  const r = run(magickBin(), ["identify", "-format", "%w %h", abs]);
+  const m = /(\d+)\s+(\d+)/.exec(r.out.trim());
+  return m ? { w: Number(m[1]), h: Number(m[2]) } : null;
+}
+
+/** true = image has USED transparency; false = opaque; null = couldn't determine. */
+function imageAlphaUsed(abs: string, tools: CompressTools): boolean | null {
+  if (!tools.magick) return null;
+  const r = run(magickBin(), ["identify", "-format", "%[opaque]", abs]);
+  const v = r.out.trim().toLowerCase();
+  if (v === "true") return false; // fully opaque → alpha unused
+  if (v === "false") return true; // has transparency
+  return null;
+}
+
+function videoInfo(abs: string, tools: CompressTools): { w: number; h: number; pixFmt: string } | null {
+  if (!tools.ffprobe) return null;
+  const r = run("ffprobe", [
+    "-v", "error", "-select_streams", "v:0",
+    "-show_entries", "stream=width,height,pix_fmt", "-of", "csv=p=0", abs,
+  ]);
+  const parts = r.out.trim().split(",");
+  if (parts.length < 2) return null;
+  return { w: Number(parts[0]), h: Number(parts[1]), pixFmt: (parts[2] ?? "").trim() };
+}
+/** A pixel format that carries alpha (yuva*, rgba/bgra/argb/abgr, ya8/ya16, gbrap…). */
+function pixFmtHasAlpha(pixFmt: string): boolean {
+  const f = pixFmt.toLowerCase();
+  return ["yuva", "rgba", "bgra", "argb", "abgr", "gbrap", "ya8", "ya16", "ayuv"].some((tok) => f.includes(tok));
+}
+
+// ── codec metadata ──────────────────────────────────────────────────────────────
+const IMAGE_TARGETS: Record<string, { ext: string; alpha: boolean }> = {
+  jpeg: { ext: ".jpg", alpha: false },
+  jpeg2000: { ext: ".jp2", alpha: false },
+  webp: { ext: ".webp", alpha: true },
+  png: { ext: ".png", alpha: true },
+};
+const VIDEO_TARGETS: Record<string, { encoder: string; ext: string; alpha: boolean; label: string }> = {
+  h264: { encoder: "libx264", ext: ".mp4", alpha: false, label: "H.264" },
+  hevc: { encoder: "libx265", ext: ".mp4", alpha: false, label: "HEVC" },
+  av1: { encoder: "libaom-av1", ext: ".mp4", alpha: false, label: "AV1" },
+};
+const LOSSLESS_IMAGE_EXT = new Set([".png", ".bmp", ".tif", ".tiff", ".gif"]);
+
+function jpegQuality(q: CompressMediaPrefs["quality"]): number {
+  return q === "high" ? 92 : q === "low" ? 70 : q === "lossless" ? 100 : 85;
+}
+function videoCrf(codec: string, q: CompressMediaPrefs["quality"]): number {
+  const base = codec === "hevc" ? 24 : 21; // medium
+  if (q === "lossless") return 0;
+  if (q === "high") return base - 3;
+  if (q === "low") return base + 5;
+  return base;
+}
+
+function mediaOf(name: string): CompressMedia | null {
+  const k = mediaKindForName(name);
+  return k === "image" ? "images" : k === "video" ? "video" : k === "audio" ? "audio" : null;
+}
+
+// ── the plan / check (compression.mdx §3 + §6) ─────────────────────────────────
+interface Plan {
+  media: CompressMedia;
+  targetKey: string;      // "png" | "jpeg" | "webp" | "jpeg2000" | "h264" | "hevc" | …
+  targetCodec: string;    // human label
+  ext: string;            // output extension
+  action: string;
+  lossless: boolean;
+}
+
+function pickImageTarget(prefs: CompressMediaPrefs, tools: CompressTools, srcExt: string, alphaUsed: boolean | null): Plan | { toolMissing: string } {
+  const denied = new Set(prefs.deny);
+  const isLosslessSrc = LOSSLESS_IMAGE_EXT.has(srcExt);
+  // Lossless quality, or a PNG we keep as PNG → oxipng lossless recompress.
+  const wantLossless = prefs.quality === "lossless";
+  for (const key of prefs.prefer) {
+    const t = IMAGE_TARGETS[key];
+    if (!t || denied.has(key)) continue;
+    // A no-alpha target is unsafe when transparency is used or undeterminable → skip it (steer onward).
+    if (!t.alpha && alphaUsed !== false) continue;
+    if (key === "webp") {
+      if (!tools.cwebp && !tools.magick) return { toolMissing: "cwebp (brew install webp)" };
+      const lossless = wantLossless || alphaUsed === true;
+      return { media: "images", targetKey: "webp", targetCodec: "WebP", ext: ".webp", action: `→ WebP${lossless ? " (lossless)" : ` (${prefs.quality})`}`, lossless };
+    }
+    if (key === "jpeg") {
+      if (!tools.magick) return { toolMissing: "ImageMagick (brew install imagemagick)" };
+      return { media: "images", targetKey: "jpeg", targetCodec: "JPEG", ext: ".jpg", action: `→ JPEG (${prefs.quality})`, lossless: false };
+    }
+    if (key === "jpeg2000") {
+      if (!tools.magick) return { toolMissing: "ImageMagick (brew install imagemagick)" };
+      return { media: "images", targetKey: "jpeg2000", targetCodec: "JPEG 2000", ext: ".jp2", action: `→ JPEG 2000 (${prefs.quality})`, lossless: false };
+    }
+  }
+  // Fallback: a lossless recompress of the source format (safe, keeps pixels + alpha).
+  if (isLosslessSrc) {
+    if (!tools.oxipng && !tools.magick) return { toolMissing: "oxipng (brew install oxipng)" };
+    const useOxi = tools.oxipng && srcExt === ".png";
+    return { media: "images", targetKey: "png", targetCodec: useOxi ? "PNG (lossless)" : "recompress", ext: srcExt, action: "lossless recompress", lossless: true };
+  }
+  // Already-lossy source (jpeg/webp) → re-encode at quality (may be no gain).
+  if (!tools.magick) return { toolMissing: "ImageMagick (brew install imagemagick)" };
+  return { media: "images", targetKey: srcExt === ".webp" ? "webp" : "jpeg", targetCodec: srcExt === ".webp" ? "WebP" : "JPEG", ext: srcExt, action: `re-encode (${prefs.quality})`, lossless: false };
+}
+
+function pickVideoTarget(prefs: CompressMediaPrefs, tools: CompressTools): Plan | { toolMissing: string } {
+  if (!tools.ffmpeg) return { toolMissing: "ffmpeg (brew install ffmpeg)" };
+  const denied = new Set(prefs.deny);
+  const key = prefs.prefer.find((k) => VIDEO_TARGETS[k] && !denied.has(k)) ?? "h264";
+  const t = VIDEO_TARGETS[key];
+  return { media: "video", targetKey: key, targetCodec: t.label, ext: t.ext, action: `→ ${t.label} (${prefs.quality}, CRF ${videoCrf(key, prefs.quality)})`, lossless: prefs.quality === "lossless" };
+}
+
+/** Dry-run: what would happen + is it alpha-safe. Never touches the file. */
+export function checkFile(input: string): CompressCheck {
+  const abs = path.resolve(expandHome(input.trim()));
+  const name = path.basename(abs);
+  const media = mediaOf(name);
+  const base: CompressCheck = {
+    path: abs, media, eligible: false, action: "", targetCodec: null,
+    alphaUsed: null, alphaSafe: true, warning: null, toolMissing: null,
+  };
+  if (!media) return { ...base, action: "not a compressible media file" };
+  if (media === "audio") return { ...base, action: "audio compression is not enabled yet" };
+
+  const settings = getCompressionSettings();
+  const prefs = media === "images" ? settings.images : settings.video;
+  if (!prefs.enabled) return { ...base, action: `${media} compression is disabled in settings` };
+  const tools = detectTools();
+
+  if (media === "images") {
+    const srcExt = path.extname(abs).toLowerCase();
+    const alphaUsed = imageAlphaUsed(abs, tools);
+    const plan = pickImageTarget(prefs, tools, srcExt, alphaUsed);
+    if ("toolMissing" in plan) return { ...base, alphaUsed, toolMissing: plan.toolMissing, action: `needs ${plan.toolMissing}` };
+    const noAlphaTarget = !IMAGE_TARGETS[plan.targetKey]?.alpha;
+    const alphaSafe = !(alphaUsed !== false && noAlphaTarget);
+    return {
+      ...base, eligible: true, action: plan.action, targetCodec: plan.targetCodec, alphaUsed,
+      alphaSafe,
+      warning: alphaUsed === true && noAlphaTarget ? "would lose transparency — steering to an alpha-safe target" : alphaUsed === null ? "alpha usage unknown (ImageMagick not installed) — treating conservatively" : null,
+    };
+  }
+  // video
+  const info = videoInfo(abs, tools);
+  const alphaUsed = info ? pixFmtHasAlpha(info.pixFmt) : null;
+  const plan = pickVideoTarget(prefs, tools);
+  if ("toolMissing" in plan) return { ...base, alphaUsed, toolMissing: plan.toolMissing, action: `needs ${plan.toolMissing}` };
+  const targetAlpha = VIDEO_TARGETS[plan.targetKey]?.alpha ?? false;
+  const alphaSafe = !(alphaUsed === true && !targetAlpha);
+  return {
+    ...base, eligible: alphaSafe, action: plan.action, targetCodec: plan.targetCodec, alphaUsed,
+    alphaSafe,
+    warning: !alphaSafe ? `source has a used alpha channel (${info?.pixFmt}); ${plan.targetCodec} can't keep it — blocked` : null,
+  };
+}
+
+// ── compress one file (compression.mdx §8) ──────────────────────────────────────
+function tmpOut(ext: string): string {
+  const dir = path.join(resolveStateDir(), "tmp");
+  ensureDir(dir);
+  const rand = spawnSync("uuidgen", [], { encoding: "utf8" }).stdout?.trim() || String(process.hrtime.bigint());
+  return path.join(dir, `compress-${rand}${ext}`);
+}
+
+function trashOriginal(abs: string): void {
+  const trashDir = path.join(resolveStateDir(), "trash");
+  ensureDir(trashDir);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const dest = path.join(trashDir, `${stamp}__${path.basename(abs)}`);
+  try {
+    fs.renameSync(abs, dest);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EXDEV") throw e;
+    fs.copyFileSync(abs, dest);
+    fs.unlinkSync(abs);
+  }
+}
+
+function fail(pathOut: string, reason: string, status: CompressResult["status"] = "failed", beforeBytes: number | null = null): CompressResult {
+  return { path: pathOut, status, reason, beforeBytes, afterBytes: null, codec: null };
+}
+
+export function compressFile(input: string): CompressResult {
+  const abs = path.resolve(expandHome(input.trim()));
+  let beforeBytes: number | null = null;
+  try {
+    beforeBytes = fs.statSync(abs).size;
+  } catch {
+    return fail(abs, "file not found");
+  }
+  const check = checkFile(abs);
+  if (!check.media || check.media === "audio") return fail(abs, check.action, "skipped", beforeBytes);
+  if (check.toolMissing) return fail(abs, `needs ${check.toolMissing}`, "failed", beforeBytes);
+  if (!check.alphaSafe) return fail(abs, check.warning ?? "alpha safety check failed", "blocked", beforeBytes);
+  if (!check.eligible) return fail(abs, check.action, "skipped", beforeBytes);
+
+  const settings = getCompressionSettings();
+  const tools = detectTools();
+  const media = check.media;
+  const prefs = media === "images" ? settings.images : settings.video;
+  const plan = media === "images"
+    ? pickImageTarget(prefs, tools, path.extname(abs).toLowerCase(), check.alphaUsed)
+    : pickVideoTarget(prefs, tools);
+  if ("toolMissing" in plan) return fail(abs, `needs ${plan.toolMissing}`, "failed", beforeBytes);
+
+  const out = tmpOut(plan.ext);
+  const inDims = media === "images" ? imageDims(abs, tools) : (videoInfo(abs, tools) && { w: videoInfo(abs, tools)!.w, h: videoInfo(abs, tools)!.h });
+
+  // Build + run the tool.
+  let cmd: { bin: string; args: string[] };
+  if (media === "images") {
+    cmd = imageCommand(plan, abs, out, prefs, tools);
+  } else {
+    const t = VIDEO_TARGETS[plan.targetKey];
+    cmd = { bin: "ffmpeg", args: ["-y", "-i", abs, "-c:v", t.encoder, "-crf", String(videoCrf(plan.targetKey, prefs.quality)), "-pix_fmt", "yuv420p", "-c:a", "copy", out] };
+  }
+  const r = run(cmd.bin, cmd.args);
+  if (r.code !== 0 || !safeSize(out)) {
+    tryUnlink(out);
+    return fail(abs, `${cmd.bin} failed: ${(r.err || "").split("\n").slice(-3).join(" ").slice(0, 200)}`, "failed", beforeBytes);
+  }
+
+  // §5 — verify resolution unchanged (never downscale) and that we actually gained.
+  const outDims = media === "images" ? imageDims(out, tools) : (videoInfo(out, tools) && { w: videoInfo(out, tools)!.w, h: videoInfo(out, tools)!.h });
+  if (settings.preserveResolution && inDims && outDims && (inDims.w !== outDims.w || inDims.h !== outDims.h)) {
+    tryUnlink(out);
+    return fail(abs, `refused: resolution changed ${inDims.w}×${inDims.h} → ${outDims.w}×${outDims.h}`, "blocked", beforeBytes);
+  }
+  const afterBytes = fs.statSync(out).size;
+  if (beforeBytes != null && afterBytes >= beforeBytes) {
+    tryUnlink(out);
+    return { path: abs, status: "skipped", reason: "no gain (already well compressed)", beforeBytes, afterBytes, codec: check.targetCodec };
+  }
+
+  // §8 — recoverable replace: original → trash, temp → final path (new ext if the format changed).
+  const finalPath = path.join(path.dirname(abs), path.basename(abs, path.extname(abs)) + plan.ext);
+  try {
+    if (settings.replaceOriginalToTrash) trashOriginal(abs);
+    else fs.unlinkSync(abs);
+    fs.renameSync(out, finalPath);
+  } catch (e) {
+    tryUnlink(out);
+    return fail(abs, `replace failed: ${(e as Error).message}`, "failed", beforeBytes);
+  }
+  log.info("compress", `${abs} → ${finalPath} (${check.targetCodec}) ${beforeBytes}→${afterBytes} bytes`);
+  return { path: finalPath, status: "compressed", reason: null, beforeBytes, afterBytes, codec: check.targetCodec };
+}
+
+function imageCommand(plan: Plan, abs: string, out: string, prefs: CompressMediaPrefs, tools: CompressTools): { bin: string; args: string[] } {
+  const q = String(jpegQuality(prefs.quality));
+  if (plan.targetKey === "png" && tools.oxipng) {
+    return { bin: "oxipng", args: ["-o", "4", "--strip", "safe", abs, "--out", out] };
+  }
+  if (plan.targetKey === "webp" && tools.cwebp) {
+    return plan.lossless
+      ? { bin: "cwebp", args: ["-lossless", abs, "-o", out] }
+      : { bin: "cwebp", args: ["-q", q, abs, "-o", out] };
+  }
+  // Everything else via ImageMagick, quality-controlled, NO resize (keeps resolution).
+  return { bin: magickBin(), args: [abs, "-quality", q, out] };
+}
+
+function safeSize(p: string): boolean {
+  try {
+    return fs.statSync(p).size > 0;
+  } catch {
+    return false;
+  }
+}
+function tryUnlink(p: string): void {
+  try {
+    fs.unlinkSync(p);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function compressBatch(inputs: string[]): CompressResult[] {
+  return inputs.map((p) => {
+    try {
+      return compressFile(p);
+    } catch (e) {
+      return fail(p, (e as Error).message, "failed");
+    }
+  });
+}

@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Web App Entry & Sign-In (credentials setup)
-description: The web app shell spec, in two parts. Part I is the entry gate (the UiPageWeRender shown before anyone is signed in) — the sign-in screen and its "sign-in is not configured yet" remediation panel that renders when the Google OAuth client credentials are missing. That panel must name the app correctly (Large File Bridge — NOT any sister app's name), show the FULL path where the credentials JSON must be installed (~/.credentials/large_files_bridge.json), print the exact JSON layout to paste into it, show the exact redirect URI to register on the Google Cloud OAuth client (http://localhost:8787/api/v1/oauth_callback), and tell the user to restart the backend. Grounded in the real code: SignInPage.tsx, the auth gate in main.tsx, GET /api/health/auth-config, and config/credentials-file.ts. Precedence is env-wins-then-file. Part II is the app shell's "something is happening" surfaces — the two bottom-left feedback regions that tell the signed-in user work is running asynchronously: (1) the app-wide sonner toasts, re-anchored from bottom-right to bottom-left, enlarged, and offset clear of the 256px left bar; and (2) a new bottom-left progress dock — a stack of short "Running <op> <target>" cards with a spinning icon (and an optional determinate bar) that appears while long jobs run (scan discovery, IPFS sync/pin/publish, compress, hash/fingerprint, git-ignore) and drains card-by-card as each job finishes. The dock reflects BOTH browser-initiated jobs (optimistic) and server-side background-worker jobs (scan every 4h, sync every 15m) polled from a new GET /api/progress, so a job started by launchd or another tab still shows. Cross-links storage.mdx §10 (where the secret lives / signing secret) and §4 (the allow-list), scan.mdx (the discovery worker), sync_list.mdx (the sync backbone), and left_bar.mdx (the 256px bar this offset clears). Learns its progress pattern from the sister app EmailDeliveryHero (pm/progress_ui.mdx).
+description: The web app shell spec, in two parts. Part I is the entry gate (the UiPageWeRender shown before anyone is signed in) — the sign-in screen and its "sign-in is not configured yet" remediation panel that renders when the Google OAuth client credentials are missing. That panel must name the app correctly (Large File Bridge — NOT any sister app's name), show the FULL path where the credentials JSON must be installed (~/.credentials/large_files_bridge.json), print the exact JSON layout to paste into it, show the exact redirect URI to register on the Google Cloud OAuth client (http://localhost:8787/api/v1/oauth_callback), and tell the user to restart the backend. Grounded in the real code: SignInPage.tsx, the auth gate in main.tsx, GET /api/health/auth-config, and config/credentials-file.ts. Precedence is env-wins-then-file. Part II is the app shell's "something is happening" surfaces — the two bottom-left feedback regions that tell the signed-in user work is running asynchronously: (1) the app-wide sonner toasts, re-anchored from bottom-right to bottom-left, enlarged, and offset clear of the 256px left bar; and (2) a new bottom-left progress dock — a stack of short "Running <op> <target>" cards with a spinning icon (and an optional determinate bar) that appears while long jobs run (scan discovery, IPFS sync/pin/publish, compress, hash/fingerprint, git-ignore) and drains card-by-card as each job finishes. The dock reflects BOTH browser-initiated jobs (optimistic) and server-side background-worker jobs (scan every 4h, sync every 15m) polled from a new GET /api/progress, so a job started by launchd or another tab still shows. Cross-links storage_local.mdx §10 (where the secret lives / signing secret) and §4 (the allow-list), scan.mdx (the discovery worker), sync_list.mdx (the sync backbone), and left_bar.mdx (the 256px bar this offset clears). Learns its progress pattern from the sister app EmailDeliveryHero (pm/progress_ui.mdx).
 ---
 
 # LargeFileBridge — Web App Entry & Sign-In (credentials setup)
@@ -24,9 +24,9 @@ Grounded in the real code:
   (`code/packages/backend/src/modules/health/health.router.ts` → `authConfig()`)
 * Where creds are read: `code/packages/backend/src/config/credentials-file.ts`
 
-Siblings: [storage.mdx §10](./storage.mdx#10-auth-session--signing-secret-runtime-not-settings) (the
+Siblings: [storage_local.mdx §10](./storage_local.mdx#10-auth-session--signing-secret-runtime-not-settings) (the
 signing secret + why client creds are **not** in the state store) ·
-[storage.mdx §4](./storage.mdx#4-per-logged-in-user-storage--the-per-user-requirement) (the
+[storage_local.mdx §4](./storage_local.mdx#4-per-logged-in-user-storage--the-per-user-requirement) (the
 allow-list that decides who, once signed in, is actually let in) ·
 [settings.mdx §4](./settings.mdx#4-the-rest-of-the-global-settings-surface) (allow-list editing,
 admin-only) · [code_plan.mdx](./code_plan.mdx) (ports: web app **:2222**, API **:8787**).
@@ -158,7 +158,7 @@ plain, copy-pasteable form.
 The panel should also surface the **allowed sign-in domain(s)** as context — default **`act3ai.com`**
 (`AUTH_ALLOWED_DOMAINS`) — so the operator knows *which* Google account will be accepted even once the
 client is wired up. Being on an allowed domain still isn't sufficient by itself: the email must also
-be on the **allow-list** ([storage.mdx §4](./storage.mdx#4-per-logged-in-user-storage--the-per-user-requirement)).
+be on the **allow-list** ([storage_local.mdx §4](./storage_local.mdx#4-per-logged-in-user-storage--the-per-user-requirement)).
 
 ---
 
@@ -201,7 +201,7 @@ Reading both accepted shapes (with invisible-whitespace repair) is handled in co
 
 **This is a secret file.** It holds the OAuth **client secret** and therefore lives **out of the repo**
 and **out of the state store** — never checked in, never inside `~/T/_large_files_bridge/`
-([storage.mdx §10](./storage.mdx#10-auth-session--signing-secret-runtime-not-settings)). The panel may
+([storage_local.mdx §10](./storage_local.mdx#10-auth-session--signing-secret-runtime-not-settings)). The panel may
 remind the operator to keep it private (e.g. `chmod 600`).
 
 ---
@@ -510,7 +510,7 @@ doubled when the same job comes back on the poll.
   are re-shaped to **register a job**, return promptly with the job id, and **report progress** into
   the registry as they run — so `GET /api/progress` can surface them and the card can show a bar.
 * **Safe persistence under parallelism.** Parallel jobs that write the same on-disk state (a repo's
-  `status.yaml` / `manifest.yaml`, [storage.mdx](./storage.mdx)) **serialize their write step** through
+  `status.yaml` / `manifest.yaml`, [storage_local.mdx](./storage_local.mdx)) **serialize their write step** through
   an in-service async lock (a promise chain) so no concurrent job clobbers another's result — invisible
   to callers; only the disk write is serialized.
 
@@ -579,6 +579,6 @@ doubled when the same job comes back on the poll.
   under launchd on their own schedule. If the left-bar width changes in config/left_bar.ts, update the
   272px offset here and in main.tsx/ProgressDock. Cards are driven by REAL in-flight jobs (registry +
   optimistic runner) — never fake progress; a card exists iff a job is actually running. Serialize the
-  on-disk write step as long as jobs fan out in parallel against the per-unit YAML state (storage.mdx).
+  on-disk write step as long as jobs fan out in parallel against the per-unit YAML state (storage_local.mdx).
 -->
 

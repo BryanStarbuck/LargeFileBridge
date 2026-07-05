@@ -9,7 +9,7 @@ import { useParams, useNavigate, Link } from "@tanstack/react-router";
 import { RefreshCw, Settings, ChevronLeft, Network, UploadCloud } from "lucide-react";
 import { toast } from "sonner";
 import type { FileRow, Decision, RepoDetail } from "@lfb/shared";
-import { formatBytes } from "@lfb/shared";
+import { formatBytes, viewerRouteForName } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
@@ -59,6 +59,27 @@ export function OneRepoPage() {
     },
   });
 
+  // Bulk compress the checked rows (compression.mdx §4). The selection Set holds fileIds; map them back
+  // to absolute paths for the batch endpoint.
+  const compressBatch = useMutation({
+    mutationFn: (paths: string[]) => api.compressBatch(paths),
+    onSuccess: (r) => {
+      const ok = r.results.filter((x) => x.status === "compressed").length;
+      const blocked = r.results.filter((x) => x.status === "blocked").length;
+      toast.success(`Compressed ${ok}/${r.results.length}${blocked ? ` · ${blocked} blocked (alpha/resolution)` : ""}`);
+      qc.invalidateQueries({ queryKey: ["repo", repoId] });
+      setSelected(new Set());
+    },
+    onError: (e: Error) => { clientLog.error("OneRepoPage.compressBatch", e); toast.error(e.message); },
+  });
+  const compressSelected = () => {
+    if (!detail?.path) return;
+    const paths = detail.files.filter((f) => selected.has(f.fileId)).map((f) => `${detail.path}/${f.path}`);
+    if (!paths.length) return;
+    if (!window.confirm(`Compress ${paths.length} file${paths.length === 1 ? "" : "s"}? Medium quality, same resolution — originals move to LFBridge trash (recoverable).`)) return;
+    compressBatch.mutate(paths);
+  };
+
   const ipfsDown = detail?.ipfs === "unreachable";
 
   const columns: LfbColumn<FileRow>[] = [
@@ -73,14 +94,17 @@ export function OneRepoPage() {
       accessor: () => "",
       cell: (f) => {
         const pinned = f.decision === "sync";
+        // Control cell — stop the click bubbling to the row's navigate (one_repo.mdx §4.7).
         return (
-          <PinToggle
-            pinned={pinned}
-            disabled={ipfsDown}
-            onToggle={() =>
-              setDecision.mutate({ paths: [f.path], decision: pinned ? "ignore" : "sync" })
-            }
-          />
+          <span onClick={(e) => e.stopPropagation()}>
+            <PinToggle
+              pinned={pinned}
+              disabled={ipfsDown}
+              onToggle={() =>
+                setDecision.mutate({ paths: [f.path], decision: pinned ? "ignore" : "sync" })
+              }
+            />
+          </span>
         );
       },
     },
@@ -128,7 +152,7 @@ export function OneRepoPage() {
     { id: "peers", header: "Peers", kind: "int", align: "right", accessor: (f) => f.peers.length,
       cell: (f) => <span className={f.decision === "sync" && f.peers.length === 0 ? "text-red-600" : ""}>{f.peers.length}</span> },
     { id: "cid", header: "CID", kind: "text", accessor: (f) => f.cid,
-      cell: (f) => f.cid ? <code className="text-xs text-black/60" title={f.cid} onClick={() => navigator.clipboard?.writeText(f.cid!).catch((e) => clientLog.warn("OneRepoPage.copyCid", e))}>{middleTruncate(f.cid, 16)}</code> : <span className="text-black/20">—</span> },
+      cell: (f) => f.cid ? <code className="text-xs text-black/60" title={f.cid} onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(f.cid!).catch((err) => clientLog.warn("OneRepoPage.copyCid", err)); toast.success("CID copied"); }}>{middleTruncate(f.cid, 16)}</code> : <span className="text-black/20">—</span> },
     { id: "changed", header: "Changed", kind: "timestamp", accessor: (f) => f.changedAt,
       cell: (f) => <span title={absoluteTime(f.changedAt)}>{relativeTime(f.changedAt)}</span> },
   ];
@@ -193,6 +217,15 @@ export function OneRepoPage() {
         columns={columns}
         searchKeys={(f) => f.path}
         getRowId={(f) => f.fileId}
+        // Row click → the file's "View one file" experience: media routes to its viewer
+        // (/image · /video · /audio), everything else to /file (one_repo.mdx §4.7). The FileRow path is
+        // repo-relative, so join it onto the repo root for the absolute path every entity page keys off.
+        onRowClick={(f) => {
+          if (!detail?.path) return;
+          const abs = `${detail.path}/${f.path}`;
+          const name = f.path.slice(f.path.lastIndexOf("/") + 1);
+          navigate({ to: viewerRouteForName(name), search: { path: abs } });
+        }}
         // Trailing ⋮ kebab — the file entity menu (menus.mdx §3), same catalog as View-one-file.
         rowMenu={(f) => (detail?.path ? <EntityKebab path={`${detail.path}/${f.path}`} /> : null)}
         itemNoun="files"
@@ -216,6 +249,11 @@ export function OneRepoPage() {
                   <button className="block w-full px-3 py-1.5 text-left text-sm hover:bg-slate-100 text-[var(--lfb-primary)]"
                     onClick={() => { syncNow.mutate([...selected]); setBulkOpen(false); }}>
                     Sync now (selected)
+                  </button>
+                  <button className="block w-full px-3 py-1.5 text-left text-sm hover:bg-slate-100"
+                    disabled={compressBatch.isPending}
+                    onClick={() => { compressSelected(); setBulkOpen(false); }}>
+                    Compress selected
                   </button>
                 </div>
               )}

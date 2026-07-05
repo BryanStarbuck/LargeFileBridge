@@ -8,14 +8,28 @@ import { AUTH_ISSUER } from "./auth-frontend.js";
 import { hasGoogleCreds } from "../../config/credentials-file.js";
 import { allowListed, securityConfigured } from "../security/security.service.js";
 import { DEFAULT_USER, type AuthUser } from "./current-user.js";
+import { isLoopback } from "../../shared/loopback.js";
 import { log } from "../../shared/logging.js";
 
 export async function identify(req: Request, _res: Response, next: NextFunction): Promise<void> {
   const withUser = req as Request & { user?: AuthUser };
 
-  // Localhost dev bypass: only once security is configured (else the frontend shows the one-time
-  // Security Setup page first — security.mdx §3). No Google creds + LFB_DEV_AUTH -> act as an admin.
-  if (securityConfigured() && !hasGoogleCreds() && process.env.LFB_DEV_AUTH !== "false") {
+  // Localhost dev bypass (security audit finding 1). This fabricates an admin principal, so it is
+  // gated on ALL of the following — never on "no Google creds" alone, which previously handed an
+  // unauthenticated, network-reachable caller full admin:
+  //   • local mode (never in server mode — a server deployment fails closed to real sign-in),
+  //   • the request actually originates from loopback (this machine),
+  //   • an EXPLICIT opt-in: LFB_DEV_AUTH === "true" (not merely unset),
+  //   • security is configured (else the one-time Security Setup page shows first — security.mdx §3),
+  //   • no Google creds are present (otherwise real OIDC sign-in is used).
+  const isLocalMode = getAppConfig().server.mode === "local";
+  if (
+    isLocalMode &&
+    isLoopback(req) &&
+    process.env.LFB_DEV_AUTH === "true" &&
+    securityConfigured() &&
+    !hasGoogleCreds()
+  ) {
     const email = getAppConfig().access.allowed_emails[0] || "dev@localhost";
     withUser.user = {
       authenticated: true,

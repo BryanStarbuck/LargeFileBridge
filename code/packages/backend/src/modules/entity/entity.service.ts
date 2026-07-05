@@ -19,6 +19,7 @@ import {
   expandHome,
   HARD_SKIP,
 } from "../fs/badges.js";
+import { assertAllowedPath } from "../fs/allow-root.js";
 import { effectiveFlags, ownFlags, setFileFlags, getAppConfig } from "../store-model/config.service.js";
 import {
   listRepoFolders,
@@ -44,8 +45,9 @@ export interface ResolvedEntity {
 export function resolveEntity(input: string | undefined): ResolvedEntity {
   const raw = (input && input.trim()) || "";
   if (!raw) throw new Error("path required");
-  const abs = path.resolve(expandHome(raw));
-  if (abs.includes("\0")) throw new Error("invalid path");
+  const abs0 = path.resolve(expandHome(raw));
+  if (abs0.includes("\0")) throw new Error("invalid path");
+  const abs = assertAllowedPath(abs0); // confine to the allow-roots (security audit finding 2)
   let st: fs.Stats;
   try {
     st = fs.statSync(abs);
@@ -336,8 +338,9 @@ export function moveEntity(input: string, dest: string): { moved: true; path: st
   if (!src.exists || src.kind !== "file") throw new Error("move: source must be an existing file");
   const destRaw = (dest && dest.trim()) || "";
   if (!destRaw) throw new Error("destination required");
-  const destAbs = path.resolve(expandHome(destRaw));
-  if (destAbs.includes("\0")) throw new Error("invalid destination");
+  const destAbs0 = path.resolve(expandHome(destRaw));
+  if (destAbs0.includes("\0")) throw new Error("invalid destination");
+  const destAbs = assertAllowedPath(destAbs0); // confine the move target too (finding 2)
   if (destAbs === src.abs) throw new Error("destination is the same as the source");
   const parent = path.dirname(destAbs);
   let pst: fs.Stats;

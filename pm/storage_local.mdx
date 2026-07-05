@@ -40,6 +40,42 @@ worker are all TypeScript-on-Node — never raw shell.
 
 ---
 
+## 0. This is *Local* Storage — one of a family of storages
+
+LFBridge has **several kinds of storage**, and this spec is only the first — **Local Storage**.
+
+* **Local Storage** (this spec, `~/T/_large_files_bridge/`) is **this computer's own settings,
+  configuration, and sync bookkeeping**. It is effectively **LFBridge's database replacement** — it holds
+  nothing that syncs between computers by itself; it is where *this machine* keeps app config, the
+  per-user config, the auth session, `peers.yaml`, logs, and the local index/manifests it needs to do its
+  job. If you wiped it and re-scanned, it would rebuild.
+
+* The **other storages are directory hierarchies that hold the actual shared large files** and travel
+  between your computers over IPFS (and often *also* have a clone in **Google Drive** or **Dropbox**).
+  Each of those lives in **its own root directory** with a **`storage.yaml`** at the top declaring its
+  **name** and **type**, plus a hidden per-directory tracking area. A person is normally involved with
+  **more than one** at a time — several communities, one or more companies, and their own personal files:
+
+  | Storage | Type | Root directory | Spec |
+  | --- | --- | --- | --- |
+  | **Local** | `local` | `~/T/_large_files_bridge/` (settings/config; no `storage.yaml`) | **this file** — [storage_local.mdx](./storage_local.mdx) |
+  | **Repo** | `repo` | any Git repo, e.g. `~/BGit/xyz/` (tracking in `~/BGit/xyz/.lfbridge/`) | [storage_repo.mdx](./storage_repo.mdx) |
+  | **Personal** | `personal` | `~/BGit/Bryan_git/personal_large_files_bridge/` | [storage_personal.mdx](./storage_personal.mdx) |
+  | **Company** | `company` | e.g. `~/BGit/Bryan_git/act3_large_files_bridge/` (one per company) | [storage_company.mdx](./storage_company.mdx) |
+  | **Community** | `community` | one per community the user helps/downloads/shares | [storage_community.mdx](./storage_community.mdx) |
+
+* The umbrella that ties them together — the **Storages** left-bar tab, the shared **`storage.yaml`**
+  schema, and the per-file **media-analysis** outputs (transcription / description / visuals-by-time) — is
+  [storages.mdx](./storages.mdx).
+
+**Division of labor.** Local Storage (this file) owns *settings + this machine's bookkeeping*. The
+directory-based storages own *the shared files themselves* and their per-file tracking. Where this spec
+still describes per-repo sync units under the state root (§5–§9), read it as the **local index** of what
+lives in each directory-based storage; the **authoritative** per-storage tracking is the `storage.yaml` +
+hidden `.lfbridge/` in that storage's own root ([storage_repo.mdx](./storage_repo.mdx)).
+
+---
+
 ## 1. The state root
 
 Everything LFB persists lives under a single **state root directory**:

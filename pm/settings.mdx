@@ -11,12 +11,12 @@ The **Settings** page (`/settings`, the Settings nav item —
 the **big-file threshold**: the single number that decides what LFB even considers a "big file."
 
 Everything on this page writes to the app-level, computer-wide `config.yaml`
-([storage.mdx §3](./storage.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)). These
+([storage_local.mdx §3](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)). These
 are global defaults for the whole install; a repo may override a subset of them on its own page
 ([repo_settings.mdx](./repo_settings.mdx)).
 
 Siblings: [repo_settings.mdx](./repo_settings.mdx) (per-repo overrides, reached via the gear icon) ·
-[scan.mdx](./scan.mdx) (the scan that *applies* the threshold) · [storage.mdx](./storage.mdx) (where
+[scan.mdx](./scan.mdx) (the scan that *applies* the threshold) · [storage_local.mdx](./storage_local.mdx) (where
 these values persist).
 
 ---
@@ -60,7 +60,7 @@ The value + unit threshold control (and the resolved-bytes helper text) is imple
 
 ### 1.2 Units — MB / GB / TB
 
-| Unit | Multiplier (binary, matching `storage.mdx` byte fields) | Example value → bytes |
+| Unit | Multiplier (binary, matching `storage_local.mdx` byte fields) | Example value → bytes |
 | --- | --- | --- |
 | **MB** | 1 MB = 1,048,576 bytes (MiB) | 100 MB → 104,857,600 |
 | **GB** | 1 GB = 1,073,741,824 bytes (GiB) | 2 GB → 2,147,483,648 |
@@ -68,7 +68,7 @@ The value + unit threshold control (and the resolved-bytes helper text) is imple
 
 The dropdown offers exactly these three units, in this order. (Binary multipliers keep the stored
 byte values consistent with the `size:`/`min_bytes:` fields already used throughout
-[storage.mdx](./storage.mdx).)
+[storage_local.mdx](./storage_local.mdx).)
 
 ### 1.3 Where it persists
 
@@ -84,7 +84,7 @@ big_file:
 
 This `big_file` block is the authoritative home of the threshold. It **supersedes** the older
 `sync_process.large_file_min_bytes` / per-repo `large_files.min_bytes` defaults in
-[storage.mdx §3/§6](./storage.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical), which
+[storage_local.mdx §3/§6](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical), which
 should be re-pointed at this value (see [scan.mdx §9](./scan.mdx#9-reconciliation-with-existing-specs)).
 
 Saving the threshold — resolving value+unit to `threshold_bytes` and persisting the `big_file` block — is handled in code:
@@ -131,7 +131,7 @@ only goes out of their way to override when a specific repo needs it (e.g. a rep
 where they want a lower cutoff, or a video repo where they want a higher one).
 
 The per-repo override persists in that repo's own config
-([storage.mdx §6.2](./storage.mdx#62-syncrrepo_nameconfigyaml)):
+([storage_local.mdx §6.2](./storage_local.mdx#62-syncrrepo_nameconfigyaml)):
 
 ```yaml
 # sync/r/<repo_name>/config.yaml  (excerpt — the per-repo threshold override)
@@ -151,12 +151,26 @@ concerns live. Each is specified elsewhere; the page groups them into sections:
 | Section | What | Spec |
 | --- | --- | --- |
 | **Big files** | The threshold (§1) + its unit. | this file |
+| **Compression** | Per-media (images / video / **audio**) codec **allow/deny** + quality; social-media-safe defaults. | [compression.mdx §7](./compression.mdx#7-codec-preference-settings-per-media-type) |
 | **Scan process** | The 4-hour discovery scan: installed / on-off / Rescan now. | [scan.mdx §7](./scan.mdx#7-the-transparency-contract-installed-vs-onoff) |
-| **Sync process** | The 15-min background sync: installed / on-off. | [storage.mdx §13](./storage.mdx#13-the-background-sync-process--the-transparency-contract) |
-| **Scanner roots** | Which top-level dirs the scan walks + global ignore globs. | [storage.mdx §3/§7](./storage.mdx#7-the-scanner--discovering-repos-and-the-mask) |
-| **IPFS node** | API/gateway multiaddrs, pin mode, reprovide. | [storage.mdx §3](./storage.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical) |
-| **Access / allow-list** | The OpenAuthFederated allow-listed emails (admin only). | [storage.mdx §4](./storage.mdx#4-per-logged-in-user-storage--the-per-user-requirement) |
-| **Account** | The signed-in user, theme/density, sign out. | [storage.mdx §4](./storage.mdx#4-per-logged-in-user-storage--the-per-user-requirement) |
+| **Sync process** | The 15-min background sync: installed / on-off. | [storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract) |
+| **Scanner roots** | Which top-level dirs the scan walks + global ignore globs. | [storage_local.mdx §3/§7](./storage_local.mdx#7-the-scanner--discovering-repos-and-the-mask) |
+| **IPFS node** | API/gateway multiaddrs, pin mode, reprovide. | [storage_local.mdx §3](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical) |
+| **Access / allow-list** | The OpenAuthFederated allow-listed emails (admin only). | [storage_local.mdx §4](./storage_local.mdx#4-per-logged-in-user-storage--the-per-user-requirement) |
+| **Account** | The signed-in user, theme/density, sign out. | [storage_local.mdx §4](./storage_local.mdx#4-per-logged-in-user-storage--the-per-user-requirement) |
+
+### 4.1 Compression (codec allow/deny per media type)
+
+The **Compression** section lets the user choose, **per media type** (images / video / audio), which
+codecs they **want** and which they **never want** — the deny list exists mostly for **social-media
+compatibility** (the newest, smallest codec may not be accepted by the sites they post to). Per media
+type: **Enabled**, **Quality** (`low | medium | high | lossless`, default **medium**), an ordered
+**Prefer** list, and a **Deny** list. Defaults: images prefer `jpeg`/`webp` and deny `jpeg2000`; video
+prefers `h264`/`hevc` and denies `av1`; **audio is disabled** (planned later). The **preserve-resolution**
+invariant is locked on. Full behavior is in [compression.mdx](./compression.mdx).
+
+The Compression settings surface (per-media codec allow/deny + quality) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` — `SettingsPage` Compression section (backed by `compression.router.ts` `GET/PATCH /api/compress/settings`)
 
 Global settings write to the app `config.yaml`; account/appearance settings write to the per-user
 `users/<email>/config.yaml`.
@@ -189,6 +203,6 @@ The admin-gated allow-list editor surface (companies + individuals) is implement
 6. The [scan](./scan.mdx) resolves `effective_threshold` per repo (override if on, else global) each
    run and records it in that unit's `status.yaml`.
 7. This page is the **authoritative source** for the threshold and its default; the older
-   `large_file_min_bytes` / `large_files.min_bytes` fields in `storage.mdx` are re-pointed at it.
+   `large_file_min_bytes` / `large_files.min_bytes` fields in `storage_local.mdx` are re-pointed at it.
 8. The page also groups the other global concerns (scan/sync process, scanner roots, IPFS, allow-list,
    account), each linking to its own spec; allow-list editing is gated to `role:admin`.

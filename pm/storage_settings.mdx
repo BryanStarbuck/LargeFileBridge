@@ -1,0 +1,327 @@
+---
+title: LargeFileBridge — Storage Settings (Per-Storage)
+description: The per-storage settings page. Reached from a SINGLE storage — the gear icon on the storage detail page header, the row ⋮ kebab / right-click on a storage row in the Storages table, and the entity ⋮ "more" menu on the storage detail page — all opening this page scoped to that one storage. It controls the machine-local choices for that storage: whether this computer keeps the hidden .lfbridge/ tracking directory and WHERE it goes, and which BACKING LOCATIONS the storage is materialized into — a dedicated Git repo (preferred when available), a Google Drive location, and a Dropbox directory — each independently ON/OFF with its own path. LFB picks good default directories that the user can change. The settings persist to a machine-local per-storage config file (sync/s/<storage_id>/config.yaml) — the local "settings file" distinct from the SHARED storage.yaml, because where the hidden dir and each mirror live differs per computer. On each sync pass, LFB reads these settings and, for every enabled backing location, CREATES the directory if missing and UPDATES it. Sibling of repo_settings.mdx (the per-repo counterpart) and storages.mdx (the storage family + storage.yaml + .lfbridge layout).
+---
+
+# LargeFileBridge — Storage Settings (Per-Storage)
+
+Every storage can be configured on its own. This is the **per-storage settings page** — the screen you
+land on from a **single storage** ([storages.mdx](./storages.mdx)). It is the storage counterpart of
+[repo_settings.mdx](./repo_settings.mdx): a repo's gear opens the per-repo settings; a storage's gear
+opens **this** page, scoped to **one storage**.
+
+It answers two questions the charter leaves per-computer:
+
+1. **Does this computer keep the hidden `.lfbridge/` tracking directory for this storage, and where does
+   it go?**
+2. **Which backing locations is this storage materialized into on this computer** — a **dedicated Git
+   repo**, a **Google Drive** location, and/or a **Dropbox** directory — each independently **on/off**
+   with its own directory?
+
+LFB **picks good default directories**; the user can change any of them. The choices persist to a
+**machine-local** per-storage config file (§5), which the **sync pass** then reads to **create and
+update** the enabled directories (§6).
+
+Siblings this builds on and does not repeat:
+
+* [storages.mdx](./storages.mdx) — the storage family: `storage.yaml` (§3), the hidden `.lfbridge/`
+  layout (§4), and the `clones` block that records Drive/Dropbox mirrors (§5).
+* [repo_settings.mdx](./repo_settings.mdx) — the per-repo settings page; a **repo is one kind of
+  storage**, so a repo's gear may land on either its repo-settings or (for its storage facet) here — the
+  two are kept aligned, never duplicated (§2).
+* [google_drive.mdx](./google_drive.mdx) / [dropbox.mdx](./dropbox.mdx) — the cloud-drive integrations a
+  backing location reuses (§4).
+* [storage_local.mdx](./storage_local.mdx) — where the machine-local per-storage config lives under the
+  state root (§5). · [sync_process.mdx](./sync_process.mdx) — the pass that materializes enabled
+  locations (§6). · [menus.mdx](./menus.mdx) — the kebab / right-click / more-menu that opens this page
+  (§1).
+
+---
+
+## 1. How you get here — gear, kebab, right-click, more-menu
+
+This page is reached from a **single storage**, never from global settings. Four affordances, one
+destination — **route `/storages/$storageId/settings`**, mirroring the per-repo
+`/repos/$repoId/settings` convention:
+
+* **Gear icon** on the **storage detail page** header (top-right, alongside **Index files**). *The
+  detail header must add this gear;
+  [StorageDetailPage](../code/packages/frontend/src/pages/storages/StorageDetailPage.tsx) currently
+  shows only the Index button.*
+* **Row `⋮` kebab** on a **Storages-table row** ([storages.mdx §2](./storages.mdx#2-the-storages-left-bar-tab),
+  [menus.mdx §3](./menus.mdx#3-the-row--kebab--every-table-has-one)) — a **Storage settings…** item in
+  the Config group.
+* **Right-click** a storage row — opens the same menu at the pointer ([menus.mdx §3](./menus.mdx)).
+* **Entity `⋮` "more" menu** on the storage detail page ([menus.mdx §4](./menus.mdx)) — the same catalog
+  as the row kebab, because the page **is** that one storage.
+
+The gear/kebab is the **only** entry — the global [Settings](./settings.mdx) page never exposes
+per-storage controls. A **back** affordance returns to the storage. The page header names the storage
+and its root path so it is unambiguous which storage is being configured.
+
+Menus.mdx needs a **storage** entity catalog (it currently defines repo / directory / file / peer / pin
+catalogs); its Config group carries the **Storage settings…** navigate item that opens this page.
+
+The gear on the storage detail header and the `Storage settings…` kebab item (both navigating to `/storages/$storageId/settings`) live in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage` settings button · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `StorageKebab` component (new).
+
+---
+
+## 2. Machine-local vs. shared — what lives where (LOCKED)
+
+The one distinction this page turns on. A storage has **two** kinds of configuration, and they live in
+**two** files:
+
+* **Shared / travels with the storage** — the storage's **identity** and its **canonical** mirror paths.
+  This is [`storage.yaml`](./storages.mdx#3-storageyaml--the-per-storage-descriptor-locked-shape): `name`,
+  `type`, the type block, and the **`clones`** block (the canonical relative Drive/Dropbox paths). It
+  syncs between computers, so every machine agrees on *what* the storage is.
+* **Machine-local / per-computer** — **this computer's** choices for the storage: whether `.lfbridge/`
+  is kept and **where** it goes on this box, and whether each backing location is **enabled** and its
+  **resolved local path** on this box. This is the **`sync/s/<storage_id>/config.yaml`** file under the
+  Local state root (§5) — the local "settings file" (the `.ini`-style local config) this page writes.
+
+Why split them: a Google Drive folder is at a different absolute path on a laptop than on a work tower;
+a machine may have the dedicated repo cloned but no Dropbox; a server may keep `.lfbridge/` on a
+faster volume. Those are **per-computer** facts and must **not** be forced into the synced descriptor.
+The descriptor says *where the Drive mirror lives relative to the drive*; the machine-local config says
+*is it turned on here, and what is its absolute path here*.
+
+For a **repo** storage, the per-repo settings in [repo_settings.mdx](./repo_settings.mdx) remain the
+home of repo-specific behavior (threshold override, selection rules, pin policy, sharing); this page adds
+only the **storage-facet** controls (`.lfbridge/` placement + backing locations). The two never restate
+each other.
+
+---
+
+## 3. The hidden `.lfbridge/` tracking directory — keep it, and where
+
+The first control. The hidden **`.lfbridge/`** area holds everything LFB knows about this storage — the
+per-file fingerprint index (`files.yaml`), the IPFS manifest, and the media-analysis outputs — kept out
+of Git ([storages.mdx §4](./storages.mdx#4-lfbridge--the-hidden-per-storage-tracking-area)).
+
+* **Checkbox: "Keep a hidden `.lfbridge/` tracking directory for this storage on this computer."**
+  **Default: ON.** ON means this computer tracks the storage's files locally; OFF means this computer
+  carries the storage's bytes but keeps **no** local tracking area (rare — e.g. a read-only mirror
+  machine). This is a **machine-local** choice (§2).
+* **Location.** Default **`<storage root>/.lfbridge/`** — the hidden folder at the storage's own root
+  (for a repo, `~/BGit/xyz/.lfbridge/`). The user may **relocate** it — a **directory picker** pre-filled
+  with the default — for cases where the storage root should stay pristine or is read-only (a Drive
+  folder). When relocated, LFB writes tracking to the chosen directory and maps it back to the storage;
+  the descriptor is still found via the root → `.lfbridge/` fallback already in code.
+* Whenever `.lfbridge/` sits **inside a Git repo**, LFB keeps it git-ignored (appends `.lfbridge/` to
+  `.gitignore`) so tracking never bloats commits — charter behavior, already enforced.
+
+The `.lfbridge/` constant, the ensure-directory, and the git-ignore-on-init behavior this control drives live in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureStorage()` / `ensureGitignore()` (dir constant `LFBRIDGE_DIR` in `tracking.service.ts`). Honoring a **relocated** `.lfbridge/` path (resolve against the machine-local config, not always `<root>/.lfbridge/`) is a change to `descriptorPath()` / the tracking-path resolvers in the same module.
+
+---
+
+## 4. Backing locations — dedicated repo · Google Drive · Dropbox
+
+The heart of the page. Beyond its **IPFS** copy (the primary cross-computer sync path,
+[sync_process.mdx](./sync_process.mdx)), a storage can be **materialized into one or more backing
+locations** — real directories that hold the same hierarchy as a second, human-reachable copy. Each is
+**independently ON/OFF** and carries **its own directory**. LFB proposes a good **default directory**;
+the user can change it.
+
+### 4.1 Dedicated Git repo (preferred when available)
+
+* **What.** A **dedicated Git repo for this storage** — the ideal home, because the small committed
+  manifest travels via Git to the user's other computers while IPFS carries the bytes (the charter's
+  git-for-small-files / IPFS-for-big-files split). *We would love a dedicated repo per storage; when one
+  isn't available we fall back to the cloud mirrors below.*
+* **Toggle + path.** ON reveals a **directory field** defaulting to the convention
+  **`~/BGit/Bryan_git/<slug>_large_files_bridge/`** (e.g. `act3_large_files_bridge/`), matching how
+  storages are discovered. For a **repo** storage the dedicated repo **is** the repo itself, so this is
+  pre-satisfied and shown read-only.
+* When ON and the directory does not exist, the **sync pass creates it** (and `git init`s it if it is
+  meant to be a repo) and keeps it updated (§6).
+
+### 4.2 Google Drive location
+
+* **What.** A clone of the storage inside a connected **Google Drive** ([google_drive.mdx](./google_drive.mdx)) —
+  so teammates or your other machines can reach the files without LFB/IPFS.
+* **Toggle + path.** ON reveals a **path field** (a path *inside* the connected Drive) defaulting to
+  **`<Drive>/LFB/<Storage Name>/`** (e.g. `My Drive/LFB/ACT3` or, for a company, a `Shared drives/…`
+  anchor). The **canonical** relative path is recorded in `storage.yaml → clones.google_drive` (§2, §5);
+  the **enable flag + resolved absolute path on this computer** are machine-local.
+
+### 4.3 Dropbox directory
+
+* **What.** A clone of the storage inside **Dropbox** ([dropbox.mdx](./dropbox.mdx)).
+* **Toggle + path.** ON reveals a **path field** (a path inside Dropbox) defaulting to
+  **`Apps/LFB/<Storage Name>/`**. As with Drive: canonical relative path in `storage.yaml → clones.dropbox`,
+  enable flag + absolute local path machine-local.
+
+### 4.4 Rules across all three
+
+* Each backing location is **independent** — any combination (repo only, repo + Drive, all three, none)
+  is valid. With **none** enabled, the storage still syncs over IPFS; the backing locations are
+  **additional** human-reachable mirrors, never the source of truth
+  ([storages.mdx §5](./storages.mdx#5-cloud-clones-google-drive--dropbox)).
+* **Defaults are proposed, never forced.** LFB pre-fills a sensible directory for each; nothing is
+  created until the user enables it **and** the sync pass runs (§6). This honors the charter rule that
+  LFB **surfaces and offers** but does not act on the filesystem on its own.
+* A location whose connected drive is **not present** on this computer (no Dropbox, Drive not linked)
+  shows disabled with a "connect Drive/Dropbox first" hint rather than erroring.
+
+Resolving the effective backing locations for a storage (default directory proposal per type + the machine-local enable flags) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `resolveBackingLocations()` (new module; reuses the Drive/Dropbox path helpers from `google_drive` / `dropbox`).
+
+---
+
+## 5. Persistence — the machine-local per-storage config
+
+Everything on this page (except the canonical `clones` paths, which go to `storage.yaml`) writes to a
+**machine-local** per-storage config under the Local state root — the direct parallel to the per-repo
+`sync/r/<repo_name>/config.yaml` ([storage_local.mdx §6](./storage_local.mdx#6-syncrrepo_name--the-per-repo-sync-unit-primary)):
+
+```yaml
+# ~/T/_large_files_bridge/sync/s/<storage_id>/config.yaml   (machine-local — the "settings file")
+schema_version: 1
+updated_at: 2026-07-05T09:41:00.000Z
+
+storage:                         # identity mirror (written by discovery; read-only on this page)
+  id: act3                       # the Storages row id (personal | communityId | short hash of root)
+  name: "ACT3 Company Files"
+  type: company                  # local | repo | personal | company | community
+  root: ~/BGit/Bryan_git/act3_large_files_bridge
+
+lfbridge:                        # §3 the hidden tracking directory
+  enabled: true                  # keep .lfbridge/ on THIS computer
+  path: null                     # null = default <root>/.lfbridge/ ; else an absolute override
+
+backing:                         # §4 backing locations — each ON/OFF + this machine's absolute path
+  dedicated_repo:
+    enabled: true
+    path: ~/BGit/Bryan_git/act3_large_files_bridge   # the storage's own repo when type: repo/company
+  google_drive:
+    enabled: false
+    path: null                   # absolute local mount path; canonical relative path in storage.yaml
+  dropbox:
+    enabled: false
+    path: null
+```
+
+* **`storage:`** identity is written by discovery and shown **read-only** here — the user configures
+  behavior, not identity.
+* The **canonical** Drive/Dropbox relative paths live in the **shared** descriptor
+  (`storage.yaml → clones`, [storages.mdx §3/§5](./storages.mdx#3-storageyaml--the-per-storage-descriptor-locked-shape));
+  the **enable flags + absolute local paths** live here (§2). Saving a Drive/Dropbox path updates
+  **both**: the relative path into `clones`, the enable flag + absolute path into this file.
+* Keyed by **`<storage_id>`** exactly as the Storages row id (`personal`, a community id, or the short
+  hash of the root), so the local settings for a storage are found the same way the row is.
+
+Reading and writing this machine-local per-storage config (and mapping it to/from the UI) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `readStorageSettings()` / `writeStorageSettings()` (atomic YAML under `sync/s/<id>/`, via `resolveStateDir()`), exposed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.router.ts` — `storagesRouter` `GET /api/storages/:id/settings` and `PATCH /api/storages/:id/settings`.
+
+The settings form itself (the `.lfbridge/` checkbox + location picker and the three backing-location toggles + path fields) is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageSettingsPage.tsx` — `StorageSettingsPage` component (route registered in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/router.tsx`).
+
+---
+
+## 6. The sync pass creates & updates the enabled directories
+
+The settings on this page are **inert until a sync pass runs**. During the **full pass**
+([sync_process.mdx §2](./sync_process.mdx#2-every-synchronization-is-a-full-pass-locked)), for each
+storage LFB reads its machine-local config (§5) and, **for every enabled backing location**:
+
+1. **Ensure the directory exists** — create it (and `git init` a dedicated repo) if missing; a location
+   that is enabled but absent is created on the next pass, never before.
+2. **Ensure `.lfbridge/`** — create/refresh the hidden tracking area at its configured location (§3) and
+   keep it git-ignored inside any repo.
+3. **Update the mirror** — reconcile the storage's files + manifest into the location so it holds the
+   current hierarchy (the human-reachable copy). Drive/Dropbox mirrors reuse
+   [google_drive.mdx](./google_drive.mdx) / [dropbox.mdx](./dropbox.mdx).
+
+A **disabled** location is **left untouched** — LFB neither creates nor deletes it (charter: surface and
+offer, never act on files unasked). Turning a location **off** stops updating it; it does **not** delete
+the directory that is already there.
+
+Materializing each enabled backing location during the pass (create-if-missing + ensure `.lfbridge/` + update the mirror) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureBackingLocations(id)` (new; called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncAll()` per known storage, through the same bounded `cores − 2` limiter as repo/computer units).
+
+---
+
+## 7. UI layout
+
+The page is a single scrollable settings form (no table beneath it, so it does not fill-height):
+
+```
+ ┌ ‹ Storages ──────────────────────────────────────────────────────────────┐
+ │  ACT3 Company Files                                          [ ⋮ ]        │
+ │  ~/BGit/Bryan_git/act3_large_files_bridge   ·   type: company             │
+ ├───────────────────────────────────────────────────────────────────────────┤
+ │  Hidden tracking directory                                                │
+ │   ☑ Keep a hidden .lfbridge/ directory for this storage on this computer  │
+ │     Location  ┌───────────────────────────────────────────┐  [Browse…]   │
+ │               │ <default>  <root>/.lfbridge/               │              │
+ │               └───────────────────────────────────────────┘              │
+ │                                                                           │
+ │  Backing locations   (each is an extra, human-reachable copy)             │
+ │   ☑ Dedicated Git repo   (preferred)                                      │
+ │       ┌──────────────────────────────────────────────┐  [Browse…]        │
+ │       │ ~/BGit/Bryan_git/act3_large_files_bridge      │                   │
+ │       └──────────────────────────────────────────────┘                   │
+ │   ☐ Google Drive                                                          │
+ │       ┌──────────────────────────────────────────────┐                   │
+ │       │ My Drive/LFB/ACT3                             │  (connect Drive)  │
+ │       └──────────────────────────────────────────────┘                   │
+ │   ☐ Dropbox                                                               │
+ │       ┌──────────────────────────────────────────────┐                   │
+ │       │ Apps/LFB/ACT3                                 │  (connect Dropbox)│
+ │       └──────────────────────────────────────────────┘                   │
+ │                                                                           │
+ │   ⓘ Directories are created and updated on the next sync pass.            │
+ │                                                    [ Cancel ] [ Save ]     │
+ └───────────────────────────────────────────────────────────────────────────┘
+```
+
+* A disabled toggle whose drive isn't connected greys its path field and shows the connect hint (§4.4).
+* Saving writes the machine-local config (§5) and the canonical `clones` paths; a toast confirms, and the
+  directories themselves appear after the next pass (§6).
+
+---
+
+## 8. Acceptance criteria
+
+1. The per-storage settings page is opened from a **single storage** — the **gear** on the storage
+   detail header, the storage row's **`⋮` kebab / right-click**, and the detail page's **`⋮` more-menu**
+   — all at **`/storages/$storageId/settings`**, scoped to that storage and naming it + its root.
+2. It exposes a **"keep `.lfbridge/`" checkbox (default ON)** and a **location** control (default
+   `<root>/.lfbridge/`, relocatable) — a **machine-local** choice.
+3. It exposes **three independent backing locations**, each **ON/OFF with its own directory**: a
+   **dedicated Git repo** (preferred; for a repo storage it is the repo itself), a **Google Drive**
+   location, and a **Dropbox** directory. LFB pre-fills a **good default directory** for each, which the
+   user can change.
+4. **Machine-local vs. shared is respected:** the enable flags + absolute local paths persist to
+   **`sync/s/<storage_id>/config.yaml`** (the local settings file); the **canonical** Drive/Dropbox
+   relative paths persist to the **shared** `storage.yaml → clones`. Neither restates repo-specific
+   settings owned by [repo_settings.mdx](./repo_settings.mdx).
+5. Settings are **inert until a sync pass**: on each pass, for **every enabled** backing location LFB
+   **creates the directory if missing** (and `git init`s a dedicated repo), ensures its `.lfbridge/`,
+   and **updates** the mirror; a **disabled** location is left untouched (never auto-created, never
+   deleted). Nothing is created merely by saving the form.
+6. Storage **identity** (`storage:` id/name/type/root) is written by discovery and shown **read-only**;
+   the user configures behavior, not identity.
+
+<!--
+  Per-STORAGE settings page (the storage counterpart of repo_settings.mdx). Opened from ONE storage:
+  gear on the storage detail header + storage row ⋮ kebab/right-click + detail ⋮ more-menu → route
+  /storages/$storageId/settings. Two controls: (§3) keep .lfbridge/ on this computer + WHERE (default
+  <root>/.lfbridge/, relocatable); (§4) three independent ON/OFF backing locations each with its own
+  directory — dedicated Git repo (preferred; IS the repo for a repo storage), Google Drive, Dropbox —
+  with good default dirs the user can change. LOCKED split (§2): machine-local enable-flags + absolute
+  paths live in sync/s/<storage_id>/config.yaml (the local "settings file"); canonical Drive/Dropbox
+  relative paths live in the SHARED storage.yaml clones. (§6) Settings are inert until a sync pass — the
+  pass creates-if-missing + ensures .lfbridge/ + updates each ENABLED location; disabled = untouched
+  (never auto-created/deleted). Code pointers: StorageSettingsPage.tsx, StorageKebab in RowKebabs.tsx,
+  storage-settings.service.ts (read/write + resolveBackingLocations), storage.router GET/PATCH
+  /:id/settings, storage.service ensureBackingLocations() called by sync.service syncAll(). Keep in
+  sync with repo_settings.mdx (per-repo counterpart), storages.mdx (storage.yaml + .lfbridge + clones),
+  google_drive.mdx / dropbox.mdx (the mirrors), sync_process.mdx §2/§4 (the pass), menus.mdx (add a
+  storage entity catalog whose Config group carries "Storage settings…").
+-->
+</content>
+</invoke>

@@ -33,6 +33,19 @@ import type {
   ScanJob,
   RescanResult,
   SessionActivityResult,
+  StoragesPageData,
+  StorageDetail,
+  StorageIndexResult,
+  StorageAnalyzeResult,
+  CompressTools,
+  CompressionSettings,
+  CompressCheck,
+  CompressResult,
+  CompressBatchResult,
+  TranscribeTools,
+  TranscribeResult,
+  TranscribeBatchResult,
+  TranscriptView,
 } from "@lfb/shared";
 import { http, unwrap } from "./axios.js";
 
@@ -136,11 +149,41 @@ export const api = {
     unwrap<EntityView>(http.post("/entity/decision", { path, decision })),
   compressEntity: (path: string) =>
     unwrap<{ queued: boolean }>(http.post("/entity/compress", { path })),
+  // Compression engine (compression.mdx). Tool status, codec settings, the dry-run check, and the real
+  // compress (one / many). The check drives the pre-compress alpha warning.
+  compressTools: () => unwrap<CompressTools>(http.get("/compress/tools")),
+  compressSettings: () => unwrap<CompressionSettings>(http.get("/compress/settings")),
+  setCompressSettings: (patch: Partial<CompressionSettings>) =>
+    unwrap<CompressionSettings>(http.patch("/compress/settings", patch)),
+  compressCheck: (path: string) => unwrap<CompressCheck>(http.get("/compress/check", { params: { path } })),
+  compressFile: (path: string) => unwrap<CompressResult>(http.post("/compress/file", { path })),
+  compressBatch: (paths: string[]) => unwrap<CompressBatchResult>(http.post("/compress/batch", { paths })),
+  // Transcribe (Transcribe.mdx). Tool status, read an existing transcript, and run transcription over one
+  // file / a selected set / a directory-or-repo tree / a whole storage. Writes to <storageRoot>/.transcribe/.
+  transcribeTools: () => unwrap<TranscribeTools>(http.get("/transcribe/tools")),
+  transcript: (path: string) => unwrap<TranscriptView | null>(http.get("/transcribe/file", { params: { path } })),
+  transcribeFile: (path: string, overwrite = false) =>
+    unwrap<TranscribeResult>(http.post("/transcribe/file", { path, overwrite })),
+  transcribeBatch: (paths: string[], overwrite = false) =>
+    unwrap<TranscribeBatchResult>(http.post("/transcribe/batch", { paths, overwrite })),
+  transcribeTree: (path: string, overwrite = false) =>
+    unwrap<TranscribeBatchResult>(http.post("/transcribe/tree", { path, overwrite })),
+  transcribeStorage: (id: string, overwrite = false) =>
+    unwrap<TranscribeBatchResult>(http.post(`/transcribe/storage/${id}`, { overwrite })),
   // Move (guarded rename) + Delete (recoverable move-to-trash) a single file — media_viewer.mdx §4.4.
   moveEntity: (path: string, dest: string) =>
     unwrap<{ moved: boolean; path: string }>(http.post("/entity/move", { path, dest })),
   deleteEntity: (path: string) =>
     unwrap<{ trashed: boolean; trashPath: string }>(http.post("/entity/delete", { path })),
+
+  // Storages (storages.mdx). The Storages tab payload, one storage's detail, and the per-storage
+  // init / index / analyze actions.
+  storages: () => unwrap<StoragesPageData>(http.get("/storages")),
+  storageDetail: (id: string) => unwrap<StorageDetail>(http.get(`/storages/${id}`)),
+  initStorage: (id: string) => unwrap<StorageDetail>(http.post(`/storages/${id}/init`)),
+  indexStorage: (id: string) => unwrap<StorageIndexResult>(http.post(`/storages/${id}/index`)),
+  analyzeStorageFile: (id: string, path: string) =>
+    unwrap<StorageAnalyzeResult>(http.post(`/storages/${id}/analyze`, { path })),
 
   // Media viewer (media_viewer.mdx §2). grant → a short-lived same-origin URL the <img>/<video>
   // element loads (Range-capable); probe → best-effort container/codec/dimensions.

@@ -6,7 +6,7 @@ description: The Communities page spec. A community is a publisher of large publ
 # LargeFileBridge — Communities
 
 A **community** is a publisher of large public files — **videos first**, images second — that a
-user can **subscribe** to. Where [Peers](./storage.mdx) are *your own computers* pinning *your own*
+user can **subscribe** to. Where [Peers](./storage_local.mdx) are *your own computers* pinning *your own*
 files, **Communities are other people's content you choose to help carry.** The two are siblings:
 same IPFS-pinning machinery, different owner of the bytes.
 
@@ -23,7 +23,7 @@ Subscribing is an act with an **intent** and a **budget**. This page is where th
 > community is helping keep **already-public** content alive across more machines.
 
 Siblings: [Left bar](./left_bar.mdx) (adds the **Communities** nav item) ·
-[Storage](./storage.mdx) (the state root + sync units this reuses) ·
+[Storage](./storage_local.mdx) (the state root + sync units this reuses) ·
 [IPFS](./ipfs.mdx) (the local pinset these subscriptions add to) ·
 [Security](./security.mdx) (the only-our-content policy §7 keeps us inside).
 
@@ -70,7 +70,7 @@ A community record is small, human-readable, and lives in the state tree as YAML
 | `totals` | Rolled-up counts and bytes: total items, total size, video count, image count. |
 | `subscription` | The user's choices for this community — **intent** (§3) and **backup mode** (§4). Absent = not subscribed. |
 
-The `library` is the same shape as the large-file manifests in [storage.mdx](./storage.mdx) §9 —
+The `library` is the same shape as the large-file manifests in [storage_local.mdx](./storage_local.mdx) §9 —
 a list of files mapped to CIDs and pin state — so a community is, mechanically, **just another sync
 unit** whose bytes happen to be owned by someone else.
 
@@ -126,7 +126,7 @@ Communities decides *how much* to keep by measuring **this computer's real stora
   bounded so headroom is preserved — **Full backup included**.
 
 > These are measured with Node's own filesystem APIs (`statfs`/`statvfs`) on the state-root volume —
-> local only, no shell, consistent with the storage-layer rules in [storage.mdx](./storage.mdx).
+> local only, no shell, consistent with the storage-layer rules in [storage_local.mdx](./storage_local.mdx).
 
 ### 5.2 The community storage budget
 
@@ -140,7 +140,7 @@ combined** — the amount the **user is willing to give** to communities.
   storage is this user willing to do for community videos."*
 * The budget is **computer-wide** (a property of this machine's disk), stored on the app-level
   config, not per-user — consistent with sync state being computer-owned in
-  [storage.mdx](./storage.mdx) §2.
+  [storage_local.mdx](./storage_local.mdx) §2.
 
 ### 5.3 The recommended amount to keep secure (per community)
 
@@ -219,7 +219,7 @@ Table behavior (all charter defaults):
 
 ## 8. State & storage
 
-A community subscription is a **sync unit** like any other (see [storage.mdx](./storage.mdx) §5–§9),
+A community subscription is a **sync unit** like any other (see [storage_local.mdx](./storage_local.mdx) §5–§9),
 stored **computer-wide** (owned by the machine, not the logged-in user):
 
 ```

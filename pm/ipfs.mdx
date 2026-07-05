@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — The IPFS Page (Locally-Pinned Content + Import)
-description: The left-bar "IPFS" page — the one screen that shows the truth of this computer's local IPFS node: what it is actually PINNING right now, whether each pinned item is already TRACKED by LargeFileBridge or is pinned-but-untracked, and the node's security posture (only-our-content compliance). Its centerpiece is IMPORT: when LFB lands on a computer that already has files pinned in IPFS (from before LFB, or pinned by hand), those CIDs are discovered by the every-15-minute scheduleTask (which reads `ipfs pin ls`), listed here as "Untracked (pinned)", and offered for one-click import into LFB's tracking — after which they count as Synced. The page is a TanStack table (one row per pinned CID/file) with the standard search + icon-only filter/sort control row, per-row "⋮" kebab (menus.mdx), and cell navigation; above it a node-status/security card that reflects and enforces knowledge/ipfs.mdx §6 (reprovide `pinned`, no public/recursive gateway, GC on) and flags any out-of-compliance config. Requires the IPFS (kubo) CLI, so it links to the install-tools preflight (tools.mdx). Cross-links knowledge/ipfs.mdx (CIDs/pins/only-our-content), scan.mdx (the scheduleTask that reads the pinset), storage.mdx §9 (the manifest/pin model), sync_list.mdx (pinned_by claims are verified, not believed), repos.mdx/one_repo.mdx (where a pinned file also appears), and menus.mdx (row/entity actions).
+description: The left-bar "IPFS" page — the one screen that shows the truth of this computer's local IPFS node: what it is actually PINNING right now, whether each pinned item is already TRACKED by LargeFileBridge or is pinned-but-untracked, and the node's security posture (only-our-content compliance). Its centerpiece is IMPORT: when LFB lands on a computer that already has files pinned in IPFS (from before LFB, or pinned by hand), those CIDs are discovered by the every-15-minute scheduleTask (which reads `ipfs pin ls`), listed here as "Untracked (pinned)", and offered for one-click import into LFB's tracking — after which they count as Synced. The page is a TanStack table (one row per pinned CID/file) with the standard search + icon-only filter/sort control row, per-row "⋮" kebab (menus.mdx), and cell navigation; above it a node-status/security card that reflects and enforces knowledge/ipfs.mdx §6 (reprovide `pinned`, no public/recursive gateway, GC on) and flags any out-of-compliance config. Requires the IPFS (kubo) CLI, so it links to the install-tools preflight (tools.mdx). Cross-links knowledge/ipfs.mdx (CIDs/pins/only-our-content), scan.mdx (the scheduleTask that reads the pinset), storage_local.mdx §9 (the manifest/pin model), sync_list.mdx (pinned_by claims are verified, not believed), repos.mdx/one_repo.mdx (where a pinned file also appears), and menus.mdx (row/entity actions).
 ---
 
 # LargeFileBridge — The IPFS Page
@@ -45,8 +45,8 @@ Siblings this spec builds on and does not repeat:
   [§5](../knowledge/ipfs.mdx#5-ipfs-lists--pinsets-cid-lists-car-files-and-ipns)) and the
   [only-our-content rule](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule) this page enforces.
 * [scan.mdx](./scan.mdx) — the **scheduleTask** that reads the pinset and reconciles it every 15 min.
-* [storage.mdx §9](./storage.mdx#9-the-manifest--ipfs-pin-model) — the manifest / pin model a tracked
-  file maps to; [§11](./storage.mdx#11-peersyaml--the-users-other-computers) — peers.
+* [storage_local.mdx §9](./storage_local.mdx#9-the-manifest--ipfs-pin-model) — the manifest / pin model a tracked
+  file maps to; [§11](./storage_local.mdx#11-peersyaml--the-users-other-computers) — peers.
 * [sync_list.mdx §5.1](./sync_list.mdx#51-local-claims-are-verified-not-believed) — a `pinned_by` claim
   about **this** computer is trusted only if `ipfs pin ls` really holds the CID. This page **is** that check, visible.
 * [menus.mdx](./menus.mdx) — the row `⋮` kebab, entity more-menu, and cell-navigation rules.
@@ -59,9 +59,9 @@ Siblings this spec builds on and does not repeat:
 | Term | Definition |
 | --- | --- |
 | **Pin** | A CID this node is keeping (`ipfs pin ls`): **recursive** (a DAG root + children), **direct** (one block), **indirect** (kept because a parent is recursive), or **MFS** (implicit pin, [ipfs.mdx §3/§7](../knowledge/ipfs.mdx#3-pinning--telling-ipfs-to-keep-a-file)). Only recursive/direct/MFS roots are listed as their own rows; indirect blocks are rolled under their root. |
-| **Tracked** | A pinned CID that LFB **knows about** — it appears in a repo or computer-unit [manifest](./storage.mdx#91-manifest-shape-per-sync-unit) as a file LFB syncs. Tracked pins are the normal, expected state. |
+| **Tracked** | A pinned CID that LFB **knows about** — it appears in a repo or computer-unit [manifest](./storage_local.mdx#91-manifest-shape-per-sync-unit) as a file LFB syncs. Tracked pins are the normal, expected state. |
 | **Untracked (pinned)** | A CID this node pins that is **not** in any LFB manifest — pinned before LFB existed, pinned by hand, or pinned by another tool. It is real, kept content LFB is not yet managing. **These are the import candidates.** |
-| **Import** | Bring an untracked pin under LFB tracking: attach it to a file/unit, record it in the manifest ([storage §9](./storage.mdx#9-the-manifest--ipfs-pin-model)), and thereafter treat it as **Synced**. Import **adds tracking**; it never re-pins, re-downloads, or moves bytes (the pin already exists). |
+| **Import** | Bring an untracked pin under LFB tracking: attach it to a file/unit, record it in the manifest ([storage §9](./storage_local.mdx#9-the-manifest--ipfs-pin-model)), and thereafter treat it as **Synced**. Import **adds tracking**; it never re-pins, re-downloads, or moves bytes (the pin already exists). |
 
 ---
 
@@ -133,7 +133,7 @@ The **Node** reachability verdict and the **PeerID** shown on the card are read 
 | Field | Meaning | Compliant value |
 | --- | --- | --- |
 | **Node** | Is the local Kubo daemon reachable? | `ok` (green) / `unreachable` (red — Rescan/imports disabled, tooltip). |
-| **PeerID** | This computer's IPFS identity ([storage §3/§11](./storage.mdx#11-peersyaml--the-users-other-computers)). | shown, click-to-copy. |
+| **PeerID** | This computer's IPFS identity ([storage §3/§11](./storage_local.mdx#11-peersyaml--the-users-other-computers)). | shown, click-to-copy. |
 | **Reprovide** | `Reprovider/Provide.Strategy` — what the node announces. | **`pinned`** ✓. `all` renders **red** with a **Fix** action (§3.1). |
 | **Gateway** | Is a public/recursive gateway exposed? | **local-only** (127.0.0.1) ✓. A public/recursive gateway renders **red** with **Fix**. |
 | **GC** | Garbage collection on, sane `StorageMax`? | **on** ✓ (so incidental third-party cache is transient, [ipfs.mdx §4](../knowledge/ipfs.mdx#4-garbage-collection-and-the-local-cache)). |
@@ -161,8 +161,8 @@ and — when it can resolve the CID to a local file path (via MFS, or a file on 
 to that CID) — the **file**. Import attaches that pin to LFB's tracking:
 
 1. **Resolve a target unit.** If the pinned file lives inside a known repo/directory, import attaches it
-   to that unit's [manifest](./storage.mdx#91-manifest-shape-per-sync-unit); otherwise it attaches to the
-   [computer unit](./storage.mdx#8-synccomputer--the-whole-computer-sync-unit).
+   to that unit's [manifest](./storage_local.mdx#91-manifest-shape-per-sync-unit); otherwise it attaches to the
+   [computer unit](./storage_local.mdx#8-synccomputer--the-whole-computer-sync-unit).
 2. **Record, don't move.** Import writes the manifest entry (`path` when known, `cid`, `size`, hashes)
    and marks the file's decision **Sync** ([one_repo §1](./one_repo.mdx#1-the-decision-model-locked)). The
    bytes are already pinned, so **nothing is fetched, re-added, or re-pinned** — import is metadata only.
@@ -211,7 +211,7 @@ height (it does not expand to fill the viewport) so the node details below it st
 | 3 | **Pin** | enum | `recursive` / `direct` / `mfs` (indirect rolled under its root). |
 | 4 | **Tracked** | enum | **`synced`** (tracked + present) / **`import`** (untracked pin — the actionable state, accent-highlighted) / `path-less` (tracked, no local path). |
 | 5 | **Unit** | text | The repo or `computer` unit it belongs to; `—` for untracked. |
-| 6 | **Peers** | int | How many of your computers also pin this CID ([storage §11](./storage.mdx#11-peersyaml--the-users-other-computers)); `0` on a tracked file renders red (not backed up). |
+| 6 | **Peers** | int | How many of your computers also pin this CID ([storage §11](./storage_local.mdx#11-peersyaml--the-users-other-computers)); `0` on a tracked file renders red (not backed up). |
 | 7 | **Seen** | timestamp | Last time the scheduleTask confirmed this pin; relative + absolute tooltip. |
 | — | **`⋮`** | — | The row kebab (vertical three-dot). When the pin **resolves to a local file** it shows the **file** catalog ([menus.mdx §5.3](./menus.mdx#53-file)). When it does **not** — an **untracked** pin or a **path-less** tracked pin — it shows the **pin** catalog ([menus.mdx §5.5](./menus.mdx#55-ipfs-pin-a-pinned-cid--locked)): Copy CID · View on IPFS · **Import** (promoted, untracked only) · Unpin. **Every** row has it, including untracked/path-less rows. |
 

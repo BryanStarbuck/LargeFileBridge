@@ -206,7 +206,7 @@ The repo action catalog (Open / Work / Config / Copy, and Remove-repo that unreg
 | Open | **Open in File System** | navigate | Drill into this directory in the [browser](./directories.mdx). |
 | Open | **View pinned on IPFS** | navigate | → [IPFS](./ipfs.mdx) filtered to files under this directory. |
 | Work | **Rescan** | mutate | Discovery scan of this directory now (`scan` op). |
-| Work | **Track / Sync this directory** | mutate | Add it to the computer sync unit ([storage §8](./storage.mdx#8-synccomputer--the-whole-computer-sync-unit)); the files inside become triage-able. |
+| Work | **Track / Sync this directory** | mutate | Add it to the computer sync unit ([storage §8](./storage_local.mdx#8-synccomputer--the-whole-computer-sync-unit)); the files inside become triage-able. |
 | Work | **Compress videos/images inside…** | mutate | Offer only (charter: video 1st, image 2nd; **explicit click only**, §6.1). |
 | Work | **Git-ignore big files inside…** | mutate | Confirm-list ignore of big files under here (§6.1). |
 | Flag | **Never IPFS** (toggle) | mutate | Sticky per-directory flag: nothing under here is ever added to IPFS / synced, and no "add to IPFS" offers appear for it (§6.6). Turning it **on** clears any `sync` decisions on files below and stops offering them; turning it **off** returns them to `undecided`. |
@@ -246,7 +246,7 @@ The file action catalog (Add/Remove IPFS, the three-state decision submenu, Comp
 | Group | Action | Kind | Notes |
 | --- | --- | --- | --- |
 | Open | **View peer** | navigate | The peer's detail (which repos/files it pins). |
-| Copy | **Copy PeerID** | copy | The IPFS PeerID ([storage §11](./storage.mdx#11-peersyaml--the-users-other-computers)). |
+| Copy | **Copy PeerID** | copy | The IPFS PeerID ([storage §11](./storage_local.mdx#11-peersyaml--the-users-other-computers)). |
 | Danger | **Remove peer** | mutate ⚠ | Forget this computer from `peers.yaml`; confirm required. Does not touch remote content. |
 
 The peer action catalog (Copy Peer ID, Remove peer) is built in code:

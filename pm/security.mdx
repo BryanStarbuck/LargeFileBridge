@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Security Setup (first-run allow-list) & Access Enforcement
-description: The one-time, unauthenticated Security Setup page shown the very first time LargeFileBridge runs on a computer — before anyone can sign in — when the app-level config.yaml has no security values yet. It names the app on top, states it is configuring who may access this install, and offers two ways to allow people in, each a checkbox + editable rows with a "+" to add more. (1) "Allow anyone from these companies" — one or more Google Workspace COMPANY DOMAINS shown with a leading @ and placeholder mycompany.com; anyone with a Google account on that domain gets in. (2) "Individual Google accounts" — one or more exact Google email addresses (e.g. joesmith@gmail.com, no leading @); only those accounts get in, nothing else. On save the values are written into config.yaml → access (allow_companies / allowed_domains / allow_individuals / allowed_emails / configured:true) and drive OpenAuthFederated: the company domains become the OIDC domain pre-filter and, together with the individual emails, become the AUTHORITATIVE allow-list that the backend re-reads live on every request (identify.ts → allowListed → requireAllowListed). Once configured, the setup page never shows again — the app enforces those rules on every return visit; further edits happen only through the admin-only Access editor in Settings. Covers the security model, the initial-experience web UI, how state maps to storage (storage.mdx §3/§4/§10), how it feeds OpenAuthFederated (auth-frontend.ts / identify.ts), the exact API calls, and a threat-model section (one-time write lock, loopback guard, fail-closed defaults, info-disclosure, path/JSON hardening). Grounded in real code: config.service.ts, schemas.ts (access block), identify.ts, auth-frontend.ts, settings.router.ts, main.tsx, SecuritySetupPage.tsx, security.router.ts, security.service.ts.
+description: The one-time, unauthenticated Security Setup page shown the very first time LargeFileBridge runs on a computer — before anyone can sign in — when the app-level config.yaml has no security values yet. It names the app on top, states it is configuring who may access this install, and offers two ways to allow people in, each a checkbox + editable rows with a "+" to add more. (1) "Allow anyone from these companies" — one or more Google Workspace COMPANY DOMAINS shown with a leading @ and placeholder mycompany.com; anyone with a Google account on that domain gets in. (2) "Individual Google accounts" — one or more exact Google email addresses (e.g. joesmith@gmail.com, no leading @); only those accounts get in, nothing else. On save the values are written into config.yaml → access (allow_companies / allowed_domains / allow_individuals / allowed_emails / configured:true) and drive OpenAuthFederated: the company domains become the OIDC domain pre-filter and, together with the individual emails, become the AUTHORITATIVE allow-list that the backend re-reads live on every request (identify.ts → allowListed → requireAllowListed). Once configured, the setup page never shows again — the app enforces those rules on every return visit; further edits happen only through the admin-only Access editor in Settings. Covers the security model, the initial-experience web UI, how state maps to storage (storage_local.mdx §3/§4/§10), how it feeds OpenAuthFederated (auth-frontend.ts / identify.ts), the exact API calls, and a threat-model section (one-time write lock, loopback guard, fail-closed defaults, info-disclosure, path/JSON hardening). Grounded in real code: config.service.ts, schemas.ts (access block), identify.ts, auth-frontend.ts, settings.router.ts, main.tsx, SecuritySetupPage.tsx, security.router.ts, security.service.ts.
 ---
 
 # LargeFileBridge — Security Setup (first-run allow-list) & Access Enforcement
@@ -8,7 +8,7 @@ description: The one-time, unauthenticated Security Setup page shown the very fi
 This spec covers the **very first screen** LargeFileBridge (LFB) shows on a computer: a one-time,
 **unauthenticated** **Security Setup** page that decides **who is allowed to sign in to this install**.
 It renders only while the app-level `config.yaml` has **no security values yet**
-([storage.mdx §3](./storage.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)); once the
+([storage_local.mdx §3](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)); once the
 operator sets them, LFB **stores them in `config.yaml`** and **enforces them on every return visit** —
 the setup page never appears again.
 
@@ -47,9 +47,9 @@ Grounded in real code:
 Siblings:
 [webapp.mdx](./webapp.mdx) (the **Google client-credentials** setup — a *different* first-run concern;
 this file is the **allow-list**, that file is the **OAuth client**) ·
-[storage.mdx §4](./storage.mdx#4-per-logged-in-user-storage--the-per-user-requirement) (the per-user
+[storage_local.mdx §4](./storage_local.mdx#4-per-logged-in-user-storage--the-per-user-requirement) (the per-user
 tree keyed by verified email) ·
-[storage.mdx §10](./storage.mdx#10-auth-session--signing-secret-runtime-not-settings) (sessions +
+[storage_local.mdx §10](./storage_local.mdx#10-auth-session--signing-secret-runtime-not-settings) (sessions +
 signing secret) ·
 [settings.mdx §4](./settings.mdx#4-the-rest-of-the-global-settings-surface) (the admin-only Access
 editor) · [code_plan.mdx](./code_plan.mdx) (ports: web app **:2222**, API **:8787**).
@@ -103,7 +103,7 @@ saves. It is the single fact the frontend gate (§4.1) and the one-time write lo
 ## 2. Where security values live — the storage mapping
 
 All security values persist in the **app-level, computer-wide** `config.yaml`
-([storage.mdx §3](./storage.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)), under a
+([storage_local.mdx §3](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)), under a
 single `access:` block. This is machine-owned (not per-user): who may sign in to *this install* is a
 property of the machine, decided once, before any user exists.
 
@@ -125,7 +125,7 @@ access:
     - bryan@act3ai.com
 ```
 
-* **`allowed_emails` is unchanged in name** from earlier storage (`storage.mdx §3 access.allowed_emails`)
+* **`allowed_emails` is unchanged in name** from earlier storage (`storage_local.mdx §3 access.allowed_emails`)
   — this spec **adds** `configured`, `allow_companies`, `allowed_domains`, and `allow_individuals`
   alongside it. Existing installs read forward cleanly: a missing field defaults per
   `schemas.ts` (`configured:false`, both switches `false`, both lists `[]`).
@@ -138,13 +138,13 @@ access:
   remains honored only as an explicit ops/dev override, never as a silent default that would breach
   default-deny.
 * No secret lives here — Google **client** id/secret stay out-of-repo
-  ([storage.mdx §10](./storage.mdx#10-auth-session--signing-secret-runtime-not-settings)); this block is
+  ([storage_local.mdx §10](./storage_local.mdx#10-auth-session--signing-secret-runtime-not-settings)); this block is
   non-secret policy (which domains/emails are allowed).
 
 Reading and writing the app-level `config.yaml → access` block is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()` / `updateAppConfig()`
 
-Inventory row (per storage.mdx §14 rule — every persisted key has a row):
+Inventory row (per storage_local.mdx §14 rule — every persisted key has a row):
 
 | Data | Location | Tier |
 | --- | --- | --- |
@@ -308,7 +308,7 @@ Server-side normalization (trim, `@`-strip, lowercase, regex-validate, de-dupe) 
 
 LFB's Google sign-in runs **in-process** via OpenAuthFederated's embedded Frontend API
 (`auth-frontend.ts`, mounted at `/api/v1`;
-[storage.mdx §10](./storage.mdx#10-auth-session--signing-secret-runtime-not-settings)). The security
+[storage_local.mdx §10](./storage_local.mdx#10-auth-session--signing-secret-runtime-not-settings)). The security
 values feed OAF at **two** layers.
 
 ### 6.1 Layer 1 — the OIDC domain pre-filter (`allowedDomains`, coarse)
@@ -485,7 +485,7 @@ config, break the domain comparison, or become a path segment.
 **Mitigation — strict normalization + no path use.** Every value is trimmed, lowercased, `@`-stripped
 (domains), and regex-validated (§5) before storage; invalid entries are dropped, not stored. These
 values are compared as strings and **never** used to build a filesystem path (unlike the email→folder
-key of storage.mdx §4, which has its own `sanitizeSegment`). Domain match is a strict suffix compare on
+key of storage_local.mdx §4, which has its own `sanitizeSegment`). Domain match is a strict suffix compare on
 a validated `label.tld`, so `evilmycompany.com` never matches `mycompany.com`
 (`domainOf(email) === domain` on the exact label, not a substring test).
 

@@ -53,20 +53,48 @@ Left_Nav:
           icon: "FolderGit2"
           route: "/"
           order: 1
-          description: "Every git repo on this computer that LargeFileBridge manages, with its large-file sync counts and status."
+          description: "Every git repo on this computer that LargeFileBridge manages, with its large-file sync counts and status. This is the dedicated long list of repos; the Storages tab links here rather than re-listing them."
+
+        # STORAGES (pm/storages.mdx) — the map of everything this user syncs. A grouping tab whose
+        # children are the storages the user belongs to: Personal (storage_personal.mdx), one child
+        # per Company (storage_company.mdx, labeled by company_name — DERIVED at runtime from each
+        # storage.yaml), a Repos child that routes to the Repos tab above (NOT a long list here), and
+        # the opted-in Communities (storage_community.mdx). Local storage (settings/config, the DB
+        # replacement — storage_local.mdx) is NOT listed here; it is not a directory-based storage.
+        - id: storages
+          label: "Storages"
+          icon: "HardDrive"
+          route: "/storages"
+          order: 2
+          description: "All the large-file storages you belong to in one map: your Personal files, each Company you're in, a Repos link to the repos list, and the Communities you carry. Each directory-based storage has a storage.yaml (name + type) and a hidden .lfbridge/ tracking area, syncs over IPFS, and may also clone to Google Drive / Dropbox. See pm/storages.mdx."
+          children:
+            - id: storages_personal
+              label: "Personal"
+              route: "/storages/personal"
+              description: "Your own private big files (storage_personal.mdx)."
+            # One child PER COMPANY is inserted here at runtime, labeled by company_name
+            # (storage_company.mdx) — derived from each company storage's storage.yaml.
+            - id: storages_repos
+              label: "Repos"
+              route: "/"
+              description: "Routes to the Repos tab (the long list) — the Storages tab does not re-list every repo (storage_repo.mdx)."
+            - id: storages_communities
+              label: "Communities"
+              route: "/communities"
+              description: "The communities you have opted into carrying — download or share (storage_community.mdx)."
 
         - id: file_system
           label: "File System"
           icon: "Columns3"
           route: "/fs"
-          order: 2
+          order: 3
           description: "Browse your whole filesystem two ways: a Finder-style column view (/fs) and a flat Full-paths table (/fs/paths) of the large files under a folder. Each row shows code badges: R/r repo (brown), S sync (pink), C/c compress (yellow), i IPFS (blue). Defaults to your home directory. See pm/directories.mdx + pm/full_paths.mdx."
 
         - id: peers
           label: "Peers"
           icon: "Network"
           route: "/peers"
-          order: 3
+          order: 4
           description: "Your other computers (laptop, desktop, studio, server, family) that pin these files over IPFS."
 
         # Peers are YOUR computers pinning YOUR files; Communities are OTHER people's
@@ -77,14 +105,14 @@ Left_Nav:
           label: "Communities"
           icon: "Users"
           route: "/communities"
-          order: 4
+          order: 5
           description: "Publishers of large public files (videos first) you can subscribe to — Get their videos to watch, or Support them by rebroadcasting to keep them secure. Per community: Block / Recommended / Full backup, against a storage budget derived from this computer's free disk outside IPFS. See pm/communities.mdx."
 
         - id: ipfs
           label: "IPFS"
           icon: "Boxes"
           route: "/ipfs"
-          order: 5
+          order: 6
           description: "Your local IPFS node's control panel: is it installed and running, an on/off toggle, live metrics (shared files, storage, peers, bandwidth), the gateway, and the only-our-content security posture. Drills into the pinset table at /ipfs/pins. See pm/ipfs_ui.mdx (dashboard) + pm/ipfs.mdx (pinset)."
 
         # NAMING (pm/menus.mdx / scan.mdx): the scheduled background jobs are
@@ -96,14 +124,14 @@ Left_Nav:
           label: "Scans"
           icon: "RefreshCw"
           route: "/scans"
-          order: 6
+          order: 7
           description: "The scheduled background scan tasks (scheduleTasks): whether each launchd job is installed, on or off, the every-15-min and every-4h schedules, and recent activity."
 
         - id: settings
           label: "Settings"
           icon: "Settings"
           route: "/settings"
-          order: 7
+          order: 8
           description: "Account, allow-list, and IPFS node configuration."
 
       # Footer: account block (avatar/name/Google email) -> popup menu (expands UP).
