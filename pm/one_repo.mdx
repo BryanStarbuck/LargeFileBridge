@@ -199,21 +199,41 @@ Each table row (one `FileRow` per discovered candidate, joined with its decision
 The trailing per-row file kebab is rendered in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` `rowMenu` (mounts `EntityKebab`)
 
-### 4.7 Cell navigation (per file) — LOCKED
+### 4.7 Row / cell navigation (per file) — LOCKED
 
-Beyond the inline Decision select, each data cell is a deep link
-([menus.mdx §2](./menus.mdx#2-cell-navigation--clicking-a-cell-is-a-deep-link)):
+**Clicking a file row opens that file's "View one file" experience.** The whole row is a deep link —
+and the **File** column especially — so a single click on `render/final_4k.mov` takes the user straight
+to the page for that one file. Only the interactive control cells opt out (the inline **Decision**
+select edits in place; the **CID** cell copies; the **`⋮`** kebab opens the menu). Each of those stops
+click propagation so it never also fires the row navigation.
+
+**Where a row click lands depends on the file's kind** — the same media-routing rule the File System
+browser and the entity menus use ([media_viewer.mdx §1](./media_viewer.mdx), [menus.mdx §2](./menus.mdx#2-cell-navigation--clicking-a-cell-is-a-deep-link)):
+
+| File kind | Route opened | Page |
+| --- | --- | --- |
+| **image** (`.png .jpg .webp .gif .heic .avif …`) | `/image?path=<abs>` | the **image viewer** ([media_viewer.mdx](./media_viewer.mdx)) |
+| **video** (`.mp4 .mov .mkv .webm .m4v …`) | `/video?path=<abs>` | the **video viewer** ([media_viewer.mdx](./media_viewer.mdx)) |
+| **audio** (`.mp3 .wav .flac .m4a .aac .ogg .opus …`) | `/audio?path=<abs>` | the **audio viewer** ([media_viewer.mdx](./media_viewer.mdx)) |
+| anything else | `/file?path=<abs>` | the properties-first **View one file** ([files.mdx](./files.mdx)) |
+
+The `path` passed is the file's **absolute** path (`<repo root>/<relative path>`), not the repo-relative
+one, because every single-entity page keys off the absolute path.
+
+Per-cell targets (all resolve to the row target above unless noted):
 
 | Cell | Click target |
 | --- | --- |
-| **File** | The **View one file** page ([files.mdx](./files.mdx)) for this file. |
-| **Size** | View one file (details). |
-| **Decision** | Inline select — edits in place, does not navigate (§4.5). |
-| **Status** | View one file (its transfer detail). |
-| **Peers** | [Peers](./left_bar.mdx) filtered to this file (which computers hold it). |
-| **CID** | **Copies** the CID (click-to-copy); an inline affordance opens [IPFS](./ipfs.mdx) filtered to it. Does not navigate away. |
-| **Changed** | View one file. |
-| **`⋮`** | Opens the **file action menu** — never navigates (§4.3). |
+| **File** | The file's **View one file** experience (viewer for media, properties otherwise). |
+| **Size / Status / Changed** | Same as the row — the file's View one file page. |
+| **Pin / Decision** | Inline control — toggles/edits in place, does not navigate (§4.5); stops propagation. |
+| **Peers** | Same as the row (peers detail lives on the file page / [Peers](./left_bar.mdx)). |
+| **CID** | **Copies** the CID (click-to-copy); does not navigate away; stops propagation. |
+| **`⋮`** | Opens the **file action menu** — never navigates (§4.3); stops propagation. |
+
+Row-click navigation — routing each file to its viewer (`/image` · `/video` · `/audio`) or the
+properties page (`/file`) by kind, on the file's absolute path — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` `onRowClick` (uses `viewerRouteForName` from `@lfb/shared`)
 
 The **File** row's kebab (and right-click) is the **file** catalog ([menus.mdx §5.3](./menus.mdx#53-file)):
 View file · Open containing folder · Add to IPFS / Remove from IPFS · Set decision ▸ · Sync now ·

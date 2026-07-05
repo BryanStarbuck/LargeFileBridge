@@ -29,6 +29,7 @@ import {
   repoIdFromPath,
 } from "../store-model/units.service.js";
 import { log } from "../../shared/logging.js";
+import { resolveStateDir, ensureDir } from "../../config/state-dir.js";
 
 export interface ResolvedEntity {
   abs: string;
@@ -323,4 +324,58 @@ export async function setEntityDecision(input: string, decision: Decision): Prom
 
 export function osHome(): string {
   return os.homedir();
+}
+
+// ── Move & Delete (media_viewer.mdx §4.4) — explicit, guarded, recoverable ─────────────────────────
+// Both operate on a single REGULAR FILE (never a directory). They are the only entity ops that relocate
+// real bytes, so the router gates them behind the allow-list and the UI behind an explicit click + confirm.
+
+/** Rename/move a file to a new absolute path. Guards: source is a file; dest parent exists; no overwrite. */
+export function moveEntity(input: string, dest: string): { moved: true; path: string } {
+  const src = resolveEntity(input);
+  if (!src.exists || src.kind !== "file") throw new Error("move: source must be an existing file");
+  const destRaw = (dest && dest.trim()) || "";
+  if (!destRaw) throw new Error("destination required");
+  const destAbs = path.resolve(expandHome(destRaw));
+  if (destAbs.includes("\0")) throw new Error("invalid destination");
+  if (destAbs === src.abs) throw new Error("destination is the same as the source");
+  const parent = path.dirname(destAbs);
+  let pst: fs.Stats;
+  try {
+    pst = fs.statSync(parent);
+  } catch {
+    throw new Error(`destination folder does not exist: ${parent}`);
+  }
+  if (!pst.isDirectory()) throw new Error(`destination folder is not a directory: ${parent}`);
+  if (fs.existsSync(destAbs)) throw new Error("a file already exists at the destination — won't overwrite");
+  renameAcrossDevices(src.abs, destAbs);
+  log.info("entity", `move ${src.abs} -> ${destAbs}`);
+  return { moved: true, path: destAbs };
+}
+
+/**
+ * "Delete" a file the RECOVERABLE way: move it into LFBridge's trash under the state dir
+ * (`<stateDir>/trash/<ts>__<name>`). We never `unlink` — the charter forbids silently destroying bytes.
+ */
+export function deleteEntity(input: string): { trashed: true; trashPath: string } {
+  const src = resolveEntity(input);
+  if (!src.exists || src.kind !== "file") throw new Error("delete: target must be an existing file");
+  const trashDir = path.join(resolveStateDir(), "trash");
+  ensureDir(trashDir);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const trashPath = path.join(trashDir, `${stamp}__${path.basename(src.abs)}`);
+  renameAcrossDevices(src.abs, trashPath);
+  log.info("entity", `delete (to trash) ${src.abs} -> ${trashPath}`);
+  return { trashed: true, trashPath };
+}
+
+/** `fs.renameSync`, falling back to copy+unlink when src and dest are on different volumes (EXDEV). */
+function renameAcrossDevices(src: string, dest: string): void {
+  try {
+    fs.renameSync(src, dest);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EXDEV") throw e;
+    fs.copyFileSync(src, dest);
+    fs.unlinkSync(src);
+  }
 }

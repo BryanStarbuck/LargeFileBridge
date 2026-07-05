@@ -5,7 +5,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { requireAllowListed } from "../auth/identify.js";
 import { log } from "../../shared/logging.js";
-import { buildEntityView, setEntityFlags, setEntityDecision } from "./entity.service.js";
+import { buildEntityView, setEntityFlags, setEntityDecision, moveEntity, deleteEntity } from "./entity.service.js";
 
 export const entityRouter = Router();
 entityRouter.use(requireAllowListed);
@@ -67,4 +67,30 @@ entityRouter.post("/compress", (req, res) => {
   if (!body.success) return res.status(400).json({ ok: false, error: "path required" });
   log.info("entity", `compress requested (queued): ${body.data.path}`);
   res.json({ ok: true, data: { queued: true } });
+});
+
+// POST /api/entity/move — move/rename a file (media_viewer.mdx §4.4). Explicit, guarded (parent exists,
+// no overwrite). Relocates real bytes, so it is an explicit-click action confirmed in the UI.
+entityRouter.post("/move", (req, res) => {
+  const body = z.object({ path: z.string().min(1), dest: z.string().min(1) }).safeParse(req.body);
+  if (!body.success) return res.status(400).json({ ok: false, error: "path + dest required" });
+  try {
+    res.json({ ok: true, data: moveEntity(body.data.path, body.data.dest) });
+  } catch (e) {
+    log.warn("entity", `move failed for ${body.data.path} -> ${body.data.dest}: ${(e as Error).message}`);
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/entity/delete — RECOVERABLE delete (media_viewer.mdx §4.4). Moves the file into LFBridge's
+// trash under the state dir; never `unlink`s (charter: never destroy bytes silently). UI confirms first.
+entityRouter.post("/delete", (req, res) => {
+  const body = z.object({ path: z.string().min(1) }).safeParse(req.body);
+  if (!body.success) return res.status(400).json({ ok: false, error: "path required" });
+  try {
+    res.json({ ok: true, data: deleteEntity(body.data.path) });
+  } catch (e) {
+    log.warn("entity", `delete failed for ${body.data.path}: ${(e as Error).message}`);
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
 });

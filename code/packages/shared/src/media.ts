@@ -13,6 +13,11 @@ const VIDEO_EXT = new Set([
 const IMAGE_EXT = new Set([
   ".png", ".bmp", ".tif", ".tiff", ".gif", ".jpg", ".jpeg", ".webp", ".heic", ".heif", ".avif",
 ]);
+// Audio media — the /audio player. Audio is NOT a compressible kind (charter: video 1st, image 2nd),
+// so it never appears in the compress rollup; it only routes to its viewer here.
+const AUDIO_EXT = new Set([
+  ".mp3", ".wav", ".flac", ".aac", ".m4a", ".ogg", ".oga", ".opus", ".aiff", ".aif", ".wma",
+]);
 
 /** Lowercased extension incl. the dot (".mp4"), or "" when the name has none. */
 export function fileExt(name: string): string {
@@ -25,16 +30,17 @@ export function fileExt(name: string): string {
   return i > 0 ? name.slice(i).toLowerCase() : "";
 }
 
-/** "image" | "video" for a viewable medium, else null (→ the /file properties page). */
+/** "image" | "video" | "audio" for a viewable/playable medium, else null (→ the /file properties page). */
 export function mediaKindForName(name: string): MediaKind | null {
   const ext = fileExt(name);
   if (VIDEO_EXT.has(ext)) return "video";
   if (IMAGE_EXT.has(ext)) return "image";
+  if (AUDIO_EXT.has(ext)) return "audio";
   return null;
 }
 
-/** The viewer route for a name ("/image" | "/video"), else "/file". */
-export function viewerRouteForName(name: string): "/image" | "/video" | "/file" {
+/** The viewer route for a name ("/image" | "/video" | "/audio"), else "/file". */
+export function viewerRouteForName(name: string): "/image" | "/video" | "/audio" | "/file" {
   const kind = mediaKindForName(name);
-  return kind === "image" ? "/image" : kind === "video" ? "/video" : "/file";
+  return kind === "image" ? "/image" : kind === "video" ? "/video" : kind === "audio" ? "/audio" : "/file";
 }

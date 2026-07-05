@@ -220,7 +220,7 @@ The directory action catalog (its Open / Work / Flag groups and the Never IPFS /
 
 | Group | Action | Kind | Notes |
 | --- | --- | --- | --- |
-| Open | **View file** | navigate | → the **View one file** page ([files.mdx](./files.mdx)). (Omitted on that page itself.) |
+| Open | **View file** / **View image** / **View video** / **View audio** | navigate | → the **View one file** experience. For a viewable medium this is the viewer ([media_viewer.mdx](./media_viewer.mdx)) — `/image`, `/video`, or `/audio` by kind; otherwise the properties page ([files.mdx](./files.mdx)). Media also offers **View properties** (`/file`) as a second Open item. (Omitted on the page itself.) |
 | Open | **Open containing folder** | navigate | → [File System](./directories.mdx) revealing this file. |
 | IPFS | **Add to IPFS** | mutate | Sets the [decision](./one_repo.mdx#1-the-decision-model-locked) to `sync`: add to the manifest, pin, and transfer to peers. Hidden when **Never IPFS** is on (§6.6). Shown when the file is not already a Sync file. |
 | IPFS | **Remove from IPFS** | mutate ⚠ | Sets the decision to `ignore`: remove from the manifest and unpin **on this machine**. **Never deletes the local bytes** (§6.2). Shown when the file is currently a Sync file. |
@@ -234,7 +234,9 @@ The directory action catalog (its Open / Work / Flag groups and the Never IPFS /
 | Flag | **Do not compress** (toggle) | mutate | Sticky per-file flag: suppress the `C` "should compress" badge/offer for this file (§6.6). |
 | IPFS | **View on IPFS** | navigate | → [IPFS](./ipfs.mdx) filtered to this file's CID. |
 | Copy | **Copy CID** · **Copy path** | copy | CID present only once the file is a Sync file with a CID. |
+| Work | **Move…** | mutate ⚠ | Move/rename the file to a new absolute path on disk (guarded: parent must exist, no overwrite). **Explicit click + confirm.** The one action here that relocates real bytes. See [media_viewer.mdx §4.4](./media_viewer.mdx). |
 | Danger | **Stop syncing (untrack / unpin)** | mutate ⚠ | Removes from the manifest and unpins **on this machine**. **Never deletes the local bytes** (§6.2); confirm required. |
+| Danger | **Delete…** | mutate ⚠ | **Recoverable delete** — moves the file to LFBridge's trash under the state dir (`<stateDir>/trash/`); it does **not** `unlink`. Explicit click + confirm ("Move to LFBridge trash? — recoverable"). See [media_viewer.mdx §4.4](./media_viewer.mdx). |
 
 The file action catalog (Add/Remove IPFS, the three-state decision submenu, Compress, Stop syncing) is built in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` function.

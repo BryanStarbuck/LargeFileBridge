@@ -68,6 +68,9 @@ const MIME: Record<string, string> = {
   ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
   ".webp": "image/webp", ".bmp": "image/bmp", ".tif": "image/tiff", ".tiff": "image/tiff",
   ".heic": "image/heic", ".heif": "image/heif", ".avif": "image/avif", ".svg": "image/svg+xml",
+  ".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac", ".aac": "audio/aac",
+  ".m4a": "audio/mp4", ".ogg": "audio/ogg", ".oga": "audio/ogg", ".opus": "audio/ogg",
+  ".aiff": "audio/aiff", ".aif": "audio/aiff", ".wma": "audio/x-ms-wma",
 };
 
 export function mimeFor(abs: string): string {
@@ -106,6 +109,12 @@ const VIDEO_EXT = new Set([
 ]);
 const IMAGE_LOSSLESS = new Set([".png", ".bmp", ".tif", ".tiff", ".gif"]);
 const IMAGE_LOSSY = new Set([".jpg", ".jpeg", ".webp", ".heic", ".heif", ".avif"]);
+// Audio containers → label for the property grid's Codec cell. Kept in step with @lfb/shared AUDIO_EXT.
+const AUDIO_CONTAINER: Record<string, string> = {
+  ".mp3": "MP3", ".wav": "WAV (PCM)", ".flac": "FLAC (lossless)", ".aac": "AAC", ".m4a": "AAC (M4A)",
+  ".ogg": "Ogg Vorbis", ".oga": "Ogg", ".opus": "Opus", ".aiff": "AIFF (PCM)", ".aif": "AIFF (PCM)",
+  ".wma": "WMA",
+};
 
 const HEAD_BYTES = 512 * 1024; // enough to reach a front-placed moov / image header
 const TAIL_BYTES = 256 * 1024; // catch a tail-placed moov (common in freshly-recorded MOV/MP4)
@@ -122,12 +131,19 @@ export function probeMedia(input: string | undefined): MediaProbe {
   const ext = path.extname(abs).toLowerCase();
   const isVideo = VIDEO_EXT.has(ext);
   const isImage = IMAGE_LOSSLESS.has(ext) || IMAGE_LOSSY.has(ext);
-  const kind: MediaProbe["kind"] = isVideo ? "video" : isImage ? "image" : "other";
+  const isAudio = ext in AUDIO_CONTAINER;
+  const kind: MediaProbe["kind"] = isVideo ? "video" : isImage ? "image" : isAudio ? "audio" : "other";
   const compressState: MediaProbe["compressState"] = isImage
     ? IMAGE_LOSSY.has(ext) ? "done" : "should"
     : isVideo
       ? /(compress|h264|x264|hevc|x265|av1|reenc|shrunk|small)/i.test(path.basename(abs)) ? "done" : "should"
-      : null;
+      : null; // audio is not a compressible kind (charter) → null
+
+  // Audio needs no header sniff — the container/codec is fully implied by the extension, and dimensions
+  // don't apply. Duration is read client-side from the media element (media_viewer.mdx §4.3).
+  if (isAudio) {
+    return { kind, container: AUDIO_CONTAINER[ext], codec: AUDIO_CONTAINER[ext], width: null, height: null, compressState };
+  }
 
   const base: MediaProbe = { kind, container: null, codec: null, width: null, height: null, compressState };
 

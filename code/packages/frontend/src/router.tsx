@@ -110,6 +110,13 @@ const viewVideoRoute = createRoute({
   component: lazyRouteComponent(() => import("./pages/entity/ViewOneVideoPage.js"), "ViewOneVideoPage"),
   validateSearch: pathSearch,
 });
+// The audio player (media_viewer.mdx): /audio — same MediaViewer shell, an <audio controls> centerpiece.
+const viewAudioRoute = createRoute({
+  getParentRoute: () => appLayout,
+  path: "/audio",
+  component: lazyRouteComponent(() => import("./pages/entity/ViewOneAudioPage.js"), "ViewOneAudioPage"),
+  validateSearch: pathSearch,
+});
 
 const routeTree = rootRoute.addChildren([
   appLayout.addChildren([
@@ -128,6 +135,7 @@ const routeTree = rootRoute.addChildren([
     viewDirRoute,
     viewImageRoute,
     viewVideoRoute,
+    viewAudioRoute,
   ]),
 ]);
 

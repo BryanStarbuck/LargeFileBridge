@@ -56,6 +56,12 @@ export async function recordActivity(email: string): Promise<SessionActivityResu
 
   await updateUserConfig(email, (c) => {
     const sessions = c.sessions;
+    // Self-heal (invariant 2): only the newest entry (index 0) may be open. Anything deeper that is
+    // still open — from a hand-edit, an older layout, or a concurrency edge — is closed here, back-dated
+    // to its own last render (invariant 3). We never trust stored session state blindly.
+    for (let i = 1; i < sessions.length; i++) {
+      if (sessions[i].ended_at === null) sessions[i].ended_at = sessions[i].last_activity_at;
+    }
     const open = sessions[0] && sessions[0].ended_at === null ? sessions[0] : null;
     if (open && withinIdle(open.last_activity_at, now)) {
       open.last_activity_at = nowIso; // still going — extend the current session

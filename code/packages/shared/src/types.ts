@@ -513,13 +513,14 @@ export interface EntityFlagsPatch {
 
 // ── Media viewer (media_viewer.mdx §2) ──────────────────────────────────────
 // Which viewer a file opens in. Non-media files fall back to the /file properties page.
-export type MediaKind = "image" | "video";
+// Audio joins image/video as a viewer-first kind (the /audio player) — media_viewer.mdx.
+export type MediaKind = "image" | "video" | "audio";
 
 // Best-effort, LOCAL-ONLY, NO-SHELL probe of a media file (media_viewer.mdx §2). Every field is
 // nullable: the sniff reads a bounded header/tail and reports only what it can determine. The viewer
 // never blocks on this — the bytes stream from the signed grant URL regardless.
 export interface MediaProbe {
-  kind: "image" | "video" | "other"; // from the extension family
+  kind: "image" | "video" | "audio" | "other"; // from the extension family
   container: string | null; // "MP4" | "QuickTime" | "Matroska" | "WebM" | "PNG" | "JPEG" | …
   codec: string | null; // "H.264" | "HEVC" | "AV1" | "VP9" | "ProRes" | "PNG (lossless)" | …
   width: number | null; // pixels — parsed for images; videos when cheaply available

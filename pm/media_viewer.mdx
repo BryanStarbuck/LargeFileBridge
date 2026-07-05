@@ -1,19 +1,28 @@
 ---
-title: LargeFileBridge — View one image / View one video
-description: The two viewer-first single-media pages. /image?path=<abs> is the image viewer; /video?path=<abs> is the video viewer. Unlike the properties-first View-one-file page (files.mdx), these pages are dominated by the media itself — a large viewer fills everything below a slim header. Above the viewer sit a thin action-button row (Add/Remove IPFS · repo chip · compressed-state chip · codec chip · the ⋮ more menu) and, below or beside it, a compact property strip and action links. The media plays/loads straight off the user's local disk, streamed through the backend over an authenticated, HTTP-Range endpoint (no file:// URL, no public gateway). This spec defines the shared viewer layout, the streaming + codec-probe backend contract, the action bar, and acceptance criteria for both pages. Implemented by the /api/media backend module and the ViewOneImagePage / ViewOneVideoPage frontend (shared MediaViewer layout).
+title: LargeFileBridge — View one file (image / video / audio viewer)
+description: The viewer-first single-media pages — the "View one file" experience for playable media. /image?path=<abs> is the image viewer; /video?path=<abs> is the video viewer; /audio?path=<abs> is the audio player. Unlike the properties-first View-one-file page (files.mdx), these pages are dominated by the media itself — a large viewer fills the bottom ~70% of the screen and auto-sizes to fit while keeping aspect ratio. Stacked above it, top to bottom: the file's absolute path, the file NAME as the big page title, a row of action buttons (Compress · Move · Delete · Add/Remove IPFS · Open folder …), and a property grid of ~4–5 columns × 2–3 rows of label/value pairs sized to sit above a 16:9 medium. The media plays/loads straight off the user's local disk, streamed through the backend over an authenticated, HTTP-Range endpoint (no file:// URL, no public gateway). This spec defines the shared viewer layout, the streaming + codec-probe backend contract, the per-type action set, and acceptance criteria for all three viewers. Implemented by the /api/media + /api/entity backend modules and the ViewOneImagePage / ViewOneVideoPage / ViewOneAudioPage frontend (shared MediaViewer layout).
 ---
 
-# LargeFileBridge — View one image / View one video
+# LargeFileBridge — View one file (image / video / audio viewer)
 
 `LargeFileBridge` shows a file in many tables and browsers. When that file is a **playable/viewable
-medium**, the row/cell/menu opens a **viewer-first** page instead of the properties page:
+medium**, clicking its row/cell/menu opens a **viewer-first** page — the **View one file** experience —
+instead of the properties page:
 
-* an **image** file → **`/image?path=<abs>`** (the image viewer),
-* a **video** file → **`/video?path=<abs>`** (the video viewer).
+* an **image** file → **`/image?path=<abs>`** (the image viewer; large-scale, zoom-to-fit),
+* a **video** file → **`/video?path=<abs>`** (the video viewer; click-to-play, full controls),
+* an **audio** file (MP3/WAV/FLAC/…) → **`/audio?path=<abs>`** (the audio player; click-to-play).
 
-Both are the same page with a different centerpiece widget, so they share one layout (`MediaViewer`).
+All three are the same page with a different centerpiece widget, so they share one layout (`MediaViewer`).
 The generic, properties-first **[View one file](./files.mdx)** page (`/file`) remains the fallback for
 everything that is not a viewable medium (and is always reachable from a viewer via **View properties**).
+
+**How you get here.** Every large-file table routes a row click to this page by the file's kind
+([one_repo.mdx §4.7](./one_repo.mdx), [full_paths.mdx](./full_paths.mdx)), the File System browser routes
+a cell click the same way ([directories.mdx](./directories.mdx)), and the entity menus offer **View
+image / View video / View audio** ([menus.mdx §5.3](./menus.mdx#53-file)). The single shared rule that
+picks the route from a filename is `viewerRouteForName` in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/media.ts`.
 
 Siblings this builds on and does not repeat:
 
@@ -111,77 +120,158 @@ The local, no-shell container/codec/dimensions sniff (bounded header + tail read
 
 ---
 
-## 3. Layout (shared `MediaViewer`)
+## 3. Layout (shared `MediaViewer`) — the fixed vertical stack
 
-One column. A **slim header**, a **thin action-button row**, the **big viewer surface** (the star — it
-takes all remaining height), and a **compact property strip + action links** pinned at the bottom.
+One column, **five bands stacked top → bottom**. The order is deliberate: the small identifying text
+is at the top, and the **media dominates the bottom ~70%** of the screen. The bands, top to bottom:
+
+1. **Full path** — the file's absolute path in small, muted, monospaced text. This is the very top line.
+2. **File name** — the title of the page, in **large** text (it is the biggest text on the page).
+3. **Action buttons** — a row of link/button actions (Compress · Move · Delete · Add/Remove IPFS ·
+   Open folder · Copy path · View properties · Open raw), plus the `⋮` more menu at the right (§4).
+4. **Property grid** — **~4–5 columns wide × 2–3 rows tall** of `Label : value` pairs (§3.1). It is
+   kept short (few rows) on purpose so it sits neatly above a 16:9 medium without crowding it out.
+5. **Media surface** — the **star**: the bottom **~70%** of the content area. The image/video/audio
+   **auto-sizes to fit the window** and **zooms up to fill** while **keeping its aspect ratio** (a 16:9
+   medium letterboxes into the band). It never upscales past 100% for an image by default.
 
 ```
 ┌────────────┬───────────────────────────────────────────────────────────────────────────┐
-│  LEFT BAR  │  ‹ back   final_4k.mov                                             ┌───┐    │ ← header
-│            │           ~/BGit/…/Our_Movies/render/final_4k.mov                  │ ⋮ │    │
-│            ├───────────────────────────────────────────────────────────────────┴───┴────┤
-│            │  [ + Add to IPFS ]   ⟨repo: Our_Movies⟩  ⟨looks uncompressed⟩  ⟨H.264 · MP4⟩ │ ← action bar
+│  LEFT BAR  │  ~/BGit/…/Our_Movies/render/final_4k.mov                            ┌───┐   │ ← 1 full path
+│            │  final_4k.mov                                                       │ ⋮ │   │ ← 2 NAME (title)
+│            │                                                                     └───┘   │
+│            │  [⚡ Compress]  [↷ Move]  [🗑 Delete]  [+ Add to IPFS]  [Open folder] [Copy]  │ ← 3 action buttons
+│            ├───────────────────────────────────────────────────────────────────────────┤
+│            │  Size    8.2 GB     Dimensions 3840×2160   Codec  H.264 · MP4   Repo Our_M… │ ← 4 property grid
+│            │  Modified 2h ago    Created  May 1         Compress looks uncompressed  …    │   (~4–5 cols × 2–3 rows)
 │            ├───────────────────────────────────────────────────────────────────────────┤
 │            │                                                                             │
 │            │                     ┌───────────────────────────────┐                       │
 │            │                     │                               │                       │
-│            │                     │        ▶  video / image        │  ← VIEWER (fills)     │
+│            │                     │        ▶  video / image        │  ← MEDIA (~70%, fits) │
 │            │                     │                               │                       │
 │            │                     └───────────────────────────────┘                       │
 │            │                                                                             │
-│            ├───────────────────────────────────────────────────────────────────────────┤
-│            │  8.2 GB · 3840×2160 · modified 2h ago · badges: i C r    Open folder · Copy  │ ← props + links
-│            │                                                          path · View props   │
 └────────────┴───────────────────────────────────────────────────────────────────────────┘
 ```
 
-* **Header.** Back affordance, the **file name** title, absolute **path** muted beneath, and the same
-  top-right **`⋮` more menu** ([menus.mdx §4](./menus.mdx)) the properties page carries — the full File
-  catalog verbatim.
-* **Action-button row.** A slim strip of the most-relevant catalog items promoted to visible controls
-  (§4).
-* **Viewer surface.** Everything below the action row until the property strip. Dark/neutral backdrop,
-  the medium centered and scaled **to fit** (never upscaled past 100% by default), letterboxed.
+* **1 Full path.** The absolute path, muted + monospaced, click-to-copy. Truncates with a tooltip on
+  overflow. The one line that lets a user confirm exactly which file on disk they are looking at.
+* **2 File name.** The basename as the page **title**, large. A small back affordance sits just above it.
+* **3 Action buttons.** The per-type action set (§4). The `⋮` more menu (top-right) still carries the
+  **complete** File catalog ([menus.mdx §4](./menus.mdx)) verbatim — the buttons are a promotion of the
+  most-used items, never the only way to reach an action.
+* **4 Property grid.** See §3.1.
+* **5 Media surface.** Dark/neutral backdrop, the medium centered and scaled **to fit** the band while
+  preserving aspect ratio (letterboxed). It grows to fill the ~70% band in a tall window and shrinks in a
+  short one — no dead space, no overflow of the page.
   * **Image viewer:** `<img>` from the grant URL, object-fit contain. Click toggles **fit ↔ 100%**
     (pan by drag when zoomed). A checkerboard shows through real transparency.
   * **Video viewer:** `<video controls>` from the grant URL (native controls: play/scrub/volume/fullscreen).
-    `preload="metadata"`; not autoplaying with sound.
-* **Property strip + action links.** One line: size · dimensions (from probe) · modified · the code
-  **badges**; then text links **Open containing folder** (`/fs`), **Copy path**, **View properties**
-  (`/file`), and **Open raw** (opens the grant URL in a new tab — download/native handoff).
+    `preload="metadata"`; not autoplaying with sound. Click/`▶` plays.
+  * **Audio player:** a large centered card with the `<audio controls>` transport (play/scrub/volume) and
+    the track name; the grant streams with Range so scrubbing seeks. No visual frame to fit — the band
+    holds the transport centered (§3.2).
 
-The shared viewer-first layout (header, action row, fit-to-fill viewer surface, property strip) is handled in code:
+### 3.1 The property grid (band 4)
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `MediaViewer` component (with `ViewerSurface`)
+A compact grid of **`Label : value`** pairs, **~4–5 columns across** and **2–3 rows tall**, so it reads
+at a glance and leaves the media its ~70%. Cells are drawn from the `EntityView` + `MediaProbe`; a cell
+whose value is unknown shows `—` (or is omitted) rather than stretching the grid. Typical cells:
+
+| | | | | |
+| --- | --- | --- | --- | --- |
+| **Size** 8.2 GB | **Dimensions** 3840×2160 | **Codec** H.264 · MP4 | **Repo** Our_Movies | **Peers** 3 |
+| **Modified** 2h ago | **Created** May 1 | **Compress** looks uncompressed | **Decision** Sync | **Badges** i C r |
+
+Audio swaps **Dimensions** for **Duration** and drops the image/video-only cells (§4). The grid never
+grows past ~3 rows — extra facts live in the `⋮` menu or the properties page, so the media keeps its space.
+
+### 3.2 Height behavior (LOCKED)
+
+The page is a **full-height flex column** that does **not** itself scroll. Bands 1–4 take their natural
+height (`shrink-0`); the **media surface takes all remaining height** — which is ~70% of the content area
+in a typical tall window. The media element is `max-h-full max-w-full object-contain`, so it always fits
+inside that band regardless of the window size. When the window is short, the media band shrinks with it;
+it never pushes the page into a scroll.
+
+The shared viewer-first layout — the five-band stack (path · name · actions · property grid · fit-to-fill
+media surface) — is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `MediaViewer` component (with `PropertyGrid` and `ViewerSurface`)
 
 ---
 
-## 4. The action-button row (promotion, not invention)
+## 4. The action buttons (band 3) — a per-type action set
 
-The row promotes a fixed, small set of the File catalog ([menus.mdx §5.3](./menus.mdx)) to visible
-controls; the complete catalog still lives under `⋮`. Left→right:
+Band 3 is a row of **action buttons** — the same operations a user reaches by right-clicking the file
+or opening its `⋮` kebab, promoted to visible buttons. **Think of them as the file's context-menu items
+laid out as buttons.** The complete catalog still lives under the `⋮` more menu at the right; the buttons
+are the most-used items, and **the set is customized by media type** (image vs. audio vs. video).
 
-1. **IPFS primary button** — the single most-useful next action, identical rule to
-   [files.mdx §3](./files.mdx):
-   * in a repo, `neverIpfs` off, decision ≠ sync → **+ Add to IPFS** (a.k.a. *Pin*; sets decision `sync`).
-   * decision = sync → **Remove from IPFS** (a.k.a. *Unpin*; sets `ignore`).
-   * not in a repo, or `neverIpfs` on → the button is absent (the `⋮` menu still governs).
-2. **Repo chip** — `⟨repo: <name>⟩`, a link to that repo ([one_repo.mdx](./one_repo.mdx)); "not in a repo"
-   when loose (muted, non-link).
-3. **Compressed-state chip** — `⟨looks uncompressed⟩` / `⟨already compressed⟩` from `compressState`
-   (suppressed to a neutral "video"/"image" label when **Do not compress** is on). When the state is
-   `should` and `noCompress` is off, the chip is clickable → the **Compress…** offer (explicit-click,
-   confirm — charter §6.1; never automatic).
-4. **Codec chip** — `⟨H.264 · MP4⟩` from `MediaProbe` (`codec · container`). Unknown codec → just the
-   container; unknown both → hidden.
+### 4.1 The shared actions (all three types)
 
-The IPFS button and the compress chip are the **same state** as their `⋮` menu items and the files.mdx
-switches — flipping one updates the others.
+* **⚡ Compress** — the compress **offer** (explicit-click, confirm — charter §6.1; never automatic).
+  Shown when the file "should" compress and **Do not compress** is off; otherwise it renders as a muted
+  state chip (`already compressed` / `looks uncompressed` suppressed). Same state as the `⋮` item and the
+  files.mdx switch — flipping one updates the others.
+* **↷ Move** — move/rename the file to a new location on disk (§4.4). Confirm-gated. This is an explicit,
+  user-initiated file operation.
+* **🗑 Delete** — remove the file (§4.4). **Recoverable**: LFBridge moves it to its own trash rather than
+  hard-unlinking, and confirms first. This is the one destructive-looking action; it never silently
+  loses bytes.
+* **+ Add to IPFS / Remove from IPFS** — the IPFS primary, identical rule to [files.mdx §3](./files.mdx):
+  in a repo with `neverIpfs` off and decision ≠ sync → **Add to IPFS** (Pin; sets `sync`); decision =
+  sync → **Remove from IPFS** (Unpin; sets `ignore`); not in a repo or `neverIpfs` on → absent.
+* **Open folder** (`/fs`) · **Copy path** · **View properties** (`/file`) · **Open raw** (the grant URL
+  in a new tab — download / native-app handoff).
 
-Promoting the IPFS primary, repo chip, compressed-state chip, and codec chip to the action row is handled in code:
+### 4.2 Type-specific actions (think like a PM)
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `IpfsPrimary` / `RepoChip` / `CompressChip` / `CodecChip` components
+The set is **customized by type** — the actions that only make sense for one medium appear only there:
+
+| Action | Image | Audio | Video | Notes |
+| --- | --- | --- | --- | --- |
+| ⚡ Compress | ✓ | — | ✓ | Charter compresses **video** (primary) and **image** (secondary); audio is out of scope, so no Compress on the audio player. |
+| ↷ Convert to compressible… | ✓ | — | — | PNG/BMP/TIFF → JPEG/WebP with the alpha-channel safety check ([menus.mdx §6.4](./menus.mdx)); image-only. |
+| Fit ↔ 100% / zoom | ✓ | — | — | Image-only viewer control (click the image). |
+| Play / pause / scrub | — | ✓ | ✓ | Native `<video>` / `<audio>` transport — audio and video only. |
+| ↷ Move · 🗑 Delete · IPFS · Copy path · Open folder · Open raw | ✓ | ✓ | ✓ | The shared set (§4.1) — every type. |
+
+### 4.3 Property-grid facts by type
+
+The property grid (§3.1) also flexes by type: **image** shows Dimensions; **video** shows Dimensions +
+Codec + Compress-state; **audio** shows **Duration** (read from the media element's metadata) instead of
+Dimensions, and drops Codec/Compress. Repo · Peers · Decision · Size · Created · Modified · Badges are
+shared across all three.
+
+### 4.4 Move & Delete — the backend contract (explicit, guarded, recoverable)
+
+Move and Delete are the only actions here that change the file on disk, so they are **explicit-click,
+confirm-gated**, and **guarded** — a direct honoring of the charter ("never alter a file unless the user
+explicitly asks"; "never destroy bytes silently").
+
+```
+POST /api/entity/move    { path: <abs>, dest: <abs> }   → { moved: true, path: <newAbs> }
+POST /api/entity/delete  { path: <abs> }                → { trashed: true, restorePath: <abs> }
+```
+
+* **Move** validates that `path` is an existing regular file and `dest` is absolute, its parent directory
+  exists, and it does not overwrite an existing file; then `fs.renameSync`. The viewer re-points to the
+  new path on success.
+* **Delete** does **not** `unlink`. It moves the file into LFBridge's **trash** under the state directory
+  (`<stateDir>/trash/<timestamp>__<name>`) so it is **recoverable**, and returns the restore path. The UI
+  confirms first ("Move to LFBridge trash? — recoverable").
+
+Moving (guarded rename) and deleting (recoverable move-to-trash, never `unlink`) a single file are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `moveEntity` / `deleteEntity` functions (routed by `entity.router.ts` `POST /move` · `POST /delete`)
+
+### 4.5 Where the action row is built
+
+Promoting the type-specific action set (Compress · Move · Delete · IPFS primary · Open folder / Copy /
+View properties / Open raw), the repo/compress/codec chips, and the `⋮` more menu to band 3 is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` (with `IpfsPrimary` / `CompressChip` / `MoveButton` / `DeleteButton`)
 
 ---
 
@@ -189,10 +279,12 @@ Promoting the IPFS primary, repo chip, compressed-state chip, and codec chip to 
 
 * **Not found / moved** (`exists:false`): the shared "no longer at that path" card (files.mdx §5) — no
   viewer surface.
-* **Wrong route for the kind:** if `/video` is opened on an image (or vice-versa), redirect to the correct
-  viewer (`/image` ↔ `/video`); a non-media file redirects to `/file`. Routing is by the file's kind, so a
-  correct link never lands on the wrong viewer. The redirect **replaces** history (does not push) so the
-  wrong-kind URL never lingers to re-bounce on Back.
+* **Wrong route for the kind:** the viewer routes by the file's **actual kind** (from its name, via
+  `mediaKindForName`), so `/video` opened on an image redirects to `/image`, an audio file to `/audio`,
+  and a non-media file to `/file` — and likewise for every other mismatch. A correct link never lands on
+  the wrong viewer. The redirect **replaces** history (does not push) so the wrong-kind URL never lingers
+  to re-bounce on Back. (Note: audio is not a "compressible" kind on `EntityView`, so the redirect keys off
+  the **name-based** kind, not `compressible`, or an audio file would wrongly fall through to `/file`.)
 * **Decode/playback failure:** the browser element failed to render the bytes (unsupported codec —
   e.g. HEVC/ProRes in a browser that can't decode it). Show an inline notice over the viewer: "This
   browser can't play this file's codec (`<codec>`)." with **Open raw** (hand off to the OS) and, for video
@@ -207,26 +299,32 @@ Promoting the IPFS primary, repo chip, compressed-state chip, and codec chip to 
 
 ## 6. Acceptance criteria
 
-1. `/image?path=<abs>` and `/video?path=<abs>` each render the **shared MediaViewer**: slim header
-   (name title + muted absolute path + `⋮`), a thin **action-button row**, a **large viewer surface** that
-   takes all remaining height, and a **compact property strip + action links**.
-2. The medium **plays/loads off the local disk** via the backend stream — never a `file://` URL. Video
-   supports **seeking** because `/api/media/raw` answers HTTP **`Range`** (`206` + `Content-Range`); images
-   load whole. The stream is reachable only through a **short-lived signed grant** minted for an
+1. `/image?path=<abs>`, `/video?path=<abs>`, and `/audio?path=<abs>` each render the **shared MediaViewer**
+   as the **five-band vertical stack** (§3), top → bottom: **full path** · **file name (large title)** ·
+   **action buttons + `⋮`** · **property grid (~4–5 cols × 2–3 rows)** · **media surface**. The media
+   occupies the bottom **~70%** and **auto-sizes to fit** the window while **keeping aspect ratio**; the
+   page itself does not scroll.
+2. The medium **plays/loads off the local disk** via the backend stream — never a `file://` URL. Video and
+   audio support **seeking** because `/api/media/raw` answers HTTP **`Range`** (`206` + `Content-Range`);
+   images load whole. The stream is reachable only through a **short-lived signed grant** minted for an
    allow-listed session; the raw endpoint refuses expired/forged tokens and any non-file path.
-3. The **action-button row** shows the IPFS primary (Add/Remove per §4/files.mdx §3), a **repo chip**
-   (link, or "not in a repo"), a **compressed-state chip** (from `compressState`, clickable → Compress…
-   offer when `should` & not suppressed), and a **codec chip** (`codec · container` from `MediaProbe`,
-   degrading to container-only or hidden when unknown). The top-right `⋮` menu renders the full File
-   catalog ([menus.mdx §5.3](./menus.mdx)) verbatim.
-4. `MediaProbe` is computed **locally with no shell** (charter): image dimensions + format from the header;
-   video container from extension and codec by a bounded fourcc/EBML sniff; unknown fields are `null` and
-   render as "—" without breaking the viewer.
-5. Property strip shows size · dimensions · modified · **code badges** (directories.mdx §3); action links
-   **Open containing folder**, **Copy path**, **View properties** (`/file`), and **Open raw** all work.
-6. Error/empty states render per §5 (not-found card, wrong-route redirect, decode-failure notice with
-   Open-raw + Compress offer, loading skeleton, node-unreachable). Nothing on either page ever **deletes**
-   or **alters** the local file; Compress is only ever an explicit-click offer.
+3. The **action buttons** (band 3) are a **per-type set** (§4): all three show **Move**, **Delete**
+   (recoverable, confirm-gated), the **IPFS primary** (Add/Remove per files.mdx §3), Open folder / Copy path
+   / View properties / Open raw; **image + video** additionally show **Compress** (offer), image also
+   **Convert to compressible…**; audio shows neither Compress nor Convert. The top-right `⋮` menu renders
+   the full File catalog ([menus.mdx §5.3](./menus.mdx)) verbatim.
+4. The **property grid** (band 4) shows the type-appropriate facts: Size · Modified · Created · Repo ·
+   Peers · Decision · Badges for all; **Dimensions + Codec + Compress** for image/video; **Duration** for
+   audio. Unknown cells show `—`; the grid never exceeds ~3 rows.
+5. `MediaProbe` is computed **locally with no shell** (charter): image dimensions + format from the header;
+   video container from extension and codec by a bounded fourcc/EBML sniff; audio container/codec from the
+   extension family; unknown fields are `null` and render as "—" without breaking the viewer.
+6. **Move** renames the file (guarded: absolute dest, existing parent, no overwrite) and the viewer
+   re-points to the new path. **Delete** moves the file to LFBridge's **trash** under the state dir
+   (recoverable) — it **never `unlink`s** — after a confirm. Compress stays an explicit-click offer.
+7. Error/empty states render per §5 (not-found card, kind-based wrong-route redirect incl. audio,
+   decode-failure notice with Open-raw + Compress offer, loading skeleton, node-unreachable). No bytes are
+   ever altered or destroyed without an explicit click + confirm.
 
 <!--
   View-one-IMAGE (/image) and View-one-VIDEO (/video) viewer-first pages. Shared MediaViewer layout.

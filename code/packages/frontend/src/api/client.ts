@@ -136,6 +136,11 @@ export const api = {
     unwrap<EntityView>(http.post("/entity/decision", { path, decision })),
   compressEntity: (path: string) =>
     unwrap<{ queued: boolean }>(http.post("/entity/compress", { path })),
+  // Move (guarded rename) + Delete (recoverable move-to-trash) a single file — media_viewer.mdx §4.4.
+  moveEntity: (path: string, dest: string) =>
+    unwrap<{ moved: boolean; path: string }>(http.post("/entity/move", { path, dest })),
+  deleteEntity: (path: string) =>
+    unwrap<{ trashed: boolean; trashPath: string }>(http.post("/entity/delete", { path })),
 
   // Media viewer (media_viewer.mdx §2). grant → a short-lived same-origin URL the <img>/<video>
   // element loads (Range-capable); probe → best-effort container/codec/dimensions.
