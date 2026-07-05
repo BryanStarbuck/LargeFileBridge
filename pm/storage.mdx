@@ -675,6 +675,10 @@ values) — and the UI renders it (`CredentialsSetupCard`) on the **sign-in scre
 **Settings → Authentication**, showing the **full path**, the **exact JSON filename**, and the
 **schema to fill in**. This is what a fresh computer sees before it can sign in.
 
+Serving the non-secret `credentialsFile` block (`GET /api/health/auth-config`) and rendering the setup card the fresh computer sees is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/health/health.router.ts` — the `GET /auth-config` route (via `authConfig()`), rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/CredentialsSetupCard.tsx` — `CredentialsSetupCard` component.
+
 ---
 
 ## 11. `peers.yaml` — the user's other computers
@@ -702,6 +706,10 @@ peers:
 * Peers are how `pinned_by` (§9.1) is resolved to real machines and how "fetch from a peer" finds a
   provider. LFB dials these IPFS PeerIDs directly (swarm connect) in addition to the public DHT.
 * A shared peer only participates in repos whose `access.participants` include its `owner` (§6.2).
+
+Reading `peers.yaml`, removing a peer, and projecting the peer rows the UI shows is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/peers.service.ts` — `getPeers` / `peerRows` / `removePeer` functions
 
 ---
 

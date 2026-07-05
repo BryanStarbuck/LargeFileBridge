@@ -90,6 +90,9 @@ should be re-pointed at this value (see [scan.mdx §9](./scan.mdx#9-reconciliati
 Saving the threshold — resolving value+unit to `threshold_bytes` and persisting the `big_file` block — is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/settings/settings.router.ts` — `settingsRouter` `PATCH /` (uses `toBytes()` into `updateAppConfig()`)
 
+Reading and writing the computer-wide `config.yaml` (the `big_file` block and every other global default) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()` / `updateAppConfig()`
+
 ---
 
 ## 2. Threshold resolution — global default, per-repo override
@@ -157,6 +160,12 @@ concerns live. Each is specified elsewhere; the page groups them into sections:
 
 Global settings write to the app `config.yaml`; account/appearance settings write to the per-user
 `users/<email>/config.yaml`.
+
+The scanner-roots editor (the textarea of top-level dirs the scan walks) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` — `SettingsPage` (persisted via `settingsRouter` `PATCH /` `scannerRoots`)
+
+Reading and writing the per-user `users/<email>/config.yaml` (account/appearance settings) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/user-config.service.ts` — `getUserConfig()` / `updateUserConfig()`
 
 The admin-gated allow-list editor surface (companies + individuals) is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/AllowListPage.tsx` — `AllowListPage` (backed by `settingsRouter` `PATCH /security`, gated by `requireAdmin()`)

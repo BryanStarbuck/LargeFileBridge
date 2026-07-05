@@ -67,6 +67,9 @@ The flag lives **with the entity**, in the local state tree ([storage.mdx](./sto
   path/fingerprint key.
 * The scan **never** touches bookmarks — user fields are preserved across re-registration.
 
+Persisting a bookmark toggle to the entity's `config.yaml` (the Repos reference implementation of the `POST /:id/bookmark` endpoint) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — the `POST /:repoId/bookmark` route (via `updateRepoConfig()` in `store-model/units.service.ts`).
+
 ---
 
 ## 2. The promoted "Bookmarked only" filter (LOCKED)

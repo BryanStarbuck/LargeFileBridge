@@ -127,6 +127,9 @@ mostly, but it is where a non-compliant node is **flagged and fixable**.
 Reading the reprovide strategy, gateway posture, and GC state for the card is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `nodePosture()`
 
+The **Node** reachability verdict and the **PeerID** shown on the card are read in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `health()` / `peerId()`
+
 | Field | Meaning | Compliant value |
 | --- | --- | --- |
 | **Node** | Is the local Kubo daemon reachable? | `ok` (green) / `unreachable` (red — Rescan/imports disabled, tooltip). |
@@ -215,6 +218,11 @@ height (it does not expand to fill the viewport) so the node details below it st
 Pagination **defaults to 500** ([repos §3.3](./repos.mdx#33-pagination--locked)); the **pinned count**
 shows left of the pager. A quick filter **Untracked only** narrows to the import backlog.
 
+The row `⋮` **pin** catalog (Copy CID · View on IPFS · Import · Unpin) is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `PinKebab` component
+Pinning/unpinning a single CID behind that menu (and the pin toggle) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `pinAdd()` / `pinRm()` (exposed by the `POST /pin` handler in `ipfs.router.ts`)
+
 ### 5.2 Cell navigation ([menus.mdx §2](./menus.mdx#2-cell-navigation--clicking-a-cell-is-a-deep-link))
 
 * **File / CID** → for a tracked file, the **View one file** page ([files.mdx](./files.mdx)); for a
@@ -242,6 +250,9 @@ Reconciling the pinset against the manifests — classifying each row as `synced
 
 Manual **Rescan** (top-right) runs the same reconciliation now. Both manual and scheduled runs report an
 `import`-eligible count and appear in the progress dock ([webapp.mdx §11/§12](./webapp.mdx#11-what-shows-up-in-the-dock--the-lfbridge-operation-taxonomy)).
+
+The manual **Rescan** endpoint (re-run the scan, then recompute the page) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.router.ts` — the exported `ipfsRouter` (`POST /rescan`)
 
 The page payload also carries a **`repos`** array — one entry per repo that owns ≥1 tracked pin
 (`repoId`, name, pin count) — which drives the **left-bar disclosure children** (§2.1). It is a rollup

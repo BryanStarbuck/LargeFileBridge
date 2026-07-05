@@ -332,6 +332,9 @@ oafAllowedDomains =
 Computing the coarse OIDC domain pre-filter (company domains ∪ individual-email domains ∪ env) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/security/security.service.ts` — `oafAllowedDomains()`
 
+Passing that domain set into the embedded OpenAuthFederated middleware (`createFederatedFrontend({ allowedDomains })`) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/auth-frontend.ts` — `allowedDomains()` / `buildAuthFrontend()`
+
 ### 6.2 Layer 2 — the authoritative allow-list (`identify.ts`, exact)
 
 After OAF verifies the Bearer access token, `identify.ts` re-checks the verified email against the

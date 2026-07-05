@@ -252,6 +252,9 @@ the two segmented filters from the badges: **compressed** = badge `compressed`, 
 badge `compress`; **in IPFS** = badge `sync`. No new per-row shape is needed — Full paths is a
 different *view* of the same file knowledge, not new knowledge.
 
+Streaming the flat listing into the page as rows arrive (NDJSON from `GET /api/fs/flat`) and windowing the large row set for scroll performance is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/useStreamedFlatListing.ts` — `useStreamedFlatListing` (rows windowed by `useWindowedRows.ts` — `useWindowedRows`).
+
 ---
 
 ## 6. Empty, truncated & loading states

@@ -213,6 +213,9 @@ The repo action catalog (Open / Work / Config / Copy, and Remove-repo that unreg
 | Flag | **Do not compress** (toggle) | mutate | Sticky per-directory flag: suppress the `C` "should compress" badge/offer for media under here — the user has said "leave these alone" (§6.6). |
 | Copy | **Copy path** | copy | Absolute directory path. |
 
+The directory action catalog (its Open / Work / Flag groups and the Never IPFS / Do not compress toggles) is rendered by the same path-driven menu in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `EntityKebab` component (via `buildActions()` over the directory's `EntityView`).
+
 ### 5.3 File
 
 | Group | Action | Kind | Notes |

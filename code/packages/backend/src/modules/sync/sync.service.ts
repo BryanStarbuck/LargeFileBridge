@@ -3,6 +3,7 @@
 // publish committed manifest. The local IPFS pinset (`ipfs pin ls`) is the source of truth for pin
 // state; the manifest `pinned_by` is a stale cache we verify and refresh against it here (§9.5).
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { ManifestSchema, type Manifest, type ManifestFile } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";

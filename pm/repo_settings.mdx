@@ -74,6 +74,9 @@ big_file_override:
 The [scan](./scan.mdx) resolves the effective threshold as *override if enabled, else global* and
 records `effective_threshold_bytes` in this repo's `status.yaml` each run.
 
+Resolving this per-repo effective threshold (the override when enabled, else the global default) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `resolveThreshold()`
+
 ### 2.2 Synced on / off (the master toggle)
 
 * A single toggle: **is this repo synced?** (`config.yaml → synced`,

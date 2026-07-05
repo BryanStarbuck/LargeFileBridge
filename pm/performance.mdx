@@ -146,6 +146,9 @@ The buffered async flat large-file listing that backs `GET /api/fs/flat` is in c
   body. (c) Longer term, push filtering to the server with a `limit`/`query` param so
   the payload shrinks — noted as a follow-up, not required for the hang fix.
 
+The debounced search/filter input hook is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/useDebounced.ts` — `useDebounced()`
+
 ### 🟠 P-06 — Time formatting allocates `Date` objects per cell per render · T2
 - **Where:** `lib/format.ts` `relativeTime`/`absoluteTime` (called in `changed`,
   `lastSync`, `seen`, etc. columns, plus `absoluteTime` in `title=` attributes).

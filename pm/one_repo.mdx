@@ -184,6 +184,12 @@ Identical to the standard toolbar ([Repos §3.1](./repos.mdx)):
 
 Pagination: **default 500** ([Repos §3.3](./repos.mdx)); the **file count** shows left of the pager.
 
+Each table row (one `FileRow` per discovered candidate, joined with its decision + manifest CID) is composed by the backend and served to this table in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows` (served via `reposRouter` → `GET /api/repos/:repoId/files`)
+
+The trailing per-row file kebab is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` `rowMenu` (mounts `EntityKebab`)
+
 ### 4.7 Cell navigation (per file) — LOCKED
 
 Beyond the inline Decision select, each data cell is a deep link
@@ -248,6 +254,9 @@ Writing a per-file decision (single or bulk) to the repo's `config.yaml` is hand
 | `missing` | In the manifest but bytes not on this machine (fetch to restore). | red outline |
 | `error` | Last transfer failed. | red |
 | `na` | Decision is Ignore/Undecided — nothing to transfer. | `—`, muted |
+
+Each file's `transfer` value (synced / pending / na, derived from its decision, CID, and peer pins) is computed by the backend in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `transferFor` (called by `composeFileRows`)
 
 ---
 

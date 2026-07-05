@@ -169,6 +169,9 @@ The dashboard shell — hero, metric-tile grid, gateway panel, security card, an
   short **subtitle/unit**, and a **›** affordance when it drills in. Non-drill tiles have no ›.
 * **Gateway panel** — one line: local-only ✓ (or a red *public* flag), the URL (click-to-copy), and a
   **Details ›** link.
+
+The gateway posture/URL summary shown in this panel is read in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `gatewaySummary()`
 * **Security card** — the only-our-content posture ([§8](#8-security-posture-card)), identical model
   to the one already shipped, kept at the bottom as the trust line.
 

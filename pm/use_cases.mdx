@@ -370,6 +370,9 @@ The IPFS worst-first verdict banner (down / not-compliant / running-and-complian
 5. **"Repo details" `Disclosure`** (collapsed) — the old status strip (sync on/off, status pill,
    peer count, last sync, IPFS ok) moves here as the mechanism.
 
+The UC-2 worst-first diagnosis banner (IPFS down / undecided files / synced-but-no-peers / pending, each with its one fix) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `RepoVerdict` (renders `StatusBanner`).
+
 ### 5.5 Peers page (`/peers`)
 The Peers page (empty-state guidance, per-peer rows, last-seen recency) is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/peers/PeersPage.tsx` — `PeersPage`.
