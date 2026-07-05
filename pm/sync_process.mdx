@@ -1,0 +1,225 @@
+---
+title: LargeFileBridge — The Synchronization Process (the Sync Pass)
+description: The authoritative spec for what happens when LargeFileBridge synchronizes — the "sync pass." A synchronization is ALWAYS a full pass over every unit LFB knows on this computer (every git repo it has discovered, plus the computer unit), never one repo in isolation. However it is triggered — the 15-minute scheduleTask, the 48-hour session catch-up, or a manual "Sync now" on a single repo — it runs the full pass; a repo-scoped trigger only sets PRIORITY (that repo syncs first, then the pass continues over the rest). The pass fans out with bounded concurrency across units and across files within a unit, because modern machines have many cores; sequential syncing is a defect, not a baseline. This spec retires the notion of an "LFB-managed" repo: LFB knows and understands EVERY repo on the filesystem automatically, with no user action required — what requires an explicit, user-confirmed action is IPFS pinning/adding a unit's bytes (the per-unit `synced` opt-in), which gates the byte work but never the visiting/reconciling. It also locks the truthful-reporting invariant learned from a real defect: a manual sync must do real work and report what it actually did — never a silent no-op that toasts "complete." Reconciles with storage.mdx (on-disk units + §13 background process), scan.mdx (the scheduleTasks + pinset reconcile), one_repo.mdx (the Sync-now button), and sync_list.mdx (the trust/reconcile rules).
+---
+
+# LargeFileBridge — The Synchronization Process (the Sync Pass)
+
+This is the **primary, authoritative** spec for the act of synchronizing. Three neighbors describe
+*pieces* of it and defer here for the process itself:
+
+* [storage.mdx](./storage.mdx) — where sync state lives on disk (per-unit `config.yaml` +
+  `manifest.yaml`) and the **background sync process** transparency contract (§13). The *mechanics of
+  a pass* are here; storage owns the *state a pass reads and writes*.
+* [scan.mdx](./scan.mdx) — the two **scheduleTasks** (4-hour discovery + 15-minute pinset) that
+  *trigger* work. A **scan** discovers; a **sync pass** (this file) moves bytes.
+* [one_repo.mdx](./one_repo.mdx) — the **Sync now** button on a repo page. The button is one *trigger*
+  of the pass defined here.
+* [sync_list.mdx](./sync_list.mdx) — the **trust & reconciliation** rules (§5 there) a pass applies
+  when it reads any incoming list. The pass never *trusts*; it *reconciles*.
+
+The sync pass runs LFB's own TypeScript-on-Node worker (never raw shell/`curl`), identically on a
+laptop and on a server; only the resolved state root changes.
+
+---
+
+## 1. LFB knows every repo — there is no "LFB-managed" gate (LOCKED)
+
+**Retire the idea of an "LFB-managed" repo.** A repo does **not** have to be added to, adopted by, or
+turned on in LFB before LFB knows about it. LFB **discovers and understands every git repository on
+the filesystem automatically** ([storage.mdx §7](./storage.mdx#7-the-scanner--discovering-repos-and-the-mask),
+[scan.mdx](./scan.mdx)). Knowing a repo, tracking its large files, computing its counts, showing it in
+the UI, and **reconciling it during a sync pass** all require **zero** user action.
+
+Two distinct concepts — keep them separate everywhere:
+
+| Concept | Who triggers it | What it means |
+| --- | --- | --- |
+| **Known / understood** | **Automatic** — the scanner | LFB has discovered this repo (or the computer unit), tracks its big files, reflects it in the UI, and **visits it every sync pass**. Every repo on disk is known. There is no opt-in to be known. |
+| **IPFS-enabled (opted in to pin)** | **Explicit user action** — a confirmed choice | LFB may **add bytes to IPFS, pin them, and fetch them from peers** for this unit. This is the **only** thing that is opt-in. It is `synced: true` in the unit's `config.yaml` (storage.mdx §6.2). |
+
+So the per-unit **`synced`** flag does **not** mean "managed vs. unmanaged." It means **"the user has
+opted this unit into IPFS pinning/adding."** A `synced: false` repo is **not** invisible or ignored —
+it is fully known and fully visited by the pass; LFB simply does not add/pin/fetch its bytes until the
+user opts in. This matches the charter: LFB never turns a computer into a pinner of content without an
+explicit, user-confirmed action, and it never quietly mutates a repo.
+
+> **Why this matters (charter alignment).** IPFS pinning is the one action with an outward, hard-to-
+> reverse footprint (it makes this machine store and serve content). The charter requires it be
+> **user-confirmed**. *Understanding* a repo has no such footprint, so it needs no gate. Conflating
+> the two produced the "managed" mental model, which made a fresh repo look like it "wasn't in LFB"
+> when in fact LFB knew it perfectly well and was merely not pinning it yet.
+
+Discovering and registering every git working tree with no user action (identity + `synced` seeded off, i.e. pinning-not-yet-opted-in) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `registerRepo`
+
+Wording rule for all specs and UI copy: prefer **"every repo on this computer"** / **"known repo"** /
+**"opted in to IPFS pinning"** over **"managed repo."** "Managed" survives only where it plainly means
+"the row in our list," never as an opt-in gate.
+
+---
+
+## 2. Every synchronization is a FULL PASS (LOCKED)
+
+A **sync pass** is one traversal of **every unit LFB knows on this computer** — every discovered repo
+(`sync/r/<repo_name>/`) **plus** the computer unit (`sync/computer/`,
+[storage.mdx §8](./storage.mdx#8-synccomputer--the-whole-computer-sync-unit)). One pass = the whole
+machine, always.
+
+**No trigger reduces the scope to a single unit.** The three triggers differ only in *when* and *what
+runs first*, never in *what gets covered*:
+
+| Trigger | Source | Scope | Order |
+| --- | --- | --- | --- |
+| **Scheduled** — 15-min scheduleTask | launchd/cron ([storage.mdx §13](./storage.mdx#13-the-background-sync-process--the-transparency-contract)) | Full pass | Natural order |
+| **Session catch-up** — > 48h stale | a returning web session ([sessions.mdx §3](./sessions.mdx)) | Full pass | Natural order |
+| **Manual — "Sync now" on a repo** | the repo page / row kebab / bulk ([one_repo.mdx §3.1](./one_repo.mdx#31-header)) | **Full pass** | **That repo first (priority §3)**, then the rest |
+
+The load-bearing rule the button must honor: **a manual Sync now on one repo prioritizes that repo but
+still runs the full pass.** It does the user's repo first (so their result is immediate) and then keeps
+going across every other known unit. It must **never** sync one repo and stop.
+
+The full pass with bounded concurrency, and a manual Sync now that syncs the clicked repo first (as the priority unit) then runs the pass over the remaining units in the background, are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncAll({ priorityDone })` (fan-out via `runPool`), invoked after the priority repo by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/repos/:repoId/sync`
+
+---
+
+## 3. Prioritization — order, never scope
+
+When a pass is triggered from a specific repo, that repo's unit is the **priority unit**:
+
+* It is synced **first and awaited**, so the UI can return that repo's fresh detail immediately and the
+  button feels instant.
+* The rest of the pass then runs, in the **background**, so the response is never blocked by a long
+  fan-out over 100+ repos.
+* Priority changes **order only**. The remaining units are still all covered.
+
+A paths-scoped manual sync (bulk **Sync now (selected)**, [one_repo.mdx §4.4](./one_repo.mdx#44-bulk-actions))
+prioritizes this repo restricted to the selected files, then the full pass follows for the rest.
+
+**Overlap guard.** Passes are idempotent, but overlapping passes waste work, so a single in-flight
+guard collapses a second pass that starts while one is running (rapid Sync-now clicks, or a
+scheduleTask that fires mid-pass). The **priority unit is always synced by its own trigger** and is
+never dropped by the guard — only the shared *remainder* fan-out is de-duplicated.
+
+Answering with the priority repo's detail immediately, then running the remainder pass in the background under the in-flight guard, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncAll` (`passInFlight` guard) + `repos.router.ts` `POST /:repoId/sync` (`void syncAll({ priorityDone })`)
+
+---
+
+## 4. Parallelism — many cores, bounded concurrency (LOCKED design)
+
+Modern machines have **20–30 cores**; syncing units one-at-a-time wastes almost all of them. A sync
+pass is **concurrent by default**:
+
+* **Across units.** Units sync in parallel with a **bounded** pool — default **`cores − 2`** — leaving
+  two cores for the web app and the IPFS node so the UI stays responsive during a big pass. Concurrent
+  unit syncs are safe because every state write goes through the store layer's **per-file mutex + atomic
+  temp-then-rename** ([storage.mdx §15](./storage.mdx#15-the-store-layer-how-code-touches-disk)).
+* **Within a unit.** A unit's independent per-file operations (add + pin new/changed files, fetch
+  missing CIDs) are themselves parallelizable — they are independent IPFS calls — and should fan out
+  under the same bounded pool rather than a strict file-by-file loop. (Ordering within a unit does not
+  matter; each file's manifest row is written independently.)
+* **The priority unit** starts immediately; the remainder fan out behind it.
+
+Sequential syncing is a **defect to fix**, not an acceptable baseline. Any place that still loops
+`for … await` over units or files across a pass should be flagged and converted to the bounded pool.
+
+The bounded-concurrency pool (`cores − 2`) that fans the pass out across units is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `runPool` + `SYNC_CONCURRENCY` (driven by `os.cpus()`)
+
+---
+
+## 5. What a pass does per unit — and what the opt-in gates
+
+For **every** known unit the pass visits, it always **reconciles** (no opt-in required):
+
+1. **Rescan light** — pick up new/changed/deleted big files the last scan recorded ([scan.mdx](./scan.mdx)).
+2. **Reconcile the pinset** — read the local IPFS pinset (`ipfs pin ls`) and refresh the unit's
+   `pinned_by` claims against ground truth: confirm real pins, **drop** stale self-claims for pins that
+   were lost, and surface pinned-but-untracked CIDs as **import** candidates
+   ([storage.mdx §9.5](./storage.mdx#95-the-ipfs-pinset-is-the-source-of-truth--pinned_by-is-a-stale-cache),
+   [scan.mdx §2.1](./scan.mdx#21-the-15-minute-scheduletask-reads-the-ipfs-pinset-import-already-pinned)).
+3. **Reconcile any incoming Sync List** — never trusted, always reconciled per
+   [sync_list.mdx §5](./sync_list.mdx#5-trust--reconciliation-the-load-bearing-rule).
+4. **Write `status.yaml`** — last sync time, counts, errors — so the UI reflects the visit.
+
+Only the **byte work** is gated by the `synced` opt-in (§1):
+
+* If the unit is **opted in** (`synced: true`): add new/changed `sync`-decided files to IPFS, pin
+  locally, fetch missing manifest CIDs from peers, and (if `publish_manifest`) write the committed
+  in-repo manifest so git carries the list.
+* If the unit is **not opted in** (`synced: false`): the pass still visits and reconciles it (steps
+  1–4) but adds/pins/fetches **nothing** — until the user opts in.
+
+**A manual Sync now is itself the opt-in.** Clicking Sync now on a not-yet-opted-in repo is an explicit
+user action, so it flips that repo to `synced: true` and does the byte work, then the every-15-min
+scheduleTask keeps it fresh. (This is the exact bug §6 records: the manual path used to be gated by the
+same `synced:false` guard as the background scheduler and silently did nothing.)
+
+The manual-vs-background gating — the background scheduler respects `synced:false`, a manual Sync now moves bytes and flips the unit's opt-in on — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncRepoFolder(folder, onlyPaths, { manual })`
+
+---
+
+## 6. Never a silent no-op — report truthfully (LOCKED, learned from a defect)
+
+This invariant exists because it was violated in production. The defect and the rule:
+
+> **The defect.** `syncRepoFolder()` bailed at the top with `if (!cfg.synced) return`, and that guard
+> fired for the **manual** Sync now too — not just the background scheduler. A fresh repo defaults to
+> `synced: false` ([storage.mdx §6.2](./storage.mdx#62-syncrrepo_nameconfigyaml)), so clicking **Sync
+> now** returned instantly, pinned nothing, wrote no manifest — **yet the UI still toasted "Sync
+> complete."** A user could mark files and click Sync forever and nothing would ever pin. The status
+> popped up and vanished because the backend genuinely did nothing.
+
+The rules this locks in:
+
+* **A user-initiated sync must do real work.** The manual path is the repo's *primary* action; it may
+  never be short-circuited by the background-only `synced` gate (§5).
+* **Report what actually happened, not a fixed string.** A sync result carries **counts** — added,
+  pinned, fetched, skipped, failed — and the UI reflects them. If a run was genuinely a no-op (nothing
+  eligible), say so explicitly ("Nothing to sync — no files marked Sync"), never a blanket "complete."
+* **Success ≠ "the call returned."** A green toast requires the work to have occurred (or an honest
+  "nothing to do"), and a failure must surface, not be swallowed.
+
+This is a **design smell to hunt for everywhere**: any action whose success UI is decoupled from
+whether it did anything. Flag and fix such silent no-ops on sight.
+
+---
+
+## 7. Acceptance criteria
+
+1. **Every repo is known automatically** with no user action; the pass **visits and reconciles every
+   known unit** (all repos + the computer unit) regardless of opt-in (§1, §2, §5). No spec or UI copy
+   frames a repo as needing to be "added"/"managed" before LFB knows it.
+2. The per-unit **`synced` flag means "opted in to IPFS pinning,"** not "managed." A `synced: false`
+   unit is still fully known, visited, and reconciled; only byte work (add/pin/fetch) is withheld (§1,
+   §5).
+3. **A synchronization is always a full pass.** No trigger — scheduled, session catch-up, or manual
+   Sync now — reduces scope to one unit (§2).
+4. A **manual Sync now on one repo prioritizes that repo (synced first, awaited) and then runs the full
+   pass over the remaining units** in the background; it never syncs one repo and stops (§2, §3).
+5. The pass runs with **bounded concurrency** (default `cores − 2`) across units, and fans out per-file
+   work within a unit; sequential `for…await` over a whole pass is treated as a defect (§4).
+6. A **manual Sync now is the explicit opt-in** for its repo (flips `synced: true` and moves bytes),
+   while the **background scheduler still respects `synced: false`** (§5).
+7. **No silent no-ops.** A user-initiated sync does real work or reports an honest "nothing to sync,"
+   with truthful counts; a green success toast is never shown for a run that did nothing, and failures
+   surface (§6).
+8. Overlapping passes are **collapsed by a single in-flight guard**; the priority unit is always synced
+   by its trigger and never dropped by the guard (§3).
+
+<!--
+  PRIMARY / AUTHORITATIVE spec for the synchronization PROCESS. LOCKED across specs:
+  (§1) LFB knows EVERY repo automatically — retire "LFB-managed" as an opt-in gate; `synced` means
+       "opted in to IPFS pinning," and it gates BYTE WORK only, never visiting/reconciling.
+  (§2) Every sync is a FULL PASS over all known units; a repo-scoped trigger sets PRIORITY, not scope.
+  (§3) Priority = order only (priority unit first + awaited, remainder in background under an overlap guard).
+  (§4) Bounded-concurrency parallelism (cores-2) across units and across files; sequential is a defect.
+  (§5) Opt-in gates add/pin/fetch; a manual Sync now IS the opt-in.
+  (§6) Never a silent no-op — report truthfully with counts (the real defect this spec learned from).
+  storage.mdx §13, scan.mdx, one_repo.mdx §3, and sync_list.mdx §5 reference THIS file for the process
+  and must not redefine it. Keep code pointers (sync.service.ts syncAll/runPool/syncRepoFolder,
+  repos.router POST /:repoId/sync) in sync with reality.
+-->

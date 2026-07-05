@@ -13,7 +13,7 @@ import {
   updateRepoConfig,
 } from "../store-model/units.service.js";
 import { startScan, getScanJob } from "../scanner/scan-job.js";
-import { syncRepoFolder } from "../sync/sync.service.js";
+import { syncRepoFolder, syncAll } from "../sync/sync.service.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { requireAllowListed } from "../auth/identify.js";
 import { log } from "../../shared/logging.js";
@@ -155,9 +155,16 @@ reposRouter.post("/:repoId/sync", async (req, res) => {
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   const only = body.success && body.data.paths ? new Set(body.data.paths) : undefined;
   try {
+    // Sync THIS repo first as the priority unit (manual = explicit opt-in), then answer immediately so
+    // the button feels instant. A manual Sync now is still a FULL PASS: after responding we run the
+    // pass over every OTHER known unit in the background so it never blocks the response
+    // (sync_process.mdx §2/§3). `priorityDone` stops the pass re-syncing the repo we just did.
     await syncRepoFolder(folder, only, { manual: true });
     const detail = computeRepoDetail(folder, await ipfs.health());
     res.json({ ok: true, data: detail });
+    void syncAll({ priorityDone: folder }).catch((e) =>
+      log.error("repos", `full pass after manual sync of ${folder} failed: ${(e as Error).message}`),
+    );
   } catch (e) {
     log.error("repos", `${folder}: sync failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });
