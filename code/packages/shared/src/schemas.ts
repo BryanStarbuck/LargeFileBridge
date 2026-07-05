@@ -221,6 +221,10 @@ export const StorageUnitConfigSchema = z.object({
       root: z.string().default(""),
     })
     .default({}),
+  // The per-storage IPFS-pinning opt-in (sync_process.mdx §1 semantics, mirrored for storages). Default
+  // OFF — a storage is known & visited every pass, but its mapped-dir bytes are added/pinned/fetched only
+  // once the user opts in. Charter: never pin content without an explicit, user-confirmed action.
+  synced: z.boolean().default(false),
   lfbridge: z
     .object({
       enabled: z.boolean().default(true), // keep .lfbridge/ on this computer (default ON — §3)
@@ -248,7 +252,7 @@ export const ManifestFileSchema = z.object({
 });
 export const ManifestSchema = z.object({
   schema_version: z.number().default(1),
-  unit: z.enum(["repo", "computer"]).default("repo"),
+  unit: z.enum(["repo", "computer", "storage"]).default("repo"),
   generated_at: iso.optional(),
   files: z.array(ManifestFileSchema).default([]),
 });
