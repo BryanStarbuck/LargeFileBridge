@@ -26,7 +26,10 @@ Siblings this builds on and does not repeat:
   **Transcribe…**, the **directory/repo/storage** catalogs gain **Transcribe all files…** (§2).
 * [compression.mdx](./compression.mdx) — the sibling engine that drives a local media tool over a file
   (offer → confirm → run → report). Transcribe mirrors its shape (a `tools`/`file`/`batch` REST surface,
-  in-process `spawnSync` of a brew/pip binary).
+  in-process spawning of a brew/pip binary).
+* [webapp.mdx](./webapp.mdx) §10–§14 — the **progress dock** + in-process **job registry** every
+  long-running job routes through. A transcription run registers here (kind `transcribe`) so a live,
+  determinate card shows while Whisper runs (§5.1).
 
 ---
 
@@ -41,7 +44,8 @@ For one media file, transcription is:
    stream** writes a short "no audio to transcribe" placeholder instead of failing.
 3. **Transcribe** the audio with **Whisper** (`whisper --model base --language en`), preferring the
    Apple-Silicon **MPS** GPU with an automatic **CPU fallback** when MPS emits garbage (the sanity check
-   the copied engine already carries).
+   the copied engine already carries). Whisper is spawned **asynchronously** and its stdout is streamed
+   to derive a **determinate percentage** (segment end-timestamp ÷ media duration) — see §5.1.
 4. **Write the transcript** — a plain-text file with a small metadata header (source name, timestamp,
    model) — into the **parallel `.transcribe/` hierarchy** under the owning storage root (§3).
 5. **Report truthfully** — word count on success; an honest skip/error otherwise (never a silent
@@ -49,10 +53,12 @@ For one media file, transcription is:
    rule applies here too).
 
 Transcription is **always an explicit user action** — like compression, LFBridge **offers**, it never
-transcribes a file on its own.
+transcribes a file on its own. It is **local-only**: no account, API key, or Google Cloud credential is
+involved (§5.2).
 
-The per-file loop (classify → ffmpeg demux → whisper → write transcript → report) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `transcribeOne()`.
+The per-file loop (classify → ffmpeg demux → whisper → write transcript → report), wrapped in a
+progress-registry job so the dock shows a live card, is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `transcribeOne()` (async; wraps the run in `track("transcribe", …)` from `modules/progress/progress.registry.ts`).
 
 ---
 
@@ -64,12 +70,18 @@ serves all of them.
 ### 2.1 One file — the Media Viewer button
 
 Open an MP3 / MP4 (or any audio/video) in the **[Media Viewer](./media_viewer.mdx)**; its action bar
-(band 3) shows a **Transcribe…** button (for `kind` audio or video). Running it writes the transcript
-and toasts the word count; when a transcript already exists the button reads **Re-transcribe** and a
-**View transcript** link opens the `.txt` on the `/file` viewer.
+(band 3) shows a **Transcribe…** button (for `kind` audio or video), and the **Transcription** analysis
+tab (band 6) shows a **Generate transcript** pane. Clicking either flips the control to a disabled
+**Transcribing…** spinner **instantly** (the click never looks like a no-op — the defect this fix
+addressed), and a live **progress card** appears in the dock. On completion the transcript tab fills in
+and a toast reports the word count; when a transcript already exists the button reads **Re-transcribe**.
 
-The Media-Viewer Transcribe button (and the View-transcript link) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` (calls `api.transcribeFile` / `api.transcript`).
+When the local tools are missing, the Transcription tab shows a **setup card** with the exact install
+commands and a **Re-check** button that re-queries `GET /api/transcribe/tools` and re-enables the run
+once fixed — no page reload (§5.2).
+
+The instant pending state, the progress-dock nudge, and the setup card are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/useTranscribeFile.ts` — `useTranscribeFile()` (react-query mutation; toasts the honest outcome, invalidates `["transcript"]` + `["progress"]`) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` / `MediaAnalysis` (calls `api.transcribeFile` / `api.transcript`) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/TranscribeSetupCard.tsx` — `TranscribeSetupCard`.
 
 ### 2.2 One file — the ⋮ kebab / right-click
 
@@ -189,18 +201,62 @@ The transcription engine is our existing **`Transcribe.js`** tool (canonically
   structured result back. This is the same discipline as
   [compression.mdx](./compression.mdx): drive the local media binary from inside the Node process.
 
-* **It still drives the local `whisper` and `ffmpeg` binaries** via `spawnSync` — those are the actual
+* **It still drives the local `whisper` and `ffmpeg` binaries** — those are the actual
   transcription/demux tools (Whisper is a Python CLI). "In-process" means *we don't shell out to our own
   Node script*; invoking the underlying `whisper`/`ffmpeg` executables is expected and mirrors how
   `compression.service.ts` invokes `ffmpeg`/`magick`.
 * **Entirely local — no network.** Whisper runs on-machine; nothing about the media or the transcript
   leaves the computer (charter alignment: only-our-content, no phone-home).
 * **Tools may be missing.** If `whisper` or `ffmpeg` is not installed, the engine returns a clear
-  `toolMissing` result with the install hint (`pipx install openai-whisper`, `brew install ffmpeg`) —
+  `tool_missing` result with the install hint (`pipx install openai-whisper`, `brew install ffmpeg`) —
   it does **not** silently no-op and does **not** auto-install behind a web request.
 
 The copied in-process engine (ffmpeg demux + Whisper with the MPS→CPU fallback and English sanity check, returning a structured result instead of logging/exiting) lives in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — class `Transcriber`, methods `toolStatus()` / `transcribeToFile()`.
+
+### 5.1 Async & non-blocking — the "Generate transcript didn't work" fix (LOCKED)
+
+The standalone `Transcribe.js` uses `spawnSync`/`execSync`. Copied verbatim that would be a **defect in a
+web server**: `spawnSync` **blocks the Node event loop for the entire Whisper run**. On a 6-minute video
+that froze the whole API — `GET /api/health` and `GET /api/progress` stopped responding, the open
+`POST /api/transcribe/file` request looked dead, and the button appeared to "do nothing." This was the
+reported bug.
+
+The in-process engine therefore spawns **every** child process (`ffprobe`, `ffmpeg`, `whisper`)
+**asynchronously** (`child_process.spawn`, awaited) so the event loop stays free to serve other requests
+while a transcription runs. Two behaviours ride on that:
+
+* **Determinate progress.** Whisper streams each decoded segment to stdout as `[start --> end]`; the
+  engine parses the **end timestamp** and divides by the media **duration** (from `ffprobe`) to emit a
+  0–1 fraction. `transcribeOne()` maps that to a `{ done, total: 100, unit: "%" }` update on its
+  progress-registry job, so the dock card fills a real bar. When duration is unreadable the card stays a
+  spinner rather than lying.
+* **Cross-tab visibility.** Because the run registers in the server-side job registry, the dock card
+  shows even in a browser tab that did **not** start it (a launchd tree run, another window).
+
+The async spawn (with the streamed stdout progress parse and the duration probe) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — class `Transcriber`, private `spawnAsync()` / `runWhisper()` / `probeDurationSec()` / `parseSegmentEndSec()` (the public `transcribeToFile()` takes an `onProgress` sink).
+
+### 5.2 No credentials, no cloud — the setup card (LOCKED)
+
+Transcription needs **no Google Cloud credential, API key, or account of any kind** — it is *local
+Whisper*. (The only credential file LFBridge reads, `~/.credentials/large_files_bridge.json`, is for
+Google **OAuth sign-in** and the AI-**description** Gemini path — see
+[security.mdx](./security.mdx) / [ai_description.mdx](./ai_description.mdx) — and is unrelated to
+transcription.) The repo therefore ships **no credentials file for transcription**, and the copied
+engine directory contains only the code.
+
+What *can* be missing is the two free binaries. When `GET /api/transcribe/tools` reports `whisper` (or
+`ffmpeg` for video) absent, the Transcription tab renders a **setup card** that mirrors the
+credentials-setup pattern used elsewhere: it names each tool, its status, the exact install command
+(`pipx install openai-whisper`, `brew install ffmpeg`), and a **Re-check** button. Pressing Re-check
+re-queries the tools endpoint; once the tool appears the run is re-enabled **without a page reload** —
+the "fix it, then hit the button to run again" flow the product owner asked for.
+
+The setup card + Re-check are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/TranscribeSetupCard.tsx` — `TranscribeSetupCard` (Re-check calls the `["transcribe-tools"]` query's `refetch`). The full install
+preflight also lists these under **Settings → Tools**
+(`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/ToolsPage.tsx`).
 
 ---
 
@@ -220,10 +276,15 @@ Allow-list-gated like every data route, mirroring `compression.router.ts`:
 The transcription REST surface (tools / read-transcript / file / batch / tree / storage) is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.router.ts` — `transcribeRouter`, mounted at `/api/transcribe` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts`.
 
-> **Long-running note.** Whisper is slow (minutes per file). Like `compressBatch`, the tree/storage
-> endpoints run **synchronously** per file through the engine for the first implementation; a future
-> enhancement is a background job queue with progress. Each file reports its own result so a tree run
-> returns honest per-file counts (transcribed / skipped / failed).
+> **Long-running note.** Whisper is slow (minutes per file), so the request can stay open for a while —
+> but the engine is **async and non-blocking** (§5.1), so a slow run no longer freezes the server, and
+> every run registers a **progress-registry job** (kind `transcribe`) that the dock surfaces via
+> `GET /api/progress`. A single-file run reports a **determinate %**; a tree/storage run reports one
+> card per file as it works through the set. Each file still reports its own result, so a tree run
+> returns honest per-file counts (transcribed / skipped / failed). The progress registry + the dock are
+> specified in [webapp.mdx](./webapp.mdx) §10–§14 (code: `modules/progress/progress.registry.ts`,
+> `modules/progress/progress.router.ts`, and the frontend `progress/ProgressContext.tsx` /
+> `components/ProgressDock.tsx`).
 
 ---
 
@@ -248,6 +309,13 @@ The transcription REST surface (tools / read-transcript / file / batch / tree / 
    no-op, no auto-install behind a request); every run **reports truthfully** (word count on success,
    honest skip/error otherwise).
 7. Transcription is **always an explicit user action** — LFBridge offers, never transcribes on its own.
+8. The engine is **async / non-blocking**: a running transcription never freezes the API (health &
+   progress keep responding), the button flips to a **Transcribing…** pending state the instant it's
+   clicked, and a **live progress card** (determinate % for one file) shows in the dock — including for a
+   run this tab did not start.
+9. Transcription needs **no credentials and no cloud** (local Whisper); the repo ships **no transcription
+   credentials file**. When the local binaries are missing, a **setup card** shows the install commands
+   and a **Re-check** button that re-enables the run once fixed, **without a page reload**.
 
 <!--
   Transcribe = audio+video → plain-text transcript. LOCKED:
@@ -258,13 +326,20 @@ The transcription REST surface (tools / read-transcript / file / batch / tree / 
        transcript.yaml sketch for transcripts.
   (§5) engine = our Transcribe.js COPIED into code/packages/backend/src/tools/transcribe/Transcribe.ts as
        a TS class, called IN-PROCESS (no `node Transcribe.js`, no reuse of ACT3-internal copy). Still
-       spawns local whisper+ffmpeg; entirely on-machine, no network. Missing tools → clear toolMissing.
-  (§2) entry points: MediaViewer button, file ⋮ Transcribe…, batch, dir/repo/storage "Transcribe all
-       files…". Always explicit user action (like compression.mdx).
-  Code pointers: transcribe.service.ts (transcribeOne/transcribeTree/resolveStorageRoot/resolveTranscriptPath),
-  transcribe.router.ts (/api/transcribe tools|file|batch|tree|storage), tools/transcribe/Transcribe.ts
-  (Transcriber.transcribeToFile), MediaViewer ActionBar, EntityMenu buildActions, RowKebabs RepoKebab,
-  StorageDetailPage. Mirrors compression.mdx's engine+router shape. Keep in sync with media_viewer.mdx §4
-  (action bar) and menus.mdx §5 (add Transcribe to the file + dir catalogs).
+       spawns local whisper+ffmpeg; entirely on-machine, no network. Missing tools → clear tool_missing.
+  (§5.1) ASYNC/non-blocking is LOCKED: use child_process.spawn (awaited), NOT spawnSync — spawnSync froze
+       the whole server for the whole Whisper run (the "Generate transcript didn't work" bug). Stream
+       whisper stdout `[start --> end]` ÷ ffprobe duration → determinate % on a track("transcribe",…) job.
+  (§5.2) NO credentials / NO cloud — local Whisper only. large_files_bridge.json is OAuth+Gemini, NOT
+       transcription. Missing binaries → TranscribeSetupCard with install cmds + Re-check (refetch tools).
+  (§2) entry points: MediaViewer button + Transcription tab (instant Transcribing… pending), file ⋮
+       Transcribe…, batch, dir/repo/storage "Transcribe all files…". Always explicit user action.
+  Code pointers: transcribe.service.ts (async transcribeOne/transcribeTree; wraps track() from
+  progress.registry.ts), transcribe.router.ts (async /api/transcribe tools|file|batch|tree|storage),
+  tools/transcribe/Transcribe.ts (Transcriber.transcribeToFile + spawnAsync/runWhisper/probeDurationSec/
+  parseSegmentEndSec), frontend lib/useTranscribeFile.ts (pending+toast+progress invalidation),
+  components/TranscribeSetupCard.tsx (setup+Re-check), MediaViewer ActionBar/MediaAnalysis, EntityMenu
+  buildActions, RowKebabs RepoKebab, StorageDetailPage. Mirrors compression.mdx's engine+router shape.
+  Keep in sync with media_viewer.mdx §4/§6, menus.mdx §5, and webapp.mdx §10–§14 (progress dock/registry).
 -->
 </content>

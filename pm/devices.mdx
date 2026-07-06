@@ -232,22 +232,85 @@ filter icon + a single sort icon above it, click-a-header to sort, 500/page, ful
 renders beneath it). The table answers, at a glance, **"which of my computers hold my files, which one
 am I on, and how do I tell the similar ones apart?"**
 
-**Columns (in order):**
+### 6.1 Columns (LOCKED)
+
+The table is deliberately **lean** — five columns, no per-spec column for every hardware fact. The
+machine facts that would each be their own column (model, year, screen, disk, RAM) are **rolled into
+the Device cell** as a descriptor line (§6.2) instead of eating table width; the full fingerprint is a
+click away on the View-one-device page (§6.5).
 
 | Column | Source | Notes |
 | --- | --- | --- |
-| **Device** | disambiguated display label (§8) | The nice name, plus any suffix needed to tell it from a similar machine (`bryan-macbook-pro (14-inch)`). A **"This computer"** chip marks the self row. |
+| **Device** | disambiguated display label (§8) **+ descriptor** (§6.2) | The nice name, plus any suffix needed to tell it from a similar machine (`bryan-macbook-pro (14-inch)`), with a small descriptor line beneath it (model · screen · chip · RAM · disk). A **"This computer"** chip marks the self row. |
 | **Kind** | `hardware.kind` | laptop / desktop / server icon + label. |
-| **Model** | `hardware.marketing_name` \|\| `model_name` | e.g. *MacBook Pro (14-inch, 2023)*. |
-| **Year** | `hardware.year` | Mac model year; blank if unknown. |
-| **Screen** | `hardware.screen_inches` | `14″` / `16″`; blank on a headless server. |
-| **Disk** | `hardware.disk_total_gb` | total volume size (bytes-formatted). |
-| **RAM** | `hardware.ram_gb` | installed memory. |
-| **Owner** | `device.owner` | the allow-listed Google email (§storage_company). |
-| **IPFS Peer ID** | `device.ipfs_peer_id` | truncated `code`; for peer dialing. |
+| **Owner** | `hardware.username` \|\| `device.owner` | the **logged-in OS username** of that computer (§6.3) — for the self row, whoever is signed in here — not an email. |
+| **IPFS Peer ID** | `device.ipfs_peer_id` | truncated to **first 8 `…` last 8** chars in a narrow, fixed-width column; **click to copy** the full id (§6.4). |
 | **Last seen** | recency | health-coloured (green < 24h, amber < 7d, neutral older / never). |
 
-**Self always present, never an empty table.** The page **auto-seeds this computer** (§9): the row set
+**Removed columns.** Model, Year, Screen, Disk, and RAM are **no longer their own columns** — they
+crowded the table and forced the page narrow. Their information now lives in the **Device descriptor**
+(§6.2) and, in full, on the **View-one-device page** (§6.5).
+
+**Fixed-width columns + a wider page.** Each column declares a fixed width so it is **wide enough** and
+never squeezed (Device is the widest to hold the name + descriptor; IPFS Peer ID is narrow because it
+is truncated). The `/devices` route also runs **full-width** (no `max-w-6xl` gutter) so the columns
+have room to breathe.
+
+### 6.2 The Device cell — name + a rolled-up descriptor (LOCKED)
+
+Because the hardware columns are gone (§6.1), the **Device** cell carries two lines:
+
+* **Line 1** — the disambiguated **display label** (§8): the nice name plus only the suffix needed to
+  tell it from a colliding twin, and the **"This computer"** chip on the self row.
+* **Line 2** — a compact **descriptor**: the salient machine facts in order — **model · screen · chip ·
+  RAM · disk** — skipping any that are unknown (so a bare peers-only row shows just the name). This is
+  what "roll a few more pieces into the device name" means: the model/screen/chip/RAM/disk that used to
+  be their own columns are now shown right under the name.
+
+Building the descriptor is **pure logic** shared so the backend, the table, and the View-one-device page all agree:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/device-naming.ts` — `deviceDescriptor(hardware)` (returns the ordered, unknown-skipping fact list); rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` — `DevicesPage` (the two-line Device cell).
+
+### 6.3 Owner = the logged-in OS user (LOCKED)
+
+**Owner is the OS username**, not the allow-listed email. It comes from the hardware fingerprint's
+`username` (`os.userInfo().username`, §7) — for the self row, that is exactly *who is signed in to this
+computer right now*. It falls back to `device.owner` (the allow-listed email) only when the username is
+unknown (a bare peers-only row with no fingerprint).
+
+Sourcing the self row's owner from the fingerprint username is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `deviceRows()` (self row `owner = hardware.username`); the column's fallback (`hardware.username || owner`) is in `DevicesPage.tsx`.
+
+### 6.4 IPFS Peer ID — truncated + click-to-copy (LOCKED)
+
+A full Peer ID is far too long for a column and would fix the whole page wide. It is shown as its
+**first 8 characters `…` last 8 characters** — enough to recognise both ends — in a **narrow,
+fixed-width** column. **Clicking the cell copies the full id to the clipboard** (with a toast); the
+click is stopped from also opening the row.
+
+The truncation helper is `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/format.ts` — `truncatePeerId(id)`; the click-to-copy cell is in `DevicesPage.tsx` — `DevicesPage` (`copyPeerId`).
+
+### 6.5 Row click → View one device (LOCKED)
+
+**Clicking a row opens that computer's own page** (`/device/$deviceId`) — the "View one device"
+experience. It gathers everything the lean table can't fit and every action you can take on that
+device:
+
+* **Full identity** — the nice name, the **device id** (copyable), the **owner** (OS user), the **IPFS
+  Peer ID** (copyable in full), the row's **source** (this computer / peers list / storage registry),
+  how many **storages** carry it, and **last seen** (absolute time).
+* **The complete hardware fingerprint** (§7) — kind, model, year, screen, disk, RAM, chip, CPU cores,
+  architecture, platform, hostname, home directory, model identifier. A bare peers-only row (no
+  fingerprint yet) explains that it fills in once that computer writes itself into a synced storage.
+* **Actions** — **Copy Peer ID**, **Open in File System** (the device's home dir; enabled only for the
+  self row, since another computer's paths aren't local here), and — for a `peers.yaml`-sourced device —
+  **Remove peer** (forgets it from `peers.yaml`; touches no remote content and no local bytes, per
+  [menus.mdx §5.4](./menus.mdx)).
+
+The page is `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/ViewOneDevicePage.tsx` — `ViewOneDevicePage`, routed at `/device/$deviceId` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/router.tsx`. It reads one device by id from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/peers/devices.router.ts` — `GET /api/devices/:id`, backed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `deviceRow(id)` (built on `deviceRows()` so it shows the same disambiguated label + union).
+
+### 6.6 Self always present, never an empty table
+
+The page **auto-seeds this computer** (§9): the row set
 is the union of *this device* (always injected from `config.yaml → computer` + the fingerprint) with the
 machine-local `peers.yaml` and the travelling `devices/*.yaml` registries across every storage, keyed by
 device **id**. If the user has only ever run LFB on one machine, the table still shows exactly one row —
@@ -255,7 +318,12 @@ device **id**. If the user has only ever run LFB on one machine, the table still
 "no devices" state.
 
 Aggregating the device rows the page shows — inject self from config, union `peers.yaml` and each storage's `devices/` registry by id, and disambiguate — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `deviceRows()` (self-seed + union), served by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/peers/peers.router.ts` — `GET /api/devices`. The table itself is `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` — `DevicesPage` (the disambiguated **Device** column comes from `disambiguateDevices()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/device-naming.ts`).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `deviceRows()` (self-seed + union), served by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/peers/devices.router.ts` — `GET /api/devices`. The table itself is `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` — `DevicesPage` (the disambiguated **Device** column comes from `disambiguateDevices()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/device-naming.ts`).
+
+### 6.7 Every table is a TanStack table (charter)
+
+Per the charter (*"All tables are TanStack tables. No exceptions."*) every table in the repo is built on
+`@tanstack/react-table`: the shared house table `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (used by Devices, Repos, Storages, Communities, IPFS, and the directory view) and the one bespoke instance `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (its own `useReactTable` for the streamed flat walk). The Devices table's fixed-width columns use the `width` field on `LfbColumn` (`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts`), which makes `DataTable` emit a `<colgroup>` + `table-fixed` layout.
 
 ---
 
@@ -378,9 +446,14 @@ name / fingerprint to every other computer's Devices / Peers table.
    sync pass **fetches marked CIDs to the grafted local path**, never to the writer's path (§4).
 5. The travelling **device registry** and the machine-local **`peers.yaml`** are kept distinct and
    cross-reference by **device id** (§5).
-6. The **Devices / Peers** page (`/devices`) renders a **TanStack table** (search + filter + sort icons,
-   header-click sort, 500/page, full-page-height) with the identity columns — Device, Kind, Model, Year,
-   Screen, Disk, RAM, Owner, IPFS Peer ID, Last seen — and marks the self row **"This computer"** (§6).
+6. The **Devices / Peers** page (`/devices`) renders a **full-width TanStack table** (search + filter +
+   sort icons, header-click sort, 500/page, full-page-height) with **fixed-width** columns — **Device,
+   Kind, Owner, IPFS Peer ID, Last seen** — and marks the self row **"This computer"** (§6.1). The
+   Model/Year/Screen/Disk/RAM columns are **removed**; those facts are rolled into the **Device
+   descriptor** line (§6.2). **Owner** shows the **logged-in OS username** (§6.3). The **IPFS Peer ID**
+   is shown **first-8 `…` last-8** and **copies in full on click** (§6.4). **Clicking a row** opens the
+   **View-one-device** page (`/device/$deviceId`) with the full identity, the complete hardware
+   fingerprint, and per-device actions (§6.5). Every table in the repo is a **TanStack** table (§6.7).
 7. Every device records a **hardware fingerprint** collected **entirely locally, no networking** — Mac
    model/year, screen size, disk, RAM, chip, and logged-in **username / home_dir** — persisted to
    `config.yaml → computer.hardware` and copied into each `devices/<device>.yaml` (§7).
@@ -404,8 +477,12 @@ name / fingerprint to every other computer's Devices / Peers table.
   machine-independent identity (mapped-dir key from syncable_data_location §3 + relpath) onto THIS
   computer's absolute paths; wanted:false/local_path:null = known-but-absent; the sync pass fetches CIDs
   to the grafted path (never the writer's canonical path, per sync_list §4). §5 device registry (travels)
-  vs peers.yaml (machine-local) — cross-ref by device id. §6 the Devices/Peers PAGE = a TanStack table
-  (identity columns; self row tagged "This computer"); deviceRows() unions self+peers+registry. §7 the
+  vs peers.yaml (machine-local) — cross-ref by device id. §6 the Devices/Peers PAGE = a full-width,
+  fixed-width TanStack table with a LEAN column set — Device (name+disambiguation+a rolled-up descriptor
+  of model/screen/chip/RAM/disk, §6.2), Kind, Owner (=OS username, §6.3), IPFS Peer ID (8…8 truncated +
+  click-to-copy, §6.4), Last seen; Model/Year/Screen/Disk/RAM columns REMOVED. A row click opens View-
+  one-device /device/$deviceId (full identity + fingerprint + actions, §6.5, GET /api/devices/:id →
+  deviceRow()). Every table in the repo is TanStack (§6.7). deviceRows() unions self+peers+registry. §7 the
   HARDWARE FINGERPRINT collected LOCALLY (no network) via os/fs + guarded sysctl/system_profiler + a
   model table (hardware-models.ts). §8 auto-name <username>-<model-slug> + DISAMBIGUATE by only the
   differing attrs, priority screen>year>disk>ram>chip>hostname (device-naming.ts). §9 auto-seed: never an
