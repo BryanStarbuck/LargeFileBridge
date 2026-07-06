@@ -176,7 +176,9 @@ export async function describeOne(
   const adapter = selectAdapter(kind, opts.provider);
   if (!adapter) {
     const need = kind === "video" ? "Gemini (only Gemini describes video)" : "Gemini, Grok, or OpenAI";
-    return result(abs, "no_provider", null, null, `no AI provider configured for ${kind} — add an API key for ${need}`);
+    const reason = `no AI provider configured for ${kind} — add an API key for ${need}`;
+    log.error("describe", `describe skipped for ${abs}: ${reason}`);
+    return result(abs, "no_provider", null, null, reason);
   }
 
   try {
@@ -212,7 +214,9 @@ export async function describeOne(
     log.info("describe", `${abs} → ${descriptionPath} (${adapter.id}/${model}, ${text.length} chars)`);
     return result(abs, "described", descriptionPath, model, null);
   } catch (e) {
-    log.error("describe", `describe failed for ${abs}: ${(e as Error).message}`);
-    return result(abs, "failed", null, null, (e as Error).message);
+    const msg = (e as Error).message;
+    // The complete fault trail lands in error.err (shared/logging.ts writes WARN/ERROR/FATAL there).
+    log.error("describe", `describe failed for ${abs} [provider=${adapter.id}, kind=${kind}]: ${msg}`);
+    return result(abs, "failed", null, null, msg);
   }
 }

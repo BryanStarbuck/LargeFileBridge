@@ -13,6 +13,7 @@ import path from "node:path";
 import type { MediaKind, DescribeProvider } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import { loadGoogleApiKey, hasGoogleApiKeyFile } from "../../config/google-apikey-file.js";
+import { DEFAULT_GEMINI_MODEL, DEFAULT_GROK_MODEL, DEFAULT_OPENAI_MODEL, looksLikeModelRetired } from "./models.js";
 
 export type ProviderId = "gemini" | "grok" | "openai";
 
@@ -53,6 +54,21 @@ function readBase64Capped(absPath: string): string {
     );
   }
   return fs.readFileSync(absPath).toString("base64");
+}
+
+/** Rewrite a provider's raw HTTP error into an actionable one when it looks like the configured model was
+ *  retired/unknown (a 404 / "no longer available" / NOT_FOUND). Names the bad model and the current
+ *  recommended default so the user can fix it in Settings → AI. Otherwise returns the error unchanged. */
+function explainModelError(e: Error, model: string, provider: string): Error {
+  const msg = e?.message ?? String(e);
+  if (looksLikeModelRetired(msg)) {
+    const recommended = provider === "Gemini" ? DEFAULT_GEMINI_MODEL : provider === "OpenAI" ? DEFAULT_OPENAI_MODEL : DEFAULT_GROK_MODEL;
+    return new Error(
+      `${provider} model "${model}" is not available — the provider may have retired it. ` +
+        `Update the model in Settings → AI (recommended: ${recommended}). Original error: ${msg}`,
+    );
+  }
+  return e;
 }
 
 /** fetch with a hard timeout so a hung provider call can't wedge the request forever. */
@@ -101,16 +117,23 @@ const gemini: DescribeAdapter = {
   async describe({ absPath, mimeType, prompt }) {
     const key = this.apiKey();
     if (!key) throw new Error("no Gemini API key");
-    const model = getAppConfig().ai.gemini.model || "gemini-2.0-flash";
+    const model = getAppConfig().ai.gemini.model || DEFAULT_GEMINI_MODEL;
     const data = readBase64Capped(absPath);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
     const body = {
       contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: mimeType, data } }] }],
     };
-    const json = (await postJson(url, body, {})) as {
+    let json: {
       candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
       promptFeedback?: { blockReason?: string };
     };
+    try {
+      json = (await postJson(url, body, {})) as typeof json;
+    } catch (e) {
+      // Turn Google's raw 404 ("... is no longer available ... NOT_FOUND") into an actionable message
+      // that names the retired model and the current recommended one (ai_description.mdx §5.1).
+      throw explainModelError(e as Error, model, "Gemini");
+    }
     if (json.promptFeedback?.blockReason) throw new Error(`Gemini blocked the request: ${json.promptFeedback.blockReason}`);
     const text = (json.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? "").join("").trim();
     if (!text) throw new Error("Gemini returned no description");
@@ -152,9 +175,12 @@ function chatVisionAdapter(cfg: {
           },
         ],
       };
-      const json = (await postJson(cfg.endpoint, body, { authorization: `Bearer ${key}` })) as {
-        choices?: Array<{ message?: { content?: string } }>;
-      };
+      let json: { choices?: Array<{ message?: { content?: string } }> };
+      try {
+        json = (await postJson(cfg.endpoint, body, { authorization: `Bearer ${key}` })) as typeof json;
+      } catch (e) {
+        throw explainModelError(e as Error, model, cfg.label);
+      }
       const text = (json.choices?.[0]?.message?.content ?? "").trim();
       if (!text) throw new Error(`${cfg.label} returned no description`);
       return { text, model };
@@ -168,7 +194,7 @@ const grok = chatVisionAdapter({
   endpoint: "https://api.x.ai/v1/chat/completions",
   envNames: ["XAI_API_KEY", "GROK_API_KEY"],
   key: () => getAppConfig().ai.grok.api_key || firstEnv("XAI_API_KEY", "GROK_API_KEY"),
-  model: () => getAppConfig().ai.grok.model || "grok-2-vision-1212",
+  model: () => getAppConfig().ai.grok.model || DEFAULT_GROK_MODEL,
 });
 
 const openai = chatVisionAdapter({
@@ -177,7 +203,7 @@ const openai = chatVisionAdapter({
   endpoint: "https://api.openai.com/v1/chat/completions",
   envNames: ["OPENAI_API_KEY"],
   key: () => getAppConfig().ai.openai.api_key || firstEnv("OPENAI_API_KEY"),
-  model: () => getAppConfig().ai.openai.model || "gpt-4o",
+  model: () => getAppConfig().ai.openai.model || DEFAULT_OPENAI_MODEL,
 });
 
 // Preference order: Gemini first (only one that covers video), then OpenAI, then Grok.

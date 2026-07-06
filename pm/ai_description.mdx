@@ -43,7 +43,7 @@ At the bottom of the media viewer (band 6) sits an analysis panel with up to **t
 ┌──────────────────────────────────────────────────────────────┐
 │  [✓ Transcription]   [✓ AI description]                       │  ← tab strip; ✓ = content exists
 ├──────────────────────────────────────────────────────────────┤
-│  AI description · gemini-2.0-flash · 2h ago      [⟳ Regenerate]│
+│  AI description · gemini-3.5-flash · 2h ago      [⟳ Regenerate]│
 │  ┌──────────────────────────────────────────────────────────┐ │
 │  │ ## Overview                                              │ │
 │  │ A wide establishing shot of a rain-slicked city street…  │ │
@@ -98,7 +98,7 @@ in place to a **done** record:
 ```yaml
 source: render/skyline.mp4
 status: done
-engine: gemini-2.0-flash          # the exact model id used
+engine: gemini-3.5-flash          # the exact model id used
 provider: gemini                  # the adapter id
 generated: 2026-07-05T09:41:00Z   # ISO timestamp
 kind: video                       # image | video
@@ -136,7 +136,7 @@ media kind**. Preference order is **Gemini → OpenAI → Grok**.
 
 | Adapter | Provider | Image | Video | Endpoint / model | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `gemini` | Google Gemini | ✓ | **✓** | `generativelanguage.googleapis.com/v1beta/models/<model>:generateContent`, default `gemini-2.0-flash` | The **only** adapter that describes **video** (inline `inline_data` base64). |
+| `gemini` | Google Gemini | ✓ | **✓** | `generativelanguage.googleapis.com/v1beta/models/<model>:generateContent`, default `gemini-3.5-flash` | The **only** adapter that describes **video** (inline `inline_data` base64). |
 | `openai` | OpenAI | ✓ | — | `api.openai.com/v1/chat/completions`, default `gpt-4o` | OpenAI-compatible chat/vision; `image_url` data URI. |
 | `grok` | xAI Grok | ✓ | — | `api.x.ai/v1/chat/completions`, default `grok-2-vision-1212` | OpenAI-compatible chat/vision; images only. |
 
@@ -218,6 +218,34 @@ The adapter set, per-kind support, key resolution (config → env), `selectAdapt
 
 The provider config schema (`provider` default `"auto"`; each of gemini/grok/openai `{ api_key, model }`) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — the `ai` block of `AppConfigSchema`.
+
+### 3.4 Model lifecycle & deprecation self-heal (LOCKED)
+
+Providers **retire** older model versions on a schedule. Google hard-retired `gemini-2.0-flash` on
+**2026-06-01**; after that date `generateContent` returns **`404 NOT_FOUND … is no longer available`** and
+a config still **pinned** to that id can NEVER succeed. The current GA default is **`gemini-3.5-flash`**
+(image + video, the model behind Google's `gemini-flash-latest` alias). Two mechanisms keep the feature
+working across these retirements so the user does not have to notice:
+
+* **Auto-heal on load.** When `config.yaml` has a Gemini model in the **retired set**, the config loader
+  rewrites it to the current default and persists it — so an old machine's stale pin (`gemini-2.0-flash`)
+  silently upgrades itself the next time the app reads config. A **valid custom** model the user chose is
+  left untouched (only known-dead ids are rewritten).
+* **Actionable error, not a raw 404.** If a call still fails on a retired/unknown model (e.g. a hand-typed
+  bad id not in the retired set), the raw Google 404 is rewritten into a message that **names the bad
+  model and the recommended one**: *"Gemini model "X" is not available — the provider may have retired it.
+  Update the model in Settings → AI (recommended: gemini-3.5-flash)."* That message is what the viewer
+  shows and what lands in **`error.err`** (§8).
+
+The single source of truth for the current default + the retired-model set (so the adapter and the config
+loader agree) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/models.ts` — `DEFAULT_GEMINI_MODEL`, `RETIRED_GEMINI_MODELS`, `looksLikeModelRetired()`.
+
+The auto-heal of a pinned retired model on config load is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()` (rewrites `ai.gemini.model` when it is in `RETIRED_GEMINI_MODELS`).
+
+Rewriting a provider 404 into the actionable, model-naming error is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `explainModelError()` (applied around every provider `postJson()` call in `gemini.describe()` and `chatVisionAdapter.describe()`).
 
 ---
 
@@ -366,7 +394,13 @@ The adapter module is annotated as the one deliberate outbound path, and the upl
   file genuinely can't be squeezed under the cap.
 * **Provider error / block / timeout** — a provider HTTP error, a Gemini safety block, non-JSON, or a
   120s timeout comes back as **`failed`** with the reason, surfaced in the toast; the existing description
-  (if any) is untouched.
+  (if any) is untouched. A **retired/unknown model** 404 is rewritten into an actionable reason that names
+  the bad model and the recommended one (§3.4). **Every failure is written to `error.err`** — the app's
+  fault trail at `<stateDir>/error.err` (WARN/ERROR/FATAL), tagged `[describe]` with the file,
+  `provider=`, and `kind=` for diagnosis. Logged by `describeOne()`'s `catch` via `log.error` in
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts`;
+  the two rolling logs (`log.log` all-levels, `error.err` faults) are written by
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts`.
 * **Already described** — without `overwrite`, a second generate returns **`skipped` ("already
   described")**; **Regenerate** passes `overwrite` to replace it.
 

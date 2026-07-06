@@ -118,7 +118,9 @@ export const AppConfigSchema = z.object({
       gemini: z
         .object({
           api_key: z.string().nullable().default(null),
-          model: z.string().default("gemini-2.0-flash"),
+          // Current GA Gemini Flash (image + video). Kept in sync with DEFAULT_GEMINI_MODEL in
+          // backend describe/models.ts; retired ids are auto-healed on load (ai_description.mdx §5.1).
+          model: z.string().default("gemini-3.5-flash"),
         })
         .default({}),
       grok: z

@@ -819,7 +819,7 @@ export interface DescribeView {
   mediaPath: string;
   descriptionPath: string; // the description.yaml under <storageRoot>/.lfbridge/analysis/<rel>/
   text: string; // the human-readable description body
-  model: string | null; // the exact model id used (e.g. "gemini-2.0-flash")
+  model: string | null; // the exact model id used (e.g. "gemini-3.5-flash")
   generatedAt: string | null; // ISO
 }
 // The result of generating one description (POST /api/describe/file). Reports truthfully per file.

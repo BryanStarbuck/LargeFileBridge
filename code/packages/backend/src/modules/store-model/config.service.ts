@@ -5,6 +5,7 @@ import { AppConfigSchema, type AppConfig, type FileFlags, defaultDeviceName } fr
 import { readYaml, writeYaml, updateYaml } from "../../shared/store/yaml-store.js";
 import { appConfigPath } from "../../shared/store/scopes.js";
 import { collectHardware } from "../storage/hardware.service.js";
+import { RETIRED_GEMINI_MODELS, DEFAULT_GEMINI_MODEL } from "../describe/models.js";
 
 export function getAppConfig(): AppConfig {
   const cfg = readYaml(appConfigPath(), AppConfigSchema);
@@ -43,6 +44,14 @@ export function getAppConfig(): AppConfig {
       cfg.computer.label = name;
       dirty = true;
     }
+  }
+  // Heal a Gemini model that Google has since RETIRED. A config pinned to a retired id (e.g.
+  // gemini-2.0-flash) returns 404 forever, so upgrade it to the current default on load — this is what
+  // makes the "Generate Description" failure self-repair without the user touching Settings
+  // (ai_description.mdx §5.1). Only rewrites known-dead ids; a valid custom model is left untouched.
+  if (RETIRED_GEMINI_MODELS.has(cfg.ai.gemini.model)) {
+    cfg.ai.gemini.model = DEFAULT_GEMINI_MODEL;
+    dirty = true;
   }
   if (dirty) {
     try {
