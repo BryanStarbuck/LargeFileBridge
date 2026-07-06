@@ -322,6 +322,39 @@ re-provide, or serve other people's content through the local computer.**
 
 ---
 
+## 11. Running the daemon across reboots (auto-start)
+
+A Kubo node only does anything while its **daemon** (`ipfs daemon`) is running. After a machine reboot,
+nothing restarts it on its own — so files silently stop syncing until someone turns it back on. LFB
+solves this by registering the daemon with the OS init/login system.
+
+* **macOS — a per-user launchd LaunchAgent.** A plist at `~/Library/LaunchAgents/` (LFB uses the label
+  `com.largefilebridge.ipfs`) whose `ProgramArguments` run the **absolute** `ipfs daemon --enable-gc`.
+  It is a *LaunchAgent* (runs in the user's login session), not a system-wide *LaunchDaemon* — no root,
+  no serving to the whole machine.
+  * **`RunAtLoad = true`** → launchd starts it when the agent loads (at login / boot).
+  * **`KeepAlive = false`** (deliberate) → launchd does **not** relaunch it every time it exits. This is
+    what lets a **deliberate stop** (the app's Off toggle / `ipfs shutdown`) actually stay stopped. With
+    `KeepAlive = true`, launchd would immediately restart a daemon the user just asked to turn off. The
+    node still comes back at the **next** login/reboot — which is the whole promise.
+  * **Absolute binary + explicit PATH.** launchd has no login-shell PATH, so the plist must point at the
+    resolved absolute `ipfs` path and set a PATH covering Homebrew (`/opt/homebrew/bin`,
+    `/usr/local/bin`) and the system.
+  * Load/unload with `launchctl bootstrap gui/<uid> <plist>` / `launchctl bootout gui/<uid>/<label>`;
+    `launchctl print gui/<uid>/<label>` tells you whether it's currently loaded (i.e. *will* run at the
+    next boot).
+* **Windows / Linux** have equivalents (Task Scheduler at logon; a systemd **user** service with
+  `WantedBy=default.target`), but LFB automates **macOS today** and reports `supported:false` elsewhere.
+* **Security is unchanged by auto-start.** Auto-start only changes **when** the daemon runs; it runs the
+  same `--enable-gc` and is brought to only-our-content compliance (§6) on start. It does **not** turn
+  the machine into a gateway or change reprovide strategy.
+
+This is a **default-off** capability the user opts into (LFB never installs the LaunchAgent without an
+explicit click) — see [pm/ipfs_ui.mdx §12–§13](../pm/ipfs_ui.mdx) for the UI and
+`code/packages/backend/src/modules/ipfs/ipfs-autostart.service.ts` for the implementation.
+
+---
+
 ## Sources
 
 Gathered from the official IPFS / Kubo / IPFS-Cluster documentation:

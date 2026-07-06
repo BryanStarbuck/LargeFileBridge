@@ -32,6 +32,7 @@ import type {
   IpfsInstallJob,
   IpfsDaemonResult,
   IpfsDaemonAction,
+  IpfsAutostartAction,
   ScanJob,
   RescanResult,
   ProgressListResult,
@@ -152,8 +153,12 @@ export const api = {
   ipfsNode: () => unwrap<IpfsNodeStatus>(http.get("/ipfs/node")),
   ipfsInstall: () => unwrap<IpfsInstallJob>(http.post("/ipfs/install")),
   ipfsInstallStatus: () => unwrap<IpfsInstallJob>(http.get("/ipfs/install/status")),
-  ipfsDaemon: (action: IpfsDaemonAction) =>
-    unwrap<IpfsDaemonResult>(http.post("/ipfs/daemon", { action })),
+  // The on/off toggle. `autostart` (start only) ALSO sets IPFS to come back after a reboot (§12).
+  ipfsDaemon: (body: { action: IpfsDaemonAction; autostart?: boolean }) =>
+    unwrap<IpfsDaemonResult>(http.post("/ipfs/daemon", body)),
+  // Set up or remove reboot auto-start directly; returns the fresh node status (ipfs_ui.mdx §13).
+  ipfsAutostart: (action: IpfsAutostartAction) =>
+    unwrap<IpfsNodeStatus>(http.post("/ipfs/autostart", { action })),
 
   // File System column browser (directory.mdx).
   fsHome: () => unwrap<{ home: string }>(http.get("/fs/home")),

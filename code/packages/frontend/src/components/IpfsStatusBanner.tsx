@@ -1,8 +1,8 @@
 // The app-wide "IPFS is not running" nudge (ipfs_ui.mdx §10). Shown on EVERY page (mounted in the
 // AppShell) but ONLY when the local node isn't answering — a healthy node is silent. It reads the
 // CHEAP liveness endpoint (GET /api/health → { ipfs }), never the pinset, and is suppressed on the
-// /ipfs pages (which already tell the full story). The action routes to the IPFS dashboard, where the
-// user installs or starts the node with live progress.
+// /ipfs pages (which already tell the full story). The action routes straight to the IPFS-off page
+// (/ipfs/off), where the user installs or turns the node on — and can keep it on across reboots.
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useRouterState } from "@tanstack/react-router";
@@ -34,7 +34,7 @@ export function IpfsStatusBanner() {
       <AlertTriangle className="h-4 w-4 shrink-0" />
       <span className="flex-1">IPFS isn't running — your files can't sync until it's set up.</span>
       <Link
-        to="/ipfs"
+        to="/ipfs/off"
         className="shrink-0 rounded-md bg-amber-600 px-3 py-1 text-xs font-medium text-white hover:bg-amber-700"
       >
         Set up IPFS

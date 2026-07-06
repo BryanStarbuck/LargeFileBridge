@@ -68,11 +68,20 @@ const communitiesRoute = createRoute({
   path: "/communities",
   component: lazyRouteComponent(() => import("./pages/communities/CommunitiesPage.js"), "CommunitiesPage"),
 });
-// The IPFS dashboard / node control panel (ipfs_ui.mdx): install, on/off, metrics, gateway, security.
+// The IPFS dashboard / node control panel (ipfs_ui.mdx §5): the RUNNING node — metrics, gateway,
+// security, on/off, reboot auto-start. Redirects to /ipfs/off when the node isn't running.
 const ipfsRoute = createRoute({
   getParentRoute: () => appLayout,
   path: "/ipfs",
   component: lazyRouteComponent(() => import("./pages/ipfs/IpfsDashboardPage.js"), "IpfsDashboardPage"),
+});
+// The IPFS-off page (ipfs_ui.mdx §12): the very different "IPFS is off" experience — install / turn on,
+// with the two-button choice (turn on + auto-start on reboot, vs turn on only). Redirects to /ipfs
+// once the node is healthy. This is where /ipfs sends you after a reboot.
+const ipfsOffRoute = createRoute({
+  getParentRoute: () => appLayout,
+  path: "/ipfs/off",
+  component: lazyRouteComponent(() => import("./pages/ipfs/IpfsOffPage.js"), "IpfsOffPage"),
 });
 // The pinset table (ipfs.mdx), now at /ipfs/pins — reached from the dashboard's Shared-files tile.
 // Optional `?repo=<repoId>` filters the pinset to one pinning repo (ipfs.mdx §2.1).
@@ -172,6 +181,7 @@ const routeTree = rootRoute.addChildren([
     storageDetailRoute,
     communitiesRoute,
     ipfsRoute,
+    ipfsOffRoute,
     ipfsPinsRoute,
     scansRoute,
     allowListRoute,

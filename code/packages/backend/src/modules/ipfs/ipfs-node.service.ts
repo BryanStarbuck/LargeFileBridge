@@ -18,6 +18,7 @@ import type {
 import { getAppConfig } from "../store-model/config.service.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { computeIpfsPage } from "./ipfs-page.service.js";
+import { autostartStatus, installAutostart } from "./ipfs-autostart.service.js";
 import * as ipfs from "./ipfs.service.js";
 import { log } from "../../shared/logging.js";
 
@@ -142,6 +143,12 @@ export async function nodeStatus(): Promise<IpfsNodeStatus> {
     (posture.reprovideStrategy === "pinned" || posture.reprovideStrategy === "roots") &&
     posture.gatewayLocalOnly;
 
+  // Will IPFS come back on its own after a reboot? (ipfs_ui.mdx §13) — reads the OS (launchd) state.
+  const autostart = await autostartStatus().catch((e) => {
+    log.warn("ipfs", `autostart status read failed: ${(e as Error).message}`);
+    return { supported: process.platform === "darwin", installed: false, enabled: false };
+  });
+
   return {
     installed,
     running,
@@ -159,6 +166,7 @@ export async function nodeStatus(): Promise<IpfsNodeStatus> {
     publicGateway,
     gcOn: posture.gcOn,
     compliant,
+    autostart,
   };
 }
 
@@ -364,9 +372,17 @@ export function startInstall(): IpfsInstallJob {
   return job;
 }
 
-/** Start OR stop the daemon (the on/off toggle). Start runs as a job; stop is quick but tracked too. */
-export async function controlDaemon(action: "start" | "stop"): Promise<IpfsDaemonResult> {
+/**
+ * Start OR stop the daemon (the on/off toggle). Start runs as a job; stop is quick but tracked too.
+ * `opts.autostart` (start only) ALSO sets up reboot auto-start once the daemon is healthy — this backs
+ * the IPFS-off page's primary "Turn On IPFS + keep it on across reboots" button (ipfs_ui.mdx §12).
+ */
+export async function controlDaemon(
+  action: "start" | "stop",
+  opts?: { autostart?: boolean },
+): Promise<IpfsDaemonResult> {
   if (job.status === "running") return { job, node: await nodeStatus() };
+  const wantAutostart = action === "start" && opts?.autostart === true;
 
   const kind: IpfsJobKind = action === "start" ? "start" : "stop";
   job = { ...idleJob(), kind, status: "running", phase: action === "start" ? "starting" : "stopping", startedAt: new Date().toISOString() };
@@ -406,6 +422,23 @@ export async function controlDaemon(action: "start" | "stop"): Promise<IpfsDaemo
       await ipfs.enforceCompliance().catch((e) =>
         log.warn("ipfs", `enforce compliance after start failed: ${(e as Error).message}`),
       );
+      // Primary-button path: also set IPFS to come back on its own after a reboot (best-effort — a
+      // failure here does NOT fail the start; the daemon is already up).
+      if (wantAutostart) {
+        job.phase = "autostart";
+        append("Setting IPFS to start automatically when you reboot…");
+        try {
+          const st = await installAutostart();
+          append(
+            st.enabled
+              ? "✓ IPFS will now start automatically on reboot."
+              : "IPFS is running, but auto-start couldn't be fully enabled — you can retry from the IPFS page.",
+          );
+        } catch (e) {
+          append(`(couldn't set up reboot auto-start: ${(e as Error).message})`);
+          log.warn("ipfs", `install autostart after start failed: ${(e as Error).message}`);
+        }
+      }
       job.status = "done";
       job.phase = "done";
       job.finishedAt = new Date().toISOString();

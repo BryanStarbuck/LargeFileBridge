@@ -183,6 +183,18 @@ export interface IpfsNodeMetrics {
   bandwidthRateOut: number | null; // stats/bw RateOut (bytes/s)
 }
 
+// Auto-start-on-reboot posture (ipfs_ui.mdx §13). On macOS this is a per-user launchd LaunchAgent
+// (com.largefilebridge.ipfs) that runs `ipfs daemon --enable-gc` at login/boot. `supported` is false
+// on OSes we don't yet automate (the UI then hides the auto-start option and shows only plain start).
+export interface IpfsAutostartStatus {
+  supported: boolean; // this OS can auto-start IPFS on reboot (macOS/launchd today)
+  installed: boolean; // the LaunchAgent (plist) exists on disk
+  enabled: boolean; // it is loaded in launchd — i.e. it WILL run at the next reboot/login
+}
+
+// POST /api/ipfs/autostart — install (set up reboot auto-start) or remove it.
+export type IpfsAutostartAction = "install" | "remove";
+
 // GET /api/ipfs/node — the whole dashboard payload (ipfs_ui.mdx §11).
 export interface IpfsNodeStatus {
   installed: boolean; // the `ipfs` CLI/daemon is present on this computer
@@ -202,6 +214,7 @@ export interface IpfsNodeStatus {
   publicGateway: boolean; // the deliberate opt-out setting (amber, not red)
   gcOn: boolean;
   compliant: boolean;
+  autostart: IpfsAutostartStatus; // will IPFS come back on its own after a reboot? (ipfs_ui.mdx §13)
 }
 
 // ── Install / start jobs — server-side, single-flight, re-attachable (ipfs_ui.mdx §7.2) ──
@@ -213,6 +226,7 @@ export type IpfsJobPhase =
   | "initializing"
   | "starting"
   | "stopping"
+  | "autostart" // setting up reboot auto-start after a successful start (ipfs_ui.mdx §13)
   | "done"
   | "error";
 
@@ -229,6 +243,14 @@ export interface IpfsInstallJob {
 }
 
 export type IpfsDaemonAction = "start" | "stop";
+
+// POST /api/ipfs/daemon request — the on/off toggle. On `start`, the OPTIONAL `autostart` flag means
+// "also set IPFS to come back automatically on reboot" — this backs the IPFS-off page's primary
+// button (ipfs_ui.mdx §12). Omitted/false = turn on now WITHOUT touching the reboot auto-start setup.
+export interface IpfsDaemonRequest {
+  action: IpfsDaemonAction;
+  autostart?: boolean;
+}
 
 // POST /api/ipfs/daemon result — either the fresh node status, or a job the UI should watch.
 export interface IpfsDaemonResult {

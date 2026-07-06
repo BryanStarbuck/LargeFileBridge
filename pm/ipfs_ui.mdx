@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — The IPFS Page (Node Control Panel / Dashboard)
-description: The left-bar "IPFS" landing page — the product-manager-facing DASHBOARD for the user's LOCAL IPFS (Kubo) node. It answers, at a glance, "Is IPFS installed? Is it running right now? Should it be?" and gives the two big controls — INSTALL (when the node/CLI is missing) and an ON/OFF toggle (start/stop the daemon) — plus a clean grid of live metrics (shared files, blocks/objects, storage used, connected peers, bandwidth) and a gateway summary. Each metric TILE drills into a deeper page: "Shared files" opens the pinset table (pm/ipfs.mdx, now at /ipfs/pins); "Peers" opens the Peers page; "Gateway" opens the gateway detail. The page is built to work on macOS, Windows, and Linux: it detects the platform and drives the right install path (Homebrew / winget / package manager), falls back to a copyable manual command when auto-install can't run, and shows a live PROGRESS view while installing or starting. It carries the only-our-content security posture card (reprovide pinned, gateway local-only, GC on) with a Fix (knowledge/ipfs.mdx §6). And it is the SOURCE of the app-wide "IPFS is not running — Install / Start" nudge that appears on every OTHER page when the node is missing or off (and never when it is healthy). Every state is designed for errors: install failed, daemon won't start, node unreachable — each says what happened and the concrete next step. Cross-links pm/ipfs.mdx (the pinset drill-down), pm/tools.mdx (the install-tools preflight this reuses), knowledge/ipfs.mdx (what a node/gateway/pin is), pm/settings.mdx (the reprovide/gateway settings), pm/left_bar.mdx (nav), and pm/menus.mdx (drill-in navigation).
+description: The left-bar "IPFS" landing page — the product-manager-facing DASHBOARD for the user's LOCAL IPFS (Kubo) node. It answers, at a glance, "Is IPFS installed? Is it running right now? Should it be?" and gives the two big controls — INSTALL (when the node/CLI is missing) and an ON/OFF toggle (start/stop the daemon) — plus a clean grid of live metrics (shared files, blocks/objects, storage used, connected peers, bandwidth) and a gateway summary. Each metric TILE drills into a deeper page: "Shared files" opens the pinset table (pm/ipfs.mdx, now at /ipfs/pins); "Peers" opens the Peers page; "Gateway" opens the gateway detail. The page is built to work on macOS, Windows, and Linux: it detects the platform and drives the right install path (Homebrew / winget / package manager), falls back to a copyable manual command when auto-install can't run, and shows a live PROGRESS view while installing or starting. It carries the only-our-content security posture card (reprovide pinned, gateway local-only, GC on) with a Fix (knowledge/ipfs.mdx §6). And it is the SOURCE of the app-wide "IPFS is not running — Install / Start" nudge that appears on every OTHER page when the node is missing or off (and never when it is healthy). Every state is designed for errors: install failed, daemon won't start, node unreachable — each says what happened and the concrete next step. When the node is OFF, `/ipfs` redirects to a separate IPFS-OFF page (`/ipfs/off`) whose whole job is turning IPFS back on — and, front and center, KEEPING it on across reboots via a two-button choice (turn on + auto-start on every reboot, recommended; or turn on now without changing the reboot setup). Auto-start on reboot is a per-user macOS launchd LaunchAgent that runs `ipfs daemon` at login/boot, so a machine restart no longer leaves IPFS silently off. Cross-links pm/ipfs.mdx (the pinset drill-down), pm/tools.mdx (the install-tools preflight this reuses), knowledge/ipfs.mdx (what a node/gateway/pin is), pm/settings.mdx (the reprovide/gateway settings), pm/left_bar.mdx (nav), and pm/menus.mdx (drill-in navigation).
 ---
 
 # LargeFileBridge — The IPFS Page (Node Control Panel)
@@ -17,10 +17,16 @@ pinset table; clicking *Peers* opens the Peers page. The heavy, row-per-CID **pi
 distinct page ([pm/ipfs.mdx](./ipfs.mdx)) that now lives at **`/ipfs/pins`** and is reached *from*
 this dashboard — so this landing page stays clean and readable.
 
-> **Page split (LOCKED).** `/ipfs` = **this dashboard** (node status, install, on/off, metrics,
-> gateway, security). `/ipfs/pins` = the **pinset table** ([pm/ipfs.mdx](./ipfs.mdx)) — the "what is
-> actually pinned / import untracked" workhorse, reached from the *Shared files* tile here (and from
-> the left-bar disclosure children). Two pages, one section.
+> **Page split (LOCKED).** Three URLs, one section:
+> * `/ipfs` = **this dashboard for a RUNNING node** (metrics, gateway, security, on/off, reboot
+>   auto-start). When the node is **not running**, `/ipfs` **redirects to `/ipfs/off`**.
+> * `/ipfs/off` = the **IPFS-off page** ([§12](#12-the-ipfs-off-page-turn-it-on-and-keep-it-on)) — a
+>   deliberately *different* page whose whole job is turning IPFS on (install / start) and, ideally,
+>   keeping it on across reboots. It **redirects to `/ipfs`** once the node is healthy. This is where
+>   you land after a reboot.
+> * `/ipfs/pins` = the **pinset table** ([pm/ipfs.mdx](./ipfs.mdx)) — the "what is actually pinned /
+>   import untracked" workhorse, reached from the *Shared files* tile here (and from the left-bar
+>   disclosure children).
 
 Siblings this spec builds on and does not repeat:
 
@@ -206,21 +212,31 @@ The page is a small state machine over two booleans — **installed** and **runn
 Deriving the installed/running booleans, live metrics, gateway summary, and compliance for the dashboard payload is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `nodeStatus()`
 
-| State | Hero shows | Body shows |
-| --- | --- | --- |
-| **Not installed** (no CLI, no daemon) | red dot · *"IPFS isn't installed on this computer"* | the **Install card** (§7) — big primary **Install IPFS** button + what it is / why. No tiles. |
-| **Installing** (job running) | spinner · *"Installing IPFS…"* | the **progress view** (§7.2) — live log lines + phase. |
-| **Installed, stopped** | amber dot · *"IPFS is installed but not running"* | **Turn on** primary button; a slim, dimmed tile row (last-known or `—`). |
-| **Starting** (job running) | spinner · *"Starting the IPFS daemon…"* | progress view (§7.2), phase = starting. |
-| **Running** (healthy) | green dot · *"IPFS is running"* · On/Off toggle | full dashboard (§5.1). |
-| **Unreachable / error** | red dot · *"Can't reach the IPFS node"* | the **error panel** (§9) with cause + retry + manual command. |
+Which URL owns each state (§12 page split): a **running** node renders on **`/ipfs`**; every
+**not-running** state renders on **`/ipfs/off`**. `/ipfs` redirects to `/ipfs/off` the moment the node
+is down (and `/ipfs/off` redirects back to `/ipfs` once it's healthy). A start/stop/install **job in
+flight** shows its live progress on whichever page you're on, then the redirect settles you on the
+right one.
+
+| State | URL | Hero shows | Body shows |
+| --- | --- | --- | --- |
+| **Not installed** (no CLI, no daemon) | `/ipfs/off` | red dot · *"IPFS isn't installed on this computer"* | the **Install card** (§7) — big primary **Install IPFS** button + what it is / why. No tiles. |
+| **Installing** (job running) | `/ipfs/off` | spinner · *"Installing IPFS…"* | the **progress view** (§7.2) — live log lines + phase. |
+| **Installed, stopped** | `/ipfs/off` | amber dot · *"IPFS is installed but not running"* | the **two-button turn-on choice** (§12) — turn on + auto-start on reboot (recommended), or turn on only. |
+| **Starting** (job running) | `/ipfs/off` | spinner · *"Starting the IPFS daemon…"* | progress view (§7.2), phase = `starting` → `autostart` (when the reboot setup runs). |
+| **Running** (healthy) | `/ipfs` | green dot · *"IPFS is running"* · On/Off toggle | full dashboard (§5.1) + the **reboot auto-start** control (§13). |
+| **Unreachable / error** | `/ipfs/off` | red dot · *"Can't reach the IPFS node"* | the **error panel** (§9) with cause + retry + manual command. |
 
 The **on/off toggle** is only meaningful once installed. **On** = daemon running; flipping **Off**
 stops the daemon (RPC `shutdown`); flipping **On** starts it (spawn `ipfs daemon`, then poll health).
 Both are **jobs with progress** (§7.2) because starting a daemon isn't instant.
 
-Starting or stopping the daemon behind the on/off toggle is handled in code:
+Starting or stopping the daemon behind the on/off toggle (and, on start, optionally installing reboot auto-start) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `controlDaemon()`
+
+Choosing which URL renders (running dashboard vs. off page) and redirecting between them is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsDashboardPage.tsx` — `IpfsDashboardPage` (running; redirects to `/ipfs/off` when down)
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsOffPage.tsx` — `IpfsOffPage` (off; redirects to `/ipfs` when healthy)
 
 ---
 
@@ -335,11 +351,16 @@ The app-wide nudge — polling cheap liveness, suppressing on `/ipfs*`, and hidi
 
 * A single **GET `/api/ipfs/node`** returns the dashboard payload: installed, running, version,
   peerId, platform, install hint (the manual command), the metric block (pins, repo stat, swarm,
-  bandwidth), the gateway summary, and the posture (reprovide / gc / compliant / publicGateway).
+  bandwidth), the gateway summary, the posture (reprovide / gc / compliant / publicGateway), and the
+  **`autostart`** block (`{ supported, installed, enabled }` — the reboot auto-start state, §13).
   Metric reads are **best-effort and bounded**: a slow or unset value comes back null → the tile shows
   `—`. Reading is **metadata-only** (like the scan) — it opens no file and moves no bytes.
-* **POST `/api/ipfs/daemon`** `{action:"start"|"stop"}` — drives the on/off toggle; returns the fresh
-  node payload (or kicks a job, below).
+* **POST `/api/ipfs/daemon`** `{action:"start"|"stop", autostart?:boolean}` — drives the on/off toggle;
+  returns the fresh node payload (or kicks a job, below). On `start`, `autostart:true` **also** sets up
+  reboot auto-start once the daemon is healthy (the off-page's primary button, §12).
+* **POST `/api/ipfs/autostart`** `{action:"install"|"remove"}` — set up or remove reboot auto-start
+  directly (the running dashboard's toggle, §13); returns the fresh node payload so the UI settles on
+  the real launchd state.
 * **POST `/api/ipfs/install`** — starts the install **job** (single-flight); **GET
   `/api/ipfs/install/status`** — polls the job (phase + log) for the progress view and the banner.
 * The **cheap** summary the banner polls is the same `/api/ipfs/node` narrowed to `{installed,
@@ -347,12 +368,113 @@ The app-wide nudge — polling cheap liveness, suppressing on `/ipfs*`, and hidi
 * Install/start jobs are **server-side** and detached from the request (re-attachable, cancel-safe on
   navigation) — same discipline as the scan job.
 
-The dashboard's REST surface (`GET /node`, `POST /daemon`, `POST /install`, `GET /install/status`) is defined in code:
+The dashboard's REST surface (`GET /node`, `POST /daemon`, `POST /install`, `GET /install/status`, `POST /autostart`) is defined in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.router.ts` — the exported `ipfsRouter`
 
 ---
 
-## 12. Acceptance criteria
+## 12. The IPFS-off page — turn it on, and keep it on
+
+`/ipfs/off` is a **separate page** from the running dashboard, with a **different job**: you are here
+because IPFS is **not running** (most often right after a reboot), and everything on the page is about
+getting it back on. `/ipfs` redirects here whenever the node is down; this page redirects back to
+`/ipfs` the moment the node is healthy. (Rationale: an *off* node and a *running* node want genuinely
+different UIs — one is "let's turn this on," the other is "here's what it's doing." Two URLs keep each
+clean.)
+
+The off-page hosts three of the state-machine states (§6): **not installed** (Install card, §7.1),
+**installed-but-stopped** (the two-button choice below), and the shared **progress / error** views
+(§7.2, §9) while a job runs.
+
+### 12.1 Installed-but-stopped: the two-button choice (LOCKED)
+
+This is the common case — IPFS is installed, the daemon just isn't up (a reboot dropped it). We present
+**two ways to turn it on**, and we deliberately **steer toward the first** (keeping IPFS on across
+reboots), because a node that silently stays off after every restart is the core problem this feature
+fixes.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  ●(amber)  IPFS is installed but not running                                  │
+│  Kubo v0.29. Turn it on so your big files can sync across your computers.      │
+│                                                                               │
+│  ↻ Automatically restart when you reboot                                      │  ← label ABOVE button 1
+│  [ ⏻ Turn On IPFS ]  Turns IPFS on now AND sets it to start automatically      │  ← PRIMARY (filled)
+│                      every time you reboot or log in.  Recommended.           │
+│                                                                               │
+│  ─────────────────────────────  Or  ─────────────────────────────            │
+│                                                                               │
+│  [ ⏻ Turn On IPFS ]  But don't modify whether or how IPFS starts up when       │  ← SECONDARY (outline)
+│                      you restart the computer.                                │
+│                                                                               │
+│  ▸ Or start it yourself:  ipfs daemon --enable-gc                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+* **Both buttons read “Turn On IPFS.”** Both start the daemon immediately. What differs is the effect
+  on **reboot auto-start**:
+  * **Button 1 (primary, recommended)** — `POST /api/ipfs/daemon {action:"start", autostart:true}`.
+    Starts IPFS **and** installs the reboot auto-start LaunchAgent (§13) once the daemon is healthy.
+    The label **above** it is *"Automatically restart when you reboot."*
+  * **Button 2 (secondary)** — `POST /api/ipfs/daemon {action:"start"}` (no `autostart`). Starts IPFS
+    now and **leaves the reboot setup exactly as it is** — it does not add, remove, or change
+    auto-start. The text **after** it says so explicitly.
+* **We only show two buttons when there's a real choice.** If reboot auto-start is **already enabled**,
+  there's nothing to opt into → a **single** "Turn On IPFS" button, with a note *"IPFS is already set to
+  start automatically when you reboot ✓."* If the OS **can't** auto-start (not macOS today) → a single
+  button + a note that auto-start-on-reboot isn't available on this OS yet.
+* **Consent, not surprise.** Pressing button 1 **is** the permission to install the LaunchAgent — we
+  never set up reboot auto-start on our own; the user chooses it.
+
+The IPFS-off page — the two-button choice, the single-button fallbacks, the Install card, and the shared progress/error views — is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsOffPage.tsx` — `IpfsOffPage` component (`StoppedCard` = the two-button choice)
+
+Reusable progress/error/security/auto-start building blocks shared with the running dashboard live in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx`
+
+---
+
+## 13. Auto-start on reboot (keep IPFS on)
+
+The problem: after a machine restart, the IPFS daemon is **not** running, and nothing brings it back —
+so files silently stop syncing until the user notices and turns it on. Auto-start fixes that.
+
+* **Mechanism (macOS).** A per-user **launchd LaunchAgent** — `com.largefilebridge.ipfs` — written to
+  `~/Library/LaunchAgents/`, running the **absolute** `ipfs daemon --enable-gc` at **login/boot**
+  (`RunAtLoad`). It is a **sibling** of the scan/sync worker agents ([pm/scan.mdx](./scan.mdx)) but a
+  distinct, purpose-built plist.
+* **`RunAtLoad` yes, `KeepAlive` no (deliberate).** We want *"start once at reboot/login,"* **not**
+  *"relaunch whenever it exits."* With `KeepAlive` off, the app's own **On/Off toggle** still works — a
+  deliberate **Off** stays off (launchd won't fight it and immediately restart the daemon). It comes
+  back at the **next** login/reboot, which is exactly the promise.
+* **Absolute binary + pinned PATH.** launchd has no login shell PATH, so we resolve the absolute `ipfs`
+  path (`command -v ipfs`) and pin a conservative PATH (`/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`)
+  so both Apple-silicon and Intel Homebrew installs work.
+* **State is the OS, not a wish.** `autostart.installed` = the plist exists; `autostart.enabled` = it's
+  loaded in launchd (`launchctl print` succeeds) → it *will* run at the next boot. The app-config flag
+  `ipfs.auto_start_daemon` records the **intent**, but the node payload reports the **real** launchd
+  state. On non-macOS, `autostart.supported` is `false` and the UI hides the option.
+* **Where the user controls it.**
+  * **Off page (§12.1)** — button 1 turns it on as part of starting IPFS.
+  * **Running dashboard (§5.1)** — a compact *"Start on reboot: on ✓ / off"* row with a one-click
+    **Turn on / Turn off auto-start** toggle, so a user whose node is already up can set it up (or
+    remove it) preemptively.
+* **Security posture unchanged.** The auto-started daemon runs the same `--enable-gc` and is brought to
+  only-our-content compliance on start (§8); auto-start changes *when* the daemon runs, not *what* it
+  serves.
+
+The reboot auto-start LaunchAgent — status, install (write plist + `launchctl bootstrap`/`enable`), and remove — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-autostart.service.ts` — `autostartStatus()`, `installAutostart()`, `removeAutostart()`
+
+Installing reboot auto-start as part of a "turn on + keep on" start is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `controlDaemon()` (the `autostart` option, phase `autostart`)
+
+The running dashboard's *"Start on reboot"* toggle row is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `AutostartRow` component
+
+---
+
+## 14. Acceptance criteria
 
 1. The **IPFS** left-bar item lands on **`/ipfs`** — this **dashboard** — with a hero (installed /
    running / version / PeerID + on/off toggle), a metric-tile grid, a gateway panel, and the security
@@ -384,10 +506,36 @@ The dashboard's REST surface (`GET /node`, `POST /daemon`, `POST /install`, `GET
 10. The left-bar **disclosure children** (pinning repos) route to **`/ipfs/pins?repo=<repoId>`** and the
     disclosure stays open across `/ipfs` and `/ipfs/pins`; the **IPFS parent** lands on this dashboard
     (§5.3).
+11. **Off ↔ running is a two-page split** (§12): when the node is **not running**, `/ipfs` redirects to
+    **`/ipfs/off`**; when it becomes **healthy**, `/ipfs/off` redirects back to `/ipfs`. A job in flight
+    shows live progress on the current page before the redirect settles.
+12. **The installed-but-stopped state shows the two-button choice** (§12.1): both buttons read **"Turn
+    On IPFS"** and both start the daemon; **button 1 (primary, recommended)** — labelled *"Automatically
+    restart when you reboot"* — also sets up reboot auto-start (`daemon {autostart:true}`), while
+    **button 2** (after an **"Or"** divider) turns it on **without** modifying the reboot setup
+    (`daemon` with no `autostart`). When auto-start is already enabled, or the OS can't do it, a
+    **single** Turn-On button is shown instead with the appropriate note.
+13. **Auto-start on reboot actually persists across restarts** (§13): choosing it installs a per-user
+    launchd LaunchAgent (`com.largefilebridge.ipfs`, `RunAtLoad` yes / `KeepAlive` no) running the
+    absolute `ipfs daemon --enable-gc`; `GET /api/ipfs/node` reports the real `autostart {supported,
+    installed, enabled}` state; the running dashboard has a **Start-on-reboot** toggle; and the app
+    **never** installs auto-start without the user's click. Turning IPFS **Off** from the toggle stays
+    off (KeepAlive is off) and simply comes back at the next reboot/login.
+14. Data adds **`POST /api/ipfs/autostart {install|remove}`** and an **`autostart`** flag on **`POST
+    /api/ipfs/daemon`** (start only); both return the fresh node payload (§11).
 
 <!--
   This is the IPFS DASHBOARD / node control-panel spec (the left-bar LANDING page at /ipfs), distinct
   from pm/ipfs.mdx which is the PINSET TABLE (now at /ipfs/pins, reached from the Shared-files tile).
+  LOCKED (autostart, §12–§13): three-URL split — /ipfs = RUNNING dashboard, /ipfs/off = the OFF page
+  (install / turn-on), /ipfs/pins = pinset table; /ipfs↔/ipfs/off redirect on the running boolean. The
+  installed-but-stopped state on /ipfs/off is the TWO-BUTTON choice (both "Turn On IPFS": button 1 =
+  start + reboot auto-start [recommended], button 2 after "Or" = start only, don't touch reboot setup);
+  collapses to ONE button when auto-start is already on or unsupported. Reboot auto-start = per-user
+  launchd LaunchAgent com.largefilebridge.ipfs, RunAtLoad yes / KeepAlive NO (so the app's Off toggle
+  wins), absolute ipfs path + pinned PATH; node payload reports real launchd state in `autostart`; never
+  installed without a user click. Endpoints: POST /api/ipfs/autostart {install|remove} + `autostart`
+  flag on POST /api/ipfs/daemon (start only).
   LOCKED: the page split (/ipfs dashboard vs /ipfs/pins table); the state machine over installed×running
   (+ install/start jobs); install is cross-platform (brew/winget/pkg-mgr) with a LIVE progress view and
   an ALWAYS-present copyable manual-command fallback (never install a missing package manager — mirror

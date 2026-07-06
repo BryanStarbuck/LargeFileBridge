@@ -5,6 +5,7 @@ import { requireAllowListed } from "../auth/identify.js";
 import { scanAll } from "../scanner/scanner.service.js";
 import { computeIpfsPage, importPins } from "./ipfs-page.service.js";
 import { nodeStatus, startInstall, getJob, controlDaemon } from "./ipfs-node.service.js";
+import { installAutostart, removeAutostart } from "./ipfs-autostart.service.js";
 import * as ipfs from "./ipfs.service.js";
 import { log } from "../../shared/logging.js";
 
@@ -32,15 +33,35 @@ ipfsRouter.get("/install/status", (_req, res) => {
   res.json({ ok: true, data: getJob() });
 });
 
-// POST /api/ipfs/daemon — the on/off toggle: { action: "start" | "stop" }.
+// POST /api/ipfs/daemon — the on/off toggle: { action: "start" | "stop", autostart?: boolean }.
+// `autostart` (start only) ALSO sets IPFS to come back on its own after a reboot (ipfs_ui.mdx §12).
 ipfsRouter.post("/daemon", async (req, res) => {
-  const body = z.object({ action: z.enum(["start", "stop"]) }).safeParse(req.body ?? {});
+  const body = z
+    .object({ action: z.enum(["start", "stop"]), autostart: z.boolean().optional() })
+    .safeParse(req.body ?? {});
   if (!body.success) return res.status(400).json({ ok: false, error: body.error.message });
-  log.info("ipfs", `daemon ${body.data.action} requested`);
+  log.info("ipfs", `daemon ${body.data.action} requested${body.data.autostart ? " (+autostart)" : ""}`);
   try {
-    res.json({ ok: true, data: await controlDaemon(body.data.action) });
+    res.json({ ok: true, data: await controlDaemon(body.data.action, { autostart: body.data.autostart }) });
   } catch (e) {
     log.error("ipfs", `daemon ${body.data.action} failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/ipfs/autostart — set up or remove reboot auto-start directly: { action: "install"|"remove" }.
+// Backs the running dashboard's auto-start toggle and the off-page's retry (ipfs_ui.mdx §13). Returns
+// the fresh node status so the UI settles on the real launchd state.
+ipfsRouter.post("/autostart", async (req, res) => {
+  const body = z.object({ action: z.enum(["install", "remove"]) }).safeParse(req.body ?? {});
+  if (!body.success) return res.status(400).json({ ok: false, error: body.error.message });
+  log.info("ipfs", `autostart ${body.data.action} requested`);
+  try {
+    if (body.data.action === "install") await installAutostart();
+    else await removeAutostart();
+    res.json({ ok: true, data: await nodeStatus() });
+  } catch (e) {
+    log.error("ipfs", `autostart ${body.data.action} failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
 });
