@@ -707,6 +707,7 @@ export interface DescribeProvider {
   label: string;
   available: boolean;
   supports: MediaKind[];
+  usingFile?: boolean; // Gemini only: the resolved key came from the shared GoogleCloud/apikey.yaml
 }
 // GET /api/describe/providers — the provider matrix + whether any provider is usable at all.
 export interface DescribeProvidersStatus {
@@ -747,11 +748,31 @@ export interface DescribeAiProviderConfig {
   model: string;
   hasConfigKey: boolean; // a key is stored in config.yaml for this provider
   usingEnv: boolean; // no config key, but a matching env var is present
-  available: boolean; // a usable key resolves (config OR env)
+  usingFile: boolean; // no config/env key, but the shared GoogleCloud key file supplies one (Gemini only)
+  available: boolean; // a usable key resolves (config OR env OR shared file)
 }
 export interface DescribeAiConfig {
   provider: "auto" | "gemini" | "grok" | "openai"; // the default provider ("auto" = first available)
   providers: DescribeAiProviderConfig[];
+}
+
+// GET /api/describe/credentials — everything the "AI credentials" instructions page needs to tell the
+// user WHERE to put a Gemini key and in WHAT format. Powers the "Instructions" button of the
+// credentials-missing popup (ai_credentials.mdx). The raw key VALUE is never included.
+export interface AiCredentialsFileInfo {
+  path: string; // absolute path to the shared GoogleCloud/apikey.yaml
+  filename: string; // "apikey.yaml"
+  directory: string; // the containing directory
+  fields: string[]; // the YAML fields we read, in priority order (["apiKey", "4k_apiKey"])
+  exists: boolean; // a file is already present at that path
+  configured: boolean; // the file yields a usable (non-placeholder) key
+  schemaExample: string; // a PLACEHOLDER YAML template to fill in (no real secret)
+}
+export interface AiCredentialsInfo {
+  anyAvailable: boolean; // any provider (any source) is usable right now
+  file: AiCredentialsFileInfo; // the shared GoogleCloud/apikey.yaml key file
+  appConfigPath: string; // the app config.yaml Settings → Tools writes keys into
+  envVars: { gemini: string[]; grok: string[]; openai: string[] }; // the env vars each provider honors
 }
 // PATCH body — apiKey "" clears the config key (falls back to env); undefined leaves it unchanged.
 export interface DescribeAiProviderPatch {

@@ -8,10 +8,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import type { DescribeKind, DescribeResult, DescribeView, DescribeProvidersStatus, DescribeAiConfig, DescribeAiConfigPatch } from "@lfb/shared";
+import type { DescribeKind, DescribeResult, DescribeView, DescribeProvidersStatus, DescribeAiConfig, DescribeAiConfigPatch, AiCredentialsInfo } from "@lfb/shared";
 import { mediaKindForName } from "@lfb/shared";
 import { expandHome } from "../fs/badges.js";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
+import { appConfigPath } from "../../shared/store/scopes.js";
+import { googleApiKeyFileInfo } from "../../config/google-apikey-file.js";
 import { resolveStorageRoot } from "../transcribe/transcribe.service.js";
 import { getPrompt } from "./prompts.js";
 import { selectAdapter, providerStatus, providerKeySources, providerMeta, mimeForMedia, type ProviderId } from "./adapters.js";
@@ -111,8 +113,25 @@ export function getAiConfig(): DescribeAiConfig {
       model: sources[m.id].model,
       hasConfigKey: sources[m.id].hasConfigKey,
       usingEnv: sources[m.id].usingEnv,
+      usingFile: sources[m.id].usingFile,
       available: m.available,
     })),
+  };
+}
+
+/** Everything the "AI credentials" instructions page needs (ai_credentials.mdx): where the shared
+ *  Gemini key file lives + its placeholder schema, the app config.yaml path Settings writes to, and the
+ *  env vars each provider honors. Never returns a raw key value. */
+export function aiCredentialsInfo(): AiCredentialsInfo {
+  return {
+    anyAvailable: describeProviders().anyAvailable,
+    file: googleApiKeyFileInfo(),
+    appConfigPath: appConfigPath(),
+    envVars: {
+      gemini: ["GEMINI_API_KEY", "GOOGLE_GENAI_API_KEY", "GOOGLE_API_KEY"],
+      grok: ["XAI_API_KEY", "GROK_API_KEY"],
+      openai: ["OPENAI_API_KEY"],
+    },
   };
 }
 

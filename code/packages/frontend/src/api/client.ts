@@ -66,6 +66,7 @@ import type {
   DescribePromptView,
   DescribeAiConfig,
   DescribeAiConfigPatch,
+  AiCredentialsInfo,
 } from "@lfb/shared";
 import { http, unwrap } from "./axios.js";
 
@@ -187,7 +188,8 @@ export const api = {
   setCompressSettings: (patch: Partial<CompressionSettings>) =>
     unwrap<CompressionSettings>(http.patch("/compress/settings", patch)),
   compressCheck: (path: string) => unwrap<CompressCheck>(http.get("/compress/check", { params: { path } })),
-  compressFile: (path: string) => unwrap<CompressResult>(http.post("/compress/file", { path })),
+  compressFile: (path: string, opts?: { videoCodec?: "h264" | "hevc" | "av1" }) =>
+    unwrap<CompressResult>(http.post("/compress/file", { path, ...(opts ?? {}) })),
   compressBatch: (paths: string[]) => unwrap<CompressBatchResult>(http.post("/compress/batch", { paths })),
   // Transcribe (Transcribe.mdx). Tool status, read an existing transcript, and run transcription over one
   // file / a selected set / a directory-or-repo tree / a whole storage. Writes to <storageRoot>/.transcribe/.
@@ -204,6 +206,9 @@ export const api = {
   // AI description (ai_description.mdx). Provider status, read an existing description, generate one (the
   // external vision call), and read/customize/save/reset the per-kind prompt files.
   describeProviders: () => unwrap<DescribeProvidersStatus>(http.get("/describe/providers")),
+  // Where to put a Gemini key + in what format — powers the "AI credentials" instructions page and the
+  // credentials-missing popup (ai_credentials.mdx). Never returns a raw key value.
+  aiCredentials: () => unwrap<AiCredentialsInfo>(http.get("/describe/credentials")),
   description: (path: string) => unwrap<DescribeView | null>(http.get("/describe/file", { params: { path } })),
   describeFile: (path: string, opts?: { overwrite?: boolean; provider?: "auto" | "gemini" | "grok" | "openai" }) =>
     unwrap<DescribeResult>(http.post("/describe/file", { path, ...(opts ?? {}) })),

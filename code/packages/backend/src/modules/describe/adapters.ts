@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { MediaKind, DescribeProvider } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
+import { loadGoogleApiKey, hasGoogleApiKeyFile } from "../../config/google-apikey-file.js";
 
 export type ProviderId = "gemini" | "grok" | "openai";
 
@@ -85,7 +86,14 @@ const gemini: DescribeAdapter = {
   label: "Google Gemini",
   supports: ["image", "video"],
   apiKey() {
-    return getAppConfig().ai.gemini.api_key || firstEnv("GEMINI_API_KEY", "GOOGLE_GENAI_API_KEY", "GOOGLE_API_KEY");
+    // Resolution order (ai_description.mdx §3.2): app config → well-known env vars → the SHARED
+    // GoogleCloud/apikey.yaml the ~/BGit/all/tools Gemini/nano-banana tools use. That third source
+    // means a machine already set up for those tools describes video/images with no extra setup.
+    return (
+      getAppConfig().ai.gemini.api_key ||
+      firstEnv("GEMINI_API_KEY", "GOOGLE_GENAI_API_KEY", "GOOGLE_API_KEY") ||
+      loadGoogleApiKey()
+    );
   },
   available() {
     return !!this.apiKey();
@@ -205,20 +213,33 @@ export function selectAdapter(kind: MediaKind, requested?: ProviderId | "auto"):
   return ADAPTERS.find(supports) ?? null;
 }
 
-/** The provider matrix the settings/viewer surfaces show (which are configured, what each supports). */
+/** The provider matrix the settings/viewer surfaces show (which are configured, what each supports). For
+ *  Gemini we also flag when the resolved key came from the shared GoogleCloud key file (diagnostics). */
 export function providerStatus(): DescribeProvider[] {
-  return ADAPTERS.map((a) => ({ id: a.id, label: a.label, available: a.available(), supports: a.supports }));
+  const sources = providerKeySources();
+  return ADAPTERS.map((a) => ({
+    id: a.id,
+    label: a.label,
+    available: a.available(),
+    supports: a.supports,
+    usingFile: sources[a.id].usingFile,
+  }));
 }
 
-/** Per-provider key SOURCE (for the Settings editor): a config-stored key vs. a resolved env var. Never
- *  exposes the key value itself. */
-export function providerKeySources(): Record<ProviderId, { hasConfigKey: boolean; usingEnv: boolean; model: string }> {
+/** Per-provider key SOURCE (for the Settings editor): a config-stored key vs. a resolved env var vs. the
+ *  shared GoogleCloud key file (Gemini only). Never exposes the key value itself. */
+export function providerKeySources(): Record<ProviderId, { hasConfigKey: boolean; usingEnv: boolean; usingFile: boolean; model: string }> {
   const c = getAppConfig().ai;
   const env = (names: string[]) => names.some((n) => !!(process.env[n] && process.env[n]!.trim()));
+  const geminiConfig = !!c.gemini.api_key;
+  const geminiEnv = !geminiConfig && env(["GEMINI_API_KEY", "GOOGLE_GENAI_API_KEY", "GOOGLE_API_KEY"]);
+  // The shared GoogleCloud/apikey.yaml is the last-resort Gemini source; it only "counts" when neither
+  // config nor env already provides a key (mirrors the resolution order in gemini.apiKey()).
+  const geminiFile = !geminiConfig && !geminiEnv && hasGoogleApiKeyFile();
   return {
-    gemini: { hasConfigKey: !!c.gemini.api_key, usingEnv: !c.gemini.api_key && env(["GEMINI_API_KEY", "GOOGLE_GENAI_API_KEY", "GOOGLE_API_KEY"]), model: c.gemini.model },
-    grok: { hasConfigKey: !!c.grok.api_key, usingEnv: !c.grok.api_key && env(["XAI_API_KEY", "GROK_API_KEY"]), model: c.grok.model },
-    openai: { hasConfigKey: !!c.openai.api_key, usingEnv: !c.openai.api_key && env(["OPENAI_API_KEY"]), model: c.openai.model },
+    gemini: { hasConfigKey: geminiConfig, usingEnv: geminiEnv, usingFile: geminiFile, model: c.gemini.model },
+    grok: { hasConfigKey: !!c.grok.api_key, usingEnv: !c.grok.api_key && env(["XAI_API_KEY", "GROK_API_KEY"]), usingFile: false, model: c.grok.model },
+    openai: { hasConfigKey: !!c.openai.api_key, usingEnv: !c.openai.api_key && env(["OPENAI_API_KEY"]), usingFile: false, model: c.openai.model },
   };
 }
 

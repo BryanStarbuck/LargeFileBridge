@@ -6,7 +6,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { requireAllowListed } from "../auth/identify.js";
 import { log } from "../../shared/logging.js";
-import { describeProviders, readDescription, describeOne, getAiConfig, setAiConfig } from "./describe.service.js";
+import { describeProviders, readDescription, describeOne, getAiConfig, setAiConfig, aiCredentialsInfo } from "./describe.service.js";
 import { promptView, customizePrompt, savePrompt, resetPrompt } from "./prompts.js";
 
 export const describeRouter = Router();
@@ -39,6 +39,12 @@ describeRouter.patch("/config", async (req, res) => {
     log.error("describe", `setAiConfig failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
+});
+
+// GET /api/describe/credentials — where to put a Gemini key + in what format (ai_credentials.mdx).
+// Powers the "Instructions" full page behind the credentials-missing popup. No raw key value.
+describeRouter.get("/credentials", (_req, res) => {
+  res.json({ ok: true, data: aiCredentialsInfo() });
 });
 
 // GET /api/describe/file?path=<abs> — the existing generated description for a media file, or null.

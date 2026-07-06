@@ -161,6 +161,7 @@ function AiDescriptionSection() {
             </span>
             <span className="min-w-0 flex-1 text-black/55">
               describes {p.supports.join(" + ")}
+              {p.available && p.usingFile && <> — key from <code className="text-xs">~/.config/GoogleCloud/apikey.yaml</code></>}
               {!p.available && <> — set <code className="text-xs">{ENV_HINT[p.id]}</code> or add it in config.yaml</>}
             </span>
           </div>

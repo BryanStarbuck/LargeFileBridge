@@ -22,16 +22,29 @@ function msgOne(r: DescribeResult): string {
   }
 }
 
-/** Generate (or regenerate) the AI description for ONE media file. */
+/** Generate (or regenerate) the AI description for ONE media file.
+ *
+ *  `onNoProvider` fires when the backend reports `no_provider` (no Gemini/Grok/OpenAI key resolvable on
+ *  this machine). The viewer uses it to open the credentials-missing popup (with Close / Instructions)
+ *  instead of only flashing a toast — so the user is told exactly how to fix it (ai_credentials.mdx). */
 export function runDescribeFile(
   path: string,
   name: string,
-  opts?: { overwrite?: boolean; provider?: "auto" | "gemini" | "grok" | "openai"; onDone?: () => void },
+  opts?: {
+    overwrite?: boolean;
+    provider?: "auto" | "gemini" | "grok" | "openai";
+    onDone?: () => void;
+    onNoProvider?: (reason: string) => void;
+  },
 ): void {
   toast.promise(api.describeFile(path, { overwrite: opts?.overwrite, provider: opts?.provider }), {
     loading: `Generating AI description for ${name}…`,
     success: (r) => {
-      opts?.onDone?.();
+      if (r.status === "no_provider") {
+        opts?.onNoProvider?.(r.reason ?? "No AI provider configured — add an API key");
+      } else {
+        opts?.onDone?.();
+      }
       return msgOne(r);
     },
     error: (e) => {

@@ -107,6 +107,13 @@ const toolsRoute = createRoute({
   path: "/tools",
   component: lazyRouteComponent(() => import("./pages/settings/ToolsPage.js"), "ToolsPage"),
 });
+// AI credentials setup (ai_credentials.mdx): where to put a Gemini key + in what format. Opened in a
+// new tab by the credentials-missing popup's "Instructions" button.
+const aiCredentialsRoute = createRoute({
+  getParentRoute: () => appLayout,
+  path: "/ai-credentials",
+  component: lazyRouteComponent(() => import("./pages/settings/AiCredentialsPage.js"), "AiCredentialsPage"),
+});
 const fsRoute = createRoute({
   getParentRoute: () => appLayout,
   path: "/fs",
@@ -170,6 +177,7 @@ const routeTree = rootRoute.addChildren([
     allowListRoute,
     settingsRoute,
     toolsRoute,
+    aiCredentialsRoute,
     fsRoute,
     fsPathsRoute,
     viewFileRoute,

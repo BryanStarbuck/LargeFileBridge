@@ -225,6 +225,17 @@ brew tools transcode to a **new file**, so the flow per file is:
 Running the tool to a temp file, verifying, and doing the recoverable replace is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile` (single) / `compressBatch` (many); the travelling compression record is written via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/analysis.service.ts` — `writeCompressionRecord()` (new).
 
+### 8.1 Forced-codec convert (browser/upload compatibility)
+
+The same engine also powers the media viewer's **Convert to H.264 (MP4)…** offer — the fix for a video
+whose codec the browser can't decode ([codecs.mdx §9](./codecs.mdx)). It calls `compressFile` with an
+optional **forced video codec**, which overrides the user's preferred-codec list and pins the output to
+**H.264** — so the result plays in every browser AND uploads cleanly to TikTok/X/YouTube/Instagram (the
+universal-safe target, [codecs.mdx §5](./codecs.mdx)). It is otherwise an ordinary compress run
+(explicit-click, confirm-gated, recoverable replace). Honoring the forced codec is handled in code:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile(input, forceVideoCodec)` / `pickVideoTarget` (the `force` parameter), routed by `compression.router.ts` `POST /file` (optional `videoCodec`).
+
 ---
 
 ## 9. Showing compression state (View one file)

@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — View one file (image / video / audio viewer)
-description: The viewer-first single-media pages — the "View one file" experience for playable media. /image?path=<abs> is the image viewer; /video?path=<abs> is the video viewer; /audio?path=<abs> is the audio player. These pages run full-width (no side gutters) and are dominated by the media itself — a bounded stage auto-sizes it to fit while keeping aspect ratio. Stacked top to bottom: the file's absolute path, the file NAME as the big page title, a FULL-WIDTH overflow action bar (as many buttons as fit — IPFS primary · Compress · Open: in browser · on Mac · Open folder: in browser · on Mac · Transcribe · Copy path · View properties · Move — with the rest, plus Never-publish-via-IPFS / Do-not-compress / Delete, folded into a trailing More menu by priority), a property grid, the media stage, and a two-tab analysis panel (Transcription · AI description) each with a ✓ when its content exists and a Generate button when empty. The media plays/loads straight off the user's local disk, streamed through the backend over an authenticated, HTTP-Range endpoint (no file:// URL, no public gateway); Open on Mac/PC/Linux hands a file/folder to the host OS default handler on localhost. This spec defines the shared viewer layout, the streaming + codec-probe backend contract, the full-width overflow action bar, the OS hand-off + Open compounds, and the Transcription/AI-description analysis tabs. Implemented by the /api/media + /api/entity + /api/fs + /api/describe backend modules and the ViewOneImagePage / ViewOneVideoPage / ViewOneAudioPage frontend (shared MediaViewer layout).
+description: The viewer-first single-media pages — the "View one file" experience for playable media. /image?path=<abs> is the image viewer; /video?path=<abs> is the video viewer; /audio?path=<abs> is the audio player. These pages run full-width (no side gutters) and are dominated by the media itself — a bounded stage auto-sizes it to fit while keeping aspect ratio. Stacked top to bottom: the file's absolute path, the file NAME as the big page title, a FULL-WIDTH overflow action bar (as many buttons as fit — IPFS primary · Compress · Open: in browser · on Mac · Open folder: in browser · on Mac · Transcribe · Copy path · View properties · Move — with the rest, plus Never-publish-via-IPFS / Do-not-compress / Delete, folded into a trailing More menu by priority), a property grid, the media stage, and a side-by-side analysis panel (AI description on the left half, Transcription on the right half — both shown at once, no tabs) each with a ✓ when its content exists and a Generate button when empty. The media plays/loads straight off the user's local disk, streamed through the backend over an authenticated, HTTP-Range endpoint (no file:// URL, no public gateway); when the browser can't decode a codec the viewer automatically retries through a backend transcode stream (fragmented MP4 · H.264 · AAC) so it plays without the user converting the file, and only then offers a convert-to-H.264 button (see codecs.mdx). Open on Mac/PC/Linux hands a file/folder to the host OS default handler on localhost. This spec defines the shared viewer layout, the streaming + codec-probe backend contract, the full-width overflow action bar, the OS hand-off + Open compounds, and the AI-description/Transcription analysis panels. Implemented by the /api/media + /api/entity + /api/fs + /api/describe backend modules and the ViewOneImagePage / ViewOneVideoPage / ViewOneAudioPage frontend (shared MediaViewer layout).
 ---
 
 # LargeFileBridge — View one file (image / video / audio viewer)
@@ -34,6 +34,10 @@ Siblings this builds on and does not repeat:
   actions.
 * [One repo](./one_repo.mdx) — the **decision model** (§1) behind Add/Remove IPFS and the repo chip.
 * [Directory](./directories.mdx) — the **code badges** (§3) reused in the property strip.
+* [Codecs](./codecs.mdx) — the **codec matrix**, the "why H.264 won't play" causes, and the backend
+  transcode-stream + convert-to-H.264 contract behind this page's §5 decode-failure behavior.
+* [Hotkeys](./hotkeys.mdx) — the viewer's **keyboard shortcuts** (§5 of that spec) and the `?` overlay;
+  the shortcut scope is registered here.
 
 ---
 
@@ -130,7 +134,7 @@ buttons before folding any into **More**. Widening only the viewer routes is han
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell` (`max-w-none` for `/image` · `/video` · `/audio`, `max-w-6xl` otherwise)
 
 One column, **six bands stacked top → bottom**. The order is deliberate: the small identifying text
-is at the top, the **media is the star in the middle**, and the analysis tabs sit at the bottom. The
+is at the top, the **media is the star in the middle**, and the analysis panels sit at the bottom. The
 bands, top to bottom:
 
 1. **Full path** — the file's absolute path in small, muted, monospaced text. This is the very top line.
@@ -147,9 +151,10 @@ bands, top to bottom:
    medium letterboxes into the band). It never upscales past 100% for an image by default. Its height is
    bounded (not fill-to-viewport) precisely because band 6 sits beneath it — the "content underneath"
    exception in the charter's table rule applies here to the media stage.
-6. **Analysis tabs** — the **Transcription · AI description** tabs (§6): each carries a ✓ when its
-   content exists, defaults to whichever is available (preferring transcription), and offers a
-   **Generate** button when the active tab has nothing yet. The page scrolls to reveal this band.
+6. **Analysis panels** — the **AI description · Transcription** panels shown **side by side** (§6): AI
+   description on the left half, Transcription on the right half, **both at once** (no tabs). Each carries
+   a ✓ when its content exists and offers a **Generate** button when empty. The page scrolls to reveal
+   this band.
 
 ```
 ┌────────────┬───────────────────────────────────────────────────────────────────────────┐
@@ -165,9 +170,9 @@ bands, top to bottom:
 │            │                     │        ▶  video / image        │  ← MEDIA (bounded stage)
 │            │                     └───────────────────────────────┘                       │
 │            ├───────────────────────────────────────────────────────────────────────────┤
-│            │  ✓ Transcription   ○ AI description                                          │ ← 6 analysis tabs
-│            │  ────────────────                                                            │
-│            │  [ transcript / description text, or a Generate button ]                    │
+│            │  ✓ AI description             │  ✓ Transcription                             │ ← 6 analysis
+│            │  ───────────────              │  ──────────────                              │   panels
+│            │  [ description text / Gen ]   │  [ transcript text / Generate ]              │   (side by side)
 └────────────┴───────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -337,12 +342,20 @@ The `Open` / `Open folder` "in browser · on {label}" compound control is handle
   the wrong viewer. The redirect **replaces** history (does not push) so the wrong-kind URL never lingers
   to re-bounce on Back. (Note: audio is not a "compressible" kind on `EntityView`, so the redirect keys off
   the **name-based** kind, not `compressible`, or an audio file would wrongly fall through to `/file`.)
-* **Decode/playback failure:** the browser element failed to render the bytes (unsupported codec —
-  e.g. HEVC/ProRes in a browser that can't decode it). Show an inline notice over the viewer: "This
-  browser can't play this file's codec (`<codec>`)." with **Open raw / hand off to the OS** (the grant URL,
-  which the OS can then hand to a native app — see also **Open: on {label}**, §4.2) and, for video that
-  looks uncompressed, the **Compress…** offer as the suggested fix — bytes are never altered without the
-  user asking.
+* **Decode/playback failure → automatic backend stream (no user conversion).** When the `<video>`
+  element can't decode the raw bytes (an unsupported codec — HEVC/ProRes/MPEG-4-ASP, an "H.264" that is
+  really 10-bit/4:2:2, an MP4 with AC-3 audio or `moov` at the tail, a `.mkv`/`.avi` container), the
+  viewer does **not** dead-end. It silently re-points the same `<video>` to **`/api/media/stream`**, which
+  the backend transcodes/remuxes into a browser-safe **fragmented MP4 (H.264 · yuv420p · AAC)** on the fly
+  — so it just plays. A small **"Compatibility mode — streaming a converted copy (seeking may be
+  limited)"** badge marks this. The full codec matrix, the "why H.264 still fails" causes, and the
+  remux-vs-transcode decision tree live in **[codecs.mdx](./codecs.mdx)** (§2, §6). Only if the backend
+  stream **also** fails does the inline notice appear — "This browser can't play this file's codec
+  (`<codec>`)" — with **Open raw / hand off to the OS** (the grant URL, which the OS can hand to a native
+  app — see **Open: on {label}**, §4.2) and, for video, **Convert to H.264 (MP4)…**: a bottom-of-card
+  **offer** to re-encode the file to the universal-safe target that plays everywhere and uploads cleanly
+  to TikTok/X/YouTube/Instagram ([codecs.mdx §5/§9](./codecs.mdx)). Per the charter, conversion is always
+  an explicit, confirm-gated offer — bytes are never altered on their own.
 * **Loading:** skeleton header + action row + a shimmering viewer block; the grant + probe fetch in
   parallel; the media element mounts as soon as the grant URL resolves (probe fills the codec chip later).
 * **IPFS node unreachable:** the IPFS button disables with a tooltip (parity with one_repo.mdx §5); the
@@ -350,31 +363,35 @@ The `Open` / `Open folder` "in browser · on {label}" compound control is handle
 
 ---
 
-## 6. The analysis tabs (band 6) — Transcription · AI description
+## 6. The analysis panels (band 6) — AI description · Transcription (side by side)
 
-Beneath the media stage sits a **two-tab analysis panel**. It gives every media file a place to hold —
-and generate — its **transcript** and its **AI description**, the two things that make a large media file
-searchable and understandable without opening it.
+Beneath the media stage sits a **side-by-side analysis panel**. It gives every media file a place to hold
+— and generate — its **AI description** and its **transcript**, the two things that make a large media
+file searchable and understandable without opening it. **Both are shown at once** — there are **no tabs
+and no radio buttons to switch between them.**
 
-* **Which tabs show.** **Transcription** appears for **video + audio** (media that can have speech);
-  **AI description** appears for **video + image** (visual media). So a **video** shows **both** tabs, an
-  **audio** file shows only **Transcription**, and an **image** shows only **AI description**.
-* **The ✓ availability marker.** Each tab carries a check when its content already exists on disk (a
-  transcript at `<storageRoot>/.transcribe/<rel>.txt`; a description at
-  `<storageRoot>/.lfbridge/analysis/<rel>/description.yaml`). An empty tab shows an outlined placeholder.
-* **Default tab.** The panel opens on the tab that has content, **preferring Transcription** when both
-  are present; if neither has content it opens on the first tab. The user's click overrides this.
-* **Content vs. Generate.** When the active tab has content, the panel shows it (transcript in monospace;
-  description as prose) with a small **Regenerate** link. When it is empty, it shows a **Generate** button:
+* **The split.** **AI description fills the left half; Transcription fills the right half.** A **video**
+  shows **both** halves; an **image** shows only **AI description** (full width); an **audio** file shows
+  only **Transcription** (full width). On a narrow window the two halves stack vertically.
+* **Which half shows.** **AI description** appears for **video + image** (visual media); **Transcription**
+  appears for **video + audio** (media that can have speech).
+* **The ✓ availability marker.** Each half's header carries a check when its content already exists on
+  disk (a transcript at `<storageRoot>/.transcribe/<rel>.txt`; a description at
+  `<storageRoot>/.lfbridge/analysis/<rel>/description.yaml`), and a hollow outline when it's empty.
+* **Content vs. Generate.** When a half has content, it shows it (description as prose; transcript in
+  monospace) with a small **Regenerate** link. When it's empty, it shows a **Generate** button:
+  * **AI description → Generate description** runs a vision provider ([ai_description.mdx](./ai_description.mdx)).
+    When no provider key is configured the button stays clickable and opens a **credentials-missing popup**
+    (**Close** / **Instructions** → the `/ai-credentials` setup page in a new tab — see
+    [ai_credentials.mdx](./ai_credentials.mdx)); the copy notes that **video is uploaded to Gemini** (the
+    only provider that describes video) and an image to the configured provider.
   * **Transcription → Generate transcript** runs Whisper **locally** ([Transcribe.mdx](./Transcribe.mdx)).
     Disabled with an install hint when `whisper` isn't present.
-  * **AI description → Generate description** runs a vision provider ([ai_description.mdx](./ai_description.mdx)).
-    Disabled with a "add an API key" hint when no provider is configured; the copy notes that **video is
-    uploaded to Gemini** (the only provider that describes video) and an image to the configured provider.
 
-The two-tab analysis panel (availability ✓, default-tab rule, content vs. Generate) is handled in code:
+The side-by-side analysis panel (left = AI description, right = Transcription; availability ✓; content vs.
+Generate; single-column for audio/image; stack on narrow screens) is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `MediaAnalysis` (with `AnalysisBody` / `GeneratePane`; launchers `runTranscribeFile` in `lib/transcribe.ts` and `runDescribeFile` in `lib/describe.ts`)
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `MediaAnalysis` (a two-column grid of `AnalysisColumn`, with `AnalysisBody` / `GeneratePane`; launcher `runDescribeFile` in `lib/describe.ts` and the `useTranscribeFile` hook)
 
 See [ai_description.mdx](./ai_description.mdx) for the provider adapters, the per-kind prompt files, the
 storage YAML, and the settings (Tools) surface; see [Transcribe.mdx](./Transcribe.mdx) for the transcript
@@ -413,12 +430,14 @@ engine and placement.
 7. Error/empty states render per §5 (not-found card, kind-based wrong-route redirect incl. audio,
    decode-failure notice with Open-raw + Compress offer, loading skeleton, node-unreachable). No bytes are
    ever altered or destroyed without an explicit click + confirm.
-8. The **analysis tabs** (band 6) show **Transcription** for audio/video and **AI description** for
-   image/video (a video shows both), each with a ✓ when its content exists on disk. The panel defaults to
-   the tab with content (preferring Transcription); an empty tab offers a **Generate** button —
-   **Generate transcript** (local Whisper) or **Generate description** (a vision provider), each disabled
-   with a clear hint when its dependency (whisper / an API key) is absent. See [Transcribe.mdx](./Transcribe.mdx)
-   and [ai_description.mdx](./ai_description.mdx).
+8. The **analysis panels** (band 6) show **AI description** and **Transcription** **side by side** — AI
+   description on the left half, Transcription on the right half, **both visible at once** (no tabs/radio).
+   A **video** shows both; an **image** shows only AI description (full width); an **audio** file shows
+   only Transcription (full width); on a narrow window they stack. Each half carries a ✓ when its content
+   exists on disk and offers a **Generate** button when empty — **Generate description** (a vision
+   provider) or **Generate transcript** (local Whisper) — each disabled with a clear hint when its
+   dependency (an API key / whisper) is absent. See [ai_description.mdx](./ai_description.mdx) and
+   [Transcribe.mdx](./Transcribe.mdx).
 9. **Open on {Mac/PC/Linux}** is present only on localhost and hands the file/folder to the host OS
    default handler; in server mode (or for a non-loopback caller) the "on {label}" halves are hidden and
    only "in browser" remains ([os_open.mdx](./os_open.mdx)).

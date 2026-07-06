@@ -196,10 +196,14 @@ function pickImageTarget(prefs: CompressMediaPrefs, tools: CompressTools, srcExt
   return { media: "images", targetKey: srcExt === ".webp" ? "webp" : "jpeg", targetCodec: srcExt === ".webp" ? "WebP" : "JPEG", ext: srcExt, action: `re-encode (${prefs.quality})`, lossless: false };
 }
 
-function pickVideoTarget(prefs: CompressMediaPrefs, tools: CompressTools): Plan | { toolMissing: string } {
+function pickVideoTarget(prefs: CompressMediaPrefs, tools: CompressTools, force?: string): Plan | { toolMissing: string } {
   if (!tools.ffmpeg) return { toolMissing: "ffmpeg (brew install ffmpeg)" };
   const denied = new Set(prefs.deny);
-  const key = prefs.prefer.find((k) => VIDEO_TARGETS[k] && !denied.has(k)) ?? "h264";
+  // A forced codec (e.g. "h264" for a browser/upload-compatibility convert — codecs.mdx §5) wins over
+  // the user's prefer list; otherwise take the first preferred-and-allowed target, defaulting to H.264.
+  const key = (force && VIDEO_TARGETS[force])
+    ? force
+    : prefs.prefer.find((k) => VIDEO_TARGETS[k] && !denied.has(k)) ?? "h264";
   const t = VIDEO_TARGETS[key];
   return { media: "video", targetKey: key, targetCodec: t.label, ext: t.ext, action: `→ ${t.label} (${prefs.quality}, CRF ${videoCrf(key, prefs.quality)})`, lossless: prefs.quality === "lossless" };
 }
@@ -274,7 +278,7 @@ function fail(pathOut: string, reason: string, status: CompressResult["status"] 
   return { path: pathOut, status, reason, beforeBytes, afterBytes: null, codec: null };
 }
 
-export function compressFile(input: string): CompressResult {
+export function compressFile(input: string, forceVideoCodec?: string): CompressResult {
   const abs = path.resolve(expandHome(input.trim()));
   let beforeBytes: number | null = null;
   try {
@@ -294,7 +298,7 @@ export function compressFile(input: string): CompressResult {
   const prefs = media === "images" ? settings.images : settings.video;
   const plan = media === "images"
     ? pickImageTarget(prefs, tools, path.extname(abs).toLowerCase(), check.alphaUsed)
-    : pickVideoTarget(prefs, tools);
+    : pickVideoTarget(prefs, tools, forceVideoCodec);
   if ("toolMissing" in plan) return fail(abs, `needs ${plan.toolMissing}`, "failed", beforeBytes);
 
   const out = tmpOut(plan.ext);

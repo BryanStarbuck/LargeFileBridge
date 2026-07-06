@@ -1,5 +1,5 @@
 // The app frame: the one left bar + the routed content column (repos.mdx §2 layout).
-import { Outlet, useRouterState } from "@tanstack/react-router";
+import { Outlet, useRouterState, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import type { CurrentUser } from "@lfb/shared";
 import { api } from "../../api/client.js";
@@ -7,6 +7,7 @@ import { Sidebar } from "../../components/layout/Sidebar.js";
 import { ScanProgressBar } from "../../components/ScanProgressBar.js";
 import { IpfsStatusBanner } from "../../components/IpfsStatusBanner.js";
 import { useSessionPing } from "../../lib/useSessionPing.js";
+import { useHotkeys } from "../../lib/hotkeys.js";
 
 const FALLBACK: CurrentUser = {
   authenticated: false,
@@ -20,6 +21,20 @@ const FALLBACK: CurrentUser = {
 export function AppShell() {
   const { data: user } = useQuery({ queryKey: ["me"], queryFn: api.me });
   useSessionPing(); // record web-session activity on open + each navigation (sessions.mdx)
+  const navigate = useNavigate();
+
+  // The always-present GLOBAL nav shortcuts (hotkeys.mdx §4). Each fires on the platform modifier
+  // (Control on Mac, Alt on Windows/Linux). A page scope registered later wins any key collision.
+  useHotkeys("global", "Global", [
+    { keys: "r", label: "Go to Repos", run: () => navigate({ to: "/" }) },
+    { keys: "f", label: "Go to File System", run: () => navigate({ to: "/fs" }) },
+    { keys: "s", label: "Go to Storages", run: () => navigate({ to: "/storages" }) },
+    { keys: "d", label: "Go to Devices", run: () => navigate({ to: "/devices" }) },
+    { keys: "i", label: "Go to IPFS", run: () => navigate({ to: "/ipfs" }) },
+    { keys: "u", label: "Go to Communities", run: () => navigate({ to: "/communities" }) },
+    { keys: "n", label: "Go to Scans", run: () => navigate({ to: "/scans" }) },
+    { keys: ",", label: "Go to Settings", run: () => navigate({ to: "/settings" }) },
+  ]);
   // The media viewer pages (/image, /video, /audio) run FULL-WIDTH so the action bar can use the whole
   // column instead of leaving side gutters (media_viewer.mdx §4.1). The Devices / Peers table also runs
   // full-width so its fixed-width columns get room to breathe (devices.mdx §6). Every other route keeps

@@ -12,6 +12,7 @@ import { SsoCallbackPage } from "./pages/sign-in/SsoCallbackPage.js";
 import { SecuritySetupPage } from "./pages/security/SecuritySetupPage.js";
 import { ProgressProvider } from "./progress/ProgressContext.js";
 import { ProgressDock } from "./components/ProgressDock.js";
+import { HotkeyProvider } from "./lib/hotkeys.js";
 import { leftBar } from "./config/left_bar.js";
 import { clientLog } from "./lib/clientLog.js";
 import "./styles.css";
@@ -67,8 +68,12 @@ function Root() {
   // pages' optimistic run() (webapp.mdx §10/§12). Both live inside QueryClientProvider (from the mount).
   return (
     <ProgressProvider>
-      <RouterProvider router={router} />
-      <ProgressDock />
+      {/* Global keyboard shortcuts + the "?" help overlay (hotkeys.mdx). Inside the router so page
+          scopes can register/unregister as routes mount. */}
+      <HotkeyProvider>
+        <RouterProvider router={router} />
+        <ProgressDock />
+      </HotkeyProvider>
     </ProgressProvider>
   );
 }

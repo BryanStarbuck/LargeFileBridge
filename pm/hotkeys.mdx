@@ -1,0 +1,199 @@
+---
+title: LargeFileBridge — Keyboard shortcuts (hotkeys) & the "?" help overlay
+description: The cross-cutting keyboard-shortcut system for EVERY page. A single platform-aware modifier drives all app hotkeys — Control on macOS, Alt on Windows/Linux — so a shortcut like "R" fires on Control+R (Mac) or Alt+R (Windows) without ever clobbering the OS/browser combos (⌘ on Mac, Ctrl on Windows). Pressing "?" anywhere opens a help overlay listing the shortcuts for the CURRENT page plus the global ones; "/" jumps to the page's search box; Esc closes overlays. Each page registers its own scope of shortcuts while mounted, and the always-present Global scope holds the nav shortcuts. This spec defines the modifier rule, the "?" overlay, the registration model, and the per-page hotkey tables (Global, Media viewer, and every other page). Implemented by lib/hotkeys.tsx (HotkeyProvider + useHotkeys + the overlay), the Global scope in AppShell, and page scopes such as the Media viewer's in MediaViewer.tsx.
+---
+
+# LargeFileBridge — Keyboard shortcuts (hotkeys) & the "?" help overlay
+
+Every page in `LargeFileBridge` supports **keyboard shortcuts**, and every page can show **what its
+shortcuts do** via a **`?` help overlay**. This is one shared system so shortcuts behave identically
+everywhere and are always discoverable.
+
+---
+
+## 1. The modifier (Control on Mac · Alt on Windows/Linux)
+
+App hotkeys fire on a **single platform-aware modifier**:
+
+* **macOS → Control.** A shortcut "R" fires on **Control+R**.
+* **Windows / Linux → Alt.** The same "R" fires on **Alt+R**.
+
+This is deliberate: `⌘` (Mac) and `Ctrl` (Windows) are the **browser/OS** shortcut modifiers (⌘R / Ctrl+R
+reload the page, etc.). By taking **Control on Mac** and **Alt on Windows** we never collide with those.
+The matcher requires **exactly** that one modifier — no `⌘`, no `Shift`, no second modifier — so a hotkey
+can't be triggered by accident inside a browser combo.
+
+Two keys are **bare** (no modifier), because they are universal conventions:
+
+* **`?`** — toggle the help overlay (it's `Shift+/`, but we match the resulting `?` character).
+* **`/`** — focus the page's search box.
+
+The platform detection, the `Control`-vs-`Alt` decision, and the exact-modifier match are in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/hotkeys.tsx` — `IS_MAC` / `MODIFIER_LABEL` / `platformModifier`.
+
+Nothing fires while the user is **typing** in an `<input>`, `<textarea>`, or a contenteditable — so a
+hotkey letter typed into a search or a path field is just text. `Esc` is the exception (always dismisses
+an open overlay).
+
+---
+
+## 2. The registration model (per-page scopes)
+
+Hotkeys are **scoped**. A page registers a **scope** — a titled list of shortcuts — while it is mounted,
+and it unregisters on unmount. One always-present **Global** scope (registered by the app shell) holds the
+navigation shortcuts.
+
+* A page calls **`useHotkeys(id, title, hotkeys)`**; the scope is live for that component's lifetime.
+* A single window `keydown` listener matches a keystroke against all live scopes, **most-recently-
+  registered first** — so a **page scope wins a key collision** with the Global scope. Shortcuts are
+  therefore **context-sensitive**: the same letter can mean "go to IPFS" globally and "pin this file" on
+  the viewer, and the page meaning wins while you're on the page.
+* Closures are read **live** (via a ref), so a page may build its `hotkeys` array fresh each render with
+  the latest handlers — no memoization required.
+
+The provider, the live registry, the single key listener, and the `useHotkeys` hook are in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/hotkeys.tsx` — `HotkeyProvider` / `registerGroup` / `useHotkeys`. The provider is mounted once at the app root in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/main.tsx` — inside `ProgressProvider`, wrapping `RouterProvider`.
+
+**`/` search-focus is generic.** Rather than wire `/` on every page, the global handler focuses the first
+`input[type=search]` / search-placeholder input on the page — so every table's search box (all tables are
+TanStack tables with a search box, per the charter) responds to `/` for free. This is in
+`hotkeys.tsx` — `focusPageSearch`.
+
+---
+
+## 3. The `?` help overlay
+
+Pressing **`?`** anywhere opens a modal listing the shortcuts of **every live scope** — the current
+page's scope(s) plus Global — grouped by title, each row showing its label and its key chip (with the
+platform modifier symbol, `⌃` on Mac / `Alt` elsewhere). A small always-present **`?` button** in the
+bottom-right corner opens the same overlay for discoverability. `Esc` or a backdrop click closes it.
+
+The overlay reads scopes live (so it reflects the page you're on), merges scopes that share a title, and
+renders the modifier-aware key chips, in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/hotkeys.tsx` — `HotkeyHelpOverlay` (+ the bottom-right button in `HotkeyProvider`).
+
+---
+
+## 4. Global shortcuts (every page)
+
+Registered by the app shell; available everywhere. Modifier = **Control (Mac) / Alt (Windows)**.
+
+| Shortcut | Action |
+| --- | --- |
+| **`?`** (bare) | Open / close this help overlay |
+| **`/`** (bare) | Focus the page's search box |
+| **`R`** | Go to **Repos** |
+| **`F`** | Go to **File System** |
+| **`S`** | Go to **Storages** |
+| **`D`** | Go to **Devices** |
+| **`I`** | Go to **IPFS** |
+| **`U`** | Go to **Comm**u**nities** |
+| **`N`** | Go to **Scans** |
+| **`,`** | Go to **Settings** |
+| **`Esc`** | Close the open overlay/menu |
+
+The Global scope is registered in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell` (`useHotkeys("global", "Global", …)`).
+
+---
+
+## 5. Media viewer shortcuts (`/image` · `/video` · `/audio`)
+
+Registered by the viewer while it's open. Keys are chosen to **not collide** with the Global nav letters,
+so both work on the page. Conditional keys appear only when the action is available for the file/kind.
+
+| Shortcut | Action | When |
+| --- | --- | --- |
+| **`O`** | Open raw bytes in a new browser tab | grant available |
+| **`P`** | Add to / Remove from IPFS (**P**in) | file is in a repo, IPFS-eligible |
+| **`K`** | Compress… | image/video that "should" compress |
+| **`T`** | Transcribe / Re-transcribe | audio/video |
+| **`Y`** | Copy path (**y**ank) | always |
+| **`M`** | Move… | always |
+| **`B`** | Back | always |
+
+Native `<video>`/`<audio>` transport keys still work when the player is focused (Space = play/pause, ←/→
+= seek, ↑/↓ = volume, `F` = fullscreen where the browser provides it). Those are the browser's, not ours.
+
+The Media viewer scope is registered in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` (`useHotkeys("media-viewer", "Media viewer", …)`).
+
+---
+
+## 6. Per-page shortcuts (the plan for every page)
+
+The system is built so **any page adds shortcuts by calling `useHotkeys`**. Global (§4) and Media viewer
+(§5) ship now; the rest below are the intended per-page bindings — each page adds its scope as it's
+built. Every table page already gets **`/` search** for free (§2), and every page gets Global + `?`.
+
+Modifier = **Control (Mac) / Alt (Windows)** unless marked bare.
+
+### 6.1 Any table page (Repos · File System · Full paths · Devices · IPFS pins · Storages · Communities · Scans)
+
+The charter's tables all share a control row (search · filter · sort), so they share a shortcut vocabulary:
+
+| Shortcut | Action |
+| --- | --- |
+| **`/`** (bare) | Focus the table's search box *(shipped, generic)* |
+| **`F`** …no — reserved by Global. Use **`L`** | Open the **fi**l**ter** dropdown |
+| **`O`** | Open the s**o**rt dropdown |
+| **`J` / `K`** (bare) | Move row selection down / up |
+| **`Enter`** (bare) | Open the selected row |
+| **`X`** (bare) | Toggle-check the selected row |
+| **`A`** | Select **a**ll on the page |
+
+### 6.2 Repos (`/`)
+
+| Shortcut | Action |
+| --- | --- |
+| **`A`** | **A**dd a repo |
+| **`G`** | **G**et / scan now |
+
+### 6.3 File System (`/fs`) & Full paths (`/fs/paths`)
+
+| Shortcut | Action |
+| --- | --- |
+| **`U`** …reserved by Global. Use **`P`** | Go to **p**arent directory |
+| **`H`** | Toggle **h**idden / git-ignored files |
+| **`T`** | Switch File System ↔ Full paths **t**ab |
+
+### 6.4 IPFS dashboard (`/ipfs`)
+
+| Shortcut | Action |
+| --- | --- |
+| **`O`** | Turn the node **o**n / off |
+| **`G`** | **G**o to the pinset (Shared files) |
+
+### 6.5 Settings (`/settings`) & Tools (`/tools`)
+
+| Shortcut | Action |
+| --- | --- |
+| **`T`** | Open **T**ools (install status) |
+| **`G`** | Re-check / **g**et tool status |
+
+*(These per-page tables are the source of truth for each page's shortcuts. When a page's `useHotkeys`
+scope is added or changed, update its table here so the spec and the `?` overlay stay in step.)*
+
+---
+
+## 7. Acceptance criteria
+
+1. App hotkeys fire on **Control (macOS) / Alt (Windows/Linux)** and never on ⌘/Ctrl, so they don't
+   clobber browser shortcuts; the matcher requires exactly that one modifier.
+2. **`?`** opens a help overlay listing the **current page's** shortcuts plus **Global**, with
+   modifier-aware key chips; **`/`** focuses the page's search box; **`Esc`** closes overlays. A
+   bottom-right `?` button opens the same overlay.
+3. Hotkeys **never fire while typing** in an input/textarea/contenteditable.
+4. Each page registers its shortcuts via **`useHotkeys(id, title, hotkeys)`** for its mounted lifetime;
+   the **Global** nav scope is always present; a **page scope wins** a key collision with Global.
+5. The **Global** (§4) and **Media viewer** (§5) scopes are implemented; the per-page tables (§6) are the
+   documented plan and the pattern every other page follows as it adds its scope.
+
+<!--
+  hotkeys.mdx — cross-cutting keyboard-shortcut system. Modifier = Control (Mac) / Alt (Win/Linux), chosen
+  to avoid ⌘/Ctrl browser combos. "?" opens a per-page + Global help overlay; "/" focuses search (generic,
+  works on every TanStack table). Scopes register via useHotkeys for a component's lifetime; page scope
+  wins collisions with Global. Shipped: Global (AppShell) + Media viewer (MediaViewer ActionBar). §6 is the
+  per-page plan — the source of truth for each page's bindings; keep it in step with each useHotkeys call.
+-->

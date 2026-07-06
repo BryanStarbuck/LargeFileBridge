@@ -49,10 +49,15 @@ compressRouter.get("/check", (req, res) => {
 
 // POST /api/compress/file — compress ONE file (explicit user action, compression.mdx §1/§8).
 compressRouter.post("/file", (req, res) => {
-  const body = z.object({ path: z.string().min(1) }).safeParse(req.body);
+  // Optional videoCodec forces the output codec — used by the viewer's "Convert for compatibility"
+  // offer to always land on browser/upload-safe H.264 (codecs.mdx §5), regardless of the user's
+  // default video codec preference.
+  const body = z
+    .object({ path: z.string().min(1), videoCodec: z.enum(["h264", "hevc", "av1"]).optional() })
+    .safeParse(req.body);
   if (!body.success) return res.status(400).json({ ok: false, error: "path required" });
   try {
-    res.json({ ok: true, data: compressFile(body.data.path) });
+    res.json({ ok: true, data: compressFile(body.data.path, body.data.videoCodec) });
   } catch (e) {
     log.warn("compress", `compressFile failed for ${body.data.path}: ${(e as Error).message}`);
     res.status(400).json({ ok: false, error: (e as Error).message });

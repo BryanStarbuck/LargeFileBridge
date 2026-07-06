@@ -7,6 +7,7 @@ import { requireAllowListed } from "../auth/identify.js";
 import { currentUser } from "../auth/current-user.js";
 import { log } from "../../shared/logging.js";
 import { mintGrant, probeMedia, verifyGrant, mimeFor, parseRange } from "./media.service.js";
+import { streamPlayable } from "./transcode.service.js";
 
 export const mediaRouter = Router();
 
@@ -31,6 +32,28 @@ mediaRouter.get("/probe", requireAllowListed, (req, res) => {
     log.warn("media", `probe failed for ${p ?? "<none>"}: ${(e as Error).message}`);
     res.status(400).json({ ok: false, error: (e as Error).message });
   }
+});
+
+// GET /api/media/stream?path=&e=&s=&t= — a live, browser-SAFE fragmented MP4 (H.264 yuv420p + AAC)
+// for a video whose real codec the browser can't decode (codecs.mdx §6). Same signed-token gate as
+// /raw (a plain <video> can't send a Bearer header). No Range: this is a forward-only transcode pipe.
+mediaRouter.get("/stream", (req, res) => {
+  const p = typeof req.query.path === "string" ? req.query.path : undefined;
+  const e = typeof req.query.e === "string" ? req.query.e : undefined;
+  const s = typeof req.query.s === "string" ? req.query.s : undefined;
+  const t = typeof req.query.t === "string" ? req.query.t : undefined;
+
+  let file: { abs: string; size: number };
+  try {
+    file = verifyGrant(p, e, s, t);
+  } catch (err) {
+    const msg = (err as Error).message;
+    const code = msg === "grant expired" || msg === "bad grant" ? 403 : /ENOENT|not a file/.test(msg) ? 404 : 400;
+    log.warn("media", `stream grant rejected (${code}) for ${p ?? "<none>"}: ${msg}`);
+    return res.status(code).json({ ok: false, error: msg });
+  }
+
+  streamPlayable(file.abs, res, (cb) => req.on("close", cb));
 });
 
 // GET /api/media/raw?path=&e=&t= — stream the bytes with Range (token-gated, NOT allow-list-gated).

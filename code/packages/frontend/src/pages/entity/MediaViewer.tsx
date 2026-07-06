@@ -26,8 +26,10 @@ import { Badges } from "@/components/fs/Badges";
 import { EntityMore, type Action } from "@/components/menu/EntityMenu";
 import { OverflowActionBar, type BarItem } from "@/components/menu/OverflowActionBar";
 import { useTranscribeFile } from "@/lib/useTranscribeFile";
+import { useHotkeys } from "@/lib/hotkeys";
 import { TranscribeSetupCard } from "@/components/TranscribeSetupCard";
 import { runDescribeFile } from "@/lib/describe";
+import { CredentialsMissingDialog } from "@/components/describe/CredentialsMissingDialog";
 import { runOsOpen } from "@/lib/os";
 import { patchEntityBadges } from "@/lib/patchEntityBadges";
 import { EntityHeaderMissing } from "./entityShared";
@@ -268,6 +270,20 @@ function ActionBar({
   const openRawInBrowser = () => { if (grantUrl) window.open(grantUrl, "_blank", "noopener"); };
   const openFolderInBrowser = () => navigate({ to: "/fs", search: { path: parent } });
 
+  // Page-scoped hotkeys for the viewer (hotkeys.mdx §5). Keys avoid the global nav letters so there's no
+  // collision; each is conditional on the action being available for this file/kind.
+  const ipfsSync = v.decision === "sync";
+  const canToggleIpfs = !!v.repo && !(!ipfsSync && v.flags.neverIpfs);
+  useHotkeys("media-viewer", "Media viewer", [
+    ...(grantUrl ? [{ keys: "o", label: "Open raw in browser", run: openRawInBrowser }] : []),
+    { keys: "y", label: "Copy path", run: copyPath },
+    ...(canToggleIpfs ? [{ keys: "p", label: ipfsSync ? "Remove from IPFS" : "Add to IPFS", run: () => decide.mutate(ipfsSync ? "ignore" : "sync") }] : []),
+    ...((kind === "image" || kind === "video") && canOfferCompress(v) ? [{ keys: "k", label: "Compress…", run: onCompress }] : []),
+    ...((kind === "audio" || kind === "video") ? [{ keys: "t", label: transcript ? "Re-transcribe" : "Transcribe", run: () => transcribe.run(!!transcript) }] : []),
+    { keys: "m", label: "Move…", run: onMove },
+    { keys: "b", label: "Back", run: () => history.back() },
+  ]);
+
   // ── Build the priority-ordered action items (media_viewer.mdx §4.1). ──
   const items: BarItem[] = [];
 
@@ -387,7 +403,10 @@ function OpenCompound({
   );
 }
 
-// ── Band 6: the analysis tabs (Transcription · AI description — media_viewer.mdx §6) ──
+// ── Band 6: the analysis panels (AI description · Transcription — media_viewer.mdx §6) ──
+// Both are shown AT ONCE, side by side — AI description on the left half, Transcription on the right
+// half (no tabs/radio to switch between them). A video shows both columns; an image shows only the AI
+// description; an audio file shows only the Transcription (each full-width when it's the only one).
 function MediaAnalysis({
   view: v,
   kind,
@@ -400,6 +419,8 @@ function MediaAnalysis({
   const qc = useQueryClient();
   const canTranscribe = kind === "video" || kind === "audio"; // has (or may have) audio to transcribe
   const canDescribe = kind === "video" || kind === "image"; // AI-describable media
+  // The credentials-missing popup (ai_credentials.mdx §2): null = closed, else the honest reason string.
+  const [credsReason, setCredsReason] = useState<string | null>(null);
 
   const { data: transcript } = useQuery({
     queryKey: ["transcript", v.path], queryFn: () => api.transcript(v.path), enabled: canTranscribe,
@@ -416,94 +437,111 @@ function MediaAnalysis({
   // Async, non-blocking transcription with an instant pending state (Transcribe.mdx §5.1).
   const transcribe = useTranscribeFile(v.path, v.name);
 
-  const tabs: Array<{ id: "transcription" | "description"; label: string; present: boolean }> = [
-    ...(canTranscribe ? [{ id: "transcription" as const, label: "Transcription", present: !!transcript }] : []),
-    ...(canDescribe ? [{ id: "description" as const, label: "AI description", present: !!description }] : []),
-  ];
+  if (!canTranscribe && !canDescribe) return null;
+  const both = canTranscribe && canDescribe;
 
-  // Default tab: prefer Transcription when it has content, else the first tab that has content, else the
-  // first tab (media_viewer.mdx §6). The user's explicit choice (below) wins once set.
-  const [active, setActive] = useState<"transcription" | "description" | null>(null);
-  const activeId =
-    active && tabs.some((t) => t.id === active)
-      ? active
-      : tabs.find((t) => t.id === "transcription" && t.present)?.id ??
-        tabs.find((t) => t.present)?.id ??
-        tabs[0]?.id ??
-        null;
+  // Whether we already know (from the providers probe) that no vision key resolves on this machine.
+  const noProviderKnown = !!providers && !providers.anyAvailable;
+  // Generate/Regenerate a description. When we already know there's no key, open the credentials-missing
+  // popup straight away (no wasted call/toast); otherwise run, and still catch a RUNTIME no_provider
+  // (e.g. a video when only image-capable keys exist) and pop the same dialog (ai_credentials.mdx §2).
+  const onGenerateDescription = (overwrite: boolean) => {
+    if (noProviderKnown) {
+      setCredsReason(
+        kind === "video"
+          ? "No AI provider configured for video — a Gemini API key is required (only Gemini describes video)."
+          : "No AI provider configured — add a Gemini, Grok, or OpenAI API key.",
+      );
+      return;
+    }
+    runDescribeFile(v.path, v.name, {
+      overwrite,
+      onDone: () => qc.invalidateQueries({ queryKey: ["description", v.path] }),
+      onNoProvider: (reason) => setCredsReason(reason),
+    });
+  };
 
-  if (tabs.length === 0) return null;
+  // Left column — AI description (video + image).
+  const descriptionColumn = canDescribe ? (
+    <AnalysisColumn title="AI description" present={!!description}>
+      {description ? (
+        <AnalysisBody
+          body={description.text}
+          meta={<>AI description{description.model ? ` · ${description.model}` : ""}{description.generatedAt ? ` · ${relativeTime(description.generatedAt)}` : ""}</>}
+          onRegenerate={() => onGenerateDescription(true)}
+        />
+      ) : (
+        <GeneratePane
+          icon={<Sparkles className="h-8 w-8 text-black/30" />}
+          title="No AI description yet"
+          blurb={kind === "video"
+            ? "Generate a hyper-detailed description with a vision model. Video is uploaded to the provider (Gemini)."
+            : "Generate a hyper-detailed description with a vision model. The image is uploaded to the provider."}
+          // The button stays clickable even with no key: clicking opens the credentials-missing popup
+          // (Close / Instructions) rather than dead-ending on a disabled button (ai_credentials.mdx §2).
+          hint={noProviderKnown ? "No AI provider is configured — clicking will show how to add a key." : undefined}
+          cta="Generate description"
+          onGenerate={() => onGenerateDescription(false)}
+        />
+      )}
+    </AnalysisColumn>
+  ) : null;
+
+  // Right column — Transcription (video + audio).
+  const transcriptionColumn = canTranscribe ? (
+    <AnalysisColumn title="Transcription" present={!!transcript}>
+      {transcript ? (
+        <AnalysisBody
+          mono
+          body={transcript.text}
+          meta={<>Transcript · <button className="text-[var(--lfb-primary)] hover:underline" onClick={() => navigate({ to: "/file", search: { path: transcript.transcriptPath } })}>open file</button></>}
+          busy={transcribe.isPending}
+          onRegenerate={() => transcribe.run(true)}
+        />
+      ) : tools && !tools.whisper ? (
+        // Local tools missing — show install commands + a Re-check button so the user can fix it and
+        // run again without reloading (Transcribe.mdx §5.2). No credentials/cloud involved.
+        <TranscribeSetupCard tools={tools} rechecking={toolsFetching} onRecheck={() => void refetchTools()} />
+      ) : (
+        <GeneratePane
+          icon={<Captions className="h-8 w-8 text-black/30" />}
+          title="No transcript yet"
+          blurb="Transcribe the audio locally with Whisper — nothing leaves this computer. No account or credentials needed."
+          cta="Generate transcript"
+          busy={transcribe.isPending}
+          busyLabel="Transcribing…"
+          onGenerate={() => transcribe.run(false)}
+        />
+      )}
+    </AnalysisColumn>
+  ) : null;
 
   return (
-    <div className="mt-4">
-      {/* Tab strip — a ✓ marks a tab that already has content (media_viewer.mdx §6). */}
-      <div className="flex items-center gap-1 border-b border-[var(--lfb-border)]">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setActive(t.id)}
-            className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm ${
-              activeId === t.id
-                ? "border-[var(--lfb-primary)] font-medium text-black"
-                : "border-transparent text-black/55 hover:text-black"
-            }`}
-          >
-            <span className={`flex h-4 w-4 items-center justify-center rounded-full text-[10px] ${t.present ? "bg-emerald-500 text-white" : "border border-black/20 text-transparent"}`}>✓</span>
-            {t.label}
-          </button>
-        ))}
+    <>
+      <div className={`mt-6 grid gap-6 ${both ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1"}`}>
+        {/* Left half = AI description, right half = Transcription (media_viewer.mdx §6). */}
+        {descriptionColumn}
+        {transcriptionColumn}
       </div>
+      {/* Credentials-missing popup — Close / Instructions (ai_credentials.mdx §2). */}
+      {credsReason !== null && (
+        <CredentialsMissingDialog reason={credsReason} onClose={() => setCredsReason(null)} />
+      )}
+    </>
+  );
+}
 
-      <div className="py-4">
-        {activeId === "transcription" && (
-          transcript ? (
-            <AnalysisBody
-              mono
-              body={transcript.text}
-              meta={<>Transcript · <button className="text-[var(--lfb-primary)] hover:underline" onClick={() => navigate({ to: "/file", search: { path: transcript.transcriptPath } })}>open file</button></>}
-              busy={transcribe.isPending}
-              onRegenerate={() => transcribe.run(true)}
-            />
-          ) : tools && !tools.whisper ? (
-            // Local tools missing — show install commands + a Re-check button so the user can fix it and
-            // run again without reloading (Transcribe.mdx §5.2). No credentials/cloud involved.
-            <TranscribeSetupCard tools={tools} rechecking={toolsFetching} onRecheck={() => void refetchTools()} />
-          ) : (
-            <GeneratePane
-              icon={<Captions className="h-8 w-8 text-black/30" />}
-              title="No transcript yet"
-              blurb="Transcribe the audio locally with Whisper — nothing leaves this computer. No account or credentials needed."
-              cta="Generate transcript"
-              busy={transcribe.isPending}
-              busyLabel="Transcribing…"
-              onGenerate={() => transcribe.run(false)}
-            />
-          )
-        )}
-
-        {activeId === "description" && (
-          description ? (
-            <AnalysisBody
-              body={description.text}
-              meta={<>AI description{description.model ? ` · ${description.model}` : ""}{description.generatedAt ? ` · ${relativeTime(description.generatedAt)}` : ""}</>}
-              onRegenerate={() => runDescribeFile(v.path, v.name, { overwrite: true, onDone: () => qc.invalidateQueries({ queryKey: ["description", v.path] }) })}
-            />
-          ) : (
-            <GeneratePane
-              icon={<Sparkles className="h-8 w-8 text-black/30" />}
-              title="No AI description yet"
-              blurb={kind === "video"
-                ? "Generate a hyper-detailed description with a vision model. Video is uploaded to the provider (Gemini)."
-                : "Generate a hyper-detailed description with a vision model. The image is uploaded to the provider."}
-              disabled={!!providers && !providers.anyAvailable}
-              disabledHint="No AI provider is configured. Add a Gemini, Grok, or OpenAI API key in Settings → Tools (or export GEMINI_API_KEY / XAI_API_KEY / OPENAI_API_KEY), then reload."
-              cta="Generate description"
-              onGenerate={() => runDescribeFile(v.path, v.name, { onDone: () => qc.invalidateQueries({ queryKey: ["description", v.path] }) })}
-            />
-          )
-        )}
+// One analysis half — a titled panel with a ✓ availability marker (green when its content already
+// exists on disk, hollow when empty). Both halves render at once (media_viewer.mdx §6).
+function AnalysisColumn({ title, present, children }: { title: string; present: boolean; children: React.ReactNode }) {
+  return (
+    <section className="flex min-w-0 flex-col">
+      <div className="mb-3 flex items-center gap-2 border-b border-[var(--lfb-border)] pb-2">
+        <span className={`flex h-4 w-4 items-center justify-center rounded-full text-[10px] ${present ? "bg-emerald-500 text-white" : "border border-black/20 text-transparent"}`}>✓</span>
+        <h2 className="text-sm font-medium text-black">{title}</h2>
       </div>
-    </div>
+      {children}
+    </section>
   );
 }
 
@@ -528,7 +566,7 @@ function AnalysisBody({ body, meta, mono, onRegenerate, busy }: { body: string; 
 }
 
 function GeneratePane({
-  icon, title, blurb, cta, onGenerate, disabled, disabledHint, busy, busyLabel,
+  icon, title, blurb, cta, onGenerate, disabled, disabledHint, hint, busy, busyLabel,
 }: {
   icon: React.ReactNode;
   title: string;
@@ -537,6 +575,8 @@ function GeneratePane({
   onGenerate: () => void;
   disabled?: boolean;
   disabledHint?: string;
+  /** A muted note shown under an ENABLED button (e.g. "clicking will show how to add a key"). */
+  hint?: string;
   busy?: boolean;
   busyLabel?: string;
 }) {
@@ -554,6 +594,7 @@ function GeneratePane({
       </button>
       {busy && <div className="max-w-md text-xs text-black/50">Running locally — this can take a few minutes for a long video. You can leave this tab; progress shows in the dock.</div>}
       {disabled && !busy && disabledHint && <div className="max-w-md text-xs text-amber-700">{disabledHint}</div>}
+      {!disabled && !busy && hint && <div className="max-w-md text-xs text-amber-700">{hint}</div>}
     </div>
   );
 }
@@ -650,12 +691,19 @@ function ViewerSurface({
   onDuration: (sec: number | null) => void;
 }) {
   const [failed, setFailed] = useState(false);
+  // Video only: after the native <video> can't decode the file's codec, we retry through the backend
+  // transcode stream (/api/media/stream) which pipes a browser-safe H.264/AAC fragmented MP4
+  // (codecs.mdx §6). Only if THAT also fails do we surface DecodeFailure.
+  const [videoFallback, setVideoFallback] = useState(false);
   const [zoom, setZoom] = useState(false); // image: fit ↔ 100%
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const drag = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
 
   // Reset transient view state when the source changes.
-  useEffect(() => { setFailed(false); setZoom(false); }, [src]);
+  useEffect(() => { setFailed(false); setVideoFallback(false); setZoom(false); }, [src]);
+
+  // The backend transcode-stream URL is the grant URL pointed at /stream instead of /raw (same token).
+  const streamSrc = src ? src.replace("/api/media/raw", "/api/media/stream") : null;
 
   // Drag-to-pan a zoomed image (media_viewer.mdx §3). Only active when zoomed-in and overflowing.
   const onPointerDown = (e: React.PointerEvent) => {
@@ -702,14 +750,33 @@ function ViewerSurface({
           className={zoom ? "max-w-none" : "max-h-full max-w-full cursor-zoom-in object-contain"}
         />
       ) : kind === "video" ? (
-        <video
-          src={src}
-          controls
-          preload="metadata"
-          onLoadedMetadata={(e) => onDuration(e.currentTarget.duration || null)}
-          onError={() => { clientLog.warn("MediaViewer.video.decode", `video load failed: ${view.name}`); setFailed(true); }}
-          className="max-h-full max-w-full"
-        />
+        <>
+          <video
+            // Remount when we swap native → transcode stream so the element reloads the new source.
+            key={videoFallback ? "stream" : "native"}
+            src={videoFallback ? streamSrc ?? src : src}
+            controls
+            preload="metadata"
+            onLoadedMetadata={(e) => onDuration(e.currentTarget.duration || null)}
+            onError={() => {
+              if (!videoFallback && streamSrc) {
+                // Native decode failed (unsupported codec/profile/pixel-format/audio) — retry through the
+                // backend transcode stream instead of forcing the user to convert (codecs.mdx §6).
+                clientLog.warn("MediaViewer.video.decode", `native failed, trying transcode stream: ${view.name}`);
+                setVideoFallback(true);
+              } else {
+                clientLog.warn("MediaViewer.video.decode", `video load failed (stream too): ${view.name}`);
+                setFailed(true);
+              }
+            }}
+            className="max-h-full max-w-full"
+          />
+          {videoFallback && (
+            <div className="pointer-events-none absolute left-2 top-2 rounded bg-black/60 px-2 py-1 text-[11px] text-white/85">
+              Compatibility mode — streaming a converted copy (seeking may be limited)
+            </div>
+          )}
+        </>
       ) : (
         // Audio — a large centered card holding the transport (no visual frame to fit).
         <div className="flex w-full max-w-2xl flex-col items-center gap-4 px-6 text-white/80">
@@ -740,15 +807,23 @@ function DecodeFailure({
   src: string;
   view: EntityView;
 }) {
-  // Charter §6.1: bytes are never altered without an explicit ask. For an uncompressed video whose
-  // codec the browser can't decode, offer Compress… as the suggested fix (media_viewer.mdx §5).
-  const offerCompress = kind === "video" && canOfferCompress(view);
+  // We reach here only after BOTH native decode AND the backend transcode stream failed (codecs.mdx §6).
+  // Charter §6.1: bytes are never altered without an explicit ask — so the fixes are all offers.
+  // For a video, offer converting the file on disk to the universal-safe target (H.264 · yuv420p · AAC ·
+  // MP4 — codecs.mdx §5), which also makes it upload cleanly to TikTok/X/YouTube/Instagram.
+  const offerConvert = kind === "video" && !view.flags.noCompress;
   const noun = kind === "audio" ? "play this audio" : kind === "video" ? "play this file" : "show this image";
   return (
     <div className="max-w-md rounded-lg border border-white/15 bg-black/40 px-5 py-4 text-center text-sm text-white/80">
-      <p className="mb-3">
+      <p className="mb-1">
         This browser can't {noun}{codec ? <> ’s codec (<b>{codec}</b>)</> : null}.
       </p>
+      {kind === "video" && (
+        <p className="mb-3 text-xs text-white/55">
+          We also tried streaming a converted copy and it didn't play. Open it in a native app, or convert
+          the file to a browser- and upload-friendly H.264 MP4.
+        </p>
+      )}
       <div className="flex flex-wrap items-center justify-center gap-2">
         <a
           href={src}
@@ -758,13 +833,13 @@ function DecodeFailure({
         >
           <ExternalLink className="h-4 w-4" /> Open raw / hand off to the OS
         </a>
-        {offerCompress && (
+        {offerConvert && (
           <button
-            onClick={() => runCompressOffer(view)}
-            title="Offer to compress (nothing changes until it runs)"
+            onClick={() => runConvertOffer(view)}
+            title="Convert to H.264 MP4 (plays everywhere, uploads to TikTok/X). Nothing changes until you confirm."
             className="inline-flex items-center gap-1 rounded-md bg-amber-500/90 px-3 py-1.5 text-white hover:bg-amber-500"
           >
-            <Zap className="h-4 w-4" /> Compress…
+            <Zap className="h-4 w-4" /> Convert to H.264 (MP4)…
           </button>
         )}
       </div>
@@ -792,12 +867,14 @@ function reportCompress(r: CompressResult): void {
   }
 }
 
-/** Fire the confirm-gated compress offer — runs the real engine (compression.mdx §1). */
-function runCompressOffer(v: EntityView): void {
-  if (!window.confirm(`Compress ${v.name}? Medium quality, same resolution — the original moves to LFBridge trash (recoverable).`)) return;
-  api.compressFile(v.path)
+/** Convert a browser-incompatible video to the universal-safe H.264 MP4 target (codecs.mdx §5). Forces
+ *  the H.264 codec regardless of the user's default video-compression preference, so the result plays in
+ *  every browser and uploads to TikTok/X/YouTube/Instagram. Explicit-click + confirm (charter §6.1). */
+function runConvertOffer(v: EntityView): void {
+  if (!window.confirm(`Convert ${v.name} to H.264 MP4?\nThis re-encodes to a browser- and upload-friendly copy (same resolution); the original moves to LFBridge trash (recoverable).`)) return;
+  api.compressFile(v.path, { videoCodec: "h264" })
     .then(reportCompress)
-    .catch((e: Error) => { clientLog.error("MediaViewer.compressFile", e); toast.error(e.message); });
+    .catch((e: Error) => { clientLog.error("MediaViewer.convertFile", e); toast.error(e.message); });
 }
 
 // ── Action-bar pieces ────────────────────────────────────────────────────────────

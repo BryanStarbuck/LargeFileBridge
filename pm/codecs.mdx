@@ -1,0 +1,307 @@
+---
+title: LargeFileBridge — Video codecs, browser playback & on-the-fly streaming
+description: The knowledge base and product contract for VIDEO CODECS — the array of codecs LFBridge encounters, which ones a browser can stream in a <video> element and which it cannot, which ones each upload service (TikTok · X · YouTube · Instagram) accepts, and which compress better. When the viewer meets a file it can't play natively (e.g. an "H.264" that is really 10-bit/4:2:2, an HEVC/ProRes/MPEG-4-ASP, or a .mkv/.avi container), the backend transcodes/remuxes a browser-safe fragmented MP4 (H.264 · yuv420p · AAC) on the fly so the frontend <video> player just works — the user is NEVER required to convert the file. At the bottom, we also OFFER to convert the file to the universal-safe target (which additionally uploads cleanly to every social platform). This spec defines the codec matrix, the "H.264 but won't play" causes, the universal-safe encode target, the backend stream decision tree (remux vs transcode), the alternative-player options we evaluated, and the viewer's native → stream → convert fallback ladder. Implemented by /api/media/stream (transcode.service.ts) + the MediaViewer ViewerSurface fallback + the forced-H.264 convert path in the compression engine.
+---
+
+# LargeFileBridge — Video codecs, browser playback & on-the-fly streaming
+
+`LargeFileBridge` syncs and previews large media across a user's computers. Video is the primary large
+file (charter §Compression). A recurring problem: the browser opens a `/video?path=…` page and shows
+
+> This browser can't play this file ’s codec (H.264).
+
+even though "H.264" is supposed to play everywhere. This spec is the knowledge base for **why** that
+happens and the product contract for **what we do about it** — the short version: **the backend streams
+a browser-safe copy on the fly so the user never has to convert the file**, and separately **offers** a
+convert-to-a-friendly-codec button at the bottom.
+
+Siblings this builds on and does not repeat:
+
+* [Media viewer](./media_viewer.mdx) — the `/image` · `/video` · `/audio` viewer shell, the signed-grant
+  streaming (`/api/media/raw`), and the decode-failure state. This spec drives §5 of that page.
+* [Compression](./compression.mdx) — the ffmpeg-driven engine. The "convert to H.264" offer reuses it
+  with a forced codec.
+
+---
+
+## 1. The codec array
+
+We think of codecs as an **array**, each with: which **container(s)** it lives in, whether a browser can
+**stream** it, which upload services **accept** it, and how well it **compresses**. Facts below verified
+2024–2026 (MDN Web Media formats; platform encoder guides).
+
+| Codec / Container | Ext. | Container(s) | One-liner |
+| --- | --- | --- | --- |
+| **H.264 / AVC** | `.mp4` `.m4v` `.mov` | MP4, MOV, MKV, TS | The universal baseline. Hardware-decoded everywhere; the only codec every browser AND every social platform accepts. |
+| **H.265 / HEVC** | `.mp4` `.mov` | MP4, MOV, MKV, TS | ~40–50% smaller than H.264; patent-encumbered, so browser playback needs an OS/hardware decoder. |
+| **VP8** | `.webm` | WebM, MKV | Google royalty-free; ~H.264-class efficiency. |
+| **VP9** | `.webm` | WebM, MKV, MP4 | Royalty-free, ~HEVC-class; plays in Chrome/Firefox/Edge and Safari 14+. |
+| **AV1** | `.webm` `.mp4` | WebM, MP4, MKV | Royalty-free, most efficient mainstream codec (~30% better than HEVC/VP9). Safari decodes it **only with dedicated hardware**. |
+| **MPEG-4 Part 2 (DivX/Xvid, ASP)** | `.avi` `.divx` | AVI, MP4, MKV | Legacy "DivX/Xvid"; **browsers cannot decode it**. |
+| **ProRes** | `.mov` | MOV (QuickTime), MXF | Apple edit/intermediate codec; very large, never web-deliverable. |
+| **MPEG-2** | `.mpg` `.ts` `.vob` | MPEG-PS/TS, MP4 | Legacy DVD/broadcast; only Safari plays it. |
+| **Theora** | `.ogv` | Ogg | Obsolete; being **removed** from browsers. Do not target. |
+| **Container: MP4** | `.mp4` `.m4v` | — | The universal delivery container (H.264/HEVC/AV1 + AAC). |
+| **Container: MOV** | `.mov` | — | Apple QuickTime; structurally MP4-like. Plays if the codec inside is supported. |
+| **Container: WebM** | `.webm` | — | Web subset of Matroska; VP8/VP9/AV1 + Opus/Vorbis; MSE-friendly. |
+| **Container: MKV** | `.mkv` | — | Matroska; holds almost anything but **does not play in `<video>`** — needs remux/transcode. |
+| **Container: AVI** | `.avi` | — | Legacy Microsoft container; **does not play in `<video>`**. |
+
+The backend's cheap, no-shell probe already labels container + codec for the property grid — the
+first-known visual sample-entry fourcc (`avc1`/`hvc1`/`av01`/`vp09`/`ap4h`…) or Matroska CodecID —
+in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/media.service.ts` — `probeMedia` / `sniffVideo`.
+
+---
+
+## 2. Browser streaming support (HTML5 `<video>`)
+
+Native `<video>` decode support (desktop, 2024–2026):
+
+| Codec | Chrome | Edge | Firefox | Safari |
+| --- | --- | --- | --- | --- |
+| **H.264/AVC** (8-bit yuv420p) | ✓ | ✓ | ✓ | ✓ |
+| **VP8** | ✓ | ✓ | ✓ | ✓ (14+) |
+| **VP9** | ✓ | ✓ | ✓ | ✓ (Big Sur / iOS 14+) |
+| **AV1** | ✓ (70+) | ✓ (121+) | ✓ (67+) | ⚠︎ hardware decoder only (M3+, iPhone 15 Pro+) |
+| **HEVC/H.265** | ⚠︎ hardware-only (Win/Linux/ChromeOS) | ⚠︎ HW/OS ext | ⚠︎ OS-dependent (120+) | ✓ (licensed) |
+| **MPEG-2** | ✗ | ✗ | ✗ | ✓ |
+| **MPEG-4 ASP (DivX/Xvid)** | ✗ | ✗ | 3GP only | ✗ |
+| **Theora** | removed | removed | removed | ✗ |
+
+**Safe-everywhere set:** H.264 (8-bit yuv420p), VP8, VP9. AV1/HEVC are conditional (hardware). Everything
+else is a coin flip or a hard no. The code's playability gate treats **H.264 (8-bit 4:2:0) / VP8 / VP9 /
+AV1** as browser-decodable video and **AAC / MP3 / Opus / Vorbis / FLAC** as browser-decodable audio, in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/transcode.service.ts` — the `SAFE_VCODEC` / `SAFE_PIXFMT` / `SAFE_ACODEC` sets used by `planStream`.
+
+### 2.1 The ".mp4 says H.264 but won't play" gotcha — the five real causes
+
+The container/codec **name is not enough**. A file labeled H.264 in an MP4 can still fail. The actual
+causes (all handled by the stream decision tree, §6):
+
+1. **Advanced H.264 profile / non-`yuv420p` pixel format.** Browsers reliably decode only **8-bit 4:2:0
+   (yuv420p)** H.264 in **Constrained Baseline / Baseline / Main / High (8-bit)** profiles. Cameras and
+   NLEs often export **High 10** (10-bit), **High 4:2:2**, or **High 4:4:4 Predictive** — all technically
+   "H.264", none browser-decodable. **The pixel format, not the codec name, is the real gate.**
+2. **HEVC muxed in an MP4** on a machine with no hardware HEVC decoder — the `.mp4` opens, the video track
+   is dead.
+3. **Unsupported audio track inside the MP4.** AC-3 (Dolby), E-AC-3, DTS, TrueHD, and raw PCM are not
+   browser-decodable. The video may even play silently, or the element errors outright. Fix: re-encode
+   audio to **AAC**.
+4. **`moov` atom at the end of the file (no faststart).** For progressive HTTP playback the player must
+   read the `moov` index box first. If it's at the tail, the browser must download the whole file before
+   playing — Safari stalls/refuses. `+faststart` relocates `moov` to the front.
+5. **Wrong container for the codec.** HEVC is valid only in MP4/M4V/MOV; VP9/AV1 want WebM or MP4;
+   **MKV/AVI don't play in `<video>` at all**, whatever's inside.
+
+This is why the `/video` page in the wild showed the H.264 error: the file is H.264 but one of causes
+1/3/4/5 applies. The fix is not "tell the user to convert" — it's **stream a fixed copy** (§6).
+
+---
+
+## 3. Social upload support (which service accepts what)
+
+The other half of the array: which upload service accepts which codec. TikTok is a first-class LFBridge
+use case, so a converted copy must **both** stream in the browser **and** upload without problems.
+
+| Platform | Container | Video | Audio | Pixel fmt | Notes |
+| --- | --- | --- | --- | --- | --- |
+| **X / Twitter** | MP4 / MOV | **H.264 only** | AAC | **yuv420p** | HEVC, VP9, **AV1 all rejected**. 1080p, 30/60 fps, ~5–25 Mbps. X is the strictest — it sets the floor. |
+| **TikTok** | MP4 (preferred) | **H.264 High, L4.2** | AAC | yuv420p | 1080×1920, 9:16, 30 fps; **8–15 Mbps VBR**. H.265/VP9/AV1 force extra transcoding with less predictable output. |
+| **YouTube** | MP4 + **faststart** | **H.264 High** (also VP9/AV1/ProRes) | AAC-LC 48 kHz | yuv420p | ~8 Mbps (30 fps) / 12 Mbps (60 fps) minimums, VBR. |
+| **Instagram** | MP4 / MOV | **H.264** | AAC 48 kHz | yuv420p | 1080×1920, 9:16, 30 fps; ~3.5–10 Mbps. |
+
+**Common denominator across all four: MP4 · H.264 · AAC · yuv420p.** Because **X rejects AV1**, we never
+convert to AV1 for an upload copy — even though AV1 compresses best (§4). (Historical note: an AV1
+`compressed.mp4` failed on X precisely for this reason — charter/user experience.)
+
+---
+
+## 4. Compression efficiency (quality per bit)
+
+Best → worst: **AV1 > HEVC ≈ VP9 > H.264 > MPEG-4 ASP > MPEG-2.** Approx. bitrate savings **vs H.264 at
+equal quality**:
+
+| Codec | Savings vs H.264 | Note |
+| --- | --- | --- |
+| **AV1** | ~50–60% | Best ratio, highest encode CPU. **But X rejects it** → not an upload target. |
+| **HEVC** | ~40–50% | Great ratio; browser playback needs hardware. |
+| **VP9** | ~20–50% | ~HEVC-class; royalty-free; broad browser support. |
+| **H.264** | baseline | The compatibility target. Worse ratio, universal support. |
+| **MPEG-4 ASP** | ~20–50% **worse** | Legacy. |
+| **MPEG-2** | ~2× the bits | Legacy. |
+
+**The tension:** the codec that compresses best (AV1) is the least compatible; the most compatible
+(H.264) compresses worst. LFBridge resolves it by **purpose**: for **storage/sync compression** the user
+picks their preferred codec ([compression.mdx §7](./compression.mdx)); for **a compatibility/upload
+copy** we force **H.264** (§9). The forced-codec override lives in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `pickVideoTarget` (the `force` parameter) via `compressFile(input, forceVideoCodec)`.
+
+---
+
+## 5. The universal-safe target
+
+The single encode that streams in **every** browser AND uploads cleanly to **TikTok / X / YouTube /
+Instagram**:
+
+> **MP4 container · H.264 High profile · 8-bit · yuv420p (4:2:0) · AAC-LC audio · `+faststart`.**
+
+**Full transcode (re-encode anything → safe target):**
+
+```bash
+ffmpeg -i input.any \
+  -c:v libx264 -profile:v high -pix_fmt yuv420p -preset medium -crf 20 \
+  -vf "scale='min(1920,iw)':-2" \
+  -c:a aac -b:a 192k -ac 2 \
+  -movflags +faststart output.mp4
+```
+
+`-profile:v high -pix_fmt yuv420p` strips High 10 / 4:2:2 / 4:4:4 down to 8-bit 4:2:0. `scale=…:-2` keeps
+even dimensions (H.264 requires even w/h). `-ac 2` downmixes AC-3/DTS/multichannel to stereo AAC.
+
+**Remux only (no re-encode)** — when the video is already H.264 8-bit yuv420p but the container/faststart
+is wrong (e.g. `.mov`, or `moov` at the tail). Near-instant, lossless:
+
+```bash
+ffmpeg -i input.mov -c:v copy -c:a copy -movflags +faststart output.mp4
+```
+
+If only the audio is unsupported (AC-3/DTS/PCM): `-c:v copy -c:a aac -b:a 192k`.
+
+---
+
+## 6. On-the-fly backend streaming (the primary fix — no user conversion)
+
+When the viewer meets a file the browser can't play, we do **not** require the user to convert it on disk.
+The backend serves a **live, browser-safe fragmented MP4** that the same `<video>` element plays.
+
+### 6.1 The endpoint
+
+```
+GET /api/media/stream?path=&e=&s=&t=   (signed-token gated, like /raw) → fragmented MP4 (H.264 · AAC)
+```
+
+Same short-lived HMAC grant as `/raw` (a plain `<video>` can't send a Bearer header — [media_viewer.mdx
+§2](./media_viewer.mdx)). It is ordinary same-origin serving of the signed-in user's **own** local file to
+their **own** browser — **not** an IPFS gateway/relay (charter). It shells out to ffmpeg/ffprobe exactly
+like the compression engine; the no-shell rule applies only to the quick probe.
+
+The route (grant verify → hand to the streamer) is in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/media.router.ts` — the `GET /stream` route.
+
+### 6.2 The decision tree (cheapest path wins)
+
+`ffprobe` the first video + audio stream, then pick:
+
+| Condition | Mode | ffmpeg |
+| --- | --- | --- |
+| video codec safe **and** audio safe | **copy** (remux) | `-c copy` → fragmented MP4. Near-instant, no quality loss. |
+| video safe, audio unsafe (AC-3/DTS/PCM) | **remux-audio** | `-c:v copy -c:a aac -b:a 192k -ac 2` |
+| video unsafe (HEVC/ProRes/10-bit/4:2:2/MKV/AVI…) | **transcode** | `-c:v libx264 -profile:v high -pix_fmt yuv420p -preset veryfast -crf 23 -c:a aac …` |
+| `ffprobe` unavailable | **transcode** | the always-safe fallback |
+
+"Safe" = §2.1's real test: video codec ∈ {h264, vp8, vp9, av1} **and** pixel format ∈ {yuv420p, yuvj420p}
+(so a 10-bit/4:2:2 "H.264" correctly falls to transcode); audio ∈ {aac, mp3, opus, vorbis, flac}.
+
+To pipe without a seekable output we use **fragmented MP4**: `-movflags
+frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1` (`empty_moov` emits the init segment up front;
+`frag_keyframe` cuts a fragment at each keyframe — MSE/`<video>` ingest it cleanly).
+
+The ffprobe-driven plan, the ffmpeg argument builders, the spawn/pipe, and killing ffmpeg when the
+browser disconnects are all in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/transcode.service.ts` — `planStream` (decision) · `ffmpegArgs` (builders) · `streamPlayable` (spawn + pipe + cleanup).
+
+### 6.3 Known limitation & alternatives
+
+A live transcode/remux is a **forward-only pipe** — no HTTP `Range`, so the scrub bar can't seek past
+what's buffered (`Accept-Ranges: none`). This is acceptable for preview; the copy/remux-audio modes are
+fast and the user can still play through. Two heavier options we evaluated but did **not** ship (kept here
+for when seeking-fidelity matters, e.g. a hosted server serving long VOD):
+
+* **HLS to `hls.js`.** ffmpeg writes an `.m3u8` + segments; `hls.js` seeks cleanly against the playlist
+  and segments can be **cached** and reused across viewers. Cost: +startup latency, a frontend library,
+  and segment storage. **Best choice if/when seeking becomes a requirement.**
+* **Remux-and-serve as a static file with Range.** When ffprobe says the stream is already safe, write a
+  faststart MP4 once and serve it through the existing Range-capable `/raw` path — full native seeking,
+  negligible CPU. A good future optimization to add ahead of the live pipe.
+
+---
+
+## 7. Alternative frontend players (evaluated)
+
+Fallbacks for when native `<video>` can't decode. We chose **backend transcode (§6)** over a client-side
+player because LFBridge already has a Node backend, and server remux/transcode is cheaper and more
+reliable than WASM decode in the tab. Kept here as the option matrix:
+
+| Library | Adds | Codecs it enables | Caveat | Fully local? |
+| --- | --- | --- | --- | --- |
+| **hls.js** | HLS transport via MSE where not native | transport only (no new decoders) | ~1 MB; needs our §6 HLS branch | ✓ |
+| **video.js** (+ http-streaming) | Player UI + HLS **and** DASH | transport only | larger bundle | ✓ |
+| **Plyr** | Styled player UI wrapper | delegates to native/hls.js | needs an engine | ✓ |
+| **dash.js** | MPEG-DASH via MSE | transport only | sizable | ✓ |
+| **ffmpeg.wasm** | Full FFmpeg in the tab | ~anything (HEVC/VP9/AV1 decode) | **~31 MB WASM**, slow; short clips only | ✓ |
+| **Broadway.js** | Pure-JS/WASM H.264 decoder | **Baseline H.264 only** (no CABAC) | CPU-heavy; Baseline-only | ✓ |
+| **libav.js** | Emscripten libav* | H.264/AAC + broad demux | WASM download, heavy for realtime | ✓ |
+
+**Our fallback ladder (shipped):** native `<video>` → **backend transcode stream (§6)** → **offer to
+convert on disk (§9)**. hls.js/ffmpeg.wasm remain future options behind the same seam.
+
+---
+
+## 8. The viewer fallback ladder (how it feels)
+
+On the `/video` page ([media_viewer.mdx §5](./media_viewer.mdx)):
+
+1. **Native first.** `<video>` loads the signed `/api/media/raw` grant (Range-capable, seeks).
+2. **On decode error → backend stream.** The element silently re-points to `/api/media/stream` (same
+   grant, `/raw`→`/stream`). A small **"Compatibility mode — streaming a converted copy (seeking may be
+   limited)"** badge appears. Most files (including the H.264-that-should-play cases) play here.
+3. **If the stream also fails → the decode-failure card.** Only then do we surface **Open raw / hand off
+   to the OS** and, for video, **Convert to H.264 (MP4)…** (§9).
+
+The native→stream→fail state machine and the compatibility-mode badge are in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ViewerSurface` (the `videoFallback` state, `streamSrc`, the `<video onError>` handler) and `DecodeFailure`.
+
+---
+
+## 9. The convert offer (at the bottom — explicit, never automatic)
+
+Per the charter, **we never alter a file unless the user explicitly asks**. So conversion is an **offer**,
+shown at the bottom of the decode-failure card. **Convert to H.264 (MP4)…** re-encodes the file to the
+universal-safe target (§5) — forcing **H.264** regardless of the user's default video-compression codec —
+so the result both plays in every browser and uploads to TikTok/X/YouTube/Instagram. It runs the real
+compression engine (recoverable replace: original → LFBridge trash), confirm-gated.
+
+The convert offer + confirm and the forced-H.264 request are in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `runConvertOffer` (calls `api.compressFile(path, { videoCodec: "h264" })`); the engine honors the forced codec in `compression.service.ts` — `compressFile` / `pickVideoTarget`.
+
+---
+
+## 10. Acceptance criteria
+
+1. The codec **array** (§1) is documented with container, browser-streamability, upload-service
+   acceptance, and compression rank; the probe labels container/codec for the property grid.
+2. The viewer **never blocks on native decode failure**: when `<video>` can't play the raw bytes, it
+   automatically retries through **`/api/media/stream`**, which serves a browser-safe **fragmented MP4
+   (H.264 · yuv420p · AAC)**. The user is not required to convert the file to watch it.
+3. The stream endpoint picks the **cheapest** path (§6.2): **remux** (`-c copy`) when the file is already
+   browser-safe, **remux-audio** when only audio is unsafe, **transcode** otherwise — decided by ffprobe
+   (pixel-format-aware, so a 10-bit/4:2:2 "H.264" is transcoded, not copied). Falls back to transcode when
+   ffprobe is absent, and returns a clear 503 when ffmpeg is not installed.
+4. The stream is gated by the **same signed grant** as `/raw` (allow-listed session), serves only the
+   user's own local file, is **not** an IPFS gateway/relay, and **kills ffmpeg** when the browser
+   disconnects.
+5. Only after **both** native and stream playback fail does the **decode-failure card** appear, offering
+   **Open raw / hand off to the OS** and, for video, **Convert to H.264 (MP4)…**.
+6. **Convert** re-encodes to the universal-safe target (§5) forcing **H.264** — so the copy plays in every
+   browser AND uploads to TikTok/X/YouTube/Instagram — as an **explicit-click, confirm-gated,
+   recoverable** action (charter §6.1). We never convert automatically.
+7. We **never convert an upload copy to AV1** (X rejects it), even though AV1 compresses best.
+
+<!--
+  codecs.mdx — the codec array + the on-the-fly streaming contract. Primary fix for "browser can't play
+  this codec" is BACKEND STREAMING (/api/media/stream → fragmented MP4 H.264/AAC), NOT forcing the user to
+  convert. Convert-to-H.264 is a bottom-of-card OFFER (charter §6.1: explicit only). Universal-safe target
+  = MP4 · H.264 High · 8-bit yuv420p · AAC · +faststart (streams everywhere + uploads to TikTok/X/YT/IG; X
+  rejects AV1 so never AV1 for an upload copy). Drives media_viewer.mdx §5. Reuses compression.mdx engine
+  with a forced codec. Alt players (hls.js/ffmpeg.wasm) evaluated, not shipped — backend transcode chosen.
+-->
