@@ -305,26 +305,57 @@ it's an amber *acknowledged* note, not a red error.
 Restoring the only-our-content defaults behind the security card's **Fix** is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `enforceCompliance()`
 
+> **LOCKED — enforce writes the MODERN key.** Enforcing compliance must set **`Provide.Strategy`**, never
+> `Reprovider.Strategy`. On Kubo 0.42+ writing the deprecated `Reprovider.Strategy` **re-creates** the
+> `Reprovider` block, which makes the daemon FATAL on the next start — i.e. "enforcing compliance" would
+> silently re-arm the exact crash this feature exists to fix (§14). We fall back to the legacy key only
+> on an older build that lacks `Provide` entirely. Read compliance from `Provide.Strategy` first, too.
+
 ---
 
-## 9. Errors — every failure is a designed state
+## 9. Errors — the exhaustive taxonomy (every failure is a designed state)
 
-The page never dead-ends. Each failure names the cause and the next step.
+The page never dead-ends. Every way IPFS can fail on this computer has a **named state**, a **plain
+cause**, and a **concrete next step** — and, whenever the failure is repairable by us, a **one-click
+fix** (config problems route into the guided repair, §14). We deliberately **do not** collapse
+distinct failures into one generic "something went wrong": the reason the user hit a misleading *"the
+daemon didn't come up in time"* is exactly that the real cause (a **deprecated config key** that made
+Kubo exit immediately) was hidden behind a timeout. The rule is: **surface the real cause, never a
+symptom.**
 
-| Error | What we show | Primary action |
-| --- | --- | --- |
-| **CLI missing** | Install card (§7.1) | Install / copy command |
-| **Package manager missing** | "Homebrew/winget isn't installed" + official link + manual command | Copy command / open link |
-| **Install failed** | error panel: failed phase + output tail | Retry · Copy manual command |
-| **`ipfs init` failed** | error panel: init output | Retry · manual `ipfs init` |
-| **Daemon won't start** | error panel: start output (e.g. port 5001 busy, lock held) | Retry · copy log · troubleshooting hint |
-| **Daemon unreachable** (was running, now not) | red hero + "Can't reach the node" | Turn on · Retry · manual `ipfs daemon` |
-| **RPC timeout on a metric** | that tile shows `—` + tooltip; page stays up | Refresh |
-| **Compliance drift** | security red banner | Fix (§8) |
+The failure the daemon actually reports is read from the daemon log tail and classified into one of these causes in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-config-health.service.ts` — `diagnoseStartFailure()`
 
-Design rules: an error **replaces only the region it belongs to** (a dead metric tile doesn't blank
-the hero); the **manual command is always reachable** from any install/start failure; nothing is
-auto-retried silently — the user clicks **Retry** (charter consent posture).
+| # | Failure | How we detect it | What we show | Primary action(s) |
+| --- | --- | --- | --- | --- |
+| 1 | **CLI missing** | `ipfs` not on PATH and RPC unreachable | Install card (§7.1) | Install · copy command |
+| 2 | **Package manager missing** | brew/winget not on PATH | "Homebrew/winget isn't installed" + official link + manual command | Copy command · open link |
+| 3 | **Install failed** | installer exit ≠ 0 | error panel: failed phase + output tail | Retry · copy manual command |
+| 4 | **`ipfs` repo not initialized** | no `~/.ipfs/config` | offer to run `ipfs init` (part of turn-on) | Turn on (auto-inits) · manual `ipfs init` |
+| 5 | **`ipfs init` failed** | init exit ≠ 0 | error panel: init output | Retry · manual `ipfs init` |
+| 6 | **Config missing / unreadable** | `~/.ipfs/config` absent or not valid JSON | **Config-health card** (§14) — offer to recreate/repair | Review & Fix (confirm-then-apply) |
+| 7 | **Config deprecated → daemon crashes** | daemon log has *"Deprecated configuration detected"* (e.g. `Reprovider` after Kubo 0.42) | **Config-health card** naming the exact keys — **not** a timeout | Migrate config (§14) · copy manual steps |
+| 8 | **Repo needs migration** | daemon log asks for `ipfs daemon --migrate` (repo version bump) | error panel naming the repo-version jump | Run migration · copy `ipfs daemon --migrate` |
+| 9 | **Port already in use** | daemon log: API/gateway/swarm port busy (e.g. 5001, 8081, 4001) | error panel naming the port + likely owner (another daemon?) | Retry · change port hint · copy log |
+| 10 | **Repo lock held** | daemon log: `lock … someone else has the lock` / `repo.lock` | error panel: "another IPFS is already running (or a stale lock)" | Reuse the running node · stale-lock removal hint |
+| 11 | **Daemon won't start (other)** | health never comes up + unclassified log tail | error panel: the captured output tail verbatim | Retry · copy log · copy `ipfs daemon --enable-gc` |
+| 12 | **Daemon unreachable** (was up, now not) | RPC stops answering | red hero + "Can't reach the node" | Turn on · Retry · manual `ipfs daemon` |
+| 13 | **RPC timeout on one metric** | a single `/api/ipfs/node` sub-read times out | that tile shows `—` + tooltip; page stays up | Refresh |
+| 14 | **Compliance drift** | reprovide `all` / public gateway | security red banner (§8) | Fix |
+| 15 | **Version too old / unsupported** | installed version < recommended baseline | **Upgrade card** (§15) | Upgrade · copy upgrade command |
+| 16 | **Auto-start couldn't be set up** | launchd bootstrap/enable failed after a start | non-fatal note (the daemon is up); auto-start row shows "couldn't enable" | Retry auto-start (§13) |
+| 17 | **Stopped-off wanted, daemon won't stop** | RPC `shutdown` sent, health still ok | error note on the toggle | Retry · manual quit hint |
+
+Design rules:
+
+* An error **replaces only the region it belongs to** — a dead metric tile (row 13) never blanks the
+  hero; the security banner (row 14) never hides the tiles.
+* The **manual command is always reachable** from any install / init / start / migrate / upgrade
+  failure — the guaranteed escape hatch that never fails.
+* **Nothing is auto-retried silently** and **nothing that edits config is applied without an explicit
+  click** — the user clicks **Retry** / **Fix** (charter consent posture, §14).
+* **Every failure is logged to the fault trail** (`error.err`) via the app's logging system, with
+  enough context (phase, captured output) to diagnose after the fact (§19).
 
 ---
 
@@ -474,7 +505,316 @@ The running dashboard's *"Start on reboot"* toggle row is rendered in code:
 
 ---
 
-## 14. Acceptance criteria
+## 14. Config health & guided self-repair (the crash the user actually hit)
+
+This section exists because of a **real incident**: the user pressed **Turn on IPFS** and the app said
+*"The daemon didn't come up in time."* It hadn't timed out at all — Kubo **0.42** exits **immediately**
+with `FATAL … Deprecated configuration detected. Manually migrate 'Reprovider' … Remove 'Reprovider'
+from your config.` The daemon crash-looped, health never came up, and the app mislabeled a **config
+crash** as a **timeout**. A human had to open a terminal, hand-edit `~/.ipfs/config`, and restart it.
+**The web app must do that work for the user.** This section is that capability.
+
+### 14.1 What "config health" checks
+
+We read the node's config file (`$IPFS_PATH/config`, default `~/.ipfs/config`) and classify it — a
+**metadata-only** read that opens nothing else. The health report is a list of **issues**, each with a
+severity, a plain-language title, the exact keys involved, and whether we can **auto-fix** it.
+
+Reading `$IPFS_PATH/config`, parsing it, and classifying every issue (missing / unreadable / deprecated / non-compliant) into a health report is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-config-health.service.ts` — `configHealth()`
+
+| Issue class | Severity | Example / trigger | Auto-fixable? |
+| --- | --- | --- | --- |
+| **Missing** | blocker | no `config` file (repo never `ipfs init`-ed) | yes — offer `ipfs init` (turn-on path §7.2) |
+| **Unreadable / corrupt** | blocker | file exists but isn't valid JSON | partial — offer to back up + recreate defaults |
+| **Deprecated key present** | blocker (crashes daemon) | `Reprovider.*` on Kubo ≥ 0.42 → migrate to `Provide.*` | **yes** — the one-click migration (§14.3) |
+| **Repo needs migration** | blocker | repo version behind the binary (`ipfs daemon --migrate`) | yes — run the migration as a job |
+| **Non-compliant posture** | warn | reprovide `all` / public gateway | yes — the only-our-content Fix (§8) |
+| **Suspicious value** | info | e.g. `StorageMax` unset/huge, GC off | offer a sane default, never forced |
+
+Severity drives urgency: a **blocker** means IPFS **cannot run** until it's resolved, so it takes over
+the off-page (§17.2) with the repair front-and-center; a **warn/info** shows as a quiet card on the
+running dashboard and never blocks.
+
+### 14.2 Surfacing the REAL start-failure reason (no more fake timeouts)
+
+The turn-on flow (§7.2, §16) no longer reports a bare *"didn't come up in time."* When the daemon
+doesn't answer health within the window, we **read the tail of the daemon log** (`ipfs-daemon.log`) and
+**classify** it before we fail the job (the taxonomy in §9): deprecated config, repo-needs-migrate,
+port busy, lock held, or genuinely-slow/unknown. Only an **unclassified** stall is reported as a
+timeout — and even then we show the captured log tail.
+
+Classifying the daemon's own output (deprecated-config / migrate / port-in-use / lock-held / unknown) into a cause + suggested fix is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-config-health.service.ts` — `diagnoseStartFailure()`
+
+Wiring that diagnosis into the start/install jobs — so the job's `error` names the real cause and, when it's a config crash, hands off to the repair — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `startDaemon()` / `startInstall()` / `controlDaemon()`
+
+### 14.3 The Config-health card — review, then fix (confirm-then-apply, LOCKED)
+
+We **never rewrite the user's config on our own.** The flow is always **surface → explain → confirm →
+apply → verify**:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  ⚠  IPFS can't start — its configuration needs a small fix                    │
+│                                                                               │
+│  Kubo v0.42 removed an old setting your config still has. Until it's          │
+│  migrated, the IPFS service exits immediately (this is why "Turn on"          │
+│  looked like it timed out).                                                   │
+│                                                                               │
+│  What we'll change:                                                           │
+│   • Remove the deprecated  Reprovider  block                                  │
+│   • Keep  Provide.Strategy = "pinned"  (your announce-only-our-content        │
+│     setting — unchanged in effect)                                            │
+│   • Back up your current config to  ~/.ipfs/config.bak.<timestamp>  first     │
+│                                                                               │
+│  [ Review & Fix Configuration ]   ▸ Or do it yourself (copy the steps)        │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+* The card **lists each change in plain language** before the user commits — what is removed, what is
+  preserved, and that a **timestamped backup** is written first. This is the whole point: the user hit
+  a wall they couldn't cross without a terminal; now they read a sentence and click one button.
+* **Confirm-then-apply.** Pressing **Review & Fix** is the consent. On click we: (1) **back up** the
+  live config, (2) apply the classified fixes (remove deprecated keys, migrate values into their new
+  home, recreate a missing/corrupt config from defaults, or run the repo migration), (3) **re-verify**
+  by attempting the start again, and (4) settle the page on the resulting state.
+* **Always a manual escape hatch.** A disclosure shows the exact commands (`cp config config.bak…`,
+  the key edits, `ipfs daemon --enable-gc`) so a user who prefers the terminal — or a fix we can't
+  safely automate — is never stuck.
+* **Backup, always.** Every automated config write is preceded by a copy to
+  `~/.ipfs/config.bak.<unix-seconds>`, and the card tells the user where it is, so the change is
+  reversible.
+
+Backing up the config and applying the confirmed repairs (remove deprecated keys, migrate values, recreate defaults, or run the repo migration), then re-verifying, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-config-health.service.ts` — `repairConfig()`
+
+The Config-health card — the plain-language change list, the confirm-then-apply button, the manual disclosure, and the post-fix retry — is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `ConfigHealthCard` component
+
+### 14.4 Where config health appears
+
+* **Off-page (§17.2):** a **blocker** issue takes over — you can't turn IPFS on until it's fixed, so
+  the repair is the primary content (above any turn-on button).
+* **Running dashboard:** a **warn/info** issue shows as a quiet card below the tiles; the node is up,
+  so nothing is blocked.
+* **After a failed start:** the start job's error is a config crash → the off-page shows the card
+  instead of a generic error panel, pre-loaded with the diagnosed issue.
+
+---
+
+## 15. Keeping IPFS current — the upgrade flow
+
+IPFS moves fast, and an **out-of-date** Kubo is exactly what caused the incident (the config-key
+removal landed in a release). So the dashboard **notices when the installed version is behind** and
+offers a guided upgrade — with the same **confirm-then-do** posture as everything else.
+
+### 15.1 How we decide "old"
+
+* We compare the installed `ipfs version` against a **recommended-minimum baseline baked into the app**
+  (network-free, authoritative for "too old to be safe/known-good"). Below the baseline → an **Upgrade
+  recommended** state.
+* Where the package manager can tell us cheaply and locally that a newer build exists (`brew outdated
+  ipfs`, `winget upgrade`), we surface *"an update is available."* We **do not** phone a remote version
+  service just to nag — consistent with the app's local-first, no-surprise-network posture.
+
+Reading the installed version, comparing it to the recommended baseline, and (best-effort, local) asking the package manager whether a newer build exists is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-config-health.service.ts` — `upgradeInfo()`
+
+### 15.2 The Upgrade card — willingness, then upgrade
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  ↑  A newer, recommended version of IPFS is available                         │
+│     Installed: Kubo v0.29   ·   Recommended: v0.42+                            │
+│     Older versions can fail to start after a config change. Upgrading keeps    │
+│     your node healthy and secure.                                             │
+│                                                                               │
+│  [ Upgrade IPFS ]   ▸ Or upgrade it yourself:  brew upgrade ipfs              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+* Shown as a **quiet card** on the running dashboard (info, non-blocking) — a healthy node is still
+  healthy. It becomes **prominent** only when the installed version is **below the hard baseline**
+  (i.e. a version we know can crash), where it may block on the off-page like any other blocker.
+* Pressing **Upgrade IPFS** is the willingness/consent. It runs the package-manager upgrade as a
+  **progress job** (the §16 progress view — phases `upgrading → restarting → done`), stopping and
+  restarting the daemon around the upgrade, then re-checking health and config (§14). **Always** with
+  a copyable manual command (`brew upgrade ipfs` / `winget upgrade --id IPFS.Kubo`).
+* If no package manager can auto-upgrade (Linux/manual installs), we show only the manual command +
+  the dist.ipfs.tech link — never a broken button.
+
+Running the package-manager upgrade as a single-flight job (stop → upgrade → restart → re-verify) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `startUpgrade()`
+
+The Upgrade card is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `UpgradeCard` component
+
+---
+
+## 16. The redesigned "Turn on IPFS" experience (great UI above, terminal below)
+
+The old turn-on was a plain button that dropped straight into a black terminal log — and when the
+daemon crashed, that log was the *only* thing the user saw, with a misleading title. The redesign
+leads with a **clear, friendly status hero** and treats the terminal as **secondary, collapsible
+detail**.
+
+### 16.1 Layout — hero first, terminal second
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│   ◐  Starting IPFS…                                              phase: starting│  ← BIG status hero
+│      Bringing your node online so your big files can sync.                     │
+│      ● Initialize repository   ● Start service   ○ Verify health   ○ Keep-on   │  ← step chips (lit as they pass)
+│                                                                               │
+│   ▸ Show technical details (terminal)                                          │  ← collapsed BY DEFAULT
+│   ┌─────────────────────────────────────────────────────────────────────┐    │
+│   │ $ ipfs daemon --enable-gc                                           │    │  ← the existing log, now tucked away
+│   │ Initializing daemon…                                               │    │
+│   └─────────────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+* **The hero is the story:** a status glyph (spinner / green check / amber warning), a one-line
+  human sentence, the current **phase**, and a row of **step chips** (*Initialize · Start · Verify ·
+  Keep-on-reboot*) that light up as each phase passes. A non-technical user watches the chips, not the
+  log.
+* **The terminal is demoted** to a **"Show technical details"** disclosure, **collapsed by default**.
+  It's the same append-only log (unchanged data), kept for the power user and for support — but it no
+  longer *is* the UI.
+* **On success**, the hero flips to a green *"IPFS is running"* and the page settles onto the running
+  dashboard (or, on the primary path, confirms *"…and it'll start automatically on reboot ✓"*).
+* **On failure**, the hero flips to the **diagnosed** state (§9/§14): a config crash becomes the
+  Config-health card with the real reason, **not** a scary red log. The terminal detail is still one
+  click away.
+
+The redesigned turn-on hero (status glyph + human sentence + phase + step chips) wrapping the collapsible terminal log is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `ProgressView` (hero) + `LogBox` (collapsible detail)
+
+### 16.2 This applies everywhere a job runs
+
+Install, start, stop, migrate/repair, and upgrade all share this one progress presentation (§7.2) —
+so the experience is identical whether the user is installing for the first time or recovering from a
+crash. The only difference is the sentence and the step chips shown.
+
+---
+
+## 17. The three start-up scenarios & first-run routing
+
+Per the prompt: **when a user starts the web app**, if IPFS is (1) **not installed**, (2) **not
+running**, or (3) **not set to restart on reboot**, the app should **guide them to the UI** that fixes
+that specific scenario. These are three distinct destinations with three distinct designs.
+
+How the app picks the scenario on entry — checking installed → running → autostart, in that priority order — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/IpfsStatusBanner.tsx` — `IpfsStatusBanner` (chooses the nudge + destination) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsOffPage.tsx` (the destination pages)
+
+Priority order (the first true one wins): **not installed → not running → running but no reboot
+auto-start**. A machine that is installed + running + auto-starting is fully healthy → **no nudge at
+all** (the charter's no-nagging rule holds).
+
+### 17.1 Scenario A — IPFS is not installed
+
+* **Trigger:** no `ipfs` CLI and no reachable daemon.
+* **App-start behavior:** the app-wide banner reads *"IPFS isn't installed — your files can't sync,"*
+  action **Install IPFS**, routing to **`/ipfs/off`**, which renders the **Install card** (§7.1).
+* **Agree-button (Install) behavior:** starts the cross-platform install **job** (§7.2/§16) —
+  detect → install → init → start → compliance → (offer keep-on-reboot). On done, redirect to `/ipfs`.
+* This is a **blocker**: nothing syncs without a node.
+
+### 17.2 Scenario B — IPFS is installed but not running
+
+* **Trigger:** CLI present, daemon not answering (the classic **post-reboot** state, or a crash).
+* **App-start behavior:** banner reads *"IPFS isn't running — your files can't sync,"* action **Start
+  IPFS**, routing to **`/ipfs/off`**, which renders the **two-button turn-on choice** (§12.1) — unless
+  **config health** finds a blocker (§14), in which case the **Config-health card takes over** (you
+  can't turn it on until the config is fixed; this is the crash-recovery path).
+* **Agree-button behavior:**
+  * **Turn On + keep on (primary)** → `POST /daemon {action:"start", autostart:true}` — start now
+    **and** install reboot auto-start (§13). The redesigned progress hero (§16) shows all four step
+    chips including *Keep-on-reboot*.
+  * **Turn On only (secondary, after "Or")** → `POST /daemon {action:"start"}` — start now, **don't**
+    touch the reboot setup.
+  * **Review & Fix (when a config blocker exists)** → the guided repair (§14.3), then auto-retry the
+    start.
+
+### 17.3 Scenario C — running, but won't come back after a reboot
+
+* **Trigger:** installed **and** running, but reboot **auto-start is off** (`autostart.supported &&
+  !autostart.enabled`). Sync works *now*, but the next restart silently drops the node — the exact
+  failure this whole feature exists to end.
+* **App-start behavior — deliberately gentle (LOCKED).** Because the node is **healthy right now**, we
+  must **not** show the alarming red/amber "can't sync" banner (that would violate no-nagging). Instead
+  we show a **low-prominence, dismissible, one-time** encouragement — an **info** strip (or the blue
+  card on the dashboard, §18) reading *"IPFS is on, but it won't restart automatically after you
+  reboot. Turn on auto-start so your files keep syncing."* with a single **Turn on auto-start** button.
+  * It is **dismissible** and, once dismissed (or once auto-start is enabled), it does not return —
+    this is encouragement, not a nag. It never blocks a page.
+* **Agree-button (Turn on auto-start) behavior:** `POST /autostart {action:"install"}` (§13) — writes
+  and loads the launchd LaunchAgent. On success the strip disappears and the dashboard's control flips
+  to its quiet "on ✓" status (§18). No daemon restart, no interruption.
+
+The dismissible, one-time auto-start encouragement (distinct from the blocking "can't sync" banner, shown only when running-but-not-auto-starting) is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/IpfsStatusBanner.tsx` — `IpfsStatusBanner`
+
+---
+
+## 18. Auto-start on reboot — the "encourage it" control & prominence rules
+
+Auto-start is something we **want** the user to turn on (it's what keeps files syncing after a
+restart), so when it's **off** we make the offer **prominent**; once it's **on**, we get out of the way
+and reduce it to a **quiet status line**.
+
+| Auto-start state | Prominence | UI |
+| --- | --- | --- |
+| **Off** (supported, not enabled) | **High — encourage** | A **filled blue** primary button *"Turn on auto-start"* with a one-line "why" (*so IPFS restarts itself after a reboot*). It reads as a call-to-action. |
+| **On** (enabled) | **Low — inform** | **No filled button.** A muted status line *"Starts on reboot ✓"* with a small, secondary **Turn off** affordance. Not a CTA — just a confirmation. |
+| **Unsupported OS** | **Low — inform** | A muted *"not available on this operating system yet"* line; no button. |
+
+* The **blue fill is reserved for the off→on call-to-action** — the thing we're encouraging. When
+  auto-start is already on, using a filled button would wrongly compete for attention; it becomes plain
+  status text with only a understated way to turn it back off.
+* This rule holds in **both** places auto-start appears: the running dashboard's **auto-start row**
+  (§5.1/§13) and the off-page's two-button choice (§12.1, where "keep on reboot" is the **primary,
+  filled** button precisely because it's the encouraged path).
+
+The prominence switch — filled blue CTA when off vs. muted status line when on — is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `AutostartRow` component
+
+---
+
+## 19. Logging every IPFS fault to the error trail
+
+Everything that can go wrong with IPFS — an install exit code, a daemon that won't start, a config
+crash, a failed migration, an upgrade error, a launchd hiccup, a compliance-fix failure — is written
+to the app's **existing logging system**, so there is always a durable fault trail to diagnose from
+(the user pressed a button, it failed; the *why* must be recoverable after the fact).
+
+* **One logging system, two files.** The app already writes an append-only `log.log` (everything) and
+  `error.err` (the complete WARN/ERROR/FATAL fault trail) at the state-root log dir. IPFS code logs
+  through it — never `console.log`, never a bespoke file.
+* **Severity discipline (so `error.err` stays meaningful):**
+  * **`log.error`** — a genuine fault the user cares about: a failed start we couldn't recover, a
+    failed config repair, a failed install/upgrade, a failed pin/add. These land in **`error.err`**.
+  * **`log.warn`** — a soft/expected-ish problem: a launchd non-zero on a benign case, a best-effort
+    metric read that failed, a compliance enforce that couldn't apply. Also in `error.err` but marked
+    WARN.
+  * **`log.debug`** — routine "node is just off" probes (health/peerId/version when unreachable) —
+    **kept out of `error.err`** so a normally-off node doesn't spam the fault trail.
+* **Context tag `ipfs`.** Every line carries the `ipfs` context so the trail is filterable.
+* **The crash we hit is now logged loudly.** A `FATAL … Deprecated configuration` from the daemon is
+  captured, classified (§14.2), and logged at **ERROR** with the diagnosed cause — not swallowed behind
+  a timeout.
+
+The two-file logging system (`log.log` = everything, `error.err` = the WARN/ERROR/FATAL fault trail) IPFS code writes through is defined in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — the exported `log`
+
+The IPFS fault sites that must record to the trail (start-failure diagnosis, config repair, upgrade, autostart, compliance) log via `log.error` / `log.warn` in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-config-health.service.ts`, `ipfs-node.service.ts`, `ipfs-autostart.service.ts`, and `ipfs.service.ts`
+
+---
+
+## 20. Acceptance criteria
 
 1. The **IPFS** left-bar item lands on **`/ipfs`** — this **dashboard** — with a hero (installed /
    running / version / PeerID + on/off toggle), a metric-tile grid, a gateway panel, and the security
@@ -523,6 +863,44 @@ The running dashboard's *"Start on reboot"* toggle row is rendered in code:
     off (KeepAlive is off) and simply comes back at the next reboot/login.
 14. Data adds **`POST /api/ipfs/autostart {install|remove}`** and an **`autostart`** flag on **`POST
     /api/ipfs/daemon`** (start only); both return the fresh node payload (§11).
+15. **Every failure is a distinct, named state** (§9): the exhaustive taxonomy (CLI/package-manager
+    missing, install/init failed, config missing/corrupt/**deprecated**, repo-needs-migrate, port busy,
+    lock held, daemon won't start / unreachable, metric timeout, compliance drift, version too old,
+    auto-start failed, won't-stop) — each with a plain cause, a next step, an always-reachable manual
+    command, and **no generic "something went wrong."**
+16. **A daemon that crashes on startup surfaces its REAL reason, not a timeout** (§14.2): the start job
+    reads the daemon log tail and classifies it; a *"Deprecated configuration … Reprovider"* crash is
+    reported as a config problem with the guided fix — reproducing and **resolving** the exact incident
+    the user hit.
+17. **Config health is checked and repairable with confirm-then-apply** (§14): the app reads
+    `$IPFS_PATH/config`, classifies issues (missing / corrupt / deprecated / needs-migrate /
+    non-compliant / suspicious), and offers a **Config-health card** that lists each change in plain
+    language, writes a **timestamped backup first**, applies only on the user's click, re-verifies, and
+    always offers the manual steps. The app **never** edits config without an explicit click.
+18. **Out-of-date IPFS is noticed and upgradable** (§15): the dashboard compares the installed version
+    to a baked-in recommended baseline (network-free) and, best-effort/local, to the package manager;
+    below baseline it offers a guided **Upgrade** job (with a manual command), gated on the user's
+    willingness — prominent only when the version is old enough to be unsafe.
+19. **The turn-on UI leads with a friendly hero, terminal demoted** (§16): a status glyph + human
+    sentence + phase + step chips are the primary surface; the append-only log is a **collapsed
+    "technical details"** disclosure; on failure the hero becomes the diagnosed state (config card /
+    error), not a raw red log. Install / start / stop / repair / upgrade all share this one view.
+20. **The three start-up scenarios route to the right help** (§17): on app start, **not installed** →
+    Install (blocker banner → Install card), **not running** → Start (blocker banner → two-button
+    choice, or Config-health card when a config blocker exists), **running but no reboot auto-start** →
+    a **gentle, dismissible, one-time** encouragement (never the alarming can't-sync banner, since the
+    node is healthy now). A fully-healthy, auto-starting node shows **no nudge**.
+21. **Auto-start prominence follows its state** (§18): when **off** it's a **filled blue** "Turn on
+    auto-start" CTA (with a why); when **on** it's a **muted "Starts on reboot ✓"** status line with
+    only an understated Turn-off — the blue fill is reserved for the encouraged off→on action, in both
+    the dashboard row and the off-page choice.
+22. **Every IPFS fault is logged to the trail** (§19): install / start / config-repair / migrate /
+    upgrade / autostart / compliance failures write through the app's existing logging system (`ipfs`
+    context) — real faults at **ERROR** (into `error.err`), soft ones at **WARN**, routine node-off
+    probes at **DEBUG** (kept out of the fault trail).
+23. **New data surface:** `GET /api/ipfs/config-health`, `POST /api/ipfs/config-repair {issueIds}`,
+    `POST /api/ipfs/upgrade`, and a **`configHealth`** + **`upgrade`** block on `GET /api/ipfs/node`;
+    job phases add **`migrating`/`repairing`** and **`upgrading`** (§14–§16).
 
 <!--
   This is the IPFS DASHBOARD / node control-panel spec (the left-bar LANDING page at /ipfs), distinct
@@ -544,4 +922,24 @@ The running dashboard's *"Start on reboot"* toggle row is rendered in code:
   gateway local-only, GC on) with Fix (knowledge/ipfs.mdx §6/§10); app-wide banner ONLY when not-installed
   or not-running and NEVER when healthy (suppressed on /ipfs itself). Data: GET /api/ipfs/node (+ daemon,
   install, install/status). Table/nav conventions come from repos.mdx/menus.mdx/left_bar.mdx — don't restate.
+
+  ADDED (§14–§23) after a real incident (Turn-on reported a "timeout" that was actually Kubo 0.42
+  FATAL-ing on a deprecated `Reprovider` config key): (§9) an EXHAUSTIVE error taxonomy — every failure
+  is a distinct named state, never a generic error, and the daemon's REAL start-failure reason is read
+  from its log tail (diagnoseStartFailure) instead of a fake timeout. (§14) CONFIG HEALTH & guided
+  self-repair — read $IPFS_PATH/config, classify issues (missing/corrupt/DEPRECATED/needs-migrate/
+  non-compliant/suspicious), and a Config-health card that lists each change in plain language, BACKS UP
+  first (config.bak.<ts>), applies only on an explicit click (confirm-then-apply, LOCKED — never edit
+  config on our own), re-verifies. (§15) UPGRADE flow — installed vs baked-in recommended baseline
+  (network-free) + best-effort local package-manager check; guided Upgrade job gated on willingness.
+  (§16) REDESIGNED turn-on — friendly status hero + step chips PRIMARY, terminal log DEMOTED to a
+  collapsed "technical details" disclosure. (§17) THREE start-up scenarios routed on app entry
+  (not-installed → not-running → running-but-no-autostart), the third deliberately GENTLE/dismissible/
+  one-time (node is healthy → no alarming banner, no nagging). (§18) AUTO-START prominence: filled BLUE
+  CTA when OFF (encourage), muted "Starts on reboot ✓" status when ON. (§19) LOGGING — every IPFS fault
+  goes through the existing log system (log.error→error.err for real faults, warn for soft, debug for
+  routine node-off). New endpoints: GET /config-health, POST /config-repair {issueIds}, POST /upgrade;
+  configHealth+upgrade blocks on GET /node; job phases repairing/migrating + upgrading. Backend home:
+  ipfs-config-health.service.ts. NOTE: user said "ipfs.mdx" but this NODE-LIFECYCLE surface belongs here
+  in ipfs_ui.mdx; ipfs.mdx stays the PINSET table spec.
 -->

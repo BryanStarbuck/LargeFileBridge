@@ -475,8 +475,8 @@ function MediaAnalysis({
           icon={<Sparkles className="h-8 w-8 text-black/30" />}
           title="No AI description yet"
           blurb={kind === "video"
-            ? "Generate a hyper-detailed description with a vision model. Video is uploaded to the provider (Gemini)."
-            : "Generate a hyper-detailed description with a vision model. The image is uploaded to the provider."}
+            ? "Generate a hyper-detailed description with a vision model. Video is uploaded to the provider (Gemini). Large videos are compressed to a temporary copy for upload — your original file is never changed."
+            : "Generate a hyper-detailed description with a vision model. The image is uploaded to the provider. Large images are compressed to a temporary copy for upload — your original file is never changed."}
           // The button stays clickable even with no key: clicking opens the credentials-missing popup
           // (Close / Instructions) rather than dead-ending on a disabled button (ai_credentials.mdx §2).
           hint={noProviderKnown ? "No AI provider is configured — clicking will show how to add a key." : undefined}

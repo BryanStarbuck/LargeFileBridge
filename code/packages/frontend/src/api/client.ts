@@ -33,6 +33,9 @@ import type {
   IpfsDaemonResult,
   IpfsDaemonAction,
   IpfsAutostartAction,
+  IpfsConfigHealth,
+  IpfsConfigRepairResult,
+  IpfsLiveness,
   ScanJob,
   RescanResult,
   ProgressListResult,
@@ -151,6 +154,8 @@ export const api = {
 
   // IPFS dashboard (ipfs_ui.mdx) — node status, install, on/off toggle, install/start progress.
   ipfsNode: () => unwrap<IpfsNodeStatus>(http.get("/ipfs/node")),
+  // Cheap app-wide liveness for the nudge banner (ipfs_ui.mdx §10/§17) — never walks the pinset.
+  ipfsLiveness: () => unwrap<IpfsLiveness>(http.get("/ipfs/liveness")),
   ipfsInstall: () => unwrap<IpfsInstallJob>(http.post("/ipfs/install")),
   ipfsInstallStatus: () => unwrap<IpfsInstallJob>(http.get("/ipfs/install/status")),
   // The on/off toggle. `autostart` (start only) ALSO sets IPFS to come back after a reboot (§12).
@@ -159,6 +164,13 @@ export const api = {
   // Set up or remove reboot auto-start directly; returns the fresh node status (ipfs_ui.mdx §13).
   ipfsAutostart: (action: IpfsAutostartAction) =>
     unwrap<IpfsNodeStatus>(http.post("/ipfs/autostart", { action })),
+  // Config health & guided self-repair (ipfs_ui.mdx §14) — read the node config, then fix it on an
+  // explicit click (confirm-then-apply; a timestamped backup is written first).
+  ipfsConfigHealth: () => unwrap<IpfsConfigHealth>(http.get("/ipfs/config-health")),
+  ipfsConfigRepair: (issueIds?: string[]) =>
+    unwrap<IpfsConfigRepairResult>(http.post("/ipfs/config-repair", { issueIds })),
+  // Upgrade the ipfs binary via the package manager (ipfs_ui.mdx §15) — runs as a watchable job.
+  ipfsUpgrade: () => unwrap<IpfsInstallJob>(http.post("/ipfs/upgrade")),
 
   // File System column browser (directory.mdx).
   fsHome: () => unwrap<{ home: string }>(http.get("/fs/home")),

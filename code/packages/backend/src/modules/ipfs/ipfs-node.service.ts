@@ -14,11 +14,19 @@ import type {
   IpfsJobKind,
   IpfsPlatform,
   IpfsDaemonResult,
+  IpfsLiveness,
 } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { computeIpfsPage } from "./ipfs-page.service.js";
 import { autostartStatus, installAutostart } from "./ipfs-autostart.service.js";
+import {
+  configHealth,
+  diagnoseStartFailure,
+  upgradeInfo,
+  upgradePlan,
+  type StartDiagnosis,
+} from "./ipfs-config-health.service.js";
 import * as ipfs from "./ipfs.service.js";
 import { log } from "../../shared/logging.js";
 
@@ -149,6 +157,34 @@ export async function nodeStatus(): Promise<IpfsNodeStatus> {
     return { supported: process.platform === "darwin", installed: false, enabled: false };
   });
 
+  // Config health (ipfs_ui.mdx §14) — is the node config sane / repairable? Reads $IPFS_PATH/config;
+  // this is what makes a "won't start" crash a named, fixable state instead of a fake timeout.
+  const cfgHealth = await configHealth().catch((e) => {
+    log.warn("ipfs", `config health read failed: ${(e as Error).message}`);
+    return {
+      checked: false,
+      path: "",
+      exists: false,
+      readable: false,
+      healthy: true,
+      hasBlocker: false,
+      issues: [],
+    };
+  });
+
+  // Is the installed Kubo old vs. our recommended baseline? (ipfs_ui.mdx §15) — network-free compare.
+  const upgrade = await upgradeInfo(p, version, packageManagerPresent).catch((e) => {
+    log.warn("ipfs", `upgrade info read failed: ${(e as Error).message}`);
+    return {
+      installedVersion: version,
+      recommendedMin: "",
+      belowBaseline: false,
+      updateAvailable: null,
+      canAutoUpgrade: false,
+      upgradeCommand: plan.command,
+    };
+  });
+
   return {
     installed,
     running,
@@ -167,6 +203,33 @@ export async function nodeStatus(): Promise<IpfsNodeStatus> {
     gcOn: posture.gcOn,
     compliant,
     autostart,
+    configHealth: cfgHealth,
+    upgrade,
+  };
+}
+
+/**
+ * The CHEAP liveness summary for the app-wide nudge (ipfs_ui.mdx §10/§17). Deliberately light — a PATH
+ * probe, an RPC id, a launchctl print, a config-file read — and NEVER the pinset/metrics, so it's safe
+ * to poll on every page. Lets the banner pick the start-up scenario without loading the whole dashboard.
+ */
+export async function liveness(): Promise<IpfsLiveness> {
+  const health = await ipfs.health();
+  const running = health === "ok";
+  const installed = (await hasBinary("ipfs")) || running;
+  const autostart = await autostartStatus().catch(() => ({
+    supported: process.platform === "darwin",
+    installed: false,
+    enabled: false,
+  }));
+  const cfg = await configHealth().catch(() => ({ hasBlocker: false }) as { hasBlocker: boolean });
+  return {
+    installed,
+    running,
+    autostartSupported: autostart.supported,
+    autostartEnabled: autostart.enabled,
+    // A config blocker only matters when the node isn't already running.
+    configBlocker: !running && cfg.hasBlocker,
   };
 }
 
@@ -286,10 +349,26 @@ async function ensureInit(): Promise<boolean> {
   return false;
 }
 
-/** Spawn a detached `ipfs daemon` and wait for it to answer. */
-async function startDaemon(): Promise<boolean> {
-  job.phase = "starting";
-  append("Starting the IPFS daemon…");
+/** Read only THIS run's daemon output — the bytes appended to the log after `fromOffset`. */
+function readDaemonLogTail(outPath: string, fromOffset: number): string[] {
+  try {
+    const buf = fs.readFileSync(outPath, "utf8");
+    const slice = buf.length > fromOffset ? buf.slice(fromOffset) : buf;
+    return slice.split("\n").map((l) => l.replace(/\s+$/, "")).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Spawn a detached `ipfs daemon` and wait for it to answer. Returns `null` on success, or a
+ * StartDiagnosis naming the REAL reason it failed (ipfs_ui.mdx §14.2) — read from the daemon's own log
+ * — so callers report "your config has a deprecated setting", not a blanket "didn't come up in time".
+ * `opts.migrate` adds `--migrate` to run a one-time repo-version migration.
+ */
+async function startDaemon(opts?: { migrate?: boolean }): Promise<StartDiagnosis | null> {
+  job.phase = opts?.migrate ? "migrating" : "starting";
+  append(opts?.migrate ? "Starting IPFS and migrating its repository…" : "Starting the IPFS daemon…");
   const stateRoot = resolveStateDir();
   try {
     fs.mkdirSync(stateRoot, { recursive: true });
@@ -297,6 +376,13 @@ async function startDaemon(): Promise<boolean> {
     /* best effort */
   }
   const outPath = path.join(stateRoot, "ipfs-daemon.log");
+  // Note where this run's output will begin, so a failure reads only what THIS start printed.
+  let startOffset = 0;
+  try {
+    startOffset = fs.statSync(outPath).size;
+  } catch {
+    startOffset = 0;
+  }
   let out: number;
   try {
     out = fs.openSync(outPath, "a");
@@ -304,20 +390,35 @@ async function startDaemon(): Promise<boolean> {
     // Couldn't open the daemon log file — fall back to inheriting our own stdout rather than fail.
     log.warn("ipfs", `open daemon log ${outPath} failed: ${(e as Error).message}`);
     out = 1;
+    startOffset = 0;
   }
+  const args = ["daemon", "--enable-gc", ...(opts?.migrate ? ["--migrate"] : [])];
   try {
-    const child = spawn("ipfs", ["daemon", "--enable-gc"], {
-      detached: true,
-      stdio: ["ignore", out, out],
-    });
+    const child = spawn("ipfs", args, { detached: true, stdio: ["ignore", out, out] });
     child.unref();
   } catch (e) {
     append(`(could not launch daemon: ${(e as Error).message})`);
-    log.warn("ipfs", `spawn ipfs daemon failed: ${(e as Error).message}`);
-    return false;
+    log.error("ipfs", `spawn ipfs daemon failed: ${(e as Error).message}`);
+    return {
+      cause: "unknown",
+      message: `Couldn't launch the IPFS daemon: ${(e as Error).message}`,
+      manualCommand: "ipfs daemon --enable-gc",
+      isConfigBlocker: false,
+    };
   }
   append("Waiting for the daemon to come up…");
-  return waitForHealthy(30_000);
+  if (await waitForHealthy(30_000)) return null; // success
+
+  // It didn't answer — read what the daemon actually said and classify it (no more fake timeouts).
+  const tail = readDaemonLogTail(out === 1 ? outPath : outPath, startOffset);
+  // Surface the daemon's own last lines in the progress log so the user/support can see them.
+  for (const line of tail.slice(-12)) append(line);
+  const diag = diagnoseStartFailure(tail);
+  log.error(
+    "ipfs",
+    `daemon start failed (${diag.cause}): ${diag.message}${tail.length ? ` — tail: ${tail.slice(-3).join(" | ")}` : ""}`,
+  );
+  return diag;
 }
 
 /** Kick off the install job (single-flight). Returns the job snapshot immediately. */
@@ -352,8 +453,9 @@ export function startInstall(): IpfsInstallJob {
       if (!(await ensureInit())) {
         return fail("`ipfs init` failed — run it yourself, then start the daemon.", "ipfs init");
       }
-      if (!(await startDaemon())) {
-        return fail("Installed, but the daemon didn't come up in time.", "ipfs daemon --enable-gc");
+      const diag = await startDaemon();
+      if (diag) {
+        return fail(`Installed, but ${diag.message[0].toLowerCase()}${diag.message.slice(1)}`, diag.manualCommand);
       }
       // Bring the fresh node into only-our-content compliance (best effort).
       await ipfs.enforceCompliance().catch((e) =>
@@ -379,7 +481,7 @@ export function startInstall(): IpfsInstallJob {
  */
 export async function controlDaemon(
   action: "start" | "stop",
-  opts?: { autostart?: boolean },
+  opts?: { autostart?: boolean; migrate?: boolean },
 ): Promise<IpfsDaemonResult> {
   if (job.status === "running") return { job, node: await nodeStatus() };
   const wantAutostart = action === "start" && opts?.autostart === true;
@@ -416,8 +518,9 @@ export async function controlDaemon(
       if (!(await ensureInit())) {
         return fail("`ipfs init` failed — run it yourself, then start the daemon.", "ipfs init");
       }
-      if (!(await startDaemon())) {
-        return fail("The daemon didn't come up in time.", "ipfs daemon --enable-gc");
+      const diag = await startDaemon({ migrate: opts?.migrate });
+      if (diag) {
+        return fail(diag.message, diag.manualCommand);
       }
       await ipfs.enforceCompliance().catch((e) =>
         log.warn("ipfs", `enforce compliance after start failed: ${(e as Error).message}`),
@@ -449,4 +552,63 @@ export async function controlDaemon(
   })();
 
   return { job, node: await nodeStatus() };
+}
+
+/**
+ * Upgrade the `ipfs` binary via the package manager (ipfs_ui.mdx §15.2), as a single-flight, watchable
+ * job: stop the daemon → run the package-manager upgrade → restart → bring back to compliance. Always
+ * leaves a copyable manual command on failure. Best-effort restart: an upgrade that succeeds but whose
+ * restart hits a config issue hands off to the same diagnosis as a normal start (§14.2).
+ */
+export function startUpgrade(): IpfsInstallJob {
+  if (job.status === "running") return job;
+  const p = platform();
+  const plan = upgradePlan(p);
+  job = { ...idleJob(), kind: "upgrade", status: "running", phase: "detecting", method: plan.bin, startedAt: new Date().toISOString() };
+  append(`Upgrading IPFS on ${p} via ${plan.bin ?? "manual"}…`);
+
+  void (async () => {
+    try {
+      if (!plan.bin || !(await hasBinary(plan.bin))) {
+        return fail(
+          `Automatic upgrade isn't available here${plan.bin ? ` (${plan.bin} isn't installed)` : ""} — run the command below yourself.`,
+          plan.command,
+        );
+      }
+      // Stop the daemon first so the binary can be replaced cleanly (ignore if it's already off).
+      if ((await ipfs.health()) === "ok") {
+        append("Stopping IPFS before the upgrade…");
+        try {
+          await ipfs.shutdownDaemon();
+        } catch (e) {
+          log.warn("ipfs", `shutdown before upgrade failed: ${(e as Error).message}`);
+        }
+        await waitForStopped(10_000);
+      }
+      job.phase = "upgrading";
+      append(`Running ${plan.command}…`);
+      const code = await runStreaming(plan.bin, plan.args);
+      if (code !== 0) {
+        return fail(`${plan.bin} exited with code ${code} during upgrade.`, plan.command);
+      }
+      // Restart the (now newer) daemon, diagnosing any start failure the upgrade surfaced.
+      const diag = await startDaemon();
+      if (diag) {
+        return fail(`Upgraded, but ${diag.message[0].toLowerCase()}${diag.message.slice(1)}`, diag.manualCommand);
+      }
+      await ipfs.enforceCompliance().catch((e) =>
+        log.warn("ipfs", `enforce compliance after upgrade failed: ${(e as Error).message}`),
+      );
+      job.status = "done";
+      job.phase = "done";
+      job.finishedAt = new Date().toISOString();
+      const v = await ipfs.version().catch(() => null);
+      append(`✓ IPFS upgraded${v ? ` to Kubo v${v}` : ""} and running.`);
+      log.info("ipfs", `upgrade job complete${v ? ` — now v${v}` : ""}`);
+    } catch (e) {
+      fail((e as Error).message, plan.command);
+    }
+  })();
+
+  return job;
 }

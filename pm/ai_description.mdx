@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — AI description of images & videos
-description: The AI-description feature. At the bottom of the View-one-file media viewer sit two analysis tabs — Transcription and AI description — each with a ✓ when its content already exists, defaulting to whichever is available (preferring transcription). AI description generates a HYPER-DETAILED, searchable prose description of an IMAGE or a VIDEO by uploading the file's bytes to a vision provider with a per-kind prompt, then stores the result so it can be searched and re-found without re-opening the file. Only image + video are describable here (audio is covered by transcription). The description is written to the SAME place the storage-level media analysis uses — <storageRoot>/.lfbridge/analysis/<relpath>/description.yaml — upgrading the "pending" skeleton the storage analysis writes to a "done" record, so the Storage file table's "description" indicator lights up. Providers are pluggable adapters: Gemini (Google — the ONLY one that describes VIDEO, via inline base64), OpenAI (gpt-4o, images only), and Grok (xAI grok-2-vision, images only); keys resolve from app config first then well-known env vars, and inline uploads are capped at 18MB (compress-first over that). Prompts are shipped defaults the user can customize per-computer from Settings → Tools. IMPORTANT CHARTER NOTE: this is the ONE deliberate external-network path in LFBridge — generating a description uploads the file to the chosen provider; it is ALWAYS explicit and user-initiated, never automatic, and entirely separate from the charter's local-only perceptual-fingerprint feature (which must never phone home). Implemented by the /api/describe backend module, the describe adapters/prompts, and the MediaAnalysis tabs + Tools-page settings on the frontend.
+description: The AI-description feature. At the bottom of the View-one-file media viewer sit two analysis tabs — Transcription and AI description — each with a ✓ when its content already exists, defaulting to whichever is available (preferring transcription). AI description generates a HYPER-DETAILED, searchable prose description of an IMAGE or a VIDEO by uploading the file's bytes to a vision provider with a per-kind prompt, then stores the result so it can be searched and re-found without re-opening the file. Only image + video are describable here (audio is covered by transcription). The description is written to the SAME place the storage-level media analysis uses — <storageRoot>/.lfbridge/analysis/<relpath>/description.yaml — upgrading the "pending" skeleton the storage analysis writes to a "done" record, so the Storage file table's "description" indicator lights up. Providers are pluggable adapters: Gemini (Google — the ONLY one that describes VIDEO, via inline base64), OpenAI (gpt-4o, images only), and Grok (xAI grok-2-vision, images only); keys resolve from app config first then well-known env vars, and the file is uploaded inline as base64 (bounded ~18MB) — so any file over ~17.5MB is FIRST auto-compressed to a temporary copy that fits (H.264 video / JPEG image, stepping resolution down only when needed), and the ORIGINAL is never modified. Prompts are shipped defaults the user can customize per-computer from Settings → Tools. IMPORTANT CHARTER NOTE: this is the ONE deliberate external-network path in LFBridge — generating a description uploads the file to the chosen provider; it is ALWAYS explicit and user-initiated, never automatic, and entirely separate from the charter's local-only perceptual-fingerprint feature (which must never phone home). Implemented by the /api/describe backend module, the describe adapters/prompts, and the MediaAnalysis tabs + Tools-page settings on the frontend.
 ---
 
 # LargeFileBridge — AI description of images & videos
@@ -168,13 +168,50 @@ dedicated **[ai_credentials.mdx](./ai_credentials.mdx)**.
 Reading the shared Gemini key file (prefer `apiKey`, else `4k_apiKey`; absent/placeholder/invalid → no key) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/google-apikey-file.ts` — `loadGoogleApiKey()`; wired into the `gemini` adapter's `apiKey()` in `adapters.ts`.
 
-### 3.3 The 18MB inline cap
+### 3.3 The inline cap & compress-to-fit (LOCKED)
 
 All three providers are called with the file **inline as base64**. Because base64 inflates bytes by ~4/3
-and the providers bound inline requests (~20MB), the raw file is capped at **18MB**. A file over the cap is
-**not** uploaded — generation fails with a clear *"file is N MB — over the 18MB inline limit for AI
-description. Compress it first, then try again."* This dovetails with the charter's compression feature:
-the fix for an over-size video is to **compress it** (an explicit offer), then describe.
+and the providers bound inline requests (~20MB), the bytes we send are capped at **18MB**. Rather than
+**fail** an over-size file (a 44MB phone video is completely normal), we **compress it to fit first** and
+upload the compressed copy — the description feature must "just work" on real videos.
+
+**The rule:** before upload, ensure the media is **at or under 17.5MB** (a deliberate margin under the
+18MB cap). A file already under the target is uploaded **untouched**. A file over it is transcoded to a
+**temporary** copy under the state dir; that copy is uploaded and then **deleted**. **The user's original
+file is NEVER modified** — this is separate from the charter's explicit, user-initiated compression
+feature; it is an ephemeral upload-only proxy.
+
+**Video ladder (charter algorithm):** *keep the pixel resolution the same if high compression alone can
+get it under the target; only if that fails, reduce the resolution ~25% each step and repeat.*
+
+1. **CRF at original resolution** — H.264 (`libx264`, `-preset medium`, `-crf 28`, `yuv420p`, faststart,
+   AAC 96k audio). If the result is ≤ 17.5MB, **keep full resolution**.
+2. **Harder CRF at original resolution** — one more pass at `-crf 34` (still full resolution) before we
+   give up any pixels.
+3. **Step the resolution down** — reduce the height by **25%**, **snapping to a standard height**
+   (2160/1440/1080/900/720/540/480/360/288/240) when one is **within 3%** of the reduced value, and
+   re-encode at `-crf 30`. Repeat down the ladder to a **240p floor**.
+4. **Two-pass guarantee** — if even the floor rung is over, a **two-pass** encode at the floor resolution
+   to an **exact target bitrate** (computed from the clip duration and the byte budget) deterministically
+   lands it under the cap.
+
+**Codec choice (LOCKED):** we compress to **H.264 in mp4**, not the "better-compressing" HEVC/AV1, on
+purpose — the provider's decoder must accept whatever we send, and **H.264/mp4 is the one format every
+vision provider reliably decodes**. Audio is kept but re-encoded low (96k, or 64k in the two-pass
+fallback) so it can't eat the byte budget.
+
+**Image path:** an over-size image is re-encoded to a temporary **JPEG** at descending quality (85 → 72 →
+60) and then descending scale until it fits. (The temp JPEG may drop a PNG's alpha — acceptable because it
+exists only to show the model; the original PNG is untouched.)
+
+**Tooling:** video compression needs **ffmpeg** (+ ffprobe for duration/resolution); image compression
+needs **ImageMagick**. When the required tool is absent and the file is over the cap, generation
+**`failed`**s with an install hint (`brew install ffmpeg` / `imagemagick`) instead of silently uploading
+nothing.
+
+The compress-to-fit pipeline (the 17.5MB target, the resolution ladder, the CRF passes, and the two-pass
+guarantee — all to a temp file, never the original) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `fitMediaUnderLimit()` (with `fitVideoUnderLimit()` / `fitImageUnderLimit()` / `resolutionLadder()`); invoked from `describeOne()` in `describe.service.ts` right before the adapter call, with the temp copy cleaned up in a `finally`.
 
 The adapter set, per-kind support, key resolution (config → env), `selectAdapter` precedence, the inline base64 read with the 18MB cap, and `providerStatus` are handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `ADAPTERS` (gemini / openai / grok), `selectAdapter(kind, requested)`, `readBase64Capped()`, `providerStatus()`, `mimeForMedia()`.
@@ -196,20 +233,28 @@ Both prompts open by insisting on a **HYPER-DETAILED, factual, non-editorializin
 uncertain guesses `(uncertain)`, then require the model to write **prose under a fixed set of headings in a
 fixed order**:
 
-* **Overview** — a short plain-English summary of what the file is / what happens (2–4 sentences for an
-  image; 3–6 for a video, including its genre/purpose — interview, vlog, drone footage, product demo…).
-* **Composition** — foreground / midground / background, visual balance, leading lines, rule-of-thirds
-  placement, depth of field, and where the eye is drawn.
-* **Location** — the model's best-guess **CITY and COUNTRY** with its reasoning (signage language,
-  architecture, license plates, flora, landmarks), or `(indeterminate)`.
-* **Building / Place** — identify any building/structure (name if recognizable, else type) and its
-  architectural style/era.
-* **Setting** — state clearly whether the scene is **INSIDE (interior)** or **OUTSIDE (exterior)** and the
-  kind of space (kitchen, city street, forest, stadium, studio…), plus time of day / weather.
+* **Overview** — a short plain-English "at a glance" summary of what the file is / what happens (2–4
+  sentences for an image; 3–6 for a video, including its genre/purpose — interview, vlog, drone footage…).
+* **Hyper-Detail** — the deep-dive section: exhaustively describe everything visible (every object,
+  surface, texture, small detail), not just the headline subject. This is where the most words go.
+* **Composition** — explicit **FRAME-LEFT / FRAME-CENTER / FRAME-RIGHT** placement plus foreground /
+  midground / background, with a **percentage-of-frame** estimate and approximate **distance/direction**
+  for notable elements (e.g. "a coffee shop ~25% at frame-left; a mailbox ~9% frame-center, ~100 ft
+  forward"), separating where the **people** are from where the **non-people things** are; plus balance,
+  leading lines, rule-of-thirds, depth of field, and where the eye is drawn.
+* **Location** — the model's best-guess **CITY, STATE/REGION, and COUNTRY** (a single best city-NAME guess
+  even if `(uncertain)`), a **city-size class** (major/big, medium, small town, suburb, rural), and
+  location specifics, with reasoning (signage language, architecture, plates, flora, landmarks), or
+  `(indeterminate)`.
+* **Setting & Place** — state clearly **INSIDE (interior)** vs **OUTSIDE (exterior)** and the kind of
+  space; identify any building/structure (name if recognizable, else type + architectural style/era); for
+  exteriors, describe surroundings the way a **movie location scout** would (share-of-frame + distance).
+* **Lighting** — state plainly **DAYTIME vs NIGHTTIME** (or dawn/dusk/golden hour/overcast), then the
+  lighting design (natural vs artificial, key/fill/back, hard vs soft, high-key/low-key, color temperature,
+  practicals in frame).
 * **Cinematography** — classify the shot the way a **cinematographer** would: framing / **shot size**
   (extreme close-up, close-up, medium close-up, **cowboy shot** / medium, medium-wide, wide, extreme-wide /
-  establishing), camera angle (eye-level, low, high, overhead / bird's-eye, dutch), lens character, and the
-  lighting design (key/fill/back, hard vs. soft, high-key/low-key, color temperature, practicals).
+  establishing), camera angle (eye-level, low, high, overhead / bird's-eye, dutch), and lens character.
 * **People** — for **EACH** person in frame, **hyper-describe** them: apparent age range and height/build;
   the **full outfit head-to-toe** (garments, colors, materials, footwear, accessories, headwear, eyewear);
   hair and distinctive features; and their **placement and size in frame** with posture, gaze, and
@@ -315,8 +360,10 @@ The adapter module is annotated as the one deliberate outbound path, and the upl
   **[ai_credentials.mdx](./ai_credentials.mdx)**.
 * **Unsupported kind** — a non-image/-video path returns **`unsupported`**; audio never offers AI
   description (its tab is Transcription).
-* **Over the 18MB inline cap** — generation **`failed`** with the "compress it first" message (§3.3); no
-  bytes are uploaded.
+* **Over the 18MB inline cap** — the file is **auto-compressed to a temporary copy under 17.5MB** and that
+  copy is uploaded (§3.3); the original is untouched. Generation only **`failed`**s here when the
+  compression tool is missing (ffmpeg/ImageMagick — the reason names the `brew install` to run) or the
+  file genuinely can't be squeezed under the cap.
 * **Provider error / block / timeout** — a provider HTTP error, a Gemini safety block, non-JSON, or a
   120s timeout comes back as **`failed`** with the reason, surfaced in the toast; the existing description
   (if any) is untouched.
@@ -340,12 +387,17 @@ The adapter module is annotated as the one deliberate outbound path, and the upl
    selection is requested → configured-default → first available that supports the kind (preference Gemini,
    OpenAI, Grok). Keys resolve **config → env → (Gemini only) the shared `~/.config/GoogleCloud/apikey.yaml`**
    (Gemini `GEMINI_API_KEY`/`GOOGLE_GENAI_API_KEY`/`GOOGLE_API_KEY` then the shared file's `apiKey`/`4k_apiKey`;
-   Grok `XAI_API_KEY`/`GROK_API_KEY`; OpenAI `OPENAI_API_KEY`). Inline uploads are capped at **18MB** with a
-   compress-first error over that.
+   Grok `XAI_API_KEY`/`GROK_API_KEY`; OpenAI `OPENAI_API_KEY`). Uploads are inline base64 (~18MB bound); a
+   file over **17.5MB** is first **compressed to a temporary copy that fits** (H.264 video keeping
+   resolution when possible, else stepping down ~25%; JPEG image) and that copy is uploaded — **the
+   original is never modified**; generation only fails over-cap when ffmpeg/ImageMagick is missing.
 4. The per-kind **prompts** (shipped `image.md` / `video.md`) drive a hyper-detailed description with the
-   fixed headings (overview, composition, city/country guess, building, inside/outside, **cinematographer
-   shot classification**, per-person **head-to-toe** description; video adds shot-by-shot timeline + audio
-   paraphrase). The user can **customize** a prompt into a per-computer override and **reset** it.
+   fixed headings in order: overview → **hyper-detail** → composition (**frame-left/center/right** +
+   %-of-frame + distance) → location (**city/state/country + city-size class**) → setting & place
+   (inside/outside, building, movie-scout exteriors) → **lighting (day/night)** → **cinematographer shot
+   classification** → per-person **head-to-toe** description → objects/text → colors & mood; video adds
+   shot-by-shot timeline + audio paraphrase. The user can **customize** a prompt into a per-computer
+   override and **reset** it.
 5. The REST surface (`GET /providers`, `GET /file`, `POST /file`, `GET /prompt`, `POST /prompt/customize`,
    `PUT /prompt`, `DELETE /prompt`) is allow-list-gated and mounted at `/api/describe`; each generation
    reports truthfully (`described` / `skipped` / `no_provider` / `unsupported` / `failed`).
@@ -368,6 +420,13 @@ The adapter module is annotated as the one deliberate outbound path, and the upl
        analysisOutputs -> Storage table "description" indicator. Owning root = nearest storage.yaml/.lfbridge/.git.
   (§3) Adapters gemini/openai/grok. VIDEO = Gemini ONLY (inline base64). Keys config->env. 18MB inline cap.
        selectAdapter: requested->config default->first available supporting the kind (pref Gemini,OpenAI,Grok).
+  (§3.3) COMPRESS-TO-FIT: files >17.5MB are transcoded to a TEMP copy that fits (original never touched),
+       then uploaded + deleted. Video = H.264/mp4 (decoder-safe, NOT hevc/av1): CRF28 then CRF34 at orig
+       res (keep resolution), else step height -25% snapping to standard within 3% (CRF30) down to 240p,
+       else two-pass exact-bitrate at floor. Image = temp JPEG descending quality then scale. Needs
+       ffmpeg/ffprobe (video) / ImageMagick (image); missing tool over-cap => failed w/ brew hint.
+       fit-media.ts fitMediaUnderLimit()/fitVideoUnderLimit()/fitImageUnderLimit()/resolutionLadder();
+       called from describeOne() before adapter.describe(), temp cleaned in finally.
   (§4) Prompts describe/prompts/{image,video}.md (shipped) + per-computer override <state>/describe/prompts/<kind>.md.
        customize copies default->override; save; reset deletes override. Prompts ask overview/composition/
        city+country/building/inside-outside/cinematography shot size/per-person head-to-toe; video adds
@@ -375,6 +434,7 @@ The adapter module is annotated as the one deliberate outbound path, and the upl
   (§7) THE ONE deliberate external upload. Always explicit user click, never automatic. SEPARATE from the
        charter's local-only perceptual fingerprint (which must never phone home). No key -> no upload.
   Code pointers: describe.service.ts (resolveDescriptionPath/readDescription/describeOne/describeProviders),
+  fit-media.ts (fitMediaUnderLimit — compress-to-fit temp copy under 17.5MB),
   adapters.ts (ADAPTERS/selectAdapter/readBase64Capped/providerStatus/mimeForMedia), prompts.ts
   (getPrompt/promptView/customizePrompt/savePrompt/resetPrompt), describe.router.ts (/api/describe),
   schemas.ts AppConfigSchema.ai, types.ts (DescribeKind/Provider/ProvidersStatus/View/Result/PromptView),

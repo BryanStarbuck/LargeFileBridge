@@ -17,6 +17,7 @@ import { googleApiKeyFileInfo } from "../../config/google-apikey-file.js";
 import { resolveStorageRoot } from "../transcribe/transcribe.service.js";
 import { getPrompt } from "./prompts.js";
 import { selectAdapter, providerStatus, providerKeySources, providerMeta, mimeForMedia, type ProviderId } from "./adapters.js";
+import { fitMediaUnderLimit } from "./fit-media.js";
 import { log } from "../../shared/logging.js";
 
 const LFBRIDGE_DIR = ".lfbridge";
@@ -180,8 +181,18 @@ export async function describeOne(
 
   try {
     const prompt = getPrompt(kind);
-    const mimeType = mimeForMedia(abs, kind);
-    const { text, model } = await adapter.describe({ absPath: abs, kind, mimeType, prompt });
+    // Ensure the bytes we upload fit under the inline cap. Oversized videos/images are transcoded to a
+    // TEMPORARY compressed copy (the original is never touched); we upload that copy and delete it after.
+    // (ai_description.mdx §3.3 — compress-to-fit instead of hard-failing over the cap.)
+    const fit = fitMediaUnderLimit(abs, kind);
+    const { text, model } = await (async () => {
+      try {
+        const mimeType = mimeForMedia(fit.path, kind);
+        return await adapter.describe({ absPath: fit.path, kind, mimeType, prompt });
+      } finally {
+        fit.cleanup();
+      }
+    })();
 
     ensureLfbridgeIgnored(root);
     fs.mkdirSync(path.dirname(descriptionPath), { recursive: true });

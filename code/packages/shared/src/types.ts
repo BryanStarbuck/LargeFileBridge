@@ -195,6 +195,76 @@ export interface IpfsAutostartStatus {
 // POST /api/ipfs/autostart — install (set up reboot auto-start) or remove it.
 export type IpfsAutostartAction = "install" | "remove";
 
+// ── Config health & guided self-repair (ipfs_ui.mdx §14) ─────────────────────
+// Reading $IPFS_PATH/config and classifying it. This is what turns the incident — Kubo 0.42 FATAL-ing
+// on a deprecated `Reprovider` key, mislabeled as a "timeout" — into a named, one-click-fixable state.
+export type IpfsConfigIssueClass =
+  | "missing" // no config file at all (repo never `ipfs init`-ed)
+  | "unreadable" // exists but isn't valid JSON
+  | "deprecated" // a deprecated key is present (e.g. Reprovider on Kubo ≥ 0.42) → the daemon crashes
+  | "needs_migrate" // repo version behind the binary (`ipfs daemon --migrate`)
+  | "noncompliant" // reprovide `all` / public gateway — only-our-content drift (knowledge/ipfs.mdx §6)
+  | "suspicious"; // e.g. StorageMax unset, GC off — info only, never forced
+
+export type IpfsIssueSeverity = "blocker" | "warn" | "info"; // blocker ⇒ IPFS can't run until fixed
+
+// One config problem, with everything the UI needs to explain it and the user needs to consent to a fix.
+export interface IpfsConfigIssue {
+  id: string; // stable id passed back to POST /config-repair { issueIds }
+  class: IpfsConfigIssueClass;
+  severity: IpfsIssueSeverity;
+  title: string; // plain-language one-liner
+  detail: string; // what happened / why it matters
+  keys: string[]; // the config keys involved (e.g. ["Reprovider"])
+  changes: string[]; // plain-language list of what a fix WOULD change (shown before the click)
+  fixable: boolean; // can we auto-fix it (confirm-then-apply)?
+  manualSteps: string[]; // copyable manual commands/edits — the always-present escape hatch
+}
+
+// GET /api/ipfs/config-health — the whole config-health report (ipfs_ui.mdx §14.1).
+export interface IpfsConfigHealth {
+  checked: boolean; // we were able to look (the repo path is known)
+  path: string; // $IPFS_PATH/config (e.g. ~/.ipfs/config)
+  exists: boolean;
+  readable: boolean; // parses as JSON
+  healthy: boolean; // no blocker issues
+  hasBlocker: boolean; // ≥1 blocker → IPFS cannot start until it's fixed
+  issues: IpfsConfigIssue[];
+}
+
+// POST /api/ipfs/config-repair result (ipfs_ui.mdx §14.3) — always backs up before editing.
+export interface IpfsConfigRepairResult {
+  applied: string[]; // issue ids actually fixed
+  skipped: string[]; // issue ids not auto-fixable / not requested
+  backupPath: string | null; // config.bak.<unix-seconds> written before any edit
+  health: IpfsConfigHealth; // fresh health after the repair
+  node: IpfsNodeStatus; // fresh node status — did it come up now?
+}
+
+// ── Version / upgrade (ipfs_ui.mdx §15) ──────────────────────────────────────
+// installedVersion vs a baked-in recommended baseline (network-free). `updateAvailable` is a
+// best-effort LOCAL package-manager check ("a newer build exists") — null when we can't tell cheaply.
+export interface IpfsUpgradeInfo {
+  installedVersion: string | null; // parsed from `ipfs version`
+  recommendedMin: string; // the baked-in baseline (authoritative for "too old to be safe")
+  belowBaseline: boolean; // installedVersion < recommendedMin
+  updateAvailable: boolean | null; // local pkg-mgr says a newer build exists; null = unknown
+  canAutoUpgrade: boolean; // a package manager can run the upgrade on this machine
+  upgradeCommand: string; // the copyable manual upgrade command
+}
+
+// GET /api/ipfs/liveness — the CHEAP app-wide summary the nudge banner polls (ipfs_ui.mdx §10/§17).
+// Enough to pick the start-up scenario (not installed / not running / running-but-no-reboot-autostart)
+// WITHOUT walking the pinset or reading metrics. All reads here are light (a PATH probe, an RPC id, a
+// launchctl print, a config file read).
+export interface IpfsLiveness {
+  installed: boolean;
+  running: boolean;
+  autostartSupported: boolean;
+  autostartEnabled: boolean;
+  configBlocker: boolean; // a config issue is blocking start (ipfs_ui.mdx §14) → route to the fix
+}
+
 // GET /api/ipfs/node — the whole dashboard payload (ipfs_ui.mdx §11).
 export interface IpfsNodeStatus {
   installed: boolean; // the `ipfs` CLI/daemon is present on this computer
@@ -215,10 +285,14 @@ export interface IpfsNodeStatus {
   gcOn: boolean;
   compliant: boolean;
   autostart: IpfsAutostartStatus; // will IPFS come back on its own after a reboot? (ipfs_ui.mdx §13)
+  configHealth: IpfsConfigHealth; // is the node config sane / repairable? (ipfs_ui.mdx §14)
+  upgrade: IpfsUpgradeInfo; // installed version vs. recommended baseline (ipfs_ui.mdx §15)
 }
 
 // ── Install / start jobs — server-side, single-flight, re-attachable (ipfs_ui.mdx §7.2) ──
-export type IpfsJobKind = "install" | "start" | "stop";
+// All long IPFS actions share one job/progress view (ipfs_ui.mdx §16): install, start/stop the
+// daemon, repair/migrate the config (§14), and upgrade the binary (§15).
+export type IpfsJobKind = "install" | "start" | "stop" | "repair" | "upgrade";
 export type IpfsJobPhase =
   | "idle"
   | "detecting"
@@ -227,6 +301,9 @@ export type IpfsJobPhase =
   | "starting"
   | "stopping"
   | "autostart" // setting up reboot auto-start after a successful start (ipfs_ui.mdx §13)
+  | "repairing" // backing up + rewriting the config to fix a health issue (ipfs_ui.mdx §14.3)
+  | "migrating" // running `ipfs daemon --migrate` for a repo-version bump (ipfs_ui.mdx §14.1)
+  | "upgrading" // package-manager upgrade of the ipfs binary (ipfs_ui.mdx §15.2)
   | "done"
   | "error";
 

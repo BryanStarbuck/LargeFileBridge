@@ -1,5 +1,6 @@
 // Local Kubo/IPFS client over the HTTP RPC (knowledge/ipfs.mdx). Uses fetch, never `curl`.
-// Enforces the only-our-content rule: Reprovider.Strategy = pinned, no public/recursive gateway.
+// Enforces the only-our-content rule: Provide.Strategy = pinned (the modern key; NEVER re-add the
+// deprecated Reprovider block — it FATAL-s Kubo 0.42+ on start), no public/recursive gateway.
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -320,7 +321,7 @@ const LOOPBACK = /\/ip4\/127\.0\.0\.1\/|\/ip6\/::1\//;
 export async function nodePosture(): Promise<NodePosture> {
   const cfg = getAppConfig();
   try {
-    const strat = String((await getConfigKey("Reprovider.Strategy")) ?? "").toLowerCase();
+    const strat = await readReprovideStrategy();
     const reprovideStrategy =
       strat === "pinned" || strat === "roots" || strat === "all"
         ? (strat as "pinned" | "roots" | "all")
@@ -364,10 +365,22 @@ async function setConfigKey(key: string, value: string): Promise<void> {
   await rpc("config", { args: [key, value] });
 }
 
+/**
+ * The node's effective announce strategy, reading the MODERN key first. Kubo renamed
+ * `Reprovider.Strategy` → `Provide.Strategy` and (0.42+) REMOVED the old one — a lingering `Reprovider`
+ * block makes the daemon FATAL on start (ipfs_ui.mdx §14). So we read `Provide.Strategy` first and only
+ * fall back to the deprecated key for older builds. Returns "" when neither is set.
+ */
+async function readReprovideStrategy(): Promise<string> {
+  const provide = String((await getConfigKey("Provide.Strategy")) ?? "").toLowerCase();
+  if (provide) return provide;
+  return String((await getConfigKey("Reprovider.Strategy")) ?? "").toLowerCase();
+}
+
 /** True if the running node announces only our own pinned content and runs no public gateway. */
 export async function isCompliant(): Promise<boolean> {
   try {
-    const strat = String((await getConfigKey("Reprovider.Strategy")) ?? "").toLowerCase();
+    const strat = await readReprovideStrategy();
     // "pinned" or "roots" are compliant; empty defaults to "all" which is NOT.
     return strat === "pinned" || strat === "roots";
   } catch (e) {
@@ -385,16 +398,29 @@ export async function enforceCompliance(): Promise<void> {
     return;
   }
   try {
-    const strat = String((await getConfigKey("Reprovider.Strategy")) ?? "").toLowerCase();
+    const strat = await readReprovideStrategy();
     if (strat !== "pinned" && strat !== "roots") {
+      // CRITICAL: write the MODERN `Provide.Strategy`, NOT `Reprovider.Strategy`. On Kubo 0.42+ setting
+      // `Reprovider.Strategy` RE-CREATES the deprecated `Reprovider` block, which makes the daemon FATAL
+      // on the next start — i.e. enforcing "compliance" would silently re-arm the exact crash this
+      // feature exists to fix (ipfs_ui.mdx §14). We only fall back to the old key on a build that lacks
+      // `Provide` entirely.
       try {
-        await setConfigKey("Reprovider.Strategy", cfg.ipfs.reprovide_strategy);
-        log.info("ipfs", `Set Reprovider.Strategy = ${cfg.ipfs.reprovide_strategy} (only-our-content).`);
+        await setConfigKey("Provide.Strategy", cfg.ipfs.reprovide_strategy);
+        log.info("ipfs", `Set Provide.Strategy = ${cfg.ipfs.reprovide_strategy} (only-our-content).`);
       } catch (e) {
-        // Some Kubo builds don't expose Reprovider.Strategy at all; the SET then 500s "not found".
-        // That's a benign capability gap, not a fault — log it once at info so it stays out of error.err.
         if (/not found/i.test((e as Error).message)) {
-          log.info("ipfs", `Reprovider.Strategy not settable on this Kubo build — skipping enforcement.`);
+          // Old Kubo without `Provide` — fall back to the legacy key (safe there; it isn't removed yet).
+          try {
+            await setConfigKey("Reprovider.Strategy", cfg.ipfs.reprovide_strategy);
+            log.info("ipfs", `Set legacy Reprovider.Strategy = ${cfg.ipfs.reprovide_strategy} (older Kubo).`);
+          } catch (e2) {
+            if (/not found/i.test((e2 as Error).message)) {
+              log.info("ipfs", "Neither Provide.Strategy nor Reprovider.Strategy is settable — skipping enforcement.");
+            } else {
+              throw e2;
+            }
+          }
         } else {
           throw e;
         }

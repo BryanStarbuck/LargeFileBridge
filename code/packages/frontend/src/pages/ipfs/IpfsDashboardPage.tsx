@@ -19,7 +19,7 @@ import { formatBytes } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { middleTruncate } from "../../lib/format.js";
 import { clientLog } from "../../lib/clientLog.js";
-import { ProgressView, SecurityCard, AutostartRow, num } from "./ipfsShared.js";
+import { ProgressView, SecurityCard, AutostartRow, ConfigHealthCard, UpgradeCard, num } from "./ipfsShared.js";
 
 export function IpfsDashboardPage() {
   const qc = useQueryClient();
@@ -58,6 +58,23 @@ export function IpfsDashboardPage() {
     onError: (e: Error) => { clientLog.error("IpfsDashboardPage.autostart", e); toast.error(e.message); },
   });
 
+  // Guided upgrade (ipfs_ui.mdx §15) — kicks the watchable job; the ProgressView above then takes over.
+  const upgrade = useMutation({
+    mutationFn: api.ipfsUpgrade,
+    onSuccess: (j) => qc.setQueryData(["ipfsJob"], j),
+    onError: (e: Error) => { clientLog.error("IpfsDashboardPage.upgrade", e); toast.error(e.message); },
+  });
+
+  // Proactively migrate a non-blocking config issue while the node runs (ipfs_ui.mdx §14.4).
+  const repair = useMutation({
+    mutationFn: (issueIds: string[]) => api.ipfsConfigRepair(issueIds),
+    onSuccess: (r) => {
+      qc.setQueryData(["ipfsNode"], r.node);
+      toast.success(r.backupPath ? `Configuration updated — backup saved to ${r.backupPath}` : "Configuration updated");
+    },
+    onError: (e: Error) => { clientLog.error("IpfsDashboardPage.repair", e); toast.error(e.message); },
+  });
+
   // Redirect to the off-page when the node isn't running and nothing is in flight (§12).
   useEffect(() => {
     if (!jobActive && node && !node.running) {
@@ -91,6 +108,10 @@ export function IpfsDashboardPage() {
           toggling={daemon.isPending}
           onAutostart={(action) => autostart.mutate(action)}
           autostartBusy={autostart.isPending}
+          onUpgrade={() => upgrade.mutate()}
+          upgradeBusy={upgrade.isPending}
+          onRepair={(ids) => repair.mutate(ids)}
+          repairBusy={repair.isPending}
           onFix={async () => {
             try { await api.ipfsEnforce(); qc.invalidateQueries({ queryKey: ["ipfsNode"] }); toast.success("Restored only-our-content defaults"); }
             catch (e) { clientLog.error("IpfsDashboardPage.enforce", e); toast.error((e as Error).message); }
@@ -106,7 +127,7 @@ export function IpfsDashboardPage() {
 
 // ── Running dashboard ───────────────────────────────────────────────────────
 function RunningDashboard({
-  node, navigate, onToggleOff, toggling, onAutostart, autostartBusy, onFix,
+  node, navigate, onToggleOff, toggling, onAutostart, autostartBusy, onUpgrade, upgradeBusy, onRepair, repairBusy, onFix,
 }: {
   node: IpfsNodeStatus;
   navigate: ReturnType<typeof useNavigate>;
@@ -114,6 +135,10 @@ function RunningDashboard({
   toggling: boolean;
   onAutostart: (action: IpfsAutostartAction) => void;
   autostartBusy: boolean;
+  onUpgrade: () => void;
+  upgradeBusy: boolean;
+  onRepair: (issueIds: string[]) => void;
+  repairBusy: boolean;
   onFix: () => Promise<void>;
 }) {
   const m = node.metrics;
@@ -200,6 +225,12 @@ function RunningDashboard({
         {node.gateway.url && <CopyText text={node.gateway.url} display={node.gateway.url} mono />}
         <span className="ml-auto text-xs text-black/40">Serves your own content over HTTP on this machine only.</span>
       </div>
+
+      {/* Version upgrade offer (§15) — quiet unless the build is old enough to be risky */}
+      <UpgradeCard upgrade={node.upgrade} busy={upgradeBusy} onUpgrade={onUpgrade} />
+
+      {/* Non-blocking config-health notes (§14.4) — the node is up, so these never block */}
+      <ConfigHealthCard health={node.configHealth} busy={repairBusy} onFix={onRepair} />
 
       {/* Security posture */}
       <SecurityCard node={node} onFix={onFix} />

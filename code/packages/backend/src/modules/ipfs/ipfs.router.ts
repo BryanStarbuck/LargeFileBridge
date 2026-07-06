@@ -4,7 +4,8 @@ import { z } from "zod";
 import { requireAllowListed } from "../auth/identify.js";
 import { scanAll } from "../scanner/scanner.service.js";
 import { computeIpfsPage, importPins } from "./ipfs-page.service.js";
-import { nodeStatus, startInstall, getJob, controlDaemon } from "./ipfs-node.service.js";
+import { nodeStatus, startInstall, getJob, controlDaemon, startUpgrade, liveness } from "./ipfs-node.service.js";
+import { configHealth, repairConfig } from "./ipfs-config-health.service.js";
 import { installAutostart, removeAutostart } from "./ipfs-autostart.service.js";
 import * as ipfs from "./ipfs.service.js";
 import { log } from "../../shared/logging.js";
@@ -23,6 +24,17 @@ ipfsRouter.get("/node", async (_req, res) => {
   }
 });
 
+// GET /api/ipfs/liveness — the CHEAP app-wide summary the nudge banner polls (ipfs_ui.mdx §10/§17):
+// installed / running / autostart / config-blocker. Never walks the pinset.
+ipfsRouter.get("/liveness", async (_req, res) => {
+  try {
+    res.json({ ok: true, data: await liveness() });
+  } catch (e) {
+    log.error("ipfs", `liveness failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
 // POST /api/ipfs/install — start the single-flight install job (progress via /install/status).
 ipfsRouter.post("/install", (_req, res) => {
   res.json({ ok: true, data: startInstall() });
@@ -33,20 +45,72 @@ ipfsRouter.get("/install/status", (_req, res) => {
   res.json({ ok: true, data: getJob() });
 });
 
-// POST /api/ipfs/daemon — the on/off toggle: { action: "start" | "stop", autostart?: boolean }.
+// POST /api/ipfs/daemon — the on/off toggle: { action, autostart?, migrate? }.
 // `autostart` (start only) ALSO sets IPFS to come back on its own after a reboot (ipfs_ui.mdx §12).
+// `migrate` (start only) adds `ipfs daemon --migrate` to clear a repo-needs-migration failure (§14.2).
 ipfsRouter.post("/daemon", async (req, res) => {
   const body = z
-    .object({ action: z.enum(["start", "stop"]), autostart: z.boolean().optional() })
+    .object({ action: z.enum(["start", "stop"]), autostart: z.boolean().optional(), migrate: z.boolean().optional() })
     .safeParse(req.body ?? {});
   if (!body.success) return res.status(400).json({ ok: false, error: body.error.message });
-  log.info("ipfs", `daemon ${body.data.action} requested${body.data.autostart ? " (+autostart)" : ""}`);
+  log.info(
+    "ipfs",
+    `daemon ${body.data.action} requested${body.data.autostart ? " (+autostart)" : ""}${body.data.migrate ? " (+migrate)" : ""}`,
+  );
   try {
-    res.json({ ok: true, data: await controlDaemon(body.data.action, { autostart: body.data.autostart }) });
+    res.json({
+      ok: true,
+      data: await controlDaemon(body.data.action, { autostart: body.data.autostart, migrate: body.data.migrate }),
+    });
   } catch (e) {
     log.error("ipfs", `daemon ${body.data.action} failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
+});
+
+// GET /api/ipfs/config-health — read + classify the node config (ipfs_ui.mdx §14.1).
+ipfsRouter.get("/config-health", async (_req, res) => {
+  try {
+    res.json({ ok: true, data: await configHealth() });
+  } catch (e) {
+    log.error("ipfs", `config health failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/ipfs/config-repair — apply confirmed config fixes: { issueIds?: string[] } (ipfs_ui.mdx §14.3).
+// Backs up first, edits the config, then returns fresh health + node status. Does NOT start the daemon —
+// the UI starts it after the blocker clears (so the redesigned turn-on progress shows, §16).
+ipfsRouter.post("/config-repair", async (req, res) => {
+  const body = z.object({ issueIds: z.array(z.string()).optional() }).safeParse(req.body ?? {});
+  if (!body.success) return res.status(400).json({ ok: false, error: body.error.message });
+  try {
+    const outcome = await repairConfig(body.data.issueIds);
+    log.info(
+      "ipfs",
+      `config repair applied [${outcome.applied.join(", ") || "none"}]${outcome.backupPath ? ` (backup ${outcome.backupPath})` : ""}`,
+    );
+    const node = await nodeStatus();
+    res.json({
+      ok: true,
+      data: {
+        applied: outcome.applied,
+        skipped: outcome.skipped,
+        backupPath: outcome.backupPath,
+        health: node.configHealth,
+        node,
+      },
+    });
+  } catch (e) {
+    log.error("ipfs", `config repair failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/ipfs/upgrade — start the single-flight upgrade job (progress via /install/status; §15.2).
+ipfsRouter.post("/upgrade", (_req, res) => {
+  log.info("ipfs", "upgrade requested");
+  res.json({ ok: true, data: startUpgrade() });
 });
 
 // POST /api/ipfs/autostart — set up or remove reboot auto-start directly: { action: "install"|"remove" }.

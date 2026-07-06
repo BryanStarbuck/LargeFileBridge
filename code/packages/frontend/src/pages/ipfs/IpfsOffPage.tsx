@@ -17,7 +17,13 @@ import { toast } from "sonner";
 import type { IpfsNodeStatus } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { clientLog } from "../../lib/clientLog.js";
-import { ProgressView, ErrorPanel, ManualCommand } from "./ipfsShared.js";
+import { ProgressView, ErrorPanel, ManualCommand, ConfigHealthCard } from "./ipfsShared.js";
+
+// A blocker that the Config-health card should take over for (ipfs_ui.mdx §14.4). "missing" is NOT one:
+// turning IPFS on runs `ipfs init` and creates the config, so that flows through the normal turn-on.
+function configBlocker(node: IpfsNodeStatus | undefined): boolean {
+  return !!node?.configHealth.issues.some((i) => i.severity === "blocker" && i.class !== "missing");
+}
 
 export function IpfsOffPage() {
   const qc = useQueryClient();
@@ -51,6 +57,20 @@ export function IpfsOffPage() {
     onError: (e: Error) => { clientLog.error("IpfsOffPage.daemon", e); toast.error(e.message); },
   });
 
+  // Config self-repair (ipfs_ui.mdx §14.3): fix the config on an explicit click, then — once the
+  // blocker clears — turn IPFS on. One click both FIXES and STARTS, resolving the incident end-to-end.
+  const repair = useMutation({
+    mutationFn: (issueIds: string[]) => api.ipfsConfigRepair(issueIds),
+    onSuccess: (r) => {
+      qc.setQueryData(["ipfsNode"], r.node);
+      if (r.backupPath) toast.success(`Configuration fixed — a backup was saved to ${r.backupPath}`);
+      else toast.success("Configuration fixed");
+      const stillBlocked = r.health.issues.some((i) => i.severity === "blocker" && i.class !== "missing");
+      if (!stillBlocked && !r.node.running) daemon.mutate({ action: "start" });
+    },
+    onError: (e: Error) => { clientLog.error("IpfsOffPage.repair", e); toast.error(e.message); },
+  });
+
   // When a job finishes, refresh node status so we can redirect / re-render the right state.
   useEffect(() => {
     if (job && job.status !== "running") qc.invalidateQueries({ queryKey: ["ipfsNode"] });
@@ -73,14 +93,23 @@ export function IpfsOffPage() {
 
       {jobActive && job ? (
         <ProgressView job={job} />
+      ) : node && !node.installed ? (
+        // Not installed wins over any config noise — install first (install also inits + starts).
+        <InstallCard node={node} onInstall={() => install.mutate()} installing={install.isPending} />
+      ) : configBlocker(node) ? (
+        // A config problem is blocking start (the incident) — the guided fix takes over the page (§14.4).
+        // This also covers a failed start job whose diagnosis was a config crash.
+        <ConfigHealthCard
+          health={node!.configHealth}
+          busy={repair.isPending || daemon.isPending}
+          onFix={(ids) => repair.mutate(ids)}
+        />
       ) : jobErrored && job ? (
         <ErrorPanel
           job={job}
           onRetry={() => (job.kind === "install" ? install.mutate() : daemon.mutate({ action: "start" }))}
           onDismiss={() => qc.setQueryData(["ipfsJob"], { ...job, status: "idle" })}
         />
-      ) : node && !node.installed ? (
-        <InstallCard node={node} onInstall={() => install.mutate()} installing={install.isPending} />
       ) : node && !node.running ? (
         <StoppedCard
           node={node}
