@@ -43,7 +43,7 @@ At the bottom of the media viewer (band 6) sits an analysis panel with up to **t
 ┌──────────────────────────────────────────────────────────────┐
 │  [✓ Transcription]   [✓ AI description]                       │  ← tab strip; ✓ = content exists
 ├──────────────────────────────────────────────────────────────┤
-│  AI description · gemini-3.5-flash · 2h ago      [⟳ Regenerate]│
+│  AI description · gemini-flash-latest · 2h ago   [⟳ Regenerate]│
 │  ┌──────────────────────────────────────────────────────────┐ │
 │  │ ## Overview                                              │ │
 │  │ A wide establishing shot of a rain-slicked city street…  │ │
@@ -98,7 +98,7 @@ in place to a **done** record:
 ```yaml
 source: render/skyline.mp4
 status: done
-engine: gemini-3.5-flash          # the exact model id used
+engine: gemini-flash-latest       # the model id sent (alias → newest GA Flash)
 provider: gemini                  # the adapter id
 generated: 2026-07-05T09:41:00Z   # ISO timestamp
 kind: video                       # image | video
@@ -136,7 +136,7 @@ media kind**. Preference order is **Gemini → OpenAI → Grok**.
 
 | Adapter | Provider | Image | Video | Endpoint / model | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `gemini` | Google Gemini | ✓ | **✓** | `generativelanguage.googleapis.com/v1beta/models/<model>:generateContent`, default `gemini-3.5-flash` | The **only** adapter that describes **video** (inline `inline_data` base64). |
+| `gemini` | Google Gemini | ✓ | **✓** | `generativelanguage.googleapis.com/v1beta/models/<model>:generateContent`, default `gemini-flash-latest` (alias → newest GA Flash, currently Gemini 3.5 Flash) | The **only** adapter that describes **video** (inline `inline_data` base64). |
 | `openai` | OpenAI | ✓ | — | `api.openai.com/v1/chat/completions`, default `gpt-4o` | OpenAI-compatible chat/vision; `image_url` data URI. |
 | `grok` | xAI Grok | ✓ | — | `api.x.ai/v1/chat/completions`, default `grok-2-vision-1212` | OpenAI-compatible chat/vision; images only. |
 
@@ -223,9 +223,13 @@ The provider config schema (`provider` default `"auto"`; each of gemini/grok/ope
 
 Providers **retire** older model versions on a schedule. Google hard-retired `gemini-2.0-flash` on
 **2026-06-01**; after that date `generateContent` returns **`404 NOT_FOUND … is no longer available`** and
-a config still **pinned** to that id can NEVER succeed. The current GA default is **`gemini-3.5-flash`**
-(image + video, the model behind Google's `gemini-flash-latest` alias). Two mechanisms keep the feature
-working across these retirements so the user does not have to notice:
+a config still **pinned** to that id can NEVER succeed.
+
+**The default is the `gemini-flash-latest` ALIAS (LOCKED), not a pinned id.** Google hot-swaps that alias
+to its newest GA Flash (with a 2-week notice window), so the app **auto-tracks new releases and never
+hard-breaks** on a retirement the way a pinned version does. As of **2026-07** the alias resolves to
+**Gemini 3.5 Flash** (image + video). A user may still **pin a concrete id** in Settings → AI if they want
+a fixed model. Two further mechanisms keep even a pinned config working across retirements:
 
 * **Auto-heal on load.** When `config.yaml` has a Gemini model in the **retired set**, the config loader
   rewrites it to the current default and persists it — so an old machine's stale pin (`gemini-2.0-flash`)
@@ -234,7 +238,7 @@ working across these retirements so the user does not have to notice:
 * **Actionable error, not a raw 404.** If a call still fails on a retired/unknown model (e.g. a hand-typed
   bad id not in the retired set), the raw Google 404 is rewritten into a message that **names the bad
   model and the recommended one**: *"Gemini model "X" is not available — the provider may have retired it.
-  Update the model in Settings → AI (recommended: gemini-3.5-flash)."* That message is what the viewer
+  Update the model in Settings → AI (recommended: gemini-flash-latest)."* That message is what the viewer
   shows and what lands in **`error.err`** (§8).
 
 The single source of truth for the current default + the retired-model set (so the adapter and the config

@@ -8,9 +8,12 @@
 // available`, so a config that stays pinned to a retired model can NEVER succeed. We keep the retired set
 // here and auto-upgrade a pinned retired model to the current default on load.
 
-/** Current GA Gemini Flash — the only provider that describes BOTH image and video. Newest stable as of
- *  2026-07 (Gemini 3.5 Flash, the model behind the `gemini-flash-latest` alias). */
-export const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash";
+/** Default Gemini model — the only provider that describes BOTH image and video. We default to the
+ *  `gemini-flash-latest` ALIAS on purpose: Google hot-swaps it to the newest GA Flash (with 2-week
+ *  notice) so this app auto-tracks new releases and NEVER hard-breaks on a model retirement the way a
+ *  pinned id does. As of 2026-07 the alias resolves to Gemini 3.5 Flash. A user can still pin a concrete
+ *  id in Settings → AI; only RETIRED ids get force-upgraded (see RETIRED_GEMINI_MODELS). */
+export const DEFAULT_GEMINI_MODEL = "gemini-flash-latest";
 export const DEFAULT_GROK_MODEL = "grok-2-vision-1212";
 export const DEFAULT_OPENAI_MODEL = "gpt-4o";
 
