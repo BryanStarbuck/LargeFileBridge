@@ -106,6 +106,31 @@ Compress path.
 The kebab/menu items (`Transcribe…` on a file, `Transcribe all files…` on a directory / repo / storage) are implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (file + directory) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `RepoKebab` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage`.
 
+### 2.5 The page action — "Create Transcriptions" (selected-or-all, background-queued)
+
+The primary bulk entry point is the **`Create Transcriptions`** item in the header **`Actions ▾`** menu on
+every file-list page ([page_actions.mdx](./page_actions.mdx) — the hub that owns this convention). Unlike
+the "Transcribe all files…" kebab on a single directory/repo/storage (§2.4, which walks one entity), the
+page action honours the **whole page's set** and the three LOCKED page-action rules:
+
+* **Scope** ([page_actions.mdx §1.1](./page_actions.mdx)) — with rows **checked**, it transcribes exactly
+  the checked set; with **nothing** checked, it transcribes **every media file on the page, recursively**.
+* **Skip-already-done** ([page_actions.mdx §1.2](./page_actions.mdx)) — files that **already have a
+  transcript** (§4 idempotency) and non-audio/-video files are dropped **before** anything is queued.
+* **Background queue** ([job_queue.mdx](./job_queue.mdx)) — the eligible remainder is pushed onto the
+  server-side queue and the request **returns immediately**; the queue drains in the background, each file
+  surfacing a determinate `transcribe` dock card as it runs.
+
+The instant it is invoked, one toast states the eligible count:
+**"{N} files will have their Transcriptions created"** (or, when every candidate already had a transcript,
+**"All {M} files already have transcriptions — nothing to do"**). `N` is the `willProcess` figure the
+enqueue endpoint returns (§6, `POST /api/transcribe/enqueue`) — the eligible remainder, never the raw page
+count. This is the worked example in [page_actions.mdx §1](./page_actions.mdx): 40 files, 12 already
+transcribed, none checked → **28** queued → *"28 files will have their Transcriptions created"*.
+
+The "Create Transcriptions" page action, its plan/skip/queue, and the toast are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createTranscriptions()` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `planTranscribe()` / `enqueueTranscribe()`.
+
 ---
 
 ## 3. Where transcripts are stored — the parallel `.transcribe/` hierarchy (LOCKED)
@@ -272,9 +297,10 @@ Allow-list-gated like every data route, mirroring `compression.router.ts`:
 | `POST /api/transcribe/batch` | `{ paths[], overwrite? }` | Transcribe a selected set. |
 | `POST /api/transcribe/tree` | `{ path, overwrite? }` | Transcribe ALL audio/video under a directory or repo. |
 | `POST /api/transcribe/storage/:id` | `{ overwrite? }` | Transcribe ALL audio/video in a storage. |
+| `POST /api/transcribe/enqueue` | `{ paths?, root?, overwrite? }` | **Plan + background-queue** (the `Actions ▾` page action, §2.5). Resolves the eligible set (checked `paths` or the recursive `root`, minus already-transcribed), pushes it onto the [background queue](./job_queue.mdx), and **returns the plan immediately** (`EnqueuePlan` — [page_actions.mdx §5](./page_actions.mdx)), not the results. |
 
-The transcription REST surface (tools / read-transcript / file / batch / tree / storage) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.router.ts` — `transcribeRouter`, mounted at `/api/transcribe` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts`.
+The transcription REST surface (tools / read-transcript / file / batch / tree / storage / **enqueue**) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.router.ts` — `transcribeRouter`, mounted at `/api/transcribe` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts`. The `POST /enqueue` handler calls `enqueueTranscribe()` and returns without awaiting the queue.
 
 > **Long-running note.** Whisper is slow (minutes per file), so the request can stay open for a while —
 > but the engine is **async and non-blocking** (§5.1), so a slow run no longer freezes the server, and

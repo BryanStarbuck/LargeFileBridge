@@ -165,6 +165,28 @@ For non-media files there is no such affordance.
 Rendering the media-only Open image/video viewer affordance is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneFilePage.tsx` — `OpenViewer()`.
 
+### 7.1 Page actions — media shortcuts (proposed)
+
+Today, when `/file` renders a **medium**, the analysis actions live only inside the viewer
+([media_viewer.mdx §6](./media_viewer.mdx)) or the `⋮` more menu; this properties-first page offers only
+**Open …viewer** (§7). A customer looking at a media file's properties should be able to kick the
+analysis/compress work **from here** too, without first opening the viewer:
+
+| Action | Shown for | What it does | Status |
+| --- | --- | --- | --- |
+| **Transcribe** | audio + video (`compressible === "video"` or an audio file) | Runs Whisper locally ([Transcribe.mdx](./Transcribe.mdx)) for this file, same engine as the viewer's Transcription panel. | **proposed** |
+| **AI-describe** | image + video | Runs a vision provider ([ai_description.mdx](./ai_description.mdx)); if no key resolves, opens the credentials-missing popup ([ai_credentials.mdx](./ai_credentials.mdx)). | **proposed** |
+| **Compress** | image + video, when the file "should" compress and **Do not compress** is off | The explicit-click, confirm-gated compress offer (charter) — mirrors the Compression card's button but promoted next to the primary. | **proposed** (the Compress offer already exists on the Compression card) |
+
+These render as buttons in the header **beside the primary** (§3) / **Open …viewer** (§7), or folded
+into the `⋮` File catalog — they are page-level actions on this single-entity page, distinct from the
+per-row `⋮` kebab elsewhere ([menus.mdx](./menus.mdx)). This page is not a file-list page, so it does
+**not** carry the shared `Actions ▾` menu ([page_actions.mdx](./page_actions.mdx)); these are its own
+header buttons. When built they belong in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneFilePage.tsx` —
+`ViewOneFilePage`, reusing the same launchers the viewer uses (`runDescribeFile` in `lib/describe.ts`,
+the transcribe hook, and the compress offer).
+
 ---
 
 ## 5. Empty & error states

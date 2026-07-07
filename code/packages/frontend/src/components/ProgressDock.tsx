@@ -52,8 +52,8 @@ function Card({ job }: { job: ProgressJob }) {
 }
 
 export function ProgressDock() {
-  const { jobs } = useProgress();
-  if (jobs.length === 0) return null; // absent from the DOM while idle — no empty box
+  const { jobs, queued } = useProgress();
+  if (jobs.length === 0 && queued <= 0) return null; // absent from the DOM while idle — no empty box
   return (
     <div
       className="fixed z-40 flex flex-col-reverse gap-1.5"
@@ -61,6 +61,16 @@ export function ProgressDock() {
       aria-live="polite"
       aria-label="Background work in progress"
     >
+      {/* The pending backlog of the background job queue (job_queue.mdx §4). Rendered first so, in the
+          column-reverse stack, it sits UNDER the live cards; drains to nothing as workers pick tasks up. */}
+      {queued > 0 && (
+        <div
+          className="min-w-[260px] rounded-lg border bg-white/95 px-3 py-1 text-xs text-black/50 shadow-md backdrop-blur"
+          style={{ borderColor: "var(--lfb-border)" }}
+        >
+          + {queued.toLocaleString()} queued
+        </div>
+      )}
       {jobs.map((job) => (
         <Card key={job.id} job={job} />
       ))}

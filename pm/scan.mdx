@@ -370,6 +370,43 @@ scheduled jobs are visible side by side.
 Reading each worker's installed/enabled state reconciled against real launchd state, and the install/uninstall/enable/disable controls, live in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `workerState()` / `control()`
 
+### 7.1 The Scans page — layout & actions
+
+The **Scans** left-bar item (route `/scans`, the `SyncPage` component — formerly *Sync*) is the user's
+transparency + control surface for both scheduleTasks. Top to bottom it renders:
+
+* **The verdict banner.** A single headline about whether files are actually being kept synced (green /
+  amber / red), derived from the **transfer (15-min sync)** worker's installed/on state plus IPFS
+  liveness — e.g. *"Install the background job below so your big files sync every 15 minutes"* when the
+  sync worker is not installed.
+* **Two worker cards**, one per scheduleTask, each showing its **Installed** and **On/Off** pills (the
+  two independent facts of §7) and its cadence, with per-card controls:
+  * **Transfer — moves your files** (the 15-min sync worker): **Install** / **Uninstall**, **Turn on** /
+    **Turn off**.
+  * **Discovery — finds new big files** (the 4-hour scan worker): the same **Install / Uninstall** and
+    **Turn on / Turn off**. *(Installing creates the launchd job; turning it on/off enables/disables it —
+    two separate acts, §7.)*
+
+The verdict banner, the two worker cards, and their per-card Install/Uninstall + Turn-on/Turn-off controls render in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/sync/SyncPage.tsx` — `SyncPage` (the `WorkerCard` sub-component; controls call `schedule.service.ts` → `control()` above).
+
+#### Header actions — on-demand kicks (proposed)
+
+Separate from install/enable, a customer wants to **run each job right now** without waiting for its
+schedule. These are two **page-level header buttons** (right-aligned in the `PageHeader`), *not* the
+shared file `Actions ▾` menu (this is not a file-list page — [page_actions.mdx](./page_actions.mdx)):
+
+| Action | What it does | Placement | Status |
+| --- | --- | --- | --- |
+| **Scan now** | Kicks the 4-hour **discovery** scheduleTask on demand — the same detached background job the Repos-page Rescan drives (§2, §10). Separate from installing/enabling the schedule. | Header, right-aligned. | **proposed here** (the on-demand discovery run itself exists — `startScan()`, §10) |
+| **Sync now** | Kicks the 15-minute **transfer** scheduleTask on demand — one immediate full sync pass ([sync_process.mdx](./sync_process.mdx)), independent of the 15-min cadence. | Header, right-aligned, primary. | **proposed** |
+
+The on-demand **discovery** run these would trigger is already implemented (`startScan()` in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scan-job.ts`, §10); surfacing
+**Scan now** / **Sync now** as buttons in `SyncPage`'s header is the proposed addition. These header
+kicks are distinct from the per-card **Install/Turn-on** controls above, which manage the *schedule*, not
+a single run.
+
 ---
 
 ## 8. Acceptance criteria

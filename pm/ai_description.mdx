@@ -322,6 +322,9 @@ Allow-list-gated like every data route, mounted at `/api/describe`:
 | `GET /api/describe/credentials` | — | Where to put a Gemini key + in what format (path, placeholder YAML, config.yaml path, env var names) — powers the credentials-missing popup's Instructions page ([ai_credentials.mdx](./ai_credentials.mdx)). No raw key value. |
 | `GET /api/describe/file?path=<abs>` | — | The existing generated description (`DescribeView`) for a media file, or `null`. |
 | `POST /api/describe/file` | `{ path, overwrite?, provider? }` | **Generate** (the external, user-initiated vision call) → `DescribeResult`. |
+| `POST /api/describe/batch` | `{ paths[], overwrite?, provider? }` | Generate for a **selected set** of image/video files → `DescribeBatchResult` (per-file `described`/`skipped`/…). |
+| `POST /api/describe/tree` | `{ path, overwrite?, provider? }` | Generate for **all** image/video under a directory or repo (walked recursively). |
+| `POST /api/describe/enqueue` | `{ paths?, root?, overwrite?, provider? }` | **Plan + background-queue** (the `Actions ▾` page action, §5.1). Resolves the eligible set (checked `paths` or the recursive `root`, minus already-described and non-image/-video), pushes it onto the [background queue](./job_queue.mdx), and **returns the plan immediately** (`EnqueuePlan` — [page_actions.mdx §5](./page_actions.mdx)). |
 | `GET /api/describe/prompt?kind=` | `kind=image\|video` | The prompt text in use + whether it is an override (`DescribePromptView`). |
 | `POST /api/describe/prompt/customize` | `{ kind }` | Copy the shipped default → a per-computer override. |
 | `PUT /api/describe/prompt` | `{ kind, text }` | Save edited override text. |
@@ -335,7 +338,32 @@ The describe REST surface (providers / read / generate / prompt read-customize-s
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.router.ts` — `describeRouter`, mounted at `/api/describe` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts`.
 
 The frontend launcher and API client methods are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/describe.ts` — `runDescribeFile()`; `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `api.describeProviders` / `description` / `describeFile` / `describePrompt` / `customizeDescribePrompt` / `saveDescribePrompt` / `resetDescribePrompt`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/describe.ts` — `runDescribeFile()`; `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `api.describeProviders` / `description` / `describeFile` / `describeBatch` / `describeTree` / `describeEnqueue` / `describePrompt` / `customizeDescribePrompt` / `saveDescribePrompt` / `resetDescribePrompt`.
+
+### 5.1 The page action — "Create AI descriptions" (selected-or-all, background-queued)
+
+Beyond the single-file **Generate** (§5, the viewer's one-file vision call), the bulk entry point is the
+**`Create AI descriptions`** item in the header **`Actions ▾`** menu on every file-list page
+([page_actions.mdx](./page_actions.mdx) — the hub that owns this convention). It obeys the three LOCKED
+page-action rules, mirroring **Create Transcriptions** ([Transcribe.mdx §2.5](./Transcribe.mdx)):
+
+* **Scope** — with rows **checked**, describe exactly the checked set; with **nothing** checked, describe
+  **every image/video on the page, recursively** ([page_actions.mdx §1.1](./page_actions.mdx)).
+* **Skip-already-done** — files that **already have a `done` description** (§2.1) and non-image/-video
+  files are dropped **before** queuing ([page_actions.mdx §1.2](./page_actions.mdx)).
+* **Background queue** — the eligible remainder is pushed onto the server-side queue
+  ([job_queue.mdx](./job_queue.mdx), op `describe`, cap 3) and the request **returns immediately**; each
+  file surfaces a `describe` dock card as it runs.
+
+One toast states the eligible count: **"{N} files will have their AI descriptions created"** (or **"All
+{M} files already have descriptions — nothing to do"**). `N` is the `willProcess` figure the enqueue
+endpoint returns (the eligible remainder). Because generation **uploads bytes to a provider** (§7, the one
+deliberate network path), the batch is still **always explicit and user-initiated** — a page action is a
+click, never automatic — and a video with no Gemini key still surfaces the credentials popup
+([ai_credentials.mdx](./ai_credentials.mdx)) via the failing dock cards, named in the toast up front.
+
+The batch/tree services, the "Create AI descriptions" page action, its plan/skip/queue, and the toast are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeMany()` / `describeTree()` / `planDescribe()` / `enqueueDescribe()` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createDescriptions()`.
 
 ---
 

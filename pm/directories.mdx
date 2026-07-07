@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Directories (File System column browser + View one directory)
-description: The combined directory spec, covering BOTH directory surfaces of LargeFileBridge. PART A — The File System (route /files, a.k.a. /fs): a Mac-Finder-column-view (Miller-column) browser that lets the user walk their whole filesystem, one directory level per column, opening a new column to the right each time a directory is clicked. It defaults to the user's HOME directory and works on Mac, Windows, and Linux. Every file and directory row carries, on its far right, a stack of single-letter CODE BADGES — white letter on a solid colored square — that surface what LargeFileBridge knows about it: R/r (repo, brown — uppercase R at a repo root, lowercase r for an ancestor of a repo or any descendant inside a repo), S (sync, bright pink — a file we track and sync), C/c (compress, yellow — bright-yellow C = should be compressed, light-yellow c = already compressed), and i (ipfs, blue — an IPFS list/share artifact, an IPFS-list markdown file, or a directory that publishes such artifacts underneath it). Badges are right-aligned and stack leftward; a row may show zero, one, or several. PART B — View one directory (route /dir?path=<abs>): the single-entity page for ONE directory, reached from any directory row's "View directory" action, from clicking a directory's name/path cell, or by selecting a directory in the File System browser. It shows what LargeFileBridge knows about that one directory — identity (name, absolute path, kind, repo membership), its code badges, a rollup of what's inside (counts of videos-that-can-compress, images-that-can-compress, big-not-ignored files, and big-git-ignored-not-tracked files — the charter's category rollup table), and its two sticky flags (Never IPFS, Do not compress) which apply to everything underneath it; it carries the top-right "⋮" MORE menu rendering the exact same Directory action catalog as that directory's row kebab (menus.mdx §5.2). Part A is implemented by the /api/fs backend module and the FileSystemPage frontend (code_plan.mdx §14) and adds the "File System" nav item to left_bar.yaml; Part B is implemented by the /api/entity backend module and the ViewOneDirectoryPage frontend.
+description: The combined directory spec, covering BOTH directory surfaces of LargeFileBridge. PART A — The File System (route /files, a.k.a. /fs): a Mac-Finder-column-view (Miller-column) browser that lets the user walk their whole filesystem, one directory level per column, opening a new column to the right each time a directory is clicked. It defaults to the user's HOME directory and works on Mac, Windows, and Linux. Every file and directory row carries, on its far right, a stack of single-letter CODE BADGES — white letter on a solid colored square — that surface what LargeFileBridge knows about it: R/r (repo, brown — uppercase R at a repo root, lowercase r for an ancestor of a repo or any descendant inside a repo), S (sync, bright pink — a file we track and sync), C/c (compress, yellow — bright-yellow C = should be compressed, light-yellow c = already compressed), and i (ipfs, blue — an IPFS list/share artifact, an IPFS-list markdown file, or a directory that publishes such artifacts underneath it). Badges are right-aligned and stack leftward; a row may show zero, one, or several. The File System page also PERSISTS its view state per-user (§1.3): leaving and returning restores the exact open column chain, the 1+ selected entries, and the header filters from users/<email>/config.yaml (file_system: block) so the user picks up where they left off. Its header carries FILTER CHECKBOXES (§1.4), all default ON: "Only Large Files/Dirs" (hide everything but files at/above the settings big-file threshold, default 100 MB, plus the directories that lead to them) and per-category inclusion overrides "Videos / Images / Audio" that punch holes in that size cut (a checked category's files show even when under the threshold; audio is a visibility filter only and earns no C badge). PART B — View one directory (route /dir?path=<abs>): the single-entity page for ONE directory, reached from any directory row's "View directory" action, from clicking a directory's name/path cell, or by selecting a directory in the File System browser. It shows what LargeFileBridge knows about that one directory — identity (name, absolute path, kind, repo membership), its code badges, a rollup of what's inside (counts of videos-that-can-compress, images-that-can-compress, big-not-ignored files, and big-git-ignored-not-tracked files — the charter's category rollup table), and its two sticky flags (Never IPFS, Do not compress) which apply to everything underneath it; it carries the top-right "⋮" MORE menu rendering the exact same Directory action catalog as that directory's row kebab (menus.mdx §5.2). Part A is implemented by the /api/fs backend module and the FileSystemPage frontend (code_plan.mdx §14) and adds the "File System" nav item to left_bar.yaml; Part B is implemented by the /api/entity backend module and the ViewOneDirectoryPage frontend.
 ---
 
 # LargeFileBridge — Directories
@@ -91,6 +91,162 @@ action menu** as everywhere else ([menus.mdx](./menus.mdx)):
 
 The Miller-column strip — one lazily-fetched column per directory level, drill-down replacing columns to the right — is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (and its `FsColumn`).
+
+### 1.2 Page actions — the header `Actions ▾` menu
+
+Above the columns, the File System area also carries the page-level **`Actions ▾`** menu — the third
+action surface ([page_actions.mdx](./page_actions.mdx)), distinct from the per-row `⋮` kebab / entity
+`⋮` more-menu owned by [menus.mdx §3–§5](./menus.mdx). It runs a **batch action over the browser's
+files**: **Create Transcriptions · Create AI descriptions · Compress all videos… · Compress all
+images… · Git-ignore big files… · Track / Sync this directory** — the "File System / a directory" row
+of the per-page catalog ([page_actions.mdx §4](./page_actions.mdx)). The three LOCKED rules (scope =
+checked-subset-else-whole-page-recursive, skip-already-done, background queue) and the toast wording
+are inherited from that spec and **not** restated here.
+
+* **The browser needs a selection affordance for "checked subset."** Rule 1 keys off "one or more rows
+  checked, else the whole page recursively" ([page_actions.mdx §1.1](./page_actions.mdx)). But this
+  page is a *browser*, not a TanStack table (§1), so its rows carry **no checkboxes today** — for the
+  checked-subset case to work, rows need a lightweight **selection affordance** (a hover check /
+  ⌘-click multi-select) whose selected paths feed the menu's `scope`. With **nothing** selected, the
+  menu acts on the **deepest-selected directory (or the root column), recursively** (Rule 1b).
+
+implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (mounts `PageActions` from `code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions`, fed the selected paths + root as its `scope`).
+
+---
+
+## 1.3 Pick up where you left off — persisted columns & selection (LOCKED)
+
+Walking down a deep directory hierarchy one column at a time is **real work** — a customer may click
+through five or six levels to reach the folder they care about. If leaving the File System page and
+coming back threw that away, every visit would start over at `$HOME`. It does not. **The File System
+page restores the exact column layout and selection the user last had**, so returning after two hours
+in another part of the app drops them **right back where they were**.
+
+The scenario this serves, verbatim:
+
+> The user comes into the **File System** left tab. It can be a lot of work to click through the
+> directory hierarchy. They click another left-bar tab to navigate elsewhere, spend two hours in
+> another part of the product, then click **File System** to come back. We **re-select their open
+> directory columns** (the last-changed selected-directory chain) so they can pick up where they left
+> off. **Same with re-selecting the files that were formerly selected.**
+
+What is persisted and restored:
+
+* **The open column chain** — the ordered list of directory paths that were open, left to right (root
+  column → each drilled-into directory). Restoring re-opens each column and auto-scrolls so the newest
+  (rightmost) column is visible, exactly as if the user had clicked back down the chain.
+* **The selection** — the **one or more** entries that were highlighted when the user left (the deepest
+  selected directory, and/or the ⌘-click multi-selected files from the selection affordance in
+  [§1.2](#12-page-actions--the-header-actions-menu)). All selected paths are re-highlighted; a selected
+  directory re-opens its child column.
+* **The header filter state** — the [§1.4](#14-header-filters--only-large-filesdirs--videos--images--audio)
+  checkboxes (**Only Large Files/Dirs**, **Videos**, **Images**, **Audio**), so the view returns
+  filtered the way they left it.
+
+Where it persists — **per-user `config.yaml`**, the same personal-state file the web-session history
+lives in ([storage_local.mdx §4](./storage_local.mdx#4-per-logged-in-user-storage--the-per-user-requirement),
+[sessions.mdx §4](./sessions.mdx#4-storage--the-five-session-history-in-usersemailconfigyaml)) — under a
+top-level `file_system:` key:
+
+```yaml
+# ~/T/_large_files_bridge/users/<email>/config.yaml  (excerpt — File System view state)
+file_system:
+  columns:                       # open column chain, root → deepest, left to right (§1.3)
+    - /Users/bryan
+    - /Users/bryan/BGit
+    - /Users/bryan/BGit/Bryan_git/LargeFileBridge/pm
+  selection:                     # the 1+ entries highlighted when the user left (§1.2 multi-select)
+    - /Users/bryan/BGit/Bryan_git/LargeFileBridge/pm/directories.mdx
+    - /Users/bryan/BGit/Bryan_git/LargeFileBridge/pm/files.mdx
+  filters:                       # the §1.4 header checkboxes (all default ON)
+    only_large: true             # [x] Only Large Files/Dirs
+    videos: true                 # [x] Videos
+    images: true                 # [x] Images
+    audio: true                  # [x] Audio
+  updated_at: 2026-07-07T15:42:10.000Z
+```
+
+Rules (LOCKED):
+
+* The write is **debounced** — the page saves the view state a short beat after the columns or the
+  selection change (not on every keystroke), through the store's per-file mutex + atomic write
+  ([storage_local.mdx §15](./storage_local.mdx)), the same discipline the `sessions:` history uses.
+* **It is view state, not security state** — like the web session ([sessions.mdx §1](./sessions.mdx#1-vocabulary--web-session-vs-auth-session-locked)),
+  it never gates access and never derives identity.
+* **Stale-path tolerance.** A persisted path that no longer exists on restore is **skipped, not fatal**:
+  the page re-opens the longest still-valid prefix of the `columns` chain and drops any missing
+  `selection` entries. A wholly gone chain falls back to the **home** root column (§1). Restoring must
+  never error just because a folder moved between visits.
+* A **fresh user with no `file_system:` key** opens at **home** with all four filter checkboxes ON
+  (§1.4 defaults) — the missing key defaults to that, never to an empty/blank page.
+
+The persisted-view-state shape (`file_system:` — open columns, selection, filters) added to the
+per-user config schema is defined in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — `UserConfigSchema` (the `file_system` block, a `FileSystemViewSchema`).
+
+Reading and writing that per-user `file_system:` block is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/user-config.service.ts` — `getUserConfig()` / `updateUserConfig()`.
+
+Restoring the column chain + selection on mount and debounce-persisting them on every change is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (via its `useFileSystemViewState()` hook, which loads once and saves debounced).
+
+---
+
+## 1.4 Header filters — Only Large Files/Dirs · Videos / Images / Audio (LOCKED)
+
+Above the columns, alongside the breadcrumb and the `Actions ▾` menu (§1.2), the File System page
+carries a small row of **filter checkboxes** that cut the noise down to what actually matters for
+bridging large files. All four default **ON**:
+
+```
+ [x] Only Large Files/Dirs      [x] Videos   [x] Images   [x] Audio
+```
+
+**`[x] Only Large Files/Dirs` — the size cut.** When **ON**, the browser hides the small stuff so only
+large files (and the directories that lead to them) remain:
+
+* A **file** is shown iff it is **big** — its size is **≥ the global big-file threshold**
+  ([settings.mdx §1](./settings.mdx#1-the-big-file-threshold--the-headline-setting), default **100 MB**;
+  the same authoritative `big_file.threshold_bytes` the scan uses) — **or** it belongs to a **checked**
+  media category (below).
+* A **directory** is shown iff it **contains at least one shown file anywhere underneath it**
+  (recursively) — i.e. at least one big file, or at least one file of a checked media category. A
+  directory with **nothing qualifying** below it is **hidden**, so the walk collapses down to only the
+  branches that hold large content.
+* When **OFF**, there is **no size filtering** — every file and directory shows (this is the raw
+  Finder-style walk of §1), and the media checkboxes below have no effect (they exist only as
+  exceptions to *this* cut).
+
+**`[x] Videos  [x] Images  [x] Audio` — per-category inclusion overrides.** Each checked category is an
+**exception** to the size cut: **a file of a checked category is shown even when it is under the
+threshold.** This is how a user keeps *all* their media visible while still hiding small non-media junk:
+
+* With **Only Large Files/Dirs ON** and, say, **Videos ON**, a 12 MB `.mp4` (under 100 MB) **still
+  shows** because Videos is checked; a 12 MB `.log` does **not** (not big, not a checked category).
+* **Unchecking** a category subjects its under-threshold files to the size cut like anything else: with
+  Videos **OFF**, that same 12 MB `.mp4` is hidden (it is not big), while a 400 MB `.mp4` still shows
+  because it is **big** regardless of category.
+* The three categories are **visibility filters only**. **Audio is included here even though audio is
+  NOT a compressible kind** (it earns **no `C` badge** — the charter's compression scope is **video
+  first, image second**, [§3.3](#33-the-compress-badges--c--c--yellow-files-only)). Category membership
+  is decided by extension via the shared media map (`mediaKindForName()` → `"video" | "image" | "audio"`),
+  the same map the media viewers use ([media_viewer.mdx](./media_viewer.mdx)).
+
+The filter state **persists** with the rest of the view state (§1.3), so the browser returns filtered
+the way the user left it.
+
+> **Interaction summary (LOCKED).** *Only Large Files/Dirs* is the gate; *Videos/Images/Audio* are
+> holes punched in that gate. A file shows when **(Only-Large is OFF)** OR **(it is big)** OR **(it is
+> in a checked media category)**. A directory shows when at least one file under it shows. The media
+> checkboxes only ever *add* files back; they never hide a big file.
+
+Applying the header filters server-side — the size cut against the settings threshold, the checked-media
+overrides, and hiding directories with no qualifying descendant — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (taking the `onlyLarge` / `videos` / `images` / `audio` query params; the per-directory keep test via `dirHasQualifyingDescendant()`, a bounded recursive walk honoring the §1 hard-skip set; threshold from `getAppConfig().big_file.threshold_bytes`).
+
+Rendering the four header filter checkboxes and threading their state into the `GET /api/fs` query (and into the persisted view state) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (the `FsFilters` control row).
 
 ---
 
@@ -267,12 +423,44 @@ interface FsListing {
   root: string;          // the absolute path this column lists
   parent: string | null; // for "up" navigation
   home: string;          // the OS home dir (default root)
-  entries: FsEntry[];
+  entries: FsEntry[];    // already filtered by the header checkboxes (§1.4) when requested
 }
 ```
 
 The order of `badges[]` is authoritative — the frontend renders them in array order **right to left**,
 so the array is already sorted `[repo, sync, compress, ipfs]` per §3.5.
+
+### 5.1 Filter query params (§1.4) and persisted view state (§1.3)
+
+`GET /api/fs?path=<abs>` also accepts the four header-filter flags; the backend applies them so the
+returned `entries[]` are already filtered (the frontend renders whatever it is handed):
+
+```
+GET /api/fs?path=<abs>&onlyLarge=1&videos=1&images=1&audio=1
+```
+
+* `onlyLarge` — the size cut (§1.4). Omitted / `0` ⇒ no filtering (raw walk).
+* `videos` / `images` / `audio` — the per-category inclusion overrides; each defaults **on**.
+
+The persisted view state (§1.3) is a small block on the per-user config, restored on mount and written
+debounced:
+
+```ts
+interface FileSystemView {
+  columns: string[];     // open column chain, root → deepest (absolute paths)
+  selection: string[];   // the 1+ highlighted entries (absolute paths), §1.2 multi-select
+  filters: {
+    onlyLarge: boolean;  // [x] Only Large Files/Dirs   (default true)
+    videos: boolean;     // [x] Videos                  (default true)
+    images: boolean;     // [x] Images                  (default true)
+    audio: boolean;      // [x] Audio                   (default true)
+  };
+  updatedAt: string;     // ISO
+}
+```
+
+On restore, a `columns` entry that no longer exists truncates the chain to its longest valid prefix, and
+a missing `selection` path is dropped — restoring is **never** an error (§1.3).
 
 ---
 
@@ -307,6 +495,18 @@ so the array is already sorted `[repo, sync, compress, ipfs]` per §3.5.
     are explicit-click confirm offers and no action deletes local bytes. Opening
     [View one file](./files.mdx) / **View one directory** (Part B, §7) gives the same catalog as a
     top-right `⋮` more-menu.
+11. **Persisted view state (§1.3).** Leaving the File System page and returning **restores the exact open
+    column chain, the 1+ selected entries, and the four filter checkboxes** from the per-user
+    `config.yaml` `file_system:` block. Writes are debounced; a persisted path that no longer exists is
+    skipped (longest-valid-prefix for columns, drop-missing for selection) and never errors; a fresh user
+    with no `file_system:` key opens at **home** with all four filters ON.
+12. **Header filters (§1.4).** The header shows **`[x] Only Large Files/Dirs`** and **`[x] Videos`
+    `[x] Images` `[x] Audio`**, all default ON. With *Only Large* ON, a file shows iff it is **big**
+    (≥ the [settings.mdx §1](./settings.mdx#1-the-big-file-threshold--the-headline-setting) threshold,
+    default 100 MB) **or** in a **checked** media category; a directory shows iff it has a qualifying
+    file underneath it. A checked category shows its files **even under the threshold**; unchecking
+    subjects them to the size cut. **Audio is a visibility filter only — it earns no `C` badge.** With
+    *Only Large* OFF there is no size filtering and the media checkboxes have no effect.
 
 ---
 
@@ -360,6 +560,21 @@ One content column: a **header** (identity + primary button + `⋮`), a **badge/
 
 Rendering the View-one-directory page — header, badge/flag strip, rollup table, and the `⋮` more menu — is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneDirectoryPage.tsx` — `ViewOneDirectoryPage`.
+
+### 7.1 Page actions — the header `Actions ▾` menu
+
+Alongside the **Open in File System** primary button and the entity **`⋮` more menu** (§7), the header
+carries the page-level **`Actions ▾`** menu ([page_actions.mdx](./page_actions.mdx)) for batch work over
+**this directory's files, recursively**: **Create Transcriptions · Create AI descriptions · Compress
+all…** — the "View one directory" row of the per-page catalog ([page_actions.mdx §4](./page_actions.mdx)).
+The two menus do **not** overlap: the entity **`⋮`** acts on the directory *as one entity* (the
+[Directory catalog](./menus.mdx), §7), while **`Actions ▾`** acts on the **files underneath it**. Scope,
+skip-already-done, background queue, and the toast are inherited from [page_actions.mdx §1–§2](./page_actions.mdx);
+the **Do not compress** sticky flag (§10) suppresses the compress item just as it suppresses the rollup's
+Compress offers.
+
+implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneDirectoryPage.tsx` — `ViewOneDirectoryPage` (mounts `PageActions` from `code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions`, scoped to this directory).
 
 ---
 
@@ -487,6 +702,14 @@ Writing the directory-scoped sticky flags — and clearing `sync` decisions belo
   bright pink, C/c compress yellow, i ipfs blue), the case rule (uppercase R only at a repo root;
   everything else lowercase), and the fixed right-to-left badge order R/r · S · C/c · i. Implemented by
   code_plan.mdx §14 (/api/fs + FileSystemPage) and surfaced by the "File System" item in left_bar.yaml.
+  ALSO LOCKED in Part A: §1.3 persisted view state — the open column chain + 1+ selection + filter
+  checkboxes persist to the per-user config.yaml `file_system:` block (restored on return, debounced
+  write, stale-path-tolerant); and §1.4 the four header filter checkboxes (all default ON) — "Only
+  Large Files/Dirs" (size cut at the settings.mdx big-file threshold, hiding dirs with no qualifying
+  descendant) plus per-category inclusion overrides Videos/Images/Audio (shown even under threshold;
+  audio is a visibility filter only, no C badge). The rule: a file shows when (onlyLarge OFF) OR (big)
+  OR (in a checked media category); a directory shows when a file under it shows. When adding a new
+  filter, add its flag to §5.1 FileSystemView.filters and the GET /api/fs query, and a bullet to §1.4.
   PART B (§7–§12) = the View-one-DIRECTORY single-entity page (route /dir?path=). Renders the Directory
   action catalog from menus.mdx §5.2 — never restates it. The category rollup table (§8) is the
   charter's count+category rollup and is a TanStack table like all others. Data contract = EntityView

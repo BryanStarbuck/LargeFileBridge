@@ -8,17 +8,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import type { DescribeKind, DescribeResult, DescribeView, DescribeProvidersStatus, DescribeAiConfig, DescribeAiConfigPatch, AiCredentialsInfo } from "@lfb/shared";
+import type { DescribeKind, DescribeResult, DescribeBatchResult, DescribeView, DescribeProvidersStatus, DescribeAiConfig, DescribeAiConfigPatch, AiCredentialsInfo, EnqueuePlan } from "@lfb/shared";
 import { mediaKindForName } from "@lfb/shared";
 import { expandHome } from "../fs/badges.js";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
 import { appConfigPath } from "../../shared/store/scopes.js";
 import { googleApiKeyFileInfo } from "../../config/google-apikey-file.js";
 import { resolveStorageRoot } from "../transcribe/transcribe.service.js";
+import { track } from "../progress/progress.registry.js";
+import { enqueue } from "../jobqueue/jobqueue.service.js";
 import { getPrompt } from "./prompts.js";
 import { selectAdapter, providerStatus, providerKeySources, providerMeta, mimeForMedia, type ProviderId } from "./adapters.js";
 import { fitMediaUnderLimit } from "./fit-media.js";
 import { log } from "../../shared/logging.js";
+
+// Directories a "describe all" walk never descends into (mirrors transcribe's SKIP_DIRS).
+const SKIP_DIRS = new Set([".lfbridge", ".transcribe", ".git", "node_modules"]);
 
 const LFBRIDGE_DIR = ".lfbridge";
 const ANALYSIS_DIR = "analysis";
@@ -185,16 +190,18 @@ export async function describeOne(
     const prompt = getPrompt(kind);
     // Ensure the bytes we upload fit under the inline cap. Oversized videos/images are transcoded to a
     // TEMPORARY compressed copy (the original is never touched); we upload that copy and delete it after.
-    // (ai_description.mdx §3.3 — compress-to-fit instead of hard-failing over the cap.)
-    const fit = fitMediaUnderLimit(abs, kind);
-    const { text, model } = await (async () => {
+    // (ai_description.mdx §3.3 — compress-to-fit instead of hard-failing over the cap.) The whole run is
+    // wrapped in a track("describe", …) progress-registry job so the dock shows a live card while it uploads
+    // — including for a file the background queue started (job_queue.mdx §3).
+    const { text, model } = await track("describe", name, async () => {
+      const fit = fitMediaUnderLimit(abs, kind);
       try {
         const mimeType = mimeForMedia(fit.path, kind);
         return await adapter.describe({ absPath: fit.path, kind, mimeType, prompt });
       } finally {
         fit.cleanup();
       }
-    })();
+    });
 
     ensureLfbridgeIgnored(root);
     fs.mkdirSync(path.dirname(descriptionPath), { recursive: true });
@@ -219,4 +226,113 @@ export async function describeOne(
     log.error("describe", `describe failed for ${abs} [provider=${adapter.id}, kind=${kind}]: ${msg}`);
     return result(abs, "failed", null, null, msg);
   }
+}
+
+/** Describe a selected SET of image/video files (ai_description.mdx §5). Never throws — each file reports
+ *  its own outcome. */
+export async function describeMany(
+  inputs: string[],
+  opts: { overwrite?: boolean; provider?: ProviderId | "auto" } = {},
+): Promise<DescribeBatchResult> {
+  const results: DescribeResult[] = [];
+  for (const p of inputs) {
+    try {
+      results.push(await describeOne(p, opts));
+    } catch (e) {
+      results.push(result(path.resolve(expandHome(p.trim())), "failed", null, null, (e as Error).message));
+    }
+  }
+  return summarizeDescribe(results);
+}
+
+/** Describe ALL image/video under a directory or repo working tree (ai_description.mdx §5). */
+export async function describeTree(
+  input: string,
+  opts: { overwrite?: boolean; provider?: ProviderId | "auto" } = {},
+): Promise<DescribeBatchResult> {
+  const abs = path.resolve(expandHome(input.trim()));
+  if (!exists(abs)) return summarizeDescribe([result(abs, "failed", null, null, "path not found")]);
+  const media = walkDescribable(abs);
+  log.info("describe", `tree describe: ${media.length} image/video file(s) under ${abs}`);
+  return describeMany(media, opts);
+}
+
+/**
+ * The "Create AI descriptions" PAGE ACTION (page_actions.mdx §5) — plan + background-queue. Resolves the
+ * set (checked `paths`, else the recursive `root`), drops files that already have a `done` description and
+ * non-image/-video files (skip-already-done, page_actions.mdx §1.2), hands the eligible remainder to the
+ * background queue ([job_queue.mdx](../jobqueue)), and returns the PLAN immediately — never the results.
+ */
+export function enqueueDescribe(opts: {
+  paths?: string[];
+  root?: string;
+  overwrite?: boolean;
+  provider?: ProviderId | "auto";
+}): EnqueuePlan {
+  const overwrite = opts.overwrite ?? false;
+  const candidates = describeCandidates(opts);
+  let alreadyDone = 0;
+  let unsupported = 0;
+  const eligible: string[] = [];
+  for (const abs of candidates) {
+    if (!describeKindFor(path.basename(abs))) {
+      unsupported++;
+      continue;
+    }
+    if (!overwrite && readDescription(abs)) {
+      alreadyDone++;
+      continue;
+    }
+    eligible.push(abs);
+  }
+  const { queued } = enqueue(eligible.map((p) => ({ op: "describe", path: p, overwrite, provider: opts.provider })));
+  log.info("describe", `enqueue: ${candidates.length} considered → ${queued} queued (${alreadyDone} already done, ${unsupported} unsupported)`);
+  return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued, willProcess: queued };
+}
+
+/** Checked `paths` used as-is, else the recursive `root` walked for image/video (page_actions.mdx §1.1). */
+function describeCandidates(opts: { paths?: string[]; root?: string }): string[] {
+  if (opts.paths && opts.paths.length > 0) {
+    return opts.paths.map((p) => path.resolve(expandHome(p.trim())));
+  }
+  if (opts.root && opts.root.trim()) {
+    return walkDescribable(path.resolve(expandHome(opts.root.trim())));
+  }
+  throw new Error("enqueue requires either paths[] (the checked set) or root (to walk recursively)");
+}
+
+/** Recursively collect image/video file paths under `root`, skipping hidden/tracking/heavy dirs. */
+function walkDescribable(root: string): string[] {
+  const out: string[] = [];
+  const visit = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const ent of entries) {
+      if (ent.isDirectory()) {
+        if (SKIP_DIRS.has(ent.name) || ent.name.startsWith(".")) continue;
+        visit(path.join(dir, ent.name));
+      } else if (ent.isFile() && describeKindFor(ent.name)) {
+        out.push(path.join(dir, ent.name));
+      }
+    }
+  };
+  try {
+    fs.statSync(root).isDirectory() ? visit(root) : describeKindFor(path.basename(root)) && out.push(root);
+  } catch {
+    /* unreadable root */
+  }
+  return out;
+}
+
+function summarizeDescribe(results: DescribeResult[]): DescribeBatchResult {
+  return {
+    results,
+    described: results.filter((r) => r.status === "described").length,
+    skipped: results.filter((r) => r.status === "skipped").length,
+    failed: results.filter((r) => r.status === "failed" || r.status === "no_provider" || r.status === "unsupported").length,
+  };
 }

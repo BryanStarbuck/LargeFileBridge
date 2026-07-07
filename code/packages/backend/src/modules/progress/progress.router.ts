@@ -10,6 +10,7 @@ import { Router } from "express";
 import type { ProgressJob, ProgressListResult } from "@lfb/shared";
 import { requireAllowListed } from "../auth/identify.js";
 import { list } from "./progress.registry.js";
+import { queueDepth } from "../jobqueue/jobqueue.service.js";
 import { getScanJob } from "../scanner/scan-job.js";
 import { log } from "../../shared/logging.js";
 
@@ -36,7 +37,10 @@ progressRouter.get("/", (_req, res) => {
       });
     }
 
-    const data: ProgressListResult = { jobs };
+    // Fold in the background job queue's pending backlog (job_queue.mdx §4) — the dock shows a "+ N queued"
+    // footer while tasks wait to start. Running items already appear above as their own registry cards.
+    const queued = queueDepth();
+    const data: ProgressListResult = { jobs, ...(queued > 0 ? { queued } : {}) };
     res.json({ ok: true, data });
   } catch (e) {
     log.error("progress", `list failed: ${(e as Error).message}`);

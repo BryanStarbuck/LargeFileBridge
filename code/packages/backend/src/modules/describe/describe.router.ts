@@ -6,7 +6,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { requireAllowListed } from "../auth/identify.js";
 import { log } from "../../shared/logging.js";
-import { describeProviders, readDescription, describeOne, getAiConfig, setAiConfig, aiCredentialsInfo } from "./describe.service.js";
+import { describeProviders, readDescription, describeOne, describeMany, describeTree, enqueueDescribe, getAiConfig, setAiConfig, aiCredentialsInfo } from "./describe.service.js";
 import { promptView, customizePrompt, savePrompt, resetPrompt } from "./prompts.js";
 
 export const describeRouter = Router();
@@ -68,6 +68,49 @@ describeRouter.post("/file", async (req, res) => {
     res.json({ ok: true, data: await describeOne(body.data.path, { overwrite: body.data.overwrite, provider: body.data.provider }) });
   } catch (e) {
     log.error("describe", `describeOne failed for ${body.data.path}: ${(e as Error).message}`);
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/describe/batch — generate for a SELECTED set of image/video files (ai_description.mdx §5).
+describeRouter.post("/batch", async (req, res) => {
+  const body = z
+    .object({ paths: z.array(z.string().min(1)).min(1), overwrite: z.boolean().optional(), provider: Provider.optional() })
+    .safeParse(req.body);
+  if (!body.success) return res.status(400).json({ ok: false, error: "paths[] required" });
+  try {
+    res.json({ ok: true, data: await describeMany(body.data.paths, { overwrite: body.data.overwrite, provider: body.data.provider }) });
+  } catch (e) {
+    log.error("describe", `describeMany failed: ${(e as Error).message}`);
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/describe/tree — generate for ALL image/video under a directory or repo.
+describeRouter.post("/tree", async (req, res) => {
+  const body = z
+    .object({ path: z.string().min(1), overwrite: z.boolean().optional(), provider: Provider.optional() })
+    .safeParse(req.body);
+  if (!body.success) return res.status(400).json({ ok: false, error: "path required" });
+  try {
+    res.json({ ok: true, data: await describeTree(body.data.path, { overwrite: body.data.overwrite, provider: body.data.provider }) });
+  } catch (e) {
+    log.error("describe", `describeTree failed for ${body.data.path}: ${(e as Error).message}`);
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/describe/enqueue — the "Create AI descriptions" PAGE ACTION (page_actions.mdx §5). Plans the
+// eligible set (checked `paths`, else the recursive `root`, minus already-described), background-queues it
+// (job_queue.mdx), and returns the PLAN immediately — the request never waits for the work.
+describeRouter.post("/enqueue", (req, res) => {
+  const body = z
+    .object({ paths: z.array(z.string().min(1)).optional(), root: z.string().min(1).optional(), overwrite: z.boolean().optional(), provider: Provider.optional() })
+    .safeParse(req.body);
+  if (!body.success) return res.status(400).json({ ok: false, error: "paths[] or root required" });
+  try {
+    res.json({ ok: true, data: enqueueDescribe(body.data) });
+  } catch (e) {
     res.status(400).json({ ok: false, error: (e as Error).message });
   }
 });

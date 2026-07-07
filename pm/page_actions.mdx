@@ -1,0 +1,274 @@
+---
+title: LargeFileBridge — Page Actions (the header "Actions" menu, selected-or-all, background-queued)
+description: The cross-cutting spec for the page-level "Actions ▾" menu every LFBridge screen carries under its page header title — the consolidated home for actions that operate on the WHOLE PAGE's set of files (or the checked subset), as opposed to the per-row ⋮ kebab (menus.mdx §3) or the single-entity "more" menu (menus.mdx §4). Defines the three LOCKED rules every page action obeys: (1) SCOPE — with nothing checked the action applies to ALL files on the page, recursively into sub-directories; with rows checked it applies to exactly the checked set. (2) SKIP-ALREADY-DONE — an action that PRODUCES an output (Create Transcriptions, Create AI descriptions) first drops every file that already has that output, so only the remainder is queued. (3) BACKGROUND QUEUE — the eligible set is handed to the server-side async job queue (job_queue.mdx) and the request returns immediately; the work drains in the background and surfaces in the progress dock. The user is told what happened with a single toast: "28 files will have their Transcriptions created". Names the per-page action catalog (which actions appear on which page) and locks the notification wording. Sibling of menus.mdx (per-row/per-entity menus), job_queue.mdx (the async queue), Transcribe.mdx / ai_description.mdx (the two producing actions), and webapp.mdx §10–§14 (the progress dock the queue surfaces through).
+---
+
+# LargeFileBridge — Page Actions (the header "Actions" menu)
+
+Every LFBridge screen that shows a **list of files** carries a single **`Actions ▾`** menu in its
+**page header** (the top-right actions slot next to the page's primary button). It is the consolidated,
+discoverable home for the actions that operate on the **whole page's set of files at once** — "transcribe
+everything here", "describe everything here", "compress everything here" — rather than on one row.
+
+This is the third and last of LFBridge's action surfaces, and it must not be confused with the other two
+([menus.mdx](./menus.mdx) owns both of those):
+
+| Surface | Scope | Where | Owner spec |
+| --- | --- | --- | --- |
+| **Row `⋮` kebab** | **one** entity (the row) | last cell of each table row / right-click | [menus.mdx §3 / §5](./menus.mdx) |
+| **Entity `⋮` "more" menu** | **one** entity (the page's subject) | top-right of a single-entity page | [menus.mdx §4](./menus.mdx) |
+| **`Actions ▾` page menu** | the **whole page's files** (or the checked subset) | top-right of a **list** page, under the title | **this file** |
+
+The pattern follows the sister web apps ([EmailDeliveryHero's `DomainsPage` "Run all"](../CLAUDE.md), the
+`~/BGit/all/app` header action rows): **page-level actions live in the header, above the table.** LFBridge
+consolidates them into **one `Actions ▾` dropdown** (rather than a loose row of buttons) because a
+list page can host several batch actions, and the dropdown keeps the header uncluttered. The page's single
+**most-common** action may still be a visible primary button beside it (e.g. **Sync now** on a repo,
+**Index files** on a storage) — exactly the menus.mdx §4 "primary vs. more" split.
+
+Siblings this builds on and does not repeat:
+
+* [menus.mdx](./menus.mdx) — the per-row and per-entity menus (the other two surfaces). The `Actions ▾`
+  menu is **not** a per-entity catalog; it never appears on a single-entity page.
+* [job_queue.mdx](./job_queue.mdx) — the **server-side background queue** every producing page action hands
+  its eligible set to. Enqueue returns immediately; the queue drains in the background (§3).
+* [Transcribe.mdx](./Transcribe.mdx) / [ai_description.mdx](./ai_description.mdx) — the two **producing**
+  page actions (**Create Transcriptions** / **Create AI descriptions**); this file owns the *page-menu*
+  behaviour (scope, skip, queue, toast), those files own the *engine*.
+* [webapp.mdx §10–§14](./webapp.mdx) — the **progress dock** + job registry the queued work surfaces
+  through, and the bounded-concurrency model.
+
+---
+
+## 1. The three LOCKED rules every page action obeys
+
+A page action is defined by **what set it runs over** and **how it runs**. All three rules below are
+LOCKED — every action in the per-page catalog (§4) obeys them unless its row says otherwise.
+
+### 1.1 Rule 1 — SCOPE: checked subset, else the whole page recursively (LOCKED)
+
+When the user picks an action from `Actions ▾`, the **set of files it runs over** is:
+
+* **If one or more rows are checked** → **exactly the checked rows.**
+* **If nothing is checked** → **every file on the page**, walked **recursively** into sub-directories.
+  On a repo page that is the repo's whole working tree; on a File-System directory it is that directory
+  and everything under it; on a storage it is the whole storage.
+
+So "click the action with nothing selected" means **"do it for all of them"** — the common case. The user
+does not have to select-all first. (This mirrors the way a shell glob or a "Run all" button behaves.)
+
+> Example (LOCKED walk-through). A repo page shows **40** files, **none checked**. The user clicks
+> **Create Transcriptions**. The set to consider is **all 40** (recursive). Had **30** been checked, the
+> set would be those **30**. The set is then narrowed by Rule 2.
+
+### 1.2 Rule 2 — SKIP-ALREADY-DONE for producing actions (LOCKED)
+
+An action that **produces an output for a file** — a transcript, an AI description — is **idempotent by
+existence**: if the output already exists, the file is **dropped from the set** before anything is queued.
+This is the same "already transcribed → skipped" / "already described → skipped" idempotency the per-file
+paths already enforce ([Transcribe.mdx §4](./Transcribe.mdx), [ai_description.mdx §2.1](./ai_description.mdx)),
+lifted to the batch.
+
+The narrowing is applied **before** enqueue, so the queue only ever holds real work:
+
+> Continuing the example. Of the **40** files, **12** already have transcripts. The set narrows to the
+> **28** that do **not**. Only those **28** are enqueued. The 12 are never touched.
+
+A producing action also drops files it **cannot** act on (a non-media file for Create Transcriptions, a
+non-image/-video for Create AI descriptions) — those are silently excluded from the count, never queued.
+
+Producing actions further honour the two sticky flags ([menus.mdx §6.6](./menus.mdx)) where relevant: a
+**Do not compress** flag excludes a file from a Compress-all; **Never IPFS** excludes it from an
+Add-to-IPFS-all. (Transcribe/Describe are not gated by those flags — they don't sync or compress.)
+
+### 1.3 Rule 3 — BACKGROUND QUEUE, return immediately (LOCKED)
+
+Because a page action can add **many** items (a big repo can hold hundreds of media files), it **must not**
+run them inline in the request. The narrowed eligible set is handed to the **server-side background job
+queue** ([job_queue.mdx](./job_queue.mdx)); the endpoint **returns immediately** with the count that was
+enqueued, and the queue **drains in the background** with bounded concurrency. Each item, as it starts,
+registers a progress-dock job (kind `transcribe` / `describe`, [webapp.mdx §11](./webapp.mdx)) so the user
+watches the batch drain live — even after navigating away, and even in another tab.
+
+This is the load-bearing difference from a per-file click: a per-file **Transcribe** may keep its request
+open for the single run; a **page action** never does — it **enqueues and returns**.
+
+---
+
+## 2. The notification (LOCKED wording)
+
+The instant a producing page action is invoked, LFBridge shows **one toast** stating how many files were
+queued — computed **after** Rules 1 + 2 (the eligible remainder), never the raw page count:
+
+* **Create Transcriptions** → **"{N} files will have their Transcriptions created"**
+  (equivalently phrased for one file: "1 file will have its Transcription created").
+* **Create AI descriptions** → **"{N} files will have their AI descriptions created"**.
+* Any other producing/queuing action follows the same shape: **"{N} files will …"**.
+
+Edge cases, still one honest toast (never a silent no-op — [sync_process.mdx §6](./sync_process.mdx)):
+
+* **Nothing eligible** (every candidate already had the output, or none were media) →
+  **"All {M} files already have transcriptions — nothing to do"** (or the describe equivalent). `M` is the
+  considered set size so the user sees *why* nothing queued.
+* **Tools/credentials missing** — the action still queues, but the toast names the blocker the queue will
+  hit (e.g. "Whisper isn't installed — install it in Settings → Tools", [Transcribe.mdx §5.2](./Transcribe.mdx);
+  or the AI-credentials popup for describe, [ai_credentials.mdx](./ai_credentials.mdx)) so the user isn't
+  surprised when cards fail.
+
+The count in the toast is the **`willProcess`** figure the enqueue endpoint returns (§5) — the same number
+that becomes queue items — so the toast and the dock never disagree.
+
+---
+
+## 3. Anatomy on the page
+
+```
+┌───────────────────────────────────────────────────────────────────────────┐
+│  ‹ Repos  /  Our_Movies                       ┌──────────┐ ┌ Actions ▾ ┐ ⋮ │ ← header: primary + Actions ▾ + entity ⋮
+│  ~/BGit/…/Our_Movies                          │ ⟳ Sync   │ └───────────┘   │
+│                                               └──────────┘   │             │
+│  128 Sync · 5 Undecided · 40 Ignore              ┌───────────▼───────────┐ │
+│  search…                              ⇅  ⛛  ⋮bulk│ Create Transcriptions  │ │ ← the Actions menu
+│  ☐  render/talk.mp4     …                        │ Create AI descriptions │ │
+│  ☐  render/final.mov    …                        │ ───────────────────────│ │
+│                                                  │ Compress all videos…   │ │
+│                                                  │ Git-ignore big files…  │ │
+│                                                  └────────────────────────┘ │
+└───────────────────────────────────────────────────────────────────────────┘
+```
+
+* **Placement.** In the [`PageHeader`](../code/packages/frontend/src/components/ui/PageHeader.tsx) `actions`
+  slot, **right-aligned**, to the **right of** the page's primary button and to the **left of** the
+  single-entity `⋮` "more" menu when the page has one. It is **always visible** (not gated on a selection)
+  — that is the whole point: the user can act on "all of them" without selecting first.
+* **The label reflects scope.** With rows checked, the button reads **`Actions (12) ▾`** so the user knows
+  the next action will run over the **checked** set, not all; with nothing checked it reads **`Actions ▾`**
+  and each item's scope is "all, recursive".
+* **The popover** is the house menu popover ([menus.mdx §3](./menus.mdx)) — grouped with thin dividers,
+  producing actions first, destructive/irreversible offers (compress, git-ignore) separated below and
+  behaving as **explicit-click offers with a confirm step** ([menus.mdx §6.1](./menus.mdx)). Items that
+  make no sense for the current page/selection are **omitted**, not shown disabled.
+* **Distinct from the `⋮` bulk menu.** The table's existing selection **`⋮` bulk menu** (set decision
+  Sync/Ignore/Undecided across checked rows, [one_repo.mdx §4.4](./one_repo.mdx)) stays where it is, in the
+  control row above the table, and only appears when rows are checked. The header **`Actions ▾`** is the
+  page-level home and is always present. The two never duplicate an item.
+
+The header `Actions ▾` menu (always present on a list page, scope label reflecting the checked set) is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions` component (fed a `scope` = a root path + the checked paths, and an action list).
+
+---
+
+## 4. The per-page action catalog (LOCKED)
+
+Which actions appear in `Actions ▾` is per-page. Every **file-list** page carries the two **producing**
+actions; pages then add their own domain actions. Producing actions obey §1–§2; the others are the
+existing page-level operations, now consolidated into the same menu (they already run through the progress
+dock, [webapp.mdx §11](./webapp.mdx)).
+
+| Page (spec) | `Actions ▾` items | Primary button (stays outside the menu) |
+| --- | --- | --- |
+| **One repo** ([one_repo.mdx](./one_repo.mdx)) | Create Transcriptions · Create AI descriptions · Compress all videos… · Compress all images… · Git-ignore big files… · Rescan | **Sync now** |
+| **File System / a directory** ([directories.mdx](./directories.mdx)) | Create Transcriptions · Create AI descriptions · Compress all videos… · Compress all images… · Git-ignore big files… · Track / Sync this directory | — |
+| **Full paths** (flat file table, [full_paths.mdx](./full_paths.mdx)) | Create Transcriptions · Create AI descriptions · Compress all videos… · Git-ignore big files… | — |
+| **Storage detail** ([storages.mdx](./storages.mdx)) | Create Transcriptions · Create AI descriptions · Compress all videos… · Re-index files | **Index files** |
+| **View one directory** ([directories.mdx](./directories.mdx)) | Create Transcriptions · Create AI descriptions · Compress all… (its files, recursive) | — |
+| **Repos list** ([repos.mdx](./repos.mdx)) | Rescan all · Sync all | — (whole-list actions; rows are repos, not files) |
+| **IPFS pins** ([ipfs.mdx](./ipfs.mdx)) | Publish IPFS list… · Re-verify pins | — |
+
+Non-list pages (settings, sign-in, IPFS dashboard, single-file viewers, etc.) do **not** carry an
+`Actions ▾` menu — their actions are page-specific controls documented in each page's own spec, and a
+single media file uses the **entity `⋮` menu** ([menus.mdx §4](./menus.mdx)) and the Media-Viewer action
+bar ([media_viewer.mdx](./media_viewer.mdx)), not this page menu.
+
+> **Producing actions are the LOCKED core of this spec.** **Create Transcriptions** and **Create AI
+> descriptions** appear on **every file-list page** and behave identically everywhere (§1–§2). The other
+> menu items are the page's pre-existing operations gathered into the same place; their engines are
+> specified in their own files ([compression.mdx](./compression.mdx), [scan.mdx](./scan.mdx),
+> [ipfs_share_files.mdx](./ipfs_share_files.mdx)).
+
+The producing actions are wired to the enqueue endpoints and toast the returned count in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createTranscriptions()` / `createDescriptions()` (call `api.transcribeEnqueue` / `api.describeEnqueue`, toast `willProcess`).
+
+---
+
+## 5. The enqueue REST surface (plan-then-queue)
+
+Each producing action maps to **one** allow-list-gated endpoint that does Rules 1+2 **on the server**
+(so the "how many already have output" truth is computed where the files live) and hands the remainder to
+the queue (Rule 3):
+
+| Method + path | Body | What |
+| --- | --- | --- |
+| `POST /api/transcribe/enqueue` | `{ paths?: string[], root?: string, overwrite?: boolean }` | Plan + queue transcriptions. `paths` = the checked set; `root` = a directory/repo to walk recursively when nothing is checked. Returns the **plan**, not the results. |
+| `POST /api/describe/enqueue` | `{ paths?: string[], root?: string, overwrite?: boolean, provider? }` | Same for AI descriptions. |
+
+Both return the **plan** immediately (no waiting for the work):
+
+```ts
+export interface EnqueuePlan {
+  considered: number;   // set size after Rule 1 (checked set, or the recursive walk)
+  eligible: number;     // after Rule 2 — media that does NOT already have the output
+  alreadyDone: number;  // dropped because the output already exists
+  unsupported: number;  // dropped because not the right media kind
+  queued: number;       // handed to the queue (== eligible unless overwrite re-queues done ones)
+  willProcess: number;  // the number the toast shows (== queued)
+}
+```
+
+* Exactly **one** of `paths` / `root` is used per call: a non-empty `paths` is the checked set (Rule 1a);
+  otherwise `root` is walked recursively (Rule 1b). Sending neither is a `400`.
+* `overwrite: true` (a future "Re-create all" variant) skips Rule 2, re-queuing files that already have the
+  output; the default is `false` (skip-already-done).
+
+The enqueue planners (walk-or-take the set, drop already-done + unsupported, push the remainder onto the queue, return the plan) are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `planTranscribe()` / `enqueueTranscribe()` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `planDescribe()` / `enqueueDescribe()`; both push through `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()`.
+
+The routes are mounted on the existing feature routers:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.router.ts` — `POST /enqueue` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.router.ts` — `POST /enqueue`; API client methods `api.transcribeEnqueue` / `api.describeEnqueue` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts`.
+
+---
+
+## 6. Acceptance criteria
+
+1. Every **file-list** page (One repo, File System, a directory, Full paths, Storage detail) shows a
+   single **`Actions ▾`** menu in its **page header**, always present (not gated on a selection), to the
+   right of any primary button and left of the single-entity `⋮` menu.
+2. **Scope (Rule 1):** with rows checked, an action runs over **exactly** the checked set and the button
+   reads `Actions (N) ▾`; with nothing checked it runs over **all files on the page, recursively**.
+3. **Skip-already-done (Rule 2):** **Create Transcriptions** / **Create AI descriptions** drop every file
+   that already has the output (and every unsupported file) **before** queuing; only the remainder is
+   queued.
+4. **Background queue (Rule 3):** the eligible set is handed to the server-side queue
+   ([job_queue.mdx](./job_queue.mdx)); the endpoint **returns immediately** with the plan, and the work
+   drains in the background, each item surfacing a progress-dock card ([webapp.mdx §11](./webapp.mdx)).
+5. **Notification (§2):** one toast, **"{N} files will have their Transcriptions created"** /
+   **"… AI descriptions created"**, where **N is the eligible remainder** (the `willProcess` figure);
+   nothing-eligible gives the honest "All {M} … already have … — nothing to do".
+6. The header `Actions ▾` is **distinct** from the row `⋮` kebab, the entity `⋮` more-menu, and the
+   selection `⋮` bulk menu; it never duplicates their items, and it appears **only** on list pages (not on
+   single-entity or settings pages), per the catalog (§4).
+7. Compress/git-ignore items in the menu remain **explicit-click offers with a confirm step**
+   ([menus.mdx §6.1](./menus.mdx)); no page action compresses, converts, git-ignores, or deletes without
+   the user's explicit confirm.
+
+<!--
+  HUB spec for the THIRD action surface: the page-header "Actions ▾" menu (whole-page/checked-subset),
+  distinct from menus.mdx's row ⋮ kebab (one row) and entity ⋮ more-menu (one entity) and the selection
+  ⋮ bulk menu (decision on checked rows). THREE LOCKED rules every page action obeys:
+   (1) SCOPE — nothing checked => ALL files on the page RECURSIVELY; ≥1 checked => exactly the checked set.
+   (2) SKIP-ALREADY-DONE — producing actions (Create Transcriptions / Create AI descriptions) drop files
+       that already have the output (and unsupported kinds) BEFORE queuing. Idempotent-by-existence.
+   (3) BACKGROUND QUEUE — hand the eligible set to job_queue.mdx; endpoint RETURNS IMMEDIATELY with the
+       plan; queue drains in background; each item = a progress-dock card (kind transcribe/describe).
+  Notification (LOCKED wording): "{N} files will have their Transcriptions created" / "… AI descriptions
+  created", N = eligible remainder (willProcess). Nothing eligible => "All {M} files already have … —
+  nothing to do". Enqueue endpoints POST /api/transcribe/enqueue + /api/describe/enqueue take
+  {paths?|root?, overwrite?} and return EnqueuePlan {considered, eligible, alreadyDone, unsupported,
+  queued, willProcess}. Per-page catalog in §4 (producing actions on EVERY file-list page).
+  Code: components/menu/PageActions.tsx (the Actions ▾ menu), lib/pageActions.ts (createTranscriptions/
+  createDescriptions), transcribe.service planTranscribe/enqueueTranscribe, describe.service planDescribe/
+  enqueueDescribe, jobqueue.service enqueue(), transcribe.router/describe.router POST /enqueue,
+  api.transcribeEnqueue/describeEnqueue. Keep in sync with job_queue.mdx, Transcribe.mdx, ai_description.mdx,
+  menus.mdx (the other two surfaces), webapp.mdx §11–§14 (dock + concurrency).
+-->
+</content>

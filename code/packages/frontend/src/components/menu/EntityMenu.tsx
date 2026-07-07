@@ -45,7 +45,10 @@ export interface Action {
   onSelect: () => void | Promise<void>;
 }
 
-const GROUP_ORDER = ["Open", "IPFS", "Decision", "Work", "Config", "Flag", "Copy", "Danger"];
+// "Create" fronts the page-action menu (page_actions.mdx) — the producing actions (Create Transcriptions /
+// Create AI descriptions) sit above the page's Work offers (compress / git-ignore). The rest are the
+// per-entity catalog groups (menus.mdx §5).
+const GROUP_ORDER = ["Create", "Open", "IPFS", "Decision", "Work", "Config", "Flag", "Copy", "Danger"];
 
 // ── Position ───────────────────────────────────────────────────────────────────
 export interface MenuPos {

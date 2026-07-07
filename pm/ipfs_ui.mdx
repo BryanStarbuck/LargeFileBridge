@@ -202,6 +202,33 @@ are a property of the **pinset**, so a child now routes to **`/ipfs/pins?repo=<r
 disclosure is open while any `/ipfs*` route is active (dashboard or pins). Clicking the **IPFS**
 parent lands on this **dashboard**.
 
+### 5.4 Page actions — the header + node maintenance
+
+The dashboard already carries several **page-level actions** (its own header controls, not the shared
+file `Actions ▾` menu — this is not a file-list page, [page_actions.mdx](./page_actions.mdx)). Two more
+node-maintenance actions belong beside them:
+
+| Action | What it does | Placement | Status |
+| --- | --- | --- | --- |
+| **⟳ Refresh** | Re-reads the node payload (`GET /api/ipfs/node`) and repaints hero + tiles. | Header, top-right. | **exists** |
+| **On / Off toggle** | Starts / stops the daemon (§6). | Hero, right. | **exists** |
+| **Auto-start install / remove** | Installs or removes the reboot LaunchAgent (§13). | Hero row / off-page. | **exists** |
+| **Upgrade IPFS** | Runs the package-manager upgrade job (§15). | Upgrade card. | **exists** |
+| **Run garbage collection** | Runs `ipfs repo gc` on demand to reclaim the incidental/transient cache now, rather than waiting for the periodic GC — shrinking **Storage** without unpinning any of the user's own content (only-our-content, §8). | Header or Storage-tile menu, right-aligned. | **proposed** |
+| **Re-provide now** | Re-announces this node's pinned CIDs to the DHT on demand (`ipfs routing reprovide`) so the user's other computers can find freshly-pinned files immediately, honoring the `pinned`/`Provide.Strategy` posture (§8) — never announcing more than our own content. | Header or Security-card menu, right-aligned. | **proposed** |
+
+The existing header/hero controls render in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsDashboardPage.tsx` —
+`IpfsDashboardPage` (Refresh + on/off), with the auto-start row and upgrade card in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` (`AutostartRow`,
+`UpgradeCard`).
+
+**Run garbage collection** and **Re-provide now** are not implemented yet, so no code pointer. When
+built they are two new node ops on `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts`
+(a `runGc()` / `reprovide()` running `ipfs repo gc` / `ipfs routing reprovide`), exposed through
+`ipfs.router.ts` and surfaced as dashboard header buttons — each an explicit-click action (charter
+consent posture) that changes *what is cached/announced*, never *what is served* beyond only-our-content.
+
 ---
 
 ## 6. Node states (what renders)

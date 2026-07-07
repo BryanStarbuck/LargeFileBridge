@@ -184,6 +184,25 @@ Reading and writing the per-user `users/<email>/config.yaml` (account/appearance
 The admin-gated allow-list editor surface (companies + individuals) is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/AllowListPage.tsx` — `AllowListPage` (backed by `settingsRouter` `PATCH /security`, gated by `requireAdmin()`)
 
+### 4.2 Page actions — verify & re-scan buttons (proposed)
+
+Settings is a form page (each section has its own **Save** button), not a file list, so it carries no
+`Actions ▾` menu ([page_actions.mdx](./page_actions.mdx)). What it *should* add are a few **verify /
+re-run** controls that a customer reaches for after editing a value — placed as **section-level buttons
+beside the relevant Save**, or in the page header where global:
+
+| Action | Lives next to | What it does | Status |
+| --- | --- | --- | --- |
+| **Re-scan all roots** | Scanner roots / page header | Kicks the discovery scan over every root on demand right after editing the roots or the threshold, so the new setting takes effect without waiting 4 hours. Same detached job as [scan.mdx §10](./scan.mdx#10-on-demand-scan-execution--the-detached-background-job-locked). | **proposed** (the scan job exists — `startScan()`) |
+| **Test AI credentials** | Compression / AI section | Resolves the vision-provider key (config → env → shared file, [ai_credentials.mdx §1](./ai_credentials.mdx)) and reports which provider is usable — the same probe the credentials page uses (`GET /api/describe/credentials`). | **proposed** |
+| **Test IPFS connection** | IPFS node section | Pings the local Kubo node and reports installed / running / reachable, reusing the dashboard's cheap liveness read (`GET /api/ipfs/node`, [ipfs_ui.mdx §11](./ipfs_ui.mdx)). | **proposed** |
+
+These sit **alongside** the existing per-section **Save** buttons (they verify, they don't replace Save).
+None is implemented yet, so no code pointer; when built they belong in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` —
+`SettingsPage`, calling the scan / describe-credentials / ipfs-node endpoints already defined in their
+own specs. They are page/section-level actions, not per-row `⋮` items.
+
 ---
 
 ## 5. Acceptance criteria

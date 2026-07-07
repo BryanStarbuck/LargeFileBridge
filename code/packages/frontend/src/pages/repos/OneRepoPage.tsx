@@ -15,6 +15,8 @@ import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
 import { RepoStatusPill, TransferPill } from "../../components/Pill.js";
 import { EntityKebab } from "../../components/menu/EntityMenu.js";
+import { PageActions, producingActions } from "../../components/menu/PageActions.js";
+import type { ActionScope } from "../../lib/pageActions.js";
 import { PinToggle } from "../../components/PinToggle.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { StatusBanner, FixButton } from "../../components/ui/StatusBanner.js";
@@ -96,6 +98,16 @@ export function OneRepoPage() {
   };
 
   const ipfsDown = detail?.ipfs === "unreachable";
+
+  // The header "Actions ▾" scope (page_actions.mdx §1.1): checked rows → their absolute paths; nothing
+  // checked → the repo root, walked recursively on the server. Evaluated at click time via producingActions.
+  const pageScope = (): ActionScope => {
+    if (!detail?.path) return {};
+    if (selected.size > 0) {
+      return { paths: detail.files.filter((f) => selected.has(f.fileId)).map((f) => `${detail.path}/${f.path}`) };
+    }
+    return { root: detail.path };
+  };
 
   const columns: LfbColumn<FileRow>[] = [
     {
@@ -186,6 +198,7 @@ export function OneRepoPage() {
         subtitle={detail?.path}
         actions={
           <>
+            <PageActions actions={producingActions(pageScope)} selectedCount={selected.size} />
             <button
               onClick={() => navigate({ to: "/repos/$repoId/settings", params: { repoId } })}
               title="Repo settings"

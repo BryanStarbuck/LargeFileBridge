@@ -301,6 +301,21 @@ tables:
         - { col: name,       dir: asc  }
       filters: { bookmarked_only: false, mode: recommended }
 
+# File System page view state — restore the column browser exactly where the user left it (open
+# column chain + the 1+ selected entries + the header filter checkboxes). Debounced write, restored
+# on return, stale-path-tolerant. Full spec: directories.mdx §1.3 / §1.4.
+file_system:
+  columns:                                       # open column chain, root → deepest, left to right
+    - /Users/bryan
+    - /Users/bryan/BGit/Bryan_git/LargeFileBridge/pm
+  selection:                                     # the 1+ entries highlighted when the user left
+    - /Users/bryan/BGit/Bryan_git/LargeFileBridge/pm/directories.mdx
+  filters:                                       # the §1.4 header checkboxes (all default ON)
+    only_large: true                             # hide all but big files + the dirs that lead to them
+    videos: true                                 # show videos even under the threshold
+    images: true                                 # show images even under the threshold
+    audio: true                                  # show audio even under the threshold (no C badge)
+
 # Last 5 web sessions, newest first — usage windows measured from page renders, NOT the auth
 # session (§10). Drives the "stale return" auto-sync: starting a new session on a computer that
 # has not synced in > 48h automatically kicks off a background sync. Full spec: sessions.mdx.

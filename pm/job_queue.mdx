@@ -1,0 +1,175 @@
+---
+title: LargeFileBridge — The Background Job Queue (async batch processing)
+description: The server-side background queue that lets a page action enqueue MANY files and return immediately. When a page action (Create Transcriptions, Create AI descriptions — page_actions.mdx) resolves its eligible set, it does NOT run the files inline in the HTTP request; it PUSHES them onto this in-process FIFO queue and returns the plan. A bounded pool of workers drains the queue in the background — one item at a time per slot, a small per-op concurrency — calling the op's existing per-file runner (transcribeOne / describeOne), each of which already registers a progress-dock job so the item shows a live card while it runs. Defines the task shape, dedup (never queue the same path+op twice), the per-op concurrency caps, how running items surface in the dock (via the existing job registry, webapp.mdx §12) and how the pending backlog is counted (a `queued` figure folded into GET /api/progress), and the crash/no-persistence posture (a queue that outlives a restart was never "in flight", mirroring the registry's rationale). Sibling of page_actions.mdx (who feeds it), webapp.mdx §11–§14 (the progress dock + registry + mapLimit it reuses), Transcribe.mdx / ai_description.mdx (the per-file runners it calls).
+---
+
+# LargeFileBridge — The Background Job Queue
+
+A page action can add **many** items at once — "Create Transcriptions for this whole repo" might be 300
+media files. Running those inline in the HTTP request would be wrong: the request would hang for an hour,
+and closing the tab would lose the work. So LFBridge has a **server-side background queue**. A page action
+**enqueues and returns**; a bounded pool of workers **drains the queue in the background**.
+
+This spec owns the queue mechanism. It is deliberately small and reuses what already exists:
+
+* [page_actions.mdx](./page_actions.mdx) — the **producer**. Its enqueue endpoints (§5 there) resolve the
+  eligible set (scope + skip-already-done) and call `enqueue()`; they never wait for the work.
+* [webapp.mdx §11–§14](./webapp.mdx) — the **progress dock**, the in-process **job registry**
+  (`progress.registry.ts`), the operation **taxonomy** (kinds `transcribe` / `describe`), and the bounded
+  `mapLimit` concurrency model. The queue is the missing piece **between** "a page action fires" and "the
+  registry shows a running card": the registry shows what's **running now**; the queue holds what's
+  **waiting to run**.
+* [Transcribe.mdx §1/§5.1](./Transcribe.mdx) / [ai_description.mdx](./ai_description.mdx) — the **per-file
+  runners** (`transcribeOne` / `describeOne`) the queue calls. Each already wraps its run in a
+  `track("transcribe"/"describe", …)` registry job, so a queued item that starts **automatically gets a
+  live dock card** — the queue does not need to touch the dock itself.
+
+---
+
+## 1. Why a queue and not just `mapLimit`
+
+The browser-fan-out runner (`useProgress().run`, [webapp.mdx §12A](./webapp.mdx)) already does bounded
+parallelism — but it lives **in the browser tab** and keeps one open request per item. That is right for a
+handful of clicks; it is wrong for a 300-file batch, because:
+
+* the batch must **survive navigation and tab close** — the user clicks "Create Transcriptions" and walks
+  away;
+* the server, not the browser, owns "how many are still to do";
+* Whisper/ffmpeg are **heavy and local** — we want a **small, server-enforced** concurrency, not one
+  request per file all racing.
+
+So producing **page** actions (page_actions.mdx) go through **this server queue**; interactive **per-file**
+and **small selected-set** clicks may still use the browser runner. The queue is the durable-within-the-
+process path for "many".
+
+---
+
+## 2. The task shape & the queue
+
+The queue is an in-process **FIFO** of small task records:
+
+```ts
+export type JobOp = "transcribe" | "describe";
+
+export interface QueueTask {
+  op: JobOp;             // which per-file runner handles it
+  path: string;          // the absolute media file path
+  overwrite: boolean;    // re-do even if the output exists (default false)
+  provider?: string;     // describe only — the chosen vision provider (or "auto")
+}
+```
+
+* **`enqueue(tasks: QueueTask[]): { queued: number; deduped: number }`** appends the tasks and **kicks the
+  drain loop**, then returns immediately. `queued` is how many were actually added (after dedup); `deduped`
+  is how many were dropped because an identical `op + path` was already **pending or running**.
+* **Dedup (LOCKED).** The same file is never queued twice for the same op at the same time. Clicking
+  **Create Transcriptions** twice in a row does not double-queue; the second call reports everything as
+  `deduped`. (Skip-already-**done** is the producer's job, [page_actions.mdx §1.2](./page_actions.mdx);
+  dedup here is about the same file being **in flight** twice.)
+* **FIFO.** Items drain roughly in the order enqueued; ordering is best-effort, not a guarantee callers may
+  rely on.
+
+The FIFO queue, `enqueue()`, and the in-flight dedup set are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()` / the module-level `pending[]` + `inflight` Set.
+
+---
+
+## 3. The workers — bounded, per-op concurrency (LOCKED)
+
+A small pool of **worker loops** drains the queue. Each loop repeatedly takes the next task whose op has a
+**free slot**, runs it, and loops until the queue empties, then parks (no busy-wait). Concurrency is capped
+**per op**, because the two ops have very different cost profiles:
+
+| Op | Concurrency cap | Why |
+| --- | --- | --- |
+| `transcribe` | **2** | Whisper is CPU/GPU-heavy and local; a couple in parallel saturates the machine. |
+| `describe` | **3** | Network + a bounded ffmpeg/ImageMagick fit-to-size step; more can overlap I/O wait. |
+
+* **A task runs by calling its per-file runner** — `transcribeOne(path, overwrite)` or
+  `describeOne(path, { overwrite, provider })`. Those runners **already** register a
+  `track("transcribe"/"describe", …)` job in the progress registry ([webapp.mdx §12](./webapp.mdx)), so the
+  moment a queued item **starts**, a **live dock card** appears (determinate % for transcribe, spinner for
+  describe) — including in a tab that did not start the batch. The queue writes **no** dock code of its own.
+* **Per-item isolation.** A task that throws is caught, logged to `error.err`
+  ([ai_description.mdx §8](./ai_description.mdx)), and the worker moves on — one bad file never stalls the
+  queue. Each runner already returns a truthful status rather than throwing for expected outcomes.
+* **The caps are constants** in one place, so they are easy to tune per machine later.
+
+The bounded per-op worker loops (take next runnable task, dispatch to the runner, catch-and-continue) are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `pump()` / `runTask()` (caps `CONCURRENCY: Record<JobOp, number>`); dispatch table maps `op` → `transcribeOne` / `describeOne`.
+
+---
+
+## 4. What the user sees — running cards + a queued count
+
+The dock already shows **running** work (source B poll of `GET /api/progress`, [webapp.mdx §12](./webapp.mdx)).
+The queue adds one thing: the **pending backlog count**, so the user knows work is still waiting, not just
+the few cards currently running.
+
+* **Running items** → ordinary dock cards, unchanged — they come from the registry the runners populate.
+* **Pending backlog** → a small **`queued` integer** folded into the same `GET /api/progress` payload:
+
+```
+GET /api/progress → { jobs: Job[], queued: number }   // queued = tasks waiting (not yet started)
+```
+
+The dock shows a subtle footer like **"+ 24 queued"** under the live cards when `queued > 0`, and it clears
+to nothing as the backlog drains. No card is fabricated for a not-yet-started item ([webapp.mdx §13](./webapp.mdx):
+"a queued item simply has no card yet") — `queued` is just a number.
+
+The `queued` count is exposed by the queue and folded into the progress payload in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `queueDepth()`; read by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.router.ts` — `GET /` (adds `queued` to `ProgressListResult`). The dock footer renders it in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ProgressDock.tsx`.
+
+---
+
+## 5. Persistence & crash posture (LOCKED)
+
+The queue is **in-memory only**, exactly like the job registry ([webapp.mdx §12](./webapp.mdx)):
+
+* The process **is** the single API server; a task that outlives a restart was **not** "in flight" anymore,
+  so re-running it on boot would be wrong (it might duplicate work the user never re-requested).
+* On restart the queue is simply **empty**. Nothing was lost that mattered: any output already written to
+  disk stays; the user can re-invoke the page action, and **skip-already-done** ([page_actions.mdx §1.2](./page_actions.mdx))
+  means only the genuinely-unfinished files re-queue. That idempotency is what makes no-persistence safe.
+* There is **no** cross-process or on-disk queue file, and the queue never networks (it only calls the
+  same local runners the per-file paths call — transcribe is fully local; describe's one deliberate upload
+  is the runner's concern, [ai_description.mdx §7](./ai_description.mdx), not the queue's).
+
+---
+
+## 6. Acceptance criteria
+
+1. `enqueue(tasks)` **appends** the tasks, **kicks** the drain, and **returns immediately** with
+   `{ queued, deduped }`; the HTTP handler that called it also returns immediately (no waiting for the
+   work).
+2. **Dedup:** the same `op + path` already **pending or running** is not queued again; a double-click
+   reports the second batch as `deduped`.
+3. A bounded pool drains the queue with **per-op caps** (transcribe 2, describe 3); extra tasks wait and
+   start as slots free.
+4. Each task runs by calling **`transcribeOne` / `describeOne`**, so a started item shows a **live dock
+   card** via the existing registry — including in a tab that did not start it; the queue adds no dock code.
+5. A task that fails is **caught, logged, and skipped** — one bad file never stalls the queue.
+6. `GET /api/progress` returns a **`queued`** count of not-yet-started tasks; the dock shows a
+   **"+ N queued"** footer that drains to nothing. No fabricated cards for pending items.
+7. The queue is **in-memory only** (no persistence); on restart it is empty, and re-invoking a page action
+   re-queues only the still-unfinished files (skip-already-done makes this safe).
+
+<!--
+  The server-side background queue between "a page action fires" and "the registry shows a running card".
+  LOCKED:
+   - QueueTask { op: transcribe|describe, path, overwrite, provider? }; enqueue(tasks) => {queued,deduped},
+     appends + kicks drain + RETURNS IMMEDIATELY. Producer = page_actions.mdx enqueue endpoints.
+   - DEDUP by op+path already pending/running (not the same as skip-already-DONE, which is the producer's).
+   - Bounded per-op worker loops: transcribe cap 2, describe cap 3. Task runs by calling transcribeOne/
+     describeOne — those already track() a registry job => started item = live dock card. Queue writes NO
+     dock code. Per-item try/catch: one bad file never stalls the queue.
+   - GET /api/progress gains `queued` (pending count); dock shows "+N queued" footer. No fake cards for
+     pending items (webapp.mdx §13).
+   - IN-MEMORY ONLY, no persistence (same rationale as the registry). Restart => empty queue; re-invoking a
+     page action re-queues only unfinished files (skip-already-done makes no-persistence safe). Never networks.
+  Code: modules/jobqueue/jobqueue.service.ts (enqueue/pump/runTask/queueDepth, CONCURRENCY per op, pending[]
+  + inflight Set), progress.router.ts (fold `queued` into ProgressListResult), ProgressDock.tsx (footer).
+  Keep in sync with page_actions.mdx (producer), webapp.mdx §11–§14 (dock/registry/mapLimit), Transcribe.mdx
+  + ai_description.mdx (the per-file runners).
+-->
+</content>

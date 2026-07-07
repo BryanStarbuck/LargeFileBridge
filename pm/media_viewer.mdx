@@ -397,6 +397,25 @@ See [ai_description.mdx](./ai_description.mdx) for the provider adapters, the pe
 storage YAML, and the settings (Tools) surface; see [Transcribe.mdx](./Transcribe.mdx) for the transcript
 engine and placement.
 
+### 6.1 Proposed additions — copy analysis, download compressed copy
+
+The action bar (§4) is already strong; two small **proposed** additions round out the analysis + compress
+loop for a customer:
+
+| Action | Where | What it does | Status |
+| --- | --- | --- | --- |
+| **Copy transcript** | Beside the **Transcription** panel header (§6), next to its ✓ / Regenerate | One-click copies the transcript text to the clipboard (with a toast) — so a user can paste it elsewhere without selecting the monospace block by hand. | **proposed** |
+| **Copy description** | Beside the **AI description** panel header (§6) | Copies the description prose to the clipboard. | **proposed** |
+| **Download compressed copy** | Action bar (image/video), near **Compress** | After a compress has produced a compressed variant, offers to download that compressed copy (the `compressed` hash variant tracked in the per-file YAML — CLAUDE.md) — distinct from **Compress** (which produces it) and from **Open: in browser** (which serves the raw bytes). | **proposed** |
+
+**Copy transcript / Copy description** are pure clipboard actions (no backend, no bytes altered) — small
+buttons per analysis panel, not new catalog entries. **Download compressed copy** is a media-only bar
+action that appears once a compressed variant exists. None is implemented yet, so no code pointer; when
+built the two Copy buttons live in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx`
+— `MediaAnalysis` (the `AnalysisColumn` headers), and **Download compressed copy** is a new `BarItem` in
+the same file's `ActionBar` (§4.6). These are the media viewer's own promoted actions, not the shared
+file-list `Actions ▾` menu ([page_actions.mdx](./page_actions.mdx)).
+
 ---
 
 ## 7. Acceptance criteria

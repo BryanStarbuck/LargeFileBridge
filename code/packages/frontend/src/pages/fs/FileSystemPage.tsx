@@ -13,6 +13,7 @@ import { api } from "@/api/client";
 import { Badges } from "@/components/fs/Badges";
 import { BadgeLegend } from "@/components/fs/BadgeLegend";
 import { EntityKebab, EntityMenuAt, type MenuPos } from "@/components/menu/EntityMenu";
+import { PageActions, producingActions } from "@/components/menu/PageActions";
 import { useWindowedRows } from "@/components/table/useWindowedRows";
 import { formatBytes, middleTruncate } from "@/lib/format";
 import { FsTabs } from "./FsTabs";
@@ -106,6 +107,12 @@ export default function FileSystemPage() {
           <input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} />
           Show hidden
         </label>
+        {/* The header "Actions ▾" page menu (page_actions.mdx §4) — Create Transcriptions / Create AI
+            descriptions over the CURRENT directory (the deepest open column), walked recursively. */}
+        <PageActions actions={producingActions(() => {
+          const currentDir = stack[stack.length - 1];
+          return currentDir ? { root: currentDir } : {};
+        })} />
       </div>
 
       <BadgeLegend className="border-b border-[var(--lfb-border)] px-4 py-1" />

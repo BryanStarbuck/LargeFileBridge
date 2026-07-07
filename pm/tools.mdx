@@ -120,6 +120,23 @@ The per-platform package manager, exact command, and copyable manual command are
 * **Manual escape hatch.** The full command (`brew install ipfs ffmpeg`) is always shown copy-able, so a
   user who prefers their terminal never needs the button.
 
+#### Page actions — the header buttons
+
+The Tools page's existing page-level actions are **Install all required** (header/summary) and the
+per-row **Install** button. One more customer action belongs beside **Install all required**:
+
+| Action | What it does | Placement | Status |
+| --- | --- | --- | --- |
+| **Install all required** | Installs every missing required tool, then offers to resume the pending action. | Header / summary row, primary. | **exists** |
+| **Re-check all tools** | Re-runs the on-`PATH` presence probe for **every** row at once and repaints their status — for the user who just installed a tool in their own terminal and wants the page to reflect it without a reload. A single refresh, not a per-row action. | Header, right-aligned, beside Install all required. | **proposed** |
+
+**Re-check all tools** is a single refresh over the same probe each row already uses (`hasBinary()` via
+`nodeStatus()`, §3); it installs nothing and needs no consent. When built it lives in the header of
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/ToolsPage.tsx` and re-reads
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` —
+`nodeStatus()`. These are page-level actions; this page is not a file list, so it carries its own header
+buttons rather than the shared `Actions ▾` menu ([page_actions.mdx](./page_actions.mdx)).
+
 ### 4.1 Running an install (LOCKED)
 
 * **Explicit click only.** LFB installs a tool **only** when the user clicks Install (or Install all) —

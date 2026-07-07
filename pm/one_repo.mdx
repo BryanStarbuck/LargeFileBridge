@@ -119,6 +119,15 @@ Three regions stacked in the content column: the **header** (repo identity + Syn
 Sync now — which syncs THIS repo first as the priority unit (moving bytes even when the repo's pinning toggle was off, and flipping it on), then runs the full pass over the remaining units in the background — is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/repos/:repoId/sync` (calls `syncRepoFolder(folder, only, { manual: true })` then `syncAll({ priorityDone: folder })`)
 
+* **`Actions ▾` page menu** (top-right, between Sync now and the `⋮` more menu) — the header
+  **page-action** menu that operates on this repo's **files** (the whole working tree, or the checked
+  subset), as opposed to the `⋮` more menu which operates on the **repo entity**. It carries **Create
+  Transcriptions · Create AI descriptions · Compress all videos… · Compress all images… · Git-ignore big
+  files… · Rescan** ([page_actions.mdx §4](./page_actions.mdx)). The two producing actions obey the LOCKED
+  scope / skip-already-done / background-queue rules ([page_actions.mdx §1](./page_actions.mdx)): with no
+  rows checked they run over **all files recursively**, skipping files that already have the output, and
+  the eligible remainder is background-queued with a "{N} files will have their Transcriptions created"
+  toast. Rendered by `PageActions` ([page_actions.mdx §3](./page_actions.mdx)).
 * **`⋮` "more" menu** (top-right, next to Sync now) — because this page **is one repo**, it carries the
   **repo entity menu**: the same catalog as a Repos-table row's kebab
   ([menus.mdx §4 / §5.1](./menus.mdx#4-the-entity--more-menu--single-entity-pages)) — Open in File

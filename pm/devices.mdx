@@ -304,7 +304,19 @@ device:
 * **Actions** — **Copy Peer ID**, **Open in File System** (the device's home dir; enabled only for the
   self row, since another computer's paths aren't local here), and — for a `peers.yaml`-sourced device —
   **Remove peer** (forgets it from `peers.yaml`; touches no remote content and no local bytes, per
-  [menus.mdx §5.4](./menus.mdx)).
+  [menus.mdx §5.4](./menus.mdx)). Two more are **proposed** for this page's header:
+  * **Ping / re-announce to this peer** *(proposed)* — dial the device's PeerID and refresh `last_seen`,
+    so a user can confirm reachability instead of waiting for the next sync pass. No pointer yet — not
+    implemented.
+  * **Show files this device carries** *(proposed)* — filter the pinset/file view to the CIDs this
+    device's `pinned_by` claims cover, answering "what does this computer hold for me?". No pointer yet.
+
+These header buttons are page-level actions (the device *is* the page's subject), not a per-row `⋮`
+kebab ([menus.mdx](./menus.mdx)); this page is not a file-list page, so it carries its own header buttons
+rather than the shared `Actions ▾` menu ([page_actions.mdx](./page_actions.mdx)).
+
+The existing three actions render in the `PageHeader` `actions` slot, right-aligned, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/ViewOneDevicePage.tsx` — `ViewOneDevicePage` (the `actions={…}` header slot: Copy Peer ID / Open in File System / Remove peer).
 
 The page is `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/ViewOneDevicePage.tsx` — `ViewOneDevicePage`, routed at `/device/$deviceId` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/router.tsx`. It reads one device by id from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/peers/devices.router.ts` — `GET /api/devices/:id`, backed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `deviceRow(id)` (built on `deviceRows()` so it shows the same disambiguated label + union).
 
@@ -324,6 +336,25 @@ Aggregating the device rows the page shows — inject self from config, union `p
 
 Per the charter (*"All tables are TanStack tables. No exceptions."*) every table in the repo is built on
 `@tanstack/react-table`: the shared house table `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (used by Devices, Repos, Storages, Communities, IPFS, and the directory view) and the one bespoke instance `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (its own `useReactTable` for the streamed flat walk). The Devices table's fixed-width columns use the `width` field on `LfbColumn` (`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts`), which makes `DataTable` emit a `<colgroup>` + `table-fixed` layout.
+
+### 6.8 Page actions — the Devices / Peers header (proposed)
+
+The Devices / Peers page (`/devices`) currently carries **no header actions** — it is a pure table
+(the `PageHeader` has only a title + subtitle, no `actions` slot). Because it is a device registry, not
+a file list, the two customer actions it wants are its **own header buttons** (right-aligned in the
+header), not the shared file `Actions ▾` menu ([page_actions.mdx](./page_actions.mdx)):
+
+| Action | What it does | Placement | Status |
+| --- | --- | --- | --- |
+| **Add a computer** | Opens pairing help — how to install LFB on a second machine and have it join this storage's registry (§9). It is the empty-state nudge promoted to a persistent header button. | Header, right-aligned, primary. | **proposed** |
+| **Refresh peers / re-announce** | Re-reads `peers.yaml` + each storage's `devices/` registry and re-announces this device, refreshing `last_seen` health colours without waiting on the sync pass. | Header, right-aligned. | **proposed** |
+
+Neither is implemented yet, so no code pointer. When built, they render in the `PageHeader` `actions`
+slot of `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` —
+`DevicesPage`, driving the aggregation already served by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/peers/devices.router.ts` —
+`GET /api/devices` (§6.6). These are page-level actions, distinct from any per-row `⋮` kebab
+([menus.mdx](./menus.mdx)).
 
 ---
 

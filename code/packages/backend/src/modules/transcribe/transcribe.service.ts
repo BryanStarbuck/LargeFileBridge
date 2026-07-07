@@ -5,12 +5,13 @@
 // directory / repo / storage. Explicit-user-action only (§7); reports truthfully per file (§6).
 import fs from "node:fs";
 import path from "node:path";
-import type { TranscribeResult, TranscribeBatchResult, TranscribeTools, TranscriptView } from "@lfb/shared";
+import type { TranscribeResult, TranscribeBatchResult, TranscribeTools, TranscriptView, EnqueuePlan } from "@lfb/shared";
 import { mediaKindForName } from "@lfb/shared";
 import { Transcriber } from "../../tools/transcribe/Transcribe.js";
 import { expandHome } from "../fs/badges.js";
 import { getStorageDetail } from "../storage/storage.service.js";
 import { track } from "../progress/progress.registry.js";
+import { enqueue } from "../jobqueue/jobqueue.service.js";
 import { log } from "../../shared/logging.js";
 
 // The parallel hidden hierarchy under a storage root (Transcribe.mdx §3). Single constant — rename here
@@ -152,6 +153,50 @@ export async function transcribeStorageById(id: string, overwrite = false): Prom
     return summarize([result(detail.storage.root, "skipped", null, null, "local storage holds no media")]);
   }
   return transcribeTree(detail.storage.root, overwrite);
+}
+
+/**
+ * The "Create Transcriptions" PAGE ACTION (page_actions.mdx §5) — plan + background-queue. Resolves the
+ * set (checked `paths`, else the recursive `root`), drops files that already have a transcript and
+ * non-audio/-video files (skip-already-done, page_actions.mdx §1.2), hands the eligible remainder to the
+ * background queue ([job_queue.mdx](../jobqueue)), and returns the PLAN immediately — never the results.
+ * The caller returns without awaiting the queue; each file surfaces its own `transcribe` dock card as it runs.
+ */
+export function enqueueTranscribe(opts: { paths?: string[]; root?: string; overwrite?: boolean }): EnqueuePlan {
+  const overwrite = opts.overwrite ?? false;
+  const candidates = resolveCandidates(opts);
+  let alreadyDone = 0;
+  let unsupported = 0;
+  const eligible: string[] = [];
+  for (const abs of candidates) {
+    const name = path.basename(abs);
+    if (!mediaKindForName(name) || !engine.canTranscribe(name)) {
+      unsupported++;
+      continue;
+    }
+    if (!overwrite && exists(resolveTranscriptPath(abs).transcriptPath)) {
+      alreadyDone++;
+      continue;
+    }
+    eligible.push(abs);
+  }
+  const { queued } = enqueue(eligible.map((p) => ({ op: "transcribe", path: p, overwrite })));
+  log.info("transcribe", `enqueue: ${candidates.length} considered → ${queued} queued (${alreadyDone} already done, ${unsupported} unsupported)`);
+  return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued, willProcess: queued };
+}
+
+/**
+ * The candidate set for a page action (page_actions.mdx §1.1): a non-empty `paths` is the CHECKED set
+ * (used as-is); otherwise `root` is walked recursively for media. Exactly one must be supplied.
+ */
+function resolveCandidates(opts: { paths?: string[]; root?: string }): string[] {
+  if (opts.paths && opts.paths.length > 0) {
+    return opts.paths.map((p) => path.resolve(expandHome(p.trim())));
+  }
+  if (opts.root && opts.root.trim()) {
+    return walkMedia(path.resolve(expandHome(opts.root.trim())));
+  }
+  throw new Error("enqueue requires either paths[] (the checked set) or root (to walk recursively)");
 }
 
 // ── walk + helpers ──────────────────────────────────────────────────────────────

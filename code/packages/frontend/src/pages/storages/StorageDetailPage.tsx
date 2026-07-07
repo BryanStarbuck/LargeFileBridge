@@ -8,7 +8,8 @@ import { toast } from "sonner";
 import type { StorageFileRow } from "@lfb/shared";
 import { formatBytes, mediaKindForName } from "@lfb/shared";
 import { api } from "@/api/client";
-import { runTranscribeStorage, runTranscribeFile } from "@/lib/transcribe";
+import { runTranscribeFile } from "@/lib/transcribe";
+import { PageActions, producingActions } from "@/components/menu/PageActions";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { DataTable } from "@/components/table/DataTable";
 import type { LfbColumn } from "@/components/table/types";
@@ -71,15 +72,10 @@ export function StorageDetailPage() {
         subtitle={s?.root}
         actions={
           <div className="flex items-center gap-2">
-            {/* Transcribe every audio/video in this storage (Transcribe.mdx §2.4). */}
-            <button
-              onClick={() => s && runTranscribeStorage(s.id, s.name, () => qc.invalidateQueries({ queryKey: ["storage", storageId] }))}
-              disabled={!s}
-              title="Transcribe all audio & video in this storage"
-              className="flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm text-black/70 hover:bg-slate-100 disabled:opacity-50"
-            >
-              <Captions className="h-4 w-4" /> Transcribe all
-            </button>
+            {/* The header "Actions ▾" page menu (page_actions.mdx §4) — Create Transcriptions / Create AI
+                descriptions over the whole storage (walked recursively), background-queued. This
+                consolidates the former standalone "Transcribe all" button. */}
+            <PageActions actions={producingActions(() => (s ? { root: s.root } : {}))} />
             <button
               onClick={() => index.mutate()}
               disabled={index.isPending}

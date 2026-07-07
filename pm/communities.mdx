@@ -170,6 +170,23 @@ Top-to-bottom:
 2. **The communities table** — the main surface (§7).
 3. *(No panel below the table by default.)*
 
+### 6.1 Page actions — the header buttons (proposed)
+
+The Communities page (`/communities`) has **no header actions today** — its `PageHeader` carries only a
+title + subtitle. Because a community is a *publisher subscription*, not a file, the page wants two of
+its **own** header buttons (right-aligned in the header), not the shared file `Actions ▾` menu
+([page_actions.mdx](./page_actions.mdx)):
+
+| Action | What it does | Placement | Status |
+| --- | --- | --- | --- |
+| **Add community (by publisher id)** | Prompts for a publisher id / slug and adds that community as a subscribable row (defaulting to **Block**, §4). This is how a user follows a publisher LFB hasn't already surfaced. | Header, right-aligned, primary. | **proposed** |
+| **Sync / refresh community catalog** | Re-fetches every subscribed community's `library` manifest (§2) and re-plans pins against the budget (§5), so newly-published videos appear without waiting on the background pass. | Header, right-aligned. | **proposed** |
+
+Neither is implemented yet, so no code pointer. When built, they render in the `PageHeader` `actions`
+slot of `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/communities/CommunitiesPage.tsx`
+— `CommunitiesPage`. These are page-level actions, distinct from the per-row bookmark toggle and the
+per-community mode/intent controls in the table (§7).
+
 ---
 
 ## 7. The communities table (TanStack)

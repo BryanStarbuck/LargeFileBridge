@@ -185,6 +185,28 @@ Importing untracked pins into tracking (metadata-only — record the CID in the 
 > written for CIDs `ipfs pin ls` truly holds ([sync_list §5.1](./sync_list.mdx#51-local-claims-are-verified-not-believed)).
 > This page's Untracked rows are exactly the CIDs held-but-unclaimed; importing makes the claim honest.
 
+### 4.1 Page actions — the header `Actions ▾` menu
+
+Beside the top-right **⟳ Rescan** primary button (§2/§6), the header carries the page-level **`Actions ▾`**
+menu ([page_actions.mdx](./page_actions.mdx)) — the third action surface, distinct from the per-row `⋮`
+pin kebab ([menus.mdx §5.5](./menus.mdx#55-ipfs-pin-a-pinned-cid--locked)). Its items are the "IPFS pins"
+row of the per-page catalog ([page_actions.mdx §4](./page_actions.mdx)) — the pinset-wide operations:
+
+* **Publish IPFS list…** — publish the current pinset as a shareable IPFS list / share artifact (the
+  opt-in public-share feature, [ipfs_share_files.mdx](./ipfs_share_files.mdx)); an explicit-click offer
+  with a confirm step, never a silent publish.
+* **Re-verify pins** — re-confirm every `pinned_by[this-computer]` claim against `ipfs pin ls`, dropping
+  stale claims and queuing re-pins ([sync_list.mdx §5.1](./sync_list.mdx#51-local-claims-are-verified-not-believed)).
+* **Import all untracked** — the bulk adopt of every Untracked (pinned) CID (§4), consolidated here from
+  the header `⋮` bulk menu; scope honors [page_actions.mdx §1.1](./page_actions.mdx) (checked rows else the
+  whole pinset).
+
+Scope, background queue, and the toast follow [page_actions.mdx §1–§2](./page_actions.mdx) and are not
+restated; **Rescan** stays outside the menu as this page's primary button ([page_actions.mdx §3](./page_actions.mdx)).
+
+implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsPage.tsx` — `IpfsPage` (mounts `PageActions` from `code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions`, scoped to the pinset rows).
+
 ---
 
 ## 5. The table (TanStack, house style)

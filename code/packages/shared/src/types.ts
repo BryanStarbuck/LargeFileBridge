@@ -490,6 +490,7 @@ export type ProgressKind =
   | "publish"
   | "compress"
   | "transcribe"
+  | "describe"
   | "hash"
   | "fingerprint"
   | "ignore"
@@ -509,9 +510,24 @@ export interface ProgressJob {
   unit?: string; // "MB" | "files" | "%" | …
 }
 
-// GET /api/progress → the union of all in-flight jobs (registry + the active discovery scan).
+// GET /api/progress → the union of all in-flight jobs (registry + the active discovery scan). `queued`
+// is the background job queue's pending backlog (tasks waiting to start; job_queue.mdx §4) — the dock
+// shows a "+ N queued" footer when it is > 0. Absent/0 means nothing is waiting.
 export interface ProgressListResult {
   jobs: ProgressJob[];
+  queued?: number;
+}
+
+// The plan a producing PAGE ACTION returns (page_actions.mdx §5): after resolving scope (checked set or
+// the recursive root) and dropping already-done + unsupported files, how many were background-queued.
+// `willProcess` is the number the "{N} files will have their … created" toast shows (== queued).
+export interface EnqueuePlan {
+  considered: number; // set size after Rule 1 (checked set, or the recursive walk)
+  eligible: number; // after Rule 2 — media that does NOT already have the output
+  alreadyDone: number; // dropped because the output already exists
+  unsupported: number; // dropped because not the right media kind
+  queued: number; // handed to the background queue
+  willProcess: number; // the number the toast shows (== queued)
 }
 
 // ── Web session activity ping (sessions.mdx) ────────────────────────────────
@@ -829,6 +845,14 @@ export interface DescribeResult {
   descriptionPath: string | null;
   model: string | null;
   reason: string | null;
+}
+// A batch / tree run of AI description — the per-file results plus honest counts (mirrors
+// TranscribeBatchResult; ai_description.mdx §5 POST /describe/batch|/tree).
+export interface DescribeBatchResult {
+  results: DescribeResult[];
+  described: number;
+  skipped: number;
+  failed: number;
 }
 // The per-kind prompt as the settings/viewer surface sees it (GET /api/describe/prompt).
 export interface DescribePromptView {

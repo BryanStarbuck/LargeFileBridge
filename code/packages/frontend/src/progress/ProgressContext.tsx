@@ -38,6 +38,7 @@ export interface JobSpec {
 
 interface ProgressCtx {
   jobs: ProgressJob[];
+  queued: number; // background job-queue backlog (not-yet-started tasks) — the dock's "+ N queued" footer
   run: (specs: JobSpec[], opts?: { invalidate?: unknown[][]; batchLabel?: string }) => Promise<void>;
 }
 
@@ -130,7 +131,10 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
     [qc, setJob],
   );
 
-  const value = useMemo<ProgressCtx>(() => ({ jobs, run }), [jobs, run]);
+  // The background job queue's pending backlog (job_queue.mdx §4), surfaced by the same poll.
+  const queued = server?.queued ?? 0;
+
+  const value = useMemo<ProgressCtx>(() => ({ jobs, queued, run }), [jobs, queued, run]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
@@ -148,6 +152,7 @@ const VERBS: Record<ProgressKind, string> = {
   publish: "Publishing",
   compress: "Compressing",
   transcribe: "Transcribing",
+  describe: "Describing",
   hash: "Hashing",
   fingerprint: "Fingerprinting",
   ignore: "Ignoring",

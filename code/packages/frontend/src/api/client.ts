@@ -67,10 +67,12 @@ import type {
   DescribeProvidersStatus,
   DescribeView,
   DescribeResult,
+  DescribeBatchResult,
   DescribePromptView,
   DescribeAiConfig,
   DescribeAiConfigPatch,
   AiCredentialsInfo,
+  EnqueuePlan,
 } from "@lfb/shared";
 import { http, unwrap } from "./axios.js";
 
@@ -220,6 +222,10 @@ export const api = {
     unwrap<TranscribeBatchResult>(http.post("/transcribe/tree", { path, overwrite })),
   transcribeStorage: (id: string, overwrite = false) =>
     unwrap<TranscribeBatchResult>(http.post(`/transcribe/storage/${id}`, { overwrite })),
+  // "Create Transcriptions" page action (page_actions.mdx §5): plan + background-queue the checked `paths`
+  // or the recursive `root`; returns the plan immediately (willProcess = the toast count).
+  transcribeEnqueue: (body: { paths?: string[]; root?: string; overwrite?: boolean }) =>
+    unwrap<EnqueuePlan>(http.post("/transcribe/enqueue", body)),
   // AI description (ai_description.mdx). Provider status, read an existing description, generate one (the
   // external vision call), and read/customize/save/reset the per-kind prompt files.
   describeProviders: () => unwrap<DescribeProvidersStatus>(http.get("/describe/providers")),
@@ -229,6 +235,13 @@ export const api = {
   description: (path: string) => unwrap<DescribeView | null>(http.get("/describe/file", { params: { path } })),
   describeFile: (path: string, opts?: { overwrite?: boolean; provider?: "auto" | "gemini" | "grok" | "openai" }) =>
     unwrap<DescribeResult>(http.post("/describe/file", { path, ...(opts ?? {}) })),
+  describeBatch: (paths: string[], opts?: { overwrite?: boolean; provider?: "auto" | "gemini" | "grok" | "openai" }) =>
+    unwrap<DescribeBatchResult>(http.post("/describe/batch", { paths, ...(opts ?? {}) })),
+  describeTree: (path: string, opts?: { overwrite?: boolean; provider?: "auto" | "gemini" | "grok" | "openai" }) =>
+    unwrap<DescribeBatchResult>(http.post("/describe/tree", { path, ...(opts ?? {}) })),
+  // "Create AI descriptions" page action (page_actions.mdx §5): plan + background-queue; returns the plan.
+  describeEnqueue: (body: { paths?: string[]; root?: string; overwrite?: boolean; provider?: "auto" | "gemini" | "grok" | "openai" }) =>
+    unwrap<EnqueuePlan>(http.post("/describe/enqueue", body)),
   describePrompt: (kind: DescribeKind) => unwrap<DescribePromptView>(http.get("/describe/prompt", { params: { kind } })),
   customizeDescribePrompt: (kind: DescribeKind) =>
     unwrap<DescribePromptView>(http.post("/describe/prompt/customize", { kind })),

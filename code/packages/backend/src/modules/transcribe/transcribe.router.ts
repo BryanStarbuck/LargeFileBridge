@@ -12,6 +12,7 @@ import {
   transcribeMany,
   transcribeTree,
   transcribeStorageById,
+  enqueueTranscribe,
 } from "./transcribe.service.js";
 
 export const transcribeRouter = Router();
@@ -66,6 +67,21 @@ transcribeRouter.post("/tree", async (req, res) => {
     res.json({ ok: true, data: await transcribeTree(body.data.path, body.data.overwrite ?? false) });
   } catch (e) {
     log.error("transcribe", `transcribeTree failed for ${body.data.path}: ${(e as Error).message}`);
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/transcribe/enqueue — the "Create Transcriptions" PAGE ACTION (page_actions.mdx §5). Plans the
+// eligible set (checked `paths`, else the recursive `root`, minus already-transcribed), background-queues it
+// (job_queue.mdx), and returns the PLAN immediately — the request never waits for the work.
+transcribeRouter.post("/enqueue", (req, res) => {
+  const body = z
+    .object({ paths: z.array(z.string().min(1)).optional(), root: z.string().min(1).optional(), overwrite: z.boolean().optional() })
+    .safeParse(req.body);
+  if (!body.success) return res.status(400).json({ ok: false, error: "paths[] or root required" });
+  try {
+    res.json({ ok: true, data: enqueueTranscribe(body.data) });
+  } catch (e) {
     res.status(400).json({ ok: false, error: (e as Error).message });
   }
 });

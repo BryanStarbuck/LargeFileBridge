@@ -296,6 +296,27 @@ this computer with LFBridge:
 Registering a repo by folder path (and kicking a background rescan) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `POST /api/repos` (calls `registerRepo`)
 
+### 6.1 Page actions — the header `Actions ▾` menu
+
+Beside the existing **+ Add repo** primary button (§6), the header carries the page-level **`Actions ▾`**
+menu ([page_actions.mdx](./page_actions.mdx)) — the third action surface, distinct from the per-row `⋮`
+repo kebab ([menus.mdx §5.1](./menus.mdx#51-repo)). Because **Repos rows are repos, not files**, this page
+does **not** carry the file-producing actions (Create Transcriptions / Create AI descriptions live on the
+file-list pages). Instead its menu is the "Repos list" row of the per-page catalog
+([page_actions.mdx §4](./page_actions.mdx)) — the **whole-list** operations:
+
+* **Rescan all** — re-run the scan across **every** repo on this computer (the per-repo Rescan
+  [menus.mdx §5.1](./menus.mdx#51-repo), lifted to all rows).
+* **Sync all** — kick a sync on every repo that has pending work (the per-repo **Sync now**, lifted to all
+  rows).
+
+Scope resolves as usual ([page_actions.mdx §1.1](./page_actions.mdx)) — the **checked** repos if any rows
+are checked, else **every** repo in the list; both run through the background queue and the progress dock,
+so the header returns immediately.
+
+implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `ReposPage` (mounts `PageActions` from `code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions`, scoped to the repo rows).
+
 ---
 
 ## 7. Empty & loading states

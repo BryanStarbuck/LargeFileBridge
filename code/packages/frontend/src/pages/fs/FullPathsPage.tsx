@@ -41,6 +41,8 @@ import { api } from "../../api/client.js";
 import { Badges } from "../../components/fs/Badges.js";
 import { BadgeLegend } from "../../components/fs/BadgeLegend.js";
 import { EntityKebab } from "../../components/menu/EntityMenu.js";
+import { PageActions, producingActions } from "../../components/menu/PageActions.js";
+import type { ActionScope } from "../../lib/pageActions.js";
 import { formatBytes, relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
 import { clientLog } from "../../lib/clientLog.js";
 import { useDebounced } from "../../lib/useDebounced.js";
@@ -449,6 +451,14 @@ export function FullPathsPage() {
         >
           <DownloadCloud className="h-4 w-4" /> Unpin
         </button>
+        {/* The header "Actions ▾" page menu (page_actions.mdx §4) — Create Transcriptions / Create AI
+            descriptions over the checked rows, else the whole root walked recursively. */}
+        <PageActions
+          actions={producingActions((): ActionScope =>
+            selected.size > 0 ? { paths: [...selected] } : root ? { root } : {},
+          )}
+          selectedCount={selected.size}
+        />
         {selected.size > 0 && <span className="text-sm text-black/60">{selected.size} selected</span>}
       </div>
 
