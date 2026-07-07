@@ -431,7 +431,7 @@ export interface RepoSettings {
 }
 
 // ── Scheduled workers — the transparency contract (scan.mdx §7, storage.mdx §13)
-export type WorkerKind = "scan" | "sync";
+export type WorkerKind = "scan" | "sync" | "device";
 
 export interface WorkerState {
   kind: WorkerKind;
@@ -456,6 +456,7 @@ export interface WatcherState {
 export interface SyncPageData {
   scan: WorkerState;
   sync: WorkerState;
+  device: WorkerState; // the every-10-min device-registration write-back (devices.mdx §12)
   watcher: WatcherState;
   computerLabel: string;
   ipfs: IpfsHealth;
@@ -539,6 +540,11 @@ export interface EnqueuePlan {
   unsupported: number; // dropped because not the right media kind
   queued: number; // handed to the background queue
   willProcess: number; // the number the toast shows (== queued)
+  // First-time gate (Transcribe.mdx §3.5): true when EVERY eligible file needs setup (no Personal storage
+  // owns them) — nothing was queued; the UI opens the setup wizard instead. `setupPath` is a representative
+  // file to show in the wizard (null unless needsSetup).
+  needsSetup: boolean;
+  setupPath: string | null;
 }
 
 // ── Web session activity ping (sessions.mdx) ────────────────────────────────

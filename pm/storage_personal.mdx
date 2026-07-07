@@ -275,6 +275,15 @@ The loop is **idempotent**: with nothing changed on either side, a pass fetches,
 commits nothing, and pushes nothing. Run every 15 minutes on both machines, the two computers converge —
 the same files, and the same knowledge about them, on both.
 
+**Your device info is written back even before you opt into IPFS pinning.** A separate,
+**every-10-minute** device-registration check ([devices.mdx §11](./devices.mdx#11-the-device-registration-write-back--every-10-minutes-locked))
+guarantees this computer's `devices/<self>.yaml` is **written and pushed** to the Personal repo on its own
+cadence — **git pull + merge first, then commit + push**, always pulling even with nothing to change — and
+it runs **whether or not** the Personal storage is opted into IPFS pinning (`synced`). So the moment you
+turn Git on for Personal, your device appears in the repo (and on your other computer's Devices tab)
+within ten minutes, regardless of the byte-sync opt-in. It is a distinct worker with its own
+installed / on-off switch on the Scans page, so *"I turn that on"* is a single, visible toggle.
+
 Driving the per-pass Git cycle for the Personal storage (fetch+merge before the reconcile, commit+push after, with the non-fast-forward retry) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncStorageUnit(id)`, calling `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.pull()` then `GitBackbone.commitAndPush()`.
 

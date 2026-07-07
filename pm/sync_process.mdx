@@ -155,6 +155,16 @@ Only the **byte work** is gated by the `synced` opt-in (§1):
 * If the unit is **not opted in** (`synced: false`): the pass still visits and reconciles it (steps
   1–4) but adds/pins/fetches **nothing** — until the user opts in.
 
+**Device write-back is explicitly NOT gated by `synced`.** Writing **this computer's own**
+`devices/<self>.yaml` into a Git-backed storage — and running that storage's Git cycle to carry it — is
+the "understand", not the "pin", side of §1: it puts your own identity text into your own configured
+repo, with **no** outward footprint. So a Git-backed storage runs **pull → write self device → commit →
+push every pass regardless of `synced`**; only the byte reconcile above waits on the opt-in. This is the
+guarantee the [every-10-minute device-registration worker](./devices.mdx#11-the-device-registration-write-back--every-10-minutes-locked)
+is built around, and it is applied to this Transfer pass too — implemented in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` —
+`syncStorageUnit(id)` (Git cycle + `writeSelfDevice` outside the `synced` gate; only `runUnitSync` inside it).
+
 **A manual Sync now is itself the opt-in.** Clicking Sync now on a not-yet-opted-in repo is an explicit
 user action, so it flips that repo to `synced: true` and does the byte work, then the every-15-min
 scheduleTask keeps it fresh. (This is the exact bug §6 records: the manual path used to be gated by the

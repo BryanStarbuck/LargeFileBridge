@@ -229,6 +229,16 @@ order, wrapped around the storage's normal reconcile + IPFS byte work:
 The cycle is **idempotent** and safe to run every 15 minutes: with nothing changed on either side it
 fetches, finds nothing to merge, stages nothing, and pushes nothing.
 
+**The device-registration worker reuses this exact cycle on its own 10-minute cadence.** The dedicated
+every-10-minute device write-back ([devices.mdx §11](./devices.mdx#11-the-device-registration-write-back--every-10-minutes-locked))
+runs a **narrowed** version of steps 1–3 + 5–6 — resolve → **fetch → auto-merge** → write **only** this
+device's own `devices/<self>.yaml` → commit → push — for every Git-backed storage, **whether or not** the
+storage is opted into IPFS pinning. Its step 2 fetch+merge runs **every 10 minutes even when this computer
+has nothing to change**, so device edits made on another computer are pulled down. Because it and the
+15-minute pass share one process, both take a **per-storage lock** so they never run git on the same
+working copy at once (`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts`
+— `ensureDeviceRegistered(id)` under `withStorageGitLock`).
+
 Driving this ordered cycle for each Git-backed storage inside the full pass — fetch/merge before reconcile, commit/push after, with the non-fast-forward retry — is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncStorageUnit(id)` calls `GitBackbone.pull()` (fetch+merge) before `runUnitSync(...)` and `GitBackbone.commitAndPush()` after, both from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` (`pull()`, `commitAndPush()` with the fetch-merge-push retry). Only storages whose `backing.dedicated_repo.enabled` is true run the cycle; the rest sync over IPFS alone.
 

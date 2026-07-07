@@ -35,11 +35,11 @@ syncRouter.post("/watcher/:action", async (req, res) => {
   }
 });
 
-// POST /api/sync/:worker/:action  — worker ∈ scan|sync, action ∈ install|uninstall|enable|disable
+// POST /api/sync/:worker/:action  — worker ∈ scan|sync|device, action ∈ install|uninstall|enable|disable
 syncRouter.post("/:worker/:action", async (req, res) => {
   const params = z
     .object({
-      worker: z.enum(["scan", "sync"]),
+      worker: z.enum(["scan", "sync", "device"]),
       action: z.enum(["install", "uninstall", "enable", "disable"]),
     })
     .safeParse(req.params);

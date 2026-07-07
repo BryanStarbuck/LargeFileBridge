@@ -85,6 +85,12 @@ export function SyncPage() {
             state={data.sync}
           />
           <WorkerCard
+            worker="device"
+            title="Device registration — keeps your computers in the loop"
+            purpose="Every 10 minutes: makes sure this computer's device info is written to your personal Git repo — git pull + merge first, then commit + push. Runs even when there's nothing to change, so edits from your other computers are pulled down."
+            state={data.device}
+          />
+          <WorkerCard
             worker="scan"
             title="Discovery — finds new big files"
             purpose="Every 4 hours: walks your repos to spot new large files and changes (metadata only — no bytes move)."

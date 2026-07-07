@@ -98,14 +98,20 @@ The narrowing is applied **before** enqueue, so the queue only ever holds real w
 A producing action also drops files it **cannot** act on (a non-media file for Create Transcriptions, a
 non-image/-video for Create AI descriptions) — those are silently excluded from the count, never queued.
 
-**First-time gate (LOCKED).** Before a producing action queues anything, it resolves **where each output
-would land** ([Transcribe.mdx §3.4](./Transcribe.mdx)). If the target resolves to `needsSetup` — the user
-has **no Personal storage configured** and the files are owned by no repo/company storage — the action does
-**not** silently write beside the media; it opens the **first-time setup wizard**
-([Transcribe.mdx §3.5](./Transcribe.mdx)) instead, then resumes once a storage exists. The producing
-actions that consult placement this way are **Create Transcriptions** and **Create AI descriptions** (and
-any per-file analysis action added later). Pasted `~/…` paths are home-expanded before this resolution
-(Transcribe.mdx §3.6).
+**First-time gate (LOCKED).** Before a producing action queues anything, the planner resolves **where each
+output would land** ([Transcribe.mdx §3.4](./Transcribe.mdx)). If **every eligible file** resolves to
+`needsSetup` — the user has **no Personal storage configured** and the files are owned by no repo/company
+storage — the planner **queues nothing** and returns `needsSetup: true` with a representative `setupPath`;
+the page action opens the **first-time setup wizard** ([Transcribe.mdx §3.5](./Transcribe.mdx)) instead of
+silently writing beside the media, then **re-runs the same page action** once a storage exists. (A *mixed*
+scope — some files owned, some not — proceeds normally; the unowned files each report their own
+`needs_setup` per file.) The producing actions that consult placement this way are **Create Transcriptions**
+and **Create AI descriptions** (and any per-file analysis action added later). Pasted `~/…` paths are
+home-expanded before this resolution (Transcribe.mdx §3.6).
+
+The plan's `needsSetup` / `setupPath` fields, the all-eligible-need-setup detection, and the page action
+routing to the wizard are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `enqueueTranscribe()` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `enqueueDescribe()` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createTranscriptions()` / `createDescriptions()`.
 
 Producing actions further honour the two sticky flags ([menus.mdx §6.6](./menus.mdx)) where relevant: a
 **Do not compress** flag excludes a file from a Compress-all; **Never IPFS** excludes it from an

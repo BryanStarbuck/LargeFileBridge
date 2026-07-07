@@ -353,6 +353,25 @@ function resolveStorageAbs(root: string, rel: string, mappedKeys: Set<string>): 
   return path.join(root, rel); // pre-mapped-dir model: the file lives under the SDL root
 }
 
+// Serialize all Git-cycle work PER STORAGE. The every-10-min device worker and the every-15-min sync pass
+// (plus a manual Sync now) all hit THIS one backend process over loopback, and their cadences coincide —
+// two of them running git add/commit/push in the SAME working copy at once corrupts the index. This keyed
+// chain guarantees at most one pass touches a given storage's repo at a time; different storages still run
+// concurrently. In-process is sufficient because every trigger routes through this single process.
+const storageGitChain = new Map<string, Promise<unknown>>();
+function withStorageGitLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  const prev = storageGitChain.get(id) ?? Promise.resolve();
+  const run = prev.then(fn, fn); // run after the previous holder settles, success or failure
+  storageGitChain.set(
+    id,
+    run.then(
+      () => {},
+      () => {},
+    ), // keep the chain alive; swallow errors so one failure never poisons the next waiter
+  );
+  return run;
+}
+
 /**
  * Sync one directory-based storage (personal / company / community) as a unit, placing each file through
  * this computer's device graft (`resolveStorageAbs` → devices.mdx §4). Repos sync as their own repo
@@ -360,20 +379,22 @@ function resolveStorageAbs(root: string, rel: string, mappedKeys: Set<string>): 
  * the per-storage `synced` opt-in (default OFF — charter), mirroring the repo/computer-unit gate
  * (sync_process.mdx §1): a not-opted-in storage is still known and visited, but nothing is added/pinned/
  * fetched. Its file list is the tracking index; its manifest is the SDL's `.lfbridge/manifest.yaml`.
+ * The whole unit runs under the per-storage Git lock so it never races the device worker on the same repo.
  */
-export async function syncStorageUnit(id: string): Promise<void> {
+export function syncStorageUnit(id: string): Promise<void> {
+  return withStorageGitLock(id, () => syncStorageUnitInner(id));
+}
+
+async function syncStorageUnitInner(id: string): Promise<void> {
   const row = getStorageRow(id);
   if (!row || row.type === "local" || row.type === "repo") return;
   const root = expandHome(row.root);
-  if (!getStorageSynced(id)) {
-    log.info("sync", `Skip storage ${id}: synced=false.`);
-    return;
-  }
 
   // Git backbone (git_sync.mdx §6): if this storage's dedicated Git repo is ON, FETCH + auto-MERGE the
-  // user's other computers' SDL edits BEFORE we reconcile, so the incoming devices/manifest/analysis are
-  // merged in first. A merge conflict or auth failure is surfaced and we continue over IPFS. The commit +
-  // push of THIS device's own changes happens AFTER the reconcile below.
+  // user's other computers' SDL edits BEFORE we touch anything, so the incoming devices/manifest/analysis
+  // are merged in first. This pull happens EVERY pass even when we have nothing to change (devices.mdx
+  // §12), so edits made on another computer land here. A merge conflict or auth failure is surfaced and we
+  // continue over IPFS. The commit + push of THIS device's own changes happens AFTER the reconcile below.
   const gitRemote = getDedicatedRepoRemote(id);
   const gitBackbone = gitRemote ? await GitBackbone.resolve(id, gitRemote.remote) : null;
   const gitResult: GitCycleResult = { ran: gitBackbone !== null };
@@ -384,34 +405,44 @@ export async function syncStorageUnit(id: string): Promise<void> {
     if (gitResult.problem) log.warn("sync", `storage ${id} git: ${gitResult.problem}`);
   }
 
-  // Ensure this computer's device file (hence its graft) exists so path resolution has something to read.
+  // DEVICE WRITE-BACK (devices.mdx §12) — write this computer's own device file REGARDLESS of the IPFS
+  // `synced` opt-in. Writing your own identity text to your own configured repo has no outward footprint
+  // (sync_process.mdx §1), so it is never gated the way byte work is. This also gives path resolution the
+  // graft to read below. Committed + pushed by the Git cycle at the end of this function.
   try {
     writeSelfDevice(root);
   } catch (e) {
     log.warn("sync", `writeSelfDevice for storage ${id} failed: ${(e as Error).message}`);
   }
-  // Every indexed large file is a Sync candidate; its local home is resolved through the graft.
-  const decisions: Record<string, Decision> = {};
-  for (const f of readStorageIndex(root)) decisions[f.path] = "sync";
 
-  // The set of real mapped-dir keys (read once) tells resolveStorageAbs whether a path's first segment is
-  // a grafted hierarchy vs. a plain SDL-relative path.
-  const mappedKeys = new Set(readMappedDirsForRoot(root).mapped.map((m) => m.key));
+  // BYTE WORK is the ONLY thing gated by the per-storage `synced` opt-in (charter, sync_process.mdx §1/§5):
+  // a not-opted-in storage is still visited, its device info written & pushed, but no bytes are added/
+  // pinned/fetched. When opted in, reconcile every indexed large file through this computer's graft.
+  if (getStorageSynced(id)) {
+    const decisions: Record<string, Decision> = {};
+    for (const f of readStorageIndex(root)) decisions[f.path] = "sync";
 
-  await runUnitSync({
-    kind: "storage",
-    name: `storage:${id}`,
-    label: computerLabel(),
-    decisions,
-    fetchMissing: true,
-    resolveAbs: (rel) => resolveStorageAbs(root, rel, mappedKeys),
-    manifest: readCommittedManifest(root), // <root>/.lfbridge/manifest.yaml (same path convention as a repo)
-    status: UnitStatusSchema.parse({}),
-    writeManifest: (m) => writeCommittedManifest(root, m),
-    // Storage units have no status.yaml store yet — status is a no-op (the manifest + pins are still
-    // written and reconciled). A persisted per-storage status is a later follow-up.
-    writeStatus: () => {},
-  });
+    // The set of real mapped-dir keys (read once) tells resolveStorageAbs whether a path's first segment is
+    // a grafted hierarchy vs. a plain SDL-relative path.
+    const mappedKeys = new Set(readMappedDirsForRoot(root).mapped.map((m) => m.key));
+
+    await runUnitSync({
+      kind: "storage",
+      name: `storage:${id}`,
+      label: computerLabel(),
+      decisions,
+      fetchMissing: true,
+      resolveAbs: (rel) => resolveStorageAbs(root, rel, mappedKeys),
+      manifest: readCommittedManifest(root), // <root>/.lfbridge/manifest.yaml (same path convention as a repo)
+      status: UnitStatusSchema.parse({}),
+      writeManifest: (m) => writeCommittedManifest(root, m),
+      // Storage units have no status.yaml store yet — status is a no-op (the manifest + pins are still
+      // written and reconciled). A persisted per-storage status is a later follow-up.
+      writeStatus: () => {},
+    });
+  } else {
+    log.info("sync", `Storage ${id}: synced=false — device info kept current, no byte work.`);
+  }
 
   // Git backbone (git_sync.mdx §6 steps 5–6): after the reconcile has refreshed this device's own files
   // (device file, manifest, analysis), STAGE the self-owned SDL text, COMMIT, and PUSH — with a
@@ -424,6 +455,82 @@ export async function syncStorageUnit(id: string): Promise<void> {
     if (gitResult.problem) log.warn("sync", `storage ${id} git: ${gitResult.problem}`);
     else if (gitResult.pushed) log.info("sync", `storage ${id} git: pushed device state to remote`);
   }
+}
+
+/**
+ * Ensure THIS device's registration is written & pushed to ONE storage's Git backbone (devices.mdx §12) —
+ * the unit of work the every-10-minute device worker runs for each Git-backed storage. It is the storage
+ * sync narrowed to just the device write-back, DECOUPLED from the IPFS `synced` opt-in: writing your own
+ * identity text to your OWN configured repo has no outward footprint (sync_process.mdx §1).
+ *
+ * Strict order (git_sync.mdx §6), matching the user's requirement — before it ever modifies the repo it
+ * pulls, and it always pushes after:
+ *   1. resolve the working copy → git fetch → auto-merge  (ALWAYS, even with nothing to change, so another
+ *      computer's edits are pulled down);
+ *   2. writeSelfDevice — write/update this device's own devices/<self>.yaml;
+ *   3. git add (self-owned) → commit → push, with the non-fast-forward retry.
+ *
+ * A storage with no Git backbone still gets its local device file refreshed (it travels once a backbone is
+ * turned on). Returns the Git cycle result so the caller can surface a problem; never throws for a per-
+ * storage fault (the pass contains it). Runs under the per-storage Git lock so it never races the sync pass
+ * on the same repo.
+ */
+export function ensureDeviceRegistered(id: string): Promise<GitCycleResult> {
+  return withStorageGitLock(id, () => ensureDeviceRegisteredInner(id));
+}
+
+async function ensureDeviceRegisteredInner(id: string): Promise<GitCycleResult> {
+  const result: GitCycleResult = { ran: false };
+  const row = getStorageRow(id);
+  if (!row || row.type === "local" || row.type === "repo") return result;
+  const root = expandHome(row.root);
+
+  const gitRemote = getDedicatedRepoRemote(id);
+  const gitBackbone = gitRemote ? await GitBackbone.resolve(id, gitRemote.remote) : null;
+  result.ran = gitBackbone !== null;
+
+  // 1. PULL first — fetch + auto-merge before we modify anything (never on a storage without a backbone).
+  if (gitBackbone) {
+    await gitBackbone.pull(result).catch((e) => {
+      result.problem = `Git pull failed: ${(e as Error).message}`;
+    });
+    if (result.problem) log.warn("sync", `device-reg storage ${id} git: ${result.problem}`);
+  }
+
+  // 2. WRITE/UPDATE this device's own file (self-owned). Runs even without a backbone so the local file
+  //    stays current and is ready to travel the moment the user turns Git on.
+  try {
+    writeSelfDevice(root);
+  } catch (e) {
+    log.warn("sync", `device-reg writeSelfDevice for storage ${id} failed: ${(e as Error).message}`);
+  }
+
+  // 3. COMMIT + PUSH this device's own SDL text (skips an empty commit; non-fast-forward retry inside).
+  if (gitBackbone) {
+    await gitBackbone.commitAndPush(result).catch((e) => {
+      result.problem = `Git push failed: ${(e as Error).message}`;
+    });
+    if (result.problem) log.warn("sync", `device-reg storage ${id} git: ${result.problem}`);
+    else if (result.pushed) log.info("sync", `device-reg storage ${id} git: pushed device info to remote`);
+  }
+  return result;
+}
+
+/**
+ * The DEVICE-REGISTRATION background pass (devices.mdx §12) — what the dedicated every-10-minute `device`
+ * worker runs. For EVERY directory-based storage, make sure this computer's device info is present and
+ * current in the repo, pulling first so another computer's edits land here even when we have nothing to
+ * write. Decoupled from the IPFS opt-in and bounded by the same limiter; a per-storage fault is contained.
+ */
+export async function syncDeviceRegistrations(): Promise<void> {
+  const ids = safeStorageIds();
+  await runPool(ids, SYNC_CONCURRENCY, async (id) => {
+    try {
+      await ensureDeviceRegistered(id);
+    } catch (e) {
+      log.error("sync", `device registration for storage ${id} failed: ${(e as Error).message}`);
+    }
+  });
 }
 
 /** Sync one storage without letting a per-storage fault throw the pass. */

@@ -286,21 +286,31 @@ export function enqueueDescribe(opts: {
   const candidates = describeCandidates(opts);
   let alreadyDone = 0;
   let unsupported = 0;
+  let needSetup = 0;
   const eligible: string[] = [];
   for (const abs of candidates) {
     if (!describeKindFor(path.basename(abs))) {
       unsupported++;
       continue;
     }
-    if (!overwrite && readDescription(abs)) {
+    const dp = resolveDescriptionPath(abs);
+    // A file that needs first-time setup has no real destination yet — never counts as already-done.
+    if (!overwrite && !dp.needsSetup && readDescription(abs)) {
       alreadyDone++;
       continue;
     }
     eligible.push(abs);
+    if (dp.needsSetup) needSetup++;
+  }
+  // First-time gate (Transcribe.mdx §3.5): if EVERY eligible file needs setup (no Personal storage owns
+  // them), queue nothing and tell the UI to open the wizard with a representative path.
+  if (eligible.length > 0 && needSetup === eligible.length) {
+    log.info("describe", `enqueue: ${eligible.length} eligible all need first-time setup — not queuing`);
+    return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued: 0, willProcess: 0, needsSetup: true, setupPath: eligible[0] };
   }
   const { queued } = enqueue(eligible.map((p) => ({ op: "describe", path: p, overwrite, provider: opts.provider })));
   log.info("describe", `enqueue: ${candidates.length} considered → ${queued} queued (${alreadyDone} already done, ${unsupported} unsupported)`);
-  return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued, willProcess: queued };
+  return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued, willProcess: queued, needsSetup: false, setupPath: null };
 }
 
 /** Checked `paths` used as-is, else the recursive `root` walked for image/video (page_actions.mdx §1.1). */

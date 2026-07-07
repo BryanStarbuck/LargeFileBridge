@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import type { EnqueuePlan } from "@lfb/shared";
 import { api } from "../api/client.js";
 import { clientLog } from "./clientLog.js";
+import { requestStorageSetup } from "./setupWizard.js";
 
 // The page's set for an action (page_actions.mdx §1.1): a non-empty `paths` = the CHECKED subset; otherwise
 // `root` is walked recursively. Callers pass one or the other.
@@ -58,7 +59,14 @@ function describeToast(plan: EnqueuePlan): void {
  *  drains in the background; each file surfaces its own `transcribe` dock card). */
 export async function createTranscriptions(scope: ActionScope): Promise<void> {
   try {
-    transcribeToast(await api.transcribeEnqueue(scope));
+    const plan = await api.transcribeEnqueue(scope);
+    // First-time gate (Transcribe.mdx §3.5): the whole scope needs setup — open the wizard, then re-run
+    // this exact page action once a Personal storage exists. Nothing was queued.
+    if (plan.needsSetup) {
+      requestStorageSetup({ mediaPath: plan.setupPath ?? "", actionLabel: "transcribe", retry: () => void createTranscriptions(scope) });
+      return;
+    }
+    transcribeToast(plan);
   } catch (e) {
     clientLog.error("pageActions.createTranscriptions", e);
     toast.error((e as Error).message);
@@ -68,7 +76,16 @@ export async function createTranscriptions(scope: ActionScope): Promise<void> {
 /** Enqueue AI descriptions for the page's scope and toast the eligible count. */
 export async function createDescriptions(scope: ActionScope): Promise<void> {
   try {
-    describeToast(await api.describeEnqueue(scope));
+    const plan = await api.describeEnqueue(scope);
+    if (plan.needsSetup) {
+      requestStorageSetup({
+        mediaPath: plan.setupPath ?? "",
+        actionLabel: "generate AI descriptions for",
+        retry: () => void createDescriptions(scope),
+      });
+      return;
+    }
+    describeToast(plan);
   } catch (e) {
     clientLog.error("pageActions.createDescriptions", e);
     toast.error((e as Error).message);

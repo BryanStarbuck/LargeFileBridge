@@ -148,6 +148,24 @@ export const AppConfigSchema = z.object({
       last_run_ok: z.boolean().nullable().default(null),
     })
     .default({}),
+  // The DEVICE-REGISTRATION background worker (devices.mdx §12). A dedicated, every-10-minute pass whose
+  // ONE job is: make sure THIS computer's device info (its self-owned devices/<self>.yaml) is written and
+  // pushed up to each Git-backed storage's repo — pulling first (git fetch + auto-merge) EVERY run even
+  // when there is nothing to change, so another computer's edits land here. Decoupled from the per-storage
+  // IPFS `synced` opt-in: writing your own identity text to your OWN configured repo has no outward
+  // footprint (sync_process.mdx §1), so it runs whenever the Git backbone is on. `enabled` is the "turn it
+  // on" switch (the user's "I turn that on"). Same transparency contract (installed/on-off/last-run) as the
+  // sync + scan workers (storage_local.mdx §13).
+  device_process: z
+    .object({
+      installed: z.boolean().default(false),
+      enabled: z.boolean().default(false),
+      interval_minutes: z.number().default(10), // check every 10 min (devices.mdx §12)
+      label: z.string().default("com.largefilebridge.device"),
+      last_run_at: iso.nullable().default(null),
+      last_run_ok: z.boolean().nullable().default(null),
+    })
+    .default({}),
   scan_process: z
     .object({
       installed: z.boolean().default(false),

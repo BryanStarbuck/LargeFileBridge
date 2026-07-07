@@ -3,7 +3,7 @@
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { WorkerKind, WorkerState, SyncPageData } from "@lfb/shared";
+import type { WorkerKind, WorkerState, SyncPageData, AppConfig } from "@lfb/shared";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
 import { peerRows } from "../store-model/peers.service.js";
 import { launchdInstaller } from "./os/launchd.js";
@@ -38,16 +38,28 @@ function triggerScriptPath(): string {
 }
 
 function labelFor(kind: WorkerKind): string {
-  return kind === "scan" ? "com.largefilebridge.scan" : "com.largefilebridge.sync";
+  if (kind === "scan") return "com.largefilebridge.scan";
+  if (kind === "device") return "com.largefilebridge.device";
+  return "com.largefilebridge.sync";
 }
+
+// The transparency-contract config block for a worker kind (installed / enabled / interval / last-run).
+// The `device` worker (devices.mdx §12) is the every-10-min device-registration write-back.
+function processBlock(c: AppConfig, kind: WorkerKind) {
+  if (kind === "scan") return c.scan_process;
+  if (kind === "device") return c.device_process;
+  return c.sync_process;
+}
+
 function intervalFor(kind: WorkerKind): number {
   const c = getAppConfig();
-  return kind === "scan" ? c.scan_process.interval_hours * 3600 : c.sync_process.interval_minutes * 60;
+  if (kind === "scan") return c.scan_process.interval_hours * 3600;
+  if (kind === "device") return c.device_process.interval_minutes * 60;
+  return c.sync_process.interval_minutes * 60;
 }
 
 export async function workerState(kind: WorkerKind): Promise<WorkerState> {
-  const c = getAppConfig();
-  const block = kind === "scan" ? c.scan_process : c.sync_process;
+  const block = processBlock(getAppConfig(), kind);
   const inst = installer();
   const installed = inst.isInstalled(block.label) || block.installed;
   const enabled = installed ? await inst.isEnabled(block.label) : block.enabled;
@@ -67,6 +79,7 @@ export async function syncPageData(): Promise<SyncPageData> {
   return {
     scan: await workerState("scan"),
     sync: await workerState("sync"),
+    device: await workerState("device"),
     watcher: watcherState(),
     computerLabel: c.computer.label,
     ipfs: await ipfs.health(),
@@ -112,7 +125,7 @@ export async function control(
   log.info("schedule", `${kind}: ${action}`);
 
   await updateAppConfig((c) => {
-    const block = kind === "scan" ? c.scan_process : c.sync_process;
+    const block = processBlock(c, kind);
     if (action === "install") block.installed = true;
     if (action === "uninstall") {
       block.installed = false;
@@ -133,7 +146,7 @@ export async function control(
 // ALREADY installed — it never installs or enables a worker the user hasn't opted into. Best-effort: a
 // launchctl/OS hiccup is logged, not fatal to boot.
 export async function reconcileWorkerSchedules(): Promise<void> {
-  for (const kind of ["scan", "sync"] as WorkerKind[]) {
+  for (const kind of ["scan", "sync", "device"] as WorkerKind[]) {
     const inst = installer();
     const label = labelFor(kind);
     try {
@@ -157,7 +170,7 @@ export async function reconcileWorkerSchedules(): Promise<void> {
 
 export async function stampRun(kind: WorkerKind, ok: boolean): Promise<void> {
   await updateAppConfig((c) => {
-    const block = kind === "scan" ? c.scan_process : c.sync_process;
+    const block = processBlock(c, kind);
     block.last_run_at = new Date().toISOString();
     block.last_run_ok = ok;
     return c;

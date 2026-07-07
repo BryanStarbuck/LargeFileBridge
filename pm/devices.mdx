@@ -464,7 +464,65 @@ name / fingerprint to every other computer's Devices / Peers table.
 
 ---
 
-## 11. Acceptance criteria
+## 11. The device-registration write-back — every 10 minutes (LOCKED)
+
+The whole registry is worthless if **this** computer's own entry never makes it into the storage's Git
+repo. The user's worry, verbatim: *"I have my device information. I worry that it hasn't written it down
+to my personal Git repo."* So LFB runs a **dedicated background check** whose one job is to guarantee
+that write-back.
+
+### 11.1 A dedicated 10-minute worker, separate from the 15-minute transfer
+
+Device write-back is its **own** scheduled worker, on its **own** cadence — **every 10 minutes** — so it
+is independent of the every-15-minute IPFS **Transfer** pass ([sync_process.mdx](./sync_process.mdx),
+[storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract)).
+It carries the **same transparency contract** as the Transfer and Discovery workers — **installed /
+on-off / last-run**, controllable from the web app — so the user can see it and **turn it on** (*"I turn
+that on"*). Every 10 minutes it visits each directory storage and makes sure this computer's device info
+is **present and current** in that storage's repo, writing/updating it when it is missing or stale.
+
+### 11.2 It is NOT gated by the IPFS opt-in
+
+Writing your **own** device identity text to your **own** configured Git repo has **no outward
+footprint** — it is the "understand", not the "pin", side of [sync_process.mdx §1](./sync_process.mdx#1-lfb-knows-every-repo--there-is-no-lfb-managed-gate).
+So the write-back runs **whenever the storage's Git backbone is on**, *decoupled* from the per-storage
+`synced` (IPFS pinning) opt-in. A Personal storage the user has **not** opted into IPFS pinning still
+gets its device registry written and pushed — exactly the case the user was worried about. Only the
+**byte work** (add/pin/fetch) stays gated by `synced`.
+
+### 11.3 The strict order — always pull before modifying, always push after (LOCKED)
+
+Before it **ever modifies** the repo, the check runs the Git backbone cycle
+([git_sync.mdx §6](./git_sync.mdx#6-the-sync-cycle--where-git-runs-inside-the-pass-locked-order)) in a
+fixed order, matching the user's requirement verbatim:
+
+1. **`git fetch` → `git merge` (automatic)** — pull the repo down **first**, so another computer's edits
+   are merged in before we touch anything. **This runs every 10 minutes even when we have nothing to
+   change**, in case the device files were updated on another computer.
+2. **Write / update this device's own `devices/<self>.yaml`** (self-owned, §2.1) — the only modification.
+3. **`git add` (self-owned) → `git commit` → `git push`** — send this device's entry up to the server
+   side, with the fetch-merge-push retry on a non-fast-forward reject. An empty diff commits/pushes
+   nothing (idempotent).
+
+A storage with **no** Git backbone still gets its **local** device file refreshed each run, so it is
+ready to travel the instant the user turns Git on.
+
+### 11.4 It never races the Transfer pass
+
+Because the 10-minute device worker and the 15-minute Transfer pass share this one backend process and
+their cadences coincide, both are routed through a **per-storage Git lock**, so at most one pass ever
+runs `git` on a given repo's working copy at a time (concurrent `add`/`commit`/`push` in one working tree
+corrupts the index). Different storages still run concurrently.
+
+The dedicated every-10-minute device worker — its transparency contract (installed / on-off / last-run) and its `device_process` config block — is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — `AppConfigSchema.device_process` (default `interval_minutes: 10`, `label: com.largefilebridge.device`); driven by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `workerState("device")` / `control("device", …)` (install/enable/disable the launchd plist), surfaced on the Scans page by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/sync/SyncPage.tsx` — `SyncPage` (the "Device registration" `WorkerCard`).
+
+The pass itself — for every Git-backed storage, pull → write self device → commit → push, decoupled from the IPFS opt-in and serialized per storage — is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncDeviceRegistrations()` (the whole pass, run by the `device` worker via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/internal/internal.router.ts` — `POST /api/internal/run/device`) and `ensureDeviceRegistered(id)` (one storage's pull → `writeSelfDevice(root)` → commit/push under `withStorageGitLock`). The same decoupling is applied to the regular Transfer pass so it, too, writes device info even when a storage is not IPFS-opted-in: `syncStorageUnit(id)` now runs the Git pull + `writeSelfDevice` + commit/push regardless of `synced`, and gates only the byte reconcile behind it.
+
+---
+
+## 12. Acceptance criteria
 
 1. Every computer has a **minted, stable device id (UUID), distinct from its IPFS PeerID**, plus a
    **user-set nice name** (auto-seeded from the fingerprint) and a **hardware fingerprint**; the id and
@@ -499,6 +557,13 @@ name / fingerprint to every other computer's Devices / Peers table.
    device id against `config.yaml → computer.id` (§9).
 10. The device identity + fingerprint **synchronize** across the user's computers via the SDL's
     Git-backed travel; self-owned writes never collide (§10).
+11. A **dedicated, every-10-minute device-registration worker** (its own installed / on-off / last-run
+    transparency contract, turnable on from the web app) guarantees this computer's device info is
+    **written and pushed** to each Git-backed storage's repo. It is **decoupled from the IPFS `synced`
+    opt-in** (writing your own identity to your own repo has no outward footprint), runs the strict
+    **fetch → auto-merge → write self device → commit → push** order — **always pulling first, even with
+    nothing to change**, so another computer's edits land here — and is **serialized per storage** so it
+    never races the 15-minute Transfer pass on the same repo (§11).
 
 <!--
   The DEVICE / PEERS model. §1 identity: a MINTED stable UUID (distinct from the IPFS PeerID) + a
@@ -526,4 +591,14 @@ name / fingerprint to every other computer's Devices / Peers table.
   GET /api/devices, DevicesPage.tsx table; config.service mints computer.id + seeds computer.hardware.
   Keep in sync with syncable_data_location.mdx (mapped_dirs keys the graft), storage_local.mdx
   (computer.id/hardware + peers.yaml), left_bar.mdx/yaml (the "Devices / Peers" item), storage_company.mdx.
+  §11 THE DEVICE-REGISTRATION WRITE-BACK: a DEDICATED every-10-min worker (its own installed/on-off/last-run
+  contract, config `device_process`, label com.largefilebridge.device) whose one job is guaranteeing THIS
+  computer's device info is written+pushed to each Git-backed storage's repo. DECOUPLED from the IPFS
+  `synced` opt-in (own-identity-to-own-repo = no outward footprint, per sync_process §1). Strict order:
+  git fetch→auto-merge (ALWAYS, even with nothing to change, so other computers' edits land) → writeSelfDevice
+  → add/commit/push. Serialized per storage (withStorageGitLock) so it never races the 15-min Transfer pass.
+  New code: schemas.ts device_process; schedule.service workerState/control("device"); internal.router
+  POST /run/device; sync.service syncDeviceRegistrations()/ensureDeviceRegistered() + the same decoupling in
+  syncStorageUnit (git cycle + writeSelfDevice run regardless of synced; only byte work gated); SyncPage
+  "Device registration" WorkerCard. Keep in sync with git_sync.mdx §6, sync_process.mdx §1/§5, storage_personal.mdx §7.
 -->
