@@ -23,6 +23,10 @@ unit and its `config.yaml`).
 
 ## 1. How you get here — the gear icon
 
+* On a **Repos-table row**, a **⚙ gear** is shown in the row's trailing action cell **just to the left of
+  the row `⋮` kebab**, so per-repo settings are **one click** from the list without opening the kebab
+  first. It is the same destination as the kebab's **Repo settings…** item — the gear is the discoverable
+  shortcut, the kebab is the full catalog. Present on **every** repo row.
 * On a single repo's page (the [one repo](./one_repo.mdx) view — the screen a Repos-table row opens,
   route `/repos/$repoId`), a **gear icon** is shown in the header for that repo (top-right, alongside
   **Sync now**). *This gear is a new addition the one-repo header must add;
@@ -36,8 +40,8 @@ unit and its `config.yaml`).
 The gear is the **only** entry to per-repo settings — global settings never expose per-repo controls;
 they only show the global defaults this page can override.
 
-The gear icon that opens this page (navigating to `/repos/$repoId/settings`) lives in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` settings button
+The gear icons that open this page (both navigating to `/repos/$repoId/settings`) live in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` settings button (the one-repo header gear) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `RepoGear` (the per-row gear), placed left of `RepoKebab` in the Repos table's `rowMenu` by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `ReposPage`.
 
 ---
 

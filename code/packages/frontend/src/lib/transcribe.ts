@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import type { TranscribeResult, TranscribeBatchResult } from "@lfb/shared";
 import { api } from "@/api/client";
 import { clientLog } from "./clientLog.js";
+import { requestStorageSetup } from "./setupWizard.js";
 
 /** One-file outcome → a human line (Transcribe.mdx §1/§4). Exported so the useTranscribeFile hook and
  *  the Media Viewer report the SAME honest per-status text. */
@@ -19,6 +20,9 @@ export function transcribeMsgOne(r: TranscribeResult): string {
       return r.reason === "already transcribed" ? "Already transcribed" : `Not transcribed: ${r.reason ?? "skipped"}`;
     case "tool_missing":
       return `Can't transcribe: ${r.reason ?? "whisper/ffmpeg not installed"}`;
+    case "needs_setup":
+      // First-time gate (Transcribe.mdx §3.5): no Personal storage owns this file yet.
+      return "Set up Personal storage first — Settings → Storages";
     default:
       return `Transcription failed: ${r.reason ?? "error"}`;
   }
@@ -37,12 +41,22 @@ function errMsg(ctx: string) {
   };
 }
 
-/** Transcribe ONE media file (Media Viewer button / file ⋮ "Transcribe…"). */
-export function runTranscribeFile(path: string, name: string, opts?: { overwrite?: boolean; onDone?: () => void }): void {
+/** Transcribe ONE media file (Media Viewer button / file ⋮ "Transcribe…"). `onNeedsSetup` fires when the
+ *  backend reports `needs_setup` (no Personal storage owns the file — Transcribe.mdx §3.5), so a caller can
+ *  open the first-time setup wizard instead of only flashing a toast. */
+export function runTranscribeFile(
+  path: string,
+  name: string,
+  opts?: { overwrite?: boolean; onDone?: () => void; onNeedsSetup?: (reason: string) => void },
+): void {
   toast.promise(api.transcribeFile(path, opts?.overwrite ?? false), {
     loading: `Transcribing ${name}…`,
     success: (r) => {
-      opts?.onDone?.();
+      if (r.status === "needs_setup") {
+        // Open the first-time wizard; on completion re-run this exact transcription (Transcribe.mdx §3.5).
+        requestStorageSetup({ mediaPath: path, actionLabel: "transcribe", retry: () => runTranscribeFile(path, name, opts) });
+        opts?.onNeedsSetup?.(r.reason ?? "");
+      } else opts?.onDone?.();
       return transcribeMsgOne(r);
     },
     error: errMsg("transcribe.file"),

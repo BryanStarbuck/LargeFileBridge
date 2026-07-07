@@ -11,7 +11,7 @@ import { api } from "@/api/client";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { DataTable } from "@/components/table/DataTable";
 import type { LfbColumn } from "@/components/table/types";
-import { StorageKebab } from "@/components/menu/RowKebabs";
+import { StorageGear, StorageKebab } from "@/components/menu/RowKebabs";
 import { clientLog } from "@/lib/clientLog";
 
 export function StoragesPage() {
@@ -60,6 +60,8 @@ export function StoragesPage() {
           ) : (
             <button className="rounded-md border border-[var(--lfb-border)] px-2 py-1 text-xs hover:bg-slate-100" disabled={init.isPending} onClick={() => init.mutate(s.id)}>Initialize</button>
           )}
+          {/* Gear → per-storage settings, sitting just left of the ⋮ kebab (storage_settings.mdx §1). */}
+          <StorageGear storage={s} />
           <StorageKebab storage={s} />
         </span>
       ),

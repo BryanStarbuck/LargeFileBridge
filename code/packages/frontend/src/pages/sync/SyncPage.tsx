@@ -5,7 +5,7 @@
 import { useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type { WorkerKind, WorkerState } from "@lfb/shared";
+import type { WorkerKind, WorkerState, WatcherState } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { clientLog } from "../../lib/clientLog.js";
 import { relativeTime } from "../../lib/format.js";
@@ -90,9 +90,81 @@ export function SyncPage() {
             purpose="Every 4 hours: walks your repos to spot new large files and changes (metadata only — no bytes move)."
             state={data.scan}
           />
+          <WatcherCard state={data.watcher} />
         </div>
       )}
     </div>
+  );
+}
+
+// The live filesystem watcher (scan.mdx §2.2). NOT a scheduled job — no Install step: it runs only
+// while the web app is open and reacts the instant a big or video/image/audio file is added or deleted,
+// updating tracking + the File System tree without waiting for the 4-hour Discovery pass. So this card
+// mirrors the WorkerCard's Installed/On layout but drops "Installed" for a live "Watching N folders"
+// pill and offers only Turn on / Turn off.
+function watcherHealth(s: WatcherState): Health {
+  if (!s.enabled) return "warn";
+  if (!s.watching) return "warn"; // enabled but nothing bound (no roots / all unwatchable)
+  return "ok";
+}
+
+function WatcherCard({ state }: { state: WatcherState }) {
+  const qc = useQueryClient();
+  const control = useMutation({
+    mutationFn: (action: "enable" | "disable") => api.controlWatcher(action),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["syncPage"] });
+      toast.success("Live watch updated");
+    },
+    onError: (e: Error) => {
+      clientLog.error("SyncPage.controlWatcher", e);
+      toast.error(e.message);
+    },
+  });
+
+  const h = watcherHealth(state);
+  const rootCount = state.roots.length;
+  const status = !state.enabled
+    ? "off — changes are picked up by the 4-hour Discovery pass instead"
+    : state.watching
+      ? `watching ${rootCount} ${rootCount === 1 ? "folder" : "folders"} for added/deleted big & media files`
+      : "on, but no folders are being watched yet — set your scan roots in Settings";
+
+  return (
+    <DiagnosticCard
+      state={h}
+      title="Live watch — reacts instantly"
+      summary="While the app is open: the moment a big file or a video/image/audio file is added or deleted, it updates your tracking and the File System tree — no waiting for the 4-hour scan."
+      pills={
+        <>
+          <Pill on={state.enabled} onLabel="On" offLabel="Off" />
+          {state.enabled && (
+            <Pill on={state.watching} onLabel={`Watching ${rootCount}`} offLabel="Idle" />
+          )}
+        </>
+      }
+      fix={
+        <div className="flex gap-2">
+          {state.enabled ? (
+            <Btn onClick={() => control.mutate("disable")}>Turn off</Btn>
+          ) : (
+            <Btn primary onClick={() => control.mutate("enable")}>
+              Turn on
+            </Btn>
+          )}
+        </div>
+      }
+    >
+      <div className="space-y-1">
+        <div>{status}</div>
+        <div className="text-xs text-black/45">
+          Not a scheduled job — it runs only while the web app is open, using your operating system's
+          native file-change notifications. It reacts to files being <strong>added or deleted</strong>,
+          never to edits, and moves no bytes. Changes made while the app is closed are caught by the
+          Discovery pass above.
+        </div>
+      </div>
+    </DiagnosticCard>
   );
 }
 

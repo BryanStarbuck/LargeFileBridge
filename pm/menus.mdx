@@ -111,6 +111,13 @@ The trailing control column that carries every row's ⋮ kebab is rendered by th
   gated items hidden without the claim (§6.3). Opens on click, closes on select / outside-click / `Esc`.
 * **Keyboard + a11y.** Focusable button (`aria-haspopup="menu"`), arrow-key navigation, `Enter`
   activates, `Esc` closes and returns focus. Each item has a clear label; icons are decorative.
+* **Optional row gear (shortcut to settings).** A row whose entity has a **settings page** may show a
+  **⚙ gear** in the same trailing action cell, **immediately to the left of the `⋮`**, as a one-click
+  shortcut to that settings page — the **Storages** rows ([storage_settings.mdx §1](./storage_settings.mdx#1-how-you-get-here--gear-kebab-right-click-more-menu))
+  and **Repos** rows ([repo_settings.mdx §1](./repo_settings.mdx#1-how-you-get-here--the-gear-icon)) do
+  this. The gear is a **redundant shortcut**, never a replacement: it lands on the exact same page as the
+  kebab's **… settings…** item, and (like the kebab) stops row-click propagation so it opens settings
+  without navigating the row.
 
 The vertical ⋮ kebab button (stops row-click propagation, opens a portaled popover) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `KebabButton` component.

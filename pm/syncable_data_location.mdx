@@ -111,10 +111,20 @@ The layout, rooted at the SDL:
 | `.lfbridge/devices/<device>.yaml` | Device id, nice name, schedule, graft | each device (self-owned) | [devices.mdx](./devices.mdx) |
 | `.lfbridge/analysis/<relpath>/*.yaml` | Transcript, description, visuals-by-time, compression record | analysis passes | [storages.mdx §6](./storages.mdx) + §4 here |
 
-Only `LargeFilesBridge_SyncList.yaml` (and, for a repo storage, its committed `manifest.yaml`) is
-**committed to Git**; the rest of `.lfbridge/` is **git-ignored** so tracking never bloats commits, yet
-it still travels because the SDL directory itself is mirrored over the chosen backbone(s)
+**What is committed depends on the backbone (LOCKED).** For a **cloud backbone** (Google Drive / Dropbox
+mirrors the whole SDL directory), only `LargeFilesBridge_SyncList.yaml` (and, for a code-repo storage,
+its committed `manifest.yaml`) is **committed to Git**; the rest of `.lfbridge/` is **git-ignored** so
+tracking never bloats a code repo's commits, yet it still travels because the SDL directory itself is
+mirrored over the chosen backbone
 ([storage_settings.mdx §4](./storage_settings.mdx#4-backing-locations--dedicated-repo--google-drive--dropbox)).
+But when **Git itself is the backbone** — a **dedicated** LFB repo whose entire purpose is to carry this
+text (the Personal or a company `_large_files_bridge` repo,
+[storage_personal.mdx §1](./storage_personal.mdx#1-anatomy-of-the-personal-storage),
+[git_sync.mdx](./git_sync.mdx)) — the SDL's small YAML **is committed** (SyncList, descriptor, mapped
+dirs, fingerprints, manifest, bookmarks, `devices/`, `analysis/`), because Git is the vehicle that makes
+it travel; only the **big-file bytes** are git-ignored, and those never live in the SDL. The git-ignore
+rule keeps *bytes* out of Git, not the metadata whose whole job is to ride Git to the user's other
+computers.
 
 Composing the SDL — writing the descriptor, the mapped-dirs list, the fingerprint index, the device registry, and the analysis/compression/bookmark artifacts under one storage root — is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureStorage()` / `readDescriptor()` / `writeDescriptor()`, and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `indexStorageFiles()` (the `.lfbridge/` constant `LFBRIDGE_DIR`).
@@ -204,6 +214,16 @@ The natural directory a movie lives in should stay a directory of movies — not
 `.transcript.yaml` siblings. Putting derived artifacts in the SDL keeps the source tree pristine **and**
 makes the artifacts travel. This is the whole reason the SDL is separate from the mapped directories
 (§3).
+
+**Which SDL a loose file's artifact belongs to.** A media file usually lives out under a **mapped source
+directory** (§3), not inside the storage's own root. Its artifact is still routed to the storage that
+**owns** it: the most specific company/personal storage whose mapped directory (resolved through the
+device **graft**, [devices.mdx §4](./devices.mdx)) contains the file, or — for anything under `~` that no
+mapped dir claims — the **Personal** storage as the default owner. When that owning storage's **dedicated
+Git repo** is enabled (storage_settings.mdx §4.1), the artifact lands **inside that repo**, mirroring the
+file's hierarchy and **not** git-ignored. This ownership→placement rule is authoritative in
+[Transcribe.mdx §3.4](./Transcribe.mdx) and is what keeps transcripts/descriptions from scattering beside
+the media.
 
 ### 4.3 Compression records — original identity + before/after
 When LFB compresses a file (only ever on explicit user request — charter), it records **what the file

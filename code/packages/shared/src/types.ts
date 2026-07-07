@@ -443,9 +443,20 @@ export interface WorkerState {
   lastRunOk: boolean | null;
 }
 
+// The live filesystem watcher (scan.mdx §2.2). NOT a scheduled worker — no plist/installed flag: it
+// runs only while the web-app process is up. `enabled` is the persisted config switch; `watching` is
+// whether it is actually bound to OS file-change events right now; `roots` is what it is watching.
+export interface WatcherState {
+  enabled: boolean;
+  watching: boolean;
+  roots: string[];
+  pending: number;
+}
+
 export interface SyncPageData {
   scan: WorkerState;
   sync: WorkerState;
+  watcher: WatcherState;
   computerLabel: string;
   ipfs: IpfsHealth;
   peers: PeerRow[];
@@ -788,10 +799,26 @@ export interface TranscribeTools {
 // the parallel <storageRoot>/.transcribe/<relpath>.txt hierarchy (§3).
 export interface TranscribeResult {
   path: string;               // the media file transcribed
-  status: "transcribed" | "skipped" | "no_audio" | "tool_missing" | "failed";
+  // "needs_setup" — no Personal storage exists and the file is owned by nothing, so placement would be
+  // surprising; the action is redirected to the first-time setup wizard instead (Transcribe.mdx §3.5).
+  status: "transcribed" | "skipped" | "no_audio" | "tool_missing" | "failed" | "needs_setup";
   transcriptPath: string | null;
   words: number | null;       // word count of the transcript body (success only)
-  reason: string | null;      // why skipped / no_audio / tool_missing / failed
+  reason: string | null;      // why skipped / no_audio / tool_missing / failed / needs_setup
+}
+
+// ── derived-artifact placement (Transcribe.mdx §3.4–§3.5) ───────────────────────────────────────────
+// Where a media file's parallel hidden hierarchy (.transcribe/, .lfbridge/analysis/) will be written, and
+// whether the first-time setup wizard must run first. GET /api/storages/placement?path=<media> returns it,
+// so an action can show/decide WHERE its output lands before running.
+export interface ArtifactPlacementView {
+  mediaPath: string;                 // the home-expanded absolute media path resolved
+  root: string;                      // the storage/repo/dedicated-repo/dir the dot-trees hang under
+  rel: string;                       // the media path mirrored inside those trees
+  transcriptPath: string;            // <root>/.transcribe/<rel>.txt (the concrete transcript destination)
+  gitIgnore: boolean;                // false inside a dedicated repo (it exists to hold these artifacts)
+  owner: "repo" | "storage-root" | "dedicated-repo" | "beside";
+  needsSetup: boolean;               // true → route to the first-time setup wizard (§3.5)
 }
 // A tree / batch / storage run — the per-file results plus honest counts (Transcribe.mdx §6).
 export interface TranscribeBatchResult {
@@ -854,7 +881,9 @@ export interface DescribeView {
 // The result of generating one description (POST /api/describe/file). Reports truthfully per file.
 export interface DescribeResult {
   path: string;
-  status: "described" | "skipped" | "no_provider" | "unsupported" | "failed";
+  // "needs_setup" — mirrors TranscribeResult: no Personal storage exists and the file is owned by
+  // nothing, so the first-time setup wizard must run first (Transcribe.mdx §3.5, ai_description.mdx §2).
+  status: "described" | "skipped" | "no_provider" | "unsupported" | "failed" | "needs_setup";
   descriptionPath: string | null;
   model: string | null;
   reason: string | null;

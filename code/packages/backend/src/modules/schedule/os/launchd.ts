@@ -82,6 +82,16 @@ export const launchdInstaller: SchedulerInstaller = {
       return false;
     }
   },
+  installedIntervalSeconds(label) {
+    try {
+      const xml = fs.readFileSync(agentPath(label), "utf8");
+      const m = xml.match(/<key>StartInterval<\/key>\s*<integer>(\d+)<\/integer>/);
+      return m ? Number(m[1]) : null;
+    } catch {
+      // Not installed / unreadable — no interval to compare against.
+      return null;
+    }
+  },
   async isEnabled(label) {
     try {
       await run("launchctl", ["print", domainTarget(label)]);

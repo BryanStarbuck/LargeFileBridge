@@ -35,6 +35,50 @@ function copyToClipboard(text: string, label: string) {
   toast.success(`${label} copied`);
 }
 
+// ── The row settings gear (storage_settings.mdx §1 / repo_settings.mdx §1) ──────
+// A small gear button that opens a settings page, shown just LEFT of the row ⋮ kebab so per-storage /
+// per-repo settings are one click from the list (the same destination the kebab's "…settings…" item
+// reaches). It matches KebabButton's flat icon-button look and stops row-click propagation, so it opens
+// settings without also navigating the row.
+function SettingsGear({ onOpen, title }: { onOpen: () => void; title: string }) {
+  return (
+    <button
+      title={title}
+      aria-label={title}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+      className="rounded p-1 text-black/50 hover:bg-slate-200 hover:text-black"
+    >
+      <Settings className="h-4 w-4" />
+    </button>
+  );
+}
+
+// Gear for a Storages-table row — opens that storage's per-storage settings (storage_settings.mdx §1).
+// Company / personal / repo / community storages all land on the same route, scoped by id.
+export function StorageGear({ storage }: { storage: StorageRow }) {
+  const navigate = useNavigate();
+  return (
+    <SettingsGear
+      title="Storage settings"
+      onOpen={() => navigate({ to: "/storages/$storageId/settings", params: { storageId: storage.id } })}
+    />
+  );
+}
+
+// Gear for a Repos-table row — opens that repo's per-repo settings (repo_settings.mdx §1).
+export function RepoGear({ repo }: { repo: RepoRow }) {
+  const navigate = useNavigate();
+  return (
+    <SettingsGear
+      title="Repo settings"
+      onOpen={() => navigate({ to: "/repos/$repoId/settings", params: { repoId: repo.repoId } })}
+    />
+  );
+}
+
 // ── Repo row / One-repo page (menus.mdx §5.1) ──────────────────────────────────
 export function RepoKebab({ repo }: { repo: RepoRow }) {
   const qc = useQueryClient();

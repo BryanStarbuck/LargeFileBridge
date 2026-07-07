@@ -86,6 +86,12 @@ The Storages children are **derived** — Personal from the personal storage's p
 Communities by scanning each directory-based storage's `storage.yaml` `type`, and Repos as the fixed link
 to the Repos tab.
 
+Each **row** in the Storages table carries, in its trailing action cell, an **Open / Initialize** control,
+then a **⚙ gear**, then the row **`⋮` kebab**. The gear sits **just left of the kebab** and opens that
+storage's **per-storage settings** ([storage_settings.mdx §1](./storage_settings.mdx#1-how-you-get-here--gear-kebab-right-click-more-menu)) —
+the one-click shortcut to the same place the kebab's **Storage settings…** item reaches, for Company,
+Personal, Repo, or Community storages alike.
+
 Building the Storages tab and its derived children (Personal · Companies · Repos link · Communities) from the discovered `storage.yaml` files is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `listStoragesPage()` · rendered by the frontend `Sidebar` from `pm/left_bar.yaml`.
 

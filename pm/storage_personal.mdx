@@ -1,44 +1,75 @@
 ---
 title: LargeFileBridge — Personal Storage
-description: The Personal storage spec. A user's own personal large files, rooted at ~/BGit/Bryan_git/personal_large_files_bridge/, tracked as a directory-based storage with a storage.yaml (name + type: personal) and a hidden .lfbridge/ area at its root (fingerprint index, IPFS manifest, media-analysis outputs). Unlike a repo storage it need not be a Git repository — it is the user's private pile of big files (videos, images, archives) synced across their own computers over IPFS, and optionally mirrored to Google Drive / Dropbox. There is exactly one personal storage per user. Sibling of storage_repo / storage_company / storage_community; shares the storage.yaml schema and .lfbridge/ layout defined in storages.mdx. Appears as the "Personal" child of the Storages left-bar tab.
+description: The Personal storage spec. A user's own personal large files, tracked as a directory-based storage whose Syncable Data Location is a Git repo the user configures — conventionally ~/BGit/Bryan_git/personal_large_files_bridge/. This is the CANONICAL Git-backbone use case: one user with two (or more) computers, each running LFB, each pointed at the same Personal repo. On each computer the user opens Personal storage settings, turns Git ON, and supplies the repo either as a LOCAL FILE PATH (a checkout already on that box) or as an HTTP(S) URL (a Git server not mapped to the local filesystem, which LFB clones into a machine-local working-copy cache). Turning Git on GRANTS LFB permission to run git fetch, git merge (automatic), git add/commit, and git push on every sync pass, carried by the git_sync.mdx engine using simple-git over the system git binary. Each computer registers itself as a UNIQUE device: it writes a .lfbridge/devices/<device-id>.yaml — its stable minted id plus a hardware fingerprint (model, year, disk, screen, RAM, chip, OS user) collected from OS APIs, falling back to a composed fingerprint — into the Personal repo, and reads the OTHER devices' files to discover the user's other computers, which then appear in the Devices left-bar tab. There is exactly one Personal storage per user. The storage.yaml carries name + type: personal; the .lfbridge/ area carries the fingerprint index, IPFS manifest, media-analysis outputs, and the device registry; big files stay in their natural home directories, git-ignored, moving over IPFS while the small SDL text moves over Git. Sibling of storage_repo / storage_company / storage_community (shared storage.yaml + .lfbridge layout in storages.mdx), storage_settings.mdx (where Git is turned on), git_sync.mdx (the Git engine), devices.mdx (the device registry + graft), and syncable_data_location.mdx (the SDL that travels).
 ---
 
 # LargeFileBridge — Personal Storage
 
 **Personal storage** is the user's own private pile of big files — videos, images, archives — that they
-sync across **their own** computers. There is exactly **one** personal storage per user.
+sync across **their own** computers. There is exactly **one** personal storage per user. It is also the
+product's **canonical Git-backbone use case**: the simplest, most common shape of "I have two computers
+and I want the same files, and the same *knowledge about* those files, on both."
 
-Read the shared model first: the storage family, the `storage.yaml` schema, the `.lfbridge/` tracking
-layout, cloud clones, and media analysis are defined once in **[storages.mdx](./storages.mdx)**. This spec
-covers only what is **specific to personal storage**.
+This spec tells that story end to end — a user with **two computers**, one **Personal Git repo**,
+configured on **each** machine — and locks how Git carries the small text while IPFS carries the bytes,
+how each computer **registers itself as a unique device**, and how the two machines **discover each
+other** and stay synchronized.
 
-Siblings this builds on and does not repeat:
+Read the shared model first; this spec does not restate it:
 
-* [storages.mdx](./storages.mdx) — the umbrella: `storage.yaml` (§3), `.lfbridge/` (§4), clones (§5),
-  media analysis (§6).
-* [storage_repo.mdx](./storage_repo.mdx) — the canonical directory-based storage; personal storage is the
-  same shape with a `personal` block and no requirement to be a Git repo.
-* [Communities](./communities.mdx) — *other people's* files; personal storage is the opposite: **your own**
-  private files, not shared with anyone else.
+* [storages.mdx](./storages.mdx) — the storage family: `storage.yaml` (§3), the hidden `.lfbridge/`
+  layout (§4), cloud clones (§5), media analysis (§6).
+* [storage_settings.mdx](./storage_settings.mdx) — the per-storage settings page where the user **turns
+  the Git backbone on** and supplies the remote (§4.1 there).
+* [git_sync.mdx](./git_sync.mdx) — the **Git engine** this spec drives: the granted operations, the
+  `simple-git` library, the local-path-vs-URL remote shapes, and the automatic-merge design.
+* [devices.mdx](./devices.mdx) — the **device identity**, the **hardware fingerprint**, and the **graft**
+  that the two-computer story below depends on.
+* [syncable_data_location.mdx](./syncable_data_location.mdx) — the **SDL** (the travelling text) that the
+  Personal Git repo *is*.
+* [Communities](./communities.mdx) — *other people's* files; personal storage is the opposite: **your
+  own** private files, not shared with anyone else.
 
 ---
 
 ## 1. Anatomy of the personal storage
 
+The Personal storage's Syncable Data Location is, conventionally, a Git repo the user checks out on each
+computer:
+
 ```
-~/BGit/Bryan_git/personal_large_files_bridge/     ← the personal storage root
-├── .lfbridge/
-│   ├── storage.yaml        ← name + type: personal (storages.mdx §3)
-│   ├── files.yaml          ← per-file fingerprint index (storages.mdx §4.1)
-│   ├── manifest.yaml       ← large-file → IPFS CID + pin state
-│   └── analysis/           ← per-file media analysis (storages.mdx §6)
-└── …the user's personal big files…
+~/BGit/Bryan_git/personal_large_files_bridge/     ← the personal storage root (its SDL; a Git repo)
+├── .git/                                          ← the user's clone (local-path remote) or LFB's cache clone (URL remote)
+├── .gitattributes                                 ← merge=union for the append-mostly lists (git_sync.mdx §4.2)
+├── LargeFilesBridge_SyncList.yaml                 ← the portable list (committed, travels via Git)
+└── .lfbridge/                                     ← the hidden tracking area — COMMITTED for a Git backbone (§6)
+    ├── storage.yaml        ← name + type: personal (storages.mdx §3)
+    ├── mapped_dirs.yaml    ← the home-tree hierarchies this Personal storage covers (SDL §3)
+    ├── files.yaml          ← per-file fingerprint index (storages.mdx §4.1)
+    ├── manifest.yaml       ← large-file → IPFS CID + pin state
+    ├── bookmarks.yaml      ← the user's starred files
+    ├── devices/            ← the DEVICE REGISTRY — one file per computer (§4)
+    │   ├── bryan-macbook-pro.yaml
+    │   └── bryan-mac-studio.yaml
+    └── analysis/           ← per-file media analysis (storages.mdx §6)
+
+…the user's personal big files stay in their natural home-tree directories (git-ignored, moved over IPFS)…
 ```
 
-* **Root:** `~/BGit/Bryan_git/personal_large_files_bridge/` (the `{personal_storage_root}`; the leading
-  path follows the user's `~/BGit/Bryan_git/` convention).
-* It **need not be a Git repo** — unlike a [repo storage](./storage_repo.mdx), it can be a plain directory
-  hierarchy of big files. The `.lfbridge/` tracking area still lives at its root.
+* **Root:** conventionally `~/BGit/Bryan_git/personal_large_files_bridge/` (the `{personal_storage_root}`).
+  It is the storage's SDL — its own little Git repo ([syncable_data_location.mdx §1](./syncable_data_location.mdx#1-definition--what-a-syncable-data-location-is-locked)).
+* **The big files are not here.** Like a company storage, Personal maps a **list** of the user's home-tree
+  directories ([syncable_data_location.mdx §3](./syncable_data_location.mdx#3-mapped-source-directories--one-storage-many-hierarchies-locked));
+  the bytes stay in `~/Movies`, `~/Pictures`, `~/_Mirror/…`, git-ignored, synced over IPFS. Only the small
+  YAML lives in this repo — and that is exactly what Git is good at carrying.
+* **Committed vs. git-ignored, for a Git backbone (LOCKED, §6).** When the backbone is a **Git repo**, the
+  SDL's small text — `LargeFilesBridge_SyncList.yaml`, `storage.yaml`, `mapped_dirs.yaml`, `files.yaml`,
+  `manifest.yaml`, `bookmarks.yaml`, `devices/`, and `analysis/` — **is committed**, because Git is the
+  vehicle that makes it travel. Only the **big-file bytes** are git-ignored (and they never live in this
+  repo anyway). This narrows the generic *"keep `.lfbridge/` git-ignored"* rule
+  ([storages.mdx §4](./storages.mdx#4-lfbridge--the-hidden-per-storage-tracking-area)) to its true intent:
+  keep the *bytes* out of Git, not the metadata whose entire purpose is to ride Git to your other
+  computers.
 
 ---
 
@@ -58,42 +89,304 @@ clones:
 * **`type: personal`** with a (usually empty) **`personal`** block. Its content is the user's own — no
   `company`/`community` identity.
 * Because it is **private to one user**, it never has a shared allow-list the way a company/community
-  storage might — it syncs only across **this user's** computers (peers — [storage_local.mdx §11](./storage_local.mdx)).
+  storage might — it syncs only across **this user's** computers (its own device registry, §4).
 
 ---
 
-## 3. Media analysis + cloud clones
+## 3. Use case — two computers, one Personal repo (the driving story)
+
+This is the exact scenario the product is built to serve, told from the user's chair:
+
+> *I have two computers. Each runs the Large File Bridge web app. I created a Git repo for my personal
+> files and checked it out on both machines. On each computer I opened **Personal storage settings**,
+> turned **Git on**, and pointed it at where I checked the repo out. Now I want both computers to hold my
+> big files and to know everything about them — and I want them to know about **each other**.*
+
+Everything below makes that true:
+
+* **Turning Git on grants the sync permission (§5).** It authorizes LFB to run `git fetch`, `git merge`,
+  `git commit`, and `git push` on that repo every pass ([git_sync.mdx §1](./git_sync.mdx#1-what-lfb-is-permitted-to-do--the-granted-git-operations-locked)).
+* **The remote is one of two shapes (§5).** A **local file path** to the checkout the user already made,
+  or an **HTTP(S) URL** to a Git server with no local checkout.
+* **Each computer becomes a unique device (§4).** It writes its own `devices/<device-id>.yaml` — id +
+  hardware fingerprint — into the repo, so it never collides with the other computer's file.
+* **The computers discover each other (§4).** Each reads the *other* devices' files from the repo. That
+  is how "computer B" appears on "computer A" in the **Devices** left-bar tab, and vice-versa.
+* **They stay synchronized (§6).** Every pass: fetch what the other pushed, auto-merge it, do the byte
+  work over IPFS, commit this computer's own changes, and push them back.
+
+The rest of this spec is the mechanism behind each bullet.
+
+---
+
+## 4. Each computer registers itself as a unique device
+
+When a Personal storage exists on a computer, that computer **writes itself into the repo** as one
+device file, and **reads the others** to learn about the user's other machines. The full device model —
+identity, fingerprint, disambiguation, the graft, the Devices/Peers table — is
+[devices.mdx](./devices.mdx); this section is the Personal-storage view of it.
+
+### 4.1 A unique id per device, under `.lfbridge/devices/`
+
+Inside the Personal repo, LFB keeps a **`devices/`** directory, and each computer creates **one file
+keyed by its own unique id**:
+
+```
+~/BGit/Bryan_git/personal_large_files_bridge/.lfbridge/devices/
+├── bryan-macbook-pro.yaml    ← written & OWNED by the laptop (its id inside)
+└── bryan-mac-studio.yaml     ← written & OWNED by the studio tower
+```
+
+* **The id is a stable, minted UUID** ([devices.mdx §1](./devices.mdx#1-device-identity--a-minted-id--a-nice-name-locked)),
+  distinct from the IPFS PeerID, minted once on first run and stored both in this machine's local
+  `~/T` config **and** copied into this device file. Because it is unique per computer, *"it won't
+  conflict with other devices"* — two computers writing the registry at the same time touch **two
+  different files**, and Git merges them with no conflict ([git_sync.mdx §4.1](./git_sync.mdx#41-self-owned-files-rarely-collide)).
+* **Self-owned (trust).** A computer writes **only its own** device file and treats every other device
+  file as a **claim** ([devices.mdx §2.1](./devices.mdx#21-a-device-file-is-self-owned-trust)) — it never
+  edits another computer's file.
+
+### 4.2 The device file carries this computer's specifics
+
+Each device file records as much as it can to make the physical machine **recognizable and unique** —
+first from OS APIs, and, in the worst case, from a **composed** fingerprint of whatever hardware facts
+are available ([devices.mdx §7](./devices.mdx#7-the-hardware-fingerprint--identify-the-physical-machine-no-networking)):
+
+* **From the OS directly (always available, no network):** platform, architecture, hostname, **logged-in
+  username** + **home directory** (which user this machine belongs to), CPU core count, RAM, and total
+  disk size.
+* **From macOS tooling (best-effort):** the **model identifier** (`sysctl -n hw.model` → `Mac14,7`), the
+  **model name** + **chip** (`system_profiler`), and the **display count**.
+* **From a built-in model table:** the **marketing name**, **year**, and **built-in screen size** resolved
+  from the model identifier.
+* **If the OS exposes a stable machine id, we use it;** otherwise the id is our minted UUID and the
+  **composed** set above (model + year + disk size + screen size + RAM + chip + username) is what keeps
+  this machine distinct from every other — *"put together the pieces that make this computer unique … as
+  many things like that as possible."*
+
+The whole fingerprint is collected **locally, with no networking** (the charter's no-phone-home rule),
+then committed into the device file so **other** computers can see and disambiguate this one.
+
+### 4.3 Discovering the other computers
+
+Because every computer's device file is **in the repo**, a fetch+merge brings the **full set** onto this
+machine. LFB then reads the whole `devices/` directory:
+
+* The file whose `id` matches **this** machine's local `config.yaml → computer.id` is **"this computer"**;
+  every other file is one of the user's **other** computers ([devices.mdx §9](./devices.mdx#9-auto-seed--the-registry-is-never-empty-locked)).
+* Those other devices — the second computer, a future third, a family member's machine — appear as rows
+  in the **Devices** left-bar tab ([devices.mdx §6](./devices.mdx#6-the-devices--peers-page-the-table)),
+  where the user can open one and see its full hardware details. *"That way, in the Devices left-bar tab,
+  they appear there in the UI, and we can open them up and get details on them."*
+
+Writing this computer's own `devices/<id>.yaml` into the Personal repo (self-owned) and reading the whole registry to discover the other computers is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice(storageRoot)` / `readDevices(storageRoot)`, with the fingerprint from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/hardware.service.ts` — `collectHardware()`; surfaced in the Devices tab by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` — `DevicesPage`.
+
+---
+
+## 5. Turning the Git backbone on — local path vs. HTTP(S) URL
+
+The user turns Git on for Personal from its **[storage settings](./storage_settings.mdx#41-dedicated-git-repo-preferred-when-available)**
+page (the dedicated-Git-repo backing location). Doing so is the **explicit grant** that lets LFB run Git
+on the repo ([git_sync.mdx §1](./git_sync.mdx#1-what-lfb-is-permitted-to-do--the-granted-git-operations-locked)).
+The user supplies the repo as **one of two remote shapes** ([git_sync.mdx §3](./git_sync.mdx#3-the-two-remote-shapes--a-local-path-vs-an-https-url-locked)):
+
+* **A local file path** — the checkout already on this computer, e.g.
+  `~/BGit/Bryan_git/personal_large_files_bridge/`. This is what the user in the story did on each machine
+  (*"added that local file path where I have checked in"*). LFB uses that directory **in place** as the
+  working copy and runs Git against whatever `origin` the user's clone already has.
+* **An HTTP(S) URL** — e.g. `https://github.com/BryanStarbuck/personal_large_files_bridge.git`, with
+  **no** local checkout (*"sometimes people will add an HTTP URL, and we have to talk to that Git server
+  without it being mapped to the local file system"*). LFB **clones** it into a machine-local
+  working-copy cache (`~/T/_large_files_bridge/sync/s/personal/git/`) and manages Git there. Credentials
+  come from the **OS git credential helper**, never an LFB password prompt
+  ([git_sync.mdx §5](./git_sync.mdx#5-credentials-for-a-url-remote--the-os-git-credential-helper-never-a-prompt-locked)).
+
+Both shapes converge on one working copy; everything downstream is indifferent to which one the user
+picked.
+
+Persisting the Personal storage's Git remote (its kind — local path or URL — and value) from the settings page, and reading it back to resolve the working copy, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `writeStorageSettings()` / `readStorageSettings()` (the `backing.dedicated_repo` block), consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `resolveWorkingCopy(storageId, remote)`.
+
+---
+
+## 6. First-time usage — configuring both computers, step by step
+
+The canonical Personal walkthrough, matching the story in §3. It shows exactly what happens the **first**
+time on each machine and how the two converge.
+
+**Computer 1 (the laptop):**
+
+1. **Open Personal storage settings; turn Git on.** The user enables the dedicated-Git-repo backing
+   location and enters the **local path** to their checkout (§5).
+2. **LFB seeds the SDL.** On the next pass it ensures `.lfbridge/` in the repo, writes `storage.yaml`
+   (`type: personal`), the `mapped_dirs.yaml` for the home-tree directories the user added, the
+   `.gitattributes` (`merge=union`, [git_sync.mdx §4.2](./git_sync.mdx#42-append-mostly-shared-lists-merge-by-union)),
+   and — crucially — **this laptop's own** `devices/bryan-macbook-pro.yaml` with its id + fingerprint (§4).
+3. **The user pins some big files to IPFS.** LFB records each CID in `manifest.yaml` and marks this
+   laptop in `pinned_by`.
+4. **LFB commits and pushes.** The small SDL text is committed to the Personal repo and pushed to the
+   remote ([git_sync.mdx §6](./git_sync.mdx#6-the-sync-cycle--where-git-runs-inside-the-pass-locked-order)).
+   The bytes never enter Git — they move over IPFS.
+
+**Computer 2 (the studio tower):**
+
+5. **Open Personal storage settings; turn Git on.** The user enters this machine's path to the **same**
+   repo (a local checkout) — or a **URL** if they'd rather LFB manage the clone (§5).
+6. **LFB fetches + auto-merges.** The pass pulls down the laptop's push. Now this computer knows, from
+   the merged YAML alone: which big files exist and their **CIDs**, which were **pinned/compressed/
+   transcribed/described**, which are **bookmarked**, and — the point of this spec — that a **second
+   device** (the laptop) exists.
+7. **This computer registers itself.** It writes its **own** `devices/bryan-mac-studio.yaml` (a *different*
+   file — no conflict, §4.1), pulls the marked CIDs down over IPFS to its **grafted** local paths
+   ([devices.mdx §4](./devices.mdx#4-the-graft--machine-independent-hierarchy--local-paths-locked)), then
+   **commits and pushes** its own device file back.
+8. **Both computers now see both devices.** On the next pass the laptop fetches the tower's device file;
+   each machine's **Devices** tab shows two rows, one tagged *This computer*. The user can open the other
+   row and see its full hardware details (§4.3).
+
+Seeding the Personal SDL on first configuration (descriptor + mapped dirs + `.gitattributes` + self device) and driving the first fetch/merge/commit/push is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureStorage()` (writes the descriptor + self device on create/index) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncStorageUnit(id)` (the Git cycle around the reconcile).
+
+---
+
+## 7. The synchronization loop — keeping the two computers in step
+
+Every sync pass ([sync_process.mdx](./sync_process.mdx), the 15-minute background process +
+Sync-now), for the Personal storage with its Git backbone on, LFB runs the fixed Git cycle
+([git_sync.mdx §6](./git_sync.mdx#6-the-sync-cycle--where-git-runs-inside-the-pass-locked-order)) so that
+*"as changes are happening, we're updating the app files and pulling down any changes, dealing with any
+merge, then checking in changes and getting them synced with the server side"*:
+
+1. **Resolve the working copy** — the local checkout, or the URL cache clone (§5).
+2. **`git fetch`** — bring down what the **other** computer pushed since last time.
+3. **`git merge` (automatic)** — fold the other computer's device files, manifest, and analysis into this
+   working copy. Self-owned device files don't collide; the shared lists union-merge; only a genuine
+   conflict is surfaced (never clobbered) ([git_sync.mdx §4](./git_sync.mdx#4-automatic-merge--why-conflicts-are-rare-and-how-git-resolves-them-locked)).
+4. **Reconcile + IPFS byte work** — pull/pin the marked CIDs to this computer's grafted paths, inherit
+   derived artifacts without regenerating them, refresh this computer's own device file, update the
+   manifest.
+5. **`git add` (self-owned only) → `git commit`** — stage **only this computer's** files plus any shared
+   list it appended to; commit if anything changed (no empty commits).
+6. **`git push`** — send this computer's commit up. On a non-fast-forward reject (the other computer
+   pushed in between), LFB **re-fetches, re-merges, and re-pushes once** — never a force-push.
+
+The loop is **idempotent**: with nothing changed on either side, a pass fetches, finds nothing to merge,
+commits nothing, and pushes nothing. Run every 15 minutes on both machines, the two computers converge —
+the same files, and the same knowledge about them, on both.
+
+Driving the per-pass Git cycle for the Personal storage (fetch+merge before the reconcile, commit+push after, with the non-fast-forward retry) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncStorageUnit(id)`, calling `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.pull()` then `GitBackbone.commitAndPush()`.
+
+---
+
+## 8. Media analysis + cloud clones
 
 Personal storage produces the same [storages.mdx §6](./storages.mdx) **media-analysis** outputs into
 `.lfbridge/analysis/` (transcript / description / visuals-by-time for video; description for images) and
 may **clone** to Google Drive / Dropbox ([storages.mdx §5](./storages.mdx)) — recorded in the `clones`
-block. Everything stays private to the user's own accounts and computers.
+block. These artifacts ride the same Git backbone (§7) to the user's other computers, so they are
+**generated once and reused everywhere** ([syncable_data_location.mdx §4](./syncable_data_location.mdx#4-derived-artifacts--generate-once-reuse-everywhere-locked-value)).
+Everything stays private to the user's own accounts and computers.
 
 ---
 
-## 4. Where it shows in the UI
+## 9. Personal is the default owner of loose files — and where their artifacts land
+
+Personal storage is the **default catch-all owner** for any media file that lives out in the user's home
+tree and belongs to **no repo and no company storage**. That ownership decides **where derived artifacts
+go** (transcripts, AI descriptions):
+
+* **Dedicated Git repo backing.** Like every non-local storage, Personal exposes the three backing
+  locations of [storage_settings.mdx §4](./storage_settings.mdx#4-backing-locations--dedicated-repo--google-drive--dropbox) —
+  the **dedicated Git repo** is the preferred one, and (per this spec) the vehicle that syncs the SDL
+  between the user's computers. Its convention default is **`~/BGit/Bryan_git/personal_large_files_bridge/`**.
+* **When the dedicated repo is ON**, a transcript / description for a loose personal file (e.g.
+  `~/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4`) is written **under that repo**, mirroring
+  the file's path **relative to `~`**:
+  `~/BGit/Bryan_git/personal_large_files_bridge/.transcribe/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4.txt`
+  — **committed, not git-ignored** (the repo exists to sync these). This is placement rule B of
+  [Transcribe.mdx §3.4](./Transcribe.mdx).
+* **When it is OFF**, the same artifacts fall back to the Personal storage root's `.lfbridge/` / a
+  `.transcribe/` beside the media (the legacy fallback, rule D).
+
+## 10. First-action setup — configuring Personal on the first click
+
+A user commonly starts with **no Personal storage at all** and only discovers it by clicking **Transcribe**
+or **Get AI details** on a loose file. Rather than write output somewhere surprising, that first click is
+**gated by the setup wizard** ([Transcribe.mdx §3.5](./Transcribe.mdx)):
+
+* If the file is inside a **repo**, we never reach the wizard — that path is repo configuration
+  ([repo_settings.mdx](./repo_settings.mdx)); we detect the repo by walking up to its `.git/`.
+* If a **company** storage already covers the path, use it; otherwise **default to Personal** and create the
+  one Personal storage.
+* **Where the Personal `.lfbridge/` root is created:** default to a directory **under the home (`~`)
+  tree**; or, if the user prefers, point it at a **dedicated Git repo**
+  (`~/BGit/Bryan_git/personal_large_files_bridge/`) — at which point the Git backbone (§5–§7) takes over
+  and artifacts store **under that repo** per §9. Nothing is created until the user completes the wizard
+  (charter: surface and offer, never act unasked).
+
+## 11. Where it shows in the UI
 
 In the **[Storages](./storages.mdx#2-the-storages-left-bar-tab)** left-bar tab, personal storage is the
 **Personal** child. It sits alongside the user's company children, the Repos link, and their opted-in
-communities — one row in the map of everything this user syncs.
+communities — one row in the map of everything this user syncs. Its **[settings page](./storage_settings.mdx)**
+is where Git is turned on (§5); its devices show in the **[Devices](./devices.mdx#6-the-devices--peers-page-the-table)**
+left-bar tab (§4.3).
 
 ---
 
-## 5. Acceptance criteria
+## 12. Acceptance criteria
 
-1. A user has **exactly one** personal storage, rooted at `~/BGit/Bryan_git/personal_large_files_bridge/`,
-   tracked via a hidden **`.lfbridge/`** at its root.
+1. A user has **exactly one** personal storage, whose SDL is conventionally the Git repo
+   `~/BGit/Bryan_git/personal_large_files_bridge/`, tracked via a hidden **`.lfbridge/`** at its root.
 2. Its `.lfbridge/storage.yaml` has **`name`** + **`type: personal`** and a (usually empty) `personal`
    block; no `company`/`community`/`repo` block.
-3. It **need not** be a Git repo; it holds the fingerprint index, IPFS manifest, and `analysis/` outputs
-   per [storages.mdx §4](./storages.mdx).
-4. It syncs **only across the user's own computers** over IPFS and may clone to Google Drive / Dropbox; it
-   is never shared with other users.
-5. It appears as the **Personal** child of the Storages tab.
+3. **The Git backbone is turned on per-computer from Personal storage settings**, and doing so **grants
+   LFB permission** to run `git fetch` / `merge` (automatic) / `commit` / `push` on that repo every sync
+   pass ([git_sync.mdx](./git_sync.mdx)). The remote may be a **local file path** (a checkout used in
+   place) or an **HTTP(S) URL** (cloned into a machine-local cache) (§5).
+4. **When the backbone is a Git repo, the SDL's small text is committed** (SyncList, storage.yaml,
+   mapped_dirs, files, manifest, bookmarks, `devices/`, `analysis/`); only the **big-file bytes** are
+   git-ignored, and those never live in the repo (§1). Bytes move over IPFS; text moves over Git.
+5. **Each computer registers itself as a unique device**: it writes a self-owned
+   `.lfbridge/devices/<device-id>.yaml` keyed by its **stable minted id**, carrying a **hardware
+   fingerprint** (OS machine id when available, else composed from model + year + disk + screen + RAM +
+   chip + OS user), collected **locally with no networking**. Two computers write **different** files, so
+   the registry **never conflicts** on merge (§4).
+6. **The computers discover each other**: after a fetch+merge, each reads the whole `devices/` directory,
+   identifies **"this computer"** by matching its local `config.yaml → computer.id`, and shows every
+   **other** computer as a row in the **Devices** left-bar tab, openable for full hardware details (§4.3).
+7. **First-time usage converges** (§6): computer 1 turns Git on, seeds the SDL + its device file, pins
+   files, commits & pushes; computer 2 turns Git on, fetches & auto-merges, pins the marked CIDs to its
+   **grafted** paths, writes its **own** device file, and commits & pushes — after which both machines see
+   both devices and hold the same files + the same derived knowledge.
+8. **The synchronization loop keeps them in step** (§7): every pass resolves the working copy → fetch →
+   auto-merge (self-owned files don't collide; shared lists union-merge; genuine conflicts surfaced, never
+   clobbered) → reconcile/pin over IPFS → stage self-owned + commit → push, with a **fetch-merge-push
+   retry** on a non-fast-forward reject; the loop is idempotent.
+9. Personal remains the **default owner** of loose home-tree media; with its dedicated repo ON, derived
+   artifacts are **committed under that repo** mirroring the file's `~`-relative path (§9), and it appears
+   as the **Personal** child of the Storages tab (§11).
 
 <!--
-  Personal storage = the user's OWN private big files. Root ~/BGit/Bryan_git/personal_large_files_bridge/.
-  Need not be a Git repo. storage.yaml: name + type: personal + (empty) personal block. .lfbridge/ per
-  storages.mdx. Private to this user's computers; optional Drive/Dropbox clone. Shows as the "Personal"
-  child of the Storages tab. Don't restate the shared model — see storages.mdx.
+  Personal storage = the user's OWN private big files, and the CANONICAL Git-backbone use case: one user,
+  two computers, one Personal Git repo (conventionally ~/BGit/Bryan_git/personal_large_files_bridge/),
+  configured on BOTH. §1 anatomy: the SDL IS a git repo; big files stay in mapped home-tree dirs
+  (git-ignored, IPFS); for a GIT backbone the .lfbridge/ TEXT is COMMITTED (only bytes git-ignored) —
+  narrows the generic git-ignore rule to its true intent. §3 the driving story (two computers, turn Git
+  on, register as unique devices, discover each other, stay synced). §4 each computer writes a UNIQUE,
+  SELF-OWNED .lfbridge/devices/<id>.yaml (minted UUID + hardware fingerprint from OS APIs, else composed
+  from model/year/disk/screen/RAM/chip/user; no networking) and reads the OTHERS to discover the user's
+  other computers → Devices left-bar tab. §5 turning Git ON (storage_settings §4.1) = the permission grant;
+  remote is a LOCAL PATH (used in place) or an HTTP(S) URL (LFB clones into sync/s/personal/git/ cache,
+  creds via OS helper). §6 first-time walkthrough both computers, converge. §7 the sync loop = git_sync §6
+  cycle: resolve→fetch→auto-merge→reconcile/pin to grafted paths→stage self-owned+commit→push, non-ff
+  retry, idempotent. §8 media analysis + clones ride the same backbone (generate once, reuse everywhere).
+  §9 Personal = default owner of loose files; dedicated repo ON = artifacts committed under it. Code:
+  devices.service writeSelfDevice/readDevices, hardware.service collectHardware, storage-settings.service
+  read/writeStorageSettings (backing.dedicated_repo remote), git.service resolveWorkingCopy/GitBackbone,
+  sync.service syncStorageUnit (git cycle around reconcile), DevicesPage. Keep in sync with git_sync.mdx
+  (the engine), storage_settings.mdx §4.1 (the toggle+remote), devices.mdx (identity/fingerprint/graft),
+  syncable_data_location.mdx (the SDL text), storages.mdx (storage.yaml + .lfbridge + analysis).
 -->

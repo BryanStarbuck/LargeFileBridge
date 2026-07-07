@@ -86,8 +86,15 @@ written to the **same per-file media-analysis area** the storage-level analysis 
 
 For a file at **`render/skyline.mp4`** the description is written to
 **`<storageRoot>/.lfbridge/analysis/render/skyline.mp4/description.yaml`**. The owning storage root is
-resolved **exactly like transcription** — the **nearest ancestor** carrying `storage.yaml`, `.lfbridge/`,
-or `.git/`; when none is found, the file's own directory is used.
+resolved **exactly like transcription — by the shared ordered placement rule**
+([Transcribe.mdx §3.4](./Transcribe.mdx), the authoritative spec): walk **up** to the nearest ancestor
+carrying `storage.yaml` / `.lfbridge/` / `.git/`; else route to the **owning storage's dedicated Git repo**
+when enabled (mirroring the file's hierarchy — `<dedicatedRepo>/.lfbridge/analysis/<rel>/…`, **not**
+git-ignored there); else the owning storage's root; else the **first-time setup wizard**
+([Transcribe.mdx §3.5](./Transcribe.mdx)) when no Personal storage exists; else, as a last resort, the
+file's own directory. **Get AI details / AI description is one of the actions that triggers the first-time
+wizard**, and it consults placement (`needsSetup`) before it runs. Pasted `~/…` paths are home-expanded
+first (Transcribe.mdx §3.6).
 
 ### 2.1 The YAML shape — upgrading the skeleton
 
@@ -116,12 +123,14 @@ generate pane rather than an empty box.
 
 Because the description lands at the exact path the storage analysis indexes, the **Storage file table's
 `analysis: ["description"]` indicator lights up** the moment a description exists — one source of truth for
-"this file has a description," shared by the viewer tab and the storage table. Generating also ensures the
-storage's `.lfbridge/` directory is **git-ignored** (the same nudge transcription makes) so analysis never
-bloats commits.
+"this file has a description," shared by the viewer tab and the storage table. When the artifact lands in a
+**plain** repo (placement rule A) generating also ensures that repo's `.lfbridge/` is **git-ignored** (the
+same nudge transcription makes) so analysis never bloats commits; when it lands in the owning storage's
+**dedicated Git repo** (rule B) it is **deliberately not** git-ignored — that repo exists to track and sync
+the artifacts.
 
-Resolving the description path under the owning storage root, reading back a done description, and writing the upgraded `description.yaml` (plus the `.lfbridge/` gitignore nudge) are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `resolveDescriptionPath()` / `readDescription()` / `describeOne()` (root resolution reuses `resolveStorageRoot` from `transcribe.service.ts`).
+Resolving the description path via the shared ordered placement rule, reading back a done description, and writing the upgraded `description.yaml` (with the git-ignore nudge only when the placement flags it) are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `resolveDescriptionPath()` / `readDescription()` / `describeOne()` (placement via `resolveArtifactPlacement()` in `storage/artifact-placement.service.ts`).
 
 The skeleton these upgrade, and the storage-table indicator that keys off the same path, are handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/analysis.service.ts` — `analyzeFile()` (writes the `pending` skeleton) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `analysisOutputs()`.

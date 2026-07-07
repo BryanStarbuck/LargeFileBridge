@@ -8,7 +8,7 @@ import type { RepoRow, RepoStatus } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
-import { RepoKebab } from "../../components/menu/RowKebabs.js";
+import { RepoGear, RepoKebab } from "../../components/menu/RowKebabs.js";
 import { PageActions } from "../../components/menu/PageActions.js";
 import { syncAllRepos } from "../../components/menu/domainActions.js";
 import type { Action } from "../../components/menu/EntityMenu.js";
@@ -179,7 +179,13 @@ export function ReposPage() {
         searchKeys={(r) => `${r.name} ${r.path}`}
         getRowId={(r) => r.repoId}
         onRowClick={(r) => navigate({ to: "/repos/$repoId", params: { repoId: r.repoId } })}
-        rowMenu={(r) => <RepoKebab repo={r} />}
+        // Gear → per-repo settings, sitting just left of the ⋮ kebab (repo_settings.mdx §1).
+        rowMenu={(r) => (
+          <>
+            <RepoGear repo={r} />
+            <RepoKebab repo={r} />
+          </>
+        )}
         itemNoun="repos"
         // Default sort (tables.mdx §3.4): bookmarked repos float to the top, then by name.
         defaultSort={[

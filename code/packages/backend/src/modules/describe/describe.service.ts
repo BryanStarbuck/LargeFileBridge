@@ -14,7 +14,7 @@ import { expandHome } from "../fs/badges.js";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
 import { appConfigPath } from "../../shared/store/scopes.js";
 import { googleApiKeyFileInfo } from "../../config/google-apikey-file.js";
-import { resolveStorageRoot } from "../transcribe/transcribe.service.js";
+import { resolveArtifactPlacement } from "../storage/artifact-placement.service.js";
 import { track } from "../progress/progress.registry.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
 import { getPrompt } from "./prompts.js";
@@ -38,12 +38,19 @@ function exists(p: string): boolean {
   }
 }
 
-/** <storageRoot>/.lfbridge/analysis/<relpath>/description.yaml — the canonical description location. */
-export function resolveDescriptionPath(absFile: string): { root: string; rel: string; descriptionPath: string } {
-  const root = resolveStorageRoot(absFile);
-  const rel = path.relative(root, absFile);
-  const descriptionPath = path.join(root, LFBRIDGE_DIR, ANALYSIS_DIR, rel, DESCRIPTION_YAML);
-  return { root, rel, descriptionPath };
+/** <base>/.lfbridge/analysis/<relpath>/description.yaml — resolved by the shared ordered placement rule
+ *  (Transcribe.mdx §3.4), so a description routes to the owning storage's dedicated repo exactly like a
+ *  transcript. Carries the placement flags that gate the gitignore nudge and the first-time setup. */
+export function resolveDescriptionPath(absFile: string): {
+  root: string;
+  rel: string;
+  descriptionPath: string;
+  gitIgnore: boolean;
+  needsSetup: boolean;
+} {
+  const p = resolveArtifactPlacement(absFile);
+  const descriptionPath = path.join(p.root, LFBRIDGE_DIR, ANALYSIS_DIR, p.rel, DESCRIPTION_YAML);
+  return { root: p.root, rel: p.rel, descriptionPath, gitIgnore: p.gitIgnore, needsSetup: p.needsSetup };
 }
 
 /** Keep the .lfbridge/ analysis tree out of Git in a plain repo (mirrors the transcribe .gitignore nudge). */
@@ -173,7 +180,12 @@ export async function describeOne(
   const kind = describeKindFor(name);
   if (!kind) return result(abs, "unsupported", null, null, "only images and videos can be AI-described");
 
-  const { root, descriptionPath } = resolveDescriptionPath(abs);
+  const { root, descriptionPath, gitIgnore, needsSetup } = resolveDescriptionPath(abs);
+  // First-time gate (Transcribe.mdx §3.5): no Personal storage owns this file — route to the setup wizard
+  // rather than writing a description in a surprising place.
+  if (needsSetup) {
+    return result(abs, "needs_setup", null, null, "no storage is set up for this file — configure Personal storage first");
+  }
   if (!opts.overwrite && readDescription(abs)) {
     return result(abs, "skipped", descriptionPath, null, "already described");
   }
@@ -203,7 +215,8 @@ export async function describeOne(
       }
     });
 
-    ensureLfbridgeIgnored(root);
+    // Keep .lfbridge/ out of Git only in a PLAIN repo; a dedicated repo (rule B) is meant to hold+sync it.
+    if (gitIgnore) ensureLfbridgeIgnored(root);
     fs.mkdirSync(path.dirname(descriptionPath), { recursive: true });
     fs.writeFileSync(
       descriptionPath,
@@ -332,7 +345,8 @@ function summarizeDescribe(results: DescribeResult[]): DescribeBatchResult {
   return {
     results,
     described: results.filter((r) => r.status === "described").length,
-    skipped: results.filter((r) => r.status === "skipped").length,
+    // needs_setup counts with skipped (nothing produced, not an error) so the counts still sum.
+    skipped: results.filter((r) => r.status === "skipped" || r.status === "needs_setup").length,
     failed: results.filter((r) => r.status === "failed" || r.status === "no_provider" || r.status === "unsupported").length,
   };
 }

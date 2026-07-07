@@ -9,6 +9,7 @@ import type { TranscribeResult, TranscribeBatchResult, TranscribeTools, Transcri
 import { mediaKindForName } from "@lfb/shared";
 import { Transcriber } from "../../tools/transcribe/Transcribe.js";
 import { expandHome } from "../fs/badges.js";
+import { resolveArtifactPlacement } from "../storage/artifact-placement.service.js";
 import { getStorageDetail } from "../storage/storage.service.js";
 import { track } from "../progress/progress.registry.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
@@ -23,37 +24,29 @@ const SKIP_DIRS = new Set([TRANSCRIBE_DIR, ".lfbridge", ".git", "node_modules"])
 
 const engine = new Transcriber();
 
-// ── storage-root + transcript-path resolution (§3.4) ──────────────────────────────
-/** True when `dir` is a storage root: it carries storage.yaml, a .lfbridge/, or a .git/ (a repo). */
-function isStorageRoot(dir: string): boolean {
-  return (
-    exists(path.join(dir, "storage.yaml")) ||
-    exists(path.join(dir, ".lfbridge")) ||
-    exists(path.join(dir, ".git"))
-  );
-}
+// ── transcript-path resolution (§3.4) — delegated to the shared, storage-aware placement resolver ──────
+// The ordered rule (walk-up containing root → owning storage's dedicated repo → first-time signal →
+// beside-media) lives in storage/artifact-placement.service.ts so transcription and AI description never
+// drift. Here we just append the `.transcribe/<rel>.txt` shape onto whatever base it returns.
 
-/**
- * The nearest ancestor of `absFile` that is a storage root (§3.4). When none is found, the file's own
- * directory is used as the base, so a stray file still gets a `.transcribe/` beside it.
- */
+/** The base directory the `.transcribe/` tree hangs under for a media file (§3.4). Kept for callers that
+ *  only need the root; the full placement (incl. gitIgnore / needsSetup) comes from resolveTranscriptPath. */
 export function resolveStorageRoot(absFile: string): string {
-  let dir = path.dirname(absFile);
-  const stopAt = path.parse(dir).root;
-  while (dir && dir !== stopAt) {
-    if (isStorageRoot(dir)) return dir;
-    dir = path.dirname(dir);
-  }
-  if (dir === stopAt && isStorageRoot(dir)) return dir;
-  return path.dirname(absFile);
+  return resolveArtifactPlacement(absFile).root;
 }
 
-/** <storageRoot>/.transcribe/<relpath>.txt — mirrors the media file's relative path, keeps its name. */
-export function resolveTranscriptPath(absFile: string): { root: string; rel: string; transcriptPath: string } {
-  const root = resolveStorageRoot(absFile);
-  const rel = path.relative(root, absFile);
-  const transcriptPath = path.join(root, TRANSCRIBE_DIR, `${rel}.txt`);
-  return { root, rel, transcriptPath };
+/** <base>/.transcribe/<rel>.txt — the transcript destination, plus the placement flags that drive the
+ *  gitignore nudge (only in a plain repo, never a dedicated repo) and the first-time setup gate (§3.4–§3.5). */
+export function resolveTranscriptPath(absFile: string): {
+  root: string;
+  rel: string;
+  transcriptPath: string;
+  gitIgnore: boolean;
+  needsSetup: boolean;
+} {
+  const p = resolveArtifactPlacement(absFile);
+  const transcriptPath = path.join(p.root, TRANSCRIBE_DIR, `${p.rel}.txt`);
+  return { root: p.root, rel: p.rel, transcriptPath, gitIgnore: p.gitIgnore, needsSetup: p.needsSetup };
 }
 
 /** Keep the parallel hierarchy out of Git (added alongside the existing .lfbridge/ ignore). */
@@ -107,11 +100,18 @@ export async function transcribeOne(input: string, overwrite = false): Promise<T
     return result(abs, "skipped", null, null, "not an audio/video file");
   }
 
-  const { root, transcriptPath } = resolveTranscriptPath(abs);
+  const { root, transcriptPath, gitIgnore, needsSetup } = resolveTranscriptPath(abs);
+  // First-time gate (§3.5): no Personal storage exists and nothing owns this file — don't write somewhere
+  // surprising; tell the UI to run the setup wizard. Never produces a file.
+  if (needsSetup) {
+    return result(abs, "needs_setup", null, null, "no storage is set up for this file — configure Personal storage first");
+  }
   if (!overwrite && exists(transcriptPath)) {
     return result(abs, "skipped", transcriptPath, null, "already transcribed");
   }
-  ensureTranscribeIgnored(root);
+  // Only keep the dot-dir out of Git for a PLAIN repo (rule A). A dedicated repo (rule B) exists to hold
+  // and sync these artifacts, so we deliberately do NOT gitignore there (Transcribe.mdx §3.4).
+  if (gitIgnore) ensureTranscribeIgnored(root);
 
   const r = await track("transcribe", name, (report) =>
     engine.transcribeToFile(abs, transcriptPath, ({ fraction }) =>
@@ -241,7 +241,8 @@ function summarize(results: TranscribeResult[]): TranscribeBatchResult {
   return {
     results,
     transcribed: results.filter((r) => r.status === "transcribed").length,
-    skipped: results.filter((r) => r.status === "skipped" || r.status === "no_audio").length,
+    // needs_setup is counted with skipped (nothing produced, not an error) so the counts still sum.
+    skipped: results.filter((r) => r.status === "skipped" || r.status === "no_audio" || r.status === "needs_setup").length,
     failed: results.filter((r) => r.status === "failed" || r.status === "tool_missing").length,
   };
 }

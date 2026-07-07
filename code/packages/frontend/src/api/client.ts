@@ -13,6 +13,7 @@ import type {
   Decision,
   WorkerKind,
   WorkerState,
+  WatcherState,
   SizeUnit,
   FsListing,
   FileSystemView,
@@ -43,6 +44,7 @@ import type {
   SessionActivityResult,
   StoragesPageData,
   StorageDetail,
+  ArtifactPlacementView,
   StorageIndexResult,
   StorageAnalyzeResult,
   StorageSettings,
@@ -136,6 +138,9 @@ export const api = {
   syncPage: () => unwrap<SyncPageData>(http.get("/sync")),
   controlWorker: (worker: WorkerKind, action: "install" | "uninstall" | "enable" | "disable") =>
     unwrap<WorkerState>(http.post(`/sync/${worker}/${action}`)),
+  // The live filesystem watcher (scan.mdx §2.2) — enable/disable only (no install step).
+  controlWatcher: (action: "enable" | "disable") =>
+    unwrap<WatcherState>(http.post(`/sync/watcher/${action}`)),
 
   peers: () => unwrap<PeerRow[]>(http.get("/peers")),
   // The Devices / Peers table (devices.mdx §6) — self + peers.yaml + registry, unioned & disambiguated.
@@ -274,6 +279,13 @@ export const api = {
   storages: () => unwrap<StoragesPageData>(http.get("/storages")),
   storageDetail: (id: string) => unwrap<StorageDetail>(http.get(`/storages/${id}`)),
   initStorage: (id: string) => unwrap<StorageDetail>(http.post(`/storages/${id}/init`)),
+  // First-time setup wizard commit (Transcribe.mdx §3.5): create the ONE Personal storage at its canonical
+  // root; `dedicatedRepo` makes it a git repo whose artifacts are tracked+synced (not git-ignored).
+  createPersonalStorage: (dedicatedRepo: boolean) =>
+    unwrap<StorageDetail>(http.post("/storages/personal/create", { dedicatedRepo })),
+  // Where a media file's derived artifacts (transcript / AI description) will land, and whether the
+  // first-time setup wizard must run first (Transcribe.mdx §3.4–§3.5).
+  placement: (path: string) => unwrap<ArtifactPlacementView>(http.get("/storages/placement", { params: { path } })),
   indexStorage: (id: string) => unwrap<StorageIndexResult>(http.post(`/storages/${id}/index`)),
   analyzeStorageFile: (id: string, path: string) =>
     unwrap<StorageAnalyzeResult>(http.post(`/storages/${id}/analyze`, { path })),

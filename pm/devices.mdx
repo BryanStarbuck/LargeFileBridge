@@ -443,7 +443,10 @@ Guaranteeing the self row (config-seeded) and self-writing into each storage's r
 ## 10. Synchronization — the identity travels, the machine facts follow
 
 The whole point is that this data **stays synchronized across the user's computers**. The mechanism is
-already the SDL's Git-backed travel ([syncable_data_location.mdx](./syncable_data_location.mdx)):
+already the SDL's Git-backed travel ([syncable_data_location.mdx](./syncable_data_location.mdx)), driven
+by the [Git backbone engine](./git_sync.mdx) (`git fetch` → automatic `merge` → `commit` → `push` each
+pass); [storage_personal.mdx](./storage_personal.mdx) is the canonical two-computer walkthrough of a
+device registering itself and discovering the user's other machines:
 
 * A device's **id, nice name, fingerprint, schedule, and graft** live in its self-owned
   `devices/<device>.yaml`, which is committed to the storage's Git repo and (optionally) mirrored to

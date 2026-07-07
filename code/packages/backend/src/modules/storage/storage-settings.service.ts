@@ -235,6 +235,21 @@ export function getStorageSynced(storageId: string): boolean {
   }
 }
 
+/**
+ * This storage's Git backbone remote when its dedicated-repo backing is ON (git_sync.mdx §1/§3). Returns
+ * `{ remote }` where `remote` is either a LOCAL PATH to a checkout or an HTTP(S)/SSH URL — the git engine
+ * classifies + resolves it. Returns null when the backbone is OFF or no remote is set (no git this pass).
+ */
+export function getDedicatedRepoRemote(storageId: string): { remote: string } | null {
+  try {
+    const dr = readYaml(storageConfigPath(storageId), StorageUnitConfigSchema).backing.dedicated_repo;
+    if (!dr.enabled || !dr.path) return null;
+    return { remote: dr.path };
+  } catch {
+    return null;
+  }
+}
+
 // ── mapped source directories (syncable_data_location.mdx §3, storage_settings.mdx §4a) ───────────────
 // The SHARED list of source hierarchies a company/personal storage covers, in the SDL's
 // `<root>/.lfbridge/mapped_dirs.yaml`. Everything recursive under each mapped dir is in scope. The

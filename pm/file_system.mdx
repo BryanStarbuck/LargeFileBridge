@@ -147,21 +147,64 @@ any image ≥3MB" pass. The detection reuses the existing classifiers so the voc
 * **big file** = `size >= getAppConfig().big_file.threshold_bytes` (default 100 MB; per-repo override
   honored), matching the size filter in [directories.mdx §1.4](./directories.mdx).
 
-Determining a directory's interest level (walk the subtree with the standard budget/depth caps, classify each file, fold to the highest-priority category present) is computed in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `buildDirRollup()` (extended to emit `interest`) · classifiers `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `compressInfo()` / `VIDEO_EXT` / `IMAGE_UNCOMPRESSED_EXT`. The value rides on each directory entry in the shared type `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FsEntry` (add `interest?: FolderInterest`).
+Determining each **column-browser** directory row's interest level (the primary place — the `/fs` tree) is computed in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `computeDirInterest()` (the bounded subtree walk, mtime+TTL cache, early-exit on the first big file, and the truncation floor of §3.3), called per directory child by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDir()` (which shares **one** `interestBudget` across every child in the column so a huge sibling can't pin the thread).
+The **entity-detail / View-one-directory** rollup computes the same value as a by-product of its category walk in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `buildDirRollup()` (emits `interest`) · both paths share the classifiers `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `compressInfo()` / `VIDEO_EXT` / `IMAGE_UNCOMPRESSED_EXT`. The value rides on each directory entry in the shared type `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FsEntry` (`interest?: FolderInterest`).
 
 ### 3.3 Performance — computed on the walk, cached, never blocking (LOCKED)
 
 Interest is a **recursive** property, so a naive per-row recompute is expensive on a deep tree. Follow the
 model already in [performance.mdx](./performance.mdx):
 
-* Reuse the **bounded** walk (the existing budget of ~20,000 entries, depth ≤ 8, `HARD_SKIP` dirs
-  excluded). Interest is a by-product of that same pass — no extra traversal.
-* **Cache** the result by directory + its `scannedAt`; serve the cached `interest` instantly and refresh in
-  the background when the directory changes.
+* Reuse the **bounded** walk (depth ≤ 8, `HARD_SKIP` dirs excluded). Interest is a by-product of that same
+  pass — no extra traversal.
+* **Fair per-child budget, not one greedy shared pool (LOCKED).** When a column lists its children, each
+  directory child gets its **own** budget capped at **`INTEREST_PER_CHILD` (3,000 entries)**, drawn from a
+  larger per-listing ceiling **`INTEREST_TOTAL` (120,000)**; only what a child actually consumes is drawn
+  down, so cheap dirs leave budget for the rest. This is the fix for the **`_Mirror` starvation bug**: the
+  old design shared **one** 40k budget consumed first-come, so huge early siblings (Dropbox/Library) drained
+  it to **0 before `_Mirror` was even walked** — `_Mirror` got `undefined` → a **plain glyph** — and because
+  `undefined` is never cached, every refetch re-drained the pool and `_Mirror` stayed plain **forever**. A
+  per-child cap makes the walk fair and position-independent: every child, `_Mirror` included, gets its own
+  slice and resolves (`_Mirror` finds its big file in ~35 entries).
+* **The walk must never block the event loop (async policy, LOCKED).** `computeDirInterest` is a synchronous
+  stat loop; a single heavy child can do thousands of stats. The listing loop counts those consumed entries
+  toward its yield budget and hands the event loop back (`setImmediate`) so a cold multi-second walk stays
+  **non-blocking** — concurrent requests interleave instead of hanging.
+* **Cache** the result by directory + mtime/`scannedAt` (20 s TTL); serve the cached `interest` instantly.
 * The column browser **renders immediately** with the plain glyph and **upgrades** the tint when the
-  interest value arrives — the tree never blocks on the walk. A directory whose walk hit the budget cap is
-  treated as **not-yet-known** (plain glyph), not falsely "not interesting".
+  interest value arrives — the tree never blocks on the walk.
+
+**Truncation returns the best-known FLOOR, it never discards a positive hit (LOCKED).** When the bounded
+walk hits the budget cap, we do **not** throw away what the walk already saw. The rule is a **floor**:
+
+* If the walk **already found a video** (or an uncompressed image ≥ 3 MB) before the cap, the directory is
+  **definitely at least that** — return **`"video"`** (or `"image"`). It shows **blue**. The only thing
+  truncation can hide is a **deeper big file** that would have **upgraded** the color to brown — so a
+  truncated floor is always **safe** (it under-states at worst, never a false "not interesting"). Leave a
+  truncated floor **uncached** so a later full-budget walk can still upgrade it to `"big"`.
+* Only when the walk hits the cap **having found nothing yet** is the result **unknown** (`undefined` →
+  plain glyph) — a big file could still be deeper, so we don't claim "not interesting".
+* A **fully drained** walk that found nothing is a definite **`null`** (not interesting), which is cached.
+
+So a huge directory like **`~/_Mirror/`** (≈20 k entries, a ≥100 MB file and videos several levels deep)
+shows **brown** (it finds its big file in ~35 of its 3,000-entry slice); before both fixes it showed a
+plain glyph. Even a `_Mirror` with only videos (no big file) is guaranteed **at least blue** by the floor
+rule the moment a video is seen.
+
+Sharing the per-listing budget as a per-child cap plus a total ceiling (so no single sibling can starve the rest), and yielding the event loop as heavy children consume it, is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (`INTEREST_PER_CHILD` / `INTEREST_TOTAL`; per-child `childBudget`, `interestPool` draw-down, and `sinceYield += consumed`).
+
+Returning the best-known floor on budget exhaustion (yield the already-found video/image rather than discarding it, and leave that truncated floor uncached so a later full walk can upgrade it to `"big"`) is enforced in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `computeDirInterest()` (the `truncatedFloor()` helper at each `budget.left <= 0` return) · mirrored for the entity-detail rollup in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `buildDirRollup()` (the `interestVideo`/`interestImage` branches taken before the `walkTruncated → undefined` branch).
+
+The filesystem discovery scan that keeps the big-file / candidate data fresh runs **out-of-process and cooperatively async** (it yields to the event loop every few hundred entries so it never freezes the web app) on a schedule of **at least every 2 hours** (`scan_process.interval_hours`, default **2**), implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()` (the `yieldToLoop()` cadence) · scheduled via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `intervalFor()` → the launchd `StartInterval`. The default lives in `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — `scan_process.interval_hours` (default **2**).
+
+Existing installs are migrated forward so the new cadence takes effect without user action. The old stored default (4h) is healed to 2h when config loads, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()` (rewrites `scan_process.interval_hours === 4 → 2`; a value the user deliberately set is left alone). The already-installed launchd plist still fires on its baked-in `StartInterval` until re-rendered, so at boot any drift between the plist's interval and the configured interval is reconciled (the plist is rewritten and reloaded, and only for workers the user already installed) in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `reconcileWorkerSchedules()` (reads the installed interval via `SchedulerInstaller.installedIntervalSeconds()`, implemented for macOS in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/os/launchd.ts`), called once from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts` — `bootstrapState()`.
 
 Mapping the `interest` value to the folder glyph's `color`/`fill` is done in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FsRow` (the `<Folder>` at the folder-glyph line; replace the hardcoded `text-slate-500` with a `folderGlyphStyle(entry.interest)` lookup) · shared helper `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/fs/folderInterest.ts` — `folderGlyphStyle()` (returns `{ color, fill }` from the token pairs in §2), reused by every other folder glyph listed in §3.1.
@@ -251,9 +294,13 @@ Enforcing downward-only containment of the recursive walk (descend into children
    browser, View-one-directory child lists, storage directory rows, and repo rows (a movie-filled repo
    reads brown) — via one shared `folderGlyphStyle()` helper. Full paths (`/fs/paths`) has no directory
    rows and is unaffected.
-5. **Performance (§3.3):** interest is a by-product of the existing bounded rollup walk, cached by
-   directory + `scannedAt`; the tree renders immediately with plain glyphs and upgrades the tint when the
-   value arrives — never blocking; a budget-capped walk shows the plain glyph, not a false "not interesting".
+5. **Performance + truncation floor (§3.3):** interest is a by-product of the existing bounded walk (per-
+   child in the column browser, sharing one budget), cached by directory + mtime/`scannedAt`; the tree
+   renders immediately with plain glyphs and upgrades the tint when the value arrives — never blocking. A
+   budget-capped walk that **already found a video/image returns that as a definite floor (at least blue),
+   uncached so it can still upgrade to brown**; only a budget-capped walk that found **nothing** shows the
+   plain glyph (unknown), never a false "not interesting". Concretely, `~/_Mirror/` (≈20 k entries, videos
+   several levels deep) shows **at least blue** even though its walk truncates.
 6. **Tokens:** the six `--lfb-fold-*` CSS variables from §2 exist in `styles.css` and drive the glyph
    `color`/`fill`; the brown reuses the existing repo-badge brown and the blue reuses the IPFS-badge blue.
 7. **Action-links row (§4):** the File System page shows the standard action-links row under its title with
@@ -279,6 +326,16 @@ Enforcing downward-only containment of the recursive walk (descend into children
        lists, storage dir rows, repo rows), NOT just /fs. Video interest = ANY video (no compressState/size
        floor). Image interest floor = 3 MB (higher than the 1 MiB compress floor). Tokens: six --lfb-fold-*
        vars (brown reuses --lfb-badge-repo-root, blue reuses --lfb-badge-ipfs).
+       TRUNCATION FLOOR (§3.3, LOCKED): the walk is bounded (depth<=8, HARD_SKIP, a per-listing budget the
+       column browser SHARES across every sibling — 40k in fs.service.ts listDir). On budget exhaustion we
+       return the best-known FLOOR: if a video/image was already found, return "video"/"image" (>= blue),
+       UNCACHED so a later full walk can upgrade to "big"; only truncation-with-nothing-found is undefined
+       (unknown -> plain glyph); a fully-drained empty walk is a cached null (not interesting). This is the
+       fix for ~/_Mirror/ (~20k entries, deep videos) showing a PLAIN glyph: it blew the shared budget and
+       computeDirInterest() returned undefined, discarding the videos it had found. Now it returns "video".
+       Computed by fs/badges.ts computeDirInterest() (truncatedFloor() helper) for the column browser, and
+       mirrored in entity.service.ts buildDirRollup() (interestVideo/interestImage branches before the
+       walkTruncated->undefined branch).
    (2) ACTION-LINKS ROW (§4): delegates ALL behavior to page_actions.mdx (visible links row under the title,
        NOT the old Actions ▾ dropdown). Catalog: Create Transcriptions · Create AI descriptions · Compress
        all videos… · Compress all images… · Git-ignore big files… · Track / Sync this directory.

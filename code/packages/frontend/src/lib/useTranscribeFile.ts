@@ -11,6 +11,7 @@ import type { TranscribeResult } from "@lfb/shared";
 import { api } from "@/api/client";
 import { clientLog } from "./clientLog.js";
 import { transcribeMsgOne } from "./transcribe.js";
+import { requestStorageSetup } from "./setupWizard.js";
 
 export interface UseTranscribeFile {
   /** Kick off transcription (overwrite=true re-transcribes an existing transcript). */
@@ -29,13 +30,17 @@ export function useTranscribeFile(path: string, name: string): UseTranscribeFile
       toast.info(`Transcribing ${name}… this can take a few minutes for a long video.`);
       void qc.invalidateQueries({ queryKey: ["progress"] });
     },
-    onSuccess: (r: TranscribeResult) => {
+    onSuccess: (r: TranscribeResult, overwrite: boolean) => {
       void qc.invalidateQueries({ queryKey: ["transcript", path] });
       void qc.invalidateQueries({ queryKey: ["progress"] });
       const msg = transcribeMsgOne(r);
       if (r.status === "transcribed") toast.success(msg);
       else if (r.status === "tool_missing" || r.status === "failed") toast.error(msg);
-      else toast(msg);
+      // First-time gate (Transcribe.mdx §3.5): open the wizard and re-run this transcription once set up.
+      else if (r.status === "needs_setup") {
+        toast.warning(msg);
+        requestStorageSetup({ mediaPath: path, actionLabel: "transcribe", retry: () => m.mutate(overwrite) });
+      } else toast(msg);
     },
     onError: (e: Error) => {
       clientLog.error("useTranscribeFile", e);

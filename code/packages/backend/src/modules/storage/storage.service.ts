@@ -27,7 +27,7 @@ import { readStorageIndex, countStorageIndex, indexStorageFiles, LFBRIDGE_DIR } 
 import { analyzeFile } from "./analysis.service.js";
 // Lazy import cycles with storage-settings.service (ensureBackingLocations) and devices.service
 // (writeSelfDevice) — used only inside functions, never at module-eval time — safe under NodeNext ESM.
-import { readStorageSettings } from "./storage-settings.service.js";
+import { readStorageSettings, writeStorageSettings } from "./storage-settings.service.js";
 import { writeSelfDevice } from "./devices.service.js";
 import { log } from "../../shared/logging.js";
 
@@ -310,6 +310,34 @@ export function initStorageById(id: string): StorageDetail {
     company: storage.companyName ? { companyName: storage.companyName } : undefined,
   });
   return getStorageDetail(id);
+}
+
+/**
+ * Create the ONE Personal storage from scratch — the first-time setup wizard's commit step (Transcribe.mdx
+ * §3.5, storage_personal.mdx §3b). Personal always roots at the canonical
+ * `~/BGit/Bryan_git/personal_large_files_bridge/` (storage_personal.mdx §1); the user's only choice is
+ * whether it is a **dedicated Git repo** (versioned + synced, artifacts tracked) or a **plain folder**.
+ * Idempotent: an existing Personal storage is returned as-is.
+ *
+ *   • Always: create the root dir, `ensureStorage(root, "personal")` (writes storage.yaml + .lfbridge/).
+ *   • dedicatedRepo: `git init` the root if needed AND enable the dedicated-repo backing (so derived
+ *     artifacts route INTO the repo, not git-ignored — placement rule B).
+ */
+export async function createPersonalStorage(opts: { dedicatedRepo?: boolean }): Promise<StorageDetail> {
+  const root = path.join(os.homedir(), "BGit", "Bryan_git", `personal${CONVENTION_SUFFIX}`);
+  fs.mkdirSync(root, { recursive: true });
+  if (opts.dedicatedRepo && !exists(path.join(root, ".git"))) {
+    const r = spawnSync("git", ["init"], { cwd: root, encoding: "utf8" });
+    if (r.status === 0) log.info("storage", `git init personal dedicated repo at ${root}`);
+    else log.warn("storage", `git init at ${root} failed: ${(r.stderr || r.error?.message || "unknown").trim()}`);
+  }
+  ensureStorage(root, "personal", { name: "My Personal Files" });
+  if (opts.dedicatedRepo) {
+    // Turn ON the dedicated-repo backing pointing at the storage root itself, so loose personal files route
+    // their transcripts/descriptions INTO this repo (not git-ignored) per Transcribe.mdx §3.4 rule B.
+    await writeStorageSettings("personal", { backing: { dedicatedRepo: { enabled: true, path: root } } });
+  }
+  return getStorageDetail("personal");
 }
 
 export function indexStorageById(id: string): { indexed: number } {

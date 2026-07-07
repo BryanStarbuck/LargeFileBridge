@@ -179,16 +179,106 @@ layout above. The `.lfbridge/analysis/` area remains the home of the *other* ana
 (description, visuals-by-time); when the analysis index needs to note that a transcript exists, it points
 at the `.transcribe/` path rather than duplicating the text.
 
-### 3.4 Finding the storage root + git-ignore
+### 3.4 Resolving where the parallel hierarchy lives — the ordered rule (LOCKED)
 
-The owning storage root is the **nearest ancestor** of the media file that is a storage — a directory
-carrying a `storage.yaml`, a `.lfbridge/`, or a `.git/` (a repo is a storage). When none is found, the
-media file's own directory is used as the base, so a stray file still gets a `.transcribe/` beside it.
-The `.transcribe/` directory is **git-ignored** (added alongside the existing `.lfbridge/` ignore) so
-transcripts never bloat commits; the bytes sync over IPFS with the rest of the storage.
+The `.transcribe/` (and `.lfbridge/analysis/`, ai_description.mdx §2) tree does **not** always hang under
+the media file's nearest storage-carrying ancestor. A media file very often lives **out in the user's
+wider filesystem** (e.g. `~/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4`) — not inside a
+Git repo and not inside a storage root. For those files, scattering a `.transcribe/` beside every media
+subfolder is exactly what we do **not** want. Placement is therefore resolved by an **ordered rule** — the
+first case that matches wins. This is the **authoritative** resolution for *every* derived-artifact
+producer (transcription and AI description share it):
 
-Resolving the owning storage root and the parallel transcript path (`<root>/.transcribe/<relpath>.txt`), and ensuring `.transcribe/` is git-ignored, are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `resolveStorageRoot()` / `resolveTranscriptPath()` (constant `TRANSCRIBE_DIR`).
+**A. Containing storage root (walk-up).** Walk **up** from the media file's directory to the filesystem
+root. The **nearest ancestor** carrying a `storage.yaml`, a `.lfbridge/`, or a `.git/` (a repo *is* a
+storage — [storages.mdx](./storages.mdx)) is the containing root. This is the "repo root" walk the
+product owner described: we are usually in some subdirectory *under* a repo, so we climb until we find the
+`.git/`. When found:
+* `root` = that ancestor · `rel` = the media file's path **relative to it**.
+* If the root is a **Git repo**, the dot-directory is **git-ignored** (the existing nudge) so plain
+  repos never bloat commits; the bytes sync over IPFS. A repo's own per-repo config UI is
+  [repo_settings.mdx](./repo_settings.mdx) — reached *because* we detected we are inside a repo.
+
+**B. Owning storage by mapping — routed to the dedicated repo (the fix, LOCKED).** When walk-up finds
+nothing (the file is out in the wider filesystem), the file is still **owned** by a storage:
+* **Which storage owns it.** The **most specific** company/personal storage whose **mapped source
+  directory** ([syncable_data_location.mdx §3](./syncable_data_location.mdx), storage_settings.mdx §4a)
+  contains the file — matched against this computer's **graft** local paths ([devices.mdx §4](./devices.mdx)).
+  If no explicit mapped dir contains it, the **Personal** storage is the **default catch-all** owner for
+  anything under the user's home tree ([storage_personal.mdx](./storage_personal.mdx)).
+* **Where the artifact goes.**
+  * If the owning storage has its **dedicated Git repo** backing **enabled** (storage_settings.mdx §4.1),
+    the artifact is written **under that dedicated repo**, mirroring the file's hierarchy —
+    `<dedicatedRepo>/.transcribe/<rel>.txt`. `rel` is the file's path relative to its **mapped-dir root**
+    (prefixed by the mapped-dir key), or relative to **`~`** for the personal default catch-all. The dot
+    tree is **NOT git-ignored** here — the dedicated repo **exists to hold and sync these artifacts**, so
+    we just put them in (the product owner: *"it won't need to add the `.gitignore` if you have a
+    dedicated git repo — it'll just put it in there"*).
+  * If the owning storage has **no** dedicated repo enabled, the artifact goes under the storage's own
+    **root** (`<storageRoot>/.transcribe/<rel>.txt`), where its `.lfbridge/` already lives.
+
+**C. First-time experience (no storage yet).** If the file is owned by **no** storage **and** the user has
+**no Personal storage configured at all**, we do **not** silently write beside the media. The action is
+gated by the **first-time setup wizard** (§3.5).
+
+**D. Last resort.** Personal exists but the file is genuinely outside every mapped hierarchy and no
+dedicated repo is enabled → the media file's own directory is the base (`.transcribe/` beside it), as
+before. This is the narrow legacy fallback, not the common path.
+
+> **Worked example (the reported case).** With the Personal storage's **dedicated Git repo** turned ON at
+> `~/BGit/Bryan_git/personal_large_files_bridge/`, transcribing
+> `~/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4` writes to
+> `~/BGit/Bryan_git/personal_large_files_bridge/.transcribe/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4.txt`
+> — **not** a `.transcribe/` beside the media, and **not** git-ignored. Turn the dedicated repo back off
+> and the same file falls to rule D (beside the media).
+
+The ordered resolution (walk-up → owning-storage/dedicated-repo → first-time signal → beside-media), the
+home-`~` expansion of pasted paths, and the per-case `gitIgnore` flag are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveArtifactPlacement()`.
+The transcript path (`<root>/.transcribe/<rel>.txt`) and the git-ignore-only-when-flagged behaviour wrap it in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `resolveTranscriptPath()` / `resolveStorageRoot()` (constant `TRANSCRIBE_DIR`).
+
+### 3.5 The first-time setup wizard — actions that trigger it (LOCKED)
+
+A derived-artifact action must know **where its output will land before it runs**. When placement rule C
+fires — the file is owned by no storage and **no Personal storage exists yet** — the action is redirected
+to a **first-time setup wizard** instead of producing a file in a surprising place.
+
+* **Triggering actions.** Any derived-artifact action taken on a file/directory that resolves to
+  `needsSetup`:
+  * **Transcribe** (this spec).
+  * **Get AI details** / **AI description** ([ai_description.mdx §2](./ai_description.mdx)).
+  (The list grows as new per-file analysis actions are added; every one consults placement first.)
+* **What the wizard does.** It walks the user through the minimum configuration for the situation:
+  1. **In a repo?** If the file *is* under a repo (rule A would have matched) we never reach the wizard —
+     repo configuration is [repo_settings.mdx](./repo_settings.mdx). The wizard is only for the
+     no-storage case.
+  2. **Company vs personal.** If a **company** storage already covers the path, use it. Otherwise
+     **default to Personal** — create the one Personal storage.
+  3. **Where the Personal `.lfbridge/` root lives.** Default to creating it under the **home (`~`)
+     directory** ([storage_personal.mdx §1](./storage_personal.mdx)); or, if the user prefers, point it at
+     a **dedicated Git repo** (`~/BGit/Bryan_git/personal_large_files_bridge/`) — in which case artifacts
+     store **under that repo** per rule B.
+* **After setup.** The originally-clicked action re-resolves placement (now a storage exists) and runs —
+  the user lands back where they were, no reload.
+
+The backend reports `needsSetup` from the same placement resolver; every derived-artifact launcher checks it
+and, when set, opens the wizard (via a global request bus, so no entry point needs bespoke wiring) and
+re-runs the original action once a Personal storage exists. The wizard offers exactly the two choices above
+— **Dedicated Git repo** (recommended; artifacts tracked + synced, placement rule B) or **Plain folder** —
+and commits by creating the one Personal storage at its canonical root. Implemented in code:
+* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveArtifactPlacement()` (the `needsSetup` flag).
+* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.router.ts` — `GET /api/storages/placement` (what-would-this-do) · `POST /api/storages/personal/create` (the wizard's commit).
+* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `createPersonalStorage()` (creates the root, optional `git init`, enables the dedicated-repo backing).
+* `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/FirstTimeStorageWizard.tsx` — `FirstTimeStorageWizardProvider` (the modal) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/setupWizard.ts` — `requestStorageSetup()` (the bus the Transcribe / Get-AI-details launchers call).
+
+### 3.6 Pasted paths are `~`-expanded (LOCKED)
+
+Users paste paths that begin with `~` (e.g. `~/BGit/Bryan_git/personal_large_files_bridge`). Every entry
+point home-expands the input **before** any resolution, so `~/…` and the absolute form behave identically
+everywhere — walk-up, ownership matching, and dedicated-repo routing all operate on the expanded absolute
+path. Home-expansion of every inbound path is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `expandHome()` (applied at each service entry point and inside `resolveArtifactPlacement()`).
 
 ---
 

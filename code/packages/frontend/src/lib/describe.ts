@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import type { DescribeResult } from "@lfb/shared";
 import { api } from "@/api/client";
 import { clientLog } from "./clientLog.js";
+import { requestStorageSetup } from "./setupWizard.js";
 
 /** One-file outcome → a human line (ai_description.mdx §2). */
 function msgOne(r: DescribeResult): string {
@@ -17,6 +18,9 @@ function msgOne(r: DescribeResult): string {
       return r.reason ?? "No AI provider configured — add an API key";
     case "unsupported":
       return r.reason ?? "Not an image or video";
+    case "needs_setup":
+      // First-time gate (Transcribe.mdx §3.5): no Personal storage owns this file yet.
+      return "Set up Personal storage first — Settings → Storages";
     default:
       return `Description failed: ${r.reason ?? "error"}`;
   }
@@ -35,12 +39,21 @@ export function runDescribeFile(
     provider?: "auto" | "gemini" | "grok" | "openai";
     onDone?: () => void;
     onNoProvider?: (reason: string) => void;
+    onNeedsSetup?: (reason: string) => void;
   },
 ): void {
   toast.promise(api.describeFile(path, { overwrite: opts?.overwrite, provider: opts?.provider }), {
     loading: `Generating AI description for ${name}…`,
     success: (r) => {
-      if (r.status === "no_provider") {
+      if (r.status === "needs_setup") {
+        // First-time gate (Transcribe.mdx §3.5): open the wizard; re-run this description once set up.
+        requestStorageSetup({
+          mediaPath: path,
+          actionLabel: "generate an AI description for",
+          retry: () => runDescribeFile(path, name, opts),
+        });
+        opts?.onNeedsSetup?.(r.reason ?? "");
+      } else if (r.status === "no_provider") {
         opts?.onNoProvider?.(r.reason ?? "No AI provider configured — add an API key");
       } else {
         opts?.onDone?.();

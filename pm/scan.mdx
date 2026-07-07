@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — The Scanning Service (Big-File Discovery)
-description: The periodic filesystem scan that discovers large files and filesystem changes. It runs on its OWN cadence — once every FOUR hours — separate from the every-15-minute background sync (storage_local.mdx §13). It is a metadata-only pass: it stats files (name, size, mtime) and NEVER opens or reads file contents. Cross-platform — scheduled by a launchd plist on Mac, cron/systemd timer on Linux, and Task Scheduler on Windows — with the Mac launchd plist as the primary target. It walks the scanner roots, discovers Git repos, applies the repo mask, and flags every file at or above the "big" threshold (default 100 MB, set in settings.mdx). Its output is written to each sync unit's status.yaml and feeds the Repos/Sync UI. This is how LFBridge notices new big files, grown files, moved/renamed files, deleted files, and newly appeared or vanished repos without any manual action.
+description: The periodic filesystem scan that discovers large files and filesystem changes. It runs on its OWN cadence — once every FOUR hours — separate from the every-15-minute background sync (storage_local.mdx §13). It is a metadata-only pass: it stats files (name, size, mtime) and NEVER opens or reads file contents. Cross-platform — scheduled by a launchd plist on Mac, cron/systemd timer on Linux, and Task Scheduler on Windows — with the Mac launchd plist as the primary target. It walks the scanner roots, discovers Git repos, applies the repo mask, and flags every file at or above the "big" threshold (default 100 MB, set in settings.mdx). Its output is written to each sync unit's status.yaml and feeds the Repos/Sync UI. This is how LFBridge notices new big files, grown files, moved/renamed files, deleted files, and newly appeared or vanished repos without any manual action. In addition to the two scheduled passes, a THIRD trigger runs while the web app is up: a LIVE FILESYSTEM WATCHER (§2.2) that subscribes to the OS's native file-change notifications (FSEvents on Mac, inotify on Linux, ReadDirectoryChangesW on Windows) over the scanner roots and reacts to files being ADDED or DELETED — not modified — updating our tracking (candidate/importance flags) and the File System tree the moment a big file or a video/image/audio file appears or vanishes, instead of waiting up to four hours for the next discovery pass.
 ---
 
 # LargeFileBridge — The Scanning Service (Big-File Discovery)
@@ -23,6 +23,16 @@ The discovery pass is expensive (it walks the tree and stats many files), so it 
 four hours**. The 15-minute pass is cheap per unit and time-sensitive, so it runs over the small set the
 discovery pass has already found. The 15-min pass may do a *light* rescan of a unit it is about to sync;
 the **deep, full-filesystem discovery walk is the 4-hour job's alone.**
+
+Both of those are **polling** jobs on a clock. There is also a **third, event-driven trigger** — the
+**live filesystem watcher** (§2.2) — that is **not** a scheduleTask and has **no** cadence: it runs
+**only while the web app process is up** and fires **the moment the OS tells it a file was added or
+deleted**, so a big file dropped into a repo lights up in the UI in seconds rather than after the next
+4-hour walk. The watcher never moves bytes and never opens files; when it sees a **qualifying** add/delete
+(§2.2) it simply **kicks the same discovery worker** (coalesced) so all the existing tracking/output
+machinery (§6) runs. It is a *latency* optimization on top of the 4-hour scan, **never a replacement** —
+the scheduled walk still catches everything that changed **while the app was off** (when no watcher was
+listening).
 
 ### Naming — "scheduleTask" internally, "scan" in the UI (LOCKED)
 
@@ -112,6 +122,83 @@ being IPFS-pinned locally … make that happen at the 15-minute [interval]."*
 
 The 15-minute pass that reads the local pinset and reconciles/refreshes each `pinned_by` claim against the manifests runs in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncRepoFolder()` (reads `ipfs.listPins()`, refreshes via `setPinClaim()`)
+
+### 2.2 The live filesystem watcher — event-driven, while the web app runs (LOCKED)
+
+Every operating system offers a way to be **called back** when the filesystem changes — files added,
+removed, or renamed under a directory — instead of forcing us to re-walk the tree to find out. LFBridge
+uses that. **While the web app is running**, it registers a **recursive filesystem watcher** over the
+**`scanner.roots`** so we learn about relevant changes **the instant they happen**, and update our
+tracking and the File System tree without waiting up to four hours for the next discovery pass (§2).
+
+> This watcher lives **with the web-app process**, not with the OS scheduler. It is **not** a
+> scheduleTask — it has no plist/cron/timer and no cadence. It starts when the backend boots and stops
+> when the backend exits. If the app is not running, there is no watcher; that gap is exactly what the
+> 4-hour scheduled discovery pass (§2) exists to backfill.
+
+**Which OS API.** One cross-platform Node/TS watcher, the same everywhere; only the kernel notification
+source underneath differs per OS (Node's `fs.watch({ recursive: true })` binds to each natively):
+
+| OS | Native change-notification source |
+| --- | --- |
+| **macOS** (primary) | **FSEvents** |
+| **Linux** | **inotify** |
+| **Windows** | **ReadDirectoryChangesW** |
+
+**We react to ADD and DELETE — never to "modified" (LOCKED).** The user's contract is explicit: *"when
+files are added or deleted … we don't care about modified."* So the watcher acts **only** on a file
+**appearing** (added) or **disappearing** (deleted/renamed-away) under a root. A pure **content edit**
+of an existing file (`write`/`change`) is **ignored** — a file being re-saved does not change whether it
+is our payload, and reacting to every save would be needless churn. (A **rename** surfaces as a
+delete-at-old-path + add-at-new-path pair, which the coalesced rescan then re-classifies as a **move**
+via the size+mtime heuristic in §6 — so pins are kept, not re-added.)
+
+**What we check for each added/deleted path.** The watcher answers the same two questions the charter
+poses, using only cheap metadata — it **never opens the file** (the §1 no-content contract holds here
+too):
+
+1. **Is it at or over the big threshold?** For an **added** path we `stat` it once and compare against
+   the effective big threshold (§4.2; the watcher uses the global default as a cheap gate and lets the
+   rescan apply exact per-unit overrides). For a **deleted** path there is nothing left to `stat`, so
+   size cannot be read — the extension test below carries the delete case.
+2. **Is it a video, image, or audio file?** By extension via `isMediaFile()` (the shared
+   `scan-filters.ts` list, §4.1) — the same media test the scan uses.
+
+A change is **qualifying** when the path is a **media file (video/image/audio)** *or* an **added file at
+or over the big threshold**. Non-media, non-big noise (a `.ts` source file, a `.log`) is dropped so the
+watcher stays quiet on ordinary editing. Paths under any **`HARD_SKIP`** directory (§4.3) or matching
+`scanner.ignore_globs` are ignored before either test — we never wake on `node_modules`/`build`/`.git`
+churn.
+
+**Debounce + coalesce.** Editors and tools emit **bursts** (a save writes a temp file, renames it,
+deletes the temp). The watcher collects raw events into a pending set and **debounces** (default
+~1.5 s of quiet, `watcher.debounce_ms`, §5) before deciding. If, after a burst settles, **at least one**
+qualifying add/delete remains, the watcher **kicks the discovery worker once** — `startScan("manual")`,
+the same single-flight, coalesced, detached background job the Rescan button drives (§10). Because
+`startScan` is single-flight and coalescing, a storm of drops results in **at most one** in-flight walk
+plus **one** queued follow-up — never a walk per file.
+
+**How the tracking and the tree update.** The kicked discovery pass does exactly what §6 already
+specifies: it re-diffs the affected unit(s) and rewrites each `status.yaml` — the **candidate list**,
+the **big-file counts**, and the added/deleted **change set** (the "importance flags" the user means).
+Because the File System page derives its **interesting-directory folder coloring** and counts from that
+same tracking ([file_system.mdx §1](./file_system.mdx), [directories.mdx](./directories.mdx)), and
+because the FS browser's per-directory listing cache is already **mtime-guarded** and self-invalidates
+when a directory's contents change ([performance.mdx](./performance.mdx) / `fsindex.service.ts`
+`getListingCached`), **adding or deleting a big/media file makes the tree and its coloring refresh on
+their own** — no manual Rescan. That is the whole point: *"if [a file] was added then our file system
+tree will update."*
+
+**Security posture is unchanged.** The watcher subscribes **only** to our own `scanner.roots`, reads
+**only** filesystem event metadata + one `stat`, opens no file contents, and touches **no** network and
+**no** IPFS. It is fully inside the [only-our-content](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule)
+posture.
+
+Registering the recursive OS watcher over the scanner roots, filtering to qualifying add/delete events, debouncing bursts, and kicking the coalesced discovery worker happen in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/watcher/watcher.service.ts` — `startWatcher()` → `onFsEvent()` / `flushPending()` (calls `isMediaFile()` from `shared/scan-filters.ts`, then `startScan("manual")`)
+
+Starting the watcher when the backend boots and stopping it on shutdown is wired in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts` — `main()` (calls `startWatcher()` after `app.listen`; `stopWatcher()` on `SIGINT`/`SIGTERM`)
 
 ---
 
@@ -303,11 +390,18 @@ scan_process:
   label: com.largefilebridge.scan   # launchd label (Mac) / task name / timer name
   last_run_at: 2026-07-02T12:00:00Z # machine-written: when the scan last completed
   last_run_ok: true           # machine-written: did the last scan finish without a fatal error?
+
+# The live filesystem watcher (§2.2) — event-driven, runs with the web-app process (no scheduler).
+watcher:
+  enabled: true               # subscribe to OS file-change events over scanner.roots while the app runs
+  debounce_ms: 1500           # quiet-period before a settled burst kicks a coalesced discovery rescan
 ```
 
 The existing `scanner:` block (roots / ignore_globs / follow_symlinks) stays where it is in
 `config.yaml` — `scan_process` adds only the **scheduling + on/off** facts, exactly mirroring how
-`sync_process` is structured.
+`sync_process` is structured. The `watcher:` block is separate because the watcher is **not** a
+scheduled job (§2.2): it has an `enabled` switch and a debounce window, but **no** `installed`/plist —
+it exists whenever the backend is up.
 
 ---
 
@@ -386,9 +480,21 @@ transparency + control surface for both scheduleTasks. Top to bottom it renders:
   * **Discovery — finds new big files** (the 4-hour scan worker): the same **Install / Uninstall** and
     **Turn on / Turn off**. *(Installing creates the launchd job; turning it on/off enables/disables it —
     two separate acts, §7.)*
+* **One watcher card — "Live watch — reacts instantly"** (the live filesystem watcher, §2.2). It sits
+  below the two scheduleTask cards and is deliberately a **simpler variant**: because the watcher is
+  **not** a scheduled job, it has **no Install step and no cadence** — only a single **On / Off** toggle
+  that binds/unbinds the OS watch at runtime and persists `watcher.enabled` (§5). In place of the
+  "Installed" pill it shows a live **"Watching N folders"** pill (the count of scanner roots actually
+  bound right now, `WatcherState.watching`/`.roots`), and its body explains it runs only while the app
+  is open, reacts to files being **added or deleted** (never edits), moves no bytes, and that anything
+  changed while the app was closed is caught by the Discovery pass above. Health is amber when it is
+  off (or on but nothing is bound) and green when it is actively watching.
 
-The verdict banner, the two worker cards, and their per-card Install/Uninstall + Turn-on/Turn-off controls render in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/sync/SyncPage.tsx` — `SyncPage` (the `WorkerCard` sub-component; controls call `schedule.service.ts` → `control()` above).
+The verdict banner, the two scheduleTask worker cards, and the watcher card — with their per-card controls (Install/Uninstall + Turn-on/Turn-off for the scheduleTasks, Turn-on/Turn-off for the watcher) render in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/sync/SyncPage.tsx` — `SyncPage` (the `WorkerCard` + `WatcherCard` sub-components; scheduleTask controls call `schedule.service.ts` → `control()`, the watcher toggle calls `watcher.service.ts` → `setWatcherEnabled()`).
+
+The watcher card's data (`enabled` / `watching` / `roots`) is served alongside the two scheduleTasks in the Scans payload, and its on/off toggle is handled, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `syncPageData()` (adds `watcher: watcherState()`); toggle route `POST /api/sync/watcher/:action` in `sync.router.ts` → `watcher.service.ts` `setWatcherEnabled()`.
 
 #### Header actions — on-demand kicks (proposed)
 
@@ -459,6 +565,17 @@ The scan is correct when **all** hold:
     Rescan is **coalesced** into one queued follow-up pass, never a concurrent racer on the same
     `status.yaml`), and the walk **cooperatively yields** so it does **not freeze** the web app —
     `scan-status` polls and every other page stay responsive while a scan runs.
+15. A **live filesystem watcher** (§2.2) runs **while the web app is up**, subscribing to the OS's
+    native change notifications (FSEvents / inotify / ReadDirectoryChangesW) over `scanner.roots`. It
+    reacts to files being **added or deleted — never to a content "modified"** — and only when the path
+    is **qualifying** (a video/image/audio file by `isMediaFile`, or an added file **at/over the big
+    threshold**); non-media, non-big churn and any `HARD_SKIP`/`ignore_globs` path are dropped. It is
+    **metadata-only** (one `stat` on an add; no content read), touches **no** IPFS and **no** network,
+    **debounces** bursts (`watcher.debounce_ms`), and on a settled qualifying change **kicks the same
+    single-flight, coalesced discovery worker** (`startScan`, §10) — so the `status.yaml` tracking, the
+    interesting-directory coloring, and the File System tree refresh within seconds **without** waiting
+    for the 4-hour pass. The watcher is `watcher.enabled` (§5), has **no** scheduler/plist, and never
+    replaces the scheduled walk (which backfills changes that happened while the app was off).
 
 ---
 

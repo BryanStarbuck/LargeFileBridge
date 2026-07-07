@@ -281,14 +281,18 @@ function buildDirRollup(dirAbs: string, match: RepoMatch | null): DirRollup {
     }
   }
 
-  // A big file is definite regardless of truncation (highest priority). Otherwise, if the walk stopped
-  // on the budget with dirs unexplored, we can't be sure a big file isn't deeper → interest is UNKNOWN
-  // (undefined). A fully-drained walk yields a definite video/image/null.
+  // A big file is definite regardless of truncation (highest priority). A positively-found video/image
+  // is also definite — it's a FLOOR (at least blue) even if the walk truncated, since truncation can
+  // only hide a deeper big file that would upgrade it to brown, never demote it. Only a truncated walk
+  // that found NOTHING is UNKNOWN (undefined → plain glyph): a big file could still be deeper. A fully
+  // drained walk that found nothing is a definite `null` (not interesting). (file_system.mdx §3.3.)
   const walkTruncated = stack.length > 0;
   let interest: FolderInterest | undefined;
   if (interestBig) interest = "big";
+  else if (interestVideo) interest = "video";
+  else if (interestImage) interest = "image";
   else if (walkTruncated) interest = undefined;
-  else interest = interestVideo ? "video" : interestImage ? "image" : null;
+  else interest = null;
 
   return {
     videosToCompress,

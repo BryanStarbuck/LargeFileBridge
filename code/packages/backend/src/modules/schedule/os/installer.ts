@@ -6,6 +6,9 @@ export interface SchedulerInstaller {
   disable(label: string): Promise<void>;
   isInstalled(label: string): boolean;
   isEnabled(label: string): Promise<boolean>;
+  /** The StartInterval (seconds) baked into the CURRENTLY-INSTALLED schedule, or null if not installed /
+   *  not readable. Used to detect drift from the configured interval so a stale plist can be re-rendered. */
+  installedIntervalSeconds(label: string): number | null;
 }
 
 export interface InstallOpts {

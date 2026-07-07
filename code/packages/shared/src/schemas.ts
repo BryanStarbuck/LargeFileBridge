@@ -152,10 +152,20 @@ export const AppConfigSchema = z.object({
     .object({
       installed: z.boolean().default(false),
       enabled: z.boolean().default(false),
-      interval_hours: z.number().default(4),
+      interval_hours: z.number().default(2), // scan at least every 2h so interest/big-file data stays fresh
       label: z.string().default("com.largefilebridge.scan"),
       last_run_at: iso.nullable().default(null),
       last_run_ok: z.boolean().nullable().default(null),
+    })
+    .default({}),
+  // The live filesystem watcher (scan.mdx §2.2). Event-driven — NOT a scheduleTask: it runs only while
+  // the web-app process is up (no plist/installed flag), subscribes to the OS's native change
+  // notifications (FSEvents/inotify/ReadDirectoryChangesW) over scanner.roots, and on a qualifying
+  // ADD/DELETE of a big or video/image/audio file kicks the coalesced discovery worker.
+  watcher: z
+    .object({
+      enabled: z.boolean().default(true), // subscribe to file-change events while the app runs
+      debounce_ms: z.number().default(1500), // quiet-period before a settled burst triggers a rescan
     })
     .default({}),
   // Security allow-list (security.mdx §2). Set once by the first-run Security Setup page, then read

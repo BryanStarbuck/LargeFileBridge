@@ -28,7 +28,9 @@ import { securityRouter } from "./modules/security/security.router.js";
 import { internalRouter } from "./modules/internal/internal.router.js";
 import { clientLogRouter } from "./modules/clientlog/clientlog.router.js";
 import * as ipfs from "./modules/ipfs/ipfs.service.js";
+import { reconcileWorkerSchedules } from "./modules/schedule/schedule.service.js";
 import { acquireSingleInstanceLock } from "./shared/single-instance.js";
+import { startWatcher, stopWatcher } from "./modules/watcher/watcher.service.js";
 import { log } from "./shared/logging.js";
 
 async function bootstrapState(): Promise<void> {
@@ -42,6 +44,11 @@ async function bootstrapState(): Promise<void> {
   ipfs.enforceCompliance().catch((e) => log.warn("main", `IPFS compliance enforcement failed: ${(e as Error).message}`));
   const pid = await ipfs.peerId();
   if (pid) await updateAppConfig((c) => ((c.computer.ipfs_peer_id = pid), c));
+  // Re-render any installed worker LaunchAgent whose StartInterval drifted from the configured cadence
+  // (e.g. the scan default dropped 4h → 2h). Best-effort — never blocks boot.
+  await reconcileWorkerSchedules().catch((e) =>
+    log.warn("main", `worker schedule reconcile failed: ${(e as Error).message}`),
+  );
 }
 
 function configuredOrigins(): string[] {
@@ -150,6 +157,19 @@ async function main(): Promise<void> {
     }
     process.exit(1);
   });
+
+  // Start the live filesystem watcher (scan.mdx §2.2): subscribe to OS file-change events over the
+  // scanner roots and, on a qualifying add/delete of a big or video/image/audio file, kick a coalesced
+  // discovery rescan so tracking + the File System tree refresh in seconds. It lives WITH this process
+  // — no scheduler — so release it cleanly on shutdown.
+  startWatcher();
+  const shutdown = (sig: string) => {
+    log.info("main", `${sig} received — stopping filesystem watcher and exiting.`);
+    stopWatcher();
+    server.close(() => process.exit(0));
+  };
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
 
   process.on("unhandledRejection", (r) => log.error("main", `unhandledRejection: ${String(r)}`));
   process.on("uncaughtException", (e) => log.fatal("main", `uncaughtException: ${e.stack || e}`));

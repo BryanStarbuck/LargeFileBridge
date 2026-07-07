@@ -8,12 +8,14 @@ import {
   listStoragesPage,
   getStorageDetail,
   initStorageById,
+  createPersonalStorage,
   indexStorageById,
   analyzeStorageFile,
   readBookmarks,
   setBookmark,
 } from "./storage.service.js";
 import { readStorageSettings, writeStorageSettings, getMappedDirsView, patchMappedDirs } from "./storage-settings.service.js";
+import { placementView, clearPlacementCache } from "./artifact-placement.service.js";
 
 export const storagesRouter = Router();
 storagesRouter.use(requireAllowListed);
@@ -43,12 +45,42 @@ storagesRouter.get("/", (_req, res) => {
   }
 });
 
+// GET /api/storages/placement?path=<media> — where a media file's derived artifacts (transcript / AI
+// description) will be written, and whether the first-time setup wizard must run first (Transcribe.mdx
+// §3.4–§3.5). Registered BEFORE /:id so "placement" is not captured as a storage id. Used by the
+// Transcribe / Get-AI-details launchers to gate on `needsSetup` and to answer "what would this do?".
+storagesRouter.get("/placement", (req, res) => {
+  const p = typeof req.query.path === "string" ? req.query.path : undefined;
+  if (!p) return res.status(400).json({ ok: false, error: "path required" });
+  try {
+    res.json({ ok: true, data: placementView(p) });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
 // GET /api/storages/:id — one storage's descriptor + tracked files.
 storagesRouter.get("/:id", (req, res) => {
   try {
     res.json({ ok: true, data: getStorageDetail(req.params.id) });
   } catch (e) {
     res.status(404).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/storages/personal/create — the first-time setup wizard's commit (Transcribe.mdx §3.5). Creates
+// the ONE Personal storage at its canonical root; `dedicatedRepo:true` git-inits it and turns on the
+// dedicated-repo backing so artifacts route into the repo. Registered before /:id/init (distinct literal).
+storagesRouter.post("/personal/create", async (req, res) => {
+  const body = z.object({ dedicatedRepo: z.boolean().optional() }).safeParse(req.body ?? {});
+  if (!body.success) return res.status(400).json({ ok: false, error: body.error.message });
+  try {
+    const data = await createPersonalStorage({ dedicatedRepo: body.data.dedicatedRepo ?? false });
+    clearPlacementCache(); // a new storage exists — the next placement resolve must not use the stale index
+    res.json({ ok: true, data });
+  } catch (e) {
+    log.warn("storage", `create personal storage failed: ${(e as Error).message}`);
+    res.status(400).json({ ok: false, error: (e as Error).message });
   }
 });
 

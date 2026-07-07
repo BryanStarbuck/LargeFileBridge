@@ -53,6 +53,15 @@ export function getAppConfig(): AppConfig {
     cfg.ai.gemini.model = DEFAULT_GEMINI_MODEL;
     dirty = true;
   }
+  // Heal the stale scan cadence. The old default was 4h; the policy is now "scan at least every 2h" so
+  // the interest/big-file data the File System coloring relies on stays fresh (file_system.mdx §3.3).
+  // Only the exact old default (4) is rewritten — a value the user deliberately chose (anything else) is
+  // left untouched, mirroring the Gemini-model healing above. The installed launchd plist is re-rendered
+  // to match by reconcileWorkerSchedules() at boot (main.ts).
+  if (cfg.scan_process.interval_hours === 4) {
+    cfg.scan_process.interval_hours = 2;
+    dirty = true;
+  }
   if (dirty) {
     try {
       writeYaml(appConfigPath(), cfg as unknown as Record<string, unknown>);

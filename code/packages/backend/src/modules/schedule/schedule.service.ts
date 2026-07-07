@@ -10,6 +10,7 @@ import { launchdInstaller } from "./os/launchd.js";
 import type { SchedulerInstaller } from "./os/installer.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
+import { watcherState } from "../watcher/watcher.service.js";
 import { log } from "../../shared/logging.js";
 
 // Mac launchd is the shipped path; other platforms fall back to a no-op installer
@@ -23,6 +24,7 @@ const noopInstaller: SchedulerInstaller = {
   async isEnabled() {
     return false;
   },
+  installedIntervalSeconds: () => null,
 };
 
 function installer(): SchedulerInstaller {
@@ -65,9 +67,26 @@ export async function syncPageData(): Promise<SyncPageData> {
   return {
     scan: await workerState("scan"),
     sync: await workerState("sync"),
+    watcher: watcherState(),
     computerLabel: c.computer.label,
     ipfs: await ipfs.health(),
     peers: peerRows(),
+  };
+}
+
+// The full install options for a worker plist — the same set whether we're installing fresh or
+// re-rendering an existing plist to fix a drifted interval (reconcileWorkerSchedules).
+function buildInstallOpts(kind: WorkerKind) {
+  const stateRoot = resolveStateDir();
+  return {
+    label: labelFor(kind),
+    worker: kind,
+    intervalSeconds: intervalFor(kind),
+    nodeBin: process.execPath,
+    triggerScript: triggerScriptPath(),
+    apiPort: getAppConfig().server.backend_port,
+    logOut: path.join(stateRoot, "log.log"),
+    logErr: path.join(stateRoot, "error.err"),
   };
 }
 
@@ -77,17 +96,7 @@ export async function control(
 ): Promise<WorkerState> {
   const label = labelFor(kind);
   const inst = installer();
-  const stateRoot = resolveStateDir();
-  const opts = {
-    label,
-    worker: kind,
-    intervalSeconds: intervalFor(kind),
-    nodeBin: process.execPath,
-    triggerScript: triggerScriptPath(),
-    apiPort: getAppConfig().server.backend_port,
-    logOut: path.join(stateRoot, "log.log"),
-    logErr: path.join(stateRoot, "error.err"),
-  };
+  const opts = buildInstallOpts(kind);
 
   // The installer shells out to launchctl / writes the plist — surface any OS-level failure to the
   // fault trail before it propagates up to the router's 500.
@@ -115,6 +124,35 @@ export async function control(
   });
   void os;
   return workerState(kind);
+}
+
+// Re-render an already-installed worker plist when its baked-in StartInterval no longer matches the
+// configured interval. Case in point: the scan cadence default dropped 4h → 2h — config.service.ts heals
+// the stored value on load, but the on-disk LaunchAgent still fires on the OLD schedule until the plist is
+// re-written and reloaded. Called once at boot (main.ts bootstrapState). Only touches workers that are
+// ALREADY installed — it never installs or enables a worker the user hasn't opted into. Best-effort: a
+// launchctl/OS hiccup is logged, not fatal to boot.
+export async function reconcileWorkerSchedules(): Promise<void> {
+  for (const kind of ["scan", "sync"] as WorkerKind[]) {
+    const inst = installer();
+    const label = labelFor(kind);
+    try {
+      if (!inst.isInstalled(label)) continue;
+      const want = intervalFor(kind);
+      const have = inst.installedIntervalSeconds(label);
+      if (have === want) continue; // already correct — nothing to do
+      const wasEnabled = await inst.isEnabled(label);
+      await inst.install(buildInstallOpts(kind)); // rewrite the plist with the current interval
+      if (wasEnabled) {
+        // launchd only picks up a new StartInterval on reload: bootout the stale job, bootstrap the new.
+        await inst.disable(label);
+        await inst.enable(label);
+      }
+      log.info("schedule", `${kind}: reconciled schedule interval ${have ?? "?"}s → ${want}s`);
+    } catch (e) {
+      log.warn("schedule", `${kind}: schedule reconcile failed: ${(e as Error).message}`);
+    }
+  }
 }
 
 export async function stampRun(kind: WorkerKind, ok: boolean): Promise<void> {

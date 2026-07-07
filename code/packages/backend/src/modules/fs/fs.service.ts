@@ -27,6 +27,20 @@ const FS_ENTRY_CAP = 5000; // max rows one column returns before we stop and fla
 const FS_YIELD_EVERY = 200; // hand the event loop back every N processed entries
 const fsYield = () => new Promise<void>((r) => setImmediate(r));
 
+// Interesting-directory folder coloring (file_system.mdx §3.2/§3.3). Two caps, on purpose:
+// * INTEREST_PER_CHILD bounds how many subtree entries ANY ONE directory child may consume. Without it a
+//   single huge early sibling (e.g. Dropbox/Library) drains the whole pool and every later child — most
+//   visibly `~/_Mirror` — is starved to `undefined` (a plain glyph) even though it is full of videos. The
+//   per-child cap makes the walk FAIR and position-independent: every child gets its own slice, so an
+//   interesting dir that finds a big file/video early (e.g. `_Mirror` finds one in ~35 entries) always
+//   resolves. Paired with the truncation FLOOR in badges.ts, a child that hits its cap still shows the
+//   video/image it already found — never a false plain glyph.
+// * INTEREST_TOTAL is the responsiveness backstop: a hard ceiling across the whole listing so a
+//   pathological directory (thousands of huge subdirs) can't pin the single Node thread (performance.mdx
+//   P-16). It sits far above the realistic per-listing cost, so it only bites in the pathological case.
+const INTEREST_PER_CHILD = 3000;
+const INTEREST_TOTAL = 120000;
+
 export async function listDirectory(
   input: string | undefined,
   showHidden: boolean,
@@ -52,20 +66,24 @@ export async function listDirectory(
   let truncated = false;
   let sinceYield = 0;
   // Interesting-directory folder coloring (file_system.mdx §3): compute each DIRECTORY child's interest
-  // over its subtree, sharing ONE bounded budget across the whole column so a directory with many
-  // subdirs can't pin the thread. When the budget is exhausted, later dirs get `interest: undefined`
-  // (plain glyph, upgraded on a later refetch once the cache has filled). Cheap via the mtime+TTL cache
-  // in badges.ts, and early-exit on the first big file.
+  // over its subtree. Each child gets its OWN budget capped at INTEREST_PER_CHILD (fairness — no single
+  // huge sibling can starve the rest, see the constants above), drawn from a shared INTEREST_TOTAL pool
+  // that caps the whole listing (responsiveness backstop). A child that hits its cap still returns the
+  // best-known FLOOR (badges.ts §3.3), so an interesting dir is never left a false plain glyph. Cheap via
+  // the mtime+TTL cache in badges.ts, and early-exit on the first big file.
   const threshold = ctx.thresholdBytes;
-  const interestBudget = { left: 40000 };
+  const interestPool = { left: INTEREST_TOTAL };
   for (const ent of dirents) {
     if (!showHidden && ent.name.startsWith(".")) continue;
     if (entries.length >= FS_ENTRY_CAP) {
       truncated = true;
       break;
     }
-    // Yield to the event loop every few hundred entries so concurrent requests aren't starved.
-    if (++sinceYield >= FS_YIELD_EVERY) {
+    // Yield to the event loop so concurrent requests aren't starved. `sinceYield` counts BOTH rows and
+    // the interest-walk entries the previous iteration consumed (added at the end of the loop), because a
+    // single heavy directory's interest walk can do thousands of synchronous stat calls — far more work
+    // than one row — and must not run to completion without letting the loop breathe (async policy).
+    if ((sinceYield += 1) >= FS_YIELD_EVERY) {
       sinceYield = 0;
       await fsYield();
     }
@@ -93,12 +111,21 @@ export async function listDirectory(
       isRepoRoot = res.isRepoRoot;
     }
 
-    // Directory interest tint (file_system.mdx §3.2) — only for expandable directories. `undefined`
-    // (budget hit / unreadable) is left off the entry so the UI keeps the plain glyph.
-    const interest =
-      kind === "dir" && !collapsed
-        ? computeDirInterest(abs, threshold, interestBudget)
-        : undefined;
+    // Directory interest tint (file_system.mdx §3.2) — only for expandable directories. Each child gets a
+    // fresh budget capped at INTEREST_PER_CHILD (but no more than the shared pool has left); only what it
+    // actually consumes is drawn down from the pool, so cheap dirs leave budget for the rest. `undefined`
+    // (budget hit with nothing found / unreadable) is left off the entry so the UI keeps the plain glyph.
+    let interest: FsEntry["interest"] = undefined;
+    if (kind === "dir" && !collapsed) {
+      const childBudget = { left: Math.min(INTEREST_PER_CHILD, interestPool.left) };
+      const before = childBudget.left;
+      interest = computeDirInterest(abs, threshold, childBudget);
+      const consumed = before - childBudget.left;
+      interestPool.left -= consumed; // subtract only what this child consumed
+      // Count the interest walk's synchronous stat calls toward the yield budget so a single heavy
+      // directory forces a breather on the NEXT iteration instead of blocking the loop (async policy).
+      sinceYield += consumed;
+    }
 
     entries.push({
       name: ent.name,

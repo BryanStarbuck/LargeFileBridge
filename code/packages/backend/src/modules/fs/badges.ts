@@ -261,8 +261,12 @@ function dirPublishesIpfs(dirAbs: string): boolean {
 // The highest-priority category present picks the color: big → "video" → "image" → null. Big beats
 // video beats image, so the walk EARLY-EXITS the moment it finds a big file. Bounded like every other
 // walk here (depth ≤ 8, HARD_SKIP, a caller-shared budget) so listing a folder with many subdirs stays
-// responsive; when the budget is exhausted before a conclusion the result is UNKNOWN (undefined), which
-// the UI renders as a plain glyph — never a false "not interesting".
+// responsive. When the budget is exhausted we DO NOT throw away what we already saw: if a video or an
+// uncompressed image ≥ 3 MB was already found, we return that as a definite FLOOR (at least blue) — the
+// only thing truncation robs us of is a deeper BIG file that would upgrade the floor to brown, so a
+// truncated floor is safe (never a false "not interesting") and is left UNCACHED so a later full-budget
+// walk can still upgrade it to "big". Only when the budget is exhausted with NOTHING found yet is the
+// result UNKNOWN (undefined), which the UI renders as a plain glyph — never a false "not interesting".
 
 // Result cache keyed by directory, guarded by the dir's own mtime + a short TTL. Interest depends on the
 // whole subtree (an mtime deep inside won't bump this dir's mtime), so the TTL bounds staleness the way
@@ -308,9 +312,14 @@ export function computeDirInterest(
 
   let foundVideo = false;
   let foundImage = false;
+  // On budget exhaustion, don't discard a positively-found video/image: return it as a definite FLOOR
+  // (at least blue). Uncached — a later full-budget walk may still upgrade it to "big". Only truncation
+  // with nothing found yet is truly UNKNOWN (undefined → plain glyph). (file_system.mdx §3.3.)
+  const truncatedFloor = (): FolderInterest | undefined =>
+    foundVideo ? "video" : foundImage ? "image" : undefined;
   const stack: Array<{ dir: string; depth: number }> = [{ dir: dirAbs, depth: 0 }];
   while (stack.length) {
-    if (budget.left <= 0) return undefined; // budget hit before a conclusion → unknown
+    if (budget.left <= 0) return truncatedFloor(); // budget hit → floor if any, else unknown
     const { dir, depth } = stack.pop()!;
     if (depth > 8) continue;
     let dirents: fs.Dirent[];
@@ -320,7 +329,7 @@ export function computeDirInterest(
       continue; // best-effort: an unreadable subdir is skipped
     }
     for (const ent of dirents) {
-      if (budget.left <= 0) return undefined;
+      if (budget.left <= 0) return truncatedFloor();
       budget.left--;
       if (ent.name.startsWith(".")) continue;
       if (ent.isDirectory()) {

@@ -33,7 +33,8 @@ import { writeCommittedManifest, readCommittedManifest } from "./manifest.servic
 import { listStorageIds, ensureBackingLocations, getStorageRow } from "../storage/storage.service.js";
 import { readStorageIndex } from "../storage/tracking.service.js";
 import { writeSelfDevice, resolveGraftedPath } from "../storage/devices.service.js";
-import { getStorageSynced, readMappedDirsForRoot } from "../storage/storage-settings.service.js";
+import { getStorageSynced, readMappedDirsForRoot, getDedicatedRepoRemote } from "../storage/storage-settings.service.js";
+import { GitBackbone, type GitCycleResult } from "../git/git.service.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { log } from "../../shared/logging.js";
 
@@ -368,6 +369,21 @@ export async function syncStorageUnit(id: string): Promise<void> {
     log.info("sync", `Skip storage ${id}: synced=false.`);
     return;
   }
+
+  // Git backbone (git_sync.mdx §6): if this storage's dedicated Git repo is ON, FETCH + auto-MERGE the
+  // user's other computers' SDL edits BEFORE we reconcile, so the incoming devices/manifest/analysis are
+  // merged in first. A merge conflict or auth failure is surfaced and we continue over IPFS. The commit +
+  // push of THIS device's own changes happens AFTER the reconcile below.
+  const gitRemote = getDedicatedRepoRemote(id);
+  const gitBackbone = gitRemote ? await GitBackbone.resolve(id, gitRemote.remote) : null;
+  const gitResult: GitCycleResult = { ran: gitBackbone !== null };
+  if (gitBackbone) {
+    await gitBackbone.pull(gitResult).catch((e) => {
+      gitResult.problem = `Git pull failed: ${(e as Error).message}`;
+    });
+    if (gitResult.problem) log.warn("sync", `storage ${id} git: ${gitResult.problem}`);
+  }
+
   // Ensure this computer's device file (hence its graft) exists so path resolution has something to read.
   try {
     writeSelfDevice(root);
@@ -396,6 +412,18 @@ export async function syncStorageUnit(id: string): Promise<void> {
     // written and reconciled). A persisted per-storage status is a later follow-up.
     writeStatus: () => {},
   });
+
+  // Git backbone (git_sync.mdx §6 steps 5–6): after the reconcile has refreshed this device's own files
+  // (device file, manifest, analysis), STAGE the self-owned SDL text, COMMIT, and PUSH — with a
+  // fetch-merge-push retry on a non-fast-forward reject. Big bytes are git-ignored, so only the small
+  // text is ever committed. A push/auth problem is surfaced (logged) and never blocks the IPFS work.
+  if (gitBackbone) {
+    await gitBackbone.commitAndPush(gitResult).catch((e) => {
+      gitResult.problem = `Git push failed: ${(e as Error).message}`;
+    });
+    if (gitResult.problem) log.warn("sync", `storage ${id} git: ${gitResult.problem}`);
+    else if (gitResult.pushed) log.info("sync", `storage ${id} git: pushed device state to remote`);
+  }
 }
 
 /** Sync one storage without letting a per-storage fault throw the pass. */

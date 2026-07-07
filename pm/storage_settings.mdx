@@ -44,6 +44,11 @@ This page is reached from a **single storage**, never from global settings. Four
 destination — **route `/storages/$storageId/settings`**, mirroring the per-repo
 `/repos/$repoId/settings` convention:
 
+* **Row gear icon** on a **Storages-table row** — a **⚙ gear** shown in the row's action cell **just to
+  the left of the row `⋮` kebab**, so per-storage settings are **one click** from the list without opening
+  the kebab first. It is the same destination as the kebab's **Storage settings…** item; the two are
+  redundant on purpose (the gear is the discoverable shortcut, the kebab is the full catalog). Present on
+  **every** storage row — Company, Personal, Repo, and Community — scoped to that row's storage.
 * **Gear icon** on the **storage detail page** header (top-right, alongside **Index files**). *The
   detail header must add this gear;
   [StorageDetailPage](../code/packages/frontend/src/pages/storages/StorageDetailPage.tsx) currently
@@ -62,8 +67,8 @@ and its root path so it is unambiguous which storage is being configured.
 Menus.mdx needs a **storage** entity catalog (it currently defines repo / directory / file / peer / pin
 catalogs); its Config group carries the **Storage settings…** navigate item that opens this page.
 
-The gear on the storage detail header and the `Storage settings…` kebab item (both navigating to `/storages/$storageId/settings`) live in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage` settings button · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `StorageKebab` component (new).
+The gear on the storage detail header, the per-row gear in the Storages table, and the `Storage settings…` kebab item (all navigating to `/storages/$storageId/settings`) live in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage` settings button · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `StorageGear` (the row gear) and `StorageKebab` components · placed in the row's action cell by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StoragesPage.tsx` — `StoragesPage`.
 
 ---
 
@@ -131,12 +136,33 @@ the user can change it.
   manifest travels via Git to the user's other computers while IPFS carries the bytes (the charter's
   git-for-small-files / IPFS-for-big-files split). *We would love a dedicated repo per storage; when one
   isn't available we fall back to the cloud mirrors below.*
-* **Toggle + path.** ON reveals a **directory field** defaulting to the convention
-  **`~/BGit/Bryan_git/<slug>_large_files_bridge/`** (e.g. `act3_large_files_bridge/`), matching how
-  storages are discovered. For a **repo** storage the dedicated repo **is** the repo itself, so this is
-  pre-satisfied and shown read-only.
-* When ON and the directory does not exist, the **sync pass creates it** (and `git init`s it if it is
-  meant to be a repo) and keeps it updated (§6).
+* **Toggle + path.** ON reveals a **remote field** — the repo the SDL text travels through — accepting
+  **either** shape ([git_sync.mdx §3](./git_sync.mdx#3-the-two-remote-shapes--a-local-path-vs-an-https-url-locked)):
+  * a **local file path** to a checkout already on this computer, defaulting to the convention
+    **`~/BGit/Bryan_git/<slug>_large_files_bridge/`** (e.g. `act3_large_files_bridge/`), matching how
+    storages are discovered — LFB uses that directory **in place** as the working copy; **or**
+  * an **HTTP(S) URL** to a Git server **not** mapped to the local filesystem — LFB **clones** it into a
+    machine-local working-copy cache (`sync/s/<storage_id>/git/`) and manages Git there, authenticating
+    via the OS git credential helper ([git_sync.mdx §5](./git_sync.mdx#5-credentials-for-a-url-remote--the-os-git-credential-helper-never-a-prompt-locked)).
+
+  For a **repo** storage the dedicated repo **is** the repo itself, so this is pre-satisfied and shown
+  read-only.
+* **Turning this ON is the permission grant.** It authorizes LFB to run **`git fetch`, `git merge`
+  (automatic), `git add`/`commit`, and `git push`** on that repo on **every sync pass** — the
+  [git_sync.mdx](./git_sync.mdx) engine (`simple-git` over the system git binary) — so the SDL's small
+  text is pulled, merged, and pushed between the user's computers while IPFS carries the bytes. No Git
+  command runs against a storage whose backbone is off.
+* When ON and a **local path** does not exist, the **sync pass creates it** (and `git init`s it if it is
+  meant to be a repo) and keeps it updated (§6); a **URL** remote is cloned on first use instead.
+* **It also becomes the home for this storage's derived artifacts (LOCKED).** Once the dedicated repo is
+  ON, transcripts and AI descriptions for any file this storage **owns but that lives out in the wider
+  filesystem** (a mapped source directory, or — for Personal — anywhere under `~`) are written **under the
+  dedicated repo**, mirroring the file's hierarchy (`<dedicatedRepo>/.transcribe/<rel>.txt`,
+  `<dedicatedRepo>/.lfbridge/analysis/<rel>/description.yaml`). They are **not** git-ignored there — the
+  dedicated repo exists to **hold and sync** these artifacts, so we simply put them in. This is the
+  authoritative placement rule B in [Transcribe.mdx §3.4](./Transcribe.mdx); turning the dedicated repo
+  ON is precisely what moves those artifacts off the scattered `.transcribe/`-beside-the-media fallback and
+  into the repo. Turning it OFF returns them to the storage root / beside-media fallback.
 
 ### 4.2 Google Drive location
 
@@ -319,9 +345,10 @@ The page is a single scrollable settings form (no table beneath it, so it does n
 
 ## 8. Acceptance criteria
 
-1. The per-storage settings page is opened from a **single storage** — the **gear** on the storage
-   detail header, the storage row's **`⋮` kebab / right-click**, and the detail page's **`⋮` more-menu**
-   — all at **`/storages/$storageId/settings`**, scoped to that storage and naming it + its root.
+1. The per-storage settings page is opened from a **single storage** — the **per-row gear** in the
+   Storages table (just left of the row `⋮`), the **gear** on the storage detail header, the storage
+   row's **`⋮` kebab / right-click**, and the detail page's **`⋮` more-menu** — all at
+   **`/storages/$storageId/settings`**, scoped to that storage and naming it + its root.
 2. It exposes a **"keep `.lfbridge/`" checkbox (default ON)** and a **location** control (default
    `<root>/.lfbridge/`, relocatable) — a **machine-local** choice.
 3. It exposes **three independent backing locations**, each **ON/OFF with its own directory**: a

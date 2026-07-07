@@ -12,6 +12,7 @@ import { SsoCallbackPage } from "./pages/sign-in/SsoCallbackPage.js";
 import { SecuritySetupPage } from "./pages/security/SecuritySetupPage.js";
 import { ProgressProvider } from "./progress/ProgressContext.js";
 import { ProgressDock } from "./components/ProgressDock.js";
+import { FirstTimeStorageWizardProvider } from "./components/FirstTimeStorageWizard.js";
 import { HotkeyProvider } from "./lib/hotkeys.js";
 import { leftBar } from "./config/left_bar.js";
 import { clientLog } from "./lib/clientLog.js";
@@ -73,6 +74,10 @@ function Root() {
       <HotkeyProvider>
         <RouterProvider router={router} />
         <ProgressDock />
+        {/* First-time setup wizard (Transcribe.mdx §3.5): opens when a Transcribe / Get-AI-details action
+            hits `needs_setup`. Mounted here so it's inside the query + hotkey providers and only for the
+            signed-in app. Listens on the setupWizard bus — no per-call-site wiring. */}
+        <FirstTimeStorageWizardProvider />
       </HotkeyProvider>
     </ProgressProvider>
   );

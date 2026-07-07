@@ -1,0 +1,304 @@
+---
+title: LargeFileBridge — The Git Backbone Engine (fetch · merge · commit · push)
+description: The authoritative spec for how LargeFileBridge drives Git as a sync backbone. When a storage (most often the user's Personal storage) is configured with a Git repo, LFB is granted permission to run the real Git commands — git fetch, git merge (with automatic merge), git add/commit, and git push — on every sync pass, so the small travelling text of the Syncable Data Location (the storage descriptor, the device registry, the mapped-directory list, the IPFS manifest/CID list, and the derived-artifact records) is pulled down, merged, and pushed back up between the user's own computers. Locks the LIBRARY choice (simple-git, a thin wrapper over the system git binary — chosen over isomorphic-git and nodegit because real merges must be done by real git), the two REMOTE shapes a user can configure (a LOCAL FILE PATH to a checked-out working tree on this box, versus an HTTP(S) URL to a Git server that is NOT mapped to the local filesystem, which LFB clones into a machine-local working-copy cache), the pull cycle (fetch → merge with the ort strategy → resolve/report conflicts), the push cycle (stage only this device's self-owned files → commit → push, retry-on-reject by re-pulling and re-merging), the auto-merge design that makes conflicts rare (self-owned per-device files + union-merge .gitattributes for append-mostly lists), the credential model for URL remotes (the OS git credential helper / a stored token, never LFB prompting for a password), and the permission/compliance boundary (LFB touches ONLY the user's own configured repos, never a third party's, honoring the charter's no-public-relay posture). Sibling of storage_settings.mdx (where the Git backbone is turned on per storage), storage_personal.mdx (the canonical two-computer use case that drives this), syncable_data_location.mdx (the SDL text this engine carries), devices.mdx (the self-owned device files that ride it), and sync_process.mdx (the full pass this cycle runs inside).
+---
+
+# LargeFileBridge — The Git Backbone Engine
+
+A storage's small, travelling text — its descriptor, its device registry, its mapped-directory list, its
+IPFS manifest, and its expensive-to-generate derived artifacts — has to get **between the user's
+computers**. For most storages the vehicle for that text is a **Git repository**: the
+[Syncable Data Location](./syncable_data_location.mdx) *is* a little Git repo, and Git is exactly the
+tool for versioning small text and reconciling edits made on two machines at once.
+
+This spec is the **authoritative** description of how LFB drives that Git repo. When the user turns the
+**Git backbone** on for a storage ([storage_settings.mdx §4.1](./storage_settings.mdx#41-dedicated-git-repo-preferred-when-available)),
+they are **granting LFB permission** to run the real Git commands on that repo — **`git fetch`,
+`git merge` (with automatic merge), `git add` / `git commit`, and `git push`** — on **every sync pass**.
+Nothing else in the product moves the SDL's YAML between computers; this engine does.
+
+Read the shared model first; this spec does not restate it:
+
+* [storage_settings.mdx §4.1](./storage_settings.mdx#41-dedicated-git-repo-preferred-when-available) —
+  the per-storage setting that **turns this backbone on** and holds the remote (a local path or a URL).
+* [storage_personal.mdx](./storage_personal.mdx) — the **canonical use case**: one user, two computers,
+  one Personal Git repo, the same repo configured on both. That spec drives every requirement here.
+* [syncable_data_location.mdx](./syncable_data_location.mdx) — **what** travels (the SDL's YAML
+  inventory, §2) and the **trust/reconcile** rule this engine obeys when two devices edit at once.
+* [devices.mdx](./devices.mdx) — the **self-owned** `devices/<device>.yaml` files that are the main
+  thing this engine commits and pushes; self-ownership is what makes auto-merge safe (§4).
+* [sync_process.mdx](./sync_process.mdx) — the **full pass** this pull/merge/push cycle runs inside,
+  once per storage that has a Git backbone.
+
+---
+
+## 1. What LFB is permitted to do — the granted Git operations (LOCKED)
+
+Turning on the Git backbone for a storage is an **explicit, user-confirmed grant**. Until the user
+enables it and supplies a remote, LFB runs **no** Git command against that storage beyond the
+already-existing `git init` of a brand-new dedicated repo. Once enabled, LFB has permission to run — and
+**only** — this closed set of operations against **that one configured repo**:
+
+| Operation | Command | When | Why |
+| --- | --- | --- | --- |
+| **Fetch** | `git fetch <remote>` | start of every pass | pull down what the user's *other* computers pushed |
+| **Merge** | `git merge --no-edit` (ort strategy) | after fetch, if the remote advanced | fold the other computers' SDL edits into this working copy, **automatically** |
+| **Stage** | `git add <this device's own files>` | after local changes | queue only **this** device's self-owned files (§4) |
+| **Commit** | `git commit --no-edit` | if anything is staged | record this device's SDL edits |
+| **Push** | `git push <remote> <branch>` | after commit | send this device's edits to the user's other computers |
+
+Two hard boundaries the charter imposes (§7):
+
+* **Only the user's own configured repos.** LFB fetches/merges/pushes **exactly** the repo the user
+  pointed a storage's Git backbone at — never a repo it merely *discovered*, never a third party's repo,
+  never a public one. This is the Git analogue of the charter's *no-public-relay* posture: we move
+  **our own** content between **our own** machines, nothing else.
+* **Never destructive without cause.** LFB never runs `push --force`, never `reset --hard` a user's
+  work, never `clean` their tree. The only writes it makes are the additive commit of its own files and
+  a fast-forwardable push; anything it cannot reconcile it **surfaces**, it does not overwrite (§3.3).
+
+The granted operation set, gated behind the per-storage "Git backbone enabled" flag, is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone` class (`fetch()`, `merge()`, `commitSelf()`, `push()`); the enable gate is read from the per-storage settings by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `readStorageSettings()` (`backing.dedicated_repo`).
+
+---
+
+## 2. The library — `simple-git` over the system git binary (LOCKED)
+
+LFB does **not** re-implement Git. It shells out to the **system `git` binary** through
+[`simple-git`](https://www.npmjs.com/package/simple-git) — a thin, pure-JavaScript, promise-based
+wrapper with **no native bindings**. This is a locked decision; the alternatives were evaluated and
+rejected:
+
+| Library | Verdict | Reason |
+| --- | --- | --- |
+| **`simple-git`** ✅ | **chosen** | Wraps the installed `git` CLI, so **real Git does the merge** — the modern **ort** recursive strategy with rename detection, exactly what "handle automatic merge" requires. ~8M weekly downloads, actively maintained, pure JS (no build step), and it reuses the same `git` LFB already calls for `git init`. |
+| `isomorphic-git` | rejected | A pure-JS re-implementation. Its merge is **limited** — fast-forward and simple 3-way only, weak on renames, and it **throws** on cases real git would resolve. We must not hand the user's history to a partial merge engine. |
+| `nodegit` | rejected | Native **libgit2** bindings — painful, fragile installs across macOS/Linux and Node versions. Heavy for what we need, and still not the canonical git merge. |
+
+Because the merge is performed by the **real `git`** the user already has, LFB inherits git's full,
+battle-tested conflict resolution, its `.gitattributes` merge drivers (§4.2), and its credential
+handling (§5) for free. The requirement — *"find the right library … and let it handle all the Git
+commands, including automatic merge"* — is met by delegating to git itself and orchestrating it with
+`simple-git`.
+
+The `simple-git` dependency (added to the backend workspace) and the single wrapper that all Git operations flow through are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `openRepo(workingDir)` returns a configured `SimpleGit` instance (system-git, non-interactive env). Declared in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/package.json` — `dependencies.simple-git`.
+
+---
+
+## 3. The two remote shapes — a local path vs. an HTTP(S) URL (LOCKED)
+
+When the user turns the Git backbone on for a storage they supply a **remote**. LFB accepts **two
+shapes**, and the difference is the whole reason this section exists — one is already a working tree on
+this computer, the other is not.
+
+### 3.1 A local file path — a checked-out working tree on this box
+
+The common case in the [Personal use case](./storage_personal.mdx): the user has **already cloned/created**
+the Git repo on this computer (e.g. `~/BGit/Bryan_git/personal_large_files_bridge/`) and points the
+storage's Git backbone at **that local path**.
+
+* LFB treats that directory **as the working copy** — it reads and writes the SDL YAML there directly,
+  and runs `fetch` / `merge` / `commit` / `push` **in place** against whatever `origin` the user's clone
+  already has.
+* This is the preferred, simplest shape: the user manages the clone; LFB just keeps it synced. Because
+  the repo is a real checkout, the user can also inspect it with their own Git tools.
+
+### 3.2 An HTTP(S) URL — a Git server not mapped to the local filesystem
+
+The user may instead give a **URL** — `https://github.com/BryanStarbuck/personal_large_files_bridge.git`
+or any Git server — **without** a corresponding local checkout. *"Sometimes people will add an HTTP URL,
+and we have to go talk to that Git server without it being mapped to the local file system."* LFB then
+owns the working copy:
+
+* On first use LFB **clones the URL into a machine-local working-copy cache** under the state root —
+  `~/T/_large_files_bridge/sync/s/<storage_id>/git/` — a hidden checkout LFB manages, **not** a place
+  the user browses. (This cache is machine-local scaffolding, exactly like the rest of
+  [storage_local.mdx](./storage_local.mdx); wipe it and the next pass re-clones.)
+* Every pass thereafter runs `fetch` / `merge` / `commit` / `push` inside that cached checkout, against
+  the configured URL as `origin`.
+* The SDL YAML that other parts of LFB read is resolved to **that cache path** for a URL-backed storage,
+  vs. the user's own checkout for a local-path storage. Everything downstream (devices, manifest,
+  analysis) is indifferent to which shape produced the working copy.
+
+### 3.3 Both shapes converge on one working copy
+
+After resolution, both shapes yield a single **working directory** the rest of the engine operates on: a
+user-managed checkout (local path) or an LFB-managed cache clone (URL). §4–§6 are written against that
+working directory and do not care which shape it came from.
+
+Resolving the configured remote to a working directory — using the local path in place, or clone-on-first-use / open-thereafter for a URL — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `resolveWorkingCopy(storageId, remote)` (returns `{ dir, origin }`; clones a URL remote into `sync/s/<id>/git/` via `resolveStateDir()`, opens a local path directly). The remote itself (kind + value) is persisted per-storage by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `writeStorageSettings()`.
+
+---
+
+## 4. Automatic merge — why conflicts are rare, and how git resolves them (LOCKED)
+
+The load-bearing requirement: *"deal with any merge."* Two of the user's computers can edit the same SDL
+repo before either has pulled the other's push. LFB must **fetch, merge automatically, and push** without
+the user ever hand-resolving a conflict in the normal case. Three things make that true.
+
+### 4.1 Self-owned files rarely collide
+
+The SDL is deliberately structured so that concurrent edits land in **different files** (the trust rule
+of [sync_list.mdx §5](./sync_list.mdx#5-trust--reconciliation-the-load-bearing-rule),
+[devices.mdx §2.1](./devices.mdx#21-a-device-file-is-self-owned-trust)):
+
+* A computer **writes only its own** `devices/<device>.yaml`. Two computers editing the registry at the
+  same time touch **two different files** — git merges them with **no conflict at all** (a clean union of
+  two added/modified paths).
+* `pinned_by` claims, schedules, and grafts are all **per-device**, so the same rule holds for them.
+
+This is why *"we're making a unique device … then it won't conflict with other devices"* is true at the
+Git level, not just conceptually: self-ownership maps directly onto per-file, non-overlapping commits.
+
+### 4.2 Append-mostly shared lists merge by union
+
+A few files are genuinely **shared** (the `LargeFilesBridge_SyncList.yaml`, the `manifest.yaml`). For
+these, LFB installs a **`.gitattributes`** in the SDL that marks them `merge=union`, so git **keeps both
+sides' lines** instead of conflicting when two computers append different entries. LFB then re-sorts /
+de-duplicates the merged list on the next read (the list is a set keyed by path/CID, so a union followed
+by a dedupe is always correct).
+
+```gitattributes
+# <SDL root>/.gitattributes  (written by LFB when it enables the Git backbone)
+LargeFilesBridge_SyncList.yaml   merge=union
+.lfbridge/manifest.yaml          merge=union
+```
+
+### 4.3 The strategy, and the fallback when git truly cannot resolve
+
+* LFB merges with git's default **ort** recursive strategy (`git merge --no-edit`), which resolves the
+  overwhelming majority of real-world cases (including renames) on its own.
+* If — despite §4.1/§4.2 — git reports a **genuine conflict** it cannot auto-resolve, LFB does **not**
+  guess and does **not** clobber. It **aborts the merge** (`git merge --abort`, leaving the working copy
+  clean), records the conflicted paths, and **surfaces them in the UI** as a sync problem on that
+  storage, so the user can resolve it with their own Git tools. Reconciliation of *content* claims (a
+  stale `pinned_by`, a superseded revision) still follows the SDL trust rules
+  ([sync_list.mdx §5.3](./sync_list.mdx#53-conflict-resolution)); this fallback is only for the rare
+  textual conflict git itself declines.
+
+Performing the automatic merge (ort strategy, `--no-edit`), writing the `merge=union` `.gitattributes` when the backbone is enabled, and the abort-and-surface fallback on an unresolvable conflict, are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `merge()` (calls `git.merge(['--no-edit'])`, catches a conflict → `git.merge(['--abort'])` and returns a `GitConflict` the pass records) and `ensureMergeAttributes(dir)` (writes `.gitattributes`). The surfaced problem is written into the storage's `status.yaml` by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncStorageUnit(id)`.
+
+---
+
+## 5. Credentials for a URL remote — the OS git credential helper, never a prompt (LOCKED)
+
+A local-path remote needs no credentials — it is a local checkout whose `origin` the user already
+authenticated. A **URL** remote (§3.2) needs to authenticate to the Git server. LFB **never** invents
+its own password prompt and **never** stores a plaintext password in its own config:
+
+* LFB runs git **non-interactively** (`GIT_TERMINAL_PROMPT=0`) and lets git use the **OS credential
+  helper** (macOS Keychain via `osxkeychain`) or an **already-configured token** in the URL/helper, the
+  same way the user's own `git push` authenticates. If the user can `git push` that URL from a terminal,
+  LFB can.
+* If authentication **fails** (no cached credential, expired token), LFB **surfaces a clear "connect /
+  re-authenticate this Git remote" problem** on the storage rather than hanging or retrying blindly —
+  and simply keeps syncing over IPFS in the meantime (the Git backbone is an *additional* path, never
+  the only one).
+* This honors the charter's security posture: no secrets in LFB's own files, no phone-home, and the
+  user stays in control of what LFB can reach.
+
+Running git with a non-interactive, credential-helper-backed environment and turning an auth failure into a surfaced storage problem (not a hang) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `openRepo()` sets `GIT_TERMINAL_PROMPT=0` and inherits the OS credential helper; `push()` / `fetch()` classify an auth error into a `GitAuthProblem` surfaced by `syncStorageUnit(id)`.
+
+---
+
+## 6. The sync cycle — where Git runs inside the pass (LOCKED order)
+
+Every storage that has the Git backbone enabled runs **one Git cycle per sync pass**
+([sync_process.mdx §2](./sync_process.mdx#2-every-synchronization-is-a-full-pass-locked)), in this fixed
+order, wrapped around the storage's normal reconcile + IPFS byte work:
+
+1. **Resolve the working copy** (§3) — local path in place, or clone/open the URL cache.
+2. **`git fetch`** — bring down what the user's other computers pushed.
+3. **`git merge` (auto)** — fold their SDL edits into this working copy (§4); on an unresolvable
+   conflict, abort + surface and continue with IPFS-only for this pass.
+4. **Reconcile against the merged SDL** — now that the incoming devices/manifest/analysis are merged in,
+   run the storage's normal reconcile ([sync_process.mdx §5](./sync_process.mdx#5-what-a-pass-does-per-unit--and-what-the-opt-in-gates)):
+   fetch/pin the marked CIDs to their **grafted** local paths ([devices.mdx §4](./devices.mdx#4-the-graft--machine-independent-hierarchy--local-paths-locked)),
+   inherit derived artifacts, write this device's own `devices/<device>.yaml`, update `manifest.yaml`.
+5. **`git add` (self-owned only) → `git commit`** — stage **only this device's** files (§4.1) plus any
+   shared list this device appended to, and commit if anything changed. Nothing to commit → no empty
+   commit.
+6. **`git push`** — send this device's commit up. On a **non-fast-forward reject** (another computer
+   pushed between our fetch and our push), LFB **re-fetches, re-merges (§4), and re-pushes once** — the
+   standard pull-then-push retry — rather than force-pushing.
+
+The cycle is **idempotent** and safe to run every 15 minutes: with nothing changed on either side it
+fetches, finds nothing to merge, stages nothing, and pushes nothing.
+
+Driving this ordered cycle for each Git-backed storage inside the full pass — fetch/merge before reconcile, commit/push after, with the non-fast-forward retry — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncStorageUnit(id)` calls `GitBackbone.pull()` (fetch+merge) before `runUnitSync(...)` and `GitBackbone.commitAndPush()` after, both from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` (`pull()`, `commitAndPush()` with the fetch-merge-push retry). Only storages whose `backing.dedicated_repo.enabled` is true run the cycle; the rest sync over IPFS alone.
+
+---
+
+## 7. Compliance boundary — the charter's no-relay posture, in Git terms (LOCKED)
+
+The charter forbids LFB from becoming a gateway/relay for **other people's** content. The Git backbone
+has the same shape of rule and the same default:
+
+* LFB drives Git **only** on the repos the user **explicitly configured** as a storage's backbone. It
+  never fetches, hosts, or serves a repo it merely discovered on disk, and it never proxies a third
+  party's repo. The set of repos LFB will `push` to is exactly the set of storage backbones the user
+  turned on — no wider.
+* **Always look for out-of-compliance cases and flag/fix them**: any code path that would run a Git
+  command against a repo the user did **not** configure as a backbone is a defect, exactly like a code
+  path that would turn this machine into a public IPFS gateway. The only acceptable Git targets are the
+  user's own configured storage backbones.
+
+Enforcing that Git operations only ever target a user-configured storage backbone (never a merely-discovered repo) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone` is only ever constructed from a storage whose `backing.dedicated_repo.enabled` is true (checked in `syncStorageUnit`); there is no entry point that runs `push`/`fetch` on an arbitrary path.
+
+---
+
+## 8. Acceptance criteria
+
+1. Turning on a storage's **Git backbone** ([storage_settings.mdx §4.1](./storage_settings.mdx#41-dedicated-git-repo-preferred-when-available))
+   grants LFB permission to run **`git fetch`, `git merge` (automatic), `git add`/`commit`, and
+   `git push`** against **that one repo** on **every sync pass** — and no Git command runs against a
+   storage whose backbone is off (§1).
+2. The Git library is **`simple-git`** driving the **system `git` binary**, so the **merge is done by
+   real git** (ort strategy); `isomorphic-git` and `nodegit` are explicitly rejected (§2).
+3. LFB accepts **two remote shapes**: a **local file path** to a checked-out working tree (used in
+   place), and an **HTTP(S) URL** with **no** local checkout (cloned into a machine-local
+   `sync/s/<id>/git/` cache and managed there). Both converge on one working copy the rest of the engine
+   operates on (§3).
+4. Concurrent edits from two of the user's computers **merge automatically**: self-owned per-device
+   files never collide, append-mostly shared lists merge by **`merge=union`**, and only a **genuine**
+   git conflict is surfaced — via **`merge --abort` + a UI problem**, never a clobber or a force-push
+   (§4).
+5. A **URL** remote authenticates through the **OS git credential helper** with `GIT_TERMINAL_PROMPT=0`;
+   an auth failure is **surfaced** as a "re-authenticate" problem while IPFS sync continues — LFB never
+   prompts for or stores a plaintext password (§5).
+6. The per-pass **cycle order is fixed**: resolve working copy → fetch → auto-merge → reconcile/pin to
+   grafted paths → stage self-owned + commit → push, with a **fetch-merge-push retry** on a
+   non-fast-forward reject; the cycle is idempotent (§6).
+7. LFB drives Git **only** on user-configured storage backbones — never a merely-discovered or
+   third-party repo, never a force-push — the Git analogue of the charter's no-public-relay rule (§1, §7).
+
+<!--
+  AUTHORITATIVE spec for LFB's GIT BACKBONE ENGINE. Turning on a storage's Git backbone (storage_settings
+  §4.1) GRANTS LFB permission to run REAL git — fetch, merge (auto), add/commit, push — against THAT ONE
+  repo every sync pass; nothing else moves the SDL YAML between computers. LOCKED decisions:
+  (§1) closed operation set + two boundaries: only user-configured repos, never destructive/force.
+  (§2) LIBRARY = simple-git over the SYSTEM git binary (real git does the merge, ort strategy). Reject
+       isomorphic-git (partial merge) and nodegit (native libgit2, fragile install).
+  (§3) TWO remote shapes: LOCAL FILE PATH = an existing checkout used in place; HTTP(S) URL = no local
+       checkout, LFB clones into a machine-local cache sync/s/<id>/git/ and manages it. Both converge on
+       one working dir.
+  (§4) AUTOMATIC MERGE: self-owned per-device files don't collide; shared append-mostly lists (SyncList,
+       manifest) get .gitattributes merge=union; genuine conflict → merge --abort + surface, never clobber.
+  (§5) URL creds via OS credential helper + GIT_TERMINAL_PROMPT=0; auth fail → surfaced problem, IPFS keeps
+       going; no plaintext secrets, no prompt.
+  (§6) FIXED cycle per pass: resolve → fetch → merge → reconcile/pin to grafted paths → stage self-owned +
+       commit → push, with fetch-merge-push retry on non-ff reject; idempotent.
+  (§7) Compliance: git only ever targets a user-configured backbone — the git analogue of no-public-relay.
+  New code: modules/git/git.service.ts (GitBackbone: openRepo/resolveWorkingCopy/fetch/merge/pull/
+  commitSelf/push/commitAndPush + ensureMergeAttributes), simple-git dep in backend package.json, wired
+  into sync.service syncStorageUnit (pull before reconcile, commitAndPush after). Keep in sync with
+  storage_settings.mdx §4.1 (the toggle + remote), storage_personal.mdx (the two-computer use case that
+  drives this), syncable_data_location.mdx (the SDL text carried), devices.mdx (self-owned files that ride
+  it), sync_process.mdx (the full pass this runs inside).
+-->
