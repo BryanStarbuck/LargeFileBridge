@@ -477,9 +477,18 @@ Device write-back is its **own** scheduled worker, on its **own** cadence — **
 is independent of the every-15-minute IPFS **Transfer** pass ([sync_process.mdx](./sync_process.mdx),
 [storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract)).
 It carries the **same transparency contract** as the Transfer and Discovery workers — **installed /
-on-off / last-run**, controllable from the web app — so the user can see it and **turn it on** (*"I turn
-that on"*). Every 10 minutes it visits each directory storage and makes sure this computer's device info
-is **present and current** in that storage's repo, writing/updating it when it is missing or stale.
+on-off / last-run**, controllable from the web app. Every 10 minutes it visits each directory storage and
+makes sure this computer's device info is **present and current** in that storage's repo, writing/updating
+it when it is missing or stale.
+
+**It is ON BY DEFAULT.** Unlike the Transfer and Discovery workers — which the user must deliberately
+Install (installing a background job is a system-state change) — device write-back is low-footprint (your
+own identity text to your own repo, §11.2), so it needs **no** setup step. On **first boot** LFB
+**auto-installs and enables** its launchd job, so the write-back starts running with **zero** user action
+— your device shows up in your repos within ten minutes of your first launch. This auto-on happens exactly
+**once** (latched by `device_process.auto_provisioned`): if the user later **turns it off** from the web
+app, it **stays off** — LFB never forces it back on. The user's *"I turn that on"* becomes *"it's already
+on; here's the switch if you ever want it off."*
 
 ### 11.2 It is NOT gated by the IPFS opt-in
 
@@ -515,7 +524,10 @@ runs `git` on a given repo's working copy at a time (concurrent `add`/`commit`/`
 corrupts the index). Different storages still run concurrently.
 
 The dedicated every-10-minute device worker — its transparency contract (installed / on-off / last-run) and its `device_process` config block — is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — `AppConfigSchema.device_process` (default `interval_minutes: 10`, `label: com.largefilebridge.device`); driven by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `workerState("device")` / `control("device", …)` (install/enable/disable the launchd plist), surfaced on the Scans page by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/sync/SyncPage.tsx` — `SyncPage` (the "Device registration" `WorkerCard`).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — `AppConfigSchema.device_process` (default `interval_minutes: 10`, `label: com.largefilebridge.device`, `auto_provisioned` latch); driven by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `workerState("device")` / `control("device", …)` (install/enable/disable the launchd plist), surfaced on the Scans page by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/sync/SyncPage.tsx` — `SyncPage` (the "Device registration" `WorkerCard`).
+
+Turning the worker **on by default** on first boot — auto-install + enable, latched once so a user's later opt-out sticks — is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `ensureDeviceWorkerDefaultOn()`, called at boot from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts` — `bootstrapState()` (before `reconcileWorkerSchedules()`).
 
 The pass itself — for every Git-backed storage, pull → write self device → commit → push, decoupled from the IPFS opt-in and serialized per storage — is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncDeviceRegistrations()` (the whole pass, run by the `device` worker via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/internal/internal.router.ts` — `POST /api/internal/run/device`) and `ensureDeviceRegistered(id)` (one storage's pull → `writeSelfDevice(root)` → commit/push under `withStorageGitLock`). The same decoupling is applied to the regular Transfer pass so it, too, writes device info even when a storage is not IPFS-opted-in: `syncStorageUnit(id)` now runs the Git pull + `writeSelfDevice` + commit/push regardless of `synced`, and gates only the byte reconcile behind it.
@@ -557,13 +569,13 @@ The pass itself — for every Git-backed storage, pull → write self device →
    device id against `config.yaml → computer.id` (§9).
 10. The device identity + fingerprint **synchronize** across the user's computers via the SDL's
     Git-backed travel; self-owned writes never collide (§10).
-11. A **dedicated, every-10-minute device-registration worker** (its own installed / on-off / last-run
-    transparency contract, turnable on from the web app) guarantees this computer's device info is
-    **written and pushed** to each Git-backed storage's repo. It is **decoupled from the IPFS `synced`
-    opt-in** (writing your own identity to your own repo has no outward footprint), runs the strict
-    **fetch → auto-merge → write self device → commit → push** order — **always pulling first, even with
-    nothing to change**, so another computer's edits land here — and is **serialized per storage** so it
-    never races the 15-minute Transfer pass on the same repo (§11).
+11. A **dedicated, every-10-minute device-registration worker** guarantees this computer's device info is
+    **written and pushed** to each Git-backed storage's repo. It is **ON BY DEFAULT** — auto-installed +
+    enabled on first boot with no user action, latched so that if the user later turns it off it stays off
+    (§11.1). It is **decoupled from the IPFS `synced` opt-in** (writing your own identity to your own repo
+    has no outward footprint), runs the strict **fetch → auto-merge → write self device → commit → push**
+    order — **always pulling first, even with nothing to change**, so another computer's edits land here —
+    and is **serialized per storage** so it never races the 15-minute Transfer pass on the same repo (§11).
 
 <!--
   The DEVICE / PEERS model. §1 identity: a MINTED stable UUID (distinct from the IPFS PeerID) + a

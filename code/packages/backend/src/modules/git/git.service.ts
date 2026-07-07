@@ -131,6 +131,30 @@ export class GitBackbone {
     }
   }
 
+  /**
+   * The Git backbone is only ever ON for an SDL repo whose `.lfbridge/` text — the device registry, the
+   * manifest, the mapped-dir list — is the PAYLOAD that must travel between the user's computers
+   * (storage_personal.mdx §1). A generic storages rule (and older builds) wrote a bare `.lfbridge/` line
+   * into `.gitignore` to keep tracking out of a plain *code* repo; in an SDL repo that same line silently
+   * blocks EVERY device file from being committed or pushed, so two computers never see each other. Remove
+   * a bare `.lfbridge/` ignore so the SDL text is committable. Idempotent; every other `.gitignore` rule
+   * (the big-file byte ignores) is left untouched — and the bytes never live under `.lfbridge/` anyway.
+   */
+  ensureSdlCommittable(): void {
+    const gi = path.join(this.dir, ".gitignore");
+    let body: string;
+    try {
+      body = fs.readFileSync(gi, "utf8");
+    } catch {
+      return; // no .gitignore → nothing is ignoring the SDL
+    }
+    const lines = body.split("\n");
+    const kept = lines.filter((l) => !/^\s*\.lfbridge\/?\s*$/.test(l));
+    if (kept.length === lines.length) return; // no bare `.lfbridge/` rule present
+    fs.writeFileSync(gi, kept.join("\n"), "utf8");
+    log.info("git", `${this.dir}: removed '.lfbridge/' from .gitignore so the SDL device registry can be committed`);
+  }
+
   /** Ensure the union-merge `.gitattributes` so shared append-mostly lists never conflict (git_sync.mdx §4.2). */
   ensureMergeAttributes(): void {
     const file = path.join(this.dir, ".gitattributes");
@@ -194,6 +218,7 @@ export class GitBackbone {
    */
   async commitAndPush(result: GitCycleResult): Promise<void> {
     if (result.conflicts?.length) return; // don't commit on top of an unresolved conflict
+    this.ensureSdlCommittable(); // the SDL text is the payload for a Git backbone — never let .gitignore hide it
     this.ensureMergeAttributes();
     try {
       await this.git.add(["-A"]); // .gitignore keeps the big bytes out; only SDL text is staged

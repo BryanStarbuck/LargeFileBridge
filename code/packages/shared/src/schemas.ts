@@ -160,10 +160,14 @@ export const AppConfigSchema = z.object({
     .object({
       installed: z.boolean().default(false),
       enabled: z.boolean().default(false),
-      interval_minutes: z.number().default(10), // check every 10 min (devices.mdx §12)
+      interval_minutes: z.number().default(10), // check every 10 min (devices.mdx §11)
       label: z.string().default("com.largefilebridge.device"),
       last_run_at: iso.nullable().default(null),
       last_run_ok: z.boolean().nullable().default(null),
+      // ON BY DEFAULT (devices.mdx §11.1). Unlike scan/sync, the device worker needs no explicit user
+      // Install — on first boot LFB auto-installs + enables its launchd job. This one-time latch records
+      // that the auto-on happened, so if the user later turns it OFF it stays off (we never force it back).
+      auto_provisioned: z.boolean().default(false),
     })
     .default({}),
   scan_process: z

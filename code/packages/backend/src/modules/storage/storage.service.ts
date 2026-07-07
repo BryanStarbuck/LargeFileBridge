@@ -132,7 +132,9 @@ function omit(o: Record<string, any>, keys: string[]): Record<string, unknown> {
 export function ensureStorage(root: string, type: StorageType, extras?: Partial<StorageDescriptor>): StorageDescriptor {
   if (!safeIsDir(root)) throw new Error(`not a directory: ${root}`);
   fs.mkdirSync(path.join(root, LFBRIDGE_DIR), { recursive: true });
-  if (exists(path.join(root, ".git"))) ensureGitignore(root); // keep .lfbridge/ out of commits
+  // A repo storage ignores .lfbridge/; an SDL repo (personal/company/community) must COMMIT it so the
+  // device registry travels between computers (storage_personal.mdx §1).
+  if (exists(path.join(root, ".git"))) reconcileLfbridgeIgnore(root, type);
   // Record THIS computer in the storage's travelling device registry (devices.mdx §2). Self-owned write,
   // best-effort — a device-file failure must never block initializing the storage.
   try {
@@ -169,7 +171,9 @@ export function ensureRepoStorage(repoRoot: string): StorageDescriptor {
   return ensureStorage(repoRoot, "repo", { repo: { repoRoot } });
 }
 
-function ensureGitignore(root: string): void {
+// A REPO storage is the user's own *code* repo — keep the `.lfbridge/` tracking area OUT of their commits
+// (storage_repo.mdx §2). This is the ONLY storage type that ignores `.lfbridge/`.
+function ignoreLfbridge(root: string): void {
   const gi = path.join(root, ".gitignore");
   let body = "";
   try {
@@ -180,6 +184,34 @@ function ensureGitignore(root: string): void {
   if (/^\.lfbridge\/?\s*$/m.test(body)) return;
   const prefix = body && !body.endsWith("\n") ? `${body}\n` : body;
   fs.writeFileSync(gi, `${prefix}.lfbridge/\n`, "utf8");
+}
+
+// For an SDL-repo storage (personal / company / community backed by a dedicated Git repo), the `.lfbridge/`
+// text — the device registry, the manifest — IS the payload that must travel between the user's computers
+// (storage_personal.mdx §1). It must NOT be git-ignored. Heal a repo that a prior build (or the user)
+// wrongly ignored by REMOVING a bare `.lfbridge/` line from `.gitignore`, so device files can be committed
+// and pushed. Without this, two computers never see each other's device YAML. Idempotent; leaves the
+// big-file byte ignores untouched (and those bytes live outside the SDL repo anyway).
+function unignoreLfbridge(root: string): void {
+  const gi = path.join(root, ".gitignore");
+  let body: string;
+  try {
+    body = fs.readFileSync(gi, "utf8");
+  } catch {
+    return; // no .gitignore → nothing ignoring the SDL
+  }
+  const lines = body.split("\n");
+  const kept = lines.filter((l) => !/^\s*\.lfbridge\/?\s*$/.test(l));
+  if (kept.length === lines.length) return; // no bare `.lfbridge/` rule present
+  fs.writeFileSync(gi, kept.join("\n"), "utf8");
+  log.info("storage", `removed '.lfbridge/' from .gitignore at ${root} — SDL text must be committed for a Git backbone`);
+}
+
+// Keep a git-backed storage's `.gitignore` correct for its type: a plain code repo ignores `.lfbridge/`;
+// an SDL repo (personal/company/community) must commit it so the device registry travels.
+function reconcileLfbridgeIgnore(root: string, type: StorageType): void {
+  if (type === "repo") ignoreLfbridge(root);
+  else unignoreLfbridge(root);
 }
 
 // ── discovery ─────────────────────────────────────────────────────────────────
@@ -409,10 +441,10 @@ export async function setBookmark(storageId: string, relPath: string, on: boolea
 // missing (git init a dedicated repo), ensure its hidden `.lfbridge/` (git-ignored inside a repo), and
 // leave it ready for the mirror update. A DISABLED location is left untouched — never created, never
 // deleted (charter: surface and offer, never act on files unasked). Called per storage from the pass.
-function ensureLfbridgeAt(dir: string): void {
+function ensureLfbridgeAt(dir: string, type: StorageType): void {
   try {
     fs.mkdirSync(path.join(dir, LFBRIDGE_DIR), { recursive: true });
-    if (exists(path.join(dir, ".git"))) ensureGitignore(dir);
+    if (exists(path.join(dir, ".git"))) reconcileLfbridgeIgnore(dir, type);
   } catch (e) {
     log.warn("storage", `ensure .lfbridge at ${dir} failed: ${(e as Error).message}`);
   }
@@ -432,7 +464,7 @@ export function ensureBackingLocations(id: string): void {
     } catch (e) {
       log.warn("storage", `ensure .lfbridge for ${id} at ${lfDir} failed: ${(e as Error).message}`);
     }
-    if (exists(path.join(storage.root, ".git"))) ensureGitignore(storage.root);
+    if (exists(path.join(storage.root, ".git"))) reconcileLfbridgeIgnore(storage.root, storage.type);
   }
 
   // The backing mirrors (§4/§6). Enabled + reachable only.
@@ -461,6 +493,6 @@ export function ensureBackingLocations(id: string): void {
       if (r.status === 0) log.info("storage", `${id}: git init dedicated repo at ${abs}`);
       else log.warn("storage", `${id}: git init at ${abs} failed: ${(r.stderr || r.error?.message || "unknown").trim()}`);
     }
-    ensureLfbridgeAt(abs); // §6.2
+    ensureLfbridgeAt(abs, storage.type); // §6.2
   }
 }

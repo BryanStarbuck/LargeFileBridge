@@ -168,6 +168,27 @@ export async function reconcileWorkerSchedules(): Promise<void> {
   }
 }
 
+/**
+ * The device-registration worker (devices.mdx §11) is ON BY DEFAULT — unlike the scan/sync workers it
+ * needs no explicit user Install. On first boot LFB auto-installs + enables its launchd job so this
+ * computer's device info starts writing back to your Git repos every 10 minutes with zero action. Runs
+ * exactly ONCE, latched by `device_process.auto_provisioned`: if the user later turns it OFF, it stays off
+ * (we never force it back on). Best-effort — a launchctl/OS failure leaves the latch unset so the next
+ * boot retries. Called from main.ts bootstrapState(), before reconcileWorkerSchedules().
+ */
+export async function ensureDeviceWorkerDefaultOn(): Promise<void> {
+  if (getAppConfig().device_process.auto_provisioned) return; // already auto-provisioned once — respect the user's later choice
+  try {
+    await control("device", "install"); // create the launchd plist
+    await control("device", "enable"); // load it so it fires every 10 min
+    await updateAppConfig((c) => ((c.device_process.auto_provisioned = true), c));
+    log.info("schedule", "device worker: auto-provisioned ON by default (every 10 min)");
+  } catch (e) {
+    // Leave auto_provisioned unset so the next boot retries; the app still runs.
+    log.warn("schedule", `device worker: default-on provisioning failed (retries next boot): ${(e as Error).message}`);
+  }
+}
+
 export async function stampRun(kind: WorkerKind, ok: boolean): Promise<void> {
   await updateAppConfig((c) => {
     const block = processBlock(c, kind);

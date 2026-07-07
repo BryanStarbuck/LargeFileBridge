@@ -71,6 +71,14 @@ computer:
   keep the *bytes* out of Git, not the metadata whose entire purpose is to ride Git to your other
   computers.
 
+  LFB **enforces** this: for a personal (or company/community) SDL repo it never adds a `.lfbridge/`
+  ignore, and before every backbone commit it **strips** a stray `.lfbridge/` line so the device registry
+  is actually committed and pushed — a bare `.lfbridge/` ignore here silently blocks every device file and
+  makes the two computers invisible to each other ([git_sync.mdx §4.2.1](./git_sync.mdx#421-the-lfbridge-sdl-text-must-never-be-git-ignored-locked-learned-from-a-defect)).
+  Handled in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts`
+  — `reconcileLfbridgeIgnore(root, type)` and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts`
+  — `GitBackbone.ensureSdlCommittable()`.
+
 ---
 
 ## 2. `storage.yaml` for personal

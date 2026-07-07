@@ -166,6 +166,28 @@ LargeFilesBridge_SyncList.yaml   merge=union
 .lfbridge/manifest.yaml          merge=union
 ```
 
+### 4.2.1 The `.lfbridge/` SDL text must never be git-ignored (LOCKED, learned from a defect)
+
+This invariant exists because it was **violated in production** and it broke the entire two-computer
+story. The defect and the rule:
+
+> **The defect.** The generic storages rule *"keep `.lfbridge/` git-ignored"* ([storages.mdx §4](./storages.mdx#4-lfbridge--the-hidden-per-storage-tracking-area))
+> — correct for a plain **code** repo — was applied to **every** git-backed storage root, so LFB wrote a
+> bare `.lfbridge/` line into the **SDL repo's** `.gitignore`. That silently made `git add -A` stage
+> **nothing** under `.lfbridge/`: each computer wrote its `devices/<self>.yaml` to disk, committed only
+> `.gitattributes`, and **pushed no device file at all**. Two computers each pushed nothing about
+> themselves, so **neither ever saw the other** — the symptom "I'm not seeing my other computer."
+
+The rule this locks in: **for a Git backbone, the `.lfbridge/` text is the payload that must travel**
+([storage_personal.mdx §1](./storage_personal.mdx#1-anatomy-of-the-personal-storage)) — only the big-file
+**bytes** are ignored, and those never live under `.lfbridge/`. So **before every commit** the backbone
+**removes a bare `.lfbridge/` ignore line**, healing a repo that a prior build (or the user) wrongly
+ignored so the device registry, manifest, and analysis can be committed and pushed. This is a **design
+smell to hunt for**: any code path that git-ignores the very SDL text a Git backbone exists to carry.
+
+Ensuring the SDL text is committable on every backbone commit (strip a bare `.lfbridge/` ignore) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.ensureSdlCommittable()` (called from `commitAndPush()` alongside `ensureMergeAttributes()`). The complementary fix — LFB no longer **adds** the ignore for a personal/company/community SDL repo in the first place, only for a `repo`-type code repo — is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `reconcileLfbridgeIgnore(root, type)` (`ignoreLfbridge` for `type: repo`, `unignoreLfbridge` otherwise), called from `ensureStorage()` and `ensureBackingLocations()`.
+
 ### 4.3 The strategy, and the fallback when git truly cannot resolve
 
 * LFB merges with git's default **ort** recursive strategy (`git merge --no-edit`), which resolves the

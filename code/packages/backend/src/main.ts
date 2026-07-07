@@ -28,7 +28,7 @@ import { securityRouter } from "./modules/security/security.router.js";
 import { internalRouter } from "./modules/internal/internal.router.js";
 import { clientLogRouter } from "./modules/clientlog/clientlog.router.js";
 import * as ipfs from "./modules/ipfs/ipfs.service.js";
-import { reconcileWorkerSchedules } from "./modules/schedule/schedule.service.js";
+import { reconcileWorkerSchedules, ensureDeviceWorkerDefaultOn } from "./modules/schedule/schedule.service.js";
 import { acquireSingleInstanceLock } from "./shared/single-instance.js";
 import { startWatcher, stopWatcher } from "./modules/watcher/watcher.service.js";
 import { log } from "./shared/logging.js";
@@ -44,6 +44,12 @@ async function bootstrapState(): Promise<void> {
   ipfs.enforceCompliance().catch((e) => log.warn("main", `IPFS compliance enforcement failed: ${(e as Error).message}`));
   const pid = await ipfs.peerId();
   if (pid) await updateAppConfig((c) => ((c.computer.ipfs_peer_id = pid), c));
+  // The device-registration worker is ON BY DEFAULT (devices.mdx §11.1): auto-install + enable its
+  // launchd job on first boot so device write-back runs every 10 min with no user action. One-time
+  // (latched); if the user later turns it off it stays off. Best-effort — never blocks boot.
+  await ensureDeviceWorkerDefaultOn().catch((e) =>
+    log.warn("main", `device worker default-on provisioning failed: ${(e as Error).message}`),
+  );
   // Re-render any installed worker LaunchAgent whose StartInterval drifted from the configured cadence
   // (e.g. the scan default dropped 4h → 2h). Best-effort — never blocks boot.
   await reconcileWorkerSchedules().catch((e) =>
