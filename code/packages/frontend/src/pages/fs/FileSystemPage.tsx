@@ -4,10 +4,10 @@
 // code badges pinned to the far right, plus a ⋯ kebab and right-click that open the shared entity
 // action menu (menus.mdx §3/§3.1 — the same catalog as the view-one pages).
 import { memo, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 import { ChevronRight, File as FileIcon, Folder, Home } from "lucide-react";
-import type { FsEntry, FsListing } from "@lfb/shared";
+import type { FsEntry, FsListing, FileSystemView } from "@lfb/shared";
 import { viewerRouteForName } from "@lfb/shared";
 import { api } from "@/api/client";
 import { Badges } from "@/components/fs/Badges";
@@ -54,6 +54,7 @@ export default function FileSystemPage() {
   // Once we've chosen the opening columns we must never re-seed (that would fight the user's clicks);
   // it also gates the debounced save so the initial restore can't immediately overwrite itself.
   const restoredRef = useRef(false);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     if (restoredRef.current || stack.length > 0) return;
@@ -87,18 +88,36 @@ export default function FileSystemPage() {
   useEffect(() => {
     latestView.current = { columns: stack, selection: selectedFile ? [selectedFile] : [] };
   }, [stack, selectedFile]);
+  // Persist to the server AND write the same value straight into the ["fs","viewState"] cache
+  // (directories.mdx §1.3 — client cache coherence). Without the cache write the browser keeps serving
+  // the stale view-state it read on the FIRST mount, so returning to the page within react-query's
+  // cache window restores that old snapshot and silently drops every column the user just opened — the
+  // recurring "it never restores" bug. Updating the cache here keeps it equal to the last-saved state,
+  // so the one-shot restore on the next mount seeds the correct chain.
+  const persistView = useCallback(
+    (v: { columns: string[]; selection: string[] }) => {
+      queryClient.setQueryData<FileSystemView | null>(["fs", "viewState"], (prev) => ({
+        columns: v.columns,
+        selection: v.selection,
+        filters: prev?.filters ?? { only_large: true, videos: true, images: true, audio: true },
+        updated_at: prev?.updated_at ?? "",
+      }));
+      void api.saveFsViewState(v);
+    },
+    [queryClient],
+  );
   useEffect(() => {
     if (!restoredRef.current || stack.length === 0) return;
-    const t = setTimeout(() => void api.saveFsViewState(latestView.current), 600);
+    const t = setTimeout(() => persistView(latestView.current), 600);
     return () => clearTimeout(t);
-  }, [stack, selectedFile]);
+  }, [stack, selectedFile, persistView]);
   useEffect(
     () => () => {
       if (restoredRef.current && latestView.current.columns.length > 0) {
-        void api.saveFsViewState(latestView.current);
+        persistView(latestView.current);
       }
     },
-    [],
+    [persistView],
   );
 
   // Auto-scroll to the newest column whenever the stack grows.

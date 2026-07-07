@@ -93,11 +93,12 @@ The layout, rooted at the SDL:
 │   │   └── bryan-studio.yaml
 │   └── analysis/                        ← per-file derived artifacts, keyed by relpath (§4)
 │       └── <relpath>/
-│           ├── transcript.yaml          ←   speech-to-text + time ranges
-│           ├── description.yaml         ←   video summary / image contents
 │           ├── visuals_by_time.yaml     ←   time × visual × story timeline (video)
 │           └── compression.yaml         ←   §4.3 original name/ext + size before/after
-└── …NO big files here — they live in the MAPPED directories (§3)…
+│                                            (transcript & description are SIDECARS beside the media, §4.2)
+├── <mapped>/<relpath-without-ext>.transcription   ← transcript sidecar beside the media (§4.2)
+├── <mapped>/<relpath-without-ext>.ai_description  ← AI description sidecar beside the media (§4.2)
+└── …big files live in the MAPPED directories (§3); the two sidecars sit right beside them…
 ```
 
 | File | Purpose | Owner | Defined in |
@@ -109,7 +110,8 @@ The layout, rooted at the SDL:
 | `.lfbridge/manifest.yaml` | path → CID + `pinned_by` | sync pass | [storage_local.mdx §9](./storage_local.mdx) |
 | `.lfbridge/bookmarks.yaml` | The user's starred files (§4.4) | user action | **§4.4 here** |
 | `.lfbridge/devices/<device>.yaml` | Device id, nice name, schedule, graft | each device (self-owned) | [devices.mdx](./devices.mdx) |
-| `.lfbridge/analysis/<relpath>/*.yaml` | Transcript, description, visuals-by-time, compression record | analysis passes | [storages.mdx §6](./storages.mdx) + §4 here |
+| `.lfbridge/analysis/<relpath>/*.yaml` | Visuals-by-time + compression record (transcript & description are **sidecars beside the media**, not here) | analysis passes | [storages.mdx §6](./storages.mdx) + §4 here |
+| `<rel-without-ext>.transcription` · `<rel-without-ext>.ai_description` | Transcript & AI description — **sidecars beside the media** (extension replaced), mirrored into the placement root | transcribe / describe | [Transcribe.mdx §3](./Transcribe.mdx), [ai_description.mdx §2](./ai_description.mdx) |
 
 **What is committed depends on the backbone (LOCKED).** For a **cloud backbone** (Google Drive / Dropbox
 mirrors the whole SDL directory), only `LargeFilesBridge_SyncList.yaml` (and, for a code-repo storage,
@@ -201,19 +203,25 @@ keep them, because it travels and it does not disturb the natural directory the 
 > pulls the SDL, not for a teammate on a shared company storage. Transcription and vision passes cost
 > real money and time; paying for them more than once for the same bytes is a defect.
 
-The artifact kinds, all written under `.lfbridge/analysis/<relpath>/`:
+The artifact kinds:
 
 ### 4.1 Transcript · Description · Visuals-by-time
 These three are defined in [storages.mdx §6](./storages.mdx#6-per-file-media-analysis-transcription--description--visuals-by-time)
-and not restated here — speech-to-text with time ranges; a prose summary (video) / contents (image);
-and a time × visual × story timeline (video). They live in the SDL so a second computer, or a teammate,
-gets them for free.
+and not restated here — speech-to-text; a prose summary (video) / contents (image); and a time × visual ×
+story timeline (video). **Transcript and description are sidecars beside the media** (extension replaced —
+[Transcribe.mdx §3](./Transcribe.mdx), [ai_description.mdx §2](./ai_description.mdx)); **visuals-by-time**
+stays as a YAML **under `.lfbridge/analysis/<relpath>/`**. All of them travel with the storage so a second
+computer, or a teammate, gets them for free.
 
-### 4.2 Why they belong in the SDL, not next to the file
-The natural directory a movie lives in should stay a directory of movies — not get littered with
-`.transcript.yaml` siblings. Putting derived artifacts in the SDL keeps the source tree pristine **and**
-makes the artifacts travel. This is the whole reason the SDL is separate from the mapped directories
-(§3).
+### 4.2 Sidecar-by-extension for transcript & description (LOCKED)
+The transcript and AI description are keyed to the media file by **extension**, not by a parallel
+directory: `TheFunnyVideo.mp4` → `TheFunnyVideo.transcription` / `TheFunnyVideo.ai_description`, written in
+the **same folder** (mirrored into the placement root). This is the product owner's explicit choice — no
+extra `.transcribe/` or `.lfbridge/analysis/` directory for these two; the sidecar is trivially findable
+from the media (swap the extension). It still **travels**: in a dedicated repo it is committed and synced;
+in a plain repo it is git-ignored (`*.transcription` / `*.ai_description`) and rides over IPFS like the
+media. (Visuals-by-time and the compression record, which have no natural single-file extension, remain in
+the SDL under `.lfbridge/analysis/` — §4.1.)
 
 **Which SDL a loose file's artifact belongs to.** A media file usually lives out under a **mapped source
 directory** (§3), not inside the storage's own root. Its artifact is still routed to the storage that
@@ -285,12 +293,13 @@ with **seven mapped directories**:
    records each CID in `manifest.yaml`, and marks this computer in `pinned_by`. (Some the user may
    instead have `ipfs pin add`-ed by hand — both land in the same pinset and are reconciled;
    [storage_local.mdx §9.5](./storage_local.mdx#95-the-ipfs-pinset-is-the-source-of-truth--pinned_by-is-a-stale-cache).)
-3. **They transcribe a third.** For ~10 of the videos they click **Transcribe**; LFB writes
-   `analysis/<relpath>/transcript.yaml` into the SDL (§4.1).
+3. **They transcribe a third.** For ~10 of the videos they click **Transcribe**; LFB writes a
+   `<rel-without-ext>.transcription` sidecar mirrored into the dedicated repo (§4.1, §4.2).
 4. **They get AI video descriptions.** For the same or other videos they click to generate descriptions
-   / visuals-by-time; those land as `description.yaml` / `visuals_by_time.yaml` in the SDL. Because a
-   **dedicated Git repo** is configured for this company (`act3_large_files_bridge`), all of this is
-   saved into the SDL, not scattered next to the source files.
+   / visuals-by-time; the description lands as a `<rel-without-ext>.ai_description` sidecar, and
+   visuals-by-time as `visuals_by_time.yaml` under `.lfbridge/analysis/`. Because a **dedicated Git repo**
+   is configured for this company (`act3_large_files_bridge`), all of this is mirrored into that repo and
+   synced.
 5. **Compression records + transcriptions are stored in matching paths.** Any file the user compresses
    gets its `compression.yaml` (§4.3); every transcription/description sits under a path that **mirrors
    the file's location within its mapped directory** — so the SDL's `analysis/` tree reads like a

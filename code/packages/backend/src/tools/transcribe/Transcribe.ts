@@ -65,8 +65,8 @@ export class Transcriber {
   }
 
   /**
-   * Transcribe one audio/video file to `outputPath` (a .txt written by the caller's chosen layout —
-   * Transcribe.mdx §3 puts it under <storageRoot>/.transcribe/<relpath>.txt). Pure result object; never
+   * Transcribe one audio/video file to `outputPath` (a plain-text file at the caller's chosen path —
+   * Transcribe.mdx §3 puts it at the sidecar <root>/<relpath-without-ext>.transcription). Pure result object; never
    * throws for the expected outcomes (missing tools, no audio) — those come back as a status. ASYNC:
    * awaits ffmpeg + whisper without blocking the event loop, and streams determinate progress to
    * `onProgress` when given (parsed from Whisper's segment timestamps against the media duration).

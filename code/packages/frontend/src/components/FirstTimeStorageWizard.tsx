@@ -102,8 +102,8 @@ export function FirstTimeStorageWizardProvider() {
           <span className="text-black/40">Created at</span>{" "}
           <span className="font-mono text-black/70">{PERSONAL_ROOT}/</span>
           <div className="mt-1">
-            <span className="text-black/40">Results saved under</span>{" "}
-            <span className="font-mono text-black/70">{PERSONAL_ROOT}/.transcribe/…</span>
+            <span className="text-black/40">Results saved beside each file as</span>{" "}
+            <span className="font-mono text-black/70">…/name.transcription</span>
           </div>
         </div>
 

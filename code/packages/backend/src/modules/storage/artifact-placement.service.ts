@@ -1,9 +1,12 @@
-// Storage-aware placement of derived artifacts — transcripts (.transcribe/) and AI descriptions
-// (.lfbridge/analysis/). Given ANY media file, decide WHERE its parallel hidden hierarchy hangs, by the
-// ordered rule locked in Transcribe.mdx §3.4:
+// Storage-aware placement of derived artifacts — the transcript (.transcription) and AI description
+// (.ai_description) SIDECARS. Given ANY media file, decide WHICH root the artifact's mirrored path hangs
+// under, by the ordered rule locked in Transcribe.mdx §3.4. The sidecar itself is written BESIDE the media
+// (same folder), the media's own base name with its extension REPLACED — there is NO .transcribe/ or
+// .lfbridge/analysis/ directory for these two (see siblingArtifactPath below):
 //
 //   A. Containing storage/repo root — the NEAREST ancestor carrying storage.yaml / .lfbridge/ / .git/
-//      (the "walk up to the repo root" the product owner described). Git repos get the dot-dir gitignored.
+//      (the "walk up to the repo root" the product owner described). Git repos get the sidecars
+//      gitignored (*.transcription / *.ai_description).
 //   B. Owning company/personal storage for a file living OUT in the wider filesystem: the most specific
 //      storage whose MAPPED source dir (via this device's graft) contains it, else PERSONAL as the default
 //      catch-all for anything under ~. Its artifact is written under the storage's DEDICATED GIT REPO when
@@ -11,7 +14,7 @@
 //      and sync these), else under the storage's own root.
 //   C. First-time signal — no Personal storage exists and nothing owns the file → needsSetup:true so the
 //      action routes to the setup wizard (Transcribe.mdx §3.5) instead of writing somewhere surprising.
-//   D. Last resort — beside the media (.transcribe/ next to it), the narrow legacy fallback.
+//   D. Last resort — literally beside the media (its own directory is the root), the narrow legacy fallback.
 //
 // Pure resolver: reads config, never writes. Home-expands every path first (Transcribe.mdx §3.6). Node fs
 // only (charter). Shared by transcribe.service and describe.service so the two never drift.
@@ -29,11 +32,11 @@ import { log } from "../../shared/logging.js";
 export type ArtifactOwner = "repo" | "storage-root" | "dedicated-repo" | "beside";
 
 export interface ArtifactPlacement {
-  /** Directory the .transcribe/ and .lfbridge/analysis/ trees hang under. */
+  /** Root the media's mirrored relative path hangs under; the sidecar lands at <root>/<relNoExt>.<ext>. */
   root: string;
-  /** The media file's path mirrored inside those trees (no leading separator). */
+  /** The media file's path relative to `root` (no leading separator) — mirrored, then ext-replaced. */
   rel: string;
-  /** Whether the dot-directory should be git-ignored in `root`. FALSE inside a dedicated repo. */
+  /** Whether the sidecars should be git-ignored in `root`. FALSE inside a dedicated repo. */
   gitIgnore: boolean;
   /** Which rule matched — for logging + the placement endpoint. */
   owner: ArtifactOwner;
@@ -186,9 +189,22 @@ export function resolveArtifactPlacement(input: string): ArtifactPlacement {
   return { root: path.dirname(abs), rel: path.basename(abs), gitIgnore: isGit, owner: "beside", needsSetup: false };
 }
 
-// Mirror of TRANSCRIBE_DIR (transcribe.service.ts) — kept local here to avoid an import cycle, since
-// transcribe.service imports THIS module. Rename in both places if the dot-dir name ever changes.
-const TRANSCRIBE_DIR = ".transcribe";
+// The sidecar extensions (Transcribe.mdx §3, ai_description.mdx §2). Single source of truth — imported by
+// transcribe.service / describe.service so the two never drift. The transcript/description are written
+// BESIDE the media with the media's extension REPLACED by one of these (no .transcribe/ dot-directory).
+export const TRANSCRIPTION_EXT = ".transcription";
+export const AI_DESCRIPTION_EXT = ".ai_description";
+
+/**
+ * The sidecar path for a media file's derived artifact: the media's mirrored relative path under `root`
+ * with its extension REPLACED by `ext` (Transcribe.mdx §3.1). Same folder as the (mirrored) media —
+ * `render/talk.mp3` + `.transcription` → `<root>/render/talk.transcription`. Files with no extension just
+ * get `ext` appended. `ext` includes the leading dot.
+ */
+export function siblingArtifactPath(root: string, rel: string, ext: string): string {
+  const relNoExt = rel.slice(0, rel.length - path.extname(rel).length);
+  return path.join(root, relNoExt + ext);
+}
 
 /**
  * The placement resolved for a media file, shaped for the UI (GET /api/storages/placement). Adds the
@@ -202,7 +218,7 @@ export function placementView(input: string): ArtifactPlacementView {
     mediaPath: abs,
     root: p.root,
     rel: p.rel,
-    transcriptPath: path.join(p.root, TRANSCRIBE_DIR, `${p.rel}.txt`),
+    transcriptPath: siblingArtifactPath(p.root, p.rel, TRANSCRIPTION_EXT),
     gitIgnore: p.gitIgnore,
     owner: p.owner,
     needsSetup: p.needsSetup,

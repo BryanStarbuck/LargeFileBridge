@@ -157,12 +157,13 @@ the user can change it.
 * **It also becomes the home for this storage's derived artifacts (LOCKED).** Once the dedicated repo is
   ON, transcripts and AI descriptions for any file this storage **owns but that lives out in the wider
   filesystem** (a mapped source directory, or — for Personal — anywhere under `~`) are written **under the
-  dedicated repo**, mirroring the file's hierarchy (`<dedicatedRepo>/.transcribe/<rel>.txt`,
-  `<dedicatedRepo>/.lfbridge/analysis/<rel>/description.yaml`). They are **not** git-ignored there — the
-  dedicated repo exists to **hold and sync** these artifacts, so we simply put them in. This is the
-  authoritative placement rule B in [Transcribe.mdx §3.4](./Transcribe.mdx); turning the dedicated repo
-  ON is precisely what moves those artifacts off the scattered `.transcribe/`-beside-the-media fallback and
-  into the repo. Turning it OFF returns them to the storage root / beside-media fallback.
+  dedicated repo** as **sidecars**, mirroring the file's hierarchy with the media's extension replaced
+  (`<dedicatedRepo>/<rel-without-ext>.transcription`, `<dedicatedRepo>/<rel-without-ext>.ai_description`).
+  They are **not** git-ignored there — the dedicated repo exists to **hold and sync** these artifacts, so
+  we simply put them in. This is the authoritative placement rule B in
+  [Transcribe.mdx §3.4](./Transcribe.mdx); turning the dedicated repo ON is precisely what moves those
+  sidecars off the beside-the-media fallback and into the repo (mirrored). Turning it OFF returns them to
+  the storage root / beside-media fallback.
 
 ### 4.2 Google Drive location
 

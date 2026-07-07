@@ -226,7 +226,7 @@ export const api = {
     unwrap<CompressResult>(http.post("/compress/file", { path, ...(opts ?? {}) })),
   compressBatch: (paths: string[]) => unwrap<CompressBatchResult>(http.post("/compress/batch", { paths })),
   // Transcribe (Transcribe.mdx). Tool status, read an existing transcript, and run transcription over one
-  // file / a selected set / a directory-or-repo tree / a whole storage. Writes to <storageRoot>/.transcribe/.
+  // file / a selected set / a directory-or-repo tree / a whole storage. Writes a .transcription sidecar beside the media.
   transcribeTools: () => unwrap<TranscribeTools>(http.get("/transcribe/tools")),
   transcript: (path: string) => unwrap<TranscriptView | null>(http.get("/transcribe/file", { params: { path } })),
   transcribeFile: (path: string, overwrite = false) =>

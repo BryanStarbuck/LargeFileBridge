@@ -1,10 +1,11 @@
 // AI DESCRIPTION service (ai_description.mdx). Generates a hyper-detailed, searchable description of a
 // local image/video by calling a vision provider (adapters.ts) with the kind's prompt (prompts.ts), and
-// stores the result in the SAME place the storage-level media analysis uses (storages.mdx §6):
-//   <storageRoot>/.lfbridge/analysis/<relpath>/description.yaml
-// so the storage file table's "description" indicator and this viewer feature stay one source of truth.
-// The owning storage root is resolved exactly like transcription (nearest ancestor with storage.yaml /
-// .lfbridge / .git), so a description lands beside its media wherever it lives. Explicit-user-action only.
+// stores the result as a SIDECAR BESIDE the media — the media's own base name with its extension replaced
+// by `.ai_description` (ai_description.mdx §2), mirrored under the owning storage's placement root (no
+// .lfbridge/analysis/ directory). The storage file table's "description" indicator detects that same
+// sidecar (tracking.service.analysisOutputs). The placement root is resolved exactly like transcription
+// (nearest ancestor with storage.yaml / .lfbridge / .git, else dedicated repo, else storage root, else
+// beside the media). Explicit-user-action only.
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
@@ -14,7 +15,7 @@ import { expandHome } from "../fs/badges.js";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
 import { appConfigPath } from "../../shared/store/scopes.js";
 import { googleApiKeyFileInfo } from "../../config/google-apikey-file.js";
-import { resolveArtifactPlacement } from "../storage/artifact-placement.service.js";
+import { resolveArtifactPlacement, siblingArtifactPath, AI_DESCRIPTION_EXT } from "../storage/artifact-placement.service.js";
 import { track } from "../progress/progress.registry.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
 import { getPrompt } from "./prompts.js";
@@ -25,10 +26,6 @@ import { log } from "../../shared/logging.js";
 // Directories a "describe all" walk never descends into (mirrors transcribe's SKIP_DIRS).
 const SKIP_DIRS = new Set([".lfbridge", ".transcribe", ".git", "node_modules"]);
 
-const LFBRIDGE_DIR = ".lfbridge";
-const ANALYSIS_DIR = "analysis";
-const DESCRIPTION_YAML = "description.yaml";
-
 function exists(p: string): boolean {
   try {
     fs.statSync(p);
@@ -38,9 +35,9 @@ function exists(p: string): boolean {
   }
 }
 
-/** <base>/.lfbridge/analysis/<relpath>/description.yaml — resolved by the shared ordered placement rule
- *  (Transcribe.mdx §3.4), so a description routes to the owning storage's dedicated repo exactly like a
- *  transcript. Carries the placement flags that gate the gitignore nudge and the first-time setup. */
+/** <root>/<rel-without-ext>.ai_description — the description sidecar beside the media, resolved by the
+ *  shared ordered placement rule (Transcribe.mdx §3.4) so it routes to the owning storage's dedicated repo
+ *  exactly like a transcript. Carries the placement flags that gate the gitignore nudge and first-time setup. */
 export function resolveDescriptionPath(absFile: string): {
   root: string;
   rel: string;
@@ -49,24 +46,26 @@ export function resolveDescriptionPath(absFile: string): {
   needsSetup: boolean;
 } {
   const p = resolveArtifactPlacement(absFile);
-  const descriptionPath = path.join(p.root, LFBRIDGE_DIR, ANALYSIS_DIR, p.rel, DESCRIPTION_YAML);
+  const descriptionPath = siblingArtifactPath(p.root, p.rel, AI_DESCRIPTION_EXT);
   return { root: p.root, rel: p.rel, descriptionPath, gitIgnore: p.gitIgnore, needsSetup: p.needsSetup };
 }
 
-/** Keep the .lfbridge/ analysis tree out of Git in a plain repo (mirrors the transcribe .gitignore nudge). */
+/** Keep the description sidecars out of Git in a plain repo (a `*.ai_description` .gitignore nudge,
+ *  mirroring the transcribe `*.transcription` nudge). */
 function ensureLfbridgeIgnored(root: string): void {
   if (!exists(path.join(root, ".git"))) return;
   const gi = path.join(root, ".gitignore");
+  const pattern = `*${AI_DESCRIPTION_EXT}`; // *.ai_description
   let body = "";
   try {
     body = fs.readFileSync(gi, "utf8");
   } catch {
     /* none yet */
   }
-  if (/^\.lfbridge\/?\s*$/m.test(body)) return;
+  if (new RegExp(`^\\*\\${AI_DESCRIPTION_EXT}\\s*$`, "m").test(body)) return;
   const prefix = body && !body.endsWith("\n") ? `${body}\n` : body;
   try {
-    fs.writeFileSync(gi, `${prefix}${LFBRIDGE_DIR}/\n`, "utf8");
+    fs.writeFileSync(gi, `${prefix}${pattern}\n`, "utf8");
   } catch (e) {
     log.warn("describe", `could not update .gitignore in ${root}: ${(e as Error).message}`);
   }
@@ -166,7 +165,7 @@ export async function setAiConfig(patch: DescribeAiConfigPatch): Promise<Describ
 
 /**
  * Generate (or regenerate) the AI description for ONE media file. Uploads the file to the selected
- * provider and writes the result to description.yaml. Never throws for the expected outcomes — those
+ * provider and writes the result to the `.ai_description` sidecar. Never throws for the expected outcomes — those
  * come back as a status the UI reports truthfully.
  */
 export async function describeOne(
@@ -215,7 +214,7 @@ export async function describeOne(
       }
     });
 
-    // Keep .lfbridge/ out of Git only in a PLAIN repo; a dedicated repo (rule B) is meant to hold+sync it.
+    // Keep the sidecars out of Git only in a PLAIN repo; a dedicated repo (rule B) is meant to hold+sync it.
     if (gitIgnore) ensureLfbridgeIgnored(root);
     fs.mkdirSync(path.dirname(descriptionPath), { recursive: true });
     fs.writeFileSync(

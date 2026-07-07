@@ -1,7 +1,7 @@
 // Transcription service (Transcribe.mdx). Wraps the in-process Transcribe engine (tools/transcribe) with
-// LFBridge's storage-aware placement: a transcript is written to a PARALLEL hidden hierarchy under the
-// OWNING STORAGE ROOT — <storageRoot>/.transcribe/<relpath>.txt (§3), recreating the media file's
-// relative directory path and keeping its name. Also drives the "Transcribe all files" walks over a
+// LFBridge's storage-aware placement: a transcript is written as a SIDECAR BESIDE the media — the media's
+// own base name with its extension replaced by `.transcription` (§3), mirrored under the owning storage's
+// placement root (no .transcribe/ directory). Also drives the "Transcribe all files" walks over a
 // directory / repo / storage. Explicit-user-action only (§7); reports truthfully per file (§6).
 import fs from "node:fs";
 import path from "node:path";
@@ -9,34 +9,32 @@ import type { TranscribeResult, TranscribeBatchResult, TranscribeTools, Transcri
 import { mediaKindForName } from "@lfb/shared";
 import { Transcriber } from "../../tools/transcribe/Transcribe.js";
 import { expandHome } from "../fs/badges.js";
-import { resolveArtifactPlacement } from "../storage/artifact-placement.service.js";
+import { resolveArtifactPlacement, siblingArtifactPath, TRANSCRIPTION_EXT } from "../storage/artifact-placement.service.js";
 import { getStorageDetail } from "../storage/storage.service.js";
 import { track } from "../progress/progress.registry.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
 import { log } from "../../shared/logging.js";
 
-// The parallel hidden hierarchy under a storage root (Transcribe.mdx §3). Single constant — rename here
-// to change the dot-directory name everywhere. (The product owner referred to it loosely as ".flac/".)
-export const TRANSCRIBE_DIR = ".transcribe";
-
-// Directories a "Transcribe all" walk never descends into.
-const SKIP_DIRS = new Set([TRANSCRIBE_DIR, ".lfbridge", ".git", "node_modules"]);
+// The transcript sidecar extension (Transcribe.mdx §3) is TRANSCRIPTION_EXT, imported above.
+// Directories a "Transcribe all" walk never descends into (`.transcribe` kept so legacy trees are skipped).
+const SKIP_DIRS = new Set([".transcribe", ".lfbridge", ".git", "node_modules"]);
 
 const engine = new Transcriber();
 
 // ── transcript-path resolution (§3.4) — delegated to the shared, storage-aware placement resolver ──────
 // The ordered rule (walk-up containing root → owning storage's dedicated repo → first-time signal →
 // beside-media) lives in storage/artifact-placement.service.ts so transcription and AI description never
-// drift. Here we just append the `.transcribe/<rel>.txt` shape onto whatever base it returns.
+// drift. Here we just apply the `<rel-without-ext>.transcription` sidecar shape onto whatever base it returns.
 
-/** The base directory the `.transcribe/` tree hangs under for a media file (§3.4). Kept for callers that
- *  only need the root; the full placement (incl. gitIgnore / needsSetup) comes from resolveTranscriptPath. */
+/** The placement root the transcript sidecar is mirrored under for a media file (§3.4). Kept for callers
+ *  that only need the root; the full placement (incl. gitIgnore / needsSetup) comes from resolveTranscriptPath. */
 export function resolveStorageRoot(absFile: string): string {
   return resolveArtifactPlacement(absFile).root;
 }
 
-/** <base>/.transcribe/<rel>.txt — the transcript destination, plus the placement flags that drive the
- *  gitignore nudge (only in a plain repo, never a dedicated repo) and the first-time setup gate (§3.4–§3.5). */
+/** <root>/<rel-without-ext>.transcription — the transcript sidecar beside the media, plus the placement
+ *  flags that drive the gitignore nudge (only in a plain repo, never a dedicated repo) and the first-time
+ *  setup gate (§3.4–§3.5). */
 export function resolveTranscriptPath(absFile: string): {
   root: string;
   rel: string;
@@ -45,24 +43,25 @@ export function resolveTranscriptPath(absFile: string): {
   needsSetup: boolean;
 } {
   const p = resolveArtifactPlacement(absFile);
-  const transcriptPath = path.join(p.root, TRANSCRIBE_DIR, `${p.rel}.txt`);
+  const transcriptPath = siblingArtifactPath(p.root, p.rel, TRANSCRIPTION_EXT);
   return { root: p.root, rel: p.rel, transcriptPath, gitIgnore: p.gitIgnore, needsSetup: p.needsSetup };
 }
 
-/** Keep the parallel hierarchy out of Git (added alongside the existing .lfbridge/ ignore). */
+/** Keep the transcript sidecars out of Git in a plain repo (a `*.transcription` .gitignore nudge). */
 function ensureTranscribeIgnored(root: string): void {
   if (!exists(path.join(root, ".git"))) return;
   const gi = path.join(root, ".gitignore");
+  const pattern = `*${TRANSCRIPTION_EXT}`; // *.transcription
   let body = "";
   try {
     body = fs.readFileSync(gi, "utf8");
   } catch {
     /* no .gitignore yet */
   }
-  if (new RegExp(`^${TRANSCRIBE_DIR}\\/?\\s*$`, "m").test(body)) return;
+  if (new RegExp(`^\\*\\${TRANSCRIPTION_EXT}\\s*$`, "m").test(body)) return;
   const prefix = body && !body.endsWith("\n") ? `${body}\n` : body;
   try {
-    fs.writeFileSync(gi, `${prefix}${TRANSCRIBE_DIR}/\n`, "utf8");
+    fs.writeFileSync(gi, `${prefix}${pattern}\n`, "utf8");
   } catch (e) {
     log.warn("transcribe", `could not update .gitignore in ${root}: ${(e as Error).message}`);
   }
@@ -86,7 +85,7 @@ export function readTranscript(input: string): TranscriptView | null {
 }
 
 /**
- * Transcribe ONE media file into the parallel `.transcribe/` hierarchy (§1). ASYNC and non-blocking —
+ * Transcribe ONE media file into its `.transcription` sidecar beside the media (§1). ASYNC and non-blocking —
  * the underlying engine spawns ffmpeg/whisper without freezing the event loop (§5.1). The actual run is
  * wrapped in a progress-registry job (kind "transcribe") so the web app's progress dock shows a live,
  * determinate card — even for a run this browser tab did not start (webapp.mdx §12/§14).
@@ -109,7 +108,7 @@ export async function transcribeOne(input: string, overwrite = false): Promise<T
   if (!overwrite && exists(transcriptPath)) {
     return result(abs, "skipped", transcriptPath, null, "already transcribed");
   }
-  // Only keep the dot-dir out of Git for a PLAIN repo (rule A). A dedicated repo (rule B) exists to hold
+  // Only keep the sidecars out of Git for a PLAIN repo (rule A). A dedicated repo (rule B) exists to hold
   // and sync these artifacts, so we deliberately do NOT gitignore there (Transcribe.mdx §3.4).
   if (gitIgnore) ensureTranscribeIgnored(root);
 

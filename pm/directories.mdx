@@ -198,6 +198,26 @@ Rules (LOCKED):
   never error just because a folder moved between visits.
 * A **fresh user with no `file_system:` key** opens at **home** with all four filter checkboxes ON
   (§1.4 defaults) — the missing key defaults to that, never to an empty/blank page.
+* **Client cache coherence on the round-trip (LOCKED — this is the recurring "it never restores"
+  bug).** The restore is only correct if, when the page re-mounts, it reads back **the columns the
+  user actually last selected** — not a stale earlier snapshot. Two things make this fail if not
+  handled, and both are required:
+  1. **The save must update the client's cached copy of the view state, not just the server.** The
+     browser caches the `GET /view-state` result (react-query). Selecting directories does a
+     debounced `PUT /view-state`, but if that PUT does **not** also refresh the client's cached
+     view-state entry, the cache still holds the value from the first mount. On return within the
+     cache window the page restores that **stale** value (typically empty → falls back to home),
+     silently throwing away every directory the user just clicked. **Every persist (the debounced
+     save AND the flush-on-unmount save) must write the new `{columns, selection, filters}` into the
+     client view-state cache at the same time** so the cache is always the last-saved state.
+  2. **The one-shot restore must not lock in a stale value before the fresh one arrives.** Restore
+     seeds the columns exactly once per mount (so it can't fight the user's clicks). It must seed
+     from **authoritative, current** view state — never from a cached snapshot that a background
+     refetch is about to replace. With rule 1 the cache is always current, so the once-only seed is
+     safe; the seed must still wait for the view-state lookup to settle before deciding home-vs-restore.
+  The symptom when this is broken: the backend `config.yaml` shows the correct `columns:` (the save
+  worked), yet the page keeps reopening at home. The defect is always on the **client cache side**, not
+  the server.
 
 The persisted-view-state shape (`file_system:` — open columns, selection, filters) added to the
 per-user config schema is defined in code:
@@ -213,6 +233,13 @@ Exposing that view state to the browser is handled in code (per-user, allow-list
 Restoring the column chain + selection on mount and debounce-persisting them on every change (plus a
 flush on unmount so clicking away to another left-bar tab still saves) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (seeds the column `stack` from `api.fsViewState()` behind a `restoredRef` gate — `?path` deep-link wins, then the saved view, then home — and debounce-saves via `api.saveFsViewState()`).
+
+Keeping the client's cached view state coherent with each save (the LOCKED cache-coherence rule above)
+is handled in code: `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx`
+— `FileSystemPage`'s `persistView()` helper writes the just-saved `{columns, selection}` into the
+`["fs","viewState"]` react-query cache (`queryClient.setQueryData`) as it calls `api.saveFsViewState()`,
+for BOTH the debounced-change save and the flush-on-unmount save, so a re-mount within the cache window
+restores the last-selected chain instead of a stale snapshot.
 
 ---
 

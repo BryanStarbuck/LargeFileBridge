@@ -314,7 +314,7 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
     if (v.compressible && v.compressState !== "done" && !v.flags.noCompress) {
       a.push({ id: "compress", label: "Compress…", group: "Work", icon: <Zap className="h-4 w-4" />, onSelect: compress });
     }
-    // Transcribe… — audio/video only (Transcribe.mdx §2.2). Writes to <storageRoot>/.transcribe/<relpath>.txt.
+    // Transcribe… — audio/video only (Transcribe.mdx §2.2). Writes the <rel-without-ext>.transcription sidecar beside the media.
     if (mkind === "audio" || mkind === "video") {
       a.push({ id: "transcribe", label: "Transcribe…", group: "Work", icon: <Captions className="h-4 w-4" />,
         onSelect: () => runTranscribeFile(v.path, v.name, { onDone: refreshLists }) });

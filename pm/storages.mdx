@@ -153,10 +153,11 @@ commits, while the small committed manifest still travels with the code.
 │   ├── manifest.yaml            # large-file → IPFS CID + pin state (storage_local.mdx §9)
 │   └── analysis/                # per-file media-analysis outputs (§6)
 │       └── <relpath>/
-│           ├── transcript.yaml
-│           ├── description.yaml
-│           └── visuals_by_time.yaml
-└── …the storage's actual files…
+│           ├── visuals_by_time.yaml
+│           └── compression.yaml
+├── <relpath-without-ext>.transcription    # transcript SIDECAR beside the media (§6)
+├── <relpath-without-ext>.ai_description   # AI description SIDECAR beside the media (§6)
+└── …the storage's actual files (each with its two sidecars right beside it)…
 ```
 
 ### 4.1 Per-file tracking metadata (charter)
@@ -199,18 +200,24 @@ mirrored to Dropbox, or any combination. The clones are **mirrors, not the sourc
 
 ## 6. Per-file media analysis (transcription · description · visuals-by-time)
 
-For a file in a storage — **especially a video** — LFB can run analysis passes whose outputs are written
-as **YAML** under `.lfbridge/analysis/<relpath>/`. These are **generated artifacts** that travel with the
-storage, so any of the user's computers (or a teammate on a company/community storage) gets them without
-re-running. Each pass is an explicit, opt-in operation (never automatic on bytes — charter §6.1 spirit).
+For a file in a storage — **especially a video** — LFB can run analysis passes. Their outputs are
+**generated artifacts** that travel with the storage, so any of the user's computers (or a teammate on a
+company/community storage) gets them without re-running. Each pass is an explicit, opt-in operation (never
+automatic on bytes — charter §6.1 spirit). **Transcript and description are written as sidecars beside the
+media** ([Transcribe.mdx §3](./Transcribe.mdx), [ai_description.mdx §2](./ai_description.mdx) are
+authoritative — extension replaced, **no** `.lfbridge/analysis/` directory); **visuals-by-time and the
+compression record** remain **YAML under `.lfbridge/analysis/<relpath>/`**.
 
 The passes:
 
-* **Transcript** (`transcript.yaml`) — **speech-to-text** of what people are *saying* in a video (or in
-  an audio file), with time ranges. This is the "what was said" track.
-* **Description** (`description.yaml`) — a prose **summary/description** of the file: for a **video**, what
-  it is about; for an **image**, **what is in the image** (a content description). The "what is it" track.
-* **Visuals & action by time** (`visuals_by_time.yaml`) — primarily for **video**: a timeline of
+* **Transcript** (**`<rel-without-ext>.transcription`** sidecar beside the media) — **speech-to-text** of
+  what people are *saying* in a video (or in an audio file). This is the "what was said" track.
+  Authoritative: [Transcribe.mdx §3](./Transcribe.mdx).
+* **Description** (**`<rel-without-ext>.ai_description`** sidecar beside the media) — a prose
+  **summary/description** of the file: for a **video**, what it is about; for an **image**, **what is in the
+  image**. The "what is it" track. Authoritative: [ai_description.mdx §2](./ai_description.mdx).
+* **Visuals & action by time** (`visuals_by_time.yaml`, under `.lfbridge/analysis/<relpath>/`) — primarily
+  for **video**: a timeline of
   **time ranges** with, for each, **what is visually going on** and **what is going on story-wise** — so
   the material can be re-used or re-created (think cinematography beats/shots). The "what is happening,
   when" track.

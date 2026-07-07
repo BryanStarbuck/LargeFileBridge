@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — AI description of images & videos
-description: The AI-description feature. At the bottom of the View-one-file media viewer sit two analysis tabs — Transcription and AI description — each with a ✓ when its content already exists, defaulting to whichever is available (preferring transcription). AI description generates a HYPER-DETAILED, searchable prose description of an IMAGE or a VIDEO by uploading the file's bytes to a vision provider with a per-kind prompt, then stores the result so it can be searched and re-found without re-opening the file. Only image + video are describable here (audio is covered by transcription). The description is written to the SAME place the storage-level media analysis uses — <storageRoot>/.lfbridge/analysis/<relpath>/description.yaml — upgrading the "pending" skeleton the storage analysis writes to a "done" record, so the Storage file table's "description" indicator lights up. Providers are pluggable adapters: Gemini (Google — the ONLY one that describes VIDEO, via inline base64), OpenAI (gpt-4o, images only), and Grok (xAI grok-2-vision, images only); keys resolve from app config first then well-known env vars, and the file is uploaded inline as base64 (bounded ~18MB) — so any file over ~17.5MB is FIRST auto-compressed to a temporary copy that fits (H.264 video / JPEG image, stepping resolution down only when needed), and the ORIGINAL is never modified. Prompts are shipped defaults the user can customize per-computer from Settings → Tools. IMPORTANT CHARTER NOTE: this is the ONE deliberate external-network path in LFBridge — generating a description uploads the file to the chosen provider; it is ALWAYS explicit and user-initiated, never automatic, and entirely separate from the charter's local-only perceptual-fingerprint feature (which must never phone home). Implemented by the /api/describe backend module, the describe adapters/prompts, and the MediaAnalysis tabs + Tools-page settings on the frontend.
+description: The AI-description feature. At the bottom of the View-one-file media viewer sit two analysis tabs — Transcription and AI description — each with a ✓ when its content already exists, defaulting to whichever is available (preferring transcription). AI description generates a HYPER-DETAILED, searchable prose description of an IMAGE or a VIDEO by uploading the file's bytes to a vision provider with a per-kind prompt, then stores the result so it can be searched and re-found without re-opening the file. Only image + video are describable here (audio is covered by transcription). The description is written as a SIDECAR BESIDE the media — the media's base name with its extension replaced by .ai_description (skyline.mp4 → skyline.ai_description; TheFunnyVideo.mp4 → TheFunnyVideo.ai_description), mirrored under the owning storage's placement root, with NO .lfbridge/analysis/ directory. It is a self-contained "done" YAML record, so the Storage file table's "description" indicator lights up from the sidecar's presence. Providers are pluggable adapters: Gemini (Google — the ONLY one that describes VIDEO, via inline base64), OpenAI (gpt-4o, images only), and Grok (xAI grok-2-vision, images only); keys resolve from app config first then well-known env vars, and the file is uploaded inline as base64 (bounded ~18MB) — so any file over ~17.5MB is FIRST auto-compressed to a temporary copy that fits (H.264 video / JPEG image, stepping resolution down only when needed), and the ORIGINAL is never modified. Prompts are shipped defaults the user can customize per-computer from Settings → Tools. IMPORTANT CHARTER NOTE: this is the ONE deliberate external-network path in LFBridge — generating a description uploads the file to the chosen provider; it is ALWAYS explicit and user-initiated, never automatic, and entirely separate from the charter's local-only perceptual-fingerprint feature (which must never phone home). Implemented by the /api/describe backend module, the describe adapters/prompts, and the MediaAnalysis tabs + Tools-page settings on the frontend.
 ---
 
 # LargeFileBridge — AI description of images & videos
@@ -24,8 +24,9 @@ Siblings this builds on and does not repeat:
   **owning-storage-root** resolution. The two are the **two tabs** of one analysis panel (§1).
 * [media_viewer.mdx](./media_viewer.mdx) — the **View one file** viewer whose bottom band hosts the
   Transcription · AI description tabs. This file is **authoritative** for the AI-description tab.
-* [storages.mdx §6](./storages.mdx) — the per-file media-analysis area under `.lfbridge/analysis/`. This
-  file **fills in** the `description.yaml` that §6 sketched as a skeleton (§2).
+* [storages.mdx §6](./storages.mdx) — the per-file media-analysis area. This file **supersedes** §6's
+  `description.yaml` sketch: the description is now a **`.ai_description` sidecar beside the media**, not a
+  YAML under `.lfbridge/analysis/` (§2).
 * [os_open.mdx](./os_open.mdx) — the neighboring localhost-only viewer action; unrelated to the network,
   but shares the viewer's action surface.
 * [ai_credentials.mdx](./ai_credentials.mdx) — the **credential resolution order** (config → env → the
@@ -68,39 +69,41 @@ The two-tab panel, the ✓ presence markers, and the transcription-preferring de
 
 ---
 
-## 2. Where the description is stored — unified with the storage media analysis (LOCKED)
+## 2. Where the description is stored — a `.ai_description` sidecar beside the media (LOCKED)
 
-The description does **not** live in the Local state dir and does **not** sit loose beside the media. It is
-written to the **same per-file media-analysis area** the storage-level analysis uses
-([storages.mdx §6](./storages.mdx)), under the **owning storage's own root**:
+The description does **not** live in the Local state dir and there is **no** `.lfbridge/analysis/`
+directory for it. Exactly like the transcript, it is a **sidecar written beside the media** — the media
+file's own base name with its extension **replaced** by **`.ai_description`**:
 
 ```
-<storage root>/
-├── render/
-│   └── skyline.mp4                              ← the real media file
-└── .lfbridge/
-    └── analysis/
-        └── render/skyline.mp4/                  ← same relative path, recreated
-            └── description.yaml                 ← the generated description
+<placement root>/
+└── render/
+    ├── skyline.mp4                              ← the real media file
+    └── skyline.ai_description                   ← the generated description, right next to it
 ```
 
 For a file at **`render/skyline.mp4`** the description is written to
-**`<storageRoot>/.lfbridge/analysis/render/skyline.mp4/description.yaml`**. The owning storage root is
-resolved **exactly like transcription — by the shared ordered placement rule**
-([Transcribe.mdx §3.4](./Transcribe.mdx), the authoritative spec): walk **up** to the nearest ancestor
-carrying `storage.yaml` / `.lfbridge/` / `.git/`; else route to the **owning storage's dedicated Git repo**
-when enabled (mirroring the file's hierarchy — `<dedicatedRepo>/.lfbridge/analysis/<rel>/…`, **not**
-git-ignored there); else the owning storage's root; else the **first-time setup wizard**
-([Transcribe.mdx §3.5](./Transcribe.mdx)) when no Personal storage exists; else, as a last resort, the
-file's own directory. **Get AI details / AI description is one of the actions that triggers the first-time
-wizard**, and it consults placement (`needsSetup`) before it runs. Pasted `~/…` paths are home-expanded
-first (Transcribe.mdx §3.6).
+**`<placement root>/render/skyline.ai_description`** — same folder, `.mp4` → `.ai_description`, no
+intermediate directory. (Example: `TheFunnyVideo.mp4` → `TheFunnyVideo.ai_description`.) The **placement
+root** and the media's mirrored relative hierarchy are resolved **exactly like transcription — by the
+shared ordered placement rule** ([Transcribe.mdx §3.4](./Transcribe.mdx), the authoritative spec): walk
+**up** to the nearest ancestor carrying `storage.yaml` / `.lfbridge/` / `.git/`; else route to the **owning
+storage's dedicated Git repo** when enabled (mirroring the file's hierarchy —
+`<dedicatedRepo>/<rel-without-ext>.ai_description`, **not** git-ignored there); else the owning storage's
+root; else the **first-time setup wizard** ([Transcribe.mdx §3.5](./Transcribe.mdx)) when no Personal
+storage exists; else, as a last resort, the file's own directory. **Get AI details / AI description is one
+of the actions that triggers the first-time wizard**, and it consults placement (`needsSetup`) before it
+runs. Pasted `~/…` paths are home-expanded first (Transcribe.mdx §3.6).
 
-### 2.1 The YAML shape — upgrading the skeleton
+> **Collision caveat (accepted).** As with `.transcription`, replacing the extension means two files that
+> differ **only** by extension in the same folder map to the same `.ai_description` and the second run
+> overwrites the first — the deliberate tradeoff of extension-based, no-extra-directory naming.
 
-The storage-level analysis writes a **skeleton** for every media file — `{ source, status: "pending",
-engine: null, generated: null, description: null }`. Generating a description **upgrades that same file**
-in place to a **done** record:
+### 2.1 The YAML shape — a self-contained `done` record
+
+The `.ai_description` sidecar is a small YAML document. Generating a description writes it directly as a
+**done** record (there is no separate pre-seeded skeleton to upgrade — the sidecar either exists as a
+`done` record or does not exist yet):
 
 ```yaml
 source: render/skyline.mp4
@@ -115,25 +118,26 @@ description: |
   ## Composition … ## People …
 ```
 
-A read returns a usable `DescribeView` **only** when `status: done` **and** a non-empty `description`
-string is present — a bare `pending` skeleton reads back as **null** (no content yet), so the tab shows the
+A read returns a usable `DescribeView` **only** when the sidecar exists with `status: done` **and** a
+non-empty `description` string — otherwise it reads back as **null** (no content yet), so the tab shows the
 generate pane rather than an empty box.
 
-### 2.2 Why unified — the Storage table indicator
+### 2.2 The Storage table indicator
 
-Because the description lands at the exact path the storage analysis indexes, the **Storage file table's
-`analysis: ["description"]` indicator lights up** the moment a description exists — one source of truth for
-"this file has a description," shared by the viewer tab and the storage table. When the artifact lands in a
-**plain** repo (placement rule A) generating also ensures that repo's `.lfbridge/` is **git-ignored** (the
-same nudge transcription makes) so analysis never bloats commits; when it lands in the owning storage's
-**dedicated Git repo** (rule B) it is **deliberately not** git-ignored — that repo exists to track and sync
-the artifacts.
+The **Storage file table's `analysis: ["description"]` indicator lights up** the moment the
+`.ai_description` sidecar exists beside the media — one source of truth for "this file has a description,"
+shared by the viewer tab and the storage table (which now detects the sidecar rather than a YAML under
+`.lfbridge/analysis/`). When the artifact lands in a **plain** repo (placement rule A) generating also
+ensures that repo git-ignores **`*.ai_description`** (the same nudge transcription makes for
+`*.transcription`) so descriptions never bloat commits; when it lands in the owning storage's **dedicated
+Git repo** (rule B) it is **deliberately not** git-ignored — that repo exists to track and sync the
+artifacts.
 
-Resolving the description path via the shared ordered placement rule, reading back a done description, and writing the upgraded `description.yaml` (with the git-ignore nudge only when the placement flags it) are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `resolveDescriptionPath()` / `readDescription()` / `describeOne()` (placement via `resolveArtifactPlacement()` in `storage/artifact-placement.service.ts`).
+Resolving the description path via the shared ordered placement rule, reading back a done description, and writing the `.ai_description` sidecar (with the git-ignore nudge only when the placement flags it) are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `resolveDescriptionPath()` / `readDescription()` / `describeOne()` (sidecar path via `siblingArtifactPath()` + `AI_DESCRIPTION_EXT` in `storage/artifact-placement.service.ts`).
 
-The skeleton these upgrade, and the storage-table indicator that keys off the same path, are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/analysis.service.ts` — `analyzeFile()` (writes the `pending` skeleton) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `analysisOutputs()`.
+The storage-table indicator that detects the `.ai_description` sidecar is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `analysisOutputs()`.
 
 ---
 
@@ -453,11 +457,13 @@ The adapter module is annotated as the one deliberate outbound path, and the upl
    when its content exists; **video** shows both, **image** shows only AI description, **audio** shows only
    Transcription. The default tab **prefers Transcription** when present, else the first tab with content,
    else the first tab.
-2. AI description works on **image + video only** (audio → transcription). The description is stored at
-   **`<storageRoot>/.lfbridge/analysis/<relpath>/description.yaml`** under the **nearest-ancestor** storage
-   root, **upgrading** the storage analysis's `pending` skeleton to a `done` record `{ source, status,
-   engine, provider, generated, kind, description }` — so the Storage table's **`description` indicator**
-   lights up. `.lfbridge/` is git-ignored.
+2. AI description works on **image + video only** (audio → transcription). The description is stored as a
+   **`.ai_description` sidecar beside the media** — the media's base name with its extension replaced
+   (`skyline.mp4` → `skyline.ai_description`) — mirrored under the resolved placement root (the shared
+   ordered rule), **no** `.lfbridge/analysis/` directory. It is a self-contained `done` YAML record
+   `{ source, status, engine, provider, generated, kind, description }` — so the Storage table's
+   **`description` indicator** lights up from the sidecar's presence. In a plain repo `*.ai_description` is
+   git-ignored; in a dedicated repo it is committed and synced.
 3. Providers are the pluggable adapters **Gemini / OpenAI / Grok**; **only Gemini describes video**;
    selection is requested → configured-default → first available that supports the kind (preference Gemini,
    OpenAI, Grok). Keys resolve **config → env → (Gemini only) the shared `~/.config/GoogleCloud/apikey.yaml`**
@@ -489,10 +495,13 @@ The adapter module is annotated as the one deliberate outbound path, and the upl
   LOCKED:
   (§1) Two viewer tabs: Transcription (audio+video) · AI description (image+video). ✓ = content exists.
        Default-tab prefers Transcription, else first-with-content, else first. MediaAnalysis in MediaViewer.
-  (§2) Store at <storageRoot>/.lfbridge/analysis/<relpath>/description.yaml — UNIFIED with storages.mdx §6.
-       Upgrades analysis.service.ts analyzeFile()'s {status:pending,description:null} skeleton to
-       {source,status:done,engine,provider,generated,kind,description}. Lights up tracking.service.ts
-       analysisOutputs -> Storage table "description" indicator. Owning root = nearest storage.yaml/.lfbridge/.git.
+  (§2) Store as a SIDECAR BESIDE THE MEDIA — NO .lfbridge/analysis/ dir: <root>/<relpath-without-ext>.
+       ai_description (skyline.mp4 -> skyline.ai_description). Self-contained done YAML
+       {source,status:done,engine,provider,generated,kind,description}. AI_DESCRIPTION_EXT constant in
+       artifact-placement.service.ts. tracking.service.ts analysisOutputs detects the .ai_description
+       sidecar -> Storage table "description" indicator. Placement root = shared ordered rule (nearest
+       storage.yaml/.lfbridge/.git, else dedicated repo, else storage root, else beside media). Supersedes
+       storages.mdx §6's description.yaml skeleton. git-ignore *.ai_description in a plain repo only.
   (§3) Adapters gemini/openai/grok. VIDEO = Gemini ONLY (inline base64). Keys config->env. 18MB inline cap.
        selectAdapter: requested->config default->first available supporting the kind (pref Gemini,OpenAI,Grok).
   (§3.3) COMPRESS-TO-FIT: files >17.5MB are transcoded to a TEMP copy that fits (original never touched),

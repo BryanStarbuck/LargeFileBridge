@@ -13,11 +13,16 @@ import { log } from "../../shared/logging.js";
 export const LFBRIDGE_DIR = ".lfbridge";
 const FILES_YAML = "files.yaml";
 const ANALYSIS_DIR = "analysis";
+// Analysis outputs that still live as YAML under .lfbridge/analysis/<rel>/ (visuals-by-time; the
+// compression record is tracked separately). Transcript + description are now SIDECARS beside the media —
+// detected below by their extensions rather than a YAML here (Transcribe.mdx §3, ai_description.mdx §2).
 const ANALYSIS_FILES: Record<string, string> = {
-  transcript: "transcript.yaml",
-  description: "description.yaml",
   visuals_by_time: "visuals_by_time.yaml",
 };
+// Keep in sync with TRANSCRIPTION_EXT / AI_DESCRIPTION_EXT in storage/artifact-placement.service.ts.
+// Inlined (not imported) to avoid an import cycle — artifact-placement imports LFBRIDGE_DIR from here.
+const TRANSCRIPTION_EXT = ".transcription";
+const AI_DESCRIPTION_EXT = ".ai_description";
 const MAX_FILES = 5000; // a safety cap so an enormous tree can't run the index unbounded (logged if hit).
 const FINGERPRINT_CHUNK = 64 * 1024;
 
@@ -25,16 +30,24 @@ function filesYamlPath(root: string): string {
   return path.join(root, LFBRIDGE_DIR, FILES_YAML);
 }
 
-/** Which §6 analysis outputs already exist for a file (by presence of their YAML). */
+/** Which §6 analysis outputs already exist for a file. Transcript + description are detected by their
+ *  SIDECAR beside the media (<root>/<rel-without-ext>.transcription / .ai_description); visuals-by-time is
+ *  still a YAML under .lfbridge/analysis/<rel>/. */
 export function analysisOutputs(root: string, rel: string): string[] {
-  const dir = path.join(root, LFBRIDGE_DIR, ANALYSIS_DIR, rel);
   const out: string[] = [];
-  for (const [key, file] of Object.entries(ANALYSIS_FILES)) {
+  const relNoExt = rel.slice(0, rel.length - path.extname(rel).length);
+  const isFileAt = (p: string): boolean => {
     try {
-      if (fs.statSync(path.join(dir, file)).isFile()) out.push(key);
+      return fs.statSync(p).isFile();
     } catch {
-      /* not present — skip */
+      return false;
     }
+  };
+  if (isFileAt(path.join(root, relNoExt + TRANSCRIPTION_EXT))) out.push("transcript");
+  if (isFileAt(path.join(root, relNoExt + AI_DESCRIPTION_EXT))) out.push("description");
+  const dir = path.join(root, LFBRIDGE_DIR, ANALYSIS_DIR, rel);
+  for (const [key, file] of Object.entries(ANALYSIS_FILES)) {
+    if (isFileAt(path.join(dir, file))) out.push(key);
   }
   return out;
 }

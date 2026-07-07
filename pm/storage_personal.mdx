@@ -319,13 +319,13 @@ go** (transcripts, AI descriptions):
   the **dedicated Git repo** is the preferred one, and (per this spec) the vehicle that syncs the SDL
   between the user's computers. Its convention default is **`~/BGit/Bryan_git/personal_large_files_bridge/`**.
 * **When the dedicated repo is ON**, a transcript / description for a loose personal file (e.g.
-  `~/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4`) is written **under that repo**, mirroring
-  the file's path **relative to `~`**:
-  `~/BGit/Bryan_git/personal_large_files_bridge/.transcribe/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4.txt`
-  — **committed, not git-ignored** (the repo exists to sync these). This is placement rule B of
-  [Transcribe.mdx §3.4](./Transcribe.mdx).
-* **When it is OFF**, the same artifacts fall back to the Personal storage root's `.lfbridge/` / a
-  `.transcribe/` beside the media (the legacy fallback, rule D).
+  `~/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4`) is written **under that repo** as a
+  **sidecar**, mirroring the file's path **relative to `~`** with the extension replaced:
+  `~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.transcription`
+  (and `…/FINAL_CIA_Drones.ai_description`) — **committed, not git-ignored**, and with **no** `.transcribe/`
+  directory. This is placement rule B of [Transcribe.mdx §3.4](./Transcribe.mdx).
+* **When it is OFF**, the same sidecars fall back to the Personal storage root / literally beside the media
+  (the legacy fallback, rule D).
 
 ## 10. First-action setup — configuring Personal on the first click
 

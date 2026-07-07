@@ -94,9 +94,12 @@ The repos list and per-repo UI over this storage are rendered in code:
 ## 4. Media analysis + cloud clones (per repo)
 
 * A repo storage can produce the [storages.mdx §6](./storages.mdx) **media-analysis** outputs for its
-  video/image files into `~/BGit/xyz/.lfbridge/analysis/<relpath>/` — transcript (speech + time),
-  description (video summary / image contents), visuals-and-action-by-time (time × visual × story). They
-  are git-ignored artifacts that ride along with the storage.
+  video/image files: the **transcript** (`<rel-without-ext>.transcription`) and **description**
+  (`<rel-without-ext>.ai_description`) are **sidecars beside the media**, while
+  **visuals-and-action-by-time** (`visuals_by_time.yaml`, time × visual × story) stays under
+  `~/BGit/xyz/.lfbridge/analysis/<relpath>/`. They are artifacts that ride along with the storage —
+  git-ignored in a plain repo (`*.transcription` / `*.ai_description` / `.lfbridge/`), committed in a
+  dedicated repo.
 * A repo storage **may also clone** to Google Drive / Dropbox ([storages.mdx §5](./storages.mdx)) — the
   same repo hierarchy mirrored to a cloud drive as a second, human-reachable copy — recorded in the
   `clones` block.

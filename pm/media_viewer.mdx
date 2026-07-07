@@ -376,8 +376,8 @@ and no radio buttons to switch between them.**
 * **Which half shows.** **AI description** appears for **video + image** (visual media); **Transcription**
   appears for **video + audio** (media that can have speech).
 * **The ✓ availability marker.** Each half's header carries a check when its content already exists on
-  disk (a transcript at `<storageRoot>/.transcribe/<rel>.txt`; a description at
-  `<storageRoot>/.lfbridge/analysis/<rel>/description.yaml`), and a hollow outline when it's empty.
+  disk as a **sidecar beside the media** (a transcript at `<root>/<rel-without-ext>.transcription`; a
+  description at `<root>/<rel-without-ext>.ai_description`), and a hollow outline when it's empty.
 * **Content vs. Generate.** When a half has content, it shows it (description as prose; transcript in
   monospace) with a small **Regenerate** link. When it's empty, it shows a **Generate** button:
   * **AI description → Generate description** runs a vision provider ([ai_description.mdx](./ai_description.mdx)).

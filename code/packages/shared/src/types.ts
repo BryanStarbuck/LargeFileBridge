@@ -801,8 +801,8 @@ export interface TranscribeTools {
   ffmpeg: boolean;
   ffprobe: boolean;
 }
-// The result of transcribing one media file (Transcribe.mdx §1). transcriptPath = the .txt written into
-// the parallel <storageRoot>/.transcribe/<relpath>.txt hierarchy (§3).
+// The result of transcribing one media file (Transcribe.mdx §1). transcriptPath = the sidecar written
+// beside the media at <root>/<relpath-without-ext>.transcription (§3).
 export interface TranscribeResult {
   path: string;               // the media file transcribed
   // "needs_setup" — no Personal storage exists and the file is owned by nothing, so placement would be
@@ -814,14 +814,14 @@ export interface TranscribeResult {
 }
 
 // ── derived-artifact placement (Transcribe.mdx §3.4–§3.5) ───────────────────────────────────────────
-// Where a media file's parallel hidden hierarchy (.transcribe/, .lfbridge/analysis/) will be written, and
-// whether the first-time setup wizard must run first. GET /api/storages/placement?path=<media> returns it,
-// so an action can show/decide WHERE its output lands before running.
+// Which root a media file's sidecar artifacts (<relNoExt>.transcription / .ai_description) will be mirrored
+// under, and whether the first-time setup wizard must run first. GET /api/storages/placement?path=<media>
+// returns it, so an action can show/decide WHERE its output lands before running.
 export interface ArtifactPlacementView {
   mediaPath: string;                 // the home-expanded absolute media path resolved
-  root: string;                      // the storage/repo/dedicated-repo/dir the dot-trees hang under
-  rel: string;                       // the media path mirrored inside those trees
-  transcriptPath: string;            // <root>/.transcribe/<rel>.txt (the concrete transcript destination)
+  root: string;                      // the storage/repo/dedicated-repo/dir the mirrored sidecars hang under
+  rel: string;                       // the media path relative to root (mirrored, then ext-replaced)
+  transcriptPath: string;            // <root>/<rel-without-ext>.transcription (the concrete transcript destination)
   gitIgnore: boolean;                // false inside a dedicated repo (it exists to hold these artifacts)
   owner: "repo" | "storage-root" | "dedicated-repo" | "beside";
   needsSetup: boolean;               // true → route to the first-time setup wizard (§3.5)
@@ -879,7 +879,7 @@ export interface DescribeProvidersStatus {
 // An existing generated description read back for a media file (GET /api/describe/file).
 export interface DescribeView {
   mediaPath: string;
-  descriptionPath: string; // the description.yaml under <storageRoot>/.lfbridge/analysis/<rel>/
+  descriptionPath: string; // the sidecar beside the media at <root>/<rel-without-ext>.ai_description
   text: string; // the human-readable description body
   model: string | null; // the model id used (e.g. "gemini-flash-latest")
   generatedAt: string | null; // ISO

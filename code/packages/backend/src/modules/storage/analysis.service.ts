@@ -1,11 +1,12 @@
-// Per-file media analysis (storages.mdx §6). Writes the analysis outputs as YAML under
+// Per-file media analysis (storages.mdx §6). Writes the analysis outputs that still live as YAML under
 // `<storage root>/.lfbridge/analysis/<relpath>/`:
-//   * transcript.yaml       — speech-to-text with time ranges (video + audio)
-//   * description.yaml       — video summary / image contents (all visual/audible media)
 //   * visuals_by_time.yaml   — time ranges × what's visually going on × story (video)
 //
-// The actual transcription/vision engine is a later integration; this writes the structured skeletons
-// with status "pending" so the outputs, layout, and caching-by-presence are in place now. Node fs only.
+// Transcript and description are NO LONGER skeletoned here — they are SIDECARS beside the media
+// (<rel-without-ext>.transcription / .ai_description), written directly by transcribe.service /
+// describe.service as self-contained `done` records (Transcribe.mdx §3, ai_description.mdx §2). The
+// visuals-by-time engine is a later integration; this writes its structured skeleton with status
+// "pending" so the output, layout, and caching-by-presence are in place now. Node fs only.
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
@@ -29,7 +30,9 @@ function writeYaml(file: string, data: unknown): void {
 
 /**
  * Queue analysis for one file in a storage: write the skeleton YAML(s) for the outputs its media kind
- * supports. Returns which outputs were written. Throws when the target isn't a media file.
+ * supports. Transcript + description are NOT written here anymore — those are sidecars produced by their
+ * own actions; only the video-only visuals-by-time skeleton remains. Returns which outputs were written.
+ * Throws when the target isn't a media file.
  */
 export function analyzeFile(root: string, rel: string): string[] {
   const abs = path.join(root, rel);
@@ -37,26 +40,18 @@ export function analyzeFile(root: string, rel: string): string[] {
   const kind = mediaKindForName(path.basename(rel)); // "image" | "video" | "audio" | null
   if (!kind) throw new Error("analyze: not a media file (video / audio / image)");
 
-  const outDir = path.join(root, LFBRIDGE_DIR, ANALYSIS_DIR, rel);
-  fs.mkdirSync(outDir, { recursive: true });
   const outputs: string[] = [];
   const base = { source: rel, status: "pending" as const, engine: null, generated: null };
 
-  // Transcript — what people are saying (video + audio).
-  if (kind === "video" || kind === "audio") {
-    writeYaml(path.join(outDir, "transcript.yaml"), { ...base, segments: [] });
-    outputs.push("transcript");
-  }
-  // Description — video summary / image contents (every media kind).
-  writeYaml(path.join(outDir, "description.yaml"), { ...base, description: null });
-  outputs.push("description");
-  // Visuals & action by time — video only.
+  // Visuals & action by time — video only. Transcript/description are sidecars (see file header).
   if (kind === "video") {
+    const outDir = path.join(root, LFBRIDGE_DIR, ANALYSIS_DIR, rel);
+    fs.mkdirSync(outDir, { recursive: true });
     writeYaml(path.join(outDir, "visuals_by_time.yaml"), { ...base, segments: [] });
     outputs.push("visuals_by_time");
   }
 
-  log.info("storage", `analysis queued (${outputs.join(", ")}) for ${rel} in ${root}`);
+  log.info("storage", `analysis queued (${outputs.join(", ") || "none"}) for ${rel} in ${root}`);
   return outputs;
 }
 
