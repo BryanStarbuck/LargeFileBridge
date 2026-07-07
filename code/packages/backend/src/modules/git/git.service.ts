@@ -49,10 +49,12 @@ export function classifyRemote(remote: string): RemoteKind {
  * through the OS git credential helper and NEVER hangs on a password prompt (git_sync.mdx §5).
  */
 export function openRepo(workingDir: string): SimpleGit {
-  // Inherit the environment, but STRIP any GIT_EDITOR the user's shell exported: simple-git refuses to
-  // run with GIT_EDITOR set (a hang guard), and our commits always carry a `-m` message so no editor is
-  // ever needed. GIT_TERMINAL_PROMPT=0 keeps a URL remote from blocking on a password prompt (§5).
-  const { GIT_EDITOR: _drop, ...env } = process.env;
+  // Inherit the environment, but STRIP any editor vars the user's shell exported (EDITOR / VISUAL /
+  // GIT_EDITOR / GIT_SEQUENCE_EDITOR): simple-git refuses to run with an editor set (a hang guard), and
+  // our commits always carry a `-m` message so no editor is ever needed. GIT_TERMINAL_PROMPT=0 keeps a
+  // URL remote from blocking on a password prompt (§5).
+  const env = { ...process.env };
+  for (const k of ["EDITOR", "VISUAL", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR"]) delete env[k];
   return simpleGit({
     baseDir: workingDir,
     binary: "git",
