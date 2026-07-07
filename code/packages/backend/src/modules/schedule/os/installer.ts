@@ -9,6 +9,9 @@ export interface SchedulerInstaller {
   /** The StartInterval (seconds) baked into the CURRENTLY-INSTALLED schedule, or null if not installed /
    *  not readable. Used to detect drift from the configured interval so a stale plist can be re-rendered. */
   installedIntervalSeconds(label: string): number | null;
+  /** The worker trampoline script path baked into the CURRENTLY-INSTALLED schedule, or null if not installed /
+   *  not readable. Used to detect a drifted/broken path (e.g. after a code move) so the plist self-heals. */
+  installedTriggerScript(label: string): string | null;
 }
 
 export interface InstallOpts {

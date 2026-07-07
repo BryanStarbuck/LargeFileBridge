@@ -1,5 +1,6 @@
 // The transparency contract for both scheduled workers (scan.mdx §7, storage.mdx §13):
 // installed vs on/off, reconciled against the real OS state, controllable from the web app.
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,16 +26,34 @@ const noopInstaller: SchedulerInstaller = {
     return false;
   },
   installedIntervalSeconds: () => null,
+  installedTriggerScript: () => null,
 };
 
 function installer(): SchedulerInstaller {
   return process.platform === "darwin" ? launchdInstaller : noopInstaller;
 }
 
+// The launchd/cron worker trampoline: code/deploy/launchd/run-worker.mjs. Every scheduled worker (scan,
+// sync, device) runs `node <this> <worker> <port>`, which POSTs the loopback /api/internal/run route. If
+// this path is wrong the OS job dies instantly with MODULE_NOT_FOUND — SILENTLY, since a dead launchd job
+// writes nothing to our logs and never reaches stampRun. That exact bug shipped once: a brittle `../`
+// hop-count assumed `deploy/` lived under `packages/` and resolved to code/packages/deploy/... (nonexistent),
+// so the every-10-min device-registration worker never ran and device info never reached the Git repos.
+// We now LOCATE the file by walking UP the tree — correct no matter which package subdir this module lives
+// in — and callers verify the result exists (buildInstallOpts) so a future move can never fail silently.
 function triggerScriptPath(): string {
-  // code/deploy/launchd/run-worker.mjs — three dirs up from this module's dir.
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(here, "../../../../deploy/launchd/run-worker.mjs");
+  const rel = path.join("deploy", "launchd", "run-worker.mjs");
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  for (let hops = 0; hops < 12; hops++) {
+    const candidate = path.join(dir, rel);
+    if (fs.existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) break; // reached the filesystem root — stop
+    dir = parent;
+  }
+  // Not found by walking up. Return the canonical location (5 levels up: schedule → modules → src → backend
+  // → packages → code) so the "missing trigger script" guard names a real, checkable path in its warning.
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../deploy/launchd/run-worker.mjs");
 }
 
 function labelFor(kind: WorkerKind): string {
@@ -91,12 +110,19 @@ export async function syncPageData(): Promise<SyncPageData> {
 // re-rendering an existing plist to fix a drifted interval (reconcileWorkerSchedules).
 function buildInstallOpts(kind: WorkerKind) {
   const stateRoot = resolveStateDir();
+  const triggerScript = triggerScriptPath();
+  // A worker whose trampoline script doesn't exist installs a plist that OS-crashes on every fire with no
+  // trace in our logs. Surface it loudly rather than let it fail silently (the class of bug this whole path
+  // was hardened against). We still install — the reconcile pass self-heals once the script is present.
+  if (!fs.existsSync(triggerScript)) {
+    log.error("schedule", `${kind}: worker trigger script not found at ${triggerScript} — the launchd job will fail until this file exists`);
+  }
   return {
     label: labelFor(kind),
     worker: kind,
     intervalSeconds: intervalFor(kind),
     nodeBin: process.execPath,
-    triggerScript: triggerScriptPath(),
+    triggerScript,
     apiPort: getAppConfig().server.backend_port,
     logOut: path.join(stateRoot, "log.log"),
     logErr: path.join(stateRoot, "error.err"),
@@ -153,15 +179,28 @@ export async function reconcileWorkerSchedules(): Promise<void> {
       if (!inst.isInstalled(label)) continue;
       const want = intervalFor(kind);
       const have = inst.installedIntervalSeconds(label);
-      if (have === want) continue; // already correct — nothing to do
+      // Also heal a drifted/broken TRIGGER SCRIPT path. An already-installed plist can point at a stale or
+      // nonexistent run-worker.mjs after a code move/upgrade (the original silent-crash bug) — every machine
+      // that installed that plist stays broken until the path is rewritten. Detect it here so a plain restart
+      // self-heals: re-render when the interval drifted, OR the baked path no longer matches what we resolve,
+      // OR the baked path doesn't exist on disk.
+      const wantScript = triggerScriptPath();
+      const haveScript = inst.installedTriggerScript(label);
+      const scriptDrift = haveScript !== null && haveScript !== wantScript;
+      const scriptMissing = haveScript !== null && !fs.existsSync(haveScript);
+      if (have === want && !scriptDrift && !scriptMissing) continue; // already correct — nothing to do
       const wasEnabled = await inst.isEnabled(label);
-      await inst.install(buildInstallOpts(kind)); // rewrite the plist with the current interval
+      await inst.install(buildInstallOpts(kind)); // rewrite the plist with the current interval + trigger path
       if (wasEnabled) {
-        // launchd only picks up a new StartInterval on reload: bootout the stale job, bootstrap the new.
+        // launchd only picks up plist changes on reload: bootout the stale job, bootstrap the new.
         await inst.disable(label);
         await inst.enable(label);
       }
-      log.info("schedule", `${kind}: reconciled schedule interval ${have ?? "?"}s → ${want}s`);
+      const why =
+        scriptDrift || scriptMissing
+          ? `trigger script ${haveScript ?? "?"} → ${wantScript}`
+          : `interval ${have ?? "?"}s → ${want}s`;
+      log.info("schedule", `${kind}: reconciled schedule (${why})`);
     } catch (e) {
       log.warn("schedule", `${kind}: schedule reconcile failed: ${(e as Error).message}`);
     }
