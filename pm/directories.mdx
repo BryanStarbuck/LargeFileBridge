@@ -114,11 +114,22 @@ are inherited from that spec and **not** restated here.
   page is a *browser*, not a TanStack table (§1), so its rows carry **no checkboxes today** — for the
   checked-subset case to work, rows need a lightweight **selection affordance** (a hover check /
   ⌘-click multi-select) whose selected paths feed the action-links row's `scope`. With **nothing**
-  selected, the links act on the **deepest-selected directory (or the root column), recursively**
-  (Rule 1b).
+  selected, the links act on the **deepest (rightmost) open column's directory, recursively** (Rule 1b).
+
+* **Scope containment (LOCKED).** "Deepest open column" means the **tail** of the open-column chain — the
+  last directory the user clicked open, whose contents fill the rightmost column. The recursive walk is
+  **strictly contained inside that directory: it descends only and never ascends to a parent column or
+  touches a sibling directory.** Because clicking a directory in an earlier column **replaces** every
+  column to its right (§1), the open-column chain is always exactly the root→deepest path, and only its
+  **tail** is the scope — the ancestor columns are breadcrumbs, never scope. Highlighting a **file** inside
+  the deepest column does **not** change the directory scope (it stays the containing directory). If no
+  column is open yet, the scope resolves to *nothing* and the enqueue endpoint returns a `400` — it must
+  **never** fall back to walking the home directory or the filesystem root. This is the full guarantee the
+  File System page owner locks in [file_system.mdx §4.1](./file_system.mdx); see it for the worked
+  `Home → _Mirror → Politics → Charlie_Kirk_Mi` example.
 
 implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (mounts `PageActions` from `code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions`, fed the selected paths + root as its `scope`).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (mounts `PageActions` from `code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions`; the scope `root` is the deepest column, `currentDir = stack[stack.length - 1]`, passed as `{ root: currentDir }`). The downward-only recursive walk that enforces containment is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `walkMedia()` (recurses into children of `root` only, never a parent).
 
 ---
 
@@ -192,11 +203,16 @@ The persisted-view-state shape (`file_system:` — open columns, selection, filt
 per-user config schema is defined in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — `UserConfigSchema` (the `file_system` block, a `FileSystemViewSchema`).
 
-Reading and writing that per-user `file_system:` block is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/user-config.service.ts` — `getUserConfig()` / `updateUserConfig()`.
+Loading the saved view (pruned to the longest still-valid column prefix + existing selection, the
+stale-path tolerance above) and writing it back is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs-view.service.ts` — `loadFsView()` / `saveFsView()` (which persist the `file_system:` block through `getUserConfig()` / `updateUserConfig()` in `store-model/user-config.service.ts`).
 
-Restoring the column chain + selection on mount and debounce-persisting them on every change is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (via its `useFileSystemViewState()` hook, which loads once and saves debounced).
+Exposing that view state to the browser is handled in code (per-user, allow-list-gated):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.router.ts` — `GET /api/fs/view-state` (pruned load) and `PUT /api/fs/view-state` (debounced save).
+
+Restoring the column chain + selection on mount and debounce-persisting them on every change (plus a
+flush on unmount so clicking away to another left-bar tab still saves) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (seeds the column `stack` from `api.fsViewState()` behind a `restoredRef` gate — `?path` deep-link wins, then the saved view, then home — and debounce-saves via `api.saveFsViewState()`).
 
 ---
 

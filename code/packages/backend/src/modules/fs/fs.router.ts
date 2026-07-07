@@ -3,13 +3,64 @@ import { Router } from "express";
 import { z } from "zod";
 import type { FlatStreamEvent } from "@lfb/shared";
 import { homeDir, listDirectory, listFilesFlat } from "./fs.service.js";
+import { loadFsView, saveFsView } from "./fs-view.service.js";
 import { walkFilesFlatStreaming } from "../fsindex/fsindex.service.js";
 import { platformInfo, openInOs } from "./os-open.js";
 import { requireAllowListed } from "../auth/identify.js";
+import { currentUser } from "../auth/current-user.js";
 import { log } from "../../shared/logging.js";
 
 export const fsRouter = Router();
 fsRouter.use(requireAllowListed);
+
+// GET /api/fs/view-state — the File System page's persisted view (open column chain + selection +
+// header filters), pruned to what still exists on this machine (directories.mdx §1.3). A fresh user
+// (no `file_system:` block) reads back schema defaults — empty columns, all filters ON — so the page
+// falls back to the home root. View state, never security state: it never gates access.
+fsRouter.get("/view-state", (req, res) => {
+  const email = currentUser(req).email;
+  if (!email) return res.json({ ok: true, data: null });
+  try {
+    res.json({ ok: true, data: loadFsView(email) });
+  } catch (e) {
+    // A view-state read hiccup must never break the page — fall back to "no saved view".
+    log.warn("fs", `view-state load failed for ${email}: ${(e as Error).message}`);
+    res.json({ ok: true, data: null });
+  }
+});
+
+// PUT /api/fs/view-state — persist the File System view (debounced by the browser on every column /
+// selection / filter change, §1.3). Best-effort: a persist failure is a background nicety, not a 500.
+const viewStateBody = z.object({
+  columns: z.array(z.string()).default([]),
+  selection: z.array(z.string()).default([]),
+  filters: z
+    .object({
+      only_large: z.boolean(),
+      videos: z.boolean(),
+      images: z.boolean(),
+      audio: z.boolean(),
+    })
+    .partial()
+    .optional(),
+});
+fsRouter.put("/view-state", async (req, res) => {
+  const email = currentUser(req).email;
+  if (!email) return res.json({ ok: true, data: null });
+  const body = viewStateBody.safeParse(req.body);
+  if (!body.success) return res.status(400).json({ ok: false, error: "invalid view state" });
+  try {
+    const saved = await saveFsView(
+      email,
+      { columns: body.data.columns, selection: body.data.selection, filters: body.data.filters ?? {} },
+      new Date().toISOString(),
+    );
+    res.json({ ok: true, data: saved });
+  } catch (e) {
+    log.warn("fs", `view-state save failed for ${email}: ${(e as Error).message}`);
+    res.json({ ok: true, data: null });
+  }
+});
 
 // GET /api/fs/home — the default root the browser opens on (the OS home directory).
 fsRouter.get("/home", (_req, res) => {

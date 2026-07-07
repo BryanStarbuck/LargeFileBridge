@@ -68,6 +68,13 @@ When the user clicks an action link, the **set of files it runs over** is:
   On a repo page that is the repo's whole working tree; on a File-System directory it is that directory
   and everything under it; on a storage it is the whole storage.
 
+> **Containment (LOCKED).** The recursive walk is **downward only** — it descends into sub-directories of
+> the resolved root and **never ascends to a parent or crosses into a sibling**. On the File-System column
+> browser the root is the **deepest (rightmost) open column**, so an action there stays strictly inside
+> that one directory even though ancestor columns are still open to its left ([file_system.mdx
+> §4.1](./file_system.mdx), [directories.mdx §1.2](./directories.mdx)). A missing root is a `400`, never a
+> silent fall-back to home or `/`.
+
 So "click the action with nothing selected" means **"do it for all of them"** — the common case. The user
 does not have to select-all first. (This mirrors the way a shell glob or a "Run all" button behaves.)
 

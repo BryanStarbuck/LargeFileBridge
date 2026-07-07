@@ -484,6 +484,29 @@ export const CompressionRecordSchema = z.object({
 });
 export type CompressionRecordDoc = z.infer<typeof CompressionRecordSchema>;
 
+// ── File System page persisted view state (directories.mdx §1.3) ─────────────
+// The open column chain + selection + header filters the user last had on the File System page, so
+// leaving and returning drops them right back where they were. Personal, cosmetic view state — never
+// gates access, never derives identity (sessions.mdx §1). Restored on mount, written debounced.
+export const FileSystemViewSchema = z.object({
+  // Open column chain, root → deepest, left to right. Each is an absolute directory path.
+  columns: z.array(z.string()).default([]),
+  // The 1+ entries highlighted when the user left (§1.2 multi-select). May be files or directories.
+  selection: z.array(z.string()).default([]),
+  // The §1.4 header checkboxes (all default ON). Held forward-compatibly; the browser wires the ones
+  // whose UI exists and ignores the rest until they land.
+  filters: z
+    .object({
+      only_large: z.boolean().default(true),
+      videos: z.boolean().default(true),
+      images: z.boolean().default(true),
+      audio: z.boolean().default(true),
+    })
+    .default({}),
+  updated_at: iso.optional(),
+});
+export type FileSystemView = z.infer<typeof FileSystemViewSchema>;
+
 // ── per-user config.yaml (storage.mdx §4) ───────────────────────────────────
 export const UserConfigSchema = z.object({
   schema_version: z.number().default(1),
@@ -496,6 +519,9 @@ export const UserConfigSchema = z.object({
     })
     .default({}),
   tables: z.record(z.unknown()).default({}),
+  // The File System page's persisted view state (directories.mdx §1.3). A fresh user with no block
+  // reads back the schema defaults (empty columns/selection, all filters ON) — never an error.
+  file_system: FileSystemViewSchema.default({}),
   // Last 5 web sessions, newest first (sessions.mdx §4). At most one open (ended_at null), at index 0.
   sessions: z.array(SessionRecordSchema).default([]),
 });

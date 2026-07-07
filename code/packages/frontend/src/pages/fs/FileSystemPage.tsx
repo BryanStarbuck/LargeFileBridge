@@ -45,13 +45,61 @@ export default function FileSystemPage() {
   const [menu, setMenu] = useState<{ path: string; pos: MenuPos } | null>(null);
   const stripRef = useRef<HTMLDivElement>(null);
 
-  // Open on the ?path deep-link if present, else the OS home directory.
+  // Open on the ?path deep-link if present, else the persisted view state (directories.mdx §1.3 — pick
+  // up where you left off), else the OS home directory.
   const home = useQuery({ queryKey: ["fs", "home"], queryFn: api.fsHome });
+  // The saved view (open column chain + selection) for THIS user, pruned server-side to what still
+  // exists on this machine (stale paths dropped). `null` = nothing saved / not applicable.
+  const view = useQuery({ queryKey: ["fs", "viewState"], queryFn: api.fsViewState });
+  // Once we've chosen the opening columns we must never re-seed (that would fight the user's clicks);
+  // it also gates the debounced save so the initial restore can't immediately overwrite itself.
+  const restoredRef = useRef(false);
+
   useEffect(() => {
-    if (stack.length > 0) return;
-    if (initialPath) setStack([initialPath]);
-    else if (home.data) setStack([home.data.home]);
-  }, [home.data, initialPath, stack.length]);
+    if (restoredRef.current || stack.length > 0) return;
+    // A ?path deep-link is explicit intent — it wins over the remembered view.
+    if (initialPath) {
+      restoredRef.current = true;
+      setStack([initialPath]);
+      return;
+    }
+    // Wait for the saved-view lookup to settle before deciding, so we don't flash home then jump.
+    if (view.isPending) return;
+    const cols = view.data?.columns ?? [];
+    if (cols.length > 0) {
+      restoredRef.current = true;
+      setStack(cols);
+      // Restore the last file selection (§1.3) if one was saved; the backend already dropped it if the
+      // file is gone. A saved directory selection is already reflected by the column chain.
+      const sel = view.data?.selection?.[0];
+      if (sel && !cols.includes(sel)) setSelectedFile(sel);
+      return;
+    }
+    if (home.data) {
+      restoredRef.current = true;
+      setStack([home.data.home]);
+    }
+  }, [home.data, initialPath, stack.length, view.isPending, view.data]);
+
+  // Debounce-persist the view state on every column / selection change (directories.mdx §1.3), and
+  // flush once more on unmount so clicking away to another left-bar tab still saves the last state.
+  const latestView = useRef<{ columns: string[]; selection: string[] }>({ columns: [], selection: [] });
+  useEffect(() => {
+    latestView.current = { columns: stack, selection: selectedFile ? [selectedFile] : [] };
+  }, [stack, selectedFile]);
+  useEffect(() => {
+    if (!restoredRef.current || stack.length === 0) return;
+    const t = setTimeout(() => void api.saveFsViewState(latestView.current), 600);
+    return () => clearTimeout(t);
+  }, [stack, selectedFile]);
+  useEffect(
+    () => () => {
+      if (restoredRef.current && latestView.current.columns.length > 0) {
+        void api.saveFsViewState(latestView.current);
+      }
+    },
+    [],
+  );
 
   // Auto-scroll to the newest column whenever the stack grows.
   useEffect(() => {

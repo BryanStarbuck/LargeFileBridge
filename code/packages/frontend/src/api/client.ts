@@ -15,6 +15,7 @@ import type {
   WorkerState,
   SizeUnit,
   FsListing,
+  FileSystemView,
   FlatFileListing,
   EntityView,
   AuthConfig,
@@ -180,6 +181,15 @@ export const api = {
     unwrap<FsListing>(
       http.get("/fs", { params: { ...(path ? { path } : {}), ...(hidden ? { hidden: "1" } : {}) } }),
     ),
+  // Persisted File System view state (directories.mdx §1.3) — the open column chain + selection +
+  // header filters, so leaving and returning restores where the user left off. GET is pruned to what
+  // still exists on this machine (stale paths dropped); PUT is debounced by the page on every change.
+  fsViewState: () => unwrap<FileSystemView | null>(http.get("/fs/view-state")),
+  saveFsViewState: (view: {
+    columns: string[];
+    selection: string[];
+    filters?: Partial<{ only_large: boolean; videos: boolean; images: boolean; audio: boolean }>;
+  }) => unwrap<FileSystemView | null>(http.put("/fs/view-state", view)),
   // OS hand-off (os_open.mdx) — the host platform label + whether "Open on {label}" is possible here,
   // and the localhost-only action that opens a local file/folder in the desktop OS default handler.
   platform: () => unwrap<PlatformInfo>(http.get("/fs/platform")),

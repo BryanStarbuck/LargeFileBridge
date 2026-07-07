@@ -184,11 +184,55 @@ Git-ignore big files… · Track / Sync this directory**
 * The producing pair (Create Transcriptions / Create AI descriptions) is present on every file-list page.
 * Compress / Git-ignore links are **red-tinted explicit offers with a confirm modal** ([page_actions.mdx
   §3](./page_actions.mdx), [menus.mdx §6.1](./menus.mdx)) — never a one-click mutation.
-* Scope is the **currently selected column's directory** walked recursively when nothing is checked, or the
-  checked rows when the browser has a selection ([directories.mdx §1.2](./directories.mdx)).
+* Scope is the **deepest (rightmost) open column's directory** walked recursively when nothing is checked,
+  or the checked rows when the browser has a selection ([directories.mdx §1.2](./directories.mdx)) — with
+  the **containment guarantee locked in §4.1** below.
 
 The row is rendered in code (shared component, fed the File System scope):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions` · consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (passes the current column directory as the scope root).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions` · consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (passes the **deepest open column** — `currentDir = stack[stack.length - 1]` — as the scope `root`).
+
+### 4.1 Scope containment — the deepest selected column, downward only (LOCKED)
+
+This is the **safety guarantee** the whole column browser hangs on, and it is **LOCKED**. When the user
+walks left → right through the columns (e.g. `Home → _Mirror → Politics → Charlie_Kirk_Mi`) and clicks a
+producing action such as **Create Transcriptions** with **nothing checked**, the action's scope is the
+**single deepest (rightmost) directory the user has opened** — and the recursive walk is **strictly
+contained inside that directory**. It **descends only**; it **never ascends** to a parent column and
+**never touches sibling directories**.
+
+Concretely, with `Charlie_Kirk_Mi` as the deepest open column:
+
+* ✅ The walk covers **`~/_Mirror/Politics/Charlie_Kirk_Mi/` and everything under it, recursively** — and
+  nothing else.
+* ❌ It does **not** walk `~/_Mirror/Politics/` (the parent column), `~/_Mirror/` (its parent), or the home
+  root — even though each of those is an **open column to the left**. An open left column is **context the
+  user drilled through**, not scope.
+* ❌ It does **not** touch **siblings** of `Charlie_Kirk_Mi` (e.g. `~/_Mirror/Politics/Charlie_Kirk/`,
+  `~/_Mirror/Politics/COVID/`) — only descendants of the deepest column.
+
+The rules that make this unambiguous (all LOCKED):
+
+1. **"Deepest" = the last opened column, not the last highlighted row.** The scope root is the directory
+   whose **contents fill the rightmost column** — i.e. the last directory the user clicked open. Selecting
+   (highlighting) a **file** inside that column does **not** change the scope root: it stays the containing
+   directory. Selecting a file never widens or narrows the directory scope.
+2. **A left column is never the scope.** Clicking a directory in an earlier column **replaces** every
+   column to its right ([directories.mdx §1](./directories.mdx)), so at any moment the open-column chain is
+   exactly the path from the root to the deepest directory. Only the **tail** of that chain is the scope;
+   the ancestors are breadcrumbs.
+3. **The walk is downward-only.** The recursive collection follows child directories out of the scope root
+   and **never** calls `..`/parent — there is no code path by which a parent or sibling can enter the set.
+4. **Checked subset overrides, still contained.** If the user has checked specific rows, the scope is
+   exactly those checked paths (each of which lives at or below the deepest column) — never their parents.
+5. **No-scope is a safe no-op, never a wide walk.** If somehow no column is open yet (root not resolved),
+   the scope resolves to *nothing* and the enqueue endpoint returns a `400` — it must **never** fall back
+   to walking the home directory or the filesystem root.
+
+Determining the deepest-column scope root (the tail of the open-column stack) is computed in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (`currentDir = stack[stack.length - 1]`, passed as `{ root: currentDir }`; an unopened stack yields `{}`, which the server rejects rather than widening).
+
+Enforcing downward-only containment of the recursive walk (descend into children only, skip hidden/tracking/heavy dirs, never ascend to a parent) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `enqueueTranscribe()` → `resolveCandidates()` → `walkMedia()` (recurses into child directories of `root` only; the mirror walk for descriptions is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `enqueueDescribe()`).
 
 ---
 
@@ -215,7 +259,13 @@ The row is rendered in code (shared component, fed the File System scope):
 7. **Action-links row (§4):** the File System page shows the standard action-links row under its title with
    the catalog items above, following [page_actions.mdx](./page_actions.mdx) (visible links, not a
    dropdown); compress/git-ignore are red-tinted confirm-gated offers.
-8. **No overlap:** this file does not re-specify the column browser, badges, filters, or the Full-paths
+8. **Scope containment (§4.1):** with nothing checked, a producing action's scope is the **deepest
+   (rightmost) open column's directory**, walked **recursively downward only**. Walking
+   `Home → _Mirror → Politics → Charlie_Kirk_Mi` and clicking **Create Transcriptions** processes **only
+   `~/_Mirror/Politics/Charlie_Kirk_Mi/` and its descendants** — never a parent column (`Politics`,
+   `_Mirror`, home), never a sibling directory. Selecting a file inside the deepest column does not change
+   the directory scope; an unopened stack is a `400`, never a fall-back walk of home or `/`.
+9. **No overlap:** this file does not re-specify the column browser, badges, filters, or the Full-paths
    table — those stay owned by [directories.mdx](./directories.mdx) and [full_paths.mdx](./full_paths.mdx).
 
 <!--
@@ -232,6 +282,13 @@ The row is rendered in code (shared component, fed the File System scope):
    (2) ACTION-LINKS ROW (§4): delegates ALL behavior to page_actions.mdx (visible links row under the title,
        NOT the old Actions ▾ dropdown). Catalog: Create Transcriptions · Create AI descriptions · Compress
        all videos… · Compress all images… · Git-ignore big files… · Track / Sync this directory.
+       §4.1 SCOPE CONTAINMENT (LOCKED): with nothing checked, scope = the DEEPEST (rightmost) open column's
+       dir = currentDir = stack[stack.length-1], walked RECURSIVELY DOWNWARD ONLY. Never ascends to a parent
+       column (Politics/_Mirror/home) or touches a sibling dir. "Deepest" = last opened column, not last
+       highlighted row; selecting a file doesn't change the dir scope. Checked subset overrides but stays at/
+       below the deepest col. Unopened stack => {} => server 400, NEVER a fallback walk of home or /. Backend
+       walkMedia() in transcribe.service.ts enqueueTranscribe()->resolveCandidates() recurses into children
+       of root only (describe.service.ts enqueueDescribe() mirrors it).
   Does NOT restate: the Miller column browser / badges R-r·S·C-c·i / size+media filters / persisted state
   (owned by directories.mdx Part A) or the flat Full-paths table /fs/paths (owned by full_paths.mdx).
   Code: interest computed in entity.service.ts buildDirRollup() (extend to emit `interest`) using
