@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { api } from "@/api/client";
 import { Badges } from "@/components/fs/Badges";
 import { EntityMore, ActionsKebab, type Action } from "@/components/menu/EntityMenu";
+import { PageActions, producingActions } from "@/components/menu/PageActions";
 import { DataTable } from "@/components/table/DataTable";
 import type { LfbColumn } from "@/components/table/types";
 import { FlagSwitches, EntityHeaderMissing } from "./entityShared";
@@ -52,6 +53,31 @@ export function ViewOneDirectoryPage() {
     if (!window.confirm(`Compress media inside ${v.name}? This is an offer — nothing changes until it runs.`)) return;
     api.compressEntity(v.path).then(() => toast.success("Compression queued")).catch((e) => { clientLog.error("ViewOneDirectoryPage.compress", e); toast.error(errMessage(e)); });
   };
+
+  // The action-links row (page_actions.mdx §4 — View one directory): producing pair · Compress all…
+  // (its files, recursive). "Compress all…" is the confirm-gated red offer wired to the real
+  // per-directory compress endpoint (api.compressEntity); the confirm modal replaces window.confirm.
+  const compressDirConfirmed = (): void => {
+    api.compressEntity(v.path)
+      .then(() => { toast.success("Compression queued"); })
+      .catch((e) => { clientLog.error("ViewOneDirectoryPage.compressAll", e); toast.error(errMessage(e)); });
+  };
+  const dirPageActions: Action[] = [
+    ...producingActions(() => ({ root: v.path })),
+    {
+      id: "compress-all",
+      label: "Compress all…",
+      icon: <Zap className="h-3.5 w-3.5" />,
+      group: "Work",
+      danger: true,
+      confirm: {
+        title: `Compress media inside ${v.name}?`,
+        body: "Videos and images under this directory are compressed; originals move to LFBridge trash (recoverable).",
+        confirmLabel: "Compress",
+      },
+      onSelect: compressDirConfirmed,
+    },
+  ];
 
   // The folder-level sticky flags — same state as the strip switches (directories.mdx §8.1).
   const toggleFlag = async (patch: { neverIpfs?: boolean; noCompress?: boolean }) => {
@@ -143,6 +169,11 @@ export function ViewOneDirectoryPage() {
           </button>
           <EntityMore path={v.path} />
         </div>
+      </div>
+
+      {/* Page action-links row, directly under the title (page_actions.mdx §3). */}
+      <div className="mt-2">
+        <PageActions actions={dirPageActions} />
       </div>
 
       {/* Badge + flag strip */}

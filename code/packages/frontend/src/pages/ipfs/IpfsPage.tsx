@@ -13,7 +13,9 @@ import { formatBytes } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
-import { EntityKebab } from "../../components/menu/EntityMenu.js";
+import { EntityKebab, type Action } from "../../components/menu/EntityMenu.js";
+import { PageActions } from "../../components/menu/PageActions.js";
+import { publishIpfsList } from "../../components/menu/domainActions.js";
 import { PinKebab } from "../../components/menu/RowKebabs.js";
 import { PinToggle } from "../../components/PinToggle.js";
 import { usePinCid } from "../../components/usePinCid.js";
@@ -82,6 +84,20 @@ export function IpfsPage() {
 
   const untrackedCount = node?.untrackedCount ?? 0;
   const nodeDown = node?.health === "unreachable";
+
+  // The action-links row (page_actions.mdx §4 — IPFS pins): Publish IPFS list… · Re-verify pins.
+  // Re-verify reuses the real pinset rescan endpoint (api.ipfsRescan).
+  const ipfsActions: Action[] = [
+    publishIpfsList(),
+    {
+      id: "reverify-pins",
+      label: "Re-verify pins",
+      icon: <RefreshCw className="h-3.5 w-3.5" />,
+      group: "Work",
+      disabled: rescan.isPending || nodeDown,
+      onSelect: () => rescan.mutate(),
+    },
+  ];
 
   const columns: LfbColumn<IpfsPinRow>[] = [
     {
@@ -237,6 +253,7 @@ export function IpfsPage() {
           </>
         }
         subtitle="Every file this computer is pinning over IPFS — the ground truth of what's shared across your machines."
+        actionsRow={<PageActions actions={ipfsActions} />}
         actions={
           <>
             {untrackedCount > 0 && (

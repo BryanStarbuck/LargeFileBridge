@@ -1,0 +1,243 @@
+---
+title: LargeFileBridge — File System (the left-bar hub + interesting-directory folder coloring)
+description: The hub spec for the "File System" left-bar item (route /fs) — the page the user lands on when they click File System in the left nav. It owns two things that are NOT owned elsewhere: (1) INTERESTING-DIRECTORY FOLDER COLORING — a folder icon is tinted to make directories that contain something worth acting on stand out. A directory is "interesting" if it, or anything under it recursively, contains a big file (≥ the big-file threshold, default 100 MB), a video, or an uncompressed image ≥ 3 MB. The highest-priority thing present picks the color: BIG FILE → brown (light-brown fill, dark-brown outline) is the most powerful; else VIDEO → blue (medium-dark-blue outline, very-light-blue near-white fill); else UNCOMPRESSED IMAGE ≥3MB → blue outline only, no fill (the least powerful). A directory with none of these keeps the plain uncolored folder glyph. This coloring is applied to EVERY folder glyph across the app — the /fs column browser, View-one-directory child lists, storage directory rows, and repo rows — not just this page. (2) THE ACTION-LINKS ROW under the page title (delegates behavior to page_actions.mdx). The File System page's browsing mechanics (Finder-style column browser, code badges R/r·S·C/c·i, size/media filters, persisted view state) are owned by directories.mdx Part A, and the flat Full-paths tab (/fs/paths) by full_paths.mdx — this file references them and does not restate them. Sibling of directories.mdx, full_paths.mdx, page_actions.mdx, left_bar.mdx, repos.mdx, storages.mdx, compression.mdx, settings.mdx (the threshold), and codecs.mdx (what "uncompressed" means).
+---
+
+# LargeFileBridge — File System (the left-bar hub + interesting-directory folder coloring)
+
+This is the page the user lands on when they click **File System** in the left nav
+([left_bar.yaml](./left_bar.yaml) → `id: file_system`, `icon: Columns3`, `route: /fs`). It is the hub for
+browsing the whole filesystem and finding the large files worth acting on.
+
+The **browsing mechanics** are already specified and are **not** restated here:
+
+* [directories.mdx](./directories.mdx) **Part A** — the Finder-style **column browser** at `/fs`: the
+  Miller columns, the (optional) folder/file glyph, the code badges (R/r repo · S sync · C/c compress · i
+  IPFS), the size/media header filters (Only Large · Videos / Images / Audio), and the persisted view state.
+* [full_paths.mdx](./full_paths.mdx) — the **Full paths** tab at `/fs/paths`: the flat recursive TanStack
+  table of large files under the current root. A tab strip switches `/fs` ↔ `/fs/paths`.
+
+This file owns the two things those do **not**:
+
+1. **§1–§3 — Interesting-directory folder coloring** (the new concept: tinting the folder glyph).
+2. **§4 — The action-links row** under the page title (behavior delegated to
+   [page_actions.mdx](./page_actions.mdx)).
+
+Siblings: [directories.mdx](./directories.mdx) · [full_paths.mdx](./full_paths.mdx) ·
+[page_actions.mdx](./page_actions.mdx) · [left_bar.mdx](./left_bar.mdx) · [repos.mdx](./repos.mdx) ·
+[storages.mdx](./storages.mdx) · [compression.mdx](./compression.mdx) · [codecs.mdx](./codecs.mdx) ·
+[settings.mdx](./settings.mdx) (the big-file threshold).
+
+---
+
+## 1. Interesting directories — the idea (LOCKED)
+
+When a user opens the File System, most folders are noise — config, source, dot-directories. The few that
+matter are the ones holding **big files, videos, or uncompressed images** — the files LFBridge exists to
+sync and to help compress. So we **tint the folder icon** of those directories to make them stand out at a
+glance, and we tint them **more strongly** the more important their contents.
+
+A directory is **interesting** if — considering the directory itself **and everything under it,
+recursively** — **any** of the following is true:
+
+1. It contains at least one **video** file.
+2. It contains at least one **uncompressed image** file that is **≥ 3 MB**.
+3. It contains at least one file **at or over the big-file threshold** (the global
+   `big_file.threshold_bytes`, default **100 MB** — [settings.mdx §1](./settings.mdx); a per-repo override
+   may raise/lower it, [repo_settings.mdx](./repo_settings.mdx)).
+4. It contains at least one **sub-directory (recursively) that is itself interesting** — i.e. interest
+   **bubbles up**: a parent of an interesting folder is interesting.
+
+Criterion 4 is automatic once interest is computed recursively: a directory is interesting iff **its whole
+subtree** contains any of 1–3. Only **one** of the criteria has to hold — a folder needs just one video,
+or just one big file, to qualify.
+
+> **Why 3 MB for images and not the compress floor.** The compress-eligibility floor for images is 1 MiB
+> ([compression.mdx](./compression.mdx)); interest uses a **higher 3 MB floor** so a folder of small
+> uncompressed PNG icons does **not** light up. Videos have **no** size floor for interest — any video
+> makes a folder interesting (a small already-compressed clip still counts). Big files use the threshold as-is.
+
+---
+
+## 2. The three colors of interesting (LOCKED)
+
+A folder is **one** color, chosen by the **highest-priority** category present **anywhere in its subtree**.
+Priority, strongest first: **big file → video → uncompressed image**.
+
+| Level | Condition (anywhere in the subtree) | Folder glyph — outline | Folder glyph — fill | Meaning |
+| --- | --- | --- | --- | --- |
+| **1. Brown (strongest)** | ≥ 1 file **≥ big-file threshold** (default 100 MB) | **dark brown** | **light brown** | The important one — real large files live in here (incl. deep). |
+| **2. Blue fill (medium)** | no big file, but ≥ 1 **video** | **medium-dark blue** | **very light blue** (near white) | Video content worth syncing/compressing, nothing over the threshold yet. |
+| **3. Blue outline only (weakest)** | no big file and no video, but ≥ 1 **uncompressed image ≥ 3 MB** | **blue** | **none** (transparent) | Some heavy uncompressed images; the gentlest nudge. |
+| **— Not interesting** | none of the above | default slate (unchanged) | none | Plain folder — no tint. |
+
+Rules that make this unambiguous (all LOCKED):
+
+* **Highest wins.** A folder that contains both a 4 GB `.mov` **and** loose PNGs is **brown**, not blue —
+  the big file dominates. A folder with a small compressed `.mp4` and a 5 MB `.png` (no big file) is **blue
+  fill** (video beats image). The big-file (brown) level explicitly requires a file **≥ threshold**; having
+  only videos or only images — however many — is **not** enough for brown.
+* **Recursive.** The color reflects the **whole subtree**, so a top folder shows **brown** when the only
+  big files are several levels deep. The user sees the important branch from the root.
+* **The base "interesting" look is the blue-fill treatment** (medium-dark-blue outline + very-light-blue
+  fill) the user described — brown is the escalation for big files, blue-outline-only is the de-escalation
+  for images-only.
+* **Not interesting = no change.** A directory with none of 1–3 keeps today's plain folder glyph
+  (`text-slate-500`, no fill). We do **not** color every folder — only the ones worth acting on.
+
+The exact color tokens (added to the `:root` block in `styles.css`; the brown reuses the existing repo
+badge ramp so the palette stays coherent):
+
+```css
+/* Interesting-directory folder glyph — outline (stroke) + fill */
+--lfb-fold-big-line:    #5b3a1a;  /* dark brown  (= --lfb-badge-repo-root) */
+--lfb-fold-big-fill:    #e7d3b1;  /* light brown */
+--lfb-fold-video-line:  #2f6fed;  /* medium-dark blue (= --lfb-badge-ipfs) */
+--lfb-fold-video-fill:  #eef4ff;  /* very light blue, near white */
+--lfb-fold-image-line:  #2f6fed;  /* blue */
+--lfb-fold-image-fill:  transparent; /* outline only, no fill */
+```
+
+The folder glyph is a single `lucide-react` `<Folder>`; **outline = its `color`/stroke, fill = its `fill`**.
+So brown = `{ color: var(--lfb-fold-big-line), fill: var(--lfb-fold-big-fill) }`, video = the blue pair,
+image = `{ color: var(--lfb-fold-image-line), fill: transparent }`, not-interesting = the current
+`text-slate-500` with no fill.
+
+---
+
+## 3. Where the coloring applies + how it's computed
+
+### 3.1 Everywhere a folder glyph is drawn (LOCKED)
+
+This is **not** a File-System-page-only flourish. The user's rule: *"We'll do that pattern anywhere in the
+file system where we show directories or even repos also."* So the interesting-folder coloring is a
+**shared helper** applied to **every folder glyph across the app**:
+
+* the **File System column browser** rows (`/fs`) — the primary place;
+* **View one directory** child listings ([directories.mdx](./directories.mdx) Part B);
+* **Storage detail** directory rows ([storages.mdx](./storages.mdx));
+* **repo rows** where a repo is drawn as a folder — a repo is colored by the **same rule over its working
+  tree** (a repo full of movies shows **brown**), layered under its existing R/r repo badge, so repos and
+  plain folders read the same way.
+
+The Full-paths tab (`/fs/paths`, [full_paths.mdx](./full_paths.mdx)) lists **files, never directory rows**,
+so it has no folder glyph to color — it is unaffected.
+
+### 3.2 The interest signal (LOCKED shape)
+
+Each directory entry the UI renders carries an **`interest`** value:
+
+```ts
+type FolderInterest = "big" | "video" | "image" | null;
+// "big"   → brown         (≥1 file ≥ threshold in the subtree)
+// "video" → blue fill      (no big file, but ≥1 video)
+// "image" → blue outline   (no big file/video, but ≥1 uncompressed image ≥ 3 MB)
+// null    → not interesting (plain glyph)
+```
+
+It is computed by the **same bounded recursive walk** the charter rollup already does — extend
+`buildDirRollup()` (which today emits `videosToCompress` / `imagesToCompress` / `bigNotIgnored` /
+`bigIgnoredNotTracked`) to also emit `interest`, or compute it from those plus a broadened "any video /
+any image ≥3MB" pass. The detection reuses the existing classifiers so the vocabulary never drifts:
+
+* **video** = extension in `VIDEO_EXT` (`fs/badges.ts`) — for interest, **any** video counts (do not
+  require `compressState === "should"`).
+* **uncompressed image ≥ 3 MB** = extension in `IMAGE_UNCOMPRESSED_EXT` (`fs/badges.ts`) **and**
+  `size >= IMAGE_INTEREST_FLOOR_BYTES` (3 MB = `3 * 1024 * 1024`).
+* **big file** = `size >= getAppConfig().big_file.threshold_bytes` (default 100 MB; per-repo override
+  honored), matching the size filter in [directories.mdx §1.4](./directories.mdx).
+
+Determining a directory's interest level (walk the subtree with the standard budget/depth caps, classify each file, fold to the highest-priority category present) is computed in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `buildDirRollup()` (extended to emit `interest`) · classifiers `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `compressInfo()` / `VIDEO_EXT` / `IMAGE_UNCOMPRESSED_EXT`. The value rides on each directory entry in the shared type `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FsEntry` (add `interest?: FolderInterest`).
+
+### 3.3 Performance — computed on the walk, cached, never blocking (LOCKED)
+
+Interest is a **recursive** property, so a naive per-row recompute is expensive on a deep tree. Follow the
+model already in [performance.mdx](./performance.mdx):
+
+* Reuse the **bounded** walk (the existing budget of ~20,000 entries, depth ≤ 8, `HARD_SKIP` dirs
+  excluded). Interest is a by-product of that same pass — no extra traversal.
+* **Cache** the result by directory + its `scannedAt`; serve the cached `interest` instantly and refresh in
+  the background when the directory changes.
+* The column browser **renders immediately** with the plain glyph and **upgrades** the tint when the
+  interest value arrives — the tree never blocks on the walk. A directory whose walk hit the budget cap is
+  treated as **not-yet-known** (plain glyph), not falsely "not interesting".
+
+Mapping the `interest` value to the folder glyph's `color`/`fill` is done in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FsRow` (the `<Folder>` at the folder-glyph line; replace the hardcoded `text-slate-500` with a `folderGlyphStyle(entry.interest)` lookup) · shared helper `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/fs/folderInterest.ts` — `folderGlyphStyle()` (returns `{ color, fill }` from the token pairs in §2), reused by every other folder glyph listed in §3.1.
+
+---
+
+## 4. The action-links row (delegated to page_actions.mdx)
+
+The File System page carries the standard **action-links row directly under its page title** — the visible
+horizontal row of blue hyperlinks, each with a leading icon, that [page_actions.mdx](./page_actions.mdx)
+now specifies for every file-list page (**not** the old `Actions ▾` dropdown). Its behavior — scope
+(checked subset else all-recursive), skip-already-done, background queue, and the toast wording — is
+inherited from [page_actions.mdx §1–§2](./page_actions.mdx) and **not** restated here.
+
+The File System page's links (per the [page_actions.mdx §4](./page_actions.mdx) catalog), left → right:
+
+**Create Transcriptions · Create AI descriptions · Compress all videos… · Compress all images… ·
+Git-ignore big files… · Track / Sync this directory**
+
+* The producing pair (Create Transcriptions / Create AI descriptions) is present on every file-list page.
+* Compress / Git-ignore links are **red-tinted explicit offers with a confirm modal** ([page_actions.mdx
+  §3](./page_actions.mdx), [menus.mdx §6.1](./menus.mdx)) — never a one-click mutation.
+* Scope is the **currently selected column's directory** walked recursively when nothing is checked, or the
+  checked rows when the browser has a selection ([directories.mdx §1.2](./directories.mdx)).
+
+The row is rendered in code (shared component, fed the File System scope):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions` · consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (passes the current column directory as the scope root).
+
+---
+
+## 5. Acceptance criteria
+
+1. **Interesting definition (§1):** a directory is interesting iff its subtree (recursively) contains a
+   video, an uncompressed image ≥ 3 MB, or a file ≥ the big-file threshold (default 100 MB). Interest
+   bubbles up — a parent of an interesting folder is interesting.
+2. **Three colors, highest wins (§2):** the folder glyph is **brown** (dark-brown outline, light-brown
+   fill) when the subtree has a **big file**; else **blue fill** (medium-dark-blue outline, very-light-blue
+   fill) when it has a **video**; else **blue outline only** (blue outline, no fill) when it has an
+   **uncompressed image ≥ 3 MB**; else the plain uncolored glyph. Big beats video beats image.
+3. **Recursive:** a top-level folder shows brown when its only big files are several levels deep; the color
+   reflects the whole subtree, subject to the walk budget.
+4. **Applied everywhere (§3.1):** the same coloring is used for every folder glyph — the `/fs` column
+   browser, View-one-directory child lists, storage directory rows, and repo rows (a movie-filled repo
+   reads brown) — via one shared `folderGlyphStyle()` helper. Full paths (`/fs/paths`) has no directory
+   rows and is unaffected.
+5. **Performance (§3.3):** interest is a by-product of the existing bounded rollup walk, cached by
+   directory + `scannedAt`; the tree renders immediately with plain glyphs and upgrades the tint when the
+   value arrives — never blocking; a budget-capped walk shows the plain glyph, not a false "not interesting".
+6. **Tokens:** the six `--lfb-fold-*` CSS variables from §2 exist in `styles.css` and drive the glyph
+   `color`/`fill`; the brown reuses the existing repo-badge brown and the blue reuses the IPFS-badge blue.
+7. **Action-links row (§4):** the File System page shows the standard action-links row under its title with
+   the catalog items above, following [page_actions.mdx](./page_actions.mdx) (visible links, not a
+   dropdown); compress/git-ignore are red-tinted confirm-gated offers.
+8. **No overlap:** this file does not re-specify the column browser, badges, filters, or the Full-paths
+   table — those stay owned by [directories.mdx](./directories.mdx) and [full_paths.mdx](./full_paths.mdx).
+
+<!--
+  HUB spec for the "File System" left-bar item (/fs). OWNS two new things not owned elsewhere:
+   (1) INTERESTING-DIRECTORY FOLDER COLORING (§1-§3): a dir is "interesting" if its SUBTREE (recursive)
+       has a video, an uncompressed image >= 3 MB, or a file >= big-file threshold (default 100 MB). Color =
+       highest-priority category present: BIG FILE -> brown (dark-brown outline / light-brown fill) is
+       strongest; else VIDEO -> blue fill (medium-dark-blue outline / very-light-blue near-white fill);
+       else UNCOMPRESSED IMAGE >=3MB -> blue OUTLINE ONLY (no fill) is weakest; else plain glyph. Big beats
+       video beats image. Applied to EVERY folder glyph app-wide (fs column browser, view-one-dir child
+       lists, storage dir rows, repo rows), NOT just /fs. Video interest = ANY video (no compressState/size
+       floor). Image interest floor = 3 MB (higher than the 1 MiB compress floor). Tokens: six --lfb-fold-*
+       vars (brown reuses --lfb-badge-repo-root, blue reuses --lfb-badge-ipfs).
+   (2) ACTION-LINKS ROW (§4): delegates ALL behavior to page_actions.mdx (visible links row under the title,
+       NOT the old Actions ▾ dropdown). Catalog: Create Transcriptions · Create AI descriptions · Compress
+       all videos… · Compress all images… · Git-ignore big files… · Track / Sync this directory.
+  Does NOT restate: the Miller column browser / badges R-r·S·C-c·i / size+media filters / persisted state
+  (owned by directories.mdx Part A) or the flat Full-paths table /fs/paths (owned by full_paths.mdx).
+  Code: interest computed in entity.service.ts buildDirRollup() (extend to emit `interest`) using
+  fs/badges.ts compressInfo()/VIDEO_EXT/IMAGE_UNCOMPRESSED_EXT; rides on shared FsEntry.interest; frontend
+  maps via components/fs/folderInterest.ts folderGlyphStyle(), applied at pages/fs/FileSystemPage.tsx FsRow
+  <Folder> (replace text-slate-500) and every other folder glyph. Threshold = getAppConfig().big_file.
+  threshold_bytes (settings.mdx §1). Keep in sync with directories.mdx, full_paths.mdx, page_actions.mdx.
+-->
+</content>

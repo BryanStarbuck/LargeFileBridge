@@ -69,7 +69,10 @@ directories — at **one** level of the directory hierarchy.
   scanner's hard-skip set ([scan.mdx §4](./scan.mdx)).
 
 Each row shows, left to right: an (optional) folder/file glyph, the **entry name** (middle-truncated
-if long), a flexible spacer, and then the **code badges** pinned to the **far right** (§3).
+if long), a flexible spacer, and then the **code badges** pinned to the **far right** (§3). The folder
+glyph is drawn uncolored here, but its **interesting-directory coloring** (brown/blue tinting for
+directories whose subtree holds big files, videos, or heavy images) is specified in
+[file_system.mdx §1–§3](./file_system.mdx) and applied to every folder glyph across the app.
 
 Listing one directory level (Node `fs` only, sorted dirs-first, with per-entry badges) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()`, served by `fs.router.ts` → `GET /api/fs`.
@@ -92,14 +95,17 @@ action menu** as everywhere else ([menus.mdx](./menus.mdx)):
 The Miller-column strip — one lazily-fetched column per directory level, drill-down replacing columns to the right — is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (and its `FsColumn`).
 
-### 1.2 Page actions — the header `Actions ▾` menu
+### 1.2 Page actions — the action-links row
 
-Above the columns, the File System area also carries the page-level **`Actions ▾`** menu — the third
-action surface ([page_actions.mdx](./page_actions.mdx)), distinct from the per-row `⋮` kebab / entity
-`⋮` more-menu owned by [menus.mdx §3–§5](./menus.mdx). It runs a **batch action over the browser's
-files**: **Create Transcriptions · Create AI descriptions · Compress all videos… · Compress all
-images… · Git-ignore big files… · Track / Sync this directory** — the "File System / a directory" row
-of the per-page catalog ([page_actions.mdx §4](./page_actions.mdx)). The three LOCKED rules (scope =
+This File System area is the left-bar **File System hub** ([file_system.mdx](./file_system.mdx)); above
+the columns it carries the page-level **action-links row** — the visible horizontal row of blue text
+hyperlinks (each with a leading icon), directly **under the page title**, that is the third action
+surface ([page_actions.mdx](./page_actions.mdx)). It is **not** a dropdown — it replaces the earlier
+`Actions ▾` menu — and it is distinct from the per-row `⋮` kebab / entity `⋮` more-menu owned by
+[menus.mdx §3–§5](./menus.mdx). Its links run a **batch action over the browser's files**: **Create
+Transcriptions · Create AI descriptions · Compress all videos… · Compress all images… · Git-ignore big
+files… · Track / Sync this directory** — the "File System / a directory" row of the per-page catalog
+([page_actions.mdx §4](./page_actions.mdx)). The three LOCKED rules (scope =
 checked-subset-else-whole-page-recursive, skip-already-done, background queue) and the toast wording
 are inherited from that spec and **not** restated here.
 
@@ -107,8 +113,9 @@ are inherited from that spec and **not** restated here.
   checked, else the whole page recursively" ([page_actions.mdx §1.1](./page_actions.mdx)). But this
   page is a *browser*, not a TanStack table (§1), so its rows carry **no checkboxes today** — for the
   checked-subset case to work, rows need a lightweight **selection affordance** (a hover check /
-  ⌘-click multi-select) whose selected paths feed the menu's `scope`. With **nothing** selected, the
-  menu acts on the **deepest-selected directory (or the root column), recursively** (Rule 1b).
+  ⌘-click multi-select) whose selected paths feed the action-links row's `scope`. With **nothing**
+  selected, the links act on the **deepest-selected directory (or the root column), recursively**
+  (Rule 1b).
 
 implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (mounts `PageActions` from `code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions`, fed the selected paths + root as its `scope`).
@@ -195,7 +202,7 @@ Restoring the column chain + selection on mount and debounce-persisting them on 
 
 ## 1.4 Header filters — Only Large Files/Dirs · Videos / Images / Audio (LOCKED)
 
-Above the columns, alongside the breadcrumb and the `Actions ▾` menu (§1.2), the File System page
+Above the columns, alongside the breadcrumb and the action-links row (§1.2), the File System page
 carries a small row of **filter checkboxes** that cut the noise down to what actually matters for
 bridging large files. All four default **ON**:
 
@@ -561,14 +568,16 @@ One content column: a **header** (identity + primary button + `⋮`), a **badge/
 Rendering the View-one-directory page — header, badge/flag strip, rollup table, and the `⋮` more menu — is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneDirectoryPage.tsx` — `ViewOneDirectoryPage`.
 
-### 7.1 Page actions — the header `Actions ▾` menu
+### 7.1 Page actions — the action-links row
 
-Alongside the **Open in File System** primary button and the entity **`⋮` more menu** (§7), the header
-carries the page-level **`Actions ▾`** menu ([page_actions.mdx](./page_actions.mdx)) for batch work over
-**this directory's files, recursively**: **Create Transcriptions · Create AI descriptions · Compress
-all…** — the "View one directory" row of the per-page catalog ([page_actions.mdx §4](./page_actions.mdx)).
-The two menus do **not** overlap: the entity **`⋮`** acts on the directory *as one entity* (the
-[Directory catalog](./menus.mdx), §7), while **`Actions ▾`** acts on the **files underneath it**. Scope,
+Directly under the page title — alongside the **Open in File System** primary button and the entity
+**`⋮` more menu** (§7) that stay in the header — the page carries the page-level **action-links row**
+([page_actions.mdx](./page_actions.mdx)): the visible row of blue hyperlinks (each with a leading icon,
+**not** a dropdown) for batch work over **this directory's files, recursively**: **Create Transcriptions
+· Create AI descriptions · Compress all…** — the "View one directory" row of the per-page catalog
+([page_actions.mdx §4](./page_actions.mdx)). The two surfaces do **not** overlap: the entity **`⋮`** acts
+on the directory *as one entity* (the [Directory catalog](./menus.mdx), §7), while the **action-links
+row** acts on the **files underneath it**. Scope,
 skip-already-done, background queue, and the toast are inherited from [page_actions.mdx §1–§2](./page_actions.mdx);
 the **Do not compress** sticky flag (§10) suppresses the compress item just as it suppresses the rollup's
 Compress offers.

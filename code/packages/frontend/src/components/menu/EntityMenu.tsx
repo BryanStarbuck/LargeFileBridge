@@ -43,6 +43,13 @@ export interface Action {
   checked?: boolean; // toggle state (Flag group)
   disabled?: boolean;
   onSelect: () => void | Promise<void>;
+  // ── Page action-links row extras (page_actions.mdx §3) — ignored by the popover MenuList ──────────
+  // A destructive/irreversible offer opens this confirm modal BEFORE running onSelect (never a one-click
+  // mutation). Presence of `confirm` implies the red-tinted, confirm-gated treatment in the links row.
+  confirm?: { title: string; body?: ReactNode; confirmLabel?: string };
+  // Producing actions (Create Transcriptions / Create AI descriptions) append the checked count to their
+  // label when a selection exists, e.g. "Create Transcriptions (12)".
+  countWhenSelected?: boolean;
 }
 
 // "Create" fronts the page-action menu (page_actions.mdx) — the producing actions (Create Transcriptions /

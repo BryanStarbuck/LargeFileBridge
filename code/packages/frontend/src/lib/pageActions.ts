@@ -20,6 +20,16 @@ function plural(n: number): string {
   return n === 1 ? "" : "s";
 }
 
+/**
+ * Graceful "not yet wired" notice for a page-level domain action whose batch backend endpoint does not
+ * exist yet (compress-all, git-ignore-big, publish-ipfs, …). We do NOT fabricate a fake route — we tell
+ * the user where the capability lives today, in the app's existing toast.message style
+ * (ViewOneDirectoryPage already does this for per-file git-ignore).
+ */
+export function notWiredToast(what: string, hint?: string): void {
+  toast.message(hint ? `${what} — ${hint}` : what);
+}
+
 /** "{N} files will have their Transcriptions created" / nothing-to-do (page_actions.mdx §2 — LOCKED). */
 function transcribeToast(plan: EnqueuePlan): void {
   if (plan.willProcess === 0) {

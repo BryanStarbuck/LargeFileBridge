@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { FsEntry, FsEntryKind, FsListing, FlatFileListing } from "@lfb/shared";
-import { buildBadgeContext, computeBadges, HARD_SKIP } from "./badges.js";
+import { buildBadgeContext, computeBadges, computeDirInterest, HARD_SKIP } from "./badges.js";
 import { homeDir, resolveDir } from "./paths.js";
 import { log } from "../../shared/logging.js";
 import {
@@ -51,6 +51,13 @@ export async function listDirectory(
   const entries: FsEntry[] = [];
   let truncated = false;
   let sinceYield = 0;
+  // Interesting-directory folder coloring (file_system.mdx §3): compute each DIRECTORY child's interest
+  // over its subtree, sharing ONE bounded budget across the whole column so a directory with many
+  // subdirs can't pin the thread. When the budget is exhausted, later dirs get `interest: undefined`
+  // (plain glyph, upgraded on a later refetch once the cache has filled). Cheap via the mtime+TTL cache
+  // in badges.ts, and early-exit on the first big file.
+  const threshold = ctx.thresholdBytes;
+  const interestBudget = { left: 40000 };
   for (const ent of dirents) {
     if (!showHidden && ent.name.startsWith(".")) continue;
     if (entries.length >= FS_ENTRY_CAP) {
@@ -86,6 +93,13 @@ export async function listDirectory(
       isRepoRoot = res.isRepoRoot;
     }
 
+    // Directory interest tint (file_system.mdx §3.2) — only for expandable directories. `undefined`
+    // (budget hit / unreadable) is left off the entry so the UI keeps the plain glyph.
+    const interest =
+      kind === "dir" && !collapsed
+        ? computeDirInterest(abs, threshold, interestBudget)
+        : undefined;
+
     entries.push({
       name: ent.name,
       path: abs,
@@ -95,6 +109,7 @@ export async function listDirectory(
       isRepoRoot,
       hasChildren: kind === "dir" && !collapsed && dirHasChildren(abs, showHidden),
       badges,
+      ...(interest !== undefined ? { interest } : {}),
     });
   }
 

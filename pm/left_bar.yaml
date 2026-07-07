@@ -88,7 +88,7 @@ Left_Nav:
           icon: "Columns3"
           route: "/fs"
           order: 3
-          description: "Browse your whole filesystem two ways: a Finder-style column view (/fs) and a flat Full-paths table (/fs/paths) of the large files under a folder. Each row shows code badges: R/r repo (brown), S sync (pink), C/c compress (yellow), i IPFS (blue). Defaults to your home directory. See pm/directories.mdx + pm/full_paths.mdx."
+          description: "Browse your whole filesystem two ways: a Finder-style column view (/fs) and a flat Full-paths table (/fs/paths) of the large files under a folder. Each row shows code badges: R/r repo (brown), S sync (pink), C/c compress (yellow), i IPFS (blue). Folders whose subtree holds big files, videos, or heavy images get interesting-directory coloring (brown/blue tinting). Defaults to your home directory. See pm/file_system.mdx (hub + folder coloring) + pm/directories.mdx + pm/full_paths.mdx."
 
         # DEVICES / PEERS (pm/devices.mdx). The registry of every COMPUTER that carries your files —
         # this Mac, a laptop, a studio tower, a server, a family iMac. The page ALWAYS shows at least

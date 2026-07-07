@@ -4,7 +4,7 @@
 // background scan, so a bounded content peek is allowed. No shell, ever (charter).
 import fs from "node:fs";
 import path from "node:path";
-import type { FsBadge, FsEntryKind } from "@lfb/shared";
+import type { FsBadge, FsEntryKind, FolderInterest } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import { listRepoFolders, getRepoConfig, isGitWorkingTree } from "../store-model/units.service.js";
 // One source of truth for the never-descend set — shared with the scanner (scan.mdx §4).
@@ -18,11 +18,16 @@ const MARKDOWN_EXT = new Set([".md", ".mdx"]);
 const IPFS_READ_CAP = 512 * 1024; // don't read files larger than this for signal detection
 
 // Compressible media (charter: video primary, image secondary).
-const VIDEO_EXT = new Set([
+// Exported so the interesting-folder walk (computeDirInterest) and the entity rollup classify with the
+// SAME vocabulary the badges use — the classifier never drifts (file_system.mdx §3.2).
+export const VIDEO_EXT = new Set([
   ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".mpg", ".mpeg", ".wmv", ".flv", ".ts",
 ]);
 // Images that are lossless / uncompressed-ish → offer to compress/convert (C).
-const IMAGE_UNCOMPRESSED_EXT = new Set([".png", ".bmp", ".tif", ".tiff", ".gif"]);
+export const IMAGE_UNCOMPRESSED_EXT = new Set([".png", ".bmp", ".tif", ".tiff", ".gif"]);
+// Interest floor for uncompressed images (file_system.mdx §1): 3 MB — HIGHER than the 1 MiB compress
+// floor, so a folder of small PNG icons does NOT light up. Videos have NO size floor for interest.
+export const IMAGE_INTEREST_FLOOR_BYTES = 3 * 1024 * 1024;
 // Images already in an efficient lossy format → already compressed (c).
 const IMAGE_COMPRESSED_EXT = new Set([".jpg", ".jpeg", ".webp", ".heic", ".heif", ".avif"]);
 // A filename that advertises an already-compressed video encode.
@@ -248,6 +253,113 @@ function dirPublishesIpfs(dirAbs: string): boolean {
     /* ignore */
   }
   return false;
+}
+
+// ── interesting-directory folder coloring (file_system.mdx §1–§3.2) ────────────
+// A directory is "interesting" if — considering the directory itself AND everything under it,
+// recursively — it contains a BIG file (≥ threshold), a VIDEO (any), or an UNCOMPRESSED IMAGE ≥ 3 MB.
+// The highest-priority category present picks the color: big → "video" → "image" → null. Big beats
+// video beats image, so the walk EARLY-EXITS the moment it finds a big file. Bounded like every other
+// walk here (depth ≤ 8, HARD_SKIP, a caller-shared budget) so listing a folder with many subdirs stays
+// responsive; when the budget is exhausted before a conclusion the result is UNKNOWN (undefined), which
+// the UI renders as a plain glyph — never a false "not interesting".
+
+// Result cache keyed by directory, guarded by the dir's own mtime + a short TTL. Interest depends on the
+// whole subtree (an mtime deep inside won't bump this dir's mtime), so the TTL bounds staleness the way
+// the listing cache does; a definite result is cached, an unknown (budget-capped) one is NOT.
+interface InterestCacheEntry {
+  mtimeMs: number;
+  at: number;
+  interest: FolderInterest; // definite only (null included); unknown is never stored
+}
+const INTEREST_TTL_MS = 20000;
+const INTEREST_CACHE_MAX = 5000;
+const interestCache = new Map<string, InterestCacheEntry>();
+
+/**
+ * Compute a directory's interest level over its whole subtree. Returns `undefined` when the shared
+ * `budget` was exhausted before a definite answer (caller should leave FsEntry.interest absent). Draws
+ * down `budget.left` per directory entry examined so one listing's total walk cost is capped.
+ */
+export function computeDirInterest(
+  dirAbs: string,
+  threshold: number,
+  budget: { left: number },
+): FolderInterest | undefined {
+  // Fresh cache hit?
+  const cached = interestCache.get(dirAbs);
+  if (cached && Date.now() - cached.at <= INTEREST_TTL_MS) {
+    let mtimeMs: number;
+    try {
+      mtimeMs = fs.statSync(dirAbs).mtimeMs;
+    } catch {
+      return undefined;
+    }
+    if (mtimeMs === cached.mtimeMs) return cached.interest;
+    interestCache.delete(dirAbs);
+  }
+
+  let rootMtimeMs: number;
+  try {
+    rootMtimeMs = fs.statSync(dirAbs).mtimeMs;
+  } catch {
+    return undefined; // vanished/unreadable → unknown, not "not interesting"
+  }
+
+  let foundVideo = false;
+  let foundImage = false;
+  const stack: Array<{ dir: string; depth: number }> = [{ dir: dirAbs, depth: 0 }];
+  while (stack.length) {
+    if (budget.left <= 0) return undefined; // budget hit before a conclusion → unknown
+    const { dir, depth } = stack.pop()!;
+    if (depth > 8) continue;
+    let dirents: fs.Dirent[];
+    try {
+      dirents = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue; // best-effort: an unreadable subdir is skipped
+    }
+    for (const ent of dirents) {
+      if (budget.left <= 0) return undefined;
+      budget.left--;
+      if (ent.name.startsWith(".")) continue;
+      if (ent.isDirectory()) {
+        if (HARD_SKIP.has(ent.name) || ent.isSymbolicLink()) continue;
+        stack.push({ dir: path.join(dir, ent.name), depth: depth + 1 });
+        continue;
+      }
+      if (!ent.isFile()) continue;
+      const ext = path.extname(ent.name).toLowerCase();
+      const isVideo = VIDEO_EXT.has(ext);
+      const isUncompressedImg = IMAGE_UNCOMPRESSED_EXT.has(ext);
+      // Every file needs a size stat: the big-file check applies to ALL files, and the image floor
+      // needs the size too. (Big is the only early-exit; video/image just set the running flags.)
+      let size: number;
+      try {
+        size = fs.statSync(path.join(dir, ent.name)).size;
+      } catch {
+        continue;
+      }
+      if (size >= threshold) {
+        cacheInterest(dirAbs, rootMtimeMs, "big");
+        return "big"; // highest priority — stop immediately
+      }
+      if (isVideo) foundVideo = true;
+      else if (isUncompressedImg && size >= IMAGE_INTEREST_FLOOR_BYTES) foundImage = true;
+    }
+  }
+
+  const interest: FolderInterest = foundVideo ? "video" : foundImage ? "image" : null;
+  cacheInterest(dirAbs, rootMtimeMs, interest);
+  return interest;
+}
+
+function cacheInterest(dirAbs: string, mtimeMs: number, interest: FolderInterest): void {
+  if (interestCache.size >= INTEREST_CACHE_MAX) {
+    const oldest = interestCache.keys().next().value;
+    if (oldest) interestCache.delete(oldest);
+  }
+  interestCache.set(dirAbs, { mtimeMs, at: Date.now(), interest });
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

@@ -10,6 +10,8 @@ import { formatBytes, mediaKindForName } from "@lfb/shared";
 import { api } from "@/api/client";
 import { runTranscribeFile } from "@/lib/transcribe";
 import { PageActions, producingActions } from "@/components/menu/PageActions";
+import { compressAllVideos } from "@/components/menu/domainActions";
+import type { Action } from "@/components/menu/EntityMenu";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { DataTable } from "@/components/table/DataTable";
 import type { LfbColumn } from "@/components/table/types";
@@ -35,6 +37,21 @@ export function StorageDetailPage() {
 
   const s = data?.storage;
   const d = data?.descriptor;
+
+  // The action-links row (page_actions.mdx §4 — Storage detail): producing pair · Compress all videos… ·
+  // Re-index files. Index files stays the header primary.
+  const storageActions: Action[] = [
+    ...producingActions(() => (s ? { root: s.root } : {})),
+    compressAllVideos(),
+    {
+      id: "reindex",
+      label: "Re-index files",
+      icon: <RefreshCw className="h-3.5 w-3.5" />,
+      group: "Work",
+      disabled: index.isPending,
+      onSelect: () => index.mutate(),
+    },
+  ];
 
   const columns: LfbColumn<StorageFileRow>[] = [
     { id: "path", header: "File", kind: "text", accessor: (f) => f.path, cell: (f) => <span className="font-medium">{f.path}</span> },
@@ -70,12 +87,9 @@ export function StorageDetailPage() {
         above={<Link to="/storages" className="flex items-center gap-1 text-sm text-black/50 hover:text-black"><ChevronLeft className="h-4 w-4" /> Storages</Link>}
         title={s?.name ?? "…"}
         subtitle={s?.root}
+        actionsRow={<PageActions actions={storageActions} />}
         actions={
           <div className="flex items-center gap-2">
-            {/* The header "Actions ▾" page menu (page_actions.mdx §4) — Create Transcriptions / Create AI
-                descriptions over the whole storage (walked recursively), background-queued. This
-                consolidates the former standalone "Transcribe all" button. */}
-            <PageActions actions={producingActions(() => (s ? { root: s.root } : {}))} />
             <button
               onClick={() => index.mutate()}
               disabled={index.isPending}

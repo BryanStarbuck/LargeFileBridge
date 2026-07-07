@@ -14,8 +14,9 @@ import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
 import { RepoStatusPill, TransferPill } from "../../components/Pill.js";
-import { EntityKebab } from "../../components/menu/EntityMenu.js";
+import { EntityKebab, type Action } from "../../components/menu/EntityMenu.js";
 import { PageActions, producingActions } from "../../components/menu/PageActions.js";
+import { compressAllVideos, compressAllImages, gitIgnoreBig } from "../../components/menu/domainActions.js";
 import type { ActionScope } from "../../lib/pageActions.js";
 import { PinToggle } from "../../components/PinToggle.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
@@ -99,7 +100,7 @@ export function OneRepoPage() {
 
   const ipfsDown = detail?.ipfs === "unreachable";
 
-  // The header "Actions ▾" scope (page_actions.mdx §1.1): checked rows → their absolute paths; nothing
+  // The action-links row scope (page_actions.mdx §1.1): checked rows → their absolute paths; nothing
   // checked → the repo root, walked recursively on the server. Evaluated at click time via producingActions.
   const pageScope = (): ActionScope => {
     if (!detail?.path) return {};
@@ -108,6 +109,26 @@ export function OneRepoPage() {
     }
     return { root: detail.path };
   };
+
+  // The action-links row (page_actions.mdx §4 — One repo): producing pair · Compress all videos… ·
+  // Compress all images… · Git-ignore big files… · Rescan. Sync now stays the header primary.
+  const rescanRepo = async () => {
+    try {
+      const r = await api.rescan();
+      if (r.started) toast.success("Rescan started");
+      else toast.info("A scan is already running");
+    } catch (e) {
+      clientLog.error("OneRepoPage.rescan", e);
+      toast.error((e as Error).message);
+    }
+  };
+  const repoActions: Action[] = [
+    ...producingActions(pageScope),
+    compressAllVideos(),
+    compressAllImages(),
+    gitIgnoreBig(),
+    { id: "rescan", label: "Rescan", icon: <RefreshCw className="h-3.5 w-3.5" />, group: "Work", onSelect: rescanRepo },
+  ];
 
   const columns: LfbColumn<FileRow>[] = [
     {
@@ -196,9 +217,9 @@ export function OneRepoPage() {
         }
         title={detail?.name ?? "…"}
         subtitle={detail?.path}
+        actionsRow={<PageActions actions={repoActions} selectedCount={selected.size} />}
         actions={
           <>
-            <PageActions actions={producingActions(pageScope)} selectedCount={selected.size} />
             <button
               onClick={() => navigate({ to: "/repos/$repoId/settings", params: { repoId } })}
               title="Repo settings"

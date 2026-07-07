@@ -590,6 +590,13 @@ export type FsBadge =
 
 export type FsEntryKind = "dir" | "file" | "symlink" | "other";
 
+// Interesting-directory folder coloring (file_system.mdx §2/§3.2). A directory's folder glyph is tinted
+// by the HIGHEST-priority thing anywhere in its subtree: a big file (brown) beats a video (blue fill)
+// beats an uncompressed image ≥ 3 MB (blue outline). `null` = not interesting (plain glyph); an ABSENT
+// value (undefined on FsEntry.interest) = not-yet-known (budget-capped walk) → also plain, never a false
+// "not interesting".
+export type FolderInterest = "big" | "video" | "image" | null;
+
 // One row in a column of the File System browser (directory.mdx §5).
 export interface FsEntry {
   name: string;
@@ -600,6 +607,9 @@ export interface FsEntry {
   isRepoRoot: boolean;
   badges: FsBadge[]; // ordered rightmost-first (directory.mdx §3.5)
   hasChildren: boolean; // dir has ≥1 visible child (drives the disclosure)
+  // Directories only: the interesting-folder tint level (file_system.mdx §3.2). Filled by the listing
+  // endpoint's bounded subtree walk; may be absent when the walk budget was hit (render plain, upgrade later).
+  interest?: FolderInterest;
 }
 
 // The contents of one directory level — one column of the browser.
@@ -651,6 +661,9 @@ export interface DirRollup {
   bigIgnoredNotTracked: number; // category 4 — big git-ignored files we don't yet track
   entryCount: number; // immediate children (files + dirs)
   scannedAt: string | null;
+  // The interesting-folder tint level for THIS directory's subtree (file_system.mdx §3.2), a by-product
+  // of the same bounded rollup walk. `undefined` when the walk budget was hit before a conclusion.
+  interest?: FolderInterest;
 }
 
 // The single-entity payload for View-one-file / View-one-directory (files.mdx §2, directories.mdx §3).

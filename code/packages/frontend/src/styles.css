@@ -28,6 +28,49 @@
   --lfb-badge-compressed: #f3e6a6; /* c  light yellow (already compressed) */
   --lfb-badge-compressed-ink: #3a3320; /* dark ink for the light-yellow c */
   --lfb-badge-ipfs: #2f6fed; /* i  blue */
+
+  /* Interesting-directory folder glyph (file_system.mdx §2) — outline (stroke) + fill. The brown reuses
+     the repo-badge brown and the blue reuses the IPFS-badge blue so the palette stays coherent. */
+  --lfb-fold-big-line: #5b3a1a; /* dark brown  (= --lfb-badge-repo-root) */
+  --lfb-fold-big-fill: #e7d3b1; /* light brown */
+  --lfb-fold-video-line: #2f6fed; /* medium-dark blue (= --lfb-badge-ipfs) */
+  --lfb-fold-video-fill: #eef4ff; /* very light blue, near white */
+  --lfb-fold-image-line: #2f6fed; /* blue */
+  --lfb-fold-image-fill: transparent; /* outline only, no fill */
+}
+
+/* Page action-links row (page_actions.mdx §3) — the visible horizontal row of blue text hyperlinks
+   directly under the page title, matching the sister-app .q-actions row (blue link, leading icon,
+   gap:14px, thin "·" separators, underline on hover, red tint for destructive offers). */
+.lfb-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  font-size: 13px;
+}
+.lfb-actions a {
+  color: var(--lfb-primary);
+  text-decoration: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  line-height: 1.2;
+}
+.lfb-actions a:hover {
+  text-decoration: underline;
+}
+.lfb-actions a.danger {
+  color: var(--lfb-bad);
+}
+.lfb-actions .sep {
+  color: var(--lfb-border);
+  user-select: none;
 }
 
 html,

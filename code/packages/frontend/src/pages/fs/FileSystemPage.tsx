@@ -12,8 +12,15 @@ import { viewerRouteForName } from "@lfb/shared";
 import { api } from "@/api/client";
 import { Badges } from "@/components/fs/Badges";
 import { BadgeLegend } from "@/components/fs/BadgeLegend";
-import { EntityKebab, EntityMenuAt, type MenuPos } from "@/components/menu/EntityMenu";
+import { EntityKebab, EntityMenuAt, type Action, type MenuPos } from "@/components/menu/EntityMenu";
 import { PageActions, producingActions } from "@/components/menu/PageActions";
+import {
+  compressAllVideos,
+  compressAllImages,
+  gitIgnoreBig,
+  trackSyncDir,
+} from "@/components/menu/domainActions";
+import { folderGlyphStyle, isInteresting } from "@/components/fs/folderInterest";
 import { useWindowedRows } from "@/components/table/useWindowedRows";
 import { formatBytes, middleTruncate } from "@/lib/format";
 import { FsTabs } from "./FsTabs";
@@ -76,9 +83,26 @@ export default function FileSystemPage() {
 
   const deepest = selectedFile ?? stack[stack.length - 1] ?? "";
 
+  // The action-links row (page_actions.mdx §4 / file_system.mdx §4 — File System): producing pair ·
+  // Compress all videos… · Compress all images… · Git-ignore big files… · Track / Sync this directory.
+  // Scope = the currently-selected column's directory (deepest open column), walked recursively (there
+  // is no per-row selection in the column browser, so it is always the whole current directory).
+  const currentDir = stack[stack.length - 1];
+  const fsActions: Action[] = [
+    ...producingActions(() => (currentDir ? { root: currentDir } : {})),
+    compressAllVideos(),
+    compressAllImages(),
+    gitIgnoreBig(),
+    trackSyncDir(),
+  ];
+
   return (
     <div className="flex h-full flex-col">
       <FsTabs />
+      {/* Page action-links row, directly under the tabs/title (page_actions.mdx §3, not a dropdown). */}
+      <div className="border-b border-[var(--lfb-border)] px-4 py-2">
+        <PageActions actions={fsActions} />
+      </div>
       {/* Breadcrumb / controls */}
       <div className="flex items-center gap-2 border-b border-[var(--lfb-border)] px-4 py-2">
         <button
@@ -107,12 +131,6 @@ export default function FileSystemPage() {
           <input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} />
           Show hidden
         </label>
-        {/* The header "Actions ▾" page menu (page_actions.mdx §4) — Create Transcriptions / Create AI
-            descriptions over the CURRENT directory (the deepest open column), walked recursively. */}
-        <PageActions actions={producingActions(() => {
-          const currentDir = stack[stack.length - 1];
-          return currentDir ? { root: currentDir } : {};
-        })} />
       </div>
 
       <BadgeLegend className="border-b border-[var(--lfb-border)] px-4 py-1" />
@@ -239,7 +257,20 @@ const FsRow = memo(function FsRow({
       }`}
     >
       {isDir ? (
-        <Folder size={14} className="shrink-0 text-slate-500" />
+        // Interesting-directory folder coloring (file_system.mdx §2/§3): when `entry.interest` is set,
+        // drive the glyph's outline (color/stroke) and fill from the shared helper and drop the default
+        // slate; keep the plain text-slate-500 glyph when interest is null/undefined.
+        (() => {
+          const interesting = isInteresting(entry.interest);
+          const { color, fill } = folderGlyphStyle(entry.interest);
+          return (
+            <Folder
+              size={14}
+              className={`shrink-0 ${interesting ? "" : "text-slate-500"}`}
+              style={interesting ? { color, fill } : undefined}
+            />
+          );
+        })()
       ) : (
         <FileIcon size={14} className="shrink-0 text-slate-400" />
       )}

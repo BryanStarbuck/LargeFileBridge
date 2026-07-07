@@ -241,8 +241,11 @@ single-storage screen (the entity companion to the umbrella above). It is where 
 
 ```
 ┌────────────┬───────────────────────────────────────────────────────────────────────────┐
-│  LEFT BAR  │  ‹ Storages   ACT3 Company Files          ┌─────────────┐ ┌ Actions ▾ ┐ ⋮ │ ← primary + Actions ▾ + entity ⋮
-│            │  company · ACT3 AI · ~/BGit/…/act3_…       │ ⟲ Index files│ └───────────┘   │
+│  LEFT BAR  │  ‹ Storages   ACT3 Company Files                    ┌─────────────┐      ⋮ │ ← header: title + Index files primary + entity ⋮
+│            │  company · ACT3 AI · ~/BGit/…/act3_…                │ ⟲ Index files│        │
+│            │                                                     └─────────────┘        │
+│            │  🎬 Create Transcriptions · ✨ Create AI descriptions · 🗜 Compress all      │ ← the action-links row, UNDER the title
+│            │  videos… · ⟳ Re-index files                                                 │
 │            ├───────────────────────────────────────────────────────────────────────────┤
 │            │  Type company   Files 1,204   Tracked 1,180   Clones Drive✓ Dropbox—        │ ← descriptor summary grid
 │            ├───────────────────────────────────────────────────────────────────────────┤
@@ -260,23 +263,25 @@ single-storage screen (the entity companion to the umbrella above). It is where 
   one row per file in the storage, each carrying which §6 analysis outputs exist (transcript / description
   / visuals-by-time) and a per-row **Analyze** action.
 * **Primary button — Index files** — (re)builds the per-file fingerprint index (§4.1) for this storage;
-  it stays a visible primary button beside the menu ([page_actions.mdx §3](./page_actions.mdx)).
+  it stays a visible primary button in the header ([page_actions.mdx §3](./page_actions.mdx)).
 
-### 7.1 Page actions — the header `Actions ▾` menu
+### 7.1 Page actions — the action-links row
 
-Beside **Index files**, the header carries the page-level **`Actions ▾`** menu
-([page_actions.mdx](./page_actions.mdx)) — the third action surface, distinct from the per-row `⋮` kebab
-([menus.mdx §3](./menus.mdx)) and the entity `⋮` more-menu ([menus.mdx §4](./menus.mdx)). Its items are the
-"Storage detail" row of the per-page catalog ([page_actions.mdx §4](./page_actions.mdx)): **Create
-Transcriptions · Create AI descriptions · Compress all videos… · Re-index files**. Scope (checked subset
-else the whole storage, recursively), skip-already-done, background queue, and the toast wording are all
-inherited from [page_actions.mdx §1–§2](./page_actions.mdx) and not restated.
+Directly under the page title — with **Index files** staying as the header's primary button — the page
+carries the page-level **action-links row** ([page_actions.mdx](./page_actions.mdx)): the visible
+horizontal row of blue hyperlinks (each with a leading icon, **not** the old `Actions ▾` dropdown), the
+third action surface, distinct from the per-row `⋮` kebab ([menus.mdx §3](./menus.mdx)) and the entity `⋮`
+more-menu ([menus.mdx §4](./menus.mdx)). Its items are the "Storage detail" row of the per-page catalog
+([page_actions.mdx §4](./page_actions.mdx)): **Create Transcriptions · Create AI descriptions · Compress
+all videos… · Re-index files**. Scope (checked subset else the whole storage, recursively),
+skip-already-done, background queue, and the toast wording are all inherited from
+[page_actions.mdx §1–§2](./page_actions.mdx) and not restated.
 
-* **The menu consolidates the batch analysis passes (§6).** The page's earlier **Transcribe all** button
-  and the per-row **Analyze** action are the single-pass entry points; the header **Create Transcriptions**
-  / **Create AI descriptions** items are the **whole-storage batch** form of those passes — same engines
+* **The links row consolidates the batch analysis passes (§6).** The page's earlier **Transcribe all**
+  button and the per-row **Analyze** action are the single-pass entry points; the **Create Transcriptions**
+  / **Create AI descriptions** links are the **whole-storage batch** form of those passes — same engines
   ([Transcribe.mdx](./Transcribe.mdx), [ai_description.mdx](./ai_description.mdx)), now gathered into the
-  one `Actions ▾` home so the storage-wide "transcribe/describe everything here" lives beside the other
+  one action-links row so the storage-wide "transcribe/describe everything here" lives beside the other
   page actions rather than as a loose button.
 
 implemented in code:

@@ -7,11 +7,16 @@ export function PageHeader({
   title,
   subtitle,
   actions,
+  actionsRow,
   above,
 }: {
   title: ReactNode;
   subtitle?: ReactNode;
   actions?: ReactNode;
+  // The page action-links row (page_actions.mdx §3): a horizontal row of blue hyperlinks rendered
+  // directly BENEATH the title block (NOT in the header's right-aligned `actions` slot). The page's
+  // single primary button (Sync now / Index files / + Add repo) stays in `actions`; this row is separate.
+  actionsRow?: ReactNode;
   above?: ReactNode; // e.g. a breadcrumb / back link that sits over the title
 }) {
   return (
@@ -24,6 +29,7 @@ export function PageHeader({
         </div>
         {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
       </div>
+      {actionsRow && <div className="mt-2">{actionsRow}</div>}
     </div>
   );
 }

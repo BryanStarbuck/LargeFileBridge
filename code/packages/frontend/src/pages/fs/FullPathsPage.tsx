@@ -40,9 +40,10 @@ import type { FsEntry } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { Badges } from "../../components/fs/Badges.js";
 import { BadgeLegend } from "../../components/fs/BadgeLegend.js";
-import { EntityKebab } from "../../components/menu/EntityMenu.js";
+import { EntityKebab, type Action } from "../../components/menu/EntityMenu.js";
 import { PageActions, producingActions } from "../../components/menu/PageActions.js";
-import type { ActionScope } from "../../lib/pageActions.js";
+import { compressAllVideos, gitIgnoreBig } from "../../components/menu/domainActions.js";
+import { notWiredToast, type ActionScope } from "../../lib/pageActions.js";
 import { formatBytes, relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
 import { clientLog } from "../../lib/clientLog.js";
 import { useDebounced } from "../../lib/useDebounced.js";
@@ -270,11 +271,53 @@ export function FullPathsPage() {
 
   const rootError = flat.error;
 
+  // The action-links row (page_actions.mdx §4 — Full paths): producing pair · Compress all videos… ·
+  // Git-ignore big files… · IPFS pin · Unpin. Scope = the checked rows, else the whole root recursively.
+  // IPFS pin/Unpin reuse the page's existing per-path decision mutation over the current selection.
+  const pinScope = (verb: "sync" | "ignore") => () => {
+    if (selected.size === 0) {
+      notWiredToast(
+        verb === "sync" ? "Select files to pin" : "Select files to unpin",
+        "check the rows you want, then click again",
+      );
+      return;
+    }
+    pin.mutate(verb);
+  };
+  const fullPathsActions: Action[] = [
+    ...producingActions((): ActionScope =>
+      selected.size > 0 ? { paths: [...selected] } : root ? { root } : {},
+    ),
+    compressAllVideos(),
+    gitIgnoreBig(),
+    {
+      id: "ipfs-pin",
+      label: "IPFS pin",
+      icon: <UploadCloud className="h-3.5 w-3.5" />,
+      group: "Work",
+      disabled: pin.isPending,
+      onSelect: pinScope("sync"),
+    },
+    {
+      id: "ipfs-unpin",
+      label: "Unpin",
+      icon: <DownloadCloud className="h-3.5 w-3.5" />,
+      group: "Work",
+      disabled: pin.isPending,
+      onSelect: pinScope("ignore"),
+    },
+  ];
+
   return (
     // Full-page-height (full_paths.mdx §4 / repos.mdx §3.3.1): flex column so the table body flexes to
     // the bottom of the viewport; the bars above and the pager below stay pinned (shrink-0).
     <div className="flex min-h-0 flex-1 flex-col">
       <FsTabs />
+
+      {/* Page action-links row, directly under the tabs/title (page_actions.mdx §3, not a dropdown). */}
+      <div className="shrink-0 py-2">
+        <PageActions actions={fullPathsActions} selectedCount={selected.size} />
+      </div>
 
       {/* Root bar */}
       <div className="flex shrink-0 items-center gap-2 py-2">
@@ -429,7 +472,8 @@ export function FullPathsPage() {
         </Popover>
       )}
 
-      {/* Action row */}
+      {/* Selection helper row — "Select all" is a selection utility (not a catalog action); the IPFS
+          pin/Unpin offers now live in the action-links row under the title (page_actions.mdx §4). */}
       <div className="flex shrink-0 flex-wrap items-center gap-2 py-2">
         <button
           onClick={() => setSelected(new Set(filtered.map((f) => f.path)))}
@@ -437,28 +481,6 @@ export function FullPathsPage() {
         >
           <CheckSquare className="h-4 w-4" /> Select all
         </button>
-        <button
-          onClick={() => pin.mutate("sync")}
-          disabled={selected.size === 0 || pin.isPending}
-          className="flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:opacity-40"
-        >
-          <UploadCloud className="h-4 w-4" /> IPFS pin
-        </button>
-        <button
-          onClick={() => pin.mutate("ignore")}
-          disabled={selected.size === 0 || pin.isPending}
-          className="flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-40"
-        >
-          <DownloadCloud className="h-4 w-4" /> Unpin
-        </button>
-        {/* The header "Actions ▾" page menu (page_actions.mdx §4) — Create Transcriptions / Create AI
-            descriptions over the checked rows, else the whole root walked recursively. */}
-        <PageActions
-          actions={producingActions((): ActionScope =>
-            selected.size > 0 ? { paths: [...selected] } : root ? { root } : {},
-          )}
-          selectedCount={selected.size}
-        />
         {selected.size > 0 && <span className="text-sm text-black/60">{selected.size} selected</span>}
       </div>
 

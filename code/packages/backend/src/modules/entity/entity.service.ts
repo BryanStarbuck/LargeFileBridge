@@ -18,7 +18,11 @@ import {
   compressInfo,
   expandHome,
   HARD_SKIP,
+  VIDEO_EXT,
+  IMAGE_UNCOMPRESSED_EXT,
+  IMAGE_INTEREST_FLOOR_BYTES,
 } from "../fs/badges.js";
+import type { FolderInterest } from "@lfb/shared";
 import { assertAllowedPath } from "../fs/allow-root.js";
 import { effectiveFlags, ownFlags, setFileFlags, getAppConfig } from "../store-model/config.service.js";
 import {
@@ -202,6 +206,13 @@ function buildDirRollup(dirAbs: string, match: RepoMatch | null): DirRollup {
   let bigIgnoredNotTracked = 0;
   let entryCount = 0;
 
+  // Interesting-folder tint (file_system.mdx §3.2), computed as a by-product of this same walk — big
+  // beats video beats image. interest-video = ANY video (no compressState/size floor); interest-image
+  // floor = 3 MB (higher than the 1 MiB compress floor); big = ≥ threshold.
+  let interestBig = false;
+  let interestVideo = false;
+  let interestImage = false;
+
   // Immediate-children count (cheap, exact).
   try {
     for (const ent of fs.readdirSync(dirAbs, { withFileTypes: true })) {
@@ -253,7 +264,13 @@ function buildDirRollup(dirAbs: string, match: RepoMatch | null): DirRollup {
         if (comp.compressible === "video") videosToCompress++;
         else if (comp.compressible === "image") imagesToCompress++;
       }
+      // Interest classification (independent of the compress floor / noCompress flag): ANY video, an
+      // uncompressed image ≥ 3 MB, or a big file.
+      const ext = path.extname(ent.name).toLowerCase();
+      if (VIDEO_EXT.has(ext)) interestVideo = true;
+      else if (IMAGE_UNCOMPRESSED_EXT.has(ext) && size >= IMAGE_INTEREST_FLOOR_BYTES) interestImage = true;
       if (size >= threshold) {
+        interestBig = true;
         if (candidateRel.has(abs)) {
           // git-ignored big file: "not tracked" when we aren't syncing it.
           if (!candidateDecided.has(abs) && !flags.neverIpfs) bigIgnoredNotTracked++;
@@ -264,6 +281,15 @@ function buildDirRollup(dirAbs: string, match: RepoMatch | null): DirRollup {
     }
   }
 
+  // A big file is definite regardless of truncation (highest priority). Otherwise, if the walk stopped
+  // on the budget with dirs unexplored, we can't be sure a big file isn't deeper → interest is UNKNOWN
+  // (undefined). A fully-drained walk yields a definite video/image/null.
+  const walkTruncated = stack.length > 0;
+  let interest: FolderInterest | undefined;
+  if (interestBig) interest = "big";
+  else if (walkTruncated) interest = undefined;
+  else interest = interestVideo ? "video" : interestImage ? "image" : null;
+
   return {
     videosToCompress,
     imagesToCompress,
@@ -271,6 +297,7 @@ function buildDirRollup(dirAbs: string, match: RepoMatch | null): DirRollup {
     bigIgnoredNotTracked,
     entryCount,
     scannedAt,
+    ...(interest !== undefined ? { interest } : {}),
   };
 }
 

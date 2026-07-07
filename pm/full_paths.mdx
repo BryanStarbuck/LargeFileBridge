@@ -187,17 +187,19 @@ checked. Pin/Unpin reuse the per-entity decision endpoint, so — like everywher
 Batch pin/unpin over the checked rows (per-entity decision → sync/ignore, skip-and-report) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (the `pin` mutation), backed by `entity.service.ts` → `setEntityDecision()`.
 
-### 3.6 Page actions — the header `Actions ▾` menu
+### 3.6 Page actions — the action-links row
 
-The **Select all · IPFS pin · Unpin** buttons above (§3.5) are this table's IPFS actions. On top of them
-the page header carries the page-level **`Actions ▾`** menu — the third action surface
+The **Select all · IPFS pin · Unpin** buttons above (§3.5) are this table's IPFS actions — and those
+visible buttons are now consistent with the house **action-links** pattern this page also adopts. Under
+the page title the page carries the page-level **action-links row** — the visible horizontal row of blue
+hyperlinks (each with a leading icon, **not** the old `Actions ▾` dropdown), the third action surface
 ([page_actions.mdx](./page_actions.mdx)), distinct from the per-row `⋮` kebab ([menus.mdx §5.3](./menus.mdx)).
 Its items are the "Full paths" row of the per-page catalog ([page_actions.mdx §4](./page_actions.mdx)):
 **Create Transcriptions · Create AI descriptions · Compress all videos… · Git-ignore big files…** Each
 operates on the **checked set** (Rule 1a — the same rows §3.5's buttons act on) or, with **nothing
 checked**, on **all rows** the walk gathered, recursively (Rule 1b). Scope, skip-already-done, background
 queue, and the toast wording are inherited from [page_actions.mdx §1–§2](./page_actions.mdx) and not
-restated. (The IPFS **pin/Unpin** buttons stay outside the menu as this page's primary decision actions.)
+restated. (The IPFS **pin/Unpin** buttons stay as this page's primary decision actions in their own row.)
 
 implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (mounts `PageActions` from `code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions`, fed the checked paths + root as its `scope`).

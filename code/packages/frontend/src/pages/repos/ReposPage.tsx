@@ -9,6 +9,9 @@ import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
 import { RepoKebab } from "../../components/menu/RowKebabs.js";
+import { PageActions } from "../../components/menu/PageActions.js";
+import { syncAllRepos } from "../../components/menu/domainActions.js";
+import type { Action } from "../../components/menu/EntityMenu.js";
 import { RepoStatusPill } from "../../components/Pill.js";
 import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
 import { clientLog } from "../../lib/clientLog.js";
@@ -128,6 +131,20 @@ export function ReposPage() {
       cell: (r) => <RepoStatusPill status={r.status} /> },
   ];
 
+  // The action-links row (page_actions.mdx §4 — Repos list): Rescan all · Sync all. Rows are repos, not
+  // files, so there is NO producing pair here. + Add repo stays the header primary.
+  const repoListActions: Action[] = [
+    {
+      id: "rescan-all",
+      label: "Rescan all",
+      icon: <RefreshCw className="h-3.5 w-3.5" />,
+      group: "Work",
+      disabled: scanning || rescan.isPending,
+      onSelect: () => rescan.mutate(),
+    },
+    syncAllRepos(),
+  ];
+
   return (
     // Full-page-height (repos.mdx §3.3.1): a flex column so the DataTable fills to the bottom.
     <div className="flex min-h-0 flex-1 flex-col">
@@ -149,6 +166,11 @@ export function ReposPage() {
             <Plus className="h-4 w-4" /> Add repo
           </button>
         </div>
+      </div>
+
+      {/* Page action-links row, directly under the title (page_actions.mdx §3). */}
+      <div className="mb-2 shrink-0">
+        <PageActions actions={repoListActions} />
       </div>
 
       <DataTable

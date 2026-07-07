@@ -296,14 +296,16 @@ this computer with LFBridge:
 Registering a repo by folder path (and kicking a background rescan) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `POST /api/repos` (calls `registerRepo`)
 
-### 6.1 Page actions — the header `Actions ▾` menu
+### 6.1 Page actions — the action-links row
 
-Beside the existing **+ Add repo** primary button (§6), the header carries the page-level **`Actions ▾`**
-menu ([page_actions.mdx](./page_actions.mdx)) — the third action surface, distinct from the per-row `⋮`
-repo kebab ([menus.mdx §5.1](./menus.mdx#51-repo)). Because **Repos rows are repos, not files**, this page
-does **not** carry the file-producing actions (Create Transcriptions / Create AI descriptions live on the
-file-list pages). Instead its menu is the "Repos list" row of the per-page catalog
-([page_actions.mdx §4](./page_actions.mdx)) — the **whole-list** operations:
+Directly under the page title — with the **+ Add repo** primary button (§6) staying in the header — the
+page carries the page-level **action-links row** ([page_actions.mdx](./page_actions.mdx)): the visible
+horizontal row of blue hyperlinks (each with a leading icon, **not** the old `Actions ▾` dropdown), the
+third action surface, distinct from the per-row `⋮` repo kebab ([menus.mdx §5.1](./menus.mdx#51-repo)).
+Because **Repos rows are repos, not files**, this page does **not** carry the file-producing actions
+(Create Transcriptions / Create AI descriptions live on the file-list pages). Instead its links are the
+"Repos list" row of the per-page catalog ([page_actions.mdx §4](./page_actions.mdx)) — the **whole-list**
+operations:
 
 * **Rescan all** — re-run the scan across **every** repo on this computer (the per-repo Rescan
   [menus.mdx §5.1](./menus.mdx#51-repo), lifted to all rows).
