@@ -92,6 +92,17 @@ export const launchdInstaller: SchedulerInstaller = {
       return null;
     }
   },
+  installedTriggerScript(label) {
+    try {
+      const xml = fs.readFileSync(agentPath(label), "utf8");
+      // ProgramArguments is [node, <trigger script>, worker, port] — pull the run-worker trampoline path.
+      const m = xml.match(/<string>([^<]*run-worker\.mjs)<\/string>/);
+      return m ? m[1] : null;
+    } catch {
+      // Not installed / unreadable — no path to compare against.
+      return null;
+    }
+  },
   async isEnabled(label) {
     try {
       await run("launchctl", ["print", domainTarget(label)]);
