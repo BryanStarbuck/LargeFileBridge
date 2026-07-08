@@ -250,6 +250,34 @@ export function getDedicatedRepoRemote(storageId: string): { remote: string } | 
   }
 }
 
+/**
+ * The Git backbone remote LFB actually drives for a storage each pass (git_sync.mdx §1/§7, devices.mdx §12).
+ * Resolved in priority order:
+ *   1. The EXPLICIT dedicated-repo backing (`getDedicatedRepoRemote`) — the user pointed the backbone at a
+ *      path (a local checkout or a URL). Always wins.
+ *   2. AUTO-ADOPT the storage's OWN root when it is a `*_large_files_bridge` **company** or **personal** SDL
+ *      storage AND that root is itself a git working tree (`<root>/.git` exists). Such a repo is, by
+ *      definition, a purpose-built tracking-data repo the user created for LFB (the naming convention +
+ *      `storage.yaml` descriptor is the configuration) — so committing & pushing our OWN device registry
+ *      into it is exactly the charter's "our own content between our own machines" (storage_company.mdx),
+ *      NOT a merely-discovered code repo (those are type `repo` and get `.lfbridge/` git-ignored instead).
+ *      Without this, a company tracking repo had its `devices/<self>.yaml` WRITTEN but never
+ *      `git add`/`commit`/`push`ed unless the user manually flipped the dedicated-repo backing switch —
+ *      the exact defect reported for the Act3 company storage.
+ * Returns null when neither applies (no git this pass — the local device file still travels once a backbone
+ * turns on).
+ */
+export function getGitBackboneRemote(storageId: string): { remote: string } | null {
+  const explicit = getDedicatedRepoRemote(storageId);
+  if (explicit) return explicit;
+  const row = getStorageRow(storageId);
+  if (!row) return null;
+  if (row.type !== "company" && row.type !== "personal") return null;
+  const root = expandHome(row.root);
+  if (fs.existsSync(path.join(root, ".git"))) return { remote: root };
+  return null;
+}
+
 // ── mapped source directories (syncable_data_location.mdx §3, storage_settings.mdx §4a) ───────────────
 // The SHARED list of source hierarchies a company/personal storage covers, in the SDL's
 // `<root>/.lfbridge/mapped_dirs.yaml`. Everything recursive under each mapped dir is in scope. The

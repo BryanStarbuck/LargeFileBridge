@@ -305,9 +305,16 @@ has the same shape of rule and the same default:
   command against a repo the user did **not** configure as a backbone is a defect, exactly like a code
   path that would turn this machine into a public IPFS gateway. The only acceptable Git targets are the
   user's own configured storage backbones.
+* **A `*_large_files_bridge` company/personal tracking repo counts as user-configured.** When such a
+  storage's **own root is a git working tree**, LFB **auto-adopts that root** as its backbone
+  ([devices.mdx §11.2.1](./devices.mdx#1121-a-company--personal-tracking-repo-auto-adopts-its-own-git-root--commit--push-first-write-and-every-update-locked-learned-from-a-defect))
+  — this is **inside** the boundary, not a widening of it: a purpose-built tracking repo the user made
+  for LFB is a repo the user *configured*, and LFB only ever pushes **our own** device registry into it.
+  A plain **code** repo (storage type `repo`) is **never** adopted — its `.lfbridge/` is git-ignored and
+  it is explicitly excluded from every git cycle.
 
-Enforcing that Git operations only ever target a user-configured storage backbone (never a merely-discovered repo) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone` is only ever constructed from a storage whose `backing.dedicated_repo.enabled` is true (checked in `syncStorageUnit`); there is no entry point that runs `push`/`fetch` on an arbitrary path.
+Enforcing that Git operations only ever target a user-configured storage backbone (never a merely-discovered code repo) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getGitBackboneRemote()` returns a backbone **only** for an explicit dedicated-repo backing OR a company/personal storage whose own `<root>/.git` exists (a `repo`-type code repo returns null); `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone` is constructed only from that resolved remote, and there is no entry point that runs `push`/`fetch` on an arbitrary path.
 
 ---
 

@@ -50,7 +50,11 @@ stay in their natural directories and are brought into scope by a **list of mapp
 ```
 
 * **Root:** one **SDL** directory per company, e.g. `~/BGit/Bryan_git/act3_large_files_bridge/` — a small
-  Git repo of metadata. A user in three companies has three such roots, each its own storage.
+  Git repo of metadata. A user in three companies has three such roots, each its own storage. Because this
+  root is a **dedicated tracking-data Git repo the user made for LFB**, when it is itself a git working
+  tree LFB **auto-adopts it as the storage's Git backbone** and **commits + pushes** this computer's
+  `devices/<self>.yaml` there on first write and every update — no manual dedicated-repo setting needed
+  ([devices.mdx §11.2.1](./devices.mdx#1121-a-company--personal-tracking-repo-auto-adopts-its-own-git-root--commit--push-first-write-and-every-update-locked-learned-from-a-defect)).
 * Because it is **shared across members**, both the SDL (over Git/backbones) and the mapped big files
   (over IPFS) sync across **the members' computers** — a company storage is the multi-user case (peers
   here include teammates' machines, within the company's allow-list).

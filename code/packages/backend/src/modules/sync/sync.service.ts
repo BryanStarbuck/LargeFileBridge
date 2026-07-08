@@ -33,7 +33,7 @@ import { writeCommittedManifest, readCommittedManifest } from "./manifest.servic
 import { listStorageIds, ensureBackingLocations, getStorageRow } from "../storage/storage.service.js";
 import { readStorageIndex } from "../storage/tracking.service.js";
 import { writeSelfDevice, resolveGraftedPath } from "../storage/devices.service.js";
-import { getStorageSynced, readMappedDirsForRoot, getDedicatedRepoRemote } from "../storage/storage-settings.service.js";
+import { getStorageSynced, readMappedDirsForRoot, getGitBackboneRemote } from "../storage/storage-settings.service.js";
 import { GitBackbone, type GitCycleResult } from "../git/git.service.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { log } from "../../shared/logging.js";
@@ -395,7 +395,7 @@ async function syncStorageUnitInner(id: string): Promise<void> {
   // are merged in first. This pull happens EVERY pass even when we have nothing to change (devices.mdx
   // §12), so edits made on another computer land here. A merge conflict or auth failure is surfaced and we
   // continue over IPFS. The commit + push of THIS device's own changes happens AFTER the reconcile below.
-  const gitRemote = getDedicatedRepoRemote(id);
+  const gitRemote = getGitBackboneRemote(id);
   const gitBackbone = gitRemote ? await GitBackbone.resolve(id, gitRemote.remote) : null;
   const gitResult: GitCycleResult = { ran: gitBackbone !== null };
   if (gitBackbone) {
@@ -485,7 +485,7 @@ async function ensureDeviceRegisteredInner(id: string): Promise<GitCycleResult> 
   if (!row || row.type === "local" || row.type === "repo") return result;
   const root = expandHome(row.root);
 
-  const gitRemote = getDedicatedRepoRemote(id);
+  const gitRemote = getGitBackboneRemote(id);
   const gitBackbone = gitRemote ? await GitBackbone.resolve(id, gitRemote.remote) : null;
   result.ran = gitBackbone !== null;
 

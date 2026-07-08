@@ -412,11 +412,34 @@ Detecting the IPFS `i` badge — artifact names, the capped markdown/manifest co
   `r · S · C · i` (rendered `i C S r`).
 * A row shows **at most one badge per category** (never both `C` and `c`, never two repo shades).
 * Zero badges is normal and common.
-* Each badge has a **hover tooltip** spelling out its meaning (e.g. "Repo root", "Sync — tracked",
-  "Should be compressed", "IPFS share artifact").
+
+### 3.5.1 Hover tooltip — name what the letter stands for (LOCKED)
+
+A single colored letter is opaque to anyone who hasn't memorized the vocabulary. So **every badge, in
+every place it renders, explains itself on hover** — the user should never have to guess what `S` or `i`
+means, and should never have to open the legend to find out.
+
+* **Hovering (or keyboard-focusing) a badge shows a tooltip** whose **headline is the NAME the letter
+  stands for** — a short **1–3 word** phrase (e.g. **Repo root**, **Inside a repo**, **Synced**,
+  **Compress**, **Compressed**, **IPFS artifact**) — followed by **one slightly-longer line** explaining
+  it when a name alone isn't enough (e.g. "Tracked and bridged over IPFS across your computers."). Keep it
+  to a name plus one line; this is a glance aid, not documentation.
+* **The same badges appear at the top of an entity page** — the badge strip in the header of *View one
+  file* / *View one directory* / the media viewer (menus.mdx §5), the "top of the web page" the user
+  sees when they open one entry. Because that strip renders the **same** `Badges` component, those
+  top-of-page badges carry the **same** hover tooltip — so the meaning is reachable both while browsing
+  the file list and while looking at a single entity.
+* **One source of truth.** The tooltip's name + line come from the **same** per-badge metadata that
+  drives the **legend** ("What do these letters mean?", §5.7 of use_cases.mdx), so the hover text and the
+  legend can never drift.
+* The tooltip renders into a **body-level portal** so a table cell's or scroll region's `overflow` never
+  clips it, and it never fires a duplicate native browser `title`.
 
 Computing the ordered badge list per entry (repo precedence, sync, compress, ipfs — rightmost-first) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `computeBadges()` (with the per-listing `buildBadgeContext()`).
+
+Naming each letter on hover — the per-badge name/description metadata (the single source shared by the hover tooltip and the legend) and the portal tooltip that shows it — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/fs/Badges.tsx` — `BADGE_META` (the `name` + `desc` per `FsBadge`) rendered through `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/Tooltip.tsx` — `Tooltip` (body-portal, position:fixed); the legend reuses `BADGE_META` in `BadgeLegend.tsx` — `BadgeLegend`.
 
 ---
 

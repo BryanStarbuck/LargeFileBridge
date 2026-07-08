@@ -4,37 +4,69 @@
 // with the repo badge pinned to the far right.
 import { memo } from "react";
 import type { FsBadge } from "@lfb/shared";
+import { Tooltip } from "../ui/Tooltip.js";
 
 interface BadgeMeta {
   letter: string;
   bg: string; // CSS var
   ink: string; // letter color
-  title: string;
+  name: string; // the short NAME the letter stands for (1–3 words) — the tooltip headline
+  desc: string; // one line explaining it, a little longer when needed
 }
 
-const BADGE_META: Record<FsBadge, BadgeMeta> = {
-  repo_root: { letter: "R", bg: "var(--lfb-badge-repo-root)", ink: "#fff", title: "Repo root (git working tree)" },
+// The single source of truth for what each code-badge letter MEANS. `name` is the 1–3 word phrase the
+// letter stands for (shown bold in the hover tooltip); `desc` is the slightly-longer one-line explanation.
+// BadgeLegend.tsx reuses these, so the hover tooltip and the "What do these letters mean?" legend never drift.
+export const BADGE_META: Record<FsBadge, BadgeMeta> = {
+  repo_root: {
+    letter: "R",
+    bg: "var(--lfb-badge-repo-root)",
+    ink: "#fff",
+    name: "Repo root",
+    desc: "The top of a git working tree LFBridge manages.",
+  },
   repo_descendant: {
     letter: "r",
     bg: "var(--lfb-badge-repo-descendant)",
     ink: "#fff",
-    title: "Inside a repo",
+    name: "Inside a repo",
+    desc: "This lives underneath a git repo root.",
   },
   repo_ancestor: {
     letter: "r",
     bg: "var(--lfb-badge-repo-ancestor)",
     ink: "#fff",
-    title: "Contains a repo below",
+    name: "Contains a repo",
+    desc: "A git repo sits somewhere below this folder.",
   },
-  sync: { letter: "S", bg: "var(--lfb-badge-sync)", ink: "#fff", title: "Sync — tracked & synced" },
-  compress: { letter: "C", bg: "var(--lfb-badge-compress)", ink: "#fff", title: "Should be compressed" },
+  sync: {
+    letter: "S",
+    bg: "var(--lfb-badge-sync)",
+    ink: "#fff",
+    name: "Synced",
+    desc: "Tracked and bridged over IPFS across your computers.",
+  },
+  compress: {
+    letter: "C",
+    bg: "var(--lfb-badge-compress)",
+    ink: "#fff",
+    name: "Compress",
+    desc: "Looks uncompressed — could be shrunk (an offer, never automatic).",
+  },
   compressed: {
     letter: "c",
     bg: "var(--lfb-badge-compressed)",
     ink: "var(--lfb-badge-compressed-ink)",
-    title: "Already compressed",
+    name: "Compressed",
+    desc: "Already compressed.",
   },
-  ipfs: { letter: "i", bg: "var(--lfb-badge-ipfs)", ink: "#fff", title: "IPFS share / list artifact" },
+  ipfs: {
+    letter: "i",
+    bg: "var(--lfb-badge-ipfs)",
+    ink: "#fff",
+    name: "IPFS artifact",
+    desc: "An IPFS share / list artifact.",
+  },
 };
 
 // Memoized — the badge array for a row only changes identity when that row's data changes, so a table
@@ -46,14 +78,25 @@ export const Badges = memo(function Badges({ badges }: { badges: FsBadge[] }) {
       {badges.slice().reverse().map((b, i) => {
         const m = BADGE_META[b];
         return (
-          <span
+          // Hover/focus the chip → a tooltip names what the letter stands for (directory.mdx §4). One
+          // Tooltip per badge, so every place a badge renders — FS rows, Full Paths, the entity-detail
+          // header strip at the top of the page — explains itself the same way.
+          <Tooltip
             key={`${b}-${i}`}
-            title={m.title}
-            className="inline-flex h-4 w-4 items-center justify-center rounded-[3px] text-[10px] font-bold leading-none select-none"
-            style={{ backgroundColor: m.bg, color: m.ink }}
+            content={
+              <span className="block">
+                <span className="font-semibold">{m.name}</span>
+                <span className="mt-0.5 block text-white/75">{m.desc}</span>
+              </span>
+            }
           >
-            {m.letter}
-          </span>
+            <span
+              className="inline-flex h-4 w-4 items-center justify-center rounded-[3px] text-[10px] font-bold leading-none select-none"
+              style={{ backgroundColor: m.bg, color: m.ink }}
+            >
+              {m.letter}
+            </span>
+          </Tooltip>
         );
       })}
     </span>
