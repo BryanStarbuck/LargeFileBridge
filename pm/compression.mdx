@@ -20,6 +20,9 @@ Siblings this builds on and does not repeat:
   requirement; the two-hash (compressed/uncompressed) per-file tracking.
 * [Menus](./menus.mdx) — the **Compress…** and **Convert to compressible…** catalog items (explicit-click
   offers with a confirm, §6.1). This spec is what those items run.
+* [Compress inside](./compress_inside.mdx) — the pop-over dialog + **per-file-safe background batch** that
+  drives this engine over **many** files in a directory (the directory `⋮` and page-level compress links).
+  It surfaces originals disposition as a per-run choice (§8.2) and drives `compressFile` file-by-file.
 * [View one file / media viewer](./media_viewer.mdx) — where a single file's **codec + compressed state**
   are shown and the **Compress** button lives (§4).
 * [One repo](./one_repo.mdx) — the files table where the user **checks several** files or **compresses the
@@ -32,14 +35,16 @@ Siblings this builds on and does not repeat:
 
 1. **Never automatic.** LFBridge never compresses on its own. The user clicks **Compress** on a file, or
    selects several / a whole table filter and clicks compress. Charter §6.1.
-2. **Medium quality, prefer lossless.** We target a **medium** quality level — not maximum-aggression that
-   throws away visible quality. Where a **lossless** re-encoding applies (e.g. recompressing a PNG, or a
-   lossless WebP), we use it: the file won't shrink as much, but **no quality is lost**. Tools are always
-   invoked with an **explicit quality parameter** — we only use brew tools that let us **control the
-   quality level** (so it never silently maxes out compression).
+2. **Medium quality — the MIDDLE of the range — prefer lossless.** We target the **middle** of the
+   quality↔size range (default `medium`), for **both images and video** — not maximum-aggression that
+   throws away visible quality, and not maximum quality that barely shrinks. Where a **lossless**
+   re-encoding applies (e.g. recompressing a PNG, or a lossless WebP), we use it: the file won't shrink as
+   much, but **no quality is lost**. Tools are always invoked with an **explicit numeric quality
+   parameter** — we **only** use tools that let us **control the quality level across the full range** (so
+   it never silently maxes out compression). This is the **HARD REQUIREMENT** spelled out in **§2.1**.
 3. **Never change the pixels' size.** The output MUST keep the **same aspect ratio** and the **same pixel
-   resolution** as the input. **We never downscale.** This is verified after encoding (§5) — a size change
-   aborts the operation.
+   resolution** as the input — for **both images and video**. **We never downscale.** This is verified
+   after encoding (§5) — a size change aborts the operation.
 4. **Alpha safety first.** Before compressing we run the **alpha-channel safety check** (§6). If real
    transparency would be lost, we refuse (or steer to an alpha-preserving codec).
 5. **Recoverable.** Compression replaces the file via a **temp file**, and the original is moved to the
@@ -71,6 +76,64 @@ Detecting installed tools (which of ffmpeg/ffprobe/magick/oxipng/cwebp/cjpeg/jpe
 
 ---
 
+## 2.1 Quality control — the MIDDLE setting (HARD REQUIREMENT, LOCKED)
+
+This is the **single most important compression rule** and it applies **equally to IMAGE and VIDEO**:
+
+1. **Same pixel resolution.** Every compressed output keeps the **same aspect ratio and the same pixel
+   resolution** as the input — for **both images and video**. We **never downscale** (verified after
+   encoding, §5). Compression buys smaller files by spending bits more efficiently, **not** by throwing
+   away pixels.
+2. **A modern algorithm with a controllable quality↔size range.** For each media type we use a **modern,
+   high-efficiency** codec/encoder that exposes a **continuous quality knob** — one end = **highest
+   quality / larger file**, the other end = **maximum compression / visibly degraded**. We do **not** use
+   any tool that only has a single "make it as small as possible" mode.
+3. **We deliberately pick the MIDDLE of that range.** The default quality is **`medium`** (config default,
+   never the extreme). At medium we keep **nearly all** the perceptible quality and still get a **much
+   smaller** file — we give up only a **minuscule** amount of quality in exchange for a large size win.
+   `high` and `low` (and `lossless`) exist for the user who wants to slide toward either end, but the
+   product default sits in the middle.
+
+### 2.1.1 The RISK this requirement guards against (why the tool choice matters)
+
+The failure mode we are explicitly protecting against: **a compression tool that has no middle — it only
+races to the tiniest possible file and sacrifices a lot of quality**, with no dial to trade a little size
+back for a lot of quality. Such a tool is **disqualified**. Every tool we drive is chosen **precisely
+because it takes an explicit numeric quality parameter** that spans the full range, so the engine can pin
+it to the middle. The tools are **always** invoked **with that parameter set** — the quality is **never
+left to the tool's default and never maxed out silently**.
+
+### 2.1.2 The exact knob, range, and MIDDLE value per media type
+
+| Media | Tool / encoder | The range knob | Scale (best-quality ↔ smallest) | MIDDLE (`medium`, the default) |
+| --- | --- | --- | --- | --- |
+| **Video** | `ffmpeg` — `libx264` (H.264), `libx265` (HEVC), `libaom-av1` (AV1) | **`-crf <n>`** (Constant Rate Factor) | `0` = lossless … `51` = worst; **lower = higher quality/bigger** | **CRF 21** for H.264/AV1, **CRF 24** for HEVC |
+| **Image (lossy)** | ImageMagick `-quality <n>` / `cwebp -q <n>` (JPEG / WebP / JPEG 2000) | **`-quality` / `-q`** | `0` = smallest/worst … `100` = best/biggest | **quality 85** |
+| **Image (lossless)** | `oxipng` (PNG kept as PNG) | optimization **level** only | n/a — pixels never change | lossless (no quality given up) |
+
+Mapping of the four quality steps to concrete tool values (so `medium` is always the middle, not an
+extreme):
+
+* **Video CRF** — `lossless → 0`, `high → base−3`, **`medium → base`**, `low → base+5`, where `base = 24`
+  for HEVC and `base = 21` for H.264 / AV1.
+* **Image quality** — `lossless → 100`, `high → 92`, **`medium → 85`**, `low → 70`.
+
+**The mechanism that guarantees the middle** is two things together: (a) the config default
+`quality: "medium"` for both `images` and `video`, and (b) the two pure mapping functions that translate
+`medium` into the concrete mid-range number. If either the default or a mapping ever drifted to an
+extreme, the middle guarantee would break — so both are LOCKED here.
+
+Choosing the concrete quality value for the chosen tool is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`videoCrf()` (CRF for H.264/HEVC/AV1) and `jpegQuality()` (0–100 for JPEG/WebP/JPEG 2000). The knob is
+then passed to the actual command in `imageCommand()` (`-quality` / `cwebp -q`) and in `compressFile()`'s
+ffmpeg build (`-crf`), both of which **omit any `-vf scale` / `-s` / resize** so resolution is preserved.
+The `medium` default itself lives in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — the `compression.images.quality`
+and `compression.video.quality` defaults.
+
+---
+
 ## 3. What we do per file (the plan)
 
 The engine builds a **plan** for a file from its kind + the user's codec preferences (§7), then runs it.
@@ -98,7 +161,7 @@ The engine builds a **plan** for a file from its kind + the user's codec prefere
   steer to it.
 
 Building the per-file plan (source kind → tool + target codec + quality, honoring allow/deny prefs) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `planCompression`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `pickImageTarget()` (images) and `pickVideoTarget()` (video), assembled by `checkFile()`.
 
 ---
 
@@ -132,7 +195,7 @@ We also require the output to be **smaller** than the input; if it isn't, we kee
 **"no gain"**.
 
 Verifying the output keeps the same width × height (and is smaller) before any replacement is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `verifyOutput` (dimensions via `ffprobe` / `magick identify`).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — the resolution + size-gain checks inside `compressFile()` (dimensions re-measured via `videoInfo()` / `imageDims()`, i.e. `ffprobe` / `magick identify`), gated on the `preserve_resolution` setting.
 
 ---
 
@@ -168,7 +231,7 @@ Most delivery codecs have **no** alpha; a few do. We check the source's pixel fo
   alpha in WebM), in which case we use that.
 
 Running the alpha safety check (PNG `%[opaque]`; video `pix_fmt` vs. target codec alpha capability) before any compression is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `alphaSafety`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `checkFile()`, using `imageAlphaUsed()` (image `%[opaque]`) and `pixFmtHasAlpha()` (video `pix_fmt`).
 
 ---
 
@@ -236,6 +299,24 @@ universal-safe target, [codecs.mdx §5](./codecs.mdx)). It is otherwise an ordin
 
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile(input, forceVideoCodec)` / `pickVideoTarget` (the `force` parameter), routed by `compression.router.ts` `POST /file` (optional `videoCodec`).
 
+### 8.2 Per-run originals disposition (bulk Compress inside)
+
+A **one-off** compress (§1.5 / §8) always moves the original to the **recoverable LFBridge trash** — the
+global `compression.replace_original_to_trash` default (§7). The bulk **Compress Inside** dialog
+([compress_inside.mdx](./compress_inside.mdx)) deliberately differs: it surfaces disposition as an
+**explicit per-run choice** and **defaults it to HARD DELETE** — a reconciled contradiction (the user asked
+for exactly that for a bulk run; the one-off default is untouched, [compress_inside.mdx §4.1](./compress_inside.mdx)).
+
+The engine honors a per-call `deleteOriginal: "hard" | "trash"` override (`CompressFileOpts`) that **wins
+over the global default** — `"hard"` → `fs.unlinkSync`, `"trash"` → `trashOriginal`; when omitted it falls
+back to the global setting. Disposal still runs **only after** verify + size-gain, so a file that errors
+part-way keeps its original either way (§5). And because a bulk run may be hundreds of files, the heavy
+transcode now runs via an **async** `spawn` so a background batch **never blocks the event loop** (quick
+probes stay synchronous). Both are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`compressFile()` (`const disposition = o.deleteOriginal ?? (settings.replaceOriginalToTrash ? "trash" : "hard")`)
+and `runAsync()` (the `child_process.spawn` runner for the heavy tool).
+
 ---
 
 ## 9. Showing compression state (View one file)
@@ -257,6 +338,10 @@ Surfacing the codec + compressed-state and the Compress action per file is handl
 2. It uses **quality-controllable brew tools** (`ffmpeg`, ImageMagick, `oxipng`, `cwebp`, `mozjpeg`) at a
    **medium** quality, **preferring lossless** where it applies; a missing tool degrades with an
    "install X" message, not a silent fail.
+2a. **The MIDDLE-quality requirement (§2.1) holds for both images and video:** the tool exposes a full
+    quality↔size range (video `-crf 0…51`; image `-quality 0…100`), and the engine pins it to the middle
+    by default — **CRF 21** (H.264/AV1) / **CRF 24** (HEVC) for video, **quality 85** for lossy images —
+    at the **same pixel resolution** as the input. A tool with no controllable middle is disqualified.
 3. The output **always keeps the same aspect ratio and pixel resolution** (verified after encoding; a size
    change aborts). We **never downscale**.
 4. Before compressing, the **alpha-channel safety check** runs: a **used** PNG alpha blocks JPEG/JPEG-2000
@@ -279,4 +364,8 @@ Surfacing the codec + compressed-state and the Compress action per file is handl
   default; JPEG2000 optional; per-media codec allow/deny in Settings with social-media-safe defaults
   (deny jpeg2000/av1). Temp-file → verify → recoverable replace (original to trash). View-one-file shows
   codec + compressed state. Code: /api/compress (compression.service.ts + compression.router.ts).
+  BULK (§8.2, compress_inside.mdx): the Compress Inside dialog drives compressFile file-by-file with a
+  per-run `deleteOriginal: "hard"|"trash"` override (CompressFileOpts) that WINS over the global
+  replace_original_to_trash default (bulk DEFAULTS to hard delete; one-off stays recoverable-trash). Heavy
+  transcode runs via async spawn (runAsync) so a background batch never blocks the event loop.
 -->

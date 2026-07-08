@@ -132,8 +132,11 @@ equal quality**:
 
 **The tension:** the codec that compresses best (AV1) is the least compatible; the most compatible
 (H.264) compresses worst. LFBridge resolves it by **purpose**: for **storage/sync compression** the user
-picks their preferred codec ([compression.mdx §7](./compression.mdx)); for **a compatibility/upload
-copy** we force **H.264** (§9). The forced-codec override lives in
+picks their preferred codec ([compression.mdx §7](./compression.mdx)) and we encode at the **middle** of
+the CRF range (**CRF 21** H.264/AV1, **CRF 24** HEVC) **at the source resolution — never downscaling**
+(the LOCKED middle-quality hard requirement, [compression.mdx §2.1](./compression.mdx)); for **a
+compatibility/upload copy** we force **H.264** (§9) and — unlike storage compression — that upload copy
+**may** downscale to a max width (§5), because its purpose is upload compatibility, not archival fidelity. The forced-codec override lives in
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `pickVideoTarget` (the `force` parameter) via `compressFile(input, forceVideoCodec)`.
 
 ---

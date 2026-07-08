@@ -214,7 +214,7 @@ The repo action catalog (Open / Work / Config / Copy, and Remove-repo that unreg
 | Open | **View pinned on IPFS** | navigate | → [IPFS](./ipfs.mdx) filtered to files under this directory. |
 | Work | **Rescan** | mutate | Discovery scan of this directory now (`scan` op). |
 | Work | **Track / Sync this directory** | mutate | Add it to the computer sync unit ([storage §8](./storage_local.mdx#8-synccomputer--the-whole-computer-sync-unit)); the files inside become triage-able. |
-| Work | **Compress videos/images inside…** | mutate | Offer only (charter: video 1st, image 2nd; **explicit click only**, §6.1). |
+| Work | **Compress videos/images inside…** | mutate | Opens the **Compress Inside pop-over dialog** ([compress_inside.mdx](./compress_inside.mdx)) — a darkened-backdrop modal (Images / Videos / "also recursive" checkboxes, a **red** PNG→JPEG warning shown while Images is checked, and an **Originals** radio [Hard delete default / LargeFileBridge trash]) whose **Continue** background-queues a per-file-safe batch. **Not** a `window.confirm`. Offer only, **explicit click only** (charter: video 1st, image 2nd; §6.1). |
 | Work | **Git-ignore big files inside…** | mutate | Confirm-list ignore of big files under here (§6.1). |
 | Flag | **Never IPFS** (toggle) | mutate | Sticky per-directory flag: nothing under here is ever added to IPFS / synced, and no "add to IPFS" offers appear for it (§6.6). Turning it **on** clears any `sync` decisions on files below and stops offering them; turning it **off** returns them to `undecided`. |
 | Flag | **Do not compress** (toggle) | mutate | Sticky per-directory flag: suppress the `C` "should compress" badge/offer for media under here — the user has said "leave these alone" (§6.6). |
@@ -298,6 +298,11 @@ progress dock as its `compress` / `ignore` op ([webapp.mdx §11](./webapp.mdx#11
 
 The explicit-click Compress OFFER with its `window.confirm` step (never compresses a file on its own) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` `compress` handler.
+
+> **Directory compress is no longer a `window.confirm` (§5.2).** The old bare browser confirm for
+> **Compress videos/images inside…** is **superseded** by the pop-over configuration dialog in
+> [compress_inside.mdx](./compress_inside.mdx) (four inputs + a per-file-safe background batch). The
+> single-file **Compress…** offer (§5.3) is unchanged — it stays the confirm-gated per-file offer above.
 
 ### 6.2 Local bytes are never deleted by LFB
 **Remove repo**, **Stop syncing (untrack/unpin)**, and **Remove peer** change only *LFB's tracking* —

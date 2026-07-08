@@ -1,0 +1,200 @@
+---
+title: LargeFileBridge — Background Processing (the conditional left-bar item, the bottom-left progress window, and the Processing page)
+description: The three surfaces that show background work while it runs. (1) A CONDITIONAL "Processing" left-bar item that appears as the LAST item of the top nav list (below Settings, above the empty space before the account slot) ONLY while background work is running, and disappears when it is done — clicking it opens the Processing page. (2) The bottom-left PROGRESS WINDOW in the main area (the existing progress dock) — a small stack of live cards for the items running right now, plus a "+ N queued" backlog footer; now clickable to open the Processing page. (3) The PROCESSING PAGE (route /processing) — the full queue view: the items running now, the per-op pending backlog, and the "Compress inside" BATCHES with a progress bar each and, when a batch finishes, its ERROR LIST. All three read one polled source, GET /api/progress, extended with a per-op backlog split and the batches. Sibling of webapp.mdx §10–§14 (the dock + registry the window reuses), job_queue.mdx (the queue + batches this surfaces), left_bar.mdx / left_bar.yaml (the nav the conditional item joins), and compress_inside.mdx (the batch producer whose error list lands here).
+---
+
+# LargeFileBridge — Background Processing
+
+When the user kicks off heavy background work — a **"Compress inside"** run
+([compress_inside.mdx](./compress_inside.mdx)), a batch of transcriptions/descriptions
+([page_actions.mdx](./page_actions.mdx)) — the work drains **in the background**
+([job_queue.mdx](./job_queue.mdx)) while they navigate elsewhere. This spec owns the **three surfaces**
+that make that work visible and reachable:
+
+1. **§2 — a conditional "Processing" left-bar item** that appears only while work is running.
+2. **§3 — the bottom-left progress window** in the main area (the existing dock), now clickable.
+3. **§4 — the Processing page** (`/processing`): the full queue, with per-batch progress + the error list.
+
+All three are driven by **one** polled endpoint, `GET /api/progress` (§5), so they never disagree.
+
+Siblings this builds on and does not repeat:
+
+* [webapp.mdx §10–§14](./webapp.mdx) — the **progress dock**, the in-process **job registry**, the
+  operation **taxonomy** (verbs per `ProgressKind`), and the poll. §3 here is that dock, enhanced.
+* [job_queue.mdx](./job_queue.mdx) — the **background queue** (the `compress` / `transcribe` / `describe`
+  ops), the pending backlog count, and the **batch** grouping (`createBatch` / `recordBatchResult`).
+* [left_bar.mdx](./left_bar.mdx) / [left_bar.yaml](./left_bar.yaml) — the nav the **Processing** item joins
+  as a runtime-conditional entry.
+* [compress_inside.mdx](./compress_inside.mdx) — the batch **producer**; its per-file error list is shown
+  on the Processing page (§4).
+
+---
+
+## 1. What "processing" means here (LOCKED)
+
+**Background work is "processing"** when either of these is true:
+
+* at least one **job is running** (a registry card — a compress/transcribe/describe/sync/scan in flight,
+  [webapp.mdx §12](./webapp.mdx)), **or**
+* the **queue has a pending backlog** (tasks waiting to start, [job_queue.mdx §4](./job_queue.mdx)), **or**
+* a **batch is still active** (a "Compress inside" run not yet finished, [job_queue.mdx](./job_queue.mdx)).
+
+When **none** of those hold, there is **no processing** — the conditional nav item and the progress window
+are both **absent from the DOM** (no empty box, no dead nav row). This is the single predicate every
+surface keys off:
+
+```ts
+const processing = jobs.length > 0 || queued > 0 || activeBatches > 0;
+```
+
+The shared predicate is read from the poll in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/progress/ProgressContext.tsx` — `useProgress()` (exposes `jobs`, `queued`, and the `batches`; a derived `processing`/`isProcessing` boolean is computed from them).
+
+---
+
+## 2. The conditional "Processing" left-bar item (LOCKED)
+
+The user's words: *"Whenever something is processing in the background … the last item in that top list
+will be Processing. It only appears when there's background work doing processing, and then it disappears
+when the processing is done."*
+
+* **Position.** It is the **last item of the top nav list** — rendered **after** the static yaml items
+  (…Scans, Settings) and **before** the large empty space that runs down to the pinned account slot at the
+  bottom. It is **not** in the account slot; it sits at the tail of the scrolling nav list.
+* **Conditional.** It renders **only while `processing` is true** (§1) and **vanishes** the moment work
+  finishes. It is never shown disabled or greyed — it is simply present or absent.
+* **Look.** Same nav-row treatment as every other item ([left_bar.mdx §3](./left_bar.mdx)): black label,
+  a lucide icon (a spinning `Loader2` / `RefreshCw` to read as "active"), the active accent tint when the
+  user is on `/processing`. It may show a small **count badge** (running + queued) on the right, like the
+  IPFS children's pinned counts.
+* **Click.** Routes to **`/processing`** (§4).
+* **Source-of-truth note.** The static nav items still come from `pm/left_bar.yaml`
+  ([left_bar.mdx](./left_bar.mdx)); **Processing** is a **runtime-injected** item (like the dynamic company
+  children under Storages), not a static yaml row — it depends on live state, so it is appended by the
+  sidebar when `processing` is true. It is **documented** in `left_bar.yaml` as a commented, runtime-only
+  entry so the nav's full shape is discoverable in the source of truth.
+
+The conditional Processing row (appended after the yaml nav items, only while work runs, routing to
+`/processing`) is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (reads `useProgress()`; renders the Processing `<Link>` after the `leftBar.navItems` map when `processing` is true, with the active-route tint and the running+queued count).
+
+---
+
+## 3. The bottom-left progress window (the dock, enhanced)
+
+The user's words: *"It will show a little progress window at the very bottom left of the main area … not
+in the left window."* That surface already exists — the **progress dock** ([webapp.mdx §10](./webapp.mdx)):
+a fixed region at the **bottom-left of the main area**, offset past the 256px left bar, showing one small
+**card per running job** (spinner + "Verb target" + an optional determinate bar) and a **"+ N queued"**
+backlog footer, **absent from the DOM while idle**.
+
+This spec adds **one** thing: the window is now a **way in** to the Processing page.
+
+* **Clickable.** Clicking anywhere on the dock (a card or the queued footer) **navigates to `/processing`**
+  so the small window is the shortcut to the full view. The cards keep their live per-item detail; the
+  click is a whole-dock affordance (cursor pointer, subtle hover).
+* Everything else about the dock is unchanged and owned by [webapp.mdx §10](./webapp.mdx) — this file does
+  not restate the card layout, the offset math, or the poll.
+
+The dock's click-through to the Processing page is wired in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ProgressDock.tsx` — `ProgressDock` (an `onClick` → `navigate({ to: "/processing" })` wrapper around the card stack; `role="button"`, keyboard-activatable).
+
+---
+
+## 4. The Processing page (`/processing`) (LOCKED)
+
+Clicking the nav item or the dock opens the **Processing page** — the full, correctly-described view of
+what is being processed. The user's words: *"go to the correctly described screen to see what's being
+processed. As a [batch] queue is built up, we want to show the right appropriate UI there."*
+
+The page is a standard list screen ([tables.mdx](./tables.mdx) house style, [PageHeader](./page_actions.mdx))
+with three stacked regions, each shown only when it has content:
+
+1. **Running now** — one row per **running job** (the registry cards, [webapp.mdx §12](./webapp.mdx)):
+   the verb + target + a determinate bar/percent where the job reports it (a compress file's %, a sync's
+   MB). This is the same data the dock shows, given room to breathe.
+2. **Waiting** — the **pending backlog**, labeled **per op** from the per-op split (§5): e.g.
+   **"18 compressing · 4 transcribing"** waiting to start. Drains to nothing as workers pick tasks up.
+3. **Batches** — one **card per batch** ([job_queue.mdx](./job_queue.mdx)) — today, each **"Compress
+   inside"** run:
+   * a **title** (the batch label, e.g. *Compress inside ~/Movies/Trip_2026*) and how originals were
+     handled (*Originals: hard-deleted* / *…moved to trash*);
+   * a **progress bar** — `done + failed` of `total` — that fills as the run drains;
+   * on **finish**, the **error list** ([compress_inside.mdx §4](./compress_inside.mdx)): every file that
+     failed/was blocked, with its reason. A clean finish shows **"All {done} files compressed"** and no
+     list. Finished batches linger for a **retention window** (30 min) so the user can still read the
+     errors after the run ended (and after the conditional nav item has vanished, §2) — the finish toast
+     ([compress_inside.mdx §6](./compress_inside.mdx)) is the pointer back here.
+
+When the whole page has nothing to show (no jobs, no backlog, no batches), it renders a calm empty state —
+**"Nothing is processing right now."** — rather than a blank screen (a user can reach `/processing`
+directly).
+
+The Processing page (the three regions, the per-batch progress bar, and the finished-batch error list) is
+rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingPage.tsx` — `ProcessingPage` (subscribes to `useProgress()`; maps `jobs` → Running, `queuedByOp` → Waiting, `batches` → the batch cards with `done/failed/total` bars and the `errors[]` list). The route is registered in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/router.tsx` — `processingRoute` (`path: "/processing"`, code-split).
+
+---
+
+## 5. The one polled source — `GET /api/progress` (extended)
+
+All three surfaces read the **same** poll ([webapp.mdx §12](./webapp.mdx)); this spec extends its payload
+with the two things the Processing page needs beyond the raw running jobs and the single backlog integer:
+
+```ts
+GET /api/progress → {
+  jobs: ProgressJob[],                                   // running now (registry + active scan)
+  queued?: number,                                       // total pending backlog (dock footer)
+  queuedByOp?: Partial<Record<ProgressKind, number>>,    // pending split per op (Processing "Waiting")
+  batches?: ProcessingBatch[],                           // active + recently-finished batches (§4)
+}
+```
+
+* `queuedByOp` labels the **Waiting** region without the page needing to re-count.
+* `batches` carries each run's `{ label, total, done, failed, errors[], deleteOriginal, startedAt,
+  finishedAt }` — active ones (`finishedAt: null`) drive the progress bars; recently-finished ones (within
+  the 30-min retention) carry the error list. All optional/absent when empty, so an idle poll is tiny.
+
+The extended payload is assembled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.router.ts` — `GET /` (folds `queueDepthByOp()` → `queuedByOp` and `listBatches()` → `batches` into `ProgressListResult`), reading `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `queueDepthByOp()` / `listBatches()` (which prunes finished batches past the retention window). The client + provider consume it via `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `progress()` and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/progress/ProgressContext.tsx` — `ProgressProvider` (exposes `batches` alongside `jobs`/`queued`).
+
+---
+
+## 6. Acceptance criteria
+
+1. **Conditional nav item (§2):** a **Processing** item appears as the **last item of the top nav list**
+   (after Settings, above the account slot) **only while background work is running** — a running job, a
+   pending backlog, or an active batch — and **disappears** when work finishes. Clicking it opens
+   `/processing`. It is runtime-injected (not a static yaml row) and documented in `left_bar.yaml`.
+2. **Progress window (§3):** the existing bottom-left dock still shows a card per running item + a
+   "+ N queued" footer, is absent while idle, and is now **clickable to open `/processing`**.
+3. **Processing page (§4):** `/processing` shows **Running now** (running jobs with their determinate
+   detail), **Waiting** (the pending backlog, labeled per op), and **Batches** (one card per "Compress
+   inside" run with a `done+failed / total` progress bar). A finished batch shows its **error list** (each
+   failed file + reason) or an all-clear summary, and lingers for a 30-min retention window. An empty page
+   shows a calm "Nothing is processing right now."
+4. **One source (§5):** all three surfaces read `GET /api/progress`, extended with `queuedByOp` and
+   `batches` (both optional); they never disagree because there is no second source of truth.
+5. **No empty chrome:** when nothing is processing, the nav item and the dock are both absent from the DOM;
+   only the directly-navigated `/processing` page renders (its empty state).
+
+<!--
+  The THREE surfaces for background work, all driven by GET /api/progress:
+   §2 CONDITIONAL "Processing" LEFT-BAR ITEM — the LAST item of the top nav list (after Settings, above the
+      account slot), shown ONLY while processing (jobs.length>0 || queued>0 || activeBatches>0), vanishes when
+      done, routes to /processing. Runtime-injected in Sidebar.tsx (NOT a static yaml row; documented as a
+      commented runtime entry in left_bar.yaml). May show a running+queued count badge.
+   §3 BOTTOM-LEFT PROGRESS WINDOW = the existing dock (webapp.mdx §10), unchanged EXCEPT now click-through →
+      /processing (ProgressDock.tsx onClick navigate).
+   §4 PROCESSING PAGE (/processing, ProcessingPage.tsx, processingRoute) — Running now (jobs) · Waiting
+      (queuedByOp, per-op backlog) · Batches (one card per Compress-inside run: label + Originals disposition +
+      a done+failed/total progress bar + on-finish the ERROR LIST from compress_inside.mdx §4). Finished batches
+      linger 30 min (retention) so errors stay readable after the nav item vanished. Empty state: "Nothing is
+      processing right now."
+   §5 GET /api/progress EXTENDED: + queuedByOp (Partial<Record<ProgressKind,number>>) + batches (ProcessingBatch[]).
+      Backend progress.router folds in queueDepthByOp()+listBatches(); jobqueue.service owns the batch registry
+      (createBatch/recordBatchResult/listBatches, 30-min prune). Frontend ProgressContext exposes batches.
+  Keep in sync with webapp.mdx §10–§14 (dock/registry/poll), job_queue.mdx (queue+batches), left_bar.mdx +
+  left_bar.yaml (the conditional item), compress_inside.mdx (the batch producer + error list).
+-->
+</content>

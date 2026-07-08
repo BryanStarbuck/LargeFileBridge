@@ -124,8 +124,8 @@ export function OneRepoPage() {
   };
   const repoActions: Action[] = [
     ...producingActions(pageScope),
-    compressAllVideos(),
-    compressAllImages(),
+    compressAllVideos(detail?.path),
+    compressAllImages(detail?.path),
     gitIgnoreBig(),
     { id: "rescan", label: "Rescan", icon: <RefreshCw className="h-3.5 w-3.5" />, group: "Work", onSelect: rescanRepo },
   ];

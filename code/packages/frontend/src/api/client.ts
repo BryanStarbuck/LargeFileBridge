@@ -60,6 +60,8 @@ import type {
   CompressCheck,
   CompressResult,
   CompressBatchResult,
+  CompressInsideRequest,
+  CompressInsidePlan,
   TranscribeTools,
   TranscribeResult,
   TranscribeBatchResult,
@@ -225,6 +227,10 @@ export const api = {
   compressFile: (path: string, opts?: { videoCodec?: "h264" | "hevc" | "av1" }) =>
     unwrap<CompressResult>(http.post("/compress/file", { path, ...(opts ?? {}) })),
   compressBatch: (paths: string[]) => unwrap<CompressBatchResult>(http.post("/compress/batch", { paths })),
+  // The "Compress videos & images inside" dialog (compress_inside.mdx §5) — plans + background-queues a
+  // directory's media and returns the plan immediately; the batch drains in the background.
+  compressInside: (req: CompressInsideRequest) =>
+    unwrap<CompressInsidePlan>(http.post("/compress/inside", req)),
   // Transcribe (Transcribe.mdx). Tool status, read an existing transcript, and run transcription over one
   // file / a selected set / a directory-or-repo tree / a whole storage. Writes a .transcription sidecar beside the media.
   transcribeTools: () => unwrap<TranscribeTools>(http.get("/transcribe/tools")),

@@ -5,6 +5,7 @@
 // the instant its job finishes, so the stack drains unevenly. The offset tracks the left-bar width in
 // config/left_bar.ts; if that changes, this and main.tsx's toast offset change with it.
 import { RefreshCw } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
 import type { ProgressJob } from "@lfb/shared";
 import { useProgress, verb } from "../progress/ProgressContext.js";
 import { leftBar } from "../config/left_bar.js";
@@ -53,13 +54,25 @@ function Card({ job }: { job: ProgressJob }) {
 
 export function ProgressDock() {
   const { jobs, queued } = useProgress();
+  const navigate = useNavigate();
   if (jobs.length === 0 && queued <= 0) return null; // absent from the DOM while idle — no empty box
+  // The whole dock is a shortcut into the Processing page (processing.mdx §3) — click or Enter/Space opens it.
+  const openProcessing = () => void navigate({ to: "/processing" });
   return (
     <div
-      className="fixed z-40 flex flex-col-reverse gap-1.5"
+      className="fixed z-40 flex cursor-pointer flex-col-reverse gap-1.5"
       style={{ left: DOCK_LEFT, bottom: 88 }}
+      role="button"
+      tabIndex={0}
+      onClick={openProcessing}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openProcessing();
+        }
+      }}
       aria-live="polite"
-      aria-label="Background work in progress"
+      aria-label="Background work in progress — open the Processing page"
     >
       {/* The pending backlog of the background job queue (job_queue.mdx §4). Rendered first so, in the
           column-reverse stack, it sits UNDER the live cards; drains to nothing as workers pick tasks up. */}

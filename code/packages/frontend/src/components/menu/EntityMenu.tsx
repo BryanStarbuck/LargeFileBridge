@@ -29,6 +29,7 @@ import { mediaKindForName, viewerRouteForName } from "@lfb/shared";
 import { api } from "@/api/client";
 import { patchEntityBadges } from "@/lib/patchEntityBadges";
 import { runTranscribeFile, runTranscribeTree } from "@/lib/transcribe";
+import { openCompressInside } from "@/lib/compressInside";
 import { clientLog } from "../../lib/clientLog.js";
 
 // ── The action model ─────────────────────────────────────────────────────────
@@ -328,7 +329,11 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
     a.push({ id: "browse", label: "Open in File System", group: "Open", icon: <FolderOpen className="h-4 w-4" />,
       onSelect: () => ctx.navigate({ to: "/fs", search: { path: v.path } }) });
     if (!v.flags.noCompress) {
-      a.push({ id: "compress-dir", label: "Compress videos/images inside…", group: "Work", icon: <Zap className="h-4 w-4" />, onSelect: compress });
+      // Opens the Compress-inside pop-over dialog (compress_inside.mdx) — a darkened-backdrop modal with
+      // Images/Videos/recursive checkboxes + the Originals radio — NOT a window.confirm, and NOT a
+      // compressFile() on the directory path (which the old handler wrongly did).
+      a.push({ id: "compress-dir", label: "Compress videos/images inside…", group: "Work", icon: <Zap className="h-4 w-4" />,
+        onSelect: () => openCompressInside(v.path, { images: true, videos: true }) });
     }
     // Transcribe all audio/video under this directory (Transcribe.mdx §2.4).
     a.push({ id: "transcribe-dir", label: "Transcribe all files…", group: "Work", icon: <Captions className="h-4 w-4" />,

@@ -11,6 +11,7 @@ import {
   checkFile,
   compressFile,
   compressBatch,
+  enqueueCompressInside,
 } from "./compression.service.js";
 
 export const compressRouter = Router();
@@ -48,7 +49,7 @@ compressRouter.get("/check", (req, res) => {
 });
 
 // POST /api/compress/file — compress ONE file (explicit user action, compression.mdx §1/§8).
-compressRouter.post("/file", (req, res) => {
+compressRouter.post("/file", async (req, res) => {
   // Optional videoCodec forces the output codec — used by the viewer's "Convert for compatibility"
   // offer to always land on browser/upload-safe H.264 (codecs.mdx §5), regardless of the user's
   // default video codec preference.
@@ -57,7 +58,7 @@ compressRouter.post("/file", (req, res) => {
     .safeParse(req.body);
   if (!body.success) return res.status(400).json({ ok: false, error: "path required" });
   try {
-    res.json({ ok: true, data: compressFile(body.data.path, body.data.videoCodec) });
+    res.json({ ok: true, data: await compressFile(body.data.path, { forceVideoCodec: body.data.videoCodec }) });
   } catch (e) {
     log.warn("compress", `compressFile failed for ${body.data.path}: ${(e as Error).message}`);
     res.status(400).json({ ok: false, error: (e as Error).message });
@@ -65,13 +66,38 @@ compressRouter.post("/file", (req, res) => {
 });
 
 // POST /api/compress/batch — compress MANY files (checked rows / whole filter, compression.mdx §4).
-compressRouter.post("/batch", (req, res) => {
+compressRouter.post("/batch", async (req, res) => {
   const body = z.object({ paths: z.array(z.string().min(1)).min(1) }).safeParse(req.body);
   if (!body.success) return res.status(400).json({ ok: false, error: "paths[] required" });
   try {
-    res.json({ ok: true, data: { results: compressBatch(body.data.paths) } });
+    res.json({ ok: true, data: { results: await compressBatch(body.data.paths) } });
   } catch (e) {
     log.error("compress", `compressBatch failed: ${(e as Error).message}`);
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/compress/inside — the "Compress videos & images inside" dialog (compress_inside.mdx §5).
+// Plans + background-queues a directory's compressible media; returns the PLAN immediately (never waits
+// for the work). The queue drains it one file at a time with per-file transactional safety.
+compressRouter.post("/inside", (req, res) => {
+  const body = z
+    .object({
+      root: z.string().min(1),
+      images: z.boolean(),
+      videos: z.boolean(),
+      recursive: z.boolean(),
+      deleteOriginal: z.enum(["hard", "trash"]),
+    })
+    .safeParse(req.body);
+  if (!body.success) return res.status(400).json({ ok: false, error: "root + images/videos/recursive/deleteOriginal required" });
+  if (!body.data.images && !body.data.videos) {
+    return res.status(400).json({ ok: false, error: "select at least one of images / videos" });
+  }
+  try {
+    res.json({ ok: true, data: enqueueCompressInside(body.data) });
+  } catch (e) {
+    log.error("compress", `compress-inside failed: ${(e as Error).message}`);
     res.status(400).json({ ok: false, error: (e as Error).message });
   }
 });

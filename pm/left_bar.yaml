@@ -140,6 +140,21 @@ Left_Nav:
           order: 8
           description: "Account, allow-list, and IPFS node configuration."
 
+        # ----------------------------------------------------------------------
+        # RUNTIME-ONLY item — PROCESSING (pm/processing.mdx, pm/left_bar.mdx §3.1)
+        # Documented here for discoverability, but NOT a rendered nav_items entry:
+        # do NOT add it as a real array element. It is INJECTED AT RUNTIME by
+        # Sidebar.tsx (like the dynamic per-Company children under Storages),
+        # appended as the LAST item of this top list — after Settings (order 8),
+        # before the account slot — ONLY while background work is running (a job
+        # running, a pending backlog, or an active "Compress inside" batch), and
+        # it disappears when work finishes.
+        #   - id: processing
+        #     label: "Processing"
+        #     icon: "Loader2"
+        #     route: "/processing"
+        #     order: 9   # tail of the list; runtime-injected, not statically rendered
+
       # Footer: account block (avatar/name/Google email) -> popup menu (expands UP).
       footer:
         - id: account_block

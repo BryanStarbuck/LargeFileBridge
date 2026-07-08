@@ -123,6 +123,13 @@ const aiCredentialsRoute = createRoute({
   path: "/ai-credentials",
   component: lazyRouteComponent(() => import("./pages/settings/AiCredentialsPage.js"), "AiCredentialsPage"),
 });
+// The Processing page (processing.mdx §4): the full background-work queue — running jobs, the per-op
+// backlog, and the "Compress inside" batches with their progress + error lists.
+const processingRoute = createRoute({
+  getParentRoute: () => appLayout,
+  path: "/processing",
+  component: lazyRouteComponent(() => import("./pages/processing/ProcessingPage.js"), "ProcessingPage"),
+});
 const fsRoute = createRoute({
   getParentRoute: () => appLayout,
   path: "/fs",
@@ -188,6 +195,7 @@ const routeTree = rootRoute.addChildren([
     settingsRoute,
     toolsRoute,
     aiCredentialsRoute,
+    processingRoute,
     fsRoute,
     fsPathsRoute,
     viewFileRoute,

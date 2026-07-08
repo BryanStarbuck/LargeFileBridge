@@ -42,7 +42,7 @@ export function StorageDetailPage() {
   // Re-index files. Index files stays the header primary.
   const storageActions: Action[] = [
     ...producingActions(() => (s ? { root: s.root } : {})),
-    compressAllVideos(),
+    compressAllVideos(s?.root),
     {
       id: "reindex",
       label: "Re-index files",

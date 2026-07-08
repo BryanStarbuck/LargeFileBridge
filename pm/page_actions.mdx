@@ -251,7 +251,14 @@ bar ([media_viewer.mdx](./media_viewer.mdx)), not this page row. (View-one-file'
 > **Producing actions are the LOCKED core of this spec.** **Create Transcriptions** and **Create AI
 > descriptions** appear on **every file-list page** and behave identically everywhere (§1–§2). The other
 > links are the page's pre-existing operations shown inline; their engines are specified in their own files
-> ([compression.mdx](./compression.mdx), [scan.mdx](./scan.mdx), [ipfs_share_files.mdx](./ipfs_share_files.mdx)).
+> ([compression.mdx](./compression.mdx), [compress_inside.mdx](./compress_inside.mdx), [scan.mdx](./scan.mdx), [ipfs_share_files.mdx](./ipfs_share_files.mdx)).
+
+> **Compress links open the Compress Inside dialog (LOCKED).** The **Compress all videos…** /
+> **Compress all images…** action-links do **not** run inline or fire a bare `window.confirm` — they open
+> the **Compress Inside** pop-over dialog ([compress_inside.mdx](./compress_inside.mdx)) scoped to the
+> page's directory, with the **matching kind pre-checked** (videos-only or images-only). They stay
+> **red-tinted, confirm-gated offers** (§3, [menus.mdx §6.1](./menus.mdx)): the dialog *is* the confirm
+> step, and its **Continue** background-queues the per-file-safe batch.
 
 The producing actions are wired to the enqueue endpoints and toast the returned count in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createTranscriptions()` / `createDescriptions()` (call `api.transcribeEnqueue` / `api.describeEnqueue`, toast `willProcess`).

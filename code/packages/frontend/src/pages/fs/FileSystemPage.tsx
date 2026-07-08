@@ -157,8 +157,8 @@ export default function FileSystemPage() {
   const currentDir = stack[stack.length - 1];
   const fsActions: Action[] = [
     ...producingActions(() => (currentDir ? { root: currentDir } : {})),
-    compressAllVideos(),
-    compressAllImages(),
+    compressAllVideos(currentDir),
+    compressAllImages(currentDir),
     gitIgnoreBig(),
     trackSyncDir(),
   ];

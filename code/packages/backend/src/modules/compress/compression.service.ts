@@ -3,7 +3,7 @@
 // two hard invariants: keep the same aspect ratio + pixel resolution (never downscale — §5), and run the
 // alpha-channel safety check first (§6). Runs to a temp file, verifies, then does a recoverable replace
 // (original → LFBridge trash). Audio is out of scope for now. Explicit-user-action only (charter §6.1).
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type {
@@ -13,13 +13,18 @@ import type {
   CompressTools,
   CompressCheck,
   CompressResult,
+  DeleteOriginalMode,
+  CompressInsideRequest,
+  CompressInsidePlan,
 } from "@lfb/shared";
 import { mediaKindForName } from "@lfb/shared";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
-import { expandHome } from "../fs/badges.js";
+import { expandHome, compressInfo } from "../fs/badges.js";
 import { resolveStateDir, ensureDir } from "../../config/state-dir.js";
 import { findStorageRootForPath } from "../storage/storage.service.js";
 import { writeCompressionRecord } from "../storage/analysis.service.js";
+import { HARD_SKIP } from "../../shared/scan-filters.js";
+import { enqueue, createBatch } from "../jobqueue/jobqueue.service.js";
 import { log } from "../../shared/logging.js";
 
 // ── settings (compression.mdx §7) ─────────────────────────────────────────────
@@ -86,6 +91,37 @@ function magickBin(): string {
 function run(bin: string, args: string[], timeoutMs = 10 * 60 * 1000): { code: number | null; out: string; err: string } {
   const r = spawnSync(bin, args, { encoding: "utf8", timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 });
   return { code: r.status, out: r.stdout ?? "", err: r.stderr ?? "" };
+}
+
+// The heavy transcode runner — ASYNC (child_process.spawn), so a multi-minute ffmpeg/oxipng/cwebp run
+// NEVER blocks the Node event loop. This is what lets the background compress queue run while the web
+// app stays responsive (the user navigates other tabs, the progress poll keeps answering). Quick probes
+// (ffprobe/identify — tens of ms) stay synchronous; only this long call needs to yield.
+function runAsync(bin: string, args: string[], timeoutMs = 30 * 60 * 1000): Promise<{ code: number | null; err: string }> {
+  return new Promise((resolve) => {
+    let err = "";
+    let settled = false;
+    const child = spawn(bin, args, { stdio: ["ignore", "ignore", "pipe"] });
+    const timer = setTimeout(() => {
+      if (!settled) child.kill("SIGKILL");
+    }, timeoutMs);
+    child.stderr?.on("data", (d) => {
+      // Keep only the tail — a long ffmpeg log can be huge; we only surface the last lines on failure.
+      err = (err + d.toString()).slice(-4096);
+    });
+    child.on("error", (e) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ code: null, err: e.message });
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ code, err });
+    });
+  });
 }
 
 function imageDims(abs: string, tools: CompressTools): { w: number; h: number } | null {
@@ -278,7 +314,18 @@ function fail(pathOut: string, reason: string, status: CompressResult["status"] 
   return { path: pathOut, status, reason, beforeBytes, afterBytes: null, codec: null };
 }
 
-export function compressFile(input: string, forceVideoCodec?: string): CompressResult {
+// Per-call options (compress_inside.mdx §4). `forceVideoCodec` pins the output codec (the viewer's
+// compatibility convert); `deleteOriginal` OVERRIDES the global recoverable-by-default disposition for
+// THIS file only ("hard" = unlink, "trash" = recoverable). Both optional; omitting keeps prior behavior.
+export interface CompressFileOpts {
+  forceVideoCodec?: string;
+  deleteOriginal?: DeleteOriginalMode;
+}
+
+export async function compressFile(input: string, opts?: CompressFileOpts | string): Promise<CompressResult> {
+  // Back-compat: an old positional `forceVideoCodec` string is still accepted.
+  const o: CompressFileOpts = typeof opts === "string" ? { forceVideoCodec: opts } : opts ?? {};
+  const forceVideoCodec = o.forceVideoCodec;
   const abs = path.resolve(expandHome(input.trim()));
   let beforeBytes: number | null = null;
   try {
@@ -312,7 +359,7 @@ export function compressFile(input: string, forceVideoCodec?: string): CompressR
     const t = VIDEO_TARGETS[plan.targetKey];
     cmd = { bin: "ffmpeg", args: ["-y", "-i", abs, "-c:v", t.encoder, "-crf", String(videoCrf(plan.targetKey, prefs.quality)), "-pix_fmt", "yuv420p", "-c:a", "copy", out] };
   }
-  const r = run(cmd.bin, cmd.args);
+  const r = await runAsync(cmd.bin, cmd.args);
   if (r.code !== 0 || !safeSize(out)) {
     tryUnlink(out);
     return fail(abs, `${cmd.bin} failed: ${(r.err || "").split("\n").slice(-3).join(" ").slice(0, 200)}`, "failed", beforeBytes);
@@ -330,10 +377,16 @@ export function compressFile(input: string, forceVideoCodec?: string): CompressR
     return { path: abs, status: "skipped", reason: "no gain (already well compressed)", beforeBytes, afterBytes, codec: check.targetCodec };
   }
 
-  // §8 — recoverable replace: original → trash, temp → final path (new ext if the format changed).
+  // §8 — replace: dispose the original, then move temp → final path (new ext if the format changed).
+  // Disposition: a per-call `deleteOriginal` (the "Compress inside" dialog's per-run radio,
+  // compress_inside.mdx §4) wins; otherwise the global recoverable-by-default (settings). This runs
+  // ONLY here — after the temp verified resolution and confirmed a size gain — so a file that failed
+  // to compress NEVER reaches this point and its original is never touched (the transactional rule).
+  const disposition: DeleteOriginalMode =
+    o.deleteOriginal ?? (settings.replaceOriginalToTrash ? "trash" : "hard");
   const finalPath = path.join(path.dirname(abs), path.basename(abs, path.extname(abs)) + plan.ext);
   try {
-    if (settings.replaceOriginalToTrash) trashOriginal(abs);
+    if (disposition === "trash") trashOriginal(abs);
     else fs.unlinkSync(abs);
     fs.renameSync(out, finalPath);
   } catch (e) {
@@ -399,12 +452,106 @@ function tryUnlink(p: string): void {
   }
 }
 
-export function compressBatch(inputs: string[]): CompressResult[] {
-  return inputs.map((p) => {
+export async function compressBatch(inputs: string[]): Promise<CompressResult[]> {
+  const out: CompressResult[] = [];
+  for (const p of inputs) {
     try {
-      return compressFile(p);
+      out.push(await compressFile(p));
     } catch (e) {
-      return fail(p, (e as Error).message, "failed");
+      out.push(fail(p, (e as Error).message, "failed"));
     }
+  }
+  return out;
+}
+
+// ── "Compress videos & images inside" (compress_inside.mdx) ──────────────────────
+// The triple-dot-menu / page-action dialog: walk a directory for the SELECTED kinds (images and/or
+// videos, optionally recursive), create a ProcessingBatch, and hand every eligible file to the
+// background queue as a `compress` task carrying the per-run originals-disposition. Returns the PLAN
+// immediately (never waits for the work). The queue drains it one file at a time with per-file
+// transactional safety (a failed file's original is never deleted — compress_inside.mdx §4).
+export function enqueueCompressInside(req: CompressInsideRequest): CompressInsidePlan {
+  const root = path.resolve(expandHome(req.root.trim()));
+  const files = walkCompressible(root, {
+    images: req.images,
+    videos: req.videos,
+    recursive: req.recursive,
   });
+  // Nothing eligible → no batch (no empty card on the Processing page); the honest "nothing to compress"
+  // toast is driven off the zero plan (compress_inside.mdx §6).
+  if (files.length === 0) {
+    return { batchId: "", considered: 0, eligible: 0, queued: 0, images: 0, videos: 0 };
+  }
+  let images = 0;
+  let videos = 0;
+  for (const f of files) {
+    if (mediaOf(path.basename(f)) === "images") images++;
+    else videos++;
+  }
+  const batchId = createBatch({
+    kind: "compress",
+    label: `Compress inside ${collapseHome(root)}`,
+    total: files.length,
+    deleteOriginal: req.deleteOriginal,
+  });
+  const { queued } = enqueue(
+    files.map((p) => ({
+      op: "compress" as const,
+      path: p,
+      overwrite: false,
+      compress: { deleteOriginal: req.deleteOriginal },
+      batchId,
+    })),
+  );
+  log.info(
+    "compress",
+    `compress-inside [${collapseHome(root)}] images=${req.images} videos=${req.videos} recursive=${req.recursive} delete=${req.deleteOriginal}: ${files.length} eligible → ${queued} queued`,
+  );
+  return { batchId, considered: files.length, eligible: files.length, queued, images, videos };
+}
+
+/**
+ * Collect compressible files under `root` of the selected kinds. Skips HARD_SKIP / hidden / tracking
+ * dirs (same skip set as the scan), and includes only files whose extension heuristic says they SHOULD
+ * compress (compressInfo — already-compressed media is skipped cheaply, no wasted transcode).
+ */
+function walkCompressible(
+  root: string,
+  sel: { images: boolean; videos: boolean; recursive: boolean },
+): string[] {
+  const out: string[] = [];
+  const wanted = (name: string): boolean => {
+    const info = compressInfo(name);
+    if (info.compressState !== "should") return false; // skip already-compressed / non-media
+    if (info.compressible === "image") return sel.images;
+    if (info.compressible === "video") return sel.videos;
+    return false;
+  };
+  const visit = (dir: string, depth: number): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const ent of entries) {
+      if (ent.isDirectory()) {
+        if (HARD_SKIP.has(ent.name) || ent.name.startsWith(".")) continue;
+        if (sel.recursive) visit(path.join(dir, ent.name), depth + 1);
+      } else if (ent.isFile() && wanted(ent.name)) {
+        out.push(path.join(dir, ent.name));
+      }
+    }
+  };
+  try {
+    if (fs.statSync(root).isDirectory()) visit(root, 0);
+  } catch {
+    /* unreadable root */
+  }
+  return out;
+}
+
+function collapseHome(abs: string): string {
+  const home = process.env.HOME ?? "";
+  return home && abs.startsWith(home) ? "~" + abs.slice(home.length) : abs;
 }

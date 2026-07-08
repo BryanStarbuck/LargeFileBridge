@@ -13,6 +13,7 @@ import { SecuritySetupPage } from "./pages/security/SecuritySetupPage.js";
 import { ProgressProvider } from "./progress/ProgressContext.js";
 import { ProgressDock } from "./components/ProgressDock.js";
 import { FirstTimeStorageWizardProvider } from "./components/FirstTimeStorageWizard.js";
+import { CompressInsideProvider } from "./components/compress/CompressInsideProvider.js";
 import { HotkeyProvider } from "./lib/hotkeys.js";
 import { leftBar } from "./config/left_bar.js";
 import { clientLog } from "./lib/clientLog.js";
@@ -78,6 +79,9 @@ function Root() {
             hits `needs_setup`. Mounted here so it's inside the query + hotkey providers and only for the
             signed-in app. Listens on the setupWizard bus — no per-call-site wiring. */}
         <FirstTimeStorageWizardProvider />
+        {/* The "Compress videos & images inside" pop-over dialog (compress_inside.mdx §2): opens when a
+            directory ⋮ "Compress …inside" item or a page "Compress all…" link fires openCompressInside. */}
+        <CompressInsideProvider />
       </HotkeyProvider>
     </ProgressProvider>
   );

@@ -49,13 +49,15 @@ process path for "many".
 The queue is an in-process **FIFO** of small task records:
 
 ```ts
-export type JobOp = "transcribe" | "describe";
+export type JobOp = "transcribe" | "describe" | "compress";
 
 export interface QueueTask {
   op: JobOp;             // which per-file runner handles it
   path: string;          // the absolute media file path
   overwrite: boolean;    // re-do even if the output exists (default false)
   provider?: string;     // describe only — the chosen vision provider (or "auto")
+  compress?: { deleteOriginal: "hard" | "trash" };  // compress only — per-run originals disposition
+  batchId?: string;      // groups the per-file tasks of one bulk run (a "Compress inside" batch)
 }
 ```
 
@@ -84,19 +86,23 @@ A small pool of **worker loops** drains the queue. Each loop repeatedly takes th
 | --- | --- | --- |
 | `transcribe` | **2** | Whisper is CPU/GPU-heavy and local; a couple in parallel saturates the machine. |
 | `describe` | **3** | Network + a bounded ffmpeg/ImageMagick fit-to-size step; more can overlap I/O wait. |
+| `compress` | **2** | Heavy **async** ffmpeg/oxipng transcode ([compress_inside.mdx](./compress_inside.mdx)); a couple in parallel saturates the machine without freezing the app. |
 
-* **A task runs by calling its per-file runner** — `transcribeOne(path, overwrite)` or
-  `describeOne(path, { overwrite, provider })`. Those runners **already** register a
-  `track("transcribe"/"describe", …)` job in the progress registry ([webapp.mdx §12](./webapp.mdx)), so the
-  moment a queued item **starts**, a **live dock card** appears (determinate % for transcribe, spinner for
-  describe) — including in a tab that did not start the batch. The queue writes **no** dock code of its own.
+* **A task runs by calling its per-file runner** — `transcribeOne(path, overwrite)`,
+  `describeOne(path, { overwrite, provider })`, or (for `compress`) `compressFile(path, { deleteOriginal })`
+  wrapped in `track("compress", …)`. Those runners **already** register a
+  `track("transcribe"/"describe"/"compress", …)` job in the progress registry ([webapp.mdx §12](./webapp.mdx)),
+  so the moment a queued item **starts**, a **live dock card** appears (determinate % for transcribe/compress,
+  spinner for describe) — including in a tab that did not start the batch. The queue writes **no** dock code
+  of its own. The `compress` task's heavy transcode is **async** (`spawn`, [compress_inside.mdx §5](./compress_inside.mdx))
+  so it **never blocks the event loop** while the batch drains.
 * **Per-item isolation.** A task that throws is caught, logged to `error.err`
   ([ai_description.mdx §8](./ai_description.mdx)), and the worker moves on — one bad file never stalls the
   queue. Each runner already returns a truthful status rather than throwing for expected outcomes.
 * **The caps are constants** in one place, so they are easy to tune per machine later.
 
 The bounded per-op worker loops (take next runnable task, dispatch to the runner, catch-and-continue) are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `pump()` / `runTask()` (caps `CONCURRENCY: Record<JobOp, number>`); dispatch table maps `op` → `transcribeOne` / `describeOne`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `pump()` / `runTask()` (caps `CONCURRENCY: Record<JobOp, number>`); dispatch table maps `op` → `transcribeOne` / `describeOne` / `compressFile` (the last wrapped in `track("compress", …)` and, on return, `recordBatchResult()` against its `batchId` — §4a).
 
 ---
 
@@ -122,6 +128,27 @@ The `queued` count is exposed by the queue and folded into the progress payload 
 
 ---
 
+## 4a. Batches — grouping one bulk run's tasks
+
+A **batch** groups the per-file tasks of **one bulk run** — today, a **"Compress inside"** run
+([compress_inside.mdx](./compress_inside.mdx)) — so a surface can show that run's **progress bar** and, when
+it finishes, its **final error list**. Each enqueued `compress` task carries the run's `batchId` (§2).
+
+* **`createBatch(label, total): batchId`** — opens a batch when the bulk producer plans the set; records its
+  label (e.g. *Compress inside ~/Movies/Trip_2026*), the total file count, and `startedAt`.
+* **`recordBatchResult(batchId, path, result)`** — called by `runTask()` as each `compress` task returns. A
+  `compressed` / `skipped` result counts as **OK** (advances `done`); a `blocked` / `failed` result is
+  appended to the batch's **error list** (`errors[]` as `{ path, reason }`) and counts as `failed`. A task
+  that *throws* is caught (§3) and still recorded, so the batch always finishes.
+* **`listBatches()`** — the active + recently-finished batches, folded into `GET /api/progress` as `batches`
+  ([processing.mdx §5](./processing.mdx)). **Finished batches linger for a 30-min retention window** (then
+  are pruned) so the user can still read the error list after the run ended.
+
+The batch registry is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `createBatch()` / `recordBatchResult()` / `listBatches()` (the 30-min prune of finished batches). The producer that opens a batch is `compression.service.ts` — `enqueueCompressInside()` ([compress_inside.mdx §5](./compress_inside.mdx)); the surfaces that render batch progress + the error list are the [Processing page](./processing.mdx) (processing.mdx §4).
+
+---
+
 ## 5. Persistence & crash posture (LOCKED)
 
 The queue is **in-memory only**, exactly like the job registry ([webapp.mdx §12](./webapp.mdx)):
@@ -144,32 +171,44 @@ The queue is **in-memory only**, exactly like the job registry ([webapp.mdx §12
    work).
 2. **Dedup:** the same `op + path` already **pending or running** is not queued again; a double-click
    reports the second batch as `deduped`.
-3. A bounded pool drains the queue with **per-op caps** (transcribe 2, describe 3); extra tasks wait and
-   start as slots free.
-4. Each task runs by calling **`transcribeOne` / `describeOne`**, so a started item shows a **live dock
-   card** via the existing registry — including in a tab that did not start it; the queue adds no dock code.
+3. A bounded pool drains the queue with **per-op caps** (transcribe 2, describe 3, **compress 2**); extra
+   tasks wait and start as slots free.
+4. Each task runs by calling **`transcribeOne` / `describeOne` / `compressFile`** (the last wrapped in
+   `track("compress", …)`, its heavy transcode **async** so it never blocks the event loop), so a started
+   item shows a **live dock card** via the existing registry — including in a tab that did not start it; the
+   queue adds no dock code.
 5. A task that fails is **caught, logged, and skipped** — one bad file never stalls the queue.
 6. `GET /api/progress` returns a **`queued`** count of not-yet-started tasks; the dock shows a
    **"+ N queued"** footer that drains to nothing. No fabricated cards for pending items.
 7. The queue is **in-memory only** (no persistence); on restart it is empty, and re-invoking a page action
    re-queues only the still-unfinished files (skip-already-done makes this safe).
+8. **Batches (§4a):** a bulk **"Compress inside"** run opens a batch (`createBatch`) whose per-file
+   `compress` tasks carry its `batchId`; `recordBatchResult` counts `compressed`/`skipped` as OK and records
+   `blocked`/`failed` in the batch's `errors[]`; `listBatches()` (30-min retention for finished batches) is
+   folded into `GET /api/progress` for the [Processing page](./processing.mdx) progress bar + error list.
 
 <!--
   The server-side background queue between "a page action fires" and "the registry shows a running card".
   LOCKED:
-   - QueueTask { op: transcribe|describe, path, overwrite, provider? }; enqueue(tasks) => {queued,deduped},
-     appends + kicks drain + RETURNS IMMEDIATELY. Producer = page_actions.mdx enqueue endpoints.
+   - QueueTask { op: transcribe|describe|compress, path, overwrite, provider?, compress?{deleteOriginal},
+     batchId? }; enqueue(tasks) => {queued,deduped}, appends + kicks drain + RETURNS IMMEDIATELY. Producers =
+     page_actions.mdx enqueue endpoints + compress_inside.mdx enqueueCompressInside().
    - DEDUP by op+path already pending/running (not the same as skip-already-DONE, which is the producer's).
-   - Bounded per-op worker loops: transcribe cap 2, describe cap 3. Task runs by calling transcribeOne/
-     describeOne — those already track() a registry job => started item = live dock card. Queue writes NO
-     dock code. Per-item try/catch: one bad file never stalls the queue.
+   - Bounded per-op worker loops: transcribe cap 2, describe cap 3, compress cap 2. Task runs by calling
+     transcribeOne/describeOne/compressFile — those already track() a registry job => started item = live
+     dock card. compress's heavy transcode is ASYNC (spawn) so it never blocks the event loop. Queue writes
+     NO dock code. Per-item try/catch: one bad file never stalls the queue.
+   - BATCHES (§4a): createBatch/recordBatchResult/listBatches group one bulk "Compress inside" run's compress
+     tasks (batchId). compressed/skipped => OK (done++); blocked/failed => errors[] {path,reason}. Finished
+     batches linger 30 min (retention) then prune; folded into GET /api/progress as `batches` (processing.mdx).
    - GET /api/progress gains `queued` (pending count); dock shows "+N queued" footer. No fake cards for
      pending items (webapp.mdx §13).
    - IN-MEMORY ONLY, no persistence (same rationale as the registry). Restart => empty queue; re-invoking a
      page action re-queues only unfinished files (skip-already-done makes no-persistence safe). Never networks.
   Code: modules/jobqueue/jobqueue.service.ts (enqueue/pump/runTask/queueDepth, CONCURRENCY per op, pending[]
-  + inflight Set), progress.router.ts (fold `queued` into ProgressListResult), ProgressDock.tsx (footer).
-  Keep in sync with page_actions.mdx (producer), webapp.mdx §11–§14 (dock/registry/mapLimit), Transcribe.mdx
-  + ai_description.mdx (the per-file runners).
+  + inflight Set, createBatch/recordBatchResult/listBatches), progress.router.ts (fold `queued`+`batches` into
+  ProgressListResult), ProgressDock.tsx (footer). Keep in sync with page_actions.mdx (producer), compress_inside.mdx
+  (compress producer + batches), processing.mdx (batch surfaces), webapp.mdx §11–§14 (dock/registry/mapLimit),
+  Transcribe.mdx + ai_description.mdx (the per-file runners).
 -->
 </content>

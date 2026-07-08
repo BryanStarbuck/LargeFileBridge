@@ -13,48 +13,48 @@
 import { Zap, EyeOff, UploadCloud, DownloadCloud, Share2 } from "lucide-react";
 import type { Action } from "./EntityMenu";
 import { notWiredToast } from "../../lib/pageActions.js";
+import { openCompressInside } from "../../lib/compressInside.js";
 
 const ICON = "h-3.5 w-3.5";
 
-/** Compress-all-videos offer — destructive, confirm-gated, red. Not batch-wired: points to per-file compress. */
-export function compressAllVideos(): Action {
+/**
+ * Compress-all-videos offer. When the page can supply its directory `root`, this opens the Compress-inside
+ * pop-over dialog (compress_inside.mdx §2) scoped to that root with VIDEOS pre-checked — the dialog is its
+ * own confirm + config, so no separate ConfirmDialog is attached. Without a root (a page that can't resolve
+ * one) it falls back to the honest "not yet wired" toast.
+ */
+export function compressAllVideos(root?: string): Action {
   return {
     id: "compress-videos",
     label: "Compress all videos…",
     icon: <Zap className={ICON} />,
     group: "Work",
     danger: true,
-    confirm: {
-      title: "Compress all videos here?",
-      body: "Medium quality, same resolution — originals move to LFBridge trash (recoverable).",
-      confirmLabel: "Compress videos",
-    },
     onSelect: () =>
-      notWiredToast(
-        "Batch video compression isn't wired yet",
-        "compress a video from its ⋯ menu, or a whole directory from View one directory",
-      ),
+      root
+        ? openCompressInside(root, { images: false, videos: true })
+        : notWiredToast(
+            "Batch video compression isn't wired yet",
+            "compress a video from its ⋯ menu, or a whole directory from View one directory",
+          ),
   };
 }
 
-/** Compress-all-images offer — destructive, confirm-gated, red. Not batch-wired. */
-export function compressAllImages(): Action {
+/** Compress-all-images offer — opens the Compress-inside dialog with IMAGES pre-checked (compress_inside.mdx §2). */
+export function compressAllImages(root?: string): Action {
   return {
     id: "compress-images",
     label: "Compress all images…",
     icon: <Zap className={ICON} />,
     group: "Work",
     danger: true,
-    confirm: {
-      title: "Compress all images here?",
-      body: "Uncompressed images are re-encoded; originals move to LFBridge trash (recoverable).",
-      confirmLabel: "Compress images",
-    },
     onSelect: () =>
-      notWiredToast(
-        "Batch image compression isn't wired yet",
-        "compress an image from its ⋯ menu, or a whole directory from View one directory",
-      ),
+      root
+        ? openCompressInside(root, { images: true, videos: false })
+        : notWiredToast(
+            "Batch image compression isn't wired yet",
+            "compress an image from its ⋯ menu, or a whole directory from View one directory",
+          ),
   };
 }
 

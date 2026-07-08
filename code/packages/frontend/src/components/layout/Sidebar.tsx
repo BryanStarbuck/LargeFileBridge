@@ -9,10 +9,14 @@ import type { CurrentUser } from "@lfb/shared";
 import { leftBar } from "../../config/left_bar.js";
 import { api } from "../../api/client.js";
 import { clientLog } from "../../lib/clientLog.js";
+import { useProgress } from "../../progress/ProgressContext.js";
 import { NavIcon } from "./NavIcon.js";
 
 export function Sidebar({ user }: { user: CurrentUser }) {
   const path = useRouterState({ select: (s) => s.location.pathname });
+  // Background-work state for the conditional "Processing" item (processing.mdx §2).
+  const { processing, jobs, queued } = useProgress();
+  const processingCount = jobs.length + queued;
   const activeRepo = useRouterState({
     select: (s) => (s.location.search as { repo?: string } | undefined)?.repo,
   });
@@ -149,6 +153,27 @@ export function Sidebar({ user }: { user: CurrentUser }) {
             </div>
           );
         })}
+
+        {/* Conditional "Processing" item (processing.mdx §2): the LAST item of the top nav list, shown
+            ONLY while background work runs (a running job, a pending backlog, or an active batch), and
+            gone the moment it finishes. Runtime-injected — NOT a static yaml row (documented as a comment
+            in left_bar.yaml). Routes to the Processing page. */}
+        {processing && (
+          <Link
+            to="/processing"
+            title="Background work in progress"
+            className="mx-2 my-0.5 flex items-center gap-2.5 rounded-md px-3 py-2 text-sm hover:bg-slate-100"
+            style={
+              path.startsWith("/processing")
+                ? { color: "var(--lfb-primary)", background: "var(--lfb-primary-tint)", fontWeight: 500 }
+                : { color: "#000" }
+            }
+          >
+            <NavIcon name="Loader2" className="h-4 w-4 animate-spin" />
+            <span className="flex-1">Processing</span>
+            {processingCount > 0 && <span className="text-xs text-black/40">{processingCount}</span>}
+          </Link>
+        )}
       </nav>
 
       {/* Account slot (bottom; menu expands upward) */}

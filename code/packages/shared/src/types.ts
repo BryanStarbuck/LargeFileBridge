@@ -532,6 +532,13 @@ export interface ProgressJob {
 export interface ProgressListResult {
   jobs: ProgressJob[];
   queued?: number;
+  // Per-op pending breakdown (processing.mdx §5) — {transcribe, describe, compress} counts of not-yet-
+  // started tasks, so the Processing page can label the backlog. Absent when nothing is waiting.
+  queuedByOp?: Partial<Record<ProgressKind, number>>;
+  // Background-processing batches (processing.mdx §4): active runs, plus recently-finished ones kept for
+  // a short retention window so their error list is still visible if the user opens the page. Absent/empty
+  // when there is nothing to show.
+  batches?: ProcessingBatch[];
 }
 
 // The plan a producing PAGE ACTION returns (page_actions.mdx §5): after resolving scope (checked set or
@@ -796,6 +803,56 @@ export interface CompressResult {
 }
 export interface CompressBatchResult {
   results: CompressResult[];
+}
+
+// ── Compress videos & images inside a directory (compress_inside.mdx) ─────────
+// What happens to each ORIGINAL after its file compresses successfully. This is a PER-RUN choice made
+// in the "Compress inside" dialog and it OVERRIDES the global recoverable-by-default (compression.mdx
+// §8 / charter): "hard" = unlink the original; "trash" = move it to the recoverable LFBridge trash.
+// The dialog DEFAULTS to "hard" (the user asked for that on this explicit bulk action). Deletion is
+// PER-FILE and only ever happens AFTER that one file's temp output verified — a mid-file failure never
+// deletes its original (compress_inside.mdx §4).
+export type DeleteOriginalMode = "hard" | "trash";
+
+// POST /api/compress/inside body — the dialog's four inputs plus the directory root (compress_inside.mdx §3).
+export interface CompressInsideRequest {
+  root: string;                    // the directory whose media to compress (the triple-dot menu's dir)
+  images: boolean;                 // include image files
+  videos: boolean;                 // include video files
+  recursive: boolean;              // descend into sub-directories (dialog default: true)
+  deleteOriginal: DeleteOriginalMode; // dialog default: "hard"
+}
+
+// The plan the enqueue returns immediately (compress_inside.mdx §5) — it never waits for the work. The
+// eligible files are handed to the background queue as `compress` tasks grouped under `batchId`.
+export interface CompressInsidePlan {
+  batchId: string;   // the ProcessingBatch grouping these tasks (processing.mdx §4)
+  considered: number; // files the walk saw (of the selected kinds)
+  eligible: number;   // media that should compress (not already-done, not flagged Do-not-compress)
+  queued: number;     // handed to the queue (== eligible)
+  images: number;     // eligible breakdown
+  videos: number;
+}
+
+// ── Background processing batches (processing.mdx §4) ────────────────────────
+// A batch groups the per-file tasks of ONE bulk action (today: a "Compress inside" run) so the
+// Processing page can show one progress bar + the final ERROR LIST for that run. Individual running
+// files still surface their own dock cards via the registry; the batch is the roll-up around them.
+export interface ProcessingBatchError {
+  path: string;    // the file that failed/was blocked
+  reason: string;  // why (ffmpeg error, blocked-alpha, no-gain-is-not-an-error, …)
+}
+export interface ProcessingBatch {
+  id: string;
+  kind: ProgressKind;              // "compress" for now
+  label: string;                  // e.g. "Compress inside ~/Movies/Trip"
+  total: number;                  // eligible files in the run
+  done: number;                   // finished OK (compressed or skipped-no-gain)
+  failed: number;                 // finished with an error/blocked (each also in `errors`)
+  errors: ProcessingBatchError[]; // the list shown when the run finishes (compress_inside.mdx §4)
+  deleteOriginal: DeleteOriginalMode; // how originals were disposed (shown for transparency)
+  startedAt: string;              // ISO
+  finishedAt: string | null;      // ISO once total === done + failed; null while running
 }
 
 // ── Transcribe (Transcribe.mdx) ─────────────────────────────────────────────

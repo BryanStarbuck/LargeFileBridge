@@ -21,7 +21,8 @@ Siblings: [Repos](./repos.mdx) (the landing screen to the right of this bar) ·
 [One repo](./one_repo.mdx) (the per-repo file-sync screen a Repos row opens) ·
 [File System](./directories.mdx) (the Finder-style column browser the **File System** item opens) ·
 [IPFS](./ipfs.mdx) (the local-pinset view the **IPFS** item opens) ·
-[scan.mdx](./scan.mdx) (the scheduleTasks the **Scans** item surfaces).
+[scan.mdx](./scan.mdx) (the scheduleTasks the **Scans** item surfaces) ·
+[processing.mdx](./processing.mdx) (the runtime-conditional **Processing** item this bar appends, §3.1).
 
 > **Naming note (pm/menus.mdx, scan.mdx).** The scheduled background jobs are called **"scheduleTasks"**
 > internally; the **UI calls what they do "scans."** The former **Sync** nav item is therefore now
@@ -102,6 +103,21 @@ States:
 Rendering each nav item from the yaml with the active (route-match) / hover states and the description tooltip is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` component (its `isActive` route match).
 
+### 3.1 The runtime-conditional **Processing** item (only while work runs)
+
+A **Processing** item is appended as the **last item of the top nav list** — **after** the static yaml
+items (…Scans, Settings) and **before** the empty space that runs down to the pinned account slot (§4) —
+**only while background work is running** (a running job, a pending backlog, or an active "Compress inside"
+batch), and it **disappears** the moment work finishes. It routes to **`/processing`**. Full behavior — the
+three background-work surfaces and the Processing page — is owned by [processing.mdx](./processing.mdx).
+
+Like the dynamic company children under **Storages** (§3), this item is **runtime-injected** — it depends
+on live state, so it is **not** a static row in `pm/left_bar.yaml` (it is only *documented* there as a
+commented, runtime-only entry). The Sidebar appends it after the yaml `navItems` map when work is running,
+in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar`
+(reads `useProgress()`; renders the Processing `<Link>` after the yaml items when `processing` is true).
+
 ---
 
 ## 4. The account slot (bottom of the bar)
@@ -159,4 +175,7 @@ Resolving a nav item's lucide icon by name (unknown name renders nothing) is han
   frontend imports raw. LOCKED here: the spaced wordmark "Large File Bridge", and the color rule
   "accent stays accent, medium grey becomes black". ONE left bar only (app). When adding a nav item,
   edit the yaml (content) and, if it needs special treatment, add a row to §3 here.
+  A runtime-conditional "Processing" item (§3.1) is appended as the LAST top-nav item (after Settings,
+  before the account slot) ONLY while background work runs, routing to /processing — runtime-injected by
+  Sidebar.tsx (NOT a static yaml row; documented as a commented entry in left_bar.yaml). See processing.mdx.
 -->

@@ -288,7 +288,7 @@ export function FullPathsPage() {
     ...producingActions((): ActionScope =>
       selected.size > 0 ? { paths: [...selected] } : root ? { root } : {},
     ),
-    compressAllVideos(),
+    compressAllVideos(root ?? undefined),
     gitIgnoreBig(),
     {
       id: "ipfs-pin",

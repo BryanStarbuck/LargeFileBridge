@@ -1,0 +1,174 @@
+ROOT_DIR dir is ~/BGit/Bryan_git/LargeFileBridge
+
+COMPRESSION_SPEC is file {ROOT_DIR}/pm/compression.mdx
+CODECS_SPEC is file {ROOT_DIR}/pm/codecs.mdx
+COMPRESSION_CODE is file {ROOT_DIR}/code/packages/backend/src/modules/compress/compression.service.ts
+CONFIG_SCHEMA is file {ROOT_DIR}/code/packages/shared/src/schemas.ts
+
+Subject: Compress at MIDDLE quality, same pixel resolution, for BOTH images and video.
+Date: 2026-07-08
+
+=====================================================================
+THE REQUIREMENT (restated)
+=====================================================================
+
+* When we compress images AND video, the destination must be the SAME pixel
+  resolution as the source. Never downscale.
+* Use a modern, high-efficiency compression algorithm that exposes a RANGE of
+  aggressiveness: one end = highest quality / bigger file, the other end = best
+  compression / reduced quality, with usable values in between.
+* Deliberately pick the MIDDLE of that range so we keep almost all the quality,
+  the file is only somewhat bigger than the smallest possible, and we still get
+  a much smaller file than the uncompressed original. We give up a minuscule
+  amount of quality on purpose.
+* Document, in the product specifications, WHICH algorithm / library and WHICH
+  setting controls that middle value, for images and for video.
+
+=====================================================================
+THE BIG RISK (and how we avoid it)
+=====================================================================
+
+* THE RISK: a compression tool that has no middle. It only races to the tiniest
+  possible file and sacrifices a lot of quality, with no dial to trade a little
+  size back for a lot of quality.
+* HOW WE AVOID IT: we only drive tools that take an EXPLICIT NUMERIC QUALITY
+  PARAMETER spanning the full range, and we ALWAYS pass that parameter set to
+  the middle. The quality is never left to the tool's default and never maxed
+  out silently.
+    * Video: ffmpeg CRF (Constant Rate Factor), -crf 0..51.
+      Lower = higher quality / bigger. Middle default = CRF 21 (H.264 / AV1),
+      CRF 24 (HEVC).
+    * Image (lossy): ImageMagick -quality / cwebp -q, 0..100.
+      Higher = higher quality / bigger. Middle default = quality 85.
+    * Image (lossless, PNG kept as PNG): oxipng, which never changes pixels or
+      quality at all, so there is no quality to give up.
+* A tool with no controllable middle is DISQUALIFIED. This is now written into
+  the spec as a hard requirement (see below, {COMPRESSION_SPEC} sections 2.1 and
+  2.1.1).
+
+=====================================================================
+THE MECHANISM THAT GUARANTEES THE MIDDLE
+=====================================================================
+
+Two things together guarantee we sit in the middle, not at an extreme:
+
+  1. The config DEFAULT quality is "medium" for both images and video.
+     In {CONFIG_SCHEMA}: compression.images.quality and compression.video.quality
+     both .default("medium"). The enum is low | medium | high | lossless.
+
+  2. Two pure mapping functions translate "medium" into a concrete mid-range
+     number for the chosen tool. In {COMPRESSION_CODE}:
+       * videoCrf(codec, quality): base = 24 for HEVC else 21; medium returns
+         base; high = base-3; low = base+5; lossless = 0.
+       * jpegQuality(quality): high = 92; medium = 85; low = 70; lossless = 100.
+
+If EITHER the default or a mapping ever drifted to an extreme, the middle
+guarantee would break, so both are called out as LOCKED in the spec.
+
+The middle value is then handed to the real command with NO resize:
+  * Video, in compressFile(): ffmpeg -i IN -c:v <encoder> -crf <videoCrf>
+    -pix_fmt yuv420p -c:a copy OUT   (no -vf scale, no -s -> resolution kept)
+  * Image, in imageCommand(): oxipng (lossless PNG), or cwebp -q <jpegQuality>,
+    or magick -quality <jpegQuality>  (no resize -> resolution kept)
+Then compressFile() re-measures width x height and ABORTS if it changed (gated
+on the preserve_resolution setting, which defaults on / LOCKED).
+
+=====================================================================
+STATUS: THE CODE
+=====================================================================
+
+RESULT: Already fully implemented, for BOTH the image side and the video side.
+I did NOT need to add or change any application code. What is already there:
+
+VIDEO (already done):
+  * Encoders: libx264 (H.264), libx265 (HEVC), libaom-av1 (AV1) in
+    VIDEO_TARGETS, {COMPRESSION_CODE}.
+  * Middle knob: videoCrf() returns CRF 21 (H.264/AV1) or 24 (HEVC) for the
+    default "medium". This is a genuine mid/high-quality point on the 0..51
+    scale, not the extreme.
+  * Same resolution: the ffmpeg command in compressFile() has NO scale/size
+    filter, and compressFile() verifies out dims == in dims and aborts on a
+    mismatch when preserve_resolution is on (default on).
+
+IMAGE (already done):
+  * Lossy: magick -quality / cwebp -q at jpegQuality() = 85 for "medium".
+  * Lossless PNG: oxipng, no pixel/quality change.
+  * Middle knob: jpegQuality() maps "medium" -> 85 on the 0..100 scale.
+  * Same resolution: imageCommand() passes NO resize; compressFile() verifies
+    dims unchanged and aborts on a mismatch.
+
+HOW IT IS DONE (both sides), end to end:
+  1. checkFile() builds the plan (pickImageTarget / pickVideoTarget), picking a
+     codec that honors the user's prefer/deny lists and runs the alpha-safety
+     check first.
+  2. compressFile() runs the tool to a TEMP file with the middle quality knob
+     and no resize.
+  3. It re-measures resolution, aborts on any change, and requires the output to
+     be smaller (else "no gain", original untouched).
+  4. Only then does it do the recoverable replace (original -> LFBridge trash).
+
+OBSERVATION (not a defect, logged for follow-up):
+  * mozjpeg (cjpeg) and jpegoptim are DETECTED (detectTools) and the spec lists
+    them, but imageCommand() currently routes JPEG output through ImageMagick
+    -quality rather than cjpeg. This does NOT affect the middle-quality
+    requirement: ImageMagick -quality is a full 0..100 range knob and is pinned
+    to 85. Wiring cjpeg in later would improve the JPEG ratio at equal quality;
+    it is optional and out of scope for this task.
+
+=====================================================================
+STATUS: THE PRODUCT SPECIFICATIONS
+=====================================================================
+
+WHAT ALREADY EXISTED in {COMPRESSION_SPEC} (before this task):
+  * Principle "medium quality, prefer lossless" and "never change the pixels'
+    size" (section 1), stated at a high level.
+  * A tools table (section 2) that mentioned -crf and -quality and rough middle
+    hints ("medium ~ CRF 20-23", "~85 medium").
+  * The resolution-preserving verification (section 5) and quality enum default
+    "medium" (section 7).
+  So: the IDEA of medium quality + preserve resolution existed, but the exact
+  middle values, the explicit "must be a controllable range, not max-only" hard
+  requirement, and the code functions that implement the middle were NOT spelled
+  out as a single locked requirement, and were not clearly stated for BOTH media.
+
+WHAT I ADDED / CHANGED (this task):
+  * NEW section 2.1 "Quality control -- the MIDDLE setting (HARD REQUIREMENT,
+    LOCKED)" in {COMPRESSION_SPEC}. It states, for BOTH images and video:
+      - same pixel resolution (never downscale),
+      - a modern algorithm with a controllable quality<->size range,
+      - deliberately pick the MIDDLE (default medium).
+  * NEW section 2.1.1 "The RISK this requirement guards against" -- the
+    max-only-tool failure mode and why every tool we use is chosen for having an
+    explicit range parameter.
+  * NEW section 2.1.2 -- a table of the EXACT knob, range, and MIDDLE value per
+    media type (video: ffmpeg -crf, CRF 21 / 24; lossy image: -quality / -q, 85;
+    lossless image: oxipng), the full four-step mapping, and the two-part
+    mechanism (config default + mapping functions) that guarantees the middle.
+    Points at the real code: videoCrf(), jpegQuality(), imageCommand(),
+    compressFile(), and the schema default.
+  * Tightened section 1 principles 2 and 3 to say "the MIDDLE of the range" and
+    "for both images and video", cross-referencing section 2.1.
+  * Added acceptance criterion 2a (middle-quality holds for both media, exact
+    values, disqualify max-only tools).
+  * Fixed three stale code references so the spec points at functions that
+    actually exist: planCompression -> pickImageTarget()/pickVideoTarget();
+    verifyOutput -> the checks inside compressFile(); alphaSafety -> checkFile()
+    with imageAlphaUsed()/pixFmtHasAlpha().
+
+  * In {CODECS_SPEC} section 4: added a pointer that storage/sync compression
+    uses the middle CRF (21 / 24) at source resolution per compression.mdx 2.1,
+    and clarified that ONLY the separate compatibility/upload copy (section 5)
+    may downscale -- so the two purposes stay distinct and the never-downscale
+    rule is not contradicted.
+
+=====================================================================
+BOTTOM LINE
+=====================================================================
+
+* Code: the middle-quality-at-same-resolution behavior was ALREADY implemented
+  for both images and video. Nothing had to be added to make it work; the risk
+  (a max-only tool) does not apply because ffmpeg CRF and ImageMagick/cwebp
+  -quality are full-range knobs pinned to the middle by default.
+* Specs: the requirement is NOW documented as a hard, locked requirement with
+  the exact algorithms, libraries, settings, and middle values for both images
+  and video, and the specs now point at the real code that enforces it.
