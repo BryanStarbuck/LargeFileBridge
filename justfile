@@ -15,6 +15,7 @@ auth_lib  := justfile_directory() + "/../OpenAuthFederated"
 auth_repo := "https://github.com/BryanStarbuck/OpenAuthFederated.git"
 
 webport  := code + "/packages/frontend/scripts/web-port.mjs"
+logpipe  := justfile_directory() + "/scripts/log_rotate_pipe.mjs"   # dependency-free rotating sink (5 MiB × 5)
 portfile := "/tmp/lfb.web.port"
 log      := "/tmp/lfb.webapp.log"
 pidfile  := "/tmp/lfb.webapp.pid"
@@ -81,8 +82,11 @@ test:
 # Start backend (:8787) + web app (:2222, collision-resolved) in the background.
 run: setup stop
     -@rm -f {{portfile}}
-    cd {{code}} && nohup pnpm dev > {{log}} 2>&1 & echo $! > {{pidfile}}
-    @echo "Starting… (logs: {{log}})"
+    # Stream stdout+stderr THROUGH the rotating sink so {{log}} is size-bounded (5 MiB × 5) instead of
+    # growing unbounded. Process substitution keeps `$!` = the app pid (nohup pnpm dev), not the sink,
+    # so `stop`/pidfile still target the app. `exec node` avoids leaving an extra shell around the sink.
+    cd {{code}} && nohup pnpm dev > >(exec node "{{logpipe}}" "{{log}}") 2>&1 & echo $! > {{pidfile}}
+    @echo "Starting… (logs: {{log}}, rotating via scripts/log_rotate_pipe.mjs)"
     @for i in $(seq 1 60); do \
       if [ -f {{portfile}} ] && lsof -ti tcp:$(cat {{portfile}}) >/dev/null 2>&1 && lsof -ti tcp:{{be_port}} >/dev/null 2>&1; then \
         p=$(cat {{portfile}}); echo "Up: http://localhost:$p  (API :{{be_port}})"; exit 0; fi; \
