@@ -10,7 +10,7 @@ import { Router } from "express";
 import type { ProgressJob, ProgressListResult } from "@lfb/shared";
 import { requireAllowListed } from "../auth/identify.js";
 import { list } from "./progress.registry.js";
-import { queueDepth, queueDepthByOp, listBatches } from "../jobqueue/jobqueue.service.js";
+import { queueDepth, queueDepthByOp, listBatches, workerUtilization } from "../jobqueue/jobqueue.service.js";
 import { getScanJob } from "../scanner/scan-job.js";
 import { log } from "../../shared/logging.js";
 
@@ -44,11 +44,15 @@ progressRouter.get("/", (_req, res) => {
     // (active + recently-finished, for the Processing page's progress + error list).
     const queuedByOp = queueDepthByOp();
     const batches = listBatches();
+    // Worker utilization — the parallelism read (processing.mdx §3a): core-slots busy vs the mass-compute
+    // Core Budget. Only sent while something is actually running, so an idle poll stays tiny.
+    const workers = workerUtilization();
     const data: ProgressListResult = {
       jobs,
       ...(queued > 0 ? { queued } : {}),
       ...(Object.keys(queuedByOp).length > 0 ? { queuedByOp } : {}),
       ...(batches.length > 0 ? { batches } : {}),
+      ...(workers.busy > 0 ? { workers } : {}),
     };
     res.json({ ok: true, data });
   } catch (e) {

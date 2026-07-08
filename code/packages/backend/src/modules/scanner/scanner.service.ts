@@ -20,6 +20,7 @@ import {
 import { readYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import { computerUnitDir, unitConfigPath, unitStatusPath } from "../../shared/store/scopes.js";
 import { HARD_SKIP, isMediaFile } from "../../shared/scan-filters.js";
+import { mapLimit, responsiveBudget } from "../../shared/concurrency.js";
 import { log } from "../../shared/logging.js";
 
 interface Candidate {
@@ -52,14 +53,15 @@ export async function scanAll(
   const roots = cfg.scanner.roots.map(expandHome).filter((r) => safeIsDir(r));
   log.info("scan", `Scan (${source}) starting over ${roots.length} root(s).`);
 
-  // 1. Repo discovery — register any .git working tree found under the roots.
+  // 1. Repo discovery — register any .git working tree found under the roots. The independent per-root
+  // discovery walks fan out at the RESPONSIVE budget (cores − 2, parallelization.mdx §3) so many roots are
+  // walked at once; each walk still yields to the event loop (§10) so the app stays responsive.
   progress.setPhase("discovering");
   const discovered = new Set<string>();
-  for (const root of roots) {
-    for (const repoPath of await findGitRepos(root, cfg.scanner.follow_symlinks)) {
-      discovered.add(repoPath);
-    }
-  }
+  const perRoot = await mapLimit(roots, responsiveBudget(), (root) =>
+    findGitRepos(root, cfg.scanner.follow_symlinks),
+  );
+  for (const list of perRoot) for (const repoPath of list) discovered.add(repoPath);
   for (const repoPath of discovered) {
     try {
       await registerRepo(repoPath);
@@ -78,9 +80,13 @@ export async function scanAll(
   }
 
   // 3. Scan each repo unit. +1 for the computer unit walked in step 4.
+  // The independent repo-unit walks run IN PARALLEL, bounded by the RESPONSIVE budget (cores − 2,
+  // parallelization.mdx §3) — many stat-only walks at once instead of one-repo-after-another. Each walk
+  // still yields to the event loop (§10) so the HTTP server never freezes, and each unit's status.yaml is
+  // written atomically (storage_local.mdx §15), so concurrent unit walks never collide.
   progress.setPhase("repos");
   progress.setReposTotal(repoFolders.length + 1);
-  for (const folder of repoFolders) {
+  await mapLimit(repoFolders, responsiveBudget(), async (folder) => {
     const rc = getRepoConfig(folder);
     progress.unitStart(rc.repo.name || folder);
     const repoPath = rc.repo.path ? path.resolve(expandHome(rc.repo.path)) : "";
@@ -88,7 +94,7 @@ export async function scanAll(
       const st = getRepoStatus(folder);
       writeRepoStatus(folder, { ...st, repo_state: "missing" });
       progress.unitDone(0);
-      continue;
+      return;
     }
     const threshold = resolveThreshold(rc.big_file_override, cfg.big_file.threshold_bytes);
     const ig = rc.large_files.follow_gitignore ? buildRepoIgnore(repoPath) : null;
@@ -101,7 +107,7 @@ export async function scanAll(
     });
     writeStatus(folder, "repo", candidates, threshold, source);
     progress.unitDone(candidates.length);
-  }
+  });
 
   // 4. Scan the computer unit (roots minus the repo mask).
   progress.setPhase("computer");

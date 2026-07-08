@@ -3,6 +3,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { toBytes, type GlobalSettings } from "@lfb/shared";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
+import { logicalCores } from "../../shared/concurrency.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { requireAllowListed, requireAdmin } from "../auth/identify.js";
 import { rebuildAuthFrontend } from "../auth/auth-frontend.js";
@@ -35,6 +36,7 @@ async function toGlobalSettings(): Promise<GlobalSettings> {
     },
     allowedEmails: c.access.allowed_emails,
     access: getSecurityAccess(),
+    performance: { maxCoreFraction: c.performance.max_core_fraction, cores: logicalCores() },
   };
 }
 
@@ -54,6 +56,8 @@ const SettingsPatch = z.object({
     .optional(),
   scannerRoots: z.array(z.string()).optional(),
   ignoreGlobs: z.array(z.string()).optional(),
+  // Parallelism knob (parallelization.mdx §4) — the mass-compute core fraction (0.01–1, default 0.9).
+  performance: z.object({ maxCoreFraction: z.number().min(0.01).max(1) }).optional(),
   ipfs: z
     .object({
       apiAddr: z.string(),
@@ -77,6 +81,7 @@ settingsRouter.patch("/", async (req, res) => {
       }
       if (p.scannerRoots) c.scanner.roots = p.scannerRoots;
       if (p.ignoreGlobs) c.scanner.ignore_globs = p.ignoreGlobs;
+      if (p.performance) c.performance.max_core_fraction = p.performance.maxCoreFraction;
       if (p.ipfs) {
         if (p.ipfs.apiAddr !== undefined) c.ipfs.api_addr = p.ipfs.apiAddr;
         if (p.ipfs.gatewayAddr !== undefined) c.ipfs.gateway_addr = p.ipfs.gatewayAddr;

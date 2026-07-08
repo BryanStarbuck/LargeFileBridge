@@ -94,9 +94,12 @@ function BatchCard({ b }: { b: ProcessingBatch }) {
 }
 
 export function ProcessingPage() {
-  const { jobs, queuedByOp, batches } = useProgress();
+  const { jobs, queuedByOp, batches, workers } = useProgress();
   const waiting = Object.entries(queuedByOp).filter(([, n]) => (n ?? 0) > 0) as [ProgressKind, number][];
   const nothing = jobs.length === 0 && waiting.length === 0 && batches.length === 0;
+  // Worker utilization — the parallelism read (processing.mdx §3a): how many core-slots of the mass-compute
+  // budget are busy right now. Shown atop "Running now" so the user can SEE the mass parallelization working.
+  const utilPct = workers && workers.budget > 0 ? Math.round((workers.busy / workers.budget) * 100) : 0;
 
   return (
     <div className="flex flex-col gap-5">
@@ -110,7 +113,14 @@ export function ProcessingPage() {
 
       {jobs.length > 0 && (
         <section>
-          <h2 className="mb-2 text-sm font-semibold text-black/60">Running now</h2>
+          <div className="mb-2 flex items-baseline justify-between">
+            <h2 className="text-sm font-semibold text-black/60">Running now</h2>
+            {workers && workers.busy > 0 && (
+              <span className="text-xs text-black/50" title="Cores in use by background compression & processing (parallelization.mdx §4)">
+                {workers.busy} / {workers.budget} workers busy (~{utilPct}% of cores)
+              </span>
+            )}
+          </div>
           <div className="flex flex-col gap-1.5">
             {jobs.map((j) => (
               <RunningRow key={j.id} job={j} />

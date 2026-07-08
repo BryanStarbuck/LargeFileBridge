@@ -372,10 +372,10 @@ export async function createPersonalStorage(opts: { dedicatedRepo?: boolean }): 
   return getStorageDetail("personal");
 }
 
-export function indexStorageById(id: string): { indexed: number } {
+export async function indexStorageById(id: string): Promise<{ indexed: number }> {
   const storage = findRowById(id);
   if (!storage || storage.type === "local") throw new Error(`cannot index storage: ${id}`);
-  return { indexed: indexStorageFiles(storage.root) };
+  return { indexed: await indexStorageFiles(storage.root) };
 }
 
 export function analyzeStorageFile(id: string, rel: string): { path: string; outputs: string[] } {

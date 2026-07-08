@@ -16,27 +16,76 @@ import { compressFile } from "../compress/compression.service.js";
 import { track } from "../progress/progress.registry.js";
 import type { ProviderId } from "../describe/adapters.js";
 import type { DeleteOriginalMode, ProcessingBatch, ProgressKind } from "@lfb/shared";
+import { coreBudget } from "../../shared/concurrency.js";
 import { log } from "../../shared/logging.js";
 
 export type JobOp = "transcribe" | "describe" | "compress";
+export type CompressMediaKind = "image" | "video";
 
 export interface QueueTask {
   op: JobOp;
   path: string; // absolute media file path
   overwrite: boolean; // re-do even if the output exists (default false)
   provider?: string; // describe only — the chosen vision provider (or "auto")
-  compress?: { deleteOriginal: DeleteOriginalMode }; // compress only — per-run originals disposition
+  // compress only — per-run originals disposition + which media-aware budget this task draws (§3). The
+  // producer stamps `mediaKind` from the file's extension when it plans the batch (compress_inside.mdx §5).
+  compress?: { deleteOriginal: DeleteOriginalMode; mediaKind: CompressMediaKind };
   batchId?: string; // groups a bulk run (a "Compress inside" batch — processing.mdx §4)
 }
 
-// Per-op concurrency caps (job_queue.mdx §3). Whisper is CPU/GPU-heavy → 2; describe is network + a
-// bounded ffmpeg/ImageMagick fit step → 3; compress runs a heavy async ffmpeg/oxipng transcode → 2.
-// Constants in one place, easy to tune per machine later.
-const CONCURRENCY: Record<JobOp, number> = { transcribe: 2, describe: 3, compress: 2 };
+// ── The CORE BUDGET, media-aware (job_queue.mdx §3 / parallelization.mdx §2) ──────────────────────────
+// Concurrency is NOT a fixed tiny constant — it is DERIVED from the machine's core count so a many-core
+// box actually gets used ("use up to ~90% of cores"). The `compress` op is MEDIA-AWARE because the two
+// media kinds have OPPOSITE tool profiles, so it splits into two admission buckets:
+//   • compress:image — image tools (oxipng/cwebp/mozjpeg/magick) are ~single-threaded → fan WIDE:
+//     `budget` jobs at 1 thread each (one job per core).
+//   • compress:video — ffmpeg is internally multi-threaded → fan NARROW: floor(budget / VIDEO_THREADS)
+//     jobs, and each ffmpeg is thread-CAPPED to VIDEO_THREADS so N videos don't each grab every core.
+// transcribe (Whisper, multi-threaded) fans narrow too; describe waits on a vision-API round-trip so it
+// is NETWORK-parallel, not core-bound. The invariant (parallelization.mdx §2): for every bucket
+// `concurrentJobs × threadsPerJob ≈ budget`, NEVER cores². Caps are read LIVE from coreBudget() at
+// admission, so the Settings knob (performance.max_core_fraction) takes effect on the next task, no restart.
+type Bucket = "transcribe" | "describe" | "compress:image" | "compress:video";
+const VIDEO_THREADS = 4; // per-job ffmpeg threads for a BATCHED video compress (a one-off passes no cap)
+const WHISPER_THREADS = 4; // Whisper is multi-threaded; a couple of runs saturate the machine
+const DESCRIBE_CONCURRENCY = 6; // network round-trip, not local CPU — a fixed small overlap, not core-bound
+
+/** The admission bucket a task competes in (compress splits by media kind). */
+function bucketOf(t: QueueTask): Bucket {
+  if (t.op === "compress") return t.compress?.mediaKind === "video" ? "compress:video" : "compress:image";
+  return t.op;
+}
+
+/** The concurrency cap for a bucket, given a Core Budget snapshot (parallelization.mdx §1). The budget is
+ *  passed in — NOT read here — so the admission scan can snapshot it ONCE per pass instead of re-reading
+ *  (and re-parsing) config.yaml for every pending task, which would block the event loop on a big backlog. */
+function capFor(bucket: Bucket, budget: number): number {
+  switch (bucket) {
+    case "compress:image":
+      return budget; // WIDE — one single-threaded job per core
+    case "compress:video":
+      return Math.max(1, Math.floor(budget / VIDEO_THREADS)); // NARROW — thread-capped jobs fill the budget
+    case "transcribe":
+      return Math.max(1, Math.floor(budget / WHISPER_THREADS)); // NARROW — Whisper is heavy + multi-threaded
+    case "describe":
+      return DESCRIBE_CONCURRENCY; // network-parallel, not core-bound
+  }
+}
+
+/** Per-job internal thread cap plumbed into the compress tool so a batched job stays inside its slice
+ *  (parallelization.mdx §2). image → 1 (fan wide), video → VIDEO_THREADS (fan narrow). */
+function compressThreadsFor(kind: CompressMediaKind | undefined): number {
+  return kind === "video" ? VIDEO_THREADS : 1;
+}
 
 const pending: QueueTask[] = []; // FIFO backlog (tasks not yet started)
 const inflight = new Set<string>(); // op|path currently pending OR running — the dedup set
-const running: Record<JobOp, number> = { transcribe: 0, describe: 0, compress: 0 };
+const running: Record<Bucket, number> = {
+  transcribe: 0,
+  describe: 0,
+  "compress:image": 0,
+  "compress:video": 0,
+};
 
 const keyOf = (t: Pick<QueueTask, "op" | "path">): string => `${t.op}|${t.path}`;
 
@@ -144,11 +193,18 @@ function pump(): void {
   }
 }
 
-/** Remove and return the first pending task whose op has a free slot, else undefined (FIFO by op). */
+/** Remove and return the first pending task whose ADMISSION BUCKET has a free slot, else undefined
+ *  (FIFO per bucket — an image task never blocks behind a full video bucket, and vice versa). */
 function takeRunnable(): QueueTask | undefined {
+  // Snapshot the live Core Budget ONCE for this whole admission scan. Reading it per-element would call
+  // coreBudget() → getAppConfig() (a synchronous config.yaml read + Zod parse) for every pending task on
+  // every pump cycle — O(N²) blocking disk I/O over a big batch, defeating the responsiveness the budget
+  // exists to protect. Still read LIVE per pass, so a Settings change lands on the very next admission.
+  const budget = coreBudget();
   for (let i = 0; i < pending.length; i++) {
     const t = pending[i];
-    if (running[t.op] < CONCURRENCY[t.op]) {
+    const b = bucketOf(t);
+    if (running[b] < capFor(b, budget)) {
       pending.splice(i, 1);
       return t;
     }
@@ -157,13 +213,30 @@ function takeRunnable(): QueueTask | undefined {
 }
 
 function start(t: QueueTask): void {
-  running[t.op]++;
+  const b = bucketOf(t);
+  running[b]++;
   // Fire-and-forget: run the task, then free its slot + dedup key and re-pump for the next waiter.
   void runTask(t).finally(() => {
-    running[t.op]--;
+    running[b]--;
     inflight.delete(keyOf(t));
     pump();
   });
+}
+
+/**
+ * Worker utilization for the Processing page's parallelism read (processing.mdx §3a): how many of the
+ * mass-compute Core Budget's core-slots are BUSY right now vs the budget total. Compute jobs count their
+ * thread-equivalents (a video job occupies VIDEO_THREADS cores, a transcribe WHISPER_THREADS, an image 1),
+ * so "busy" reflects real cores in use; describe is network (not core-bound) and is excluded. Clamped to
+ * the budget for a sane display.
+ */
+export function workerUtilization(): { busy: number; budget: number } {
+  const budget = coreBudget();
+  const busy =
+    running["compress:image"] * 1 +
+    running["compress:video"] * VIDEO_THREADS +
+    running["transcribe"] * WHISPER_THREADS;
+  return { busy: Math.min(budget, busy), budget };
 }
 
 /**
@@ -186,8 +259,14 @@ async function runTask(t: QueueTask): Promise<void> {
       // Per-file transactional safety lives in compressFile: the original is only disposed AFTER the
       // temp verified, so a failure here never deletes the original (compress_inside.mdx §4).
       const name = path.basename(t.path);
+      // Pass the per-job THREAD CAP (parallelization.mdx §2): image → 1 (fan wide), video → VIDEO_THREADS
+      // (fan narrow). This is what lets many jobs run at once without cores² oversubscription. A one-off
+      // single-file compress (the file/viewer menu) passes NO threads and uses the tool's all-core default.
       const r = await track("compress", name, async () =>
-        compressFile(t.path, { deleteOriginal: t.compress?.deleteOriginal }),
+        compressFile(t.path, {
+          deleteOriginal: t.compress?.deleteOriginal,
+          threads: compressThreadsFor(t.compress?.mediaKind),
+        }),
       );
       // "compressed" / "skipped" (no-gain, already-compressed) are both fine — the file is safe and
       // present. "blocked" / "failed" are errors surfaced in the batch's final error list.

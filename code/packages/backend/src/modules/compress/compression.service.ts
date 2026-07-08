@@ -320,6 +320,12 @@ function fail(pathOut: string, reason: string, status: CompressResult["status"] 
 export interface CompressFileOpts {
   forceVideoCodec?: string;
   deleteOriginal?: DeleteOriginalMode;
+  // Per-job internal THREAD CAP (parallelization.mdx §2). Set by the background queue when it fans MANY
+  // jobs out at once so N jobs stay inside the core budget (image → 1, video → a small cap) instead of
+  // each grabbing every core (cores² oversubscription). OMITTED for a one-off single-file compress — that
+  // lone file uses the tool's own all-core default. Fed to ffmpeg -threads / oxipng --threads /
+  // cwebp multi-thread on-off / magick -limit thread below.
+  threads?: number;
 }
 
 export async function compressFile(input: string, opts?: CompressFileOpts | string): Promise<CompressResult> {
@@ -354,10 +360,13 @@ export async function compressFile(input: string, opts?: CompressFileOpts | stri
   // Build + run the tool.
   let cmd: { bin: string; args: string[] };
   if (media === "images") {
-    cmd = imageCommand(plan, abs, out, prefs, tools);
+    cmd = imageCommand(plan, abs, out, prefs, tools, o.threads);
   } else {
     const t = VIDEO_TARGETS[plan.targetKey];
-    cmd = { bin: "ffmpeg", args: ["-y", "-i", abs, "-c:v", t.encoder, "-crf", String(videoCrf(plan.targetKey, prefs.quality)), "-pix_fmt", "yuv420p", "-c:a", "copy", out] };
+    // -threads caps a BATCHED job to its slice (parallelization.mdx §2); a one-off compress omits it so
+    // ffmpeg uses its all-core default. 0 would mean "auto/all cores" to ffmpeg — so only pass when > 0.
+    const threadArgs = o.threads && o.threads > 0 ? ["-threads", String(o.threads)] : [];
+    cmd = { bin: "ffmpeg", args: ["-y", "-i", abs, "-c:v", t.encoder, ...threadArgs, "-crf", String(videoCrf(plan.targetKey, prefs.quality)), "-pix_fmt", "yuv420p", "-c:a", "copy", out] };
   }
   const r = await runAsync(cmd.bin, cmd.args);
   if (r.code !== 0 || !safeSize(out)) {
@@ -423,18 +432,29 @@ export async function compressFile(input: string, opts?: CompressFileOpts | stri
   return { path: finalPath, status: "compressed", reason: null, beforeBytes, afterBytes, codec: check.targetCodec };
 }
 
-function imageCommand(plan: Plan, abs: string, out: string, prefs: CompressMediaPrefs, tools: CompressTools): { bin: string; args: string[] } {
+function imageCommand(plan: Plan, abs: string, out: string, prefs: CompressMediaPrefs, tools: CompressTools, threads?: number): { bin: string; args: string[] } {
   const q = String(jpegQuality(prefs.quality));
+  // Thread-cap a BATCHED image job so the queue can fan MANY of them out to ~90% of cores without each
+  // tool also grabbing every core (parallelization.mdx §2). oxipng defaults to ALL cores (rayon) — the
+  // most important one to pin to 1 under a wide fan-out. A one-off compress passes no `threads` and each
+  // tool uses its own default. `capped` = an explicit small cap was requested.
+  const capped = threads != null && threads > 0;
   if (plan.targetKey === "png" && tools.oxipng) {
-    return { bin: "oxipng", args: ["-o", "4", "--strip", "safe", abs, "--out", out] };
+    const t = capped ? ["--threads", String(threads)] : [];
+    return { bin: "oxipng", args: ["-o", "4", ...t, "--strip", "safe", abs, "--out", out] };
   }
   if (plan.targetKey === "webp" && tools.cwebp) {
+    // cwebp is single-threaded by default; `-mt` opts INTO multi-threading. A batched (capped) job stays
+    // single-threaded; a one-off job turns -mt ON to use the whole machine on that lone file.
+    const mt = capped ? [] : ["-mt"];
     return plan.lossless
-      ? { bin: "cwebp", args: ["-lossless", abs, "-o", out] }
-      : { bin: "cwebp", args: ["-q", q, abs, "-o", out] };
+      ? { bin: "cwebp", args: [...mt, "-lossless", abs, "-o", out] }
+      : { bin: "cwebp", args: [...mt, "-q", q, abs, "-o", out] };
   }
-  // Everything else via ImageMagick, quality-controlled, NO resize (keeps resolution).
-  return { bin: magickBin(), args: [abs, "-quality", q, out] };
+  // Everything else via ImageMagick, quality-controlled, NO resize (keeps resolution). `-limit thread N`
+  // caps a batched job; a one-off uses ImageMagick's default thread policy.
+  const limit = capped ? ["-limit", "thread", String(threads)] : [];
+  return { bin: magickBin(), args: [...limit, abs, "-quality", q, out] };
 }
 
 function safeSize(p: string): boolean {
@@ -499,7 +519,13 @@ export function enqueueCompressInside(req: CompressInsideRequest): CompressInsid
       op: "compress" as const,
       path: p,
       overwrite: false,
-      compress: { deleteOriginal: req.deleteOriginal },
+      // Stamp the media kind so the queue draws the right media-aware budget (job_queue.mdx §3): image
+      // tasks fan wide (1 thread each), video tasks fan narrow (thread-capped). walkCompressible only
+      // returns images/videos, so anything not an image is a video here.
+      compress: {
+        deleteOriginal: req.deleteOriginal,
+        mediaKind: (mediaOf(path.basename(p)) === "images" ? "image" : "video") as "image" | "video",
+      },
       batchId,
     })),
   );

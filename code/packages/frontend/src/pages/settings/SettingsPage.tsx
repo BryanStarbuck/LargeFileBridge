@@ -23,12 +23,14 @@ export function SettingsPage() {
   const [value, setValue] = useState(100);
   const [unit, setUnit] = useState<SizeUnit>("MB");
   const [roots, setRoots] = useState("");
+  const [corePct, setCorePct] = useState(90); // parallelism knob (parallelization.mdx §4)
 
   useEffect(() => {
     if (data) {
       setValue(data.bigFile.display.value);
       setUnit(data.bigFile.display.unit);
       setRoots(data.scannerRoots.join("\n"));
+      setCorePct(Math.round(data.performance.maxCoreFraction * 100));
     }
   }, [data]);
 
@@ -79,6 +81,28 @@ export function SettingsPage() {
           className="w-full rounded border border-[var(--lfb-border)] px-2 py-1.5 font-mono text-xs" />
         <button onClick={() => save.mutate({ scannerRoots: roots.split("\n").map((s) => s.trim()).filter(Boolean) })}
           className="mt-2 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white">Save roots</button>
+      </Section>
+
+      <Section
+        title="Parallelism"
+        subtitle="How much of the CPU LargeFileBridge may use for background compression & processing. Higher = faster bulk runs; lower keeps more headroom for other apps."
+      >
+        <div className="flex items-center gap-3">
+          <input type="range" min={10} max={100} step={5} value={corePct}
+            onChange={(e) => setCorePct(Number(e.target.value))} className="w-56" />
+          <span className="w-12 text-sm tabular-nums">{corePct}%</span>
+          {data && (
+            <span className="text-xs text-black/50">
+              ≈ {Math.max(1, Math.round((data.performance.cores * corePct) / 100))} of {data.performance.cores} cores
+            </span>
+          )}
+          <button onClick={() => save.mutate({ performance: { maxCoreFraction: corePct / 100 } })}
+            className="ml-auto rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white">Save</button>
+        </div>
+        <p className="mt-2 text-xs text-black/50">
+          Tunes background compression, fingerprinting & batch transcription (the mass-compute budget).
+          Sync and scans always keep 2 cores free and aren't affected.
+        </p>
       </Section>
 
       <Section

@@ -94,10 +94,11 @@ storagesRouter.post("/:id/init", (req, res) => {
   }
 });
 
-// POST /api/storages/:id/index — (re)build the per-file fingerprint index (storages.mdx §4.1).
-storagesRouter.post("/:id/index", (req, res) => {
+// POST /api/storages/:id/index — (re)build the per-file fingerprint index (storages.mdx §4.1). The
+// per-file fingerprinting fans out across cores (parallelization.mdx §3), so this awaits the async build.
+storagesRouter.post("/:id/index", async (req, res) => {
   try {
-    res.json({ ok: true, data: indexStorageById(req.params.id) });
+    res.json({ ok: true, data: await indexStorageById(req.params.id) });
   } catch (e) {
     log.warn("storage", `index ${req.params.id} failed: ${(e as Error).message}`);
     res.status(400).json({ ok: false, error: (e as Error).message });

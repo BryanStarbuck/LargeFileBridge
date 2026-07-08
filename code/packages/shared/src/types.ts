@@ -370,6 +370,11 @@ export interface GlobalSettings {
   };
   allowedEmails: string[];
   access: SecurityAccess; // full allow-list (companies + individuals) — security.mdx §7.3
+  // Mass-parallelization knob (parallelization.mdx §4 / settings.mdx §4.3). `maxCoreFraction` is the
+  // fraction of CPU cores the mass-compute Core Budget may use for background compression & processing
+  // (0.01–1, default 0.9 = 90%); `cores` is this machine's logical-core count (read-only) so the UI can
+  // show the resolved budget, e.g. "≈ 14 of 16 cores".
+  performance: { maxCoreFraction: number; cores: number };
 }
 
 // ── Security allow-list (security.mdx) ──────────────────────────────────────
@@ -539,6 +544,10 @@ export interface ProgressListResult {
   // a short retention window so their error list is still visible if the user opens the page. Absent/empty
   // when there is nothing to show.
   batches?: ProcessingBatch[];
+  // Worker utilization — the parallelism read (processing.mdx §3a): how many of the mass-compute Core
+  // Budget's core-slots are BUSY right now (`busy`) vs the live budget total (`budget`, ≈ 90% of cores).
+  // Lets the Processing page show "12 / 14 workers busy (~90% of cores)". Absent when nothing is running.
+  workers?: { busy: number; budget: number };
 }
 
 // The plan a producing PAGE ACTION returns (page_actions.mdx §5): after resolving scope (checked set or

@@ -128,6 +128,7 @@ export const api = {
     bigFile?: { value: number; unit: SizeUnit };
     scannerRoots?: string[];
     ipfs?: Record<string, unknown>;
+    performance?: { maxCoreFraction: number };
   }) => unwrap<GlobalSettings>(http.patch("/settings", patch)),
   allowList: () => unwrap<string[]>(http.get("/settings/allow-list")),
   setAllowList: (emails: string[]) =>

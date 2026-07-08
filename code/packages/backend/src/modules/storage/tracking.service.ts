@@ -8,6 +8,7 @@ import YAML from "yaml";
 import type { StorageFileRow } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import { compressInfo, HARD_SKIP } from "../fs/badges.js";
+import { mapLimit, responsiveBudget } from "../../shared/concurrency.js";
 import { log } from "../../shared/logging.js";
 
 export const LFBRIDGE_DIR = ".lfbridge";
@@ -52,41 +53,49 @@ export function analysisOutputs(root: string, rel: string): string[] {
   return out;
 }
 
-/** A cheap-but-robust fingerprint: hash of size + mtime + the head and tail bytes. */
-function fingerprint(abs: string, st: fs.Stats): string | null {
+/** A cheap-but-robust fingerprint: hash of size + mtime + the head and tail bytes. ASYNC (fs.promises) so
+ *  that MANY files' head/tail reads OVERLAP when fingerprinting fans out under mapLimit (the disk I/O is
+ *  the cost, and async reads let the event loop drive several at once — parallelization.mdx §3). */
+async function fingerprint(abs: string, st: fs.Stats): Promise<string | null> {
+  let fh: fs.promises.FileHandle | null = null;
   try {
     const h = crypto.createHash("sha256");
     h.update(String(st.size));
     h.update(String(Math.round(st.mtimeMs)));
-    const fd = fs.openSync(abs, "r");
-    try {
-      const headLen = Math.min(FINGERPRINT_CHUNK, st.size);
-      const head = Buffer.alloc(headLen);
-      fs.readSync(fd, head, 0, headLen, 0);
-      h.update(head);
-      if (st.size > FINGERPRINT_CHUNK) {
-        const tailLen = Math.min(FINGERPRINT_CHUNK, st.size);
-        const tail = Buffer.alloc(tailLen);
-        fs.readSync(fd, tail, 0, tailLen, Math.max(0, st.size - tailLen));
-        h.update(tail);
-      }
-    } finally {
-      fs.closeSync(fd);
+    fh = await fs.promises.open(abs, "r");
+    const headLen = Math.min(FINGERPRINT_CHUNK, st.size);
+    const head = Buffer.alloc(headLen);
+    await fh.read(head, 0, headLen, 0);
+    h.update(head);
+    if (st.size > FINGERPRINT_CHUNK) {
+      const tailLen = Math.min(FINGERPRINT_CHUNK, st.size);
+      const tail = Buffer.alloc(tailLen);
+      await fh.read(tail, 0, tailLen, Math.max(0, st.size - tailLen));
+      h.update(tail);
     }
     return h.digest("hex").slice(0, 32);
   } catch {
     return null;
+  } finally {
+    await fh?.close().catch(() => {});
   }
 }
 
-/** (Re)build `<root>/.lfbridge/files.yaml` from the large files under the storage. Returns the count. */
-export function indexStorageFiles(root: string): number {
+/**
+ * (Re)build `<root>/.lfbridge/files.yaml` from the large files under the storage. Returns the count.
+ * Two phases (parallelization.mdx §3): (1) a cheap metadata-only walk collects the large-file entries; then
+ * (2) the per-file FINGERPRINTING (head+tail read + sha256) fans out WIDE across files, bounded by the
+ * RESPONSIVE budget (cores − 2), so a large storage indexes quickly without pinning the app. Indexing
+ * MULTIPLE storages parallelizes across storages too — each writes only its own `.lfbridge/files.yaml`.
+ */
+export async function indexStorageFiles(root: string): Promise<number> {
   const threshold = getAppConfig().big_file.threshold_bytes;
-  const files: Record<string, unknown> = {};
-  let count = 0;
 
+  // Phase 1 — metadata-only walk: collect the eligible large files (bounded by MAX_FILES). No hashing yet.
+  interface Entry { rel: string; name: string; abs: string; st: fs.Stats; }
+  const collected: Entry[] = [];
   const walk = (dir: string): void => {
-    if (count >= MAX_FILES) return;
+    if (collected.length >= MAX_FILES) return;
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -94,7 +103,7 @@ export function indexStorageFiles(root: string): number {
       return;
     }
     for (const ent of entries) {
-      if (count >= MAX_FILES) break;
+      if (collected.length >= MAX_FILES) break;
       const name = ent.name;
       if (name === LFBRIDGE_DIR || name === ".git" || name === "node_modules" || HARD_SKIP.has(name)) continue;
       const abs = path.join(dir, name);
@@ -110,26 +119,35 @@ export function indexStorageFiles(root: string): number {
         continue;
       }
       if (st.size < threshold) continue;
-      const rel = path.relative(root, abs);
-      const comp = compressInfo(name);
-      files[rel] = {
-        size: st.size,
-        modified: st.mtime.toISOString(),
-        created: st.birthtime && st.birthtimeMs ? st.birthtime.toISOString() : null,
-        fingerprint: fingerprint(abs, st),
-        compressible: comp.compressible,
-        analysis: analysisOutputs(root, rel),
-      };
-      count++;
+      collected.push({ rel: path.relative(root, abs), name, abs, st });
     }
   };
   walk(root);
+  const capped = collected.length >= MAX_FILES;
+
+  // Phase 2 — fingerprint IN PARALLEL across files (bounded by the responsive budget). Each result carries
+  // its rel key so the map is assembled deterministically after; per-file failure yields a null fingerprint.
+  const rows = await mapLimit(collected, responsiveBudget(), async (e) => {
+    const comp = compressInfo(e.name);
+    return [
+      e.rel,
+      {
+        size: e.st.size,
+        modified: e.st.mtime.toISOString(),
+        created: e.st.birthtime && e.st.birthtimeMs ? e.st.birthtime.toISOString() : null,
+        fingerprint: await fingerprint(e.abs, e.st),
+        compressible: comp.compressible,
+        analysis: analysisOutputs(root, e.rel),
+      },
+    ] as const;
+  });
+  const files: Record<string, unknown> = Object.fromEntries(rows);
 
   fs.mkdirSync(path.join(root, LFBRIDGE_DIR), { recursive: true });
   fs.writeFileSync(filesYamlPath(root), YAML.stringify({ files }), "utf8");
-  if (count >= MAX_FILES) log.warn("storage", `index for ${root} hit the ${MAX_FILES}-file cap — some files not indexed`);
-  else log.info("storage", `indexed ${count} large file(s) in ${root}`);
-  return count;
+  if (capped) log.warn("storage", `index for ${root} hit the ${MAX_FILES}-file cap — some files not indexed`);
+  else log.info("storage", `indexed ${collected.length} large file(s) in ${root}`);
+  return collected.length;
 }
 
 /** Read `<root>/.lfbridge/files.yaml` into rows (empty when absent). */

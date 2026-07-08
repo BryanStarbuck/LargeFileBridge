@@ -10,7 +10,6 @@
 // units × files multiply. Concurrent state writes are safe because the store layer serializes per file
 // with atomic temp-then-rename (storage.mdx §15).
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { ManifestSchema, UnitStatusSchema, type Manifest, type ManifestFile, type UnitStatus, type Decision, type SyncCounts } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
@@ -36,17 +35,19 @@ import { writeSelfDevice, resolveGraftedPath } from "../storage/devices.service.
 import { getStorageSynced, readMappedDirsForRoot, getGitBackboneRemote } from "../storage/storage-settings.service.js";
 import { GitBackbone, type GitCycleResult } from "../git/git.service.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
+import { responsiveBudget } from "../../shared/concurrency.js";
 import { log } from "../../shared/logging.js";
 
 function computerLabel(): string {
   return getAppConfig().computer.label || "this-computer";
 }
 
-// One global concurrency budget for ALL heavy IPFS work in a pass — bounded to `cores − 2` so a
-// 20–30-core machine stays busy while 2 cores keep the web app + IPFS node responsive (sync_process.mdx
-// §4). Every add/pin/fetch runs through `ipfsLimiter.run(...)`, so unit-level and file-level fan-out
-// share the same ceiling and never oversubscribe the box.
-const SYNC_CONCURRENCY = Math.max(1, (os.cpus()?.length ?? 4) - 2);
+// One global concurrency budget for ALL heavy IPFS work in a pass — the canonical RESPONSIVE budget
+// (`cores − 2`, parallelization.mdx §1) so a 20–30-core machine stays busy while 2 cores keep the web app
+// + IPFS node responsive (sync_process.mdx §4). Drawn from the ONE shared helper so there is no second
+// core-count definition. Every add/pin/fetch runs through `ipfsLimiter.run(...)`, so unit-level and
+// file-level fan-out share the same ceiling and never oversubscribe the box.
+const SYNC_CONCURRENCY = responsiveBudget();
 
 class Limiter {
   private active = 0;
