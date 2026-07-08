@@ -264,6 +264,32 @@ working copy at once (`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/sr
 Driving this ordered cycle for each Git-backed storage inside the full pass — fetch/merge before reconcile, commit/push after, with the non-fast-forward retry — is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncStorageUnit(id)` calls `GitBackbone.pull()` (fetch+merge) before `runUnitSync(...)` and `GitBackbone.commitAndPush()` after, both from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` (`pull()`, `commitAndPush()` with the fetch-merge-push retry). Only storages whose `backing.dedicated_repo.enabled` is true run the cycle; the rest sync over IPFS alone.
 
+### 6.1 Always push when the branch is ahead — deliver stranded / foreign commits (LOCKED, learned from a defect)
+
+Step 6's push must fire whenever the local branch is **ahead of the remote — for ANY reason** — not only
+when *this* pass produced its own commit. This is a locked correctness rule because its absence stranded a
+commit in production (the [2026-07-07 incident](./sync_resilience.mdx#8-the-incident-that-motivated-this-spec-2026-07-07)):
+
+> **The defect.** `commitAndPush()` staged the tree and, **if nothing new was staged, returned before it
+> ever called `git push`.** So a branch that was *already* ahead of the remote — because something OTHER
+> than LFB had committed into the repo (a machine-wide `git add -A && git commit` auto-commit), or a
+> prior push had failed and left the commit local — was pushed **only if this pass also happened to make
+> its own commit.** A stranded commit sat unpushed while the other computer advanced the remote; the two
+> diverged and never reconverged.
+
+The rule: after the (possibly empty) stage-and-commit, LFB computes the **ahead-count**
+`origin/<branch>..HEAD`; if it is **greater than zero it pushes**, regardless of whether this pass
+committed anything itself — delivering LFB's own commit, a foreign committer's commit, a merge commit, or
+a commit left behind by an earlier failed push. The non-fast-forward retry (step 6) still applies. LFB
+must **not** rely on the device write-back's `updated_at` churn to force a push (it usually does, which is
+what *accidentally* masked the bug); a pass that legitimately writes nothing must still deliver a branch
+that is ahead. This is the Git-layer half of the broader resilience contract in
+[sync_resilience.mdx §6](./sync_resilience.mdx#6-always-push-when-the-branch-is-ahead-locked-learned-from-a-defect)
+(and its §4 foreign-committer coexistence rule).
+
+Attempting the push whenever the branch is ahead of the remote — not only after a fresh local commit — via an ahead-count check is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (pushes when `result.committed` OR `aheadCount(branch) > 0`) and its helper `GitBackbone.aheadCount(branch)` (`git rev-list --count origin/<branch>..HEAD`, treating a missing upstream ref as "push to establish it").
+
 ---
 
 ## 7. Compliance boundary — the charter's no-relay posture, in Git terms (LOCKED)

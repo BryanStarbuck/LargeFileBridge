@@ -211,10 +211,31 @@ export class GitBackbone {
   }
 
   /**
+   * How many commits the working branch is AHEAD of its remote — `git rev-list --count origin/<branch>..HEAD`
+   * (git_sync.mdx §6.1). A missing upstream ref (fresh repo, never pushed) or any rev-list failure returns 1
+   * so the caller still attempts a push to establish/repair the upstream rather than silently skipping it.
+   */
+  private async aheadCount(branch: string): Promise<number> {
+    try {
+      const out = await this.git.raw(["rev-list", "--count", `origin/${branch}..HEAD`]);
+      const n = parseInt(out.trim(), 10);
+      return Number.isFinite(n) ? n : 1;
+    } catch {
+      return 1; // no upstream ref yet (or rev-list failed) — a push will establish/repair it
+    }
+  }
+
+  /**
    * Stage this device's SDL changes, commit, and push (git_sync.mdx §6 steps 5–6). Big-file bytes are
    * git-ignored, so staging the working tree only ever queues the small SDL text. On a non-fast-forward
    * reject (another computer pushed between our fetch and our push), re-pull (fetch+merge) and re-push
    * ONCE — never a force-push.
+   *
+   * ALWAYS-PUSH-WHEN-AHEAD (git_sync.mdx §6.1, sync_resilience.mdx §6): the push fires whenever the branch
+   * is ahead of the remote for ANY reason — not only when THIS pass made its own commit. An earlier build
+   * returned before pushing when nothing new was staged, which stranded a commit the branch already carried
+   * (a machine-wide auto-commit that committed into this repo, or a prior failed push) so it never reached
+   * the other computers. We now push whenever we committed OR the ahead-count is non-zero.
    */
   async commitAndPush(result: GitCycleResult): Promise<void> {
     if (result.conflicts?.length) return; // don't commit on top of an unresolved conflict
@@ -223,17 +244,24 @@ export class GitBackbone {
     try {
       await this.git.add(["-A"]); // .gitignore keeps the big bytes out; only SDL text is staged
       const staged = await this.git.status();
-      if (staged.staged.length === 0 && staged.created.length === 0 && staged.renamed.length === 0 && staged.deleted.length === 0) {
-        return; // nothing changed here — no empty commit
+      const hasStaged =
+        staged.staged.length > 0 || staged.created.length > 0 || staged.renamed.length > 0 || staged.deleted.length > 0;
+      if (hasStaged) {
+        await this.git.commit("LFB: sync device state"); // -m message → no editor invoked
+        result.committed = true;
       }
-      await this.git.commit("LFB: sync device state"); // -m message → no editor invoked
-      result.committed = true;
     } catch (e) {
       result.problem = result.problem ?? `Git commit failed: ${(e as Error).message}`;
       return;
     }
     if (!(await this.hasOrigin())) return;
     const branch = await this.branch();
+    // Deliver whatever the branch is ahead by — our fresh commit AND/OR a commit that was already local
+    // and unpushed (foreign auto-commit, merge commit, or an earlier failed push). Never rely on our own
+    // commit being the only reason to push (git_sync.mdx §6.1).
+    if (!result.committed && (await this.aheadCount(branch)) === 0) {
+      return; // truly nothing to send — not committed and not ahead
+    }
     try {
       await this.git.push("origin", branch);
       result.pushed = true;
