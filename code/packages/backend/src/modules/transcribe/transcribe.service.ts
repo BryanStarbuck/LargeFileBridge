@@ -8,6 +8,7 @@ import path from "node:path";
 import type { TranscribeResult, TranscribeBatchResult, TranscribeTools, TranscriptView, EnqueuePlan } from "@lfb/shared";
 import { mediaKindForName } from "@lfb/shared";
 import { Transcriber } from "../../tools/transcribe/Transcribe.js";
+import { HARD_SKIP } from "../../shared/scan-filters.js";
 import { expandHome } from "../fs/badges.js";
 import { resolveArtifactPlacement, siblingArtifactPath, TRANSCRIPTION_EXT } from "../storage/artifact-placement.service.js";
 import { getStorageDetail } from "../storage/storage.service.js";
@@ -16,8 +17,10 @@ import { enqueue } from "../jobqueue/jobqueue.service.js";
 import { log } from "../../shared/logging.js";
 
 // The transcript sidecar extension (Transcribe.mdx §3) is TRANSCRIPTION_EXT, imported above.
-// Directories a "Transcribe all" walk never descends into (`.transcribe` kept so legacy trees are skipped).
-const SKIP_DIRS = new Set([".transcribe", ".lfbridge", ".git", "node_modules"]);
+// Directories a "Transcribe all" walk never descends into: the SAME hard-skip set as the discovery scan
+// and FS browser (scan.mdx §4 invariant — build/, dist/, node_modules, … duplicate source media), plus
+// the artifact dirs (`.transcribe` kept so legacy trees are skipped).
+const SKIP_DIRS = new Set([...HARD_SKIP, ".transcribe", ".lfbridge"]);
 
 const engine = new Transcriber();
 
@@ -190,7 +193,7 @@ export function enqueueTranscribe(opts: { paths?: string[]; root?: string; overw
     return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued: 0, willProcess: 0, needsSetup: true, setupPath: eligible[0] };
   }
   const { queued } = enqueue(eligible.map((p) => ({ op: "transcribe", path: p, overwrite })));
-  log.info("transcribe", `enqueue: ${candidates.length} considered → ${queued} queued (${alreadyDone} already done, ${unsupported} unsupported)`);
+  log.info("transcribe", `enqueue [${scopeLabel(opts)}]: ${candidates.length} considered → ${queued} queued (${alreadyDone} already done, ${unsupported} unsupported)`);
   return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued, willProcess: queued, needsSetup: false, setupPath: null };
 }
 
@@ -209,6 +212,13 @@ function resolveCandidates(opts: { paths?: string[]; root?: string }): string[] 
 }
 
 // ── walk + helpers ──────────────────────────────────────────────────────────────
+/** The scope a page action asked for, for the enqueue log line — the walked root, or the checked-set size.
+ *  Answers "which page queued these jobs?" when the queue is read back later. */
+function scopeLabel(opts: { paths?: string[]; root?: string }): string {
+  if (opts.paths && opts.paths.length > 0) return `${opts.paths.length} checked path(s)`;
+  return opts.root ? `root ${path.resolve(expandHome(opts.root.trim()))}` : "no scope";
+}
+
 /** Recursively collect audio/video file paths under `root`, skipping hidden/tracking/heavy dirs. */
 function walkMedia(root: string): string[] {
   const out: string[] = [];

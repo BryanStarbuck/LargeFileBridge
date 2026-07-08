@@ -78,6 +78,15 @@ When the user clicks an action link, the **set of files it runs over** is:
 So "click the action with nothing selected" means **"do it for all of them"** — the common case. The user
 does not have to select-all first. (This mirrors the way a shell glob or a "Run all" button behaves.)
 
+> **Same skip set as the scan (LOCKED).** The recursive root-walk skips exactly the directories the
+> discovery scan and FS browser skip — `HARD_SKIP` ([scan.mdx §4](./scan.mdx)): `.git`, `node_modules`,
+> and **build outputs** (`build/`, `dist/`, `.docusaurus/`, …) whose media are duplicates of the source
+> files the page already shows. This keeps the action's *considered* count equal to what the page
+> displays — a repo page showing 4 videos must never queue 8 because `build/` mirrored them.
+> The walk and its skip set live in code:
+> `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `walkMedia()` / `SKIP_DIRS` (twin: `describe.service.ts` — `walkDescribable()`), sharing
+> `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts` — `HARD_SKIP`.
+
 > Example (LOCKED walk-through). A repo page shows **40** files, **none checked**. The user clicks
 > **Create Transcriptions**. The set to consider is **all 40** (recursive). Had **30** been checked, the
 > set would be those **30**. The set is then narrowed by Rule 2.

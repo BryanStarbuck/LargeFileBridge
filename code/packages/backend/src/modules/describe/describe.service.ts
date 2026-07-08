@@ -11,6 +11,7 @@ import path from "node:path";
 import YAML from "yaml";
 import type { DescribeKind, DescribeResult, DescribeBatchResult, DescribeView, DescribeProvidersStatus, DescribeAiConfig, DescribeAiConfigPatch, AiCredentialsInfo, EnqueuePlan } from "@lfb/shared";
 import { mediaKindForName } from "@lfb/shared";
+import { HARD_SKIP } from "../../shared/scan-filters.js";
 import { expandHome } from "../fs/badges.js";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
 import { appConfigPath } from "../../shared/store/scopes.js";
@@ -23,8 +24,10 @@ import { selectAdapter, providerStatus, providerKeySources, providerMeta, mimeFo
 import { fitMediaUnderLimit } from "./fit-media.js";
 import { log } from "../../shared/logging.js";
 
-// Directories a "describe all" walk never descends into (mirrors transcribe's SKIP_DIRS).
-const SKIP_DIRS = new Set([".lfbridge", ".transcribe", ".git", "node_modules"]);
+// Directories a "describe all" walk never descends into: the SAME hard-skip set as the discovery scan
+// and FS browser (scan.mdx §4 invariant — build/, dist/, node_modules, … duplicate source media), plus
+// the artifact dirs (mirrors transcribe's SKIP_DIRS).
+const SKIP_DIRS = new Set([...HARD_SKIP, ".lfbridge", ".transcribe"]);
 
 function exists(p: string): boolean {
   try {
@@ -308,7 +311,7 @@ export function enqueueDescribe(opts: {
     return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued: 0, willProcess: 0, needsSetup: true, setupPath: eligible[0] };
   }
   const { queued } = enqueue(eligible.map((p) => ({ op: "describe", path: p, overwrite, provider: opts.provider })));
-  log.info("describe", `enqueue: ${candidates.length} considered → ${queued} queued (${alreadyDone} already done, ${unsupported} unsupported)`);
+  log.info("describe", `enqueue [${scopeLabel(opts)}]: ${candidates.length} considered → ${queued} queued (${alreadyDone} already done, ${unsupported} unsupported)`);
   return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued, willProcess: queued, needsSetup: false, setupPath: null };
 }
 
@@ -321,6 +324,13 @@ function describeCandidates(opts: { paths?: string[]; root?: string }): string[]
     return walkDescribable(path.resolve(expandHome(opts.root.trim())));
   }
   throw new Error("enqueue requires either paths[] (the checked set) or root (to walk recursively)");
+}
+
+/** The scope a page action asked for, for the enqueue log line — the walked root, or the checked-set size.
+ *  Answers "which page queued these jobs?" when the queue is read back later. */
+function scopeLabel(opts: { paths?: string[]; root?: string }): string {
+  if (opts.paths && opts.paths.length > 0) return `${opts.paths.length} checked path(s)`;
+  return opts.root ? `root ${path.resolve(expandHome(opts.root.trim()))}` : "no scope";
 }
 
 /** Recursively collect image/video file paths under `root`, skipping hidden/tracking/heavy dirs. */
