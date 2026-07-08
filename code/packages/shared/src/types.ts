@@ -441,6 +441,10 @@ export interface WorkerState {
   label: string;
   lastRunAt: string | null;
   lastRunOk: boolean | null;
+  // Derived (sync_resilience.mdx §7): true when the worker is installed + enabled but its last successful
+  // run is older than 2× its interval (or it has never run) — the "automatic syncing has silently stalled"
+  // signal, distinct from off (disabled) and failed (ran with an error). Computed on read, never stored.
+  overdue: boolean;
 }
 
 // The live filesystem watcher (scan.mdx §2.2). NOT a scheduled worker — no plist/installed flag: it

@@ -1,0 +1,308 @@
+---
+title: LargeFileBridge — Sync Resilience (the data flow must never silently stop)
+description: The authoritative spec for keeping LargeFileBridge's cross-computer data flow ALIVE. The web app on each computer is the only thing running this repo, so if its sync machinery stalls, two computers silently drift apart — one keeps committing locally, the other never sees it, and the user "can't find" work that was supposedly synced. This spec turns that failure class into a first-class requirement: enumerate every way the flow can stop (the OS trigger job dies or points at a stale path, the history diverges because something OTHER than LFB committed into the repo, a local commit is left stranded/unpushed, a merge conflict, an auth failure, IPFS down, the app not running), and for EACH one lock a detection, a self-healing recovery, and a way it is surfaced. Locks the never-stop guarantees: (1) an in-process WATCHDOG in the always-on web app that runs any overdue worker itself and repairs a drifted/dead launchd job, so a broken OS trigger can never silently halt the flow; (2) FOREIGN-COMMITTER coexistence — LFB is not assumed to be the only committer of the repo, so it tolerates and DELIVERS commits it did not author (e.g. a machine-wide auto-commit), never force-pushing and never discarding them; (3) the ALWAYS-PUSH-WHEN-AHEAD rule — a push is attempted whenever the local branch is ahead of the remote for ANY reason, not only when this pass made its own commit, so a stranded commit can never sit forever; (4) STALENESS surfacing — a worker that has not run within twice its interval is flagged overdue on the Sync page. Written from a real incident (2026-07-07, §8). Sibling of git_sync.mdx (the fetch/merge/commit/push engine this hardens), sync_process.mdx (the full pass), devices.mdx (the every-10-min device write-back), and storage_local.mdx §13 (the background-process transparency contract).
+---
+
+# LargeFileBridge — Sync Resilience
+
+The whole point of LargeFileBridge is that a file made on one computer shows up on the user's other
+computers. That promise is only as good as the machinery that keeps the flow moving. On each computer
+the **web app is the only thing running this repo** — there is no separate daemon, no server in the
+middle. So when that machinery stalls, nothing else notices: one computer keeps committing work
+locally, the other never receives it, and the user goes looking for files that were "supposed to be
+synced" and **isn't finding them**. That is the exact shape of the [§8 incident](#8-the-incident-that-motivated-this-spec-2026-07-07).
+
+This spec makes **"the data flow never silently stops"** a first-class requirement. It is not enough
+for the [Git backbone](./git_sync.mdx) and the [sync pass](./sync_process.mdx) to be correct **when they
+run** — the harder guarantee is that they **keep running**, and that when a link in the chain breaks it
+**self-heals or is surfaced**, never fails silent.
+
+Read the engine first; this spec hardens it, it does not restate it:
+
+* [git_sync.mdx](./git_sync.mdx) — the fetch → merge → commit → push cycle this spec keeps alive (§6 there
+  is the ordered cycle; §6.1 there is the always-push-when-ahead rule this spec requires).
+* [sync_process.mdx](./sync_process.mdx) — the full pass, and the three triggers (scheduled / session
+  catch-up / manual) that fire it.
+* [devices.mdx](./devices.mdx) — the every-10-minute device write-back, the most frequent carrier of the
+  flow and the first thing to go quiet when a trigger dies.
+* [storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract) —
+  the transparency contract (installed / on-off / last-run) this spec extends with an **overdue** signal.
+
+---
+
+## 1. The guarantee (LOCKED)
+
+> **The cross-computer data flow must never stop silently.** Every mechanism that moves the flow —
+> the OS trigger, the Git cycle, the IPFS byte work — either **keeps running**, **self-heals** when it
+> breaks, or is **surfaced** to the user as a visible problem. A stall that produces no recovery and no
+> signal is a defect of the highest severity, because its symptom ("my other computer never got this")
+> appears far from its cause and only after the user has already lost time.
+
+Three properties fall out of that guarantee, and the rest of this spec is how each is met:
+
+1. **No single point of silent failure.** The scheduled OS worker is *a* trigger, never the *only*
+   trigger. The always-on web app **backstops** it (§3).
+2. **Forward progress is not conditional on LFB being the sole author.** The flow keeps moving even when
+   something else committed into the repo, or a previous push was left half-done (§4, §6).
+3. **Anything unrecoverable is visible.** A merge conflict, an auth failure, or a stalled worker becomes
+   a surfaced problem on the Sync page — never a swallowed error (§5, §7).
+
+---
+
+## 2. The failure taxonomy — every way the flow can stop (LOCKED)
+
+Each row is a way the flow has stopped or could stop. For each: how LFB **detects** it, how it
+**recovers**, and how it is **surfaced**. The rest of the spec elaborates the load-bearing ones.
+
+| # | Failure | Detection | Recovery | Surfaced |
+| --- | --- | --- | --- | --- |
+| **F1** | **OS trigger dead** — the launchd job crashes on every fire (e.g. a stale `run-worker.mjs` path after a code move), so no pass ever runs | worker `last_run_at` goes stale past 2× its interval (§7) | the in-process **watchdog** runs the pass itself AND calls `reconcileWorkerSchedules()` to rewrite + reload the plist (§3) | **overdue** flag on the Sync page (§7) |
+| **F2** | **Diverged history** — the branch has local commits AND the remote has commits, because something OTHER than LFB committed into the repo (a machine-wide auto-commit) or a prior push was rejected | every cycle fetches; a non-fast-forward push, or a non-zero ahead-count, reveals it | **fetch → auto-merge → push** — the merge folds in the remote, the push delivers the local side; never force, never discard (§4, §5) | only if the merge truly conflicts (F4) |
+| **F3** | **Stranded local commit** — the branch is ahead of the remote but this pass had nothing of its own to commit, so the old code returned before pushing and the commit sat forever | `origin/<branch>..HEAD` ahead-count > 0 (§6) | **always push when ahead** — a push is attempted whenever the branch is ahead, not only after a fresh commit (§6) | — (it just flows) |
+| **F4** | **Unresolvable merge conflict** — git itself declines to auto-merge | `git merge` exits conflicted | **abort** the merge (tree stays clean), keep syncing over IPFS, and **surface** the conflicted paths ([git_sync.mdx §4.3](./git_sync.mdx#43-the-strategy-and-the-fallback-when-git-truly-cannot-resolve)) | conflict problem on the storage |
+| **F5** | **Auth failure on a URL remote** — no cached credential / expired token | fetch/push classified as an auth error ([git_sync.mdx §5](./git_sync.mdx#5-credentials-for-a-url-remote--the-os-git-credential-helper-never-a-prompt)) | keep syncing over IPFS; do **not** hang or retry blindly | "re-authenticate this Git remote" problem |
+| **F6** | **IPFS node down** — bytes can't move even though git text can | `ipfs.health() !== "ok"` at the top of a unit sync | skip byte work this pass, keep the git text flowing, retry next pass | unit error on the storage |
+| **F7** | **App not running** — the web app is closed, so nothing (not even the watchdog) runs | the launchd trigger still fires the OS worker independently of the app; on next app start, boot reconcile + watchdog catch up | OS worker keeps the 10/15-min cadence while the app is down; the app re-converges on launch | last-run age visible on next open |
+
+The load-bearing insight: **F1, F2, and F3 are the ones that fail *silently*** — they produce no error,
+no toast, no conflict; the flow just quietly stops. They are exactly the incident (§8), and §3/§4/§6 are
+the locked fixes.
+
+---
+
+## 3. The in-process watchdog — the always-on backstop (LOCKED)
+
+The launchd/cron worker is **one** trigger, and OS triggers are brittle: a plist can point at a moved
+file, a job can be booted out and never re-bootstrapped, an upgrade can rename a path. When that
+happens the job **crashes on every fire and writes nothing to our own logs** (F1) — the single most
+dangerous stall because it is perfectly silent.
+
+The fix is that the **always-on web app watches its own workers**. While the backend process is up, a
+lightweight heartbeat re-evaluates each **installed + enabled** worker on a fixed cadence:
+
+* **Overdue detection.** A worker is **overdue** when its last successful run is older than **twice its
+  configured interval** (plus a small slack), or it has **never** run. Twice absorbs one legitimately
+  missed fire and clock skew; beyond that the OS trigger is presumed dead.
+* **Run it in-process.** For an overdue worker the app runs **the same work the OS worker would have**
+  — `syncDeviceRegistrations()` for `device`, `syncAll()` for `sync`, `startScan("scheduled")` for
+  `scan` — inside the app process, and stamps the run. The flow moves **now**, without waiting for the
+  next reboot.
+* **Repair the trigger.** Running in-process also calls `reconcileWorkerSchedules()`, which **rewrites
+  the plist with the correct interval + trigger-script path and reloads it** (bootout + bootstrap), so
+  the OS cadence resumes on its own and the app stops having to cover for it.
+* **Never a thundering herd.** The heartbeat is single-flighted (one tick at a time), the per-storage
+  Git lock and the pass in-flight guard still serialize the actual work
+  ([sync_process.mdx §3](./sync_process.mdx#3-prioritization--order-never-scope)), and the timer is
+  `unref`'d so it never keeps the process alive on its own.
+
+This is the property that makes the guarantee real: **as long as the web app runs at all, the flow
+cannot be silently halted by a dead OS trigger** — the app notices and takes over, then heals the
+trigger. Boot-time `reconcileWorkerSchedules()` already repairs a drifted path *at startup*; the
+watchdog extends that same repair to the **long gap between startups**.
+
+The in-process watchdog — overdue detection, running the overdue worker's pass in the app, and calling the schedule reconcile so a dead OS trigger self-repairs — is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/watchdog.service.ts` — `startWatchdog()` (heartbeat), `tick()` (per-worker overdue check + in-process run + reconcile), `runWorkerInProcess(kind)`. Started once at boot by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts` — `bootstrapState()`. The plist rewrite + reload it triggers is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `reconcileWorkerSchedules()`.
+
+---
+
+## 4. Foreign-committer coexistence — LFB is not the only author (LOCKED)
+
+The Git backbone was originally written as if **LFB were the sole committer** of the SDL repo: it
+commits `LFB: sync device state`, and it assumed the only reason a push could be rejected was another of
+the user's computers pushing the same LFB text. **That assumption is false in the field.** The SDL repo
+is a normal git repo on the user's disk, and other things commit into it:
+
+* A **machine-wide auto-commit** (a cron/launchd job that periodically `git add -A && git commit` across
+  *all* the user's repos) will happily commit into the SDL repo too, with its own message
+  (e.g. `Bryan 26 Tower`) and its own content (large **text** files that aren't git-ignored, like
+  transcriptions).
+* The **user** may commit by hand.
+
+LFB must **coexist** with those committers, and specifically it must **carry their commits to the other
+computers**, because that is still the user's data flowing between the user's machines — exactly what
+LFB exists to do. The locked rules:
+
+* **Tolerate foreign commits.** A commit LFB did not author is **not** an error and **not** something to
+  undo. LFB never `reset`s, never `revert`s, never `clean`s to "get back to a state it recognizes."
+* **Deliver foreign commits.** When the local branch is ahead of the remote — for **any** reason,
+  including a foreign commit — LFB **pushes** it (§6). The foreign committer's work reaches the other
+  computers through LFB's normal push, merged cleanly with whatever the remote advanced to.
+* **Never force-push, ever.** Coexistence is by **merge**, never by overwrite
+  ([git_sync.mdx §1](./git_sync.mdx#1-what-lfb-is-permitted-to-do--the-granted-git-operations-locked)).
+  If the remote also advanced, LFB fetches and auto-merges first, then pushes the merge.
+
+This is why the flow can survive a repo where two different mechanisms commit. The [incident](#8-the-incident-that-motivated-this-spec-2026-07-07)
+is precisely this case: a `Bryan 26 Tower` auto-commit added 30 transcription files locally, the other
+computer advanced the remote, and the branch diverged — a state LFB must merge-and-deliver, not choke
+on.
+
+Tolerating and delivering commits LFB did not author (merge the remote, then push the local side; never force, never discard) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.pull()` (fetch + auto-merge of the remote) followed by `GitBackbone.commitAndPush()` (pushes whenever the branch is ahead, §6), both driven per storage by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncStorageUnitInner(id)` and `ensureDeviceRegisteredInner(id)`.
+
+---
+
+## 5. Divergence recovery — the clean path and the conflict path (LOCKED)
+
+When the local branch and the remote have **both** advanced (F2), one pass reconciles them:
+
+1. **Fetch** `origin/<branch>` — learn where the remote actually is.
+2. **Auto-merge** it into the working copy with git's **ort** strategy
+   ([git_sync.mdx §4](./git_sync.mdx#4-automatic-merge--why-conflicts-are-rare-and-how-git-resolves-them-locked)).
+   Because device files are self-owned and shared lists are `merge=union`, and because a foreign commit
+   usually adds **new** paths, this merge succeeds automatically in the overwhelming majority of cases —
+   the local side (foreign commit included) and the remote side both survive.
+3. **Push** the merged result (§6) — now a fast-forward for the remote — delivering everything.
+
+If step 2 hits a conflict git genuinely cannot resolve (F4), LFB **aborts** the merge (working tree left
+clean), keeps moving bytes over IPFS, and **surfaces** the conflicted paths for the user to resolve with
+their own tools ([git_sync.mdx §4.3](./git_sync.mdx#43-the-strategy-and-the-fallback-when-git-truly-cannot-resolve)).
+It does **not** guess, and it does **not** clobber — but it also does **not** silently stop the rest of
+the flow: every other storage and the IPFS byte work continue.
+
+The fetch → auto-merge → push recovery for a diverged branch, and the abort-and-surface fallback for a true conflict, are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.pull()` (merge or `--abort` + record conflicts) and `GitBackbone.commitAndPush()` (the non-fast-forward re-pull-then-push retry). The surfaced conflict/auth problem is logged and attached to the pass by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncStorageUnitInner(id)`.
+
+---
+
+## 6. Always push when the branch is ahead (LOCKED, learned from a defect)
+
+This invariant exists because its absence **stranded a commit in production** (F3, §8). The defect and
+the rule:
+
+> **The defect.** `commitAndPush()` staged the working tree, and **if nothing new was staged it returned
+> before ever calling `git push`.** So a branch that was **already ahead** of the remote — because a
+> foreign commit (§4) had been made, or a prior push had failed and left the commit local — would **only
+> get pushed if THIS pass also happened to make its own commit**. A stranded `Bryan 26 Tower` commit sat
+> unpushed indefinitely while the other computer advanced the remote; the two diverged and never
+> reconverged, because the one machine that had the data never sent it.
+
+The rule this locks in:
+
+* **A push is attempted whenever the local branch is ahead of the remote — for ANY reason — not only
+  when this pass made its own commit.** After the (possibly empty) stage-and-commit, LFB computes the
+  ahead-count `origin/<branch>..HEAD`; if it is greater than zero, it **pushes**, delivering whatever is
+  ahead (LFB's own commit, a foreign commit, a merge commit, or a commit left by an earlier failed
+  push). Only when the branch is **not** ahead and nothing was committed does the cycle legitimately do
+  nothing.
+* **The push still carries the non-fast-forward retry** — if the remote advanced between our fetch and
+  our push, re-fetch, re-merge, re-push once (§5). Never force.
+* **The device write-back's timestamp churn is not a substitute.** It is true that writing this device's
+  own `devices/<self>.yaml` usually changes its `updated_at` and therefore usually produces a commit —
+  which *accidentally* masked this bug much of the time. Correctness must **not** depend on that churn; a
+  pass that legitimately writes nothing must still deliver a branch that is ahead.
+
+Attempting the push whenever the branch is ahead of the remote (not only after a fresh local commit), via an ahead-count check, is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (pushes when `result.committed` OR `aheadCount(branch) > 0`) and its helper `GitBackbone.aheadCount(branch)` (`git rev-list --count origin/<branch>..HEAD`).
+
+---
+
+## 7. Staleness surfacing — an overdue worker is visible (LOCKED)
+
+The [transparency contract](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract)
+already exposes each worker's **installed / on-off / last-run**. This spec adds the signal that makes a
+silent stall (F1) visible **before** the user notices missing files:
+
+* A worker that is **installed + enabled** but whose last successful run is older than **twice its
+  interval** (the same threshold the watchdog uses, §3) is flagged **overdue**.
+* The Sync page reflects **overdue** as a warning on that worker's card — "automatic syncing hasn't run
+  when it should have" — distinct from "off" (the user chose that) and "failed" (it ran and errored).
+* Overdue is **derived**, not stored: it is computed from `last_run_at` + the configured interval on
+  every read, so it is always current and needs no extra write path.
+
+Because the watchdog (§3) is *also* acting on the same signal, an overdue state is normally **transient**
+— the app is already running the pass and repairing the trigger by the time the card would show it — but
+surfacing it still matters for the window where the **app itself was down** (F7) and for giving the user
+an honest picture of the background process's health.
+
+Deriving the **overdue** flag from `last_run_at` + interval and returning it in the Sync page worker state is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `isWorkerOverdue(intervalSeconds, lastRunAt)` and `workerState(kind)` (sets `overdue` when installed + enabled). The field rides `WorkerState` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` and is rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/sync/SyncPage.tsx` — `workerHealth(state)`.
+
+---
+
+## 8. The incident that motivated this spec (2026-07-07)
+
+A condensed postmortem, because the rules above are only legible against the failure that produced them.
+
+**Setup.** The user's Personal SDL repo (`personal_large_files_bridge`) is synced between two
+computers — a Mac Pro tower (`bryan-mac-pro`) and a MacBook Pro laptop (`bryanstarbuck-macbook-pro`) —
+via the [Git backbone](./git_sync.mdx). Each runs the LFB web app; nothing else.
+
+**What broke, in order.**
+
+1. **The tower's OS workers died silently (F1).** A code move left the tower's launchd jobs pointing at
+   an old `packages/deploy/launchd/run-worker.mjs` path. Every fire crashed with `MODULE_NOT_FOUND`
+   (550 of them in `error.err`) and **nothing reached the app** — so the tower's every-10-minute device
+   write-back and 15-minute sync pass **stopped running entirely** around 15:21. The plists were later
+   rewritten to the correct path, but the **loaded** jobs were never reloaded, so they stayed dead.
+2. **A foreign auto-commit diverged the branch (F2/F4-adjacent).** At 16:58 a machine-wide `Bryan 26
+   Tower` auto-commit committed 30 transcription text files into the repo locally — but of course did
+   **not** push (it isn't LFB).
+3. **The laptop kept advancing the remote.** Its LFB happily pushed `LFB: sync device state` every 10
+   minutes, moving `origin/main` forward — but it **never received the transcriptions**, because the
+   tower never pushed them.
+4. **The commit was stranded (F3).** Even after the tower's app was restarted, the branch was diverged
+   (1 local commit vs. 10 remote). The device write-back's timestamp churn *would* have forced a push —
+   but the workers weren't firing at all (step 1), so nothing ran, and the transcriptions sat unpushed.
+   The user, on the laptop, went looking for them and **couldn't find them**.
+
+**Recovery performed.** Running the device worker's pass by hand proved the *engine* was correct: it
+fetched, **auto-merged the divergence cleanly** (the transcriptions and the remote's device-state
+commits both survived — a textbook §5 clean merge), and **pushed**, delivering all 30 transcriptions to
+`origin`. The launchd jobs were then reloaded from the corrected plists so the cadence resumed.
+
+**What this spec changes so it can't recur.** The engine was fine; the **machinery around it** wasn't.
+So: the watchdog (§3) means a dead OS trigger can never again silently halt the flow while the app runs;
+always-push-when-ahead (§6) means a stranded commit is delivered on the next cycle regardless of whether
+LFB made its own commit; foreign-committer coexistence (§4) is now an explicit, tested contract rather
+than an accident that happened to work; and the overdue signal (§7) makes the stall visible.
+
+> **Note (out of scope here).** The user expected ~300 transcriptions but only **30** `.txt` files ever
+> existed under `.transcribe/` on the tower. That is a **transcription-side** gap (the other ~270 were
+> never written into the synced directory), not a sync failure — the sync correctly delivered every file
+> that was actually present. Tracked separately in [Transcribe.mdx](./Transcribe.mdx).
+
+---
+
+## 9. Acceptance criteria
+
+1. **No single point of silent failure.** While the web app is running, a **dead or stale OS trigger**
+   (F1) cannot silently halt the flow: the in-process **watchdog** detects the overdue worker, runs its
+   pass in-process, and calls the schedule reconcile to rewrite + reload the plist (§3).
+2. **Foreign commits are tolerated and delivered.** A commit LFB did not author (a machine-wide
+   auto-commit, a hand commit) is never reset/reverted/cleaned; when it leaves the branch ahead it is
+   **pushed** to the other computers via a normal merge-then-push, never a force-push (§4).
+3. **A diverged branch reconciles in one pass** — fetch → auto-merge → push — with a true conflict
+   **aborted and surfaced** while IPFS byte work continues (§5).
+4. **Always push when ahead.** A push is attempted whenever `origin/<branch>..HEAD` is non-empty, **not
+   only** when this pass made its own commit, so a stranded/foreign/merge commit can never sit unpushed
+   indefinitely; correctness does not depend on device-file timestamp churn (§6).
+5. **The non-fast-forward retry still holds** — a push rejected because the remote advanced re-fetches,
+   re-merges, and re-pushes once, never force (§5, §6).
+6. **Staleness is surfaced.** A worker installed + enabled but not run within **2× its interval** is
+   flagged **overdue** on the Sync page, distinct from off and from failed (§7).
+7. **Nothing fails silent.** An unrecoverable merge conflict, an auth failure, or a down IPFS node
+   becomes a **surfaced problem** on the storage/worker while the rest of the flow keeps moving — never a
+   swallowed error (§2, §5).
+
+<!--
+  AUTHORITATIVE spec for SYNC RESILIENCE — keeping the cross-computer data flow ALIVE, not just correct
+  when it runs. Written from the 2026-07-07 incident (§8). LOCKED:
+  (§1) Guarantee: the flow never stops SILENTLY — keep running, self-heal, or surface. No silent stall.
+  (§2) Failure taxonomy F1..F7 with detection/recovery/surfacing. F1/F2/F3 are the silent ones.
+  (§3) In-process WATCHDOG in the always-on web app: overdue (last ok > 2× interval) worker → run its pass
+       in-process + reconcileWorkerSchedules() to rewrite/reload the plist. A dead OS trigger can't halt
+       the flow while the app runs. Code: schedule/watchdog.service.ts startWatchdog/tick/runWorkerInProcess,
+       started in main.ts bootstrapState.
+  (§4) FOREIGN-COMMITTER coexistence: LFB is not the only committer; tolerate + DELIVER commits it didn't
+       author (machine-wide auto-commit), merge not overwrite, never force-push. Code: git.service pull()+
+       commitAndPush() via sync.service syncStorageUnitInner/ensureDeviceRegisteredInner.
+  (§5) Divergence recovery: fetch→auto-merge→push clean path; abort+surface on true conflict, IPFS continues.
+  (§6) ALWAYS-PUSH-WHEN-AHEAD: push whenever origin/<branch>..HEAD > 0, not only after a fresh commit; the
+       fix for the stranded-commit defect. Do NOT rely on device-file timestamp churn. Code: git.service
+       commitAndPush() (committed || aheadCount>0) + aheadCount().
+  (§7) STALENESS surfacing: derived `overdue` (installed+enabled && last ok > 2× interval) on WorkerState;
+       Sync page shows it. Code: schedule.service isWorkerOverdue/workerState, shared types WorkerState.overdue,
+       SyncPage workerHealth.
+  Keep in sync with git_sync.mdx (§6.1 always-push, §4/§5 merge), sync_process.mdx (the pass + watchdog note),
+  devices.mdx (the 10-min write-back), storage_local.mdx §13 (transparency contract + overdue).
+-->

@@ -29,6 +29,7 @@ import { internalRouter } from "./modules/internal/internal.router.js";
 import { clientLogRouter } from "./modules/clientlog/clientlog.router.js";
 import * as ipfs from "./modules/ipfs/ipfs.service.js";
 import { reconcileWorkerSchedules, ensureDeviceWorkerDefaultOn } from "./modules/schedule/schedule.service.js";
+import { startWatchdog } from "./modules/schedule/watchdog.service.js";
 import { acquireSingleInstanceLock } from "./shared/single-instance.js";
 import { startWatcher, stopWatcher } from "./modules/watcher/watcher.service.js";
 import { log } from "./shared/logging.js";
@@ -55,6 +56,14 @@ async function bootstrapState(): Promise<void> {
   await reconcileWorkerSchedules().catch((e) =>
     log.warn("main", `worker schedule reconcile failed: ${(e as Error).message}`),
   );
+  // Start the in-process watchdog (sync_resilience.mdx §3): while the app runs, it backstops a dead/stale
+  // OS trigger by running any overdue worker in-process and repairing its launchd job — so the data flow
+  // can never be silently halted by a broken trigger. Best-effort; a failure here never blocks boot.
+  try {
+    startWatchdog();
+  } catch (e) {
+    log.warn("main", `sync watchdog failed to start: ${(e as Error).message}`);
+  }
 }
 
 function configuredOrigins(): string[] {

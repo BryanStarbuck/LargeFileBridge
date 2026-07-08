@@ -77,19 +77,37 @@ function intervalFor(kind: WorkerKind): number {
   return c.sync_process.interval_minutes * 60;
 }
 
+// A worker is OVERDUE when its last successful run is older than TWICE its interval (plus a slack), or it
+// has never run (sync_resilience.mdx §3/§7). 2× absorbs one legitimately-missed fire and clock skew; past
+// that the OS trigger is presumed dead. Shared by workerState() (the surfaced flag) and the watchdog (the
+// backstop that acts on it) so both use one threshold. A run means a SUCCESSFUL run — a stamped failure
+// still counts as "ran" for age, but a null stamp (never ran) is overdue.
+const OVERDUE_SLACK_SECONDS = 120;
+export function isWorkerOverdue(intervalSeconds: number, lastRunAt: string | null): boolean {
+  if (lastRunAt === null) return true;
+  const last = Date.parse(lastRunAt);
+  if (!Number.isFinite(last)) return true;
+  const ageSeconds = (Date.now() - last) / 1000;
+  return ageSeconds > intervalSeconds * 2 + OVERDUE_SLACK_SECONDS;
+}
+
 export async function workerState(kind: WorkerKind): Promise<WorkerState> {
   const block = processBlock(getAppConfig(), kind);
   const inst = installer();
   const installed = inst.isInstalled(block.label) || block.installed;
   const enabled = installed ? await inst.isEnabled(block.label) : block.enabled;
+  const on = enabled || block.enabled;
+  const intervalSeconds = intervalFor(kind);
   return {
     kind,
     installed,
-    enabled: enabled || block.enabled,
-    intervalSeconds: intervalFor(kind),
+    enabled: on,
+    intervalSeconds,
     label: block.label,
     lastRunAt: block.last_run_at,
     lastRunOk: block.last_run_ok,
+    // Only a worker that is supposed to be running can be "overdue"; an off/uninstalled worker isn't.
+    overdue: installed && on ? isWorkerOverdue(intervalSeconds, block.last_run_at) : false,
   };
 }
 

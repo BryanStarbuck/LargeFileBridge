@@ -79,6 +79,17 @@ The load-bearing rule the button must honor: **a manual Sync now on one repo pri
 still runs the full pass.** It does the user's repo first (so their result is immediate) and then keeps
 going across every other known unit. It must **never** sync one repo and stop.
 
+**A fourth, implicit trigger: the in-process watchdog backstop.** The three triggers above are all
+*external* to the running app — a launchd fire, a returning session, a button. If the **launchd trigger
+itself dies** (a stale trampoline path, an unloaded job), none of them fire and the flow stops silently.
+So the always-on web app **watches its own workers**: any installed + enabled worker that has not run
+within twice its interval is **run in-process** and its OS job is **repaired**, so a dead OS trigger can
+never silently halt the pass while the app is up. This backstop — and the full taxonomy of ways the flow
+can stall and how each self-heals or is surfaced — is specified in
+[sync_resilience.mdx](./sync_resilience.mdx) (§3 the watchdog, §7 the overdue signal), implemented in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/watchdog.service.ts` —
+`startWatchdog()`.
+
 The full pass over **every repo plus the computer unit**, and a manual Sync now that syncs the clicked repo first (as the priority unit) then runs the pass over the remaining units in the background, are implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncAll({ priorityDone })` (repos fan out via `runPool`, then `syncComputerUnit()`; both repo and computer share one generic `runUnitSync` core), invoked after the priority repo by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/repos/:repoId/sync`
 

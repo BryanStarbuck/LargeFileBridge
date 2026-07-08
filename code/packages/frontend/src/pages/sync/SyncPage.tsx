@@ -18,6 +18,7 @@ function workerHealth(s: WorkerState): Health {
   if (!s.installed) return "neutral";
   if (!s.enabled) return "warn";
   if (s.lastRunOk === false) return "bad";
+  if (s.overdue) return "warn"; // installed + on but hasn't run when it should (sync_resilience.mdx §7)
   return "ok";
 }
 
@@ -51,6 +52,12 @@ export function SyncPage() {
         state: "bad",
         headline: "The last background sync failed",
         sub: "Automatic syncing is on, but the most recent run hit an error — see the transfer job below.",
+      };
+    if (t.overdue)
+      return {
+        state: "warn",
+        headline: "Automatic syncing is overdue",
+        sub: "The background job hasn't run when it should have. The app is retrying it in the background and repairing the schedule; if it stays overdue, reinstall the transfer job below.",
       };
     return {
       state: ipfsDown ? "bad" : "ok",
@@ -203,7 +210,9 @@ function WorkerCard({
   const lastRun =
     state.lastRunAt == null
       ? "never run"
-      : `last run ${relativeTime(state.lastRunAt)}${state.lastRunOk === false ? " — failed" : ""}`;
+      : `last run ${relativeTime(state.lastRunAt)}${
+          state.lastRunOk === false ? " — failed" : state.overdue ? " — overdue" : ""
+        }`;
 
   return (
     <DiagnosticCard
