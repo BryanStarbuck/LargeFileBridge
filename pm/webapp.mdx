@@ -506,6 +506,16 @@ doubled when the same job comes back on the poll.
   runner share. No worker threads / `piscina`: scan, IPFS, hashing and even `ffmpeg` supervision are
   **I/O- or process-bound**, so bounded async concurrency on the event loop is the right, lightweight
   tool.
+* **The `limit` now comes from the shared Core Budget, not a hardcoded number.** `mapLimit()` is only
+  the low-level **runner** — it caps parallelism at whatever `limit` it is handed. That `limit` is no
+  longer a small constant baked into each caller; it is drawn from the **Core Budget helpers** that live
+  **beside** `mapLimit` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts`
+  — `coreBudget()` for **mass-compute** work (compression / fingerprinting / batch transcode, ~90% of
+  cores, tunable) or `responsiveBudget()` for work that runs **alongside** interactive use (the sync
+  pass and scan/index walks, `cores − 2`). So a bulk operation scales to the machine it runs on: callers
+  pass a **core-derived budget** (`mapLimit(items, coreBudget(), fn)` /
+  `mapLimit(items, responsiveBudget(), fn)`) rather than `mapLimit(items, 4, fn)`. The single canonical
+  policy for which budget each consumer draws is [parallelization.mdx §1](./parallelization.mdx).
 * **Endpoints become non-blocking + reportable.** The blocking handlers (`/rescan`, `/:repoId/sync`)
   are re-shaped to **register a job**, return promptly with the job id, and **report progress** into
   the registry as they run — so `GET /api/progress` can surface them and the card can show a bar.
@@ -580,5 +590,11 @@ doubled when the same job comes back on the poll.
   272px offset here and in main.tsx/ProgressDock. Cards are driven by REAL in-flight jobs (registry +
   optimistic runner) — never fake progress; a card exists iff a job is actually running. Serialize the
   on-disk write step as long as jobs fan out in parallel against the per-unit YAML state (storage_local.mdx).
+  §13 NOTE: mapLimit() is only the low-level RUNNER; the concurrency LIMIT passed to it now comes from the
+  shared Core Budget helpers that live beside mapLimit in backend/src/shared/concurrency.ts — coreBudget()
+  (mass-compute, ~90% of cores, tunable via performance.max_core_fraction) or responsiveBudget() (cores − 2).
+  Callers pass a core-derived budget (mapLimit(items, coreBudget()/responsiveBudget(), fn)), NOT a hardcoded
+  small number. Canonical policy = parallelization.mdx §1 (which budget each consumer draws); the knob =
+  settings.mdx §4.3 / parallelization.mdx §4. Keep §13's existing mapLimit description intact — this is an addition.
 -->
 

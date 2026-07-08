@@ -64,6 +64,16 @@ export const AppConfigSchema = z.object({
       public_gateway: z.boolean().default(false),
     })
     .default({}),
+  // Mass-parallelization policy (parallelization.mdx §4). `max_core_fraction` ∈ (0,1] tunes the
+  // MASS-COMPUTE core budget — round(cores × fraction) — used for user-kicked-off batch CPU work
+  // (compression, fingerprinting, batch transcode). Default 0.9 = "use up to ~90% of cores". Read LIVE
+  // by shared/concurrency.ts coreBudget(), so a change takes effect on the next bulk run with no restart.
+  // The responsive budget (cores − 2) for sync/scan is a fixed safety floor and is NOT configured here.
+  performance: z
+    .object({
+      max_core_fraction: z.number().min(0.01).max(1).default(0.9),
+    })
+    .default({}),
   big_file: z
     .object({
       threshold_bytes: z.number().default(104857600),

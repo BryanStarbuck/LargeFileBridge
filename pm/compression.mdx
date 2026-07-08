@@ -317,6 +317,44 @@ probes stay synchronous). Both are in code:
 `compressFile()` (`const disposition = o.deleteOriginal ?? (settings.replaceOriginalToTrash ? "trash" : "hard")`)
 and `runAsync()` (the `child_process.spawn` runner for the heavy tool).
 
+### 8.3 Parallelism & per-job thread-capping (LOCKED)
+
+Compression is the app's heaviest bulk work, so it draws the canonical **Core Budget**
+([parallelization.mdx](./parallelization.mdx)) — but the engine itself stays deliberately simple: it
+compresses **one file at a time** and does **not** decide how parallel to be. The fan-out lives one level
+up, in the queue that drives it ([job_queue.mdx §3](./job_queue.mdx)). What the engine owns is the **per-job
+thread cap** — the knob that lets the queue pack many jobs into the budget without oversubscribing the box.
+
+* **A one-off compress uses all cores (no cap).** When `compressFile` is called for a **single** file — the
+  media viewer's **Compress** button (§4), the **Convert to H.264** offer ([codecs.mdx §9](./codecs.mdx)) —
+  it is **not** a batch. It passes **no** thread cap, so ffmpeg/oxipng/cwebp use their **own all-core
+  default** and that one interactive file finishes as fast as the machine allows. This is the §2 corollary of
+  the parallelization policy ([parallelization.mdx §2](./parallelization.mdx)).
+* **A batch caps each job so the queue can fan WIDE/NARROW.** When the background queue drains a **"Compress
+  inside"** run over **many** files ([compress_inside.mdx](./compress_inside.mdx)), each `compress` task is
+  **thread-capped** so `concurrentJobs × threadsPerJob ≈ budget`, never `cores²`
+  ([parallelization.mdx §2](./parallelization.mdx), LOCKED). The two media kinds fan **opposite** directions
+  because their tools have opposite threading profiles:
+  * **Image jobs run 1-thread — fan WIDE.** oxipng/cwebp/mozjpeg/ImageMagick are ~single-threaded per file,
+    so the queue runs **`budget` of them at once**, one thread each — one job per core saturates the box.
+  * **Video jobs get a small cap — fan NARROW.** ffmpeg is internally multi-threaded, so the queue runs
+    **`floor(budget / videoThreads)`** jobs and passes each a **`videoThreads`** cap (default 4). A few
+    capped jobs fill the budget; without the cap, N videos would each grab every core and thrash.
+
+The mechanism is a single optional field the queue sets and the engine plumbs into whichever tool it runs:
+
+* **`CompressFileOpts.threads`** — the per-job cap. **Omitted** for a one-off (tool uses its all-core
+  default); **set** by the queue for a batched job. It maps per tool: **ffmpeg `-threads <n>`**, **oxipng
+  `--threads <n>`**, **cwebp** multithread **on/off** (`-mt` when `n > 1`, single-threaded otherwise), and
+  ImageMagick **`-limit thread <n>`**. Because the engine only forwards the number, the "how parallel"
+  decision stays in **one** place (the queue's live Core Budget), never hardcoded here.
+
+Accepting and threading the per-job cap into each tool is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`CompressFileOpts.threads` (the optional cap), applied in `compressFile()`'s ffmpeg build (`-threads`) and in
+`imageCommand()` (oxipng `--threads`, `cwebp` `-mt`, `magick -limit thread`); omitted → the tool's all-core
+default. The queue that supplies the cap per media bucket is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` / `bucketOf()` drawing `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()`.
+
 ---
 
 ## 9. Showing compression state (View one file)
@@ -355,6 +393,12 @@ Surfacing the codec + compressed-state and the Compress action per file is handl
    (`.lfbridge/analysis/<relpath>/compression.yaml`) captures the original name/extension + size
    before/after so other computers never re-compress ([syncable_data_location.mdx §4.3](./syncable_data_location.mdx)).
 7. The **View-one-file** page shows the file's **codec** and **compressed/uncompressed** state.
+8. **Parallelism (§8.3, LOCKED):** the engine compresses **one file at a time** and takes an optional
+   **`CompressFileOpts.threads`** cap. A **one-off** compress **omits** it (the tool uses its all-core
+   default); a **batched** job driven by the queue is **capped** so `concurrentJobs × threadsPerJob ≈ budget`,
+   never `cores²` — **image** jobs run **1-thread** (fan wide, `budget` at once), **video** jobs get a small
+   cap (fan narrow). The cap maps to **ffmpeg `-threads`**, **oxipng `--threads`**, **cwebp** MT on/off, and
+   **`magick -limit thread`** ([parallelization.mdx](./parallelization.mdx), [job_queue.mdx §3](./job_queue.mdx)).
 
 <!--
   Compression engine for IMAGE + VIDEO (audio later). Explicit user action only (one / checked / whole
@@ -368,4 +412,12 @@ Surfacing the codec + compressed-state and the Compress action per file is handl
   per-run `deleteOriginal: "hard"|"trash"` override (CompressFileOpts) that WINS over the global
   replace_original_to_trash default (bulk DEFAULTS to hard delete; one-off stays recoverable-trash). Heavy
   transcode runs via async spawn (runAsync) so a background batch never blocks the event loop.
+  PARALLELISM (§8.3, LOCKED, parallelization.mdx + job_queue.mdx §3): engine compresses ONE file at a time;
+  fan-out lives in the queue. Per-job cap = CompressFileOpts.threads — OMITTED for a one-off (tool's all-core
+  default; §2 corollary) vs SET by the queue for a batched job so concurrentJobs × threadsPerJob ≈ Core Budget,
+  NEVER cores². Image jobs 1-thread → fan WIDE (budget at once); video jobs small cap (videoThreads≈4) → fan
+  NARROW. threads maps to ffmpeg -threads / oxipng --threads / cwebp MT on-off / magick -limit thread.
+  Code: compression.service.ts CompressFileOpts.threads (compressFile ffmpeg -threads, imageCommand oxipng/
+  cwebp/magick); queue supplies it per media bucket via jobqueue.service.ts capFor()/bucketOf() ← shared/
+  concurrency.ts coreBudget().
 -->

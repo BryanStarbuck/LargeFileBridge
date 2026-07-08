@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Compress Videos & Images Inside (the directory pop-over dialog + per-file-safe batch)
-description: The rich pop-over dialog behind the directory triple-dot menu item "Compress videos/images inside…" (and the page-action "Compress all videos… / Compress all images…" links). Replaces the old browser window.confirm with a proper darkened-backdrop pop-over modal offering four inputs — an Images checkbox, a Videos checkbox, an "also compress recursively in subdirectories" checkbox (default ON), and a two-option "Originals" radio group (1) Hard delete [DEFAULT] and (2) LargeFileBridge trash (recoverable) — plus a red PNG→JPEG warning line shown only while Images is checked. Continue hands the directory to a server-side BACKGROUND BATCH that walks the selected kinds and compresses one file at a time; the request returns immediately and the work drains in the background (surfaced by processing.mdx). The LOCKED safety rule: originals disposal is PER-FILE and happens ONLY after that one file's compressed output verified — a file that errors part-way is left untouched and the batch continues; when the run finishes, the files that errored are shown as a list. Reconciles the deliberate contradiction with compression.mdx's recoverable-by-default: this explicit bulk dialog surfaces the disposition as a per-run choice and DEFAULTS to hard delete. Sibling of compression.mdx (the engine it drives), menus.mdx §5.2 (the directory catalog item that opens it), page_actions.mdx (the page-level compress links), job_queue.mdx (the queue it enqueues onto), and processing.mdx (the progress surfaces + the final error list).
+description: The rich pop-over dialog behind the directory triple-dot menu item "Compress videos/images inside…" (and the page-action "Compress all videos… / Compress all images…" links). Replaces the old browser window.confirm with a proper darkened-backdrop pop-over modal offering four inputs — an Images checkbox, a Videos checkbox, an "also compress recursively in subdirectories" checkbox (default ON), and a two-option "Originals" radio group (1) Hard delete [DEFAULT] and (2) LargeFileBridge trash (recoverable) — plus a red PNG→JPEG warning line shown only while Images is checked. Continue hands the directory to a server-side BACKGROUND BATCH that walks the selected kinds, stamps each file's media kind, and enqueues per-media-kind compress tasks; the request returns immediately and the work drains in the background against the media-aware mass-compute core budget (image tasks fan wide to ≈90% of cores, video tasks fan narrower/thread-capped — see job_queue.mdx §3 / parallelization.mdx), surfaced by processing.mdx. The LOCKED safety rule: originals disposal is PER-FILE and happens ONLY after that one file's compressed output verified — a file that errors part-way is left untouched and the batch continues; when the run finishes, the files that errored are shown as a list. Reconciles the deliberate contradiction with compression.mdx's recoverable-by-default: this explicit bulk dialog surfaces the disposition as a per-run choice and DEFAULTS to hard delete. Sibling of compression.mdx (the engine it drives), menus.mdx §5.2 (the directory catalog item that opens it), page_actions.mdx (the page-level compress links), job_queue.mdx (the queue it enqueues onto), and processing.mdx (the progress surfaces + the final error list).
 ---
 
 # LargeFileBridge — Compress Videos & Images Inside
@@ -172,13 +172,28 @@ navigating other tabs while the batch drains ([processing.mdx](./processing.mdx)
 * **The walk (server-side).** The endpoint walks the directory for the **selected kinds**, honoring the
   **recursive** flag and skipping the scan's `HARD_SKIP` / hidden / tracking dirs. It includes only files
   whose extension heuristic says they **should** compress (`compressInfo`), so already-compressed media is
-  cheaply skipped rather than needlessly re-encoded.
+  cheaply skipped rather than needlessly re-encoded. As it goes, it **stamps each eligible file with its
+  media kind** — `image` or `video` — from that same extension heuristic, because the two kinds draw
+  **different** concurrency budgets downstream (below, [job_queue.mdx §3](./job_queue.mdx)).
 * **A batch is created** grouping those files, and each file is enqueued as a `compress` task carrying the
-  chosen `deleteOriginal` mode and the `batchId`.
+  chosen `deleteOriginal` mode, the stamped **`mediaKind`** (image vs video), and the `batchId`.
 * **The plan returns immediately** — `{ batchId, considered, eligible, queued, images, videos }` — and a
-  single toast states what will happen (§6). The queue drains the tasks with a bounded per-op concurrency
-  (`compress` cap 2, [job_queue.mdx §3](./job_queue.mdx)); the heavy transcode runs via an **async**
-  `spawn` so it **never blocks the event loop** (the web app stays responsive during the batch).
+  single toast states what will happen (§6). The queue drains the tasks against the **media-aware
+  mass-compute core budget** ([job_queue.mdx §3](./job_queue.mdx), [parallelization.mdx](./parallelization.mdx)):
+  **image** tasks fan **wide** — ≈90% of cores, one thread each, since oxipng/cwebp/mozjpeg/magick are
+  single-threaded per file — while **video** tasks fan **narrower** — `floor(budget / videoThreads)` jobs,
+  each ffmpeg `-threads`-capped — so `concurrentJobs × threadsPerJob ≈ budget`, never `cores²`. A folder of
+  300 files therefore **pins the machine near 90%** until it's done, instead of crawling two-at-a-time. The
+  heavy transcode still runs via an **async** `spawn` so it **never blocks the event loop** (the web app
+  stays responsive during the batch), and the per-job thread cap prevents oversubscription while it runs
+  hot.
+
+> **Parallelism does not weaken the safety rule (§4, LOCKED).** Draining many files at once changes
+> **how many** files are in flight, never **how** each one is handled: every file is still processed
+> **independently** — temp → verify → dispose — so the transactional guarantee of §4 is **unchanged**. A
+> file that errors part-way is still left completely untouched while its siblings keep going, and the
+> per-job thread cap (image = 1 thread, video = capped ffmpeg `-threads`) keeps the wide fan-out from
+> oversubscribing the machine. More parallel, exactly as safe.
 
 `POST /api/compress/inside` with body `{ root, images, videos, recursive, deleteOriginal }` returns the
 `CompressInsidePlan`, implemented in code:
@@ -231,10 +246,14 @@ The Continue toast is emitted from the plan in code:
    list with reasons; a clean run shows only a success summary.
 6. **Default-hard-delete reconciliation (§4.1):** this bulk dialog defaults to Hard delete and passes a
    per-run override to the engine; the global recoverable-by-default still governs one-off compresses.
-7. **Background + responsive (§5):** Continue plans + enqueues and **returns immediately**; the batch
-   drains in the background (per-op cap 2) with the heavy transcode on an **async** child process, so the
-   app stays responsive and the user can navigate away. Already-compressed media is skipped, not
-   re-encoded.
+7. **Background + media-aware core budget (§5):** Continue plans + enqueues and **returns immediately**;
+   the walk stamps each file's **`mediaKind`** and the batch drains against the **media-aware mass-compute
+   core budget** ([job_queue.mdx §3](./job_queue.mdx), [parallelization.mdx](./parallelization.mdx)) —
+   **image** tasks fan **wide** (≈90% of cores, 1 thread each), **video** tasks fan **narrower**
+   (thread-capped ffmpeg), so `concurrentJobs × threadsPerJob ≈ budget` (never `cores²`) and a 300-file
+   folder pins the machine near 90% until done instead of crawling two-at-a-time. The heavy transcode stays
+   on an **async** child process so the app remains responsive and the user can navigate away; the per-file
+   safety of §4 is unchanged. Already-compressed media is skipped, not re-encoded.
 8. **Notification (§6):** one honest toast on Continue ("{N} files will be compressed" / the nothing-to-do
    line) and a finish summary that names the error count when non-zero.
 9. **Page-action reuse (§2):** the page-level "Compress all videos… / Compress all images…" links open the
@@ -253,14 +272,20 @@ The Continue toast is emitted from the plan in code:
   files are shown as a LIST. compressFile() disposition block runs only after verify+gain; the per-op
   `deleteOriginal` override wins over the global recoverable-by-default (§4.1 reconciles the deliberate
   contradiction with compression.mdx — this bulk dialog DEFAULTS to hard delete because the user asked).
-  BACKGROUND (§5): Continue → POST /api/compress/inside → enqueueCompressInside() walks the selected kinds
-  (recursive|shallow, HARD_SKIP-skipping, should-compress-only), createBatch(), enqueue() as `compress` tasks
-  carrying deleteOriginal+batchId; returns the plan IMMEDIATELY. compress op cap 2; heavy transcode via async
-  spawn (runAsync) so the event loop never blocks. Surfaced by processing.mdx.
+  BACKGROUND (§5): Continue → POST /api/compress/inside → enqueueCompressInside()/walkCompressible() walks the
+  selected kinds (recursive|shallow, HARD_SKIP-skipping, should-compress-only), STAMPS each file's mediaKind
+  (image|video), createBatch(), enqueue() as `compress` tasks carrying deleteOriginal+mediaKind+batchId;
+  returns the plan IMMEDIATELY. Drains against the MEDIA-AWARE MASS-COMPUTE CORE BUDGET (job_queue.mdx §3,
+  parallelization.mdx): image tasks fan WIDE (≈90% of cores, 1 thread each), video tasks fan NARROW
+  (floor(budget/videoThreads), ffmpeg -threads-capped) → concurrentJobs × threadsPerJob ≈ budget, NEVER
+  cores²; a 300-file folder pins the box near 90% until done, not two-at-a-time. Heavy transcode via async
+  spawn (runAsync) so the event loop never blocks. Parallelism does NOT weaken §4: each file is still
+  independently temp→verify→dispose, per-job thread cap prevents oversubscription. Surfaced by processing.mdx.
   Code: frontend components/compress/CompressInsideDialog.tsx + CompressInsideProvider.tsx + lib/
   compressInside.ts (bus) + lib/pageActions.ts + api client.compressInside; backend compression.service.ts
   (compressFile deleteOriginal + runAsync + enqueueCompressInside/walkCompressible), compression.router POST
   /inside, jobqueue.service.ts (compress op + createBatch/recordBatchResult), progress.router (batches in the
-  payload). Keep in sync with compression.mdx, menus.mdx §5.2, page_actions.mdx §4, job_queue.mdx, processing.mdx.
+  payload). Keep in sync with compression.mdx, menus.mdx §5.2, page_actions.mdx §4, job_queue.mdx,
+  parallelization.mdx (the media-aware core-budget policy), processing.mdx.
 -->
 </content>

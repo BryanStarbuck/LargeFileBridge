@@ -229,6 +229,19 @@ for when seeking-fidelity matters, e.g. a hosted server serving long VOD):
 
 ---
 
+### 6.4 A live stream is a ONE-OFF, not a batch — no thread cap
+
+The on-the-fly transcode/remux serves **one** file to **one** `<video>` element in real time, so it is a
+**one-off interactive action, not bulk work**. By the parallelization policy's one-off-vs-batch distinction
+([parallelization.mdx §2](./parallelization.mdx)), it therefore passes **no per-job thread cap** and lets
+ffmpeg use its **own all-core threading** — the live pipe must keep up near real time, so the one file that
+the user is watching may use the whole machine. This is the opposite end of the same rule that makes **batch**
+compression thread-capped: when the queue fans **many** compress jobs out at once it caps each job's threads
+so `concurrentJobs × threadsPerJob ≈ budget` ([compression.mdx §8.3](./compression.mdx), [job_queue.mdx §3](./job_queue.mdx)),
+but a **single live stream** is not a batch and stays uncapped.
+
+---
+
 ## 7. Alternative frontend players (evaluated)
 
 Fallbacks for when native `<video>` can't decode. We chose **backend transcode (§6)** over a client-side
@@ -307,4 +320,8 @@ The convert offer + confirm and the forced-H.264 request are in
   = MP4 · H.264 High · 8-bit yuv420p · AAC · +faststart (streams everywhere + uploads to TikTok/X/YT/IG; X
   rejects AV1 so never AV1 for an upload copy). Drives media_viewer.mdx §5. Reuses compression.mdx engine
   with a forced codec. Alt players (hls.js/ffmpeg.wasm) evaluated, not shipped — backend transcode chosen.
+  §6.4: the live stream/transcode is a ONE-OFF interactive action, NOT a batch — passes NO per-job thread cap
+  (uses ffmpeg's own all-core threading to keep the pipe near real time). Opposite end of parallelization.mdx
+  §2: BATCH compression IS thread-capped (concurrentJobs × threadsPerJob ≈ budget, compression.mdx §8.3 /
+  job_queue.mdx §3); a single live stream is not.
 -->

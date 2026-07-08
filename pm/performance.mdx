@@ -358,6 +358,31 @@ The rAF-coalesced scroll handler that skips re-renders when the window start is 
 The bounded-concurrency sync pass is in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncAll` + `runPool` + `SYNC_CONCURRENCY` (units) and `ipfsLimiter` + `runUnitSync` (per-file) + `syncComputerUnit`
 
+**Now unified with P-26.** P-23 (sync pass → the **responsive** budget, `cores − 2`) and P-26 below (the
+job queue → the **mass-compute** budget, `round(cores × 0.9)`) no longer each roll their own core count:
+both draw from the **same** shared helper, and the two named budgets are defined in one place —
+[parallelization.mdx §1](./parallelization.mdx).
+
+### 🟠 P-26 — The background job queue drained at a fixed tiny cap (2/3/2), ignoring many cores · throughput
+- **Where:** `code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `pump()` drained each op
+  under **hard-coded per-type caps** (`transcribe` 2 / `describe` 3 / `compress` 2), computed with **no
+  reference to the machine's core count**. The caps were tuned for the smallest box and never scaled up.
+- **Symptom:** A **"Compress inside"** run ([compress_inside.mdx](./compress_inside.mdx)) over **300 files**
+  crawled **2-at-a-time on a 16-core box** — ≈**12% utilization** — while 14 cores sat idle. The more cores
+  a user had, the more the queue wasted; the fixed cap capped throughput regardless of the hardware.
+- **Fix (done):** The queue now draws the shared **media-aware CORE BUDGET**
+  ([parallelization.mdx](./parallelization.mdx), [job_queue.mdx §3](./job_queue.mdx)): mass-compute =
+  `round(cores × 0.9)`. **Image** jobs fan **wide** (one `ffmpeg`/`oxipng`/`cwebp`/`magick` thread each,
+  `budget` at once); **video** jobs fan **narrow** with an `ffmpeg -threads` cap so
+  `concurrentJobs × threadsPerJob ≈ budget` and **never `cores²`** (the anti-oversubscription rule,
+  [parallelization.mdx §2](./parallelization.mdx)). Tunable live via `performance.max_core_fraction` — the
+  same 300-file run now pins ≈90% of the box until done instead of crawling two-at-a-time. Unified with the
+  sync pass (P-23) under the one shared helper — see the note above.
+
+The media-aware, core-budgeted queue drain — per-op caps and the image-vs-video bucket that shape the
+fan-out — is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` / `bucketOf()` / `pump()`, drawing `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()`
+
 ---
 
 ## Part III — The architecture transformation (streaming background filesystem index)

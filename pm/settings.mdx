@@ -152,6 +152,7 @@ concerns live. Each is specified elsewhere; the page groups them into sections:
 | --- | --- | --- |
 | **Big files** | The threshold (§1) + its unit. | this file |
 | **Compression** | Per-media (images / video / **audio**) codec **allow/deny** + quality; social-media-safe defaults. | [compression.mdx §7](./compression.mdx#7-codec-preference-settings-per-media-type) |
+| **Parallelism** | The CPU-core budget (§4.3) — how much of the machine background compression & processing may use. | [parallelization.mdx §4](./parallelization.mdx) |
 | **Scan process** | The 4-hour discovery scan: installed / on-off / Rescan now. | [scan.mdx §7](./scan.mdx#7-the-transparency-contract-installed-vs-onoff) |
 | **Sync process** | The 15-min background sync: installed / on-off. | [storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract) |
 | **Scanner roots** | Which top-level dirs the scan walks + global ignore globs. | [storage_local.mdx §3/§7](./storage_local.mdx#7-the-scanner--discovering-repos-and-the-mask) |
@@ -203,6 +204,51 @@ None is implemented yet, so no code pointer; when built they belong in
 `SettingsPage`, calling the scan / describe-credentials / ipfs-node endpoints already defined in their
 own specs. They are page/section-level actions, not per-row `⋮` items.
 
+### 4.3 Parallelism — the CPU-core budget
+
+Large File Bridge's heaviest work is **bulk, embarrassingly-parallel file work** — compress every video
+and image inside a directory, transcribe or fingerprint a whole repo, batch-transcode. On a many-core
+machine that work should chew through the box in parallel rather than crawl one file at a time. The
+**Parallelism** section exposes the **single global knob** that governs how hard it may push
+([parallelization.mdx §4](./parallelization.mdx)).
+
+The control is **one percent slider/field**, labeled **"Use up to N% of CPU cores for background
+compression & processing,"** defaulting to **90%**. Beneath it, the UI shows the **live resolved core
+count** so the abstract percentage is never ambiguous:
+
+```
+ Parallelism
+ ┌──────────────────────────────────────────┐
+ │  Use up to  [ ▓▓▓▓▓▓▓▓▓░ ]  90 %          │   ≈ 14 of 16 cores
+ └──────────────────────────────────────────┘
+   Background compression & processing may use up to this share of your CPU.
+```
+
+* **What it tunes — the MASS-COMPUTE budget only.** The percentage backs
+  `performance.max_core_fraction` ∈ `(0, 1]`, and the mass-compute budget is
+  `round(cores × max_core_fraction)` — the "use up to ~90% of cores" budget for **pure batch CPU work
+  the user explicitly kicked off** (compression, fingerprinting, batch transcode). Turning the slider
+  down keeps more headroom on a laptop; turning it up pushes a workstation harder.
+* **What it does NOT tune — the RESPONSIVE budget.** Work that runs **alongside** interactive use — the
+  15-min **sync pass** and the discovery **scan/index walks** — draws the **responsive budget**
+  (`cores − 2`, leaving 2 cores for the web app + IPFS). That floor is a **fixed safety margin and is not
+  user-tunable**; the slider never touches it.
+* **Live, no restart.** The resolved core count shown beside the slider is exactly what the next bulk
+  operation will use — the budget helper reads the setting **live**, so a change takes effect on the
+  **next** run with no restart.
+
+The percentage field lives in the app config schema, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — `AppConfigSchema.performance`
+(`max_core_fraction`, default `0.9`).
+
+The slider surface (and the live "≈ N of M cores" readout) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` —
+`SettingsPage` Parallelism section.
+
+The resolved mass-compute budget is computed live from this setting in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()`
+(reads `performance.max_core_fraction`); the fixed responsive floor is `responsiveBudget()` (`cores − 2`).
+
 ---
 
 ## 5. Acceptance criteria
@@ -225,3 +271,28 @@ own specs. They are page/section-level actions, not per-row `⋮` items.
    `large_file_min_bytes` / `large_files.min_bytes` fields in `storage_local.mdx` are re-pointed at it.
 8. The page also groups the other global concerns (scan/sync process, scanner roots, IPFS, allow-list,
    account), each linking to its own spec; allow-list editing is gated to `role:admin`.
+9. The **Parallelism** section (§4.3) shows a single **percent** control — *"Use up to N% of CPU cores
+   for background compression & processing"* — backed by `performance.max_core_fraction` (default
+   **0.9 = 90%**), with the **live resolved core count** ("≈ 14 of 16 cores") shown beside it. It tunes
+   **only** the mass-compute budget (`round(cores × max_core_fraction)`); the responsive budget
+   (`cores − 2`) for the sync pass and scan walks is a **fixed, non-tunable** safety floor. `coreBudget()`
+   reads the value **live**, so a change takes effect on the next bulk run with no restart
+   ([parallelization.mdx §4](./parallelization.mdx)).
+
+<!--
+  Global Settings page (/settings). Headline = the BIG-FILE THRESHOLD (§1): value field + MB/GB/TB unit
+  dropdown, default 100 MB, stored as resolved threshold_bytes in config.yaml → big_file; global with a
+  per-repo override checkbox OFF by default (§2/§3, repo_settings.mdx). §4 also groups the other global
+  sections: Compression codec allow/deny (§4.1, compression.mdx §7), proposed verify/re-scan page actions
+  (§4.2), Parallelism (§4.3), plus scan/sync process, scanner roots, IPFS node, allow-list (admin-only),
+  account.
+  §4.3 PARALLELISM: one PERCENT slider "Use up to N% of CPU cores for background compression & processing",
+  backed by performance.max_core_fraction (default 0.9 = 90%), showing the live resolved count ("≈ 14 of 16
+  cores"). Tunes ONLY the mass-compute budget round(cores × max_core_fraction); the responsive budget
+  (cores − 2) for sync/scan is a FIXED, non-tunable safety floor. Read LIVE by coreBudget() — no restart.
+  Canonical policy = parallelization.mdx §1/§4. Code: schema field shared/src/schemas.ts
+  (AppConfigSchema.performance.max_core_fraction, default 0.9); UI frontend SettingsPage.tsx (Parallelism
+  section); resolved live by backend shared/concurrency.ts coreBudget() (responsiveBudget() = cores − 2).
+  Keep in sync with parallelization.mdx (§4 the knob), webapp.mdx §13 (mapLimit takes the core-derived limit),
+  repo_settings.mdx, scan.mdx, storage_local.mdx, compression.mdx.
+-->

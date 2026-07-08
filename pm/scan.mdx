@@ -576,6 +576,12 @@ The scan is correct when **all** hold:
     interesting-directory coloring, and the File System tree refresh within seconds **without** waiting
     for the 4-hour pass. The watcher is `watcher.enabled` (§5), has **no** scheduler/plist, and never
     replaces the scheduled walk (which backfills changes that happened while the app was off).
+16. **Parallel unit walks** (§11): the scan walks **independent repo units in parallel**, bounded by the
+    **responsive budget** (`cores − 2`) via `mapLimit()`, and fans **root discovery** out the same way —
+    leaving 2 cores for the HTTP loop + the IPFS node ([parallelization.mdx §1/§3](./parallelization.mdx)).
+    Each walk **still cooperatively yields** (§10.3) so the app never freezes; each unit's `status.yaml`
+    write is **atomic** so concurrent walks never collide; the computer-unit walk and the per-unit
+    diff/write are unchanged; and the whole pass stays **single-flight** (two passes never overlap).
 
 ---
 
@@ -647,6 +653,41 @@ The single always-mounted progress bar that polls the server job and re-attaches
 
 Single-flight coalescing and the cooperative event-loop yielding that keeps the app responsive during a walk are in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` / `findGitRepos()` (`await yieldToLoop()` every `YIELD_EVERY`; single-flight `rerunQueued` in `scan-job.ts`)
+
+---
+
+## 11. Parallel unit walks — many units at once (LOCKED)
+
+A scan is dozens of **independent** walks: each repo unit's `stat`-only walk touches only its own
+subtree and writes only its own `status.yaml`, and root discovery over the scanner roots is likewise
+independent per root. Walking them **one after another** — the current `for (const folder of
+repoFolders)` loop in `scanAll()` — leaves a many-core machine idle while a single
+`readdirSync`/`statSync` walk plods through one repo at a time. Big-file discovery is
+**embarrassingly parallel**, so it fans **wide**.
+
+* **Repo units fan out under the responsive budget.** The repo-units loop becomes a bounded
+  `mapLimit()` sized to the **responsive budget** (`cores − 2`), so up to that many repo walks run at
+  once while **2 cores stay free for the HTTP loop + the IPFS node**. This is the right budget — a scan
+  runs **alongside** interactive use, not as user-kicked-off mass compute — exactly as
+  [parallelization.mdx §1/§3](./parallelization.mdx) assigns the "Scan — repo units" row to the
+  **responsive**, **wide** shape. Root discovery (`findGitRepos` over each root) fans out the same way.
+  Being `stat`/IO-bound, these walks want to run **wide** over independent units, not narrow with capped
+  threads — that anti-oversubscription rule ([parallelization.mdx §2](./parallelization.mdx)) is for the
+  internally-multi-threaded compress/transcode jobs, not for stat-only walks.
+* **The §10.3 cooperative yield is preserved, not replaced.** Each walk still `await`s `yieldToLoop()`
+  every `YIELD_EVERY` entries, so even with many walks in flight the event loop keeps servicing
+  `scan-status` polls and page loads — the app never freezes. Fan-out and yielding are complementary:
+  the fan-out uses more cores, the yield keeps each walk cooperative on the core it lands on.
+* **The computer-unit walk and the per-unit diff/write are unchanged.** The computer unit is still
+  walked **after** the repo units (its mask is the set of discovered repos), and each unit's
+  `status.yaml` write stays **atomic** (temp-then-rename through the store layer), so concurrent unit
+  walks **never collide** — every unit owns a distinct status file and touches only its own subtree.
+* **Single-flight is unchanged (§10.3).** Parallelism is *within* one pass; two whole passes still never
+  overlap — a second Rescan coalesces into one queued follow-up, never a concurrent racer on the same
+  `status.yaml` files.
+
+The repo-units loop running as a `mapLimit()` at the responsive budget while each walk still yields to the event loop is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()` (the `for (const folder of repoFolders)` loop becomes `mapLimit(repoFolders, responsiveBudget(), …)`; `walkUnit()` / `findGitRepos()` keep their `await yieldToLoop()`), drawing `responsiveBudget()` + `mapLimit()` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts`.
 
 ---
 

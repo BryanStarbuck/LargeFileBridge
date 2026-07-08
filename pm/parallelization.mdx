@@ -1,0 +1,204 @@
+---
+title: LargeFileBridge — Mass Parallelization & the Core Budget (use up to ~90% of the machine's cores)
+description: The canonical, cross-cutting policy for running MANY files of heavy work at once. A lot of the app's real cost is bulk, embarrassingly-parallel file work — compress every video/image inside a directory, transcribe a whole repo, describe a batch, fingerprint/index a storage, walk many repo units in a scan, add+pin many files in a sync pass. Modern machines have many cores; doing that work one-file-at-a-time (or at a fixed tiny cap like 2) wastes 90% of the box. This spec defines ONE shared notion — the CORE BUDGET — and how every bulk operation draws from it: the mass-compute budget is round(cores × max_core_fraction) with max_core_fraction defaulting to 0.9 (use up to ~90% of cores), and the responsive budget is cores − 2 (leave 2 cores for the web app + IPFS) for work that runs alongside interactive use. It defines the MEDIA-AWARE rule for compression (image tools are single-threaded → fan WIDE, one job per core; ffmpeg is internally multi-threaded → fan NARROWER and cap each job's threads so N video jobs don't oversubscribe), the anti-oversubscription rule (a per-job internal thread cap × job concurrency ≈ the budget, never cores²), the single global-settings knob that tunes the fraction, and where each consumer lives in code. Sibling of job_queue.mdx (the queue that draws the compute budget), compression.mdx / compress_inside.mdx (the media-aware compress consumer + the user's triple-dot flow), scan.mdx (parallel unit walks), storages.mdx (parallel fingerprint/index), sync_process.mdx §4 (the responsive-budget consumer already shipped), performance.mdx (P-23/P-25 the throughput rationale), webapp.mdx §13 (the mapLimit primitive), and settings.mdx (the knob).
+---
+
+# LargeFileBridge — Mass Parallelization & the Core Budget
+
+Large File Bridge's heaviest moments are **bulk file work**: the user opens a directory's **`⋮`** menu and
+picks **"Compress videos & images inside…"** ([compress_inside.mdx](./compress_inside.mdx)) over a folder of
+300 clips; runs **"Create Transcriptions"** across a whole repo ([page_actions.mdx](./page_actions.mdx));
+**indexes/fingerprints** a storage ([storages.mdx §4.1](./storages.mdx)); **scans** many repo units
+([scan.mdx](./scan.mdx)); **adds + pins** hundreds of files in a **sync pass**
+([sync_process.mdx](./sync_process.mdx)). Every one of those is **embarrassingly parallel** — the files are
+independent — and every one of them is the kind of work a **many-core machine should chew through in
+parallel**, not one file at a time.
+
+The user's directive is explicit: *"A lot of computers have a lot of cores. We want to be able to use up to
+**90% of cores** and do it with **mass parallelization**. … Look for anything and everything across this web
+app that could benefit from mass parallelization."* And equally important: *"For some things it's
+appropriate. For other things, it's not."*
+
+This spec is the **one place** that policy is defined. Every bulk consumer references it and draws its
+concurrency from the **same shared helpers**, so the whole app scales to the box it runs on and there is no
+second, drifting definition of "how parallel."
+
+---
+
+## 1. The Core Budget — two named budgets (LOCKED)
+
+There is **one** notion of "how many logical cores this machine has" and **two** budgets computed from it,
+for two different kinds of work:
+
+* **Logical cores** — `os.availableParallelism()` (falling back to `os.cpus().length`, then `4`). One
+  source, floored at 1.
+* **Mass-compute budget** = `max(1, round(cores × max_core_fraction))`, `max_core_fraction` **default
+  `0.9`** (§4 knob). This is the **"use up to ~90% of cores"** budget for **pure batch CPU work the user
+  explicitly kicked off** and is watching drain in the background — compression, fingerprinting, batch
+  transcode. It runs hot on purpose.
+* **Responsive budget** = `max(1, cores − 2)`. This leaves **2 cores** for the web app's HTTP loop + the
+  IPFS node, for work that runs **alongside** interactive use or shares the box with a latency-sensitive
+  service — the **sync pass** ([sync_process.mdx §4](./sync_process.mdx), already shipped) and the
+  **scan/index walks** ([scan.mdx](./scan.mdx)). Slightly cooler so the app never feels frozen.
+
+Which budget a consumer uses is a **deliberate choice per operation** (§3 table), and that choice is the
+"for some things it's appropriate, for others not" the user called out.
+
+The two budgets and the logical-core count come from ONE shared helper, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `logicalCores()` /
+`coreBudget(fraction?)` (mass-compute, reads `performance.max_core_fraction`) / `responsiveBudget()`
+(`cores − 2`), alongside the existing bounded-runner `mapLimit()` ([webapp.mdx §13](./webapp.mdx)).
+
+---
+
+## 2. The anti-oversubscription rule (LOCKED — the load-bearing invariant)
+
+"Use 90% of cores" does **not** mean "run 90%-of-cores jobs each of which also uses all cores." Some tools
+are **single-threaded per file** (they use one core); some are **internally multi-threaded** (one job
+saturates the whole box on its own). Mixing those up is the classic mistake that makes a machine **slower**
+under load, not faster (context-thrash, cache eviction, the scheduler drowning).
+
+**The invariant:** for any bulk operation,
+
+```
+(concurrent jobs) × (internal threads per job) ≈ the chosen Core Budget      — never cores²
+```
+
+So the two knobs move **opposite** each other:
+
+* **Single-threaded tool → fan WIDE.** One job ≈ one core, so run **budget** of them at once
+  (`concurrentJobs = budget`, `threadsPerJob = 1`).
+* **Internally multi-threaded tool → fan NARROWER, and CAP each job's threads.** Pick a small
+  `threadsPerJob`, run `floor(budget / threadsPerJob)` of them, and **pass the cap into the tool** so it
+  does not silently grab every core. A single big job still gets several threads (fast), while several jobs
+  still fit inside the budget (busy, not thrashing).
+
+The corollary the whole app follows: a **one-off** action on a **single** file (a per-file Compress, a live
+video stream) is **not** in a batch — it may use **all** the cores for that one file (no cap passed). The
+thread cap is applied **only** when the queue is fanning many jobs out at once.
+
+The per-job thread cap plumbed into the compression tools (so a batched job stays inside its slice while a
+one-off job uses the whole machine) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`CompressFileOpts.threads` (fed to `ffmpeg -threads`, `oxipng --threads`, `cwebp` MT on/off, `magick -limit
+thread`); omitted for a one-off compress so the tool uses its own all-core default.
+
+---
+
+## 3. Who draws which budget (LOCKED map)
+
+Every bulk operation in the app maps onto a budget and a fan-out shape. This table is the **inventory** the
+user asked for ("look for anything and everything across this web app that could benefit") — each row links
+to the spec that owns the detail.
+
+| Operation | Budget | Fan-out shape | Why |
+| --- | --- | --- | --- |
+| **Compress inside — images** ([compression.mdx](./compression.mdx), [compress_inside.mdx](./compress_inside.mdx)) | **mass-compute** | **wide**: `budget` jobs, **1 thread each** | oxipng/cwebp/mozjpeg/magick are ~single-threaded per file — one job per core. |
+| **Compress inside — video** ([compression.mdx](./compression.mdx)) | **mass-compute** | **narrow**: `floor(budget / videoThreads)` jobs, **`videoThreads` each** (default 4) | ffmpeg is internally multi-threaded; a few capped jobs fill the budget without cores² thrash. |
+| **Batch transcribe** ([Transcribe.mdx](./Transcribe.mdx)) | **mass-compute** | **narrow**: `floor(budget / whisperThreads)` jobs | Whisper is CPU/GPU-heavy and multi-threaded; a couple saturate the machine. |
+| **Batch describe** ([ai_description.mdx](./ai_description.mdx)) | **network** (not core-bound) | fixed small (≈4–6) | The heavy wait is a vision-API round-trip, not local CPU; overlap I/O, don't burn cores. |
+| **Storage fingerprint / index** ([storages.mdx §4.1](./storages.mdx)) | **responsive** | **wide** over files | head+tail byte reads + hash are I/O-ish; parallelize but keep the app live. |
+| **Scan — repo units** ([scan.mdx](./scan.mdx)) | **responsive** | **wide** over units | independent stat-only walks; run many units at once, leave 2 cores for HTTP. |
+| **Sync pass — units × files** ([sync_process.mdx §4](./sync_process.mdx)) | **responsive** | two levels, one shared limiter | already shipped (P-23); IPFS + the app must stay responsive. |
+| **On-the-fly stream / one-off compress** | — (no batch) | single job, **all cores** | not bulk — one interactive file may use the whole box (§2 corollary). |
+
+The two most-parallel, most-visible consumers are the **queue** ([job_queue.mdx §3](./job_queue.mdx)) and
+the **triple-dot "Compress inside"** flow ([compress_inside.mdx](./compress_inside.mdx)) — see §5 for that
+user flow.
+
+---
+
+## 4. The knob — one global setting, default 90% (LOCKED)
+
+The fraction of cores the **mass-compute** budget may use is a **single global setting**, so a user on a
+laptop who wants to keep more headroom (or a workstation user who wants to push harder) can tune it without
+touching code:
+
+* **`performance.max_core_fraction`** — a number in `(0, 1]`, **default `0.9`**. `coreBudget()` reads it
+  live, so a change takes effect on the **next** bulk operation with **no restart**.
+* The **responsive budget** (`cores − 2`) is **not** tunable — it is a fixed safety floor for work that
+  shares the box with interactive use.
+* Surfaced in **Settings** ([settings.mdx](./settings.mdx)) as a **"Parallelism"** control — a percent
+  slider/field labeled *"Use up to N% of CPU cores for background compression & processing"* with the live
+  resolved number shown (e.g. *"≈ 14 of 16 cores"*).
+
+The setting field lives in the app config schema, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — `AppConfigSchema.performance`
+(`max_core_fraction`, default `0.9`); read by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()` and
+edited from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx`.
+
+---
+
+## 5. Where it happens in the UI flow (LOCKED)
+
+The user's canonical entry point, verbatim: *"File System ⇒ triple-dot click on a directory. Select the
+compressed images and videos. … doing an action like compression, and in that, it can handle a lot of files
+… we want to be able to use up to 90% of cores."* That flow, end to end:
+
+1. **File System page** ([file_system.mdx](./file_system.mdx)) → a directory's **`⋮`** menu
+   ([menus.mdx §5.2](./menus.mdx)) → **"Compress videos & images inside…"**.
+2. The **pop-over dialog** ([compress_inside.mdx §3](./compress_inside.mdx)) — Images / Videos / recursive /
+   Originals — **Continue**.
+3. The server **walks** the selected kinds and **enqueues** every eligible file onto the **background queue**
+   as `compress` tasks, each tagged with its **media kind** (image vs video), then **returns immediately**.
+4. The **queue** drains them with the **media-aware mass-compute budget** ([job_queue.mdx §3](./job_queue.mdx)):
+   image tasks fan **wide** (≈90% of cores, one thread each), video tasks fan **narrower** (capped threads),
+   so a folder of 300 files pins the machine near 90% until it's done — instead of crawling two-at-a-time.
+5. The user watches it on the **Processing page** ([processing.mdx](./processing.mdx)): the running cards,
+   the per-op **Waiting** backlog, the batch progress bar, and a **worker-utilization** read of how many of
+   the budget's slots are busy ([processing.mdx §3a](./processing.mdx)).
+
+The same parallel queue backs the page-level **"Compress all videos… / images…"** links and the
+**"Create Transcriptions / descriptions"** page actions ([page_actions.mdx](./page_actions.mdx)) — every
+"do this to many files" producer feeds the one budgeted, parallel drain.
+
+---
+
+## 6. Acceptance criteria
+
+1. **One shared helper (§1):** `concurrency.ts` exposes `logicalCores()`, `coreBudget(fraction?)`
+   (mass-compute, default 0.9 via the knob), and `responsiveBudget()` (`cores − 2`). No consumer computes a
+   core count on its own; the old inline `SYNC_CONCURRENCY = cores − 2` is expressed via `responsiveBudget()`.
+2. **Mass-compute ≈ 90% (§1/§4):** on an N-core machine a bulk compress/fingerprint run drives ≈
+   `round(N × 0.9)` cores' worth of work, tunable by `performance.max_core_fraction`, effective on the next
+   run with no restart.
+3. **Anti-oversubscription (§2, LOCKED):** for every batch, `concurrentJobs × threadsPerJob ≈ budget`, never
+   `cores²`. Image compress fans **wide** (1 thread/job); video compress fans **narrow** with a per-job
+   `ffmpeg -threads` cap; a **one-off single-file** compress/stream passes **no** cap and may use all cores.
+4. **The map (§3):** the queue's `compress` op is **media-aware** (image vs video budgets); transcribe is
+   mass-compute-narrow; describe is network-parallel (not core-bound); fingerprint/scan use the responsive
+   budget; the shipped sync pass is the responsive-budget reference consumer.
+5. **The knob (§4):** `performance.max_core_fraction` (default 0.9) exists in the config schema, is read live
+   by `coreBudget()`, and is editable in Settings with the resolved core count shown.
+6. **The flow (§5):** the triple-dot "Compress inside" run enqueues per-media-kind tasks that drain against
+   the media-aware budget, and the Processing page shows worker utilization.
+
+<!--
+  CANONICAL cross-cutting policy for MASS PARALLELIZATION. The one place "how parallel" is defined.
+  §1 TWO budgets from ONE logical-core count (os.availableParallelism → cpus().length → 4, floor 1):
+     - mass-compute = max(1, round(cores × max_core_fraction)), default fraction 0.9 → "up to ~90% of cores".
+       For pure batch CPU the user kicked off + is watching (compress, fingerprint, batch transcode).
+     - responsive = max(1, cores − 2). Leaves 2 cores for HTTP + IPFS. For work alongside interactive use
+       (sync pass — already shipped P-23, scan/index walks).
+  §2 ANTI-OVERSUBSCRIPTION (LOCKED): concurrentJobs × threadsPerJob ≈ budget, NEVER cores². Single-threaded
+     tool → fan WIDE (budget jobs × 1 thread). Multi-threaded tool (ffmpeg/whisper) → fan NARROW + CAP each
+     job's threads (pass the cap into the tool). One-off single-file action = NOT a batch → may use ALL cores.
+  §3 MAP of consumers → budget + fan-out shape (the inventory): compress-image (mass, wide, 1thr) ·
+     compress-video (mass, narrow, videoThreads≈4) · transcribe (mass, narrow) · describe (NETWORK, fixed
+     ~4–6, not core-bound) · fingerprint/index (responsive, wide) · scan units (responsive, wide) · sync
+     (responsive, two-level, shipped) · one-off stream/compress (no batch, all cores).
+  §4 KNOB: performance.max_core_fraction ∈ (0,1], default 0.9, read LIVE by coreBudget() (no restart),
+     Settings "Parallelism" control shows resolved N-of-M cores. responsive budget is NOT tunable.
+  §5 UI FLOW (verbatim user entry): File System ⋮ on a dir → "Compress videos & images inside…" → dialog →
+     Continue → server walks selected kinds + enqueues per-media-kind compress tasks → queue drains against
+     the media-aware mass-compute budget → Processing page shows utilization.
+  Code: shared/concurrency.ts (logicalCores/coreBudget/responsiveBudget + mapLimit), schemas.ts
+  (AppConfigSchema.performance.max_core_fraction), compression.service.ts (CompressFileOpts.threads →
+  ffmpeg/oxipng/cwebp/magick), jobqueue.service.ts (media-aware caps), scanner.service.ts + tracking.service.ts
+  (parallel walks/fingerprint), sync.service.ts (responsiveBudget). Keep in sync with job_queue.mdx §3,
+  compression.mdx, compress_inside.mdx, processing.mdx §3a, scan.mdx, storages.mdx §4.1, sync_process.mdx §4,
+  performance.mdx (P-23/P-25), webapp.mdx §13, settings.mdx.
+-->
+</content>
+</invoke>

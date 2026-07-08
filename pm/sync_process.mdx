@@ -139,6 +139,17 @@ pass is **concurrent by default**:
 Sequential syncing is a **defect to fix**, not an acceptable baseline. Any place that still loops
 `for … await` over units or files across a pass should be flagged and converted to the pool/limiter.
 
+**Canonical budget (unified — one definition).** The `cores − 2` figure this pass uses is now the canonical
+**RESPONSIVE budget** defined in [parallelization.mdx §1](./parallelization.mdx) and exposed as
+`responsiveBudget()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts`.
+The sync pass is its **reference consumer** — the work that runs *alongside* interactive use, so it leaves 2
+cores for the web app + IPFS node rather than running hot at ~90% like the mass-compute budget the job queue
+draws ([performance.mdx P-26](./performance.mdx)). The inline `SYNC_CONCURRENCY = cores − 2` in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` should be
+**expressed via `responsiveBudget()`** so there is exactly **one** definition of the number, not a second
+copy that can drift. The two-level fan-out design above is unchanged — this only unifies *where the count
+comes from*.
+
 The bounded fan-out — a `cores − 2` pool across units and one shared `cores − 2` limiter that caps ALL per-file add/pin/fetch work — is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `runPool` + `SYNC_CONCURRENCY` (units) and `ipfsLimiter` + `runUnitSync` (per-file `Promise.all` through the limiter)
 
@@ -241,6 +252,11 @@ whether it did anything. Flag and fix such silent no-ops on sight.
   (§2) Every sync is a FULL PASS over all known units; a repo-scoped trigger sets PRIORITY, not scope.
   (§3) Priority = order only (priority unit first + awaited, remainder in background under an overlap guard).
   (§4) Bounded-concurrency parallelism (cores-2) across units and across files; sequential is a defect.
+       The cores-2 figure is the canonical RESPONSIVE budget from parallelization.mdx §1 (responsiveBudget()
+       in shared/concurrency.ts); the sync pass is its reference consumer (runs alongside interactive use,
+       leaves 2 cores for HTTP+IPFS). The inline SYNC_CONCURRENCY=cores-2 in sync.service.ts should call
+       responsiveBudget() so there is ONE definition — cross-ref performance.mdx P-26 (queue = mass-compute
+       budget). Design in §4 unchanged; unification note only.
   (§5) Opt-in gates add/pin/fetch; a manual Sync now IS the opt-in.
   (§6) Never a silent no-op — report truthfully with counts (the real defect this spec learned from).
   storage_local.mdx §13, scan.mdx, one_repo.mdx §3, and sync_list.mdx §5 reference THIS file for the process

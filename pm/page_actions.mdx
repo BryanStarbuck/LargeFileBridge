@@ -138,6 +138,16 @@ watches the batch drain live — even after navigating away, and even in another
 This is the load-bearing difference from a per-file click: a per-file **Transcribe** may keep its request
 open for the single run; a **page action** never does — it **enqueues and returns**.
 
+> **One core-budgeted, media-aware drain (LOCKED).** Every "do this to many files" producer — **Create
+> Transcriptions**, **Create AI descriptions**, **Compress all videos… / images…** — feeds the **one** shared
+> background drain, not a private per-action worker. That drain runs **massively parallel** against the
+> **Core Budget** ([job_queue.mdx §3](./job_queue.mdx), [parallelization.mdx](./parallelization.mdx)): the
+> mass-compute budget is `round(cores × max_core_fraction)`, default **0.9**, so a bulk page action uses
+> **≈90% of cores** — not a fixed tiny cap of two-at-a-time. It is **media-aware**: image compress fans
+> **wide** (one thread per core), video compress and transcribe fan **narrow** with capped threads, and
+> describe overlaps **network** waits — so N page actions firing at once still share the single budgeted pool
+> instead of oversubscribing the box.
+
 ---
 
 ## 2. The notification (LOCKED wording)
@@ -351,6 +361,11 @@ The routes are mounted on the existing feature routers:
        that already have the output (and unsupported kinds) BEFORE queuing. Idempotent-by-existence.
    (3) BACKGROUND QUEUE — hand the eligible set to job_queue.mdx; endpoint RETURNS IMMEDIATELY with the
        plan; queue drains in background; each item = a progress-dock card (kind transcribe/describe).
+       Every "do this to many files" producer (Create Transcriptions / Create AI descriptions / Compress all
+       videos… / images…) feeds the ONE core-budgeted, media-aware parallel drain (job_queue.mdx §3,
+       parallelization.mdx): mass-compute budget = round(cores × max_core_fraction), default 0.9 → bulk page
+       actions use ≈90% of cores (image=wide/1thr, video+transcribe=narrow/capped, describe=network), NOT a
+       fixed tiny cap.
   Notification (LOCKED wording): "{N} files will have their Transcriptions created" / "… AI descriptions
   created", N = eligible remainder (willProcess). Nothing eligible => "All {M} files already have … —
   nothing to do". Enqueue endpoints POST /api/transcribe/enqueue + /api/describe/enqueue take
@@ -361,7 +376,8 @@ The routes are mounted on the existing feature routers:
   PageHeader.tsx (renders the row beneath the title), lib/pageActions.ts (createTranscriptions/
   createDescriptions), transcribe.service planTranscribe/enqueueTranscribe, describe.service planDescribe/
   enqueueDescribe, jobqueue.service enqueue(), transcribe.router/describe.router POST /enqueue,
-  api.transcribeEnqueue/describeEnqueue. Keep in sync with file_system.mdx, job_queue.mdx, Transcribe.mdx,
+  api.transcribeEnqueue/describeEnqueue. Keep in sync with file_system.mdx, job_queue.mdx (§3 Core Budget),
+  parallelization.mdx (the ≈90%-of-cores media-aware drain the bulk producers feed), Transcribe.mdx,
   ai_description.mdx, menus.mdx (the other two surfaces), webapp.mdx §11–§14 (dock + concurrency), and the
   five per-page cross-refs that must reword their "Actions ▾ menu" headings to "action-links row":
   directories.mdx §1.2 + §7.1, full_paths.mdx §3.6, repos.mdx §6.1, storages.mdx §7.1.

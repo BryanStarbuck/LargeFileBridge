@@ -101,6 +101,36 @@ The dock's click-through to the Processing page is wired in code:
 
 ---
 
+## 3a. Worker utilization — the parallelism read (LOCKED)
+
+Now that the queue drains **many** jobs at once against the **Core Budget**
+([parallelization.mdx](./parallelization.mdx), [job_queue.mdx §3](./job_queue.mdx)) — the mass-compute budget
+is `round(cores × max_core_fraction)`, default **0.9** (*use up to ~90% of cores*) — the user should be able
+to **see the mass parallelization working**. A single running card no longer implies a single-file crawl; a
+16-core box may be chewing through **14 files at once**. This subsection adds a small **utilization read** so
+the busyness of the machine is visible, not inferred.
+
+* **The surface.** A compact line at the top of the **Running now** region (§4) reads how many of the
+  budget's slots are **busy** vs. the **budget total**, with the resolved fraction — e.g.
+  **"12 / 14 workers busy (~90% of cores)"**. It is a plain read of live state, not a control (the knob that
+  sets the budget lives in **Settings** → *Parallelism*, [parallelization.mdx §4](./parallelization.mdx)); it
+  is **absent** when nothing is running (`budget` is meaningless with an idle queue).
+* **The dock/nav echo (optional).** The same busy/budget figure may ride along as a tiny **`12/14`** badge on
+  the bottom-left dock ([§3](#3-the-bottom-left-progress-window-the-dock-enhanced)) or beside the conditional
+  **Processing** nav item ([§2](#2-the-conditional-processing-left-bar-item-locked)), so the parallelism read
+  is glanceable without opening the page. It reuses the running+queued badge slot already specified in §2 —
+  it does not add a second poll.
+* **Derived from the one source.** Like every other surface here it comes from the **same** polled
+  `GET /api/progress` (§5) — never a second endpoint. `busy` is how many admission slots are occupied across
+  all buckets right now; `budget` is the live mass-compute budget the queue admits against
+  ([job_queue.mdx §3](./job_queue.mdx)). The **`~90% of cores`** gloss is the resolved
+  `performance.max_core_fraction`. When the field is absent (idle), the read simply does not render.
+
+The worker-utilization read (busy/budget of the core budget, with the resolved fraction) is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingPage.tsx` — `ProcessingPage` (reads `workers` from `useProgress()`; renders the "{busy} / {budget} workers busy (~{pct}% of cores)" line atop Running now, and passes the same figure to the dock/nav badge). The figure is assembled server-side from the queue's live in-flight slot count and `coreBudget()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.router.ts` — `GET /` (§5), sourcing `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — the in-flight slot count + `coreBudget()`.
+
+---
+
 ## 4. The Processing page (`/processing`) (LOCKED)
 
 Clicking the nav item or the dock opens the **Processing page** — the full, correctly-described view of
@@ -112,7 +142,9 @@ with three stacked regions, each shown only when it has content:
 
 1. **Running now** — one row per **running job** (the registry cards, [webapp.mdx §12](./webapp.mdx)):
    the verb + target + a determinate bar/percent where the job reports it (a compress file's %, a sync's
-   MB). This is the same data the dock shows, given room to breathe.
+   MB). This is the same data the dock shows, given room to breathe. Atop this region sits the
+   **worker-utilization read** (§3a) — **"12 / 14 workers busy (~90% of cores)"** — so the user sees the mass
+   parallelization ([parallelization.mdx](./parallelization.mdx)) actually filling the Core Budget.
 2. **Waiting** — the **pending backlog**, labeled **per op** from the per-op split (§5): e.g.
    **"18 compressing · 4 transcribing"** waiting to start. Drains to nothing as workers pick tasks up.
 3. **Batches** — one **card per batch** ([job_queue.mdx](./job_queue.mdx)) — today, each **"Compress
@@ -147,6 +179,7 @@ GET /api/progress → {
   queued?: number,                                       // total pending backlog (dock footer)
   queuedByOp?: Partial<Record<ProgressKind, number>>,    // pending split per op (Processing "Waiting")
   batches?: ProcessingBatch[],                           // active + recently-finished batches (§4)
+  workers?: { busy: number; budget: number },            // Core Budget utilization (§3a) — busy/total slots
 }
 ```
 
@@ -154,9 +187,14 @@ GET /api/progress → {
 * `batches` carries each run's `{ label, total, done, failed, errors[], deleteOriginal, startedAt,
   finishedAt }` — active ones (`finishedAt: null`) drive the progress bars; recently-finished ones (within
   the 30-min retention) carry the error list. All optional/absent when empty, so an idle poll is tiny.
+* `workers` is the **worker-utilization read** (§3a): `busy` = admission slots occupied across all buckets
+  right now, `budget` = the live mass-compute Core Budget the queue admits against
+  ([job_queue.mdx §3](./job_queue.mdx), [parallelization.mdx](./parallelization.mdx)). Absent when the queue
+  is idle, so an idle poll carries no worker figure. The `~90% of cores` gloss is the resolved
+  `performance.max_core_fraction`.
 
 The extended payload is assembled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.router.ts` — `GET /` (folds `queueDepthByOp()` → `queuedByOp` and `listBatches()` → `batches` into `ProgressListResult`), reading `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `queueDepthByOp()` / `listBatches()` (which prunes finished batches past the retention window). The client + provider consume it via `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `progress()` and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/progress/ProgressContext.tsx` — `ProgressProvider` (exposes `batches` alongside `jobs`/`queued`).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.router.ts` — `GET /` (folds `queueDepthByOp()` → `queuedByOp`, `listBatches()` → `batches`, and the in-flight slot count + `coreBudget()` → `workers` into `ProgressListResult`), reading `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `queueDepthByOp()` / `listBatches()` / the live in-flight slot count (which prunes finished batches past the retention window), against `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()`. The client + provider consume it via `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `progress()` and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/progress/ProgressContext.tsx` — `ProgressProvider` (exposes `batches` and `workers` alongside `jobs`/`queued`).
 
 ---
 
@@ -173,9 +211,15 @@ The extended payload is assembled in code:
    inside" run with a `done+failed / total` progress bar). A finished batch shows its **error list** (each
    failed file + reason) or an all-clear summary, and lingers for a 30-min retention window. An empty page
    shows a calm "Nothing is processing right now."
-4. **One source (§5):** all three surfaces read `GET /api/progress`, extended with `queuedByOp` and
-   `batches` (both optional); they never disagree because there is no second source of truth.
-5. **No empty chrome:** when nothing is processing, the nav item and the dock are both absent from the DOM;
+4. **Worker utilization (§3a):** while jobs run, the Processing page shows a **busy / budget** read atop
+   Running now — e.g. **"12 / 14 workers busy (~90% of cores)"** — derived from `workers` on the same
+   `GET /api/progress` poll (`busy` = occupied admission slots, `budget` = the live Core Budget,
+   [job_queue.mdx §3](./job_queue.mdx), [parallelization.mdx](./parallelization.mdx)); it is **absent when the
+   queue is idle**. The same busy/budget figure may echo as a compact badge on the dock/nav item, reusing the
+   §2 badge slot (no second poll).
+5. **One source (§5):** all three surfaces read `GET /api/progress`, extended with `queuedByOp`, `batches`,
+   and `workers` (all optional); they never disagree because there is no second source of truth.
+6. **No empty chrome:** when nothing is processing, the nav item and the dock are both absent from the DOM;
    only the directly-navigated `/processing` page renders (its empty state).
 
 <!--
@@ -186,15 +230,26 @@ The extended payload is assembled in code:
       commented runtime entry in left_bar.yaml). May show a running+queued count badge.
    §3 BOTTOM-LEFT PROGRESS WINDOW = the existing dock (webapp.mdx §10), unchanged EXCEPT now click-through →
       /processing (ProgressDock.tsx onClick navigate).
+   §3a WORKER UTILIZATION READ (LOCKED) — now the queue runs MANY jobs at once against the Core Budget
+      (parallelization.mdx, job_queue.mdx §3; mass-compute = round(cores × max_core_fraction), default 0.9),
+      the Processing page shows how BUSY the machine is: a "{busy} / {budget} workers busy (~{pct}% of cores)"
+      line atop Running now (e.g. "12 / 14 workers busy (~90% of cores)"), optionally echoed as a compact
+      badge on the dock/nav item (reuses the §2 badge slot, no second poll). Derived from GET /api/progress
+      workers{busy,budget}; ABSENT when idle. busy = occupied admission slots; budget = live coreBudget();
+      ~pct = resolved performance.max_core_fraction. Rendered in ProcessingPage.tsx; assembled server-side in
+      progress.router GET / from jobqueue in-flight slot count + concurrency.ts coreBudget().
    §4 PROCESSING PAGE (/processing, ProcessingPage.tsx, processingRoute) — Running now (jobs) · Waiting
       (queuedByOp, per-op backlog) · Batches (one card per Compress-inside run: label + Originals disposition +
       a done+failed/total progress bar + on-finish the ERROR LIST from compress_inside.mdx §4). Finished batches
       linger 30 min (retention) so errors stay readable after the nav item vanished. Empty state: "Nothing is
       processing right now."
-   §5 GET /api/progress EXTENDED: + queuedByOp (Partial<Record<ProgressKind,number>>) + batches (ProcessingBatch[]).
-      Backend progress.router folds in queueDepthByOp()+listBatches(); jobqueue.service owns the batch registry
-      (createBatch/recordBatchResult/listBatches, 30-min prune). Frontend ProgressContext exposes batches.
-  Keep in sync with webapp.mdx §10–§14 (dock/registry/poll), job_queue.mdx (queue+batches), left_bar.mdx +
-  left_bar.yaml (the conditional item), compress_inside.mdx (the batch producer + error list).
+   §5 GET /api/progress EXTENDED: + queuedByOp (Partial<Record<ProgressKind,number>>) + batches (ProcessingBatch[])
+      + workers?{busy,budget} (§3a Core Budget utilization; absent when idle). Backend progress.router folds in
+      queueDepthByOp()+listBatches()+(in-flight slot count & coreBudget()); jobqueue.service owns the batch registry
+      (createBatch/recordBatchResult/listBatches, 30-min prune) + the live in-flight slot count; concurrency.ts
+      owns coreBudget(). Frontend ProgressContext exposes batches + workers.
+  Keep in sync with webapp.mdx §10–§14 (dock/registry/poll), job_queue.mdx (queue+batches +§3 Core Budget),
+  parallelization.mdx (the Core Budget the §3a utilization read reflects), left_bar.mdx + left_bar.yaml (the
+  conditional item), compress_inside.mdx (the batch producer + error list).
 -->
 </content>
