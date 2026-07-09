@@ -49,5 +49,23 @@ export default defineConfig(async () => {
     resolve: {
       alias: { "@": path.resolve(__dirname, "src") },
     },
+    build: {
+      rollupOptions: {
+        output: {
+          // Split the large, fully-used vendor libs into their own long-lived chunks so no single
+          // bundle blows past Vite's 500 kB warning and browsers cache React/TanStack independently
+          // of app code. Do NOT route tree-shakeable barrels (e.g. lucide-react) into a manual chunk:
+          // naming them here forces the whole barrel in and defeats tree-shaking (lucide alone = ~960 kB).
+          // Everything not matched below stays in the default chunk where Vite tree-shakes it.
+          manualChunks(id: string) {
+            if (!id.includes("node_modules")) return;
+            if (/node_modules\/(react|react-dom|scheduler)\//.test(id)) return "react";
+            if (id.includes("node_modules/@tanstack/")) return "tanstack";
+            // Everything else (axios, yaml, sonner, tree-shaken lucide icons, …) is small once the
+            // whole-barrel lucide import is gone — leave it in the default chunk.
+          },
+        },
+      },
+    },
   };
 });
