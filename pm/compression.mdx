@@ -366,76 +366,64 @@ transcode** and only *then* discovers "no gain". That is exactly the wasted work
 repeats on **each** machine because there is no durable, travelling "we did this" signal the walk can read
 **before** deciding to compress.
 
-We fix it with a **two-layer marker**, checked **before** any transcode:
+We fix it with an **in-file marker** the engine reads **before** any transcode.
 
-**Layer 1 — the IN-FILE marker (authoritative, travels with the bytes). LOCKED.**
-When the engine finishes a file, it stamps a small, namespaced tag **into the compressed output's own
-container metadata** — a field that is **unused by anything else** and safe to write. This is the layer the
-user asked for by name: *"find a property in an MP4 file or other video files or JPG files that are unused
-and we are allowed to use."* Its whole virtue is that it **rides with the file's bytes**: when the
-compressed file syncs to another computer over IPFS ([ipfs.mdx](../knowledge/ipfs.mdx)) the marker arrives
-**inside** it, so **every** machine — regardless of storage type — reads the same "already compressed"
-truth from the file itself. It does **not** depend on any sidecar syncing (unlike Layer 2), which is why it
-works even for `repo` storages whose `.lfbridge/` is git-ignored and never travels
-([storage_local.mdx](./storage_local.mdx), `repo` storages).
+**The IN-FILE marker (authoritative, travels with the bytes). LOCKED — IMPLEMENTED.**
+When the engine compresses a file, it stamps a small tag **into the output's own container metadata** — the
+standard **`comment`** field, which nothing else uses — recording that **LargeFileBridge already compressed
+this**. This is the layer the user asked for by name: *"find a property in an MP4 file or other video files
+or JPG files that are unused and we are allowed to use."* Its whole virtue is that it **rides with the
+file's bytes**: when the compressed file syncs to another computer over IPFS
+([ipfs.mdx](../knowledge/ipfs.mdx)) the marker arrives **inside** it, so **every** machine — regardless of
+storage type — reads the same "already compressed" truth from the file itself. It does **not** depend on any
+sidecar syncing, which is why it works even for `repo` storages whose `.lfbridge/` is git-ignored and never
+travels ([storage_local.mdx](./storage_local.mdx), `repo` storages).
 
-* **The tag.** A dedicated **XMP namespace** (`XMP-lfb`) so it can **never collide** with a field any other
-  tool uses. Written uniformly across containers by **`exiftool`** (a new detected brew tool):
-  * `XMP-lfb:CompressedBy = "LargeFileBridge"` — the presence flag.
-  * `XMP-lfb:CompressedAt = <ISO-8601 UTC>` — when.
-  * `XMP-lfb:CompressorVersion = 1` — the marker/engine version, so a future re-tuned engine can decide to
-    re-process files stamped by an **older** version (bump = "worth re-doing").
-  * `XMP-lfb:Codec = "h264/crf21"` (etc.) — what it was compressed to, for the read-out (§9).
-  * `XMP-lfb:SourceSize = <bytes>` — the compressed file's own size at stamp time, the **tamper guard**
-    (below).
-* **Per-container reach.** `exiftool` writes `XMP-lfb` into **MP4/MOV** (as an XMP `uuid` box), **JPEG**,
-  **WebP**, **TIFF**, and **PNG** (as an `iTXt` chunk) — one tool, one namespace, every media kind we touch.
-  For **video** the same values are *also* set inline during the transcode we already run
-  (**ffmpeg `-metadata comment="lfb:compressed:v1:<iso>"`**, free — no extra pass), with the `exiftool`
-  XMP write as the canonical, queryable form.
-* **Order vs. metadata-stripping tools (LOCKED).** `oxipng` runs **`--strip safe`** (§8) and **removes**
-  metadata, so the marker is **always written AFTER** the compressor, never before — the stamp is the
-  **last** step of a successful run, on the final output, so no tool can strip it.
-* **The read (skip decision).** Before compressing, the walk reads `XMP-lfb:CompressedBy`; if it is
-  `"LargeFileBridge"` **and** `XMP-lfb:SourceSize` still equals the file's **current** size (the tamper
-  guard — if the file was edited after we stamped it, the size won't match and we do **not** trust the
-  marker), the file is **skipped as already-compressed** — no transcode, no size probe. A stamp from an
-  **older** `CompressorVersion` than the current engine is treated as **stale** (eligible again), so a
-  genuinely improved engine can re-sweep.
+* **No new tool — written inline by the encoder we already run (LOCKED).** Because every compress already
+  re-encodes the file, the marker is set **in that same pass**, for free: **video** via
+  **ffmpeg `-metadata comment=…`** (into the mp4 `moov/udta`), **images** via **ImageMagick
+  `-set comment …`** (into the JPEG `COM` / PNG `tEXt`). No `exiftool`, no extra remux/rewrite pass. (An
+  optional `exiftool` could later broaden coverage to formats that skip the ffmpeg/ImageMagick path — e.g.
+  a WebP produced by `cwebp`, or a PNG by `oxipng --strip`, both of which drop the comment — but it is **not
+  required** and is not a dependency.)
+* **The payload.** `comment = "LFBcompressed;v1;<codec>"`:
+  * `LFBcompressed;` — the **presence prefix** (the whole skip test is "does the comment start with this").
+  * `v1` — the **marker version**, so a future re-tuned engine can invalidate old marks by bumping it
+    (a `v1` mark is treated as **absent** once the engine reads `v2`, so those files re-sweep).
+  * `<codec>` — what it was compressed to (e.g. `h264`, `jpeg`), for the read-out (§9).
+* **The read (skip decision) — enforced in the engine, per file.** At the top of a compress, the engine
+  reads the file's `comment` (**ffprobe** for video, **`magick identify -format %c`** for images — the same
+  fast probes used for dimensions); if it starts with `LFBcompressed;` the file is **skipped immediately**,
+  status `skipped`, reason **"already compressed (marker)"**, with **no transcode and no size probe**. This
+  runs in **`compressFile`**, so **both** a one-off compress and **every file of a bulk batch** honor it.
+* **Why per-file at compress time, not an up-front walk scan (LOCKED).** Reading a container tag on 18,000
+  files up front would itself be slow, so the marker is checked when each file **reaches the front of the
+  queue** — the fast probe *replaces* the full transcode for that file. A re-run of an already-compressed
+  tree therefore becomes **"probe-and-skip per file"** (tens of ms each) instead of **"re-encode per file"**
+  (seconds each), and a peer that already holds the compressed files skips them the same way — which is what
+  the user wants across passes **and** across the mesh.
 
-**Layer 2 — the local `.lfbridge` record (fast cache, finally READ). LOCKED.**
-The travelling record already written today — `.lfbridge/analysis/<relpath>/compression.yaml`
-(`writeCompressionRecord`, §8) — is **currently written and never read**, so it prevents nothing. This spec
-**wires up the reader**: during the walk we first consult this local record (keyed by relpath +
-[fingerprint](./storage_local.mdx#93-repo-manifests-travel-via-git-the-elegant-part)) as a **cheap cache**
-that avoids opening 18,000 files to read their in-file XMP. It is a **fast path**, not the source of truth —
-a file that arrives fresh from another computer won't be in *this* machine's record yet, but its **in-file
-marker (Layer 1)** still skips it. On SDL storages the record also travels via Git and warms the cache on
-peers; on `repo` storages it stays local, which is precisely why Layer 1 exists.
+**The extension heuristic still runs first.** The cheapest test is unchanged: `compressInfo` (§8 /
+[scan.mdx §4](./scan.mdx)) drops a non-media or already-lossy **extension** with zero I/O, so a re-encoded
+`.jpg`/`.webp` is skipped by extension **before** the marker is even read. The marker is what catches the
+cases the extension can't — a **video** (an `.mp4` always *looks* compressible by extension) and a **PNG
+kept as PNG** — on re-runs and on peers.
 
-**The skip order in the walk (LOCKED).** Cheapest test first, authoritative test last:
+**The travelling `.lfbridge` record (fast local cache) — future optimization.** The record already written
+today, `.lfbridge/analysis/<relpath>/compression.yaml` (`writeCompressionRecord`, §8), is still **written
+but not yet read**. Wiring a `readCompressionRecord()` into `walkCompressible()` (keyed by relpath +
+[fingerprint](./storage_local.mdx#93-repo-manifests-travel-via-git-the-elegant-part)) would let a bulk run
+**drop known-compressed files from the batch entirely** — skipping even the per-file probe on a same-machine
+re-run — but it is a **speed optimization on top of** the authoritative in-file marker, not a correctness
+requirement. Tracked as a follow-up; the marker above already makes re-runs and peers correct.
 
-1. **Extension heuristic** (`compressInfo`, §8 / [scan.mdx §4](./scan.mdx)) — a non-media or already-lossy
-   extension is skipped with zero I/O.
-2. **Local `.lfbridge` record** (Layer 2) — a hit whose fingerprint matches the current file → skip, no file
-   open.
-3. **In-file `XMP-lfb` marker** (Layer 1) — the authoritative, cross-mesh signal; read only for files that
-   survived 1–2, and the **only** signal that catches files freshly synced from a peer.
-
-Only a file that fails **all three** is enqueued for an actual transcode. This turns a re-run — or a
-first run on a peer that already has the compressed files — from *"re-encode 18,000 files"* into *"stat/read
-18,000 markers and skip"*, which is what the user wants across passes **and** across the mesh.
-
-Detecting the marker before compressing, and stamping it after, is handled in code:
+Detecting the marker before compressing, and stamping it during the encode, is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
-`isAlreadyCompressed()` (the 3-step skip order: `compressInfo` → `readCompressionRecord` → `readInFileMarker`)
-consulted by `walkCompressible()` (batch) and `compressFile()` (single, so even a one-off skips a marked
-file), and `writeInFileMarker()` (the `exiftool` XMP stamp + inline ffmpeg `-metadata`, run as the last step
-after a successful compress). The tool is probed in `detectTools()` (adds `exiftool`); a missing `exiftool`
-degrades to the inline-ffmpeg marker for video and the Layer-2 record for images, with an "install exiftool"
-nudge ([tools.mdx](./tools.mdx)). The now-read local record uses
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/analysis.service.ts` —
-`readCompressionRecord()` (new — the counterpart to the existing write-only `writeCompressionRecord()`).
+`isAlreadyCompressed()` / `readMarker()` (ffprobe `format_tags=comment` for video, `magick identify %c` for
+images), consulted at the top of `compressFile()` so a marked file returns `skipped` **before** any
+transcode (covering one-off **and** batched runs); the marker itself is written by `markerPayload()` folded
+into the **ffmpeg** args (`-metadata comment=…`) and the **ImageMagick** args (`-set comment …`) inside
+`imageCommand()`. No new tool is probed in `detectTools()`.
 
 ---
 
@@ -473,8 +461,9 @@ Surfacing the codec + compressed-state and the Compress action per file is handl
 6. Tools run via a **temp file**; the original is moved to the **LFBridge trash** (recoverable); tracking
    records the compressed + uncompressed hashes/sizes, **and** a travelling **compression record**
    (`.lfbridge/analysis/<relpath>/compression.yaml`) captures the original name/extension + size
-   before/after. That record is now actually **read** as a local cache **and** backed by the authoritative
-   **in-file marker** (§8.4) so other computers never re-compress ([syncable_data_location.mdx §4.3](./syncable_data_location.mdx)).
+   before/after. The authoritative **in-file marker** (§8.4, implemented) is what makes other computers never
+   re-compress; reading this record as a local cache to prune the batch up-front is a tracked follow-up
+   ([syncable_data_location.mdx §4.3](./syncable_data_location.mdx)).
 7. The **View-one-file** page shows the file's **codec** and **compressed/uncompressed** state.
 8. **Parallelism (§8.3, LOCKED):** the engine compresses **one file at a time** and takes an optional
    **`CompressFileOpts.threads`** cap. A **one-off** compress **omits** it (the tool uses its all-core
@@ -482,17 +471,17 @@ Surfacing the codec + compressed-state and the Compress action per file is handl
    never `cores²` — **image** jobs run **1-thread** (fan wide, `budget` at once), **video** jobs get a small
    cap (fan narrow). The cap maps to **ffmpeg `-threads`**, **oxipng `--threads`**, **cwebp** MT on/off, and
    **`magick -limit thread`** ([parallelization.mdx](./parallelization.mdx), [job_queue.mdx §3](./job_queue.mdx)).
-9. **Already-compressed skip (§8.4, LOCKED):** a file we already compressed is **skipped before any
-   transcode**, on **re-runs** and on **every other computer in the mesh**. This holds via a **two-layer
-   marker** checked in the walk (cheapest test first): the **extension heuristic** → the now-**read** local
-   `.lfbridge/analysis/<rel>/compression.yaml` record (Layer 2 cache) → the authoritative **in-file
-   `XMP-lfb` metadata marker** (Layer 1) written into the compressed file's own container (`exiftool` XMP +
-   inline ffmpeg `-metadata` for video, stamped **after** the compressor so `oxipng --strip safe` can't
-   remove it). The in-file marker **travels with the bytes over IPFS**, so a peer that already has the
-   compressed file skips it even though its local record is empty. A size-mismatch (`XMP-lfb:SourceSize` ≠
-   current size) or an older `CompressorVersion` **invalidates** the marker so edited/re-tunable files are
-   eligible again. The wasteful post-transcode "no gain" probe is now only the **last-resort** guard, not
-   the primary one.
+9. **Already-compressed skip (§8.4, LOCKED — IMPLEMENTED):** a file we already compressed is **skipped
+   before any transcode**, on **re-runs** and on **every other computer in the mesh**, via an **in-file
+   marker** written into the output's own **`comment`** container tag (`"LFBcompressed;v1;<codec>"`). It is
+   written **inline by the encoder we already run** — **ffmpeg `-metadata comment=…`** (video) / **ImageMagick
+   `-set comment …`** (images), **no new tool** — and read back with **ffprobe** / **`magick identify %c`**
+   at the top of `compressFile()`, so a marked file returns `skipped — "already compressed (marker)"` for
+   **both** one-off and bulk runs. Because the marker **rides in the file's bytes over IPFS**, a peer that
+   already holds the compressed file skips it too. The cheap **extension heuristic** still runs first, and
+   the version tag (`v1`) lets a re-tuned engine invalidate old marks. Verified end-to-end: compress →
+   111,360→28,253 bytes; a second pass on the output → `skipped (marker)`, no re-encode. (Reading the local
+   `.lfbridge` record to prune the batch up-front is a tracked speed follow-up, not required for this.)
 
 <!--
   Compression engine for IMAGE + VIDEO (audio later). Explicit user action only (one / checked / whole
@@ -502,15 +491,17 @@ Surfacing the codec + compressed-state and the Compress action per file is handl
   default; JPEG2000 optional; per-media codec allow/deny in Settings with social-media-safe defaults
   (deny jpeg2000/av1). Temp-file → verify → recoverable replace (original to trash). View-one-file shows
   codec + compressed state. Code: /api/compress (compression.service.ts + compression.router.ts).
-  ALREADY-COMPRESSED MARKER (§8.4, LOCKED): skip already-compressed files BEFORE any transcode, on re-runs AND
-  on every peer in the mesh. TWO layers: (L1 authoritative) an in-file XMP-lfb marker (CompressedBy/At/
-  CompressorVersion/Codec/SourceSize) written by exiftool into MP4/JPEG/WebP/PNG + inline ffmpeg -metadata for
-  video, stamped AFTER the compressor (oxipng --strip safe would remove it) — rides in the bytes over IPFS so
-  peers honor it; (L2 cache) the existing .lfbridge/analysis/<rel>/compression.yaml, now actually READ. Walk skip
-  order cheapest-first: compressInfo → readCompressionRecord → readInFileMarker; size-mismatch or older
-  CompressorVersion invalidates the marker. The post-transcode "no gain" probe is now the LAST resort only.
-  Code: compression.service.ts isAlreadyCompressed()/writeInFileMarker(), detectTools() adds exiftool (degrades
-  to inline-ffmpeg for video + L2 for images if absent); analysis.service.ts readCompressionRecord() (new).
+  ALREADY-COMPRESSED MARKER (§8.4, LOCKED, IMPLEMENTED): skip already-compressed files BEFORE any transcode, on
+  re-runs AND on every peer in the mesh. Mechanism = an IN-FILE marker in the `comment` container tag
+  ("LFBcompressed;v1;<codec>"), written INLINE by the encoder we already run — ffmpeg -metadata comment= (video)
+  / ImageMagick -set comment (images), NO new tool (no exiftool; it's optional/future for cwebp/oxipng outputs).
+  Read back via ffprobe format_tags=comment / `magick identify %c` at the TOP of compressFile(), so a marked file
+  returns skipped("already compressed (marker)") for one-off AND batch. Rides in the bytes over IPFS → peers honor
+  it. Extension heuristic (compressInfo) still runs first; v1 lets a re-tuned engine invalidate old marks. Code:
+  compression.service.ts markerPayload()/readMarker()/isAlreadyCompressed(), folded into the ffmpeg args + into
+  imageCommand()'s magick args. FOLLOW-UP (optimization, not required): read .lfbridge/analysis/<rel>/compression.yaml
+  in walkCompressible() to drop known-compressed files from the batch up-front (avoids the per-file probe on a
+  same-machine re-run). Verified E2E: 111360→28253 bytes, second pass skipped (marker).
   BULK (§8.2, compress_inside.mdx): the Compress Inside dialog drives compressFile file-by-file with a
   per-run `deleteOriginal: "hard"|"trash"` override (CompressFileOpts) that WINS over the global
   replace_original_to_trash default (bulk DEFAULTS to hard delete; one-off stays recoverable-trash). Heavy

@@ -171,16 +171,18 @@ navigating other tabs while the batch drains ([processing.mdx](./processing.mdx)
 
 * **The walk (server-side).** The endpoint walks the directory for the **selected kinds**, honoring the
   **recursive** flag and skipping the scan's `HARD_SKIP` / hidden / tracking dirs. It includes only files
-  that survive the **three-layer already-compressed test** ([compression.mdx §8.4](./compression.mdx)),
-  applied cheapest-first so a huge tree drains fast: (1) the extension heuristic (`compressInfo` — a
-  non-media or already-lossy extension is dropped with zero I/O), (2) the now-**read** local
-  `.lfbridge/analysis/<rel>/compression.yaml` record, then (3) the authoritative **in-file `XMP-lfb`
-  marker** stamped into files we previously compressed. Layer 3 is why a **re-run** (a second pass after a
-  reboot) — and a run on **another computer in the mesh** that already has the compressed files — skips
-  them **instantly instead of re-encoding**: the marker rides inside the file's bytes over IPFS, so it is
-  present even when this machine's local record is empty. As it goes, the walk **stamps each eligible file
-  with its media kind** — `image` or `video` — from that same extension heuristic, because the two kinds
-  draw **different** concurrency budgets downstream (below, [job_queue.mdx §3](./job_queue.mdx)).
+  whose **extension heuristic** (`compressInfo`) says they should compress, so already-lossy extensions are
+  dropped with zero I/O. The stronger, cross-machine skip — the authoritative **in-file marker**
+  ([compression.mdx §8.4](./compression.mdx)) — is enforced **per file when it reaches the front of the
+  queue**, inside `compressFile()`: a file that already carries our `comment` marker (`LFBcompressed;…`)
+  returns `skipped ("already compressed (marker)")` **before any transcode**. That is why a **re-run** (a
+  second pass after a reboot) — and a run on **another computer in the mesh** that already has the
+  compressed files — skips them **instantly instead of re-encoding**: the marker rides inside the file's
+  bytes over IPFS, so it is present even on a peer with an empty local index. (Pruning known-compressed
+  files from the batch **up-front** via the local `.lfbridge` record is a tracked speed follow-up.) As it
+  goes, the walk **stamps each eligible file with its media kind** — `image` or `video` — from that same
+  extension heuristic, because the two kinds draw **different** concurrency budgets downstream (below,
+  [job_queue.mdx §3](./job_queue.mdx)).
 * **A batch is created** grouping those files, and each file is enqueued as a `compress` task carrying the
   chosen `deleteOriginal` mode, the stamped **`mediaKind`** (image vs video), and the `batchId`.
 * **The plan returns immediately** — `{ batchId, considered, eligible, queued, images, videos }` — and a
@@ -266,11 +268,11 @@ The Continue toast is emitted from the plan in code:
    same dialog scoped to the page's directory with the matching kind pre-checked.
 10. **Durable skip across passes & mesh (§5, [compression.mdx §8.4](./compression.mdx)):** a **second run**
    over the same tree (e.g. after a reboot mid-run) and a **first run on another computer** that already
-   holds the compressed files **skip the already-compressed files without re-encoding**. The walk's
-   three-layer test (extension heuristic → local `.lfbridge` record → authoritative **in-file `XMP-lfb`
-   marker**) makes an 18,000-file re-run *"stat/read markers and skip"* rather than *"re-transcode
-   everything"* — the marker rides inside the file's bytes over IPFS, so peers honor it even with an empty
-   local record.
+   holds the compressed files **skip the already-compressed files without re-encoding**. The **in-file
+   marker** in the `comment` tag (`LFBcompressed;…`, written inline by ffmpeg/ImageMagick, read by
+   ffprobe/`magick identify`) is checked per file in `compressFile()`, so an 18,000-file re-run becomes
+   *"probe-and-skip per file"* rather than *"re-transcode everything"* — the marker rides inside the file's
+   bytes over IPFS, so peers honor it even with an empty local record. (Verified end-to-end.)
 
 <!--
   The rich pop-over dialog behind the directory ⋮ "Compress videos/images inside…" (menus.mdx §5.2) and the
@@ -285,11 +287,13 @@ The Continue toast is emitted from the plan in code:
   files are shown as a LIST. compressFile() disposition block runs only after verify+gain; the per-op
   `deleteOriginal` override wins over the global recoverable-by-default (§4.1 reconciles the deliberate
   contradiction with compression.mdx — this bulk dialog DEFAULTS to hard delete because the user asked).
-  DURABLE SKIP (§5 acc.10, compression.mdx §8.4): walk applies a 3-layer already-compressed test cheapest-first
-  — compressInfo (extension) → READ .lfbridge/analysis/<rel>/compression.yaml (local cache, now actually read) →
-  in-file XMP-lfb marker (authoritative, rides in the bytes over IPFS). So a re-run after a reboot AND a peer
-  that already has the compressed files skip instantly instead of re-encoding. isAlreadyCompressed() in
-  compression.service.ts; readCompressionRecord()/writeInFileMarker() (exiftool XMP + inline ffmpeg -metadata).
+  DURABLE SKIP (§5 acc.10, compression.mdx §8.4, IMPLEMENTED): extension heuristic (compressInfo) runs first in the
+  walk; the authoritative cross-machine skip = an IN-FILE marker in the `comment` tag ("LFBcompressed;v1;<codec>"),
+  written INLINE by ffmpeg -metadata / ImageMagick -set comment (NO new tool), read via ffprobe / magick identify
+  at the top of compressFile() → skipped("already compressed (marker)") before any transcode, for one-off AND batch.
+  Rides in the bytes over IPFS so a reboot re-run AND a peer skip instantly. isAlreadyCompressed()/readMarker()/
+  markerPayload() in compression.service.ts. Follow-up (optimization): read .lfbridge compression.yaml in
+  walkCompressible() to prune the batch up-front.
   BACKGROUND (§5): Continue → POST /api/compress/inside → enqueueCompressInside()/walkCompressible() walks the
   selected kinds (recursive|shallow, HARD_SKIP-skipping, should-compress-only), STAMPS each file's mediaKind
   (image|video), createBatch(), enqueue() as `compress` tasks carrying deleteOriginal+mediaKind+batchId;

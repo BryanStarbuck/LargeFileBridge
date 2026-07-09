@@ -124,6 +124,46 @@ function runAsync(bin: string, args: string[], timeoutMs = 30 * 60 * 1000): Prom
   });
 }
 
+// ── the already-compressed marker (compression.mdx §8.4) ───────────────────────
+// A durable "LFBridge already compressed this" signal written INTO the compressed file's own container
+// metadata (the `comment` tag), so it rides with the file's bytes over IPFS. On a re-run — or on ANOTHER
+// computer in the mesh that already holds the compressed file — a file carrying this marker is skipped
+// BEFORE any transcode, instead of being re-encoded just to discover "no gain". No new tool: it is written
+// inline by the SAME encoder we already run (ffmpeg `-metadata` for video, `magick -set` for images) and
+// read back with the fast ffprobe / `magick identify` probes. `v1` lets a future re-tuned engine invalidate
+// old marks by bumping the version.
+const MARKER_PREFIX = "LFBcompressed;";
+function markerPayload(codec: string): string {
+  return `${MARKER_PREFIX}v1;${codec}`;
+}
+
+// Read our marker's `comment` from a file (empty string if absent/unreadable). Fast synchronous probe.
+function readMarker(abs: string, media: CompressMedia, tools: CompressTools): string {
+  try {
+    if (media === "video") {
+      if (!tools.ffprobe) return "";
+      const r = run("ffprobe", [
+        "-v", "error",
+        "-show_entries", "format_tags=comment",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        abs,
+      ]);
+      return r.out.trim();
+    }
+    if (!tools.magick) return "";
+    const r = run(magickBin(), ["identify", "-format", "%c", abs]);
+    return r.out.trim();
+  } catch {
+    return "";
+  }
+}
+
+// True when the file already carries OUR current-version marker — the skip signal (§8.4). A mark from an
+// OLDER version is treated as absent so a genuinely improved engine can re-sweep those files.
+function isAlreadyCompressed(abs: string, media: CompressMedia, tools: CompressTools): boolean {
+  return readMarker(abs, media, tools).startsWith(MARKER_PREFIX);
+}
+
 function imageDims(abs: string, tools: CompressTools): { w: number; h: number } | null {
   if (!tools.magick) return null;
   const r = run(magickBin(), ["identify", "-format", "%w %h", abs]);
@@ -348,6 +388,14 @@ export async function compressFile(input: string, opts?: CompressFileOpts | stri
   const settings = getCompressionSettings();
   const tools = detectTools();
   const media = check.media;
+
+  // §8.4 — the already-compressed marker. If this file already carries our in-file marker (from a prior
+  // pass here, or because a peer compressed it and it synced over IPFS), skip it BEFORE any transcode — the
+  // whole point is to never re-encode a file we (or another of the user's computers) already compressed.
+  if (isAlreadyCompressed(abs, media, tools)) {
+    return { path: abs, status: "skipped", reason: "already compressed (marker)", beforeBytes, afterBytes: beforeBytes, codec: check.targetCodec };
+  }
+
   const prefs = media === "images" ? settings.images : settings.video;
   const plan = media === "images"
     ? pickImageTarget(prefs, tools, path.extname(abs).toLowerCase(), check.alphaUsed)
@@ -366,7 +414,9 @@ export async function compressFile(input: string, opts?: CompressFileOpts | stri
     // -threads caps a BATCHED job to its slice (parallelization.mdx §2); a one-off compress omits it so
     // ffmpeg uses its all-core default. 0 would mean "auto/all cores" to ffmpeg — so only pass when > 0.
     const threadArgs = o.threads && o.threads > 0 ? ["-threads", String(o.threads)] : [];
-    cmd = { bin: "ffmpeg", args: ["-y", "-i", abs, "-c:v", t.encoder, ...threadArgs, "-crf", String(videoCrf(plan.targetKey, prefs.quality)), "-pix_fmt", "yuv420p", "-c:a", "copy", out] };
+    // §8.4 — stamp the in-file marker inline (free — no extra pass). `-metadata comment=…` writes it into
+    // the output's moov/udta so a re-run / a peer reads it back and skips this file.
+    cmd = { bin: "ffmpeg", args: ["-y", "-i", abs, "-c:v", t.encoder, ...threadArgs, "-crf", String(videoCrf(plan.targetKey, prefs.quality)), "-pix_fmt", "yuv420p", "-c:a", "copy", "-metadata", `comment=${markerPayload(plan.targetKey)}`, out] };
   }
   const r = await runAsync(cmd.bin, cmd.args);
   if (r.code !== 0 || !safeSize(out)) {
@@ -452,9 +502,10 @@ function imageCommand(plan: Plan, abs: string, out: string, prefs: CompressMedia
       : { bin: "cwebp", args: [...mt, "-q", q, abs, "-o", out] };
   }
   // Everything else via ImageMagick, quality-controlled, NO resize (keeps resolution). `-limit thread N`
-  // caps a batched job; a one-off uses ImageMagick's default thread policy.
+  // caps a batched job; a one-off uses ImageMagick's default thread policy. `-set comment …` stamps the
+  // §8.4 in-file marker inline (into the JPEG COM / PNG tEXt) so a re-run / a peer skips this file.
   const limit = capped ? ["-limit", "thread", String(threads)] : [];
-  return { bin: magickBin(), args: [...limit, abs, "-quality", q, out] };
+  return { bin: magickBin(), args: [...limit, abs, "-quality", q, "-set", "comment", markerPayload(plan.targetKey), out] };
 }
 
 function safeSize(p: string): boolean {
