@@ -634,6 +634,19 @@ export type FsEntryKind = "dir" | "file" | "symlink" | "other";
 // "not interesting".
 export type FolderInterest = "big" | "video" | "image" | null;
 
+// Cloud-storage provider whose mount is surfaced at the top of the home column (file_system.mdx §6,
+// dropbox.mdx / google_drive.mdx "browseable root" section). These live under
+// ~/Library/CloudStorage/ on macOS and are lifted to the top level of the File System browser so the
+// user can browse and compress the large files inside them without drilling Library → CloudStorage.
+export type CloudProvider = "dropbox" | "google_drive" | "icloud";
+
+// Marks a directory row as a surfaced cloud-storage root (file_system.mdx §6). Present ONLY on the
+// synthetic/upgraded entries the home column lifts to its top; absent on every ordinary folder.
+export interface CloudRootMark {
+  provider: CloudProvider;
+  account?: string; // the Google Drive account email (GoogleDrive-<account>); absent for Dropbox/iCloud
+}
+
 // One row in a column of the File System browser (directory.mdx §5).
 export interface FsEntry {
   name: string;
@@ -647,6 +660,9 @@ export interface FsEntry {
   // Directories only: the interesting-folder tint level (file_system.mdx §3.2). Filled by the listing
   // endpoint's bounded subtree walk; may be absent when the walk budget was hit (render plain, upgrade later).
   interest?: FolderInterest;
+  // Set ONLY on the cloud-storage roots the home column surfaces at its top (file_system.mdx §6). Drives
+  // the cloud glyph + friendly label; `path` still points at the real mount so browsing is unchanged.
+  cloud?: CloudRootMark;
 }
 
 // The contents of one directory level — one column of the browser.
@@ -762,12 +778,14 @@ export interface MediaGrant {
 export type CompressQuality = "low" | "medium" | "high" | "lossless";
 export type CompressMedia = "images" | "video" | "audio";
 
-// Per-media codec preferences (compression.mdx §7).
+// Per-media codec preferences (compression.mdx §7) + file-type conversion policy (images.mdx §2).
 export interface CompressMediaPrefs {
   enabled: boolean;
   quality: CompressQuality;
   prefer: string[]; // ordered target codecs; first allowed+available wins
   deny: string[];   // codecs the user never wants chosen
+  convertTypes: boolean; // may a compress CHANGE the format (HEIC→JPEG…)? false = format-preserving
+  skipExts: string[];    // per-extension OPT-OUT (lowercase, leading-dot); [] = every ext in scope
 }
 export interface CompressionSettings {
   images: CompressMediaPrefs;
@@ -786,6 +804,7 @@ export interface CompressTools {
   cwebp: boolean;
   cjpeg: boolean; // mozjpeg
   jpegoptim: boolean;
+  heif: boolean; // ImageMagick libheif delegate / heif-dec — required to read HEIC/HEIF/AVIF (images.mdx §4.1)
 }
 
 // The dry-run plan + safety verdict for a file (compression.mdx §3/§6) — drives the pre-compress warning.

@@ -160,7 +160,7 @@ concerns live. Each is specified elsewhere; the page groups them into sections:
 | **Access / allow-list** | The OpenAuthFederated allow-listed emails (admin only). | [storage_local.mdx §4](./storage_local.mdx#4-per-logged-in-user-storage--the-per-user-requirement) |
 | **Account** | The signed-in user, theme/density, sign out. | [storage_local.mdx §4](./storage_local.mdx#4-per-logged-in-user-storage--the-per-user-requirement) |
 
-### 4.1 Compression (codec allow/deny per media type)
+### 4.1 Compression (codec allow/deny + file-type conversion, per media type)
 
 The **Compression** section lets the user choose, **per media type** (images / video / audio), which
 codecs they **want** and which they **never want** — the deny list exists mostly for **social-media
@@ -170,7 +170,45 @@ type: **Enabled**, **Quality** (`low | medium | high | lossless`, default **medi
 prefers `h264`/`hevc` and denies `av1`; **audio is disabled** (planned later). The **preserve-resolution**
 invariant is locked on. Full behavior is in [compression.mdx](./compression.mdx).
 
-The Compression settings surface (per-media codec allow/deny + quality) is implemented in code:
+#### 4.1.1 File-type conversion — two controls, per media type, BOTH DEFAULT ON
+
+Beyond the codec allow/deny, the Compression section carries the **file-type conversion** controls
+specified in full in [images.mdx §2](./images.mdx#2-the-two-settings-settings--compression). They are
+**per media type** (images **and** video) and **both default ON**:
+
+* **"Convert file types when compressing" (`convert_types`, default ON).** When on, a compress may
+  **change the format** to a better compressible / more-compatible target — **HEIC → JPEG**, PNG → JPEG,
+  etc. When **off**, compression is **format-preserving** (re-encode in place / lossless recompress; the
+  extension never changes).
+* **"Compress all file types" — a per-extension checkbox list (`skip_exts`, default empty = all in).**
+  Every recognized **image** and **video** extension is **checked (in scope) by default**. Unchecking one
+  leaves that extension **out of compression entirely**. The list is an **opt-OUT** (extensions to skip),
+  so "all in" stays the default even as new extensions are added.
+
+The flagship row is Apple's **`.heic`**: it is checked and shows **`→ JPEG`**, **ON by default** — because
+HEIC is poorly supported by the sites people post to while JPEG is universal. HEIC needs special decode
+care (extract the **primary still**, never a thumbnail / depth-aux image / Live-Photo motion frame) and
+all conversions keep the **same pixel resolution** — both are specified in
+[images.mdx §4](./images.mdx#4-apple-heic--jpeg-the-flagship-conversion--locked).
+
+```
+ Images                                        Videos
+ ┌──────────────────────────────┐             ┌──────────────────────────────┐
+ │ ☑ Convert file types         │             │ ☑ Convert file types         │
+ │ Compress these types:        │             │ Compress these types:        │
+ │  [✓] .heic  → JPEG           │             │  [✓] .mov  → H.264 (MP4)     │
+ │  [✓] .png   → JPEG           │             │  [✓] .avi  → H.264 (MP4)     │
+ │  [✓] .avif  → JPEG           │             │  [✓] .mkv  → H.264 (MP4)     │
+ │  [✓] .jpg   → re-encode      │             │  [✓] .mp4  → re-encode       │
+ │  …                           │             │  …                           │
+ └──────────────────────────────┘             └──────────────────────────────┘
+```
+
+These two fields persist on the existing `compression.images` / `compression.video` blocks as
+`convert_types` (bool, default `true`) and `skip_exts` (string[], default `[]`).
+
+The Compression settings surface (per-media codec allow/deny + quality, **plus the `convert_types` toggle
+and the per-extension `skip_exts` checkbox list**) is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` — `SettingsPage` Compression section (backed by `compression.router.ts` `GET/PATCH /api/compress/settings`)
 
 Global settings write to the app `config.yaml`; account/appearance settings write to the per-user
@@ -271,6 +309,10 @@ The resolved mass-compute budget is computed live from this setting in code:
    `large_file_min_bytes` / `large_files.min_bytes` fields in `storage_local.mdx` are re-pointed at it.
 8. The page also groups the other global concerns (scan/sync process, scanner roots, IPFS, allow-list,
    account), each linking to its own spec; allow-list editing is gated to `role:admin`.
+9a. The **Compression** section (§4.1.1) carries, **per media type (images / video)**, a **"Convert file
+    types"** toggle (`convert_types`, default **ON**) and a **"Compress all file types"** per-extension
+    checkbox list (`skip_exts`, default **empty = all in**, an opt-OUT list). Apple's **`.heic → JPEG`** row
+    is **ON by default**. Full behavior + the HEIC primary-image rule live in [images.mdx](./images.mdx).
 9. The **Parallelism** section (§4.3) shows a single **percent** control — *"Use up to N% of CPU cores
    for background compression & processing"* — backed by `performance.max_core_fraction` (default
    **0.9 = 90%**), with the **live resolved core count** ("≈ 14 of 16 cores") shown beside it. It tunes
@@ -283,7 +325,9 @@ The resolved mass-compute budget is computed live from this setting in code:
   Global Settings page (/settings). Headline = the BIG-FILE THRESHOLD (§1): value field + MB/GB/TB unit
   dropdown, default 100 MB, stored as resolved threshold_bytes in config.yaml → big_file; global with a
   per-repo override checkbox OFF by default (§2/§3, repo_settings.mdx). §4 also groups the other global
-  sections: Compression codec allow/deny (§4.1, compression.mdx §7), proposed verify/re-scan page actions
+  sections: Compression codec allow/deny (§4.1, compression.mdx §7) PLUS the file-type CONVERSION controls
+  (§4.1.1, images.mdx): per media type (images/video) a convert_types toggle (default ON) + a per-extension
+  skip_exts checkbox list (default [] = all in, opt-OUT); .heic→JPEG row ON by default. proposed verify/re-scan page actions
   (§4.2), Parallelism (§4.3), plus scan/sync process, scanner roots, IPFS node, allow-list (admin-only),
   account.
   §4.3 PARALLELISM: one PERCENT slider "Use up to N% of CPU cores for background compression & processing",

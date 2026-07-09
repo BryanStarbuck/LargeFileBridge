@@ -240,7 +240,74 @@ subfolder** so peers can reconcile it. Per hub [§6](./sync_list.mdx#6-publishin
 
 ---
 
-## 10. Acceptance criteria
+## 10. The other role — Google Drive as a browseable File System root
+
+Sections §1–§9 are Google Drive's **first** role: a **Sync-List backbone**. Google Drive has a **second,
+separate role** — a place the user browses and compresses inside the **File System** page. This section
+records it and, crucially, keeps the two apart.
+
+| | Role 1 — **Sync-List backbone** (§1–§9) | Role 2 — **Browseable File System root** (this §10) |
+| --- | --- | --- |
+| What it is | Transport for `LargeFilesBridge_SyncList.yaml` between the user's machines. | A place on disk browsed and compressed in the File System page. |
+| Owned by | This spec. | [file_system.mdx §4](./file_system.mdx) — this section supplies the Drive-specific discovery. |
+| Gated by | `large_files.settings.backbones.google_drive.enabled`. | **Nothing** — visible whenever a Drive mount exists. |
+| Writes to Drive? | Yes — the YAML list, into our own subfolder (§9). | **No.** Read-only directory metadata. Never writes. |
+
+> **The separation is LOCKED.** Surfacing Google Drive in the browser (role 2) **never** enables the Drive
+> backbone (role 1), **never** writes a Sync List, and **never** places bytes into Drive. All backbones off →
+> every Drive account still appears at the top of the home column, ready to browse and compress.
+
+### 10.1 One row per account — the multi-account reality (LOCKED)
+
+Google Drive for Desktop mounts **each signed-in account as its own folder**, with the **account email baked
+into the directory name**: `~/Library/CloudStorage/GoogleDrive-<email>/`. A user commonly has **several**
+(a work account and a personal account, say). So the File System browser surfaces **one row per account**,
+labeled by its email so they never blur together:
+
+```
+~/Library/CloudStorage/
+├── GoogleDrive-bryan@act3ai.com          → ☁ Google Drive — bryan@act3ai.com
+└── GoogleDrive-bryan@gmail.com           → ☁ Google Drive — bryan@gmail.com
+```
+
+* The email is **parsed out** of the `GoogleDrive-<email>` folder name and used as the row label
+  ([file_system.mdx §4.3](./file_system.mdx), classified as `provider: "google_drive"`, `account: <email>`).
+* Rows are **ordered by email** so two accounts never swap positions between listings.
+* Unlike the **backbone**, which writes only to the **allow-listed owner's** account (§2/§7), the **browsing**
+  role surfaces **every** mounted account the user can read — browsing is not adopting anyone's Sync List, so
+  there is no owner-allow-list gate on merely *seeing* a Drive. (The secret denylist and confinement of
+  [file_system.mdx §4.8](./file_system.mdx) still apply.)
+
+### 10.2 Stream-mode placeholders — browse without downloading (LOCKED)
+
+Google Drive **Stream** mode presents files as **online-only placeholders** (§3). The browsing role handles
+this the gentle, read-only way:
+
+* We `stat` placeholders for **metadata only** — size, mtime — which is enough to draw a row and to compute
+  the interesting-folder tint ([file_system.mdx §4.7](./file_system.mdx)). We **never materialize** (download)
+  a file just to browse or to color a folder.
+* A placeholder video still makes its folder **interesting** (its size is known without the bytes), so a Drive
+  full of movies lights up **brown** on the home column before the user opens it.
+* Bytes are pulled **only** when the user explicitly opens or **compresses** a file — and compressing a
+  placeholder forces a full download first, a cost the UI should surface
+  ([file_system.mdx §4.9](./file_system.mdx) growth note).
+* **My Drive vs. Shared Drives / the mount root.** For browsing we surface the **account mount** as the row
+  and let the user descend into `My Drive` (and any Shared Drives they have) naturally — unlike the backbone,
+  which writes **only** into `My Drive` (§3). Browsing is read-only, so there is no "never write to Shared
+  Drives" hazard to enforce here.
+
+Each Google Drive account mount is discovered and classified for the File System browser (one `provider: "google_drive"` row per `GoogleDrive-<email>`, email parsed out, ordered by email) in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/cloud-roots.ts` — `detectCloudRoots()` (the `GoogleDrive-` branch) · surfaced on the home column by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (the `isHomeDir` block).
+
+### 10.3 Server-mode note
+
+A hosted LFBridge has **no** desktop CloudStorage mount, so the browseable-root role — like the backbone (§7)
+— would need the **Drive API** behind the same `FsEntry` shape ([file_system.mdx §4.9](./file_system.mdx)).
+The `provider`/`account` marking already carries the identity a server-mode adapter would key on.
+
+---
+
+## 11. Acceptance criteria
 
 1. Google Drive carries **only** the **computer-scope** `LargeFilesBridge_SyncList.yaml`; the large
    files themselves are **never** placed in Drive (LOCKED — IPFS carries the bytes).
@@ -266,6 +333,13 @@ subfolder** so peers can reconcile it. Per hub [§6](./sync_list.mdx#6-publishin
    named only as a future/server-mode alternative ([§7](#7-auth)).
 10. The list is **metadata only** (paths + CIDs), **never bytes or secrets**; IPFS only-our-content
     defaults are honored; **only allow-listed owners' lists are adopted** ([§8](#8-privacy--security)).
+11. **Second role, kept separate (§10).** Google Drive is **also** surfaced as a browseable File System root
+    ([file_system.mdx §4](./file_system.mdx)): **one ☁ row per `GoogleDrive-<email>` account**, labeled and
+    ordered by email, visible **regardless of** `backbones.google_drive.enabled`. Browsing is **read-only
+    metadata** — Stream-mode placeholders are **never materialized** to draw a row or compute the interest
+    tint; the browsing role **never** enables the backbone, writes a Sync List, or moves bytes. Every readable
+    account is surfaced (no owner-allow-list gate on merely *seeing* a Drive), still subject to the secret
+    denylist + confinement of [file_system.mdx §4.8](./file_system.mdx).
 
 <!--
   This is the GOOGLE DRIVE bridge-backbone spec — a SIBLING of dropbox.mdx and repo__list_syns.mdx,
@@ -276,4 +350,14 @@ subfolder** so peers can reconcile it. Per hub [§6](./sync_list.mdx#6-publishin
   allow-listed-owner-only. This file REFERENCES sync_list.mdx (schema, two scopes, origin/revision,
   and above all the §5 trust/reconciliation model) and storage_local.mdx / knowledge/ipfs.mdx rather than
   restating them — it must never redefine the schema or the trust rules.
+  §10 (SECOND ROLE): Google Drive ALSO plays a browseable-File-System-root role, OWNED by file_system.mdx §4 —
+  this spec supplies the Drive-specific discovery: ONE row per GoogleDrive-<email> account (email parsed from
+  the dir name, ordered by email), Stream-mode placeholders stat-ed for metadata but NEVER materialized to
+  draw a row / color a folder. LOCKED: browsing role is READ-ONLY, gated by NOTHING (shows regardless of
+  backbones.google_drive.enabled), surfaces EVERY readable account (no owner-allow-list gate on seeing a
+  Drive, unlike the backbone which writes only to the allow-listed owner's My Drive), never enables the
+  backbone / writes a Sync List / moves bytes. Server-mode would need the Drive API behind the same FsEntry
+  shape. Code: cloud-roots.ts detectCloudRoots() (GoogleDrive- branch) surfaced by fs.service.ts
+  listDirectory() isHomeDir block; provider/account marking rides FsEntry.cloud (shared/types.ts).
 -->
+

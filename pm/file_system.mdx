@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — File System (the left-bar hub + interesting-directory folder coloring)
-description: The hub spec for the "File System" left-bar item (route /fs) — the page the user lands on when they click File System in the left nav. It owns two things that are NOT owned elsewhere: (1) INTERESTING-DIRECTORY FOLDER COLORING — a folder icon is tinted to make directories that contain something worth acting on stand out. A directory is "interesting" if it, or anything under it recursively, contains a big file (≥ the big-file threshold, default 100 MB), a video, or an uncompressed image ≥ 3 MB. The highest-priority thing present picks the color: BIG FILE → brown (light-brown fill, dark-brown outline) is the most powerful; else VIDEO → blue (medium-dark-blue outline, very-light-blue near-white fill); else UNCOMPRESSED IMAGE ≥3MB → blue outline only, no fill (the least powerful). A directory with none of these keeps the plain uncolored folder glyph. This coloring is applied to EVERY folder glyph across the app — the /fs column browser, View-one-directory child lists, storage directory rows, and repo rows — not just this page. (2) THE ACTION-LINKS ROW under the page title (delegates behavior to page_actions.mdx). The File System page's browsing mechanics (Finder-style column browser, code badges R/r·S·C/c·i, size/media filters, persisted view state) are owned by directories.mdx Part A, and the flat Full-paths tab (/fs/paths) by full_paths.mdx — this file references them and does not restate them. Sibling of directories.mdx, full_paths.mdx, page_actions.mdx, left_bar.mdx, repos.mdx, storages.mdx, compression.mdx, settings.mdx (the threshold), and codecs.mdx (what "uncompressed" means).
+description: The hub spec for the "File System" left-bar item (route /fs) — the page the user lands on when they click File System in the left nav. It owns three things that are NOT owned elsewhere: (1) INTERESTING-DIRECTORY FOLDER COLORING — a folder icon is tinted to make directories that contain something worth acting on stand out. A directory is "interesting" if it, or anything under it recursively, contains a big file (≥ the big-file threshold, default 100 MB), a video, or an uncompressed image ≥ 3 MB. The highest-priority thing present picks the color: BIG FILE → brown (light-brown fill, dark-brown outline) is the most powerful; else VIDEO → blue (medium-dark-blue outline, very-light-blue near-white fill); else UNCOMPRESSED IMAGE ≥3MB → blue outline only, no fill (the least powerful). A directory with none of these keeps the plain uncolored folder glyph. This coloring is applied to EVERY folder glyph across the app — the /fs column browser, View-one-directory child lists, storage directory rows, and repo rows — not just this page. (2) CLOUD-STORAGE ROOTS SURFACED AT THE TOP OF THE HOME COLUMN (§4, macOS) — Dropbox, each Google Drive account (GoogleDrive-<email>), and iCloud Drive live under ~/Library/CloudStorage/, not directly in ~, so the home column prepends one ☁ row per detected mount, sorted to the top, "as if they were in ~," letting the user browse and compress the big files inside them without drilling Library → CloudStorage. Each row is a REAL directory row (path = the mount) so badges, interest tint, and compress/git-ignore/track actions work unchanged; it is marked FsEntry.cloud only for the cloud glyph and top-of-column sort. This is a pure BROWSING feature, wholly independent of the Dropbox/Google-Drive Sync-List BACKBONES (dropbox.mdx/google_drive.mdx) — surfacing a mount never enables a backbone, writes a Sync List, or moves bytes. A legacy ~/Dropbox→CloudStorage/Dropbox symlink is de-duplicated to one cloud row; discovery is stat-only and macOS-guarded. (3) THE ACTION-LINKS ROW under the page title (delegates behavior to page_actions.mdx). The File System page's browsing mechanics (Finder-style column browser, code badges R/r·S·C/c·i, size/media filters, persisted view state) are owned by directories.mdx Part A, and the flat Full-paths tab (/fs/paths) by full_paths.mdx — this file references them and does not restate them. Sibling of directories.mdx, full_paths.mdx, page_actions.mdx, left_bar.mdx, repos.mdx, storages.mdx, compression.mdx, settings.mdx (the threshold), and codecs.mdx (what "uncompressed" means).
 ---
 
 # LargeFileBridge — File System (the left-bar hub + interesting-directory folder coloring)
@@ -17,16 +17,20 @@ The **browsing mechanics** are already specified and are **not** restated here:
 * [full_paths.mdx](./full_paths.mdx) — the **Full paths** tab at `/fs/paths`: the flat recursive TanStack
   table of large files under the current root. A tab strip switches `/fs` ↔ `/fs/paths`.
 
-This file owns the two things those do **not**:
+This file owns the three things those do **not**:
 
-1. **§1–§3 — Interesting-directory folder coloring** (the new concept: tinting the folder glyph).
-2. **§4 — The action-links row** under the page title (behavior delegated to
+1. **§1–§3 — Interesting-directory folder coloring** (tinting the folder glyph by what's worth acting on).
+2. **§4 — Cloud-storage roots surfaced at the top of the home column** — Dropbox, Google Drive, and
+   iCloud lifted out of `~/Library/CloudStorage/` to the top level of the browser, "as if they were in
+   `~`," so the user can browse and compress the huge files inside them without drilling down.
+3. **§5 — The action-links row** under the page title (behavior delegated to
    [page_actions.mdx](./page_actions.mdx)).
 
 Siblings: [directories.mdx](./directories.mdx) · [full_paths.mdx](./full_paths.mdx) ·
 [page_actions.mdx](./page_actions.mdx) · [left_bar.mdx](./left_bar.mdx) · [repos.mdx](./repos.mdx) ·
 [storages.mdx](./storages.mdx) · [compression.mdx](./compression.mdx) · [codecs.mdx](./codecs.mdx) ·
-[settings.mdx](./settings.mdx) (the big-file threshold).
+[settings.mdx](./settings.mdx) (the big-file threshold) · [dropbox.mdx](./dropbox.mdx) /
+[google_drive.mdx](./google_drive.mdx) (the vendor-specific discovery for the surfaced roots, §4).
 
 ---
 
@@ -211,7 +215,186 @@ Mapping the `interest` value to the folder glyph's `color`/`fill` is done in cod
 
 ---
 
-## 4. The action-links row (delegated to page_actions.mdx)
+## 4. Cloud-storage roots surfaced at the top of the home column
+
+### 4.1 The problem, and the product bet (LOCKED intent)
+
+The files LFBridge exists for — the multi-gigabyte movies, the uncompressed image dumps — increasingly do
+**not** live in the user's home tree at all. They live in **Dropbox**, in **Google Drive**, in **iCloud
+Drive**. On macOS none of those mount in `~`; they mount **one level deep and out of sight** under
+`~/Library/CloudStorage/` (Google Drive for Desktop, the Dropbox client, and the iCloud FileProvider all
+publish their folders there). A user who opens **File System** and lands on `~` would have to know to drill
+**`Library → CloudStorage → GoogleDrive-<email>`** — a path most people have never seen — before they could
+reach the very content the product is built to compress and sync.
+
+So the product bet, **LOCKED**: **we lift each cloud mount to the top of the home column, presented as if it
+sat directly in `~`.** The user opens File System, and Dropbox / Google Drive / iCloud are simply *there*, at
+the top, one click away — the same first-class starting points as any home folder. This is the difference
+between "a tool that browses my disk" and "a tool that knows where my big files actually are."
+
+> **Why this is a browsing feature, not a sync feature (LOCKED).** Surfacing a mount here is **purely about
+> visibility and navigation**. It is completely independent of the cloud **sync-backbones**
+> ([dropbox.mdx](./dropbox.mdx) / [google_drive.mdx](./google_drive.mdx), which carry the Sync List YAML
+> between the user's computers). Making Dropbox visible in the browser does **not** enable the Dropbox
+> backbone, does **not** write a Sync List into Dropbox, and does **not** move a single byte. The two ideas
+> share a vendor and a discovery path — nothing else. See §4.6.
+
+### 4.2 The concept — each mount becomes a top-level row (LOCKED)
+
+Only the **home column** (the leftmost column, the one rooted at `~`) is affected. Every deeper column is
+untouched. When the browser lists the home directory, it **prepends one row per detected cloud mount**, above
+every real home folder:
+
+| What the user sees | What it really is |
+| --- | --- |
+| **☁ Dropbox** | a `dir` row whose `path` is `~/Library/CloudStorage/Dropbox` |
+| **☁ Google Drive — bryan@act3ai.com** | a `dir` row whose `path` is `~/Library/CloudStorage/GoogleDrive-bryan@act3ai.com` |
+| **☁ Google Drive — bryan@gmail.com** | one row **per signed-in account** (the user often has several) |
+| **☁ iCloud Drive** | `~/Library/CloudStorage/iCloudDrive-…` (best-effort; only when it's a real dir) |
+
+The rows are **real directory rows**, not a special widget: `kind: "dir"`, `path` = the true mount path. So
+clicking one opens an **ordinary column** and **every downstream feature works unchanged** — the code badges,
+the interesting-folder tint (§1–§3), the Full-paths tab, and above all the **compress / git-ignore / track**
+action-links (§5). Nothing about "it came from the cloud shelf" changes what the user can do once inside.
+
+They are marked (`FsEntry.cloud = { provider, account? }`) for **two** cosmetic reasons only: (1) a **cloud
+glyph** instead of a folder glyph, so the row reads as a special shortcut; (2) they **sort to the very top**
+of the column, above all folders and files. The mark drives presentation; it never gates behavior.
+
+Surfacing the mounts on the home column — build one `dir` row per mount, sorted to the top — is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (the `isHomeDir(dirAbs)` block; `compareEntries()` floats `cloud` rows first) · the "am I the home column?" test is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/paths.ts` — `isHomeDir()` (raw-path then realpath compare, so a firmlinked home still matches).
+The row's cloud glyph + friendly label render in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FsRow` (the `entry.cloud` branch draws a `<Cloud>` glyph, tinted by `interest` when set, else a sky accent) · the marker rides on the shared type `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FsEntry.cloud` (`CloudRootMark` / `CloudProvider`).
+
+### 4.3 Discovery — where the mounts are, and how they're named (LOCKED shape)
+
+Discovery is **macOS-specific** (the `~/Library/CloudStorage/` convention is Apple's FileProvider design) and
+**stat-only** — Node `fs`, never the `find` shell (charter + the macOS-indexing rule). We enumerate
+`~/Library/CloudStorage/` and classify each child by its vendor naming:
+
+| Mount name pattern | Provider | Display label | Notes |
+| --- | --- | --- | --- |
+| `Dropbox`, `Dropbox (Personal)`, `Dropbox (Company)` | `dropbox` | the name verbatim | the suffix keeps two Dropbox accounts distinct ([dropbox.mdx §3](./dropbox.mdx)) |
+| `GoogleDrive-<email>` | `google_drive` | `Google Drive — <email>` | **one row per account** — the account email is parsed out ([google_drive.mdx §2](./google_drive.mdx)) |
+| `iCloudDrive-…` | `icloud` | `iCloud Drive` | best-effort; included only when it stats as a real directory |
+
+Rules that make discovery robust (all LOCKED):
+
+* **Only real directories.** Each candidate is `stat`-ed; anything that is not a live directory — an offline
+  mount, a half-removed account, a broken iCloud placeholder — is **skipped**, so the shelf never shows a dead
+  row.
+* **Stable, vendor-grouped order.** Dropbox first, then each Google Drive account **sorted by email** (so two
+  accounts never swap places between calls), then iCloud. Deterministic ordering keeps the home column from
+  reshuffling under the user.
+* **Non-macOS → empty.** On any other platform discovery returns `[]` and the home column is exactly as it was.
+  The feature is additive and platform-guarded; it can never break the browser elsewhere.
+
+Enumerating `~/Library/CloudStorage/` and classifying each mount by vendor naming (Dropbox / `GoogleDrive-<email>` / iCloud), skipping non-directories, with the deterministic vendor-grouped ordering, is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/cloud-roots.ts` — `detectCloudRoots()` (and `cloudStorageDir()` for the mount-point path).
+
+### 4.4 De-duplication — the legacy symlink collision (LOCKED)
+
+Some machines carry a **legacy home-level symlink** — `~/Dropbox → ~/Library/CloudStorage/Dropbox` — left by
+older Dropbox installers. Without care the mount would then appear **twice**: once as the real `~/Dropbox`
+symlink child, once as our surfaced Dropbox shortcut. That is confusing and wrong.
+
+The rule, **LOCKED**: before adding the cloud rows we **drop any existing SYMLINK entry whose realpath is a
+cloud mount**, then add that mount back as a proper cloud row. Only a **symlink** can alias a CloudStorage
+mount up into `~`, so we `realpath` **only** the symlink entries (cheap — a home dir has a handful at most),
+never every row. A genuine, unrelated file like `~/Dropbox alias` (a Finder alias *document*, not a symlink to
+the mount) is left untouched. Net result: **exactly one** Dropbox row, presented as the cloud shortcut.
+
+De-duplicating a legacy `~/Dropbox`-style symlink against the surfaced mounts (realpath the symlink entries only, drop the ones that resolve to a cloud mount, re-add as cloud rows) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (the `cloudReal` set + the `kind === "symlink"` splice loop).
+
+### 4.5 The interest tint carries straight through
+
+A surfaced cloud root is a directory, so the **interesting-folder coloring of §1–§3 applies to it verbatim**:
+its cloud glyph is tinted **brown** when its subtree holds a big file, **blue** for a video, and so on — the
+user can see at a glance that *"my Dropbox is full of big files worth compressing"* before opening it. The
+interest for each cloud row is computed by the **same bounded per-child walk** as every ordinary sibling
+(§3.3): each mount draws from the same `INTEREST_PER_CHILD` slice of the shared `INTEREST_TOTAL` pool, early-
+exits on the first big file, and honors the truncation **floor** — so a huge, deep Drive still resolves to at
+least the level it has already proven, never a false plain glyph.
+
+Computing each surfaced mount's `interest` from the shared per-child budget (so a huge cloud mount can't starve the ordinary siblings, and the truncation floor still applies) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (the cloud-row `computeDirInterest()` call sharing `interestPool`) · the walk itself is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `computeDirInterest()`.
+
+### 4.6 Independence from the sync-backbones (LOCKED separation)
+
+This is the separation that keeps the product honest, and it is **LOCKED**. **Dropbox and Google Drive each
+play two entirely separate roles**, and this section owns only the first:
+
+1. **Browseable file-system root (this §4).** A place on disk the user can navigate and compress. Discovered
+   from the mount, surfaced on the home column, always available whenever the mount exists — **regardless of
+   any setting**.
+2. **Sync-List backbone ([dropbox.mdx](./dropbox.mdx) / [google_drive.mdx](./google_drive.mdx)).** A transport
+   that carries the small `LargeFilesBridge_SyncList.yaml` between the user's computers, gated by
+   `large_files.settings.backbones.<vendor>.enabled`.
+
+The invariants that follow (all LOCKED):
+
+* Surfacing a mount in the browser **never** enables its backbone, **never** writes a Sync List into it, and
+  **never** places a large file into it — the backbone's own "only the YAML, never the bytes" rule
+  ([dropbox.mdx](./dropbox.mdx) top) is not even in play here, because §4 writes **nothing** to the cloud at
+  all. It only **reads directory metadata** to display rows.
+* The two share exactly one thing: the **discovery path** (`~/Library/CloudStorage/…` and, for Dropbox,
+  `~/.dropbox/info.json`). The vendor specs own that discovery; §4 reuses it for browsing.
+* A user with **all backbones disabled** still sees every cloud root on the home column. Visibility is a
+  property of the **mount existing**, not of any sync being turned on.
+
+### 4.7 Performance & the network-mount hazard (CTO note)
+
+Cloud mounts are **network-backed** and can be slow or partially materialized (Drive **Stream** mode and
+Dropbox **online-only** files are placeholders whose bytes live in the cloud). The design keeps this from ever
+hurting the browser:
+
+* **Metadata only, no materialization.** Everything §4 does is `readdir` + `stat`. A `stat` on a placeholder
+  returns local metadata **without** downloading the file — we never trigger a cloud fetch just to draw a row
+  or compute interest.
+* **The home column stays responsive.** Per-mount interest is **bounded** by the same `INTEREST_PER_CHILD` cap
+  and **early-exits** on the first big file (a mount full of movies resolves in a few dozen stats), and the
+  listing loop **yields the event loop** (`setImmediate`) as those stats accrue — a cold walk interleaves with
+  other requests instead of blocking (§3.3).
+* **Descending into a live mount is the mount's cost, not ours.** Listing *inside* a large streamed Drive is
+  inherently slow — but that is the network mount, identical to a user hand-navigating there, and it is
+  handled by the same protections every column has: the 5000-entry cap, cooperative yields, and the
+  progressive react-query render. §4 does not add a new blocking path; it only makes the mount easier to find.
+
+### 4.8 Security & confinement
+
+Every surfaced mount sits **under the home root**, so it is already inside the browse allow-roots
+([allow-root.ts](../code/packages/backend/src/modules/fs/allow-root.ts)) and inherits the same secret-denylist
+protections as any home path. As defense-in-depth, the detected mounts are **also added explicitly** to the
+allow-roots, so that a mount which happens to `realpath` **outside** home (a FileProvider firmlink, a relocated
+Drive on another volume) still resolves when the user browses into it, rather than tripping confinement. The
+feature **widens visibility, never authorization**: it exposes only what the user could already reach by
+typing the path, and nothing under the secret denylist (`~/.ssh`, `~/.credentials`, Keychains, …) is ever
+served — cloud mount or not.
+
+Adding the detected cloud mounts to the browse allow-roots (so browsing into a mount that resolves outside home still passes confinement) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/allow-root.ts` — `rawRoots()` (the `for (const cr of detectCloudRoots())` addition), consumed by `assertAllowedPath()`.
+
+### 4.9 Growth opportunities (CPO/CTO backlog — not yet built)
+
+Deliberately **not** in the first cut, recorded so the next iteration can pick them up:
+
+* **A global setting to show/hide the shelf** (`settings.mdx`) — default **on**; some users may want only their
+  own tree. Per-provider toggles (hide iCloud, keep Dropbox) are the natural next grain.
+* **A per-mount uncompressed rollup** — surface the category counts ([the rollup table](./directories.mdx))
+  right on the cloud row: *"Dropbox — 27 videos, 12 images can be compressed."* Turns the shelf from a
+  shortcut into a dashboard.
+* **Cross-platform discovery** — Windows (`%USERPROFILE%\Dropbox`, `Google Drive` drive-letter mounts) and
+  Linux (`~/Dropbox`, `rclone`/`google-drive-ocamlfuse` mounts) so the feature is not macOS-only.
+* **Server-mode parity** — a hosted LFBridge has **no** desktop CloudStorage mount, so the browseable-root
+  idea would need the vendor **APIs** (Drive API, Dropbox API) behind the same `FsEntry` shape. Mirrors the
+  server-mode note the backbone specs already make ([google_drive.mdx §7](./google_drive.mdx)).
+* **"Compress in place vs. copy out" policy** for cloud files — compressing a streamed placeholder forces a
+  full download first; the UI should make that cost explicit before it runs.
+
+---
+
+## 5. The action-links row (delegated to page_actions.mdx)
 
 The File System page carries the standard **action-links row directly under its page title** — the visible
 horizontal row of blue hyperlinks, each with a leading icon, that [page_actions.mdx](./page_actions.mdx)
@@ -229,12 +412,12 @@ Git-ignore big files… · Track / Sync this directory**
   §3](./page_actions.mdx), [menus.mdx §6.1](./menus.mdx)) — never a one-click mutation.
 * Scope is the **deepest (rightmost) open column's directory** walked recursively when nothing is checked,
   or the checked rows when the browser has a selection ([directories.mdx §1.2](./directories.mdx)) — with
-  the **containment guarantee locked in §4.1** below.
+  the **containment guarantee locked in §5.1** below.
 
 The row is rendered in code (shared component, fed the File System scope):
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions` · consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (passes the **deepest open column** — `currentDir = stack[stack.length - 1]` — as the scope `root`).
 
-### 4.1 Scope containment — the deepest selected column, downward only (LOCKED)
+### 5.1 Scope containment — the deepest selected column, downward only (LOCKED)
 
 This is the **safety guarantee** the whole column browser hangs on, and it is **LOCKED**. When the user
 walks left → right through the columns (e.g. `Home → _Mirror → Politics → Charlie_Kirk_Mi`) and clicks a
@@ -279,7 +462,7 @@ Enforcing downward-only containment of the recursive walk (descend into children
 
 ---
 
-## 5. Acceptance criteria
+## 6. Acceptance criteria
 
 1. **Interesting definition (§1):** a directory is interesting iff its subtree (recursively) contains a
    video, an uncompressed image ≥ 3 MB, or a file ≥ the big-file threshold (default 100 MB). Interest
@@ -303,20 +486,33 @@ Enforcing downward-only containment of the recursive walk (descend into children
    several levels deep) shows **at least blue** even though its walk truncates.
 6. **Tokens:** the six `--lfb-fold-*` CSS variables from §2 exist in `styles.css` and drive the glyph
    `color`/`fill`; the brown reuses the existing repo-badge brown and the blue reuses the IPFS-badge blue.
-7. **Action-links row (§4):** the File System page shows the standard action-links row under its title with
-   the catalog items above, following [page_actions.mdx](./page_actions.mdx) (visible links, not a
-   dropdown); compress/git-ignore are red-tinted confirm-gated offers.
-8. **Scope containment (§4.1):** with nothing checked, a producing action's scope is the **deepest
+7. **Cloud roots surfaced (§4):** on macOS, the **home column** shows one top-of-column ☁ row per detected
+   `~/Library/CloudStorage/` mount — **Dropbox**, **each** `GoogleDrive-<email>` account, and **iCloud
+   Drive** when it's a real dir — above every home folder, each a real `dir` row whose `path` is the mount so
+   browsing/compress/interest all work unchanged. Only the home column is affected; deeper columns are
+   untouched; a non-macOS host shows no change.
+8. **Discovery, dedup & independence (§4.3/§4.4/§4.6):** mounts are found by `stat`-only enumeration (skipping
+   non-directories), ordered Dropbox → Drive-by-email → iCloud; a legacy `~/Dropbox → CloudStorage/Dropbox`
+   symlink is de-duplicated to **one** cloud row (an unrelated `~/Dropbox alias` file is left alone); the
+   shelf appears **regardless of** `settings.backbones.*` and surfacing a mount **never** writes anything to
+   the cloud (browsing role only, distinct from the Sync-List backbone).
+9. **Cloud confinement & performance (§4.7/§4.8):** discovery and interest are metadata-only (no placeholder
+   materialization); each mount's interest uses the shared per-child budget; detected mounts are added to the
+   browse allow-roots so browsing in always resolves, while the secret denylist still applies.
+10. **Action-links row (§5):** the File System page shows the standard action-links row under its title with
+    the catalog items above, following [page_actions.mdx](./page_actions.mdx) (visible links, not a
+    dropdown); compress/git-ignore are red-tinted confirm-gated offers.
+11. **Scope containment (§5.1):** with nothing checked, a producing action's scope is the **deepest
    (rightmost) open column's directory**, walked **recursively downward only**. Walking
    `Home → _Mirror → Politics → Charlie_Kirk_Mi` and clicking **Create Transcriptions** processes **only
    `~/_Mirror/Politics/Charlie_Kirk_Mi/` and its descendants** — never a parent column (`Politics`,
    `_Mirror`, home), never a sibling directory. Selecting a file inside the deepest column does not change
    the directory scope; an unopened stack is a `400`, never a fall-back walk of home or `/`.
-9. **No overlap:** this file does not re-specify the column browser, badges, filters, or the Full-paths
-   table — those stay owned by [directories.mdx](./directories.mdx) and [full_paths.mdx](./full_paths.mdx).
+12. **No overlap:** this file does not re-specify the column browser, badges, filters, or the Full-paths
+    table — those stay owned by [directories.mdx](./directories.mdx) and [full_paths.mdx](./full_paths.mdx).
 
 <!--
-  HUB spec for the "File System" left-bar item (/fs). OWNS two new things not owned elsewhere:
+  HUB spec for the "File System" left-bar item (/fs). OWNS three things not owned elsewhere:
    (1) INTERESTING-DIRECTORY FOLDER COLORING (§1-§3): a dir is "interesting" if its SUBTREE (recursive)
        has a video, an uncompressed image >= 3 MB, or a file >= big-file threshold (default 100 MB). Color =
        highest-priority category present: BIG FILE -> brown (dark-brown outline / light-brown fill) is
@@ -336,10 +532,28 @@ Enforcing downward-only containment of the recursive walk (descend into children
        Computed by fs/badges.ts computeDirInterest() (truncatedFloor() helper) for the column browser, and
        mirrored in entity.service.ts buildDirRollup() (interestVideo/interestImage branches before the
        walkTruncated->undefined branch).
-   (2) ACTION-LINKS ROW (§4): delegates ALL behavior to page_actions.mdx (visible links row under the title,
+   (2) CLOUD-STORAGE ROOTS SURFACED AT THE TOP OF THE HOME COLUMN (§4, macOS): Dropbox / GoogleDrive-<email>
+       (one row per account) / iCloud live under ~/Library/CloudStorage/, NOT in ~. On the HOME column ONLY
+       we prepend one ☁ dir row per detected mount, sorted to the very top (compareEntries floats cloud
+       first), each a REAL dir row whose path = the mount so badges/interest/compress/full-paths all work
+       unchanged; marked FsEntry.cloud={provider,account?} only for the cloud glyph + top sort. Discovery =
+       fs.service.ts listDirectory() isHomeDir() block calling cloud-roots.ts detectCloudRoots() (stat-only
+       enumeration of ~/Library/CloudStorage/, classify Dropbox*/GoogleDrive-*/iCloud*, skip non-dirs, order
+       Dropbox→Drive-by-email→iCloud, [] off-macOS). DEDUP (LOCKED): a legacy ~/Dropbox symlink ->
+       CloudStorage/Dropbox is dropped (realpath the SYMLINK entries only) and re-added as the cloud row —
+       exactly one Dropbox; an unrelated "~/Dropbox alias" file is untouched. Interest per cloud row uses the
+       SAME shared per-child budget (computeDirInterest, interestPool). INDEPENDENCE (LOCKED): this is a
+       BROWSING feature only — totally separate from the Sync-List BACKBONES (dropbox.mdx/google_drive.mdx,
+       gated by settings.backbones.*). Surfacing a mount NEVER enables a backbone, writes a Sync List, or
+       moves bytes; shelf shows regardless of settings. CONFINEMENT: detected mounts also added to browse
+       allow-roots (allow-root.ts rawRoots()) so browsing in resolves even if a mount realpaths outside home;
+       secret denylist still applies; metadata-only, never materializes a placeholder. Frontend: FsRow
+       entry.cloud branch draws <Cloud> (FileSystemPage.tsx). Growth backlog (§4.9): settings toggle,
+       per-mount rollup, Windows/Linux discovery, server-mode via vendor APIs.
+   (3) ACTION-LINKS ROW (§5): delegates ALL behavior to page_actions.mdx (visible links row under the title,
        NOT the old Actions ▾ dropdown). Catalog: Create Transcriptions · Create AI descriptions · Compress
        all videos… · Compress all images… · Git-ignore big files… · Track / Sync this directory.
-       §4.1 SCOPE CONTAINMENT (LOCKED): with nothing checked, scope = the DEEPEST (rightmost) open column's
+       §5.1 SCOPE CONTAINMENT (LOCKED): with nothing checked, scope = the DEEPEST (rightmost) open column's
        dir = currentDir = stack[stack.length-1], walked RECURSIVELY DOWNWARD ONLY. Never ascends to a parent
        column (Politics/_Mirror/home) or touches a sibling dir. "Deepest" = last opened column, not last
        highlighted row; selecting a file doesn't change the dir scope. Checked subset overrides but stays at/

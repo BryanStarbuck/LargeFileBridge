@@ -5,7 +5,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { FsEntry, FsEntryKind, FsListing, FlatFileListing } from "@lfb/shared";
 import { buildBadgeContext, computeBadges, computeDirInterest, HARD_SKIP } from "./badges.js";
-import { homeDir, resolveDir } from "./paths.js";
+import { homeDir, isHomeDir, resolveDir } from "./paths.js";
+import { detectCloudRoots } from "./cloud-roots.js";
 import { log } from "../../shared/logging.js";
 import {
   walkFilesFlatStreaming,
@@ -140,6 +141,53 @@ export async function listDirectory(
     });
   }
 
+  // Cloud-storage roots at the top of the HOME column (file_system.mdx §6). Dropbox / Google Drive /
+  // iCloud mount under ~/Library/CloudStorage/, not directly in ~, so we lift each mount to the home
+  // column's top level "as if it were in ~" — letting the user browse and compress the big files inside
+  // without drilling Library → CloudStorage. Only on the home column; every deeper column is untouched.
+  if (isHomeDir(dirAbs)) {
+    const cloudRoots = detectCloudRoots();
+    if (cloudRoots.length) {
+      // Dedup: a legacy home-level symlink such as ~/Dropbox → ~/Library/CloudStorage/Dropbox would
+      // otherwise show the same mount twice. Drop any existing SYMLINK entry whose realpath is a cloud
+      // root (only symlinks can alias a CloudStorage mount into home), then re-add it as a proper cloud row.
+      const realOf = (p: string): string => {
+        try {
+          return fs.realpathSync.native(p);
+        } catch {
+          return p;
+        }
+      };
+      const cloudReal = new Set(cloudRoots.map((cr) => realOf(cr.path)));
+      for (let i = entries.length - 1; i >= 0; i--) {
+        if (entries[i].kind === "symlink" && cloudReal.has(realOf(entries[i].path))) entries.splice(i, 1);
+      }
+      // Build a cloud row per mount: a real directory row (kind "dir") whose `path` is the mount, so
+      // clicking it opens an ordinary column and every downstream feature (badges, interest tint,
+      // compress actions) works unchanged. Interest is drawn from the SAME per-child budget as the
+      // ordinary siblings (fair + bounded — a huge Drive mount can't pin the thread; badges.ts floor).
+      const cloudEntries: FsEntry[] = cloudRoots.map((cr) => {
+        const childBudget = { left: Math.min(INTEREST_PER_CHILD, interestPool.left) };
+        const before = childBudget.left;
+        const interest = computeDirInterest(cr.path, threshold, childBudget);
+        interestPool.left -= before - childBudget.left;
+        return {
+          name: cr.label,
+          path: cr.path,
+          kind: "dir" as const,
+          sizeBytes: null,
+          modifiedAt: null,
+          isRepoRoot: false,
+          hasChildren: dirHasChildren(cr.path, showHidden),
+          badges: [],
+          cloud: { provider: cr.provider, ...(cr.account ? { account: cr.account } : {}) },
+          ...(interest !== undefined ? { interest } : {}),
+        };
+      });
+      entries.push(...cloudEntries);
+    }
+  }
+
   entries.sort(compareEntries);
 
   const listing: FsListing = {
@@ -184,8 +232,12 @@ function kindOf(ent: fs.Dirent): FsEntryKind {
   return "other";
 }
 
-/** Directories before files, then locale-aware case-insensitive by name. */
+/** Cloud roots first (file_system.mdx §6 — surfaced at the very top of the home column), then
+ *  directories before files, then locale-aware case-insensitive by name. */
 function compareEntries(a: FsEntry, b: FsEntry): number {
+  const ac = a.cloud ? 0 : 1;
+  const bc = b.cloud ? 0 : 1;
+  if (ac !== bc) return ac - bc;
   const ad = a.kind === "dir" ? 0 : 1;
   const bd = b.kind === "dir" ? 0 : 1;
   if (ad !== bd) return ad - bd;

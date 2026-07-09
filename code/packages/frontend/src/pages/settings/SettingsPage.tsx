@@ -299,17 +299,36 @@ function CompressionSettingsSection() {
       <p className="mt-2 text-xs text-black/50">Audio compression is disabled for now (planned later).</p>
       {tools && missing.length > 0 && (
         <p className="mt-1 text-xs text-amber-700">
-          Tools not installed: {missing.join(", ")} — <code>brew install ffmpeg imagemagick oxipng webp mozjpeg</code>
+          Tools not installed: {missing.join(", ")} — <code>brew install ffmpeg imagemagick libheif oxipng webp mozjpeg</code>
         </p>
       )}
     </Section>
   );
 }
 
+// Recognized extensions per media type (mirrors @lfb/shared media.ts IMAGE_EXT / VIDEO_EXT). Each row is a
+// per-extension IN-SCOPE checkbox (images.mdx §2.2); an unchecked box adds the ext to skipExts (opt-OUT).
+// `convertLabel` is the "→ JPEG" / "→ H.264" hint shown when convert_types is ON.
+const IMAGE_SCOPE_EXTS = [".heic", ".heif", ".avif", ".png", ".bmp", ".tiff", ".gif", ".jpg", ".jpeg", ".webp"];
+const VIDEO_SCOPE_EXTS = [".mov", ".mp4", ".avi", ".mkv", ".webm", ".m4v", ".mpg", ".wmv", ".flv"];
+function convertLabel(media: "images" | "video", ext: string): string {
+  if (media === "images") return ext === ".jpg" || ext === ".jpeg" || ext === ".webp" ? "re-encode" : "→ JPEG";
+  return ext === ".mp4" ? "re-encode" : "→ H.264";
+}
+
 function MediaPrefRow({ media, prefs, onSave }: { media: "images" | "video"; prefs: CompressMediaPrefs; onSave: (patch: Partial<CompressMediaPrefs>) => void }) {
   const [prefer, setPrefer] = useState(prefs.prefer.join(", "));
   const [deny, setDeny] = useState(prefs.deny.join(", "));
   const parse = (s: string) => s.split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+  const scopeExts = media === "images" ? IMAGE_SCOPE_EXTS : VIDEO_SCOPE_EXTS;
+  const skip = new Set(prefs.skipExts);
+  const toggleExt = (ext: string, inScope: boolean) => {
+    // inScope (checked) → ensure NOT in skipExts; unchecked → add to skipExts.
+    const next = new Set(prefs.skipExts);
+    if (inScope) next.delete(ext);
+    else next.add(ext);
+    onSave({ skipExts: [...next] });
+  };
   return (
     <div className="mb-3 rounded-md border border-[var(--lfb-border)] p-3">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
@@ -322,6 +341,9 @@ function MediaPrefRow({ media, prefs, onSave }: { media: "images" | "video"; pre
           <select className="rounded border border-[var(--lfb-border)] px-1 py-0.5" value={prefs.quality} onChange={(e) => onSave({ quality: e.target.value as CompressQuality })}>
             {QUALITIES.map((q) => <option key={q} value={q}>{q}</option>)}
           </select>
+        </label>
+        <label className="flex items-center gap-1.5" title="When on, a compress may change the format to a better/compatible target (HEIC → JPEG, PNG → JPEG). Off = format-preserving.">
+          <input type="checkbox" checked={prefs.convertTypes} onChange={(e) => onSave({ convertTypes: e.target.checked })} /> Convert file types
         </label>
       </div>
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2 text-sm">
@@ -337,6 +359,21 @@ function MediaPrefRow({ media, prefs, onSave }: { media: "images" | "video"; pre
             onChange={(e) => setDeny(e.target.value)} onBlur={() => onSave({ deny: parse(deny) })}
             title="Codecs never chosen (e.g. jpeg2000, av1)" />
         </label>
+      </div>
+      <div className="mt-2">
+        <div className="mb-1 text-xs text-black/50">Compress these {media} types (uncheck to skip an extension):</div>
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-sm">
+          {scopeExts.map((ext) => {
+            const inScope = !skip.has(ext);
+            return (
+              <label key={ext} className="flex items-center gap-1" title={prefs.convertTypes ? `${ext} ${convertLabel(media, ext)}` : `${ext} re-encode in place`}>
+                <input type="checkbox" checked={inScope} onChange={(e) => toggleExt(ext, e.target.checked)} />
+                <span className="font-mono">{ext}</span>
+                {prefs.convertTypes && <span className="text-black/40">{convertLabel(media, ext)}</span>}
+              </label>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

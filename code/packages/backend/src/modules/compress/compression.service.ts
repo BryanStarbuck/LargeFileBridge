@@ -30,11 +30,13 @@ import { log } from "../../shared/logging.js";
 // ── settings (compression.mdx §7) ─────────────────────────────────────────────
 export function getCompressionSettings(): CompressionSettings {
   const c = getAppConfig().compression;
-  const map = (m: { enabled: boolean; quality: CompressMediaPrefs["quality"]; prefer: string[]; deny: string[] }): CompressMediaPrefs => ({
+  const map = (m: { enabled: boolean; quality: CompressMediaPrefs["quality"]; prefer: string[]; deny: string[]; convert_types: boolean; skip_exts: string[] }): CompressMediaPrefs => ({
     enabled: m.enabled,
     quality: m.quality,
     prefer: m.prefer,
     deny: m.deny,
+    convertTypes: m.convert_types,
+    skipExts: m.skip_exts.map(normExt),
   });
   return {
     images: map(c.images),
@@ -47,12 +49,14 @@ export function getCompressionSettings(): CompressionSettings {
 
 export async function setCompressionSettings(patch: Partial<CompressionSettings>): Promise<CompressionSettings> {
   await updateAppConfig((cfg) => {
-    const applyMedia = (dst: { enabled: boolean; quality: string; prefer: string[]; deny: string[] }, src?: Partial<CompressMediaPrefs>) => {
+    const applyMedia = (dst: { enabled: boolean; quality: string; prefer: string[]; deny: string[]; convert_types: boolean; skip_exts: string[] }, src?: Partial<CompressMediaPrefs>) => {
       if (!src) return;
       if (src.enabled !== undefined) dst.enabled = src.enabled;
       if (src.quality !== undefined) dst.quality = src.quality;
       if (src.prefer !== undefined) dst.prefer = src.prefer;
       if (src.deny !== undefined) dst.deny = src.deny;
+      if (src.convertTypes !== undefined) dst.convert_types = src.convertTypes;
+      if (src.skipExts !== undefined) dst.skip_exts = src.skipExts.map(normExt);
     };
     applyMedia(cfg.compression.images, patch.images);
     applyMedia(cfg.compression.video, patch.video);
@@ -64,6 +68,18 @@ export async function setCompressionSettings(patch: Partial<CompressionSettings>
   return getCompressionSettings();
 }
 
+// Apple photos & other HEVC/AV1-coded still formats. These are BYTE-efficient already, but we offer a
+// COMPATIBILITY conversion → JPEG (images.mdx §4). They need a libheif reader (delegate or heif-dec) and
+// their conversion is exempt from the size-gain guard (may grow the file). srcExt is lowercase w/ dot.
+const HEIC_FAMILY_EXT = new Set([".heic", ".heif", ".avif"]);
+
+/** Normalize a user-typed extension to lowercase with a single leading dot ("HEIC" / ".Heic" → ".heic"). */
+function normExt(e: string): string {
+  const t = e.trim().toLowerCase();
+  if (!t) return "";
+  return t.startsWith(".") ? t : "." + t;
+}
+
 // ── tool detection (compression.mdx §2) ────────────────────────────────────────
 function onPath(bin: string): boolean {
   try {
@@ -72,6 +88,31 @@ function onPath(bin: string): boolean {
     return false;
   }
 }
+
+// Does ImageMagick (or a standalone libheif converter) know how to READ HEIC/HEIF? On macOS,
+// `brew install imagemagick` bundles the libheif delegate; if it's missing we surface an "install libheif"
+// message instead of silently failing on an Apple photo (images.mdx §4.1). Memoized — the `-list format`
+// probe is comparatively heavy and detectTools() runs per compress.
+let _heifSupport: boolean | null = null;
+function magickSupportsHeif(): boolean {
+  if (_heifSupport !== null) return _heifSupport;
+  if (onPath("heif-dec") || onPath("heif-convert")) {
+    _heifSupport = true;
+    return _heifSupport;
+  }
+  if (!(onPath("magick") || onPath("convert"))) {
+    _heifSupport = false;
+    return _heifSupport;
+  }
+  try {
+    const r = run(magickBin(), ["-list", "format"], 15000);
+    _heifSupport = /\bheic\b|\bheif\b/i.test(r.out);
+  } catch {
+    _heifSupport = false;
+  }
+  return _heifSupport;
+}
+
 export function detectTools(): CompressTools {
   return {
     ffmpeg: onPath("ffmpeg"),
@@ -81,6 +122,7 @@ export function detectTools(): CompressTools {
     cwebp: onPath("cwebp"),
     cjpeg: onPath("cjpeg"),
     jpegoptim: onPath("jpegoptim"),
+    heif: magickSupportsHeif(),
   };
 }
 function magickBin(): string {
@@ -235,13 +277,59 @@ interface Plan {
   ext: string;            // output extension
   action: string;
   lossless: boolean;
+  // A COMPATIBILITY conversion (HEIC/HEIF/AVIF → JPEG, or a forced H.264) whose purpose is universal
+  // playback/compatibility, NOT shrinkage — so it is EXEMPT from the "output must be smaller" size-gain
+  // guard and may legitimately grow the file (images.mdx §4.1, compression.mdx §5). Resolution + alpha
+  // invariants are never waived.
+  formatConvert?: boolean;
 }
 
-function pickImageTarget(prefs: CompressMediaPrefs, tools: CompressTools, srcExt: string, alphaUsed: boolean | null): Plan | { toolMissing: string } {
+// A plan may resolve to a deliberate SKIP (not an error, not a tool gap) — e.g. conversion is turned off
+// and there is no in-place compressor for this format. The caller reports it as `skipped`.
+type PlanResult = Plan | { toolMissing: string } | { skip: string };
+
+function pickImageTarget(prefs: CompressMediaPrefs, tools: CompressTools, srcExt: string, alphaUsed: boolean | null): PlanResult {
   const denied = new Set(prefs.deny);
   const isLosslessSrc = LOSSLESS_IMAGE_EXT.has(srcExt);
+  const isHeicFamily = HEIC_FAMILY_EXT.has(srcExt);
   // Lossless quality, or a PNG we keep as PNG → oxipng lossless recompress.
   const wantLossless = prefs.quality === "lossless";
+
+  // ── convert_types OFF → FORMAT-PRESERVING only (images.mdx §2.1). No target may change the extension.
+  if (!prefs.convertTypes) {
+    if (isLosslessSrc) {
+      if (!tools.oxipng && !tools.magick) return { toolMissing: "oxipng (brew install oxipng)" };
+      const useOxi = tools.oxipng && srcExt === ".png";
+      return { media: "images", targetKey: "png", targetCodec: useOxi ? "PNG (lossless)" : "recompress", ext: srcExt, action: "lossless recompress", lossless: true };
+    }
+    if (srcExt === ".jpg" || srcExt === ".jpeg" || srcExt === ".webp") {
+      if (!tools.magick) return { toolMissing: "ImageMagick (brew install imagemagick)" };
+      return { media: "images", targetKey: srcExt === ".webp" ? "webp" : "jpeg", targetCodec: srcExt === ".webp" ? "WebP" : "JPEG", ext: srcExt, action: `re-encode (${prefs.quality})`, lossless: false };
+    }
+    // HEIC/HEIF/AVIF (and any other) have no in-place compressor here → nothing to do when convert is off.
+    return { skip: "conversion is turned off in settings (no in-place compression for this type)" };
+  }
+
+  // ── HEIC/HEIF/AVIF → JPEG COMPATIBILITY conversion (images.mdx §4). Primary-still decode happens in
+  // imageCommand(); here we only pick the target. JPEG unless transparency is used (then lossless WebP).
+  if (isHeicFamily) {
+    if (!tools.heif) return { toolMissing: "libheif for ImageMagick (brew install imagemagick libheif)" };
+    if (alphaUsed === true) {
+      if (!denied.has("webp") && tools.magick) {
+        return { media: "images", targetKey: "webp", targetCodec: "WebP", ext: ".webp", action: `→ WebP (lossless, keeps alpha)`, lossless: true, formatConvert: true };
+      }
+      return { skip: "HEIC has used transparency and JPEG can't keep it (allow WebP to convert it)" };
+    }
+    if (!denied.has("jpeg")) {
+      if (!tools.magick) return { toolMissing: "ImageMagick (brew install imagemagick)" };
+      return { media: "images", targetKey: "jpeg", targetCodec: "JPEG", ext: ".jpg", action: `→ JPEG (${prefs.quality}, primary image)`, lossless: false, formatConvert: true };
+    }
+    if (!denied.has("webp") && tools.magick) {
+      return { media: "images", targetKey: "webp", targetCodec: "WebP", ext: ".webp", action: `→ WebP (${prefs.quality}, primary image)`, lossless: wantLossless, formatConvert: true };
+    }
+    return { skip: "JPEG and WebP are both denied for images — nothing to convert HEIC to" };
+  }
+
   for (const key of prefs.prefer) {
     const t = IMAGE_TARGETS[key];
     if (!t || denied.has(key)) continue;
@@ -272,7 +360,7 @@ function pickImageTarget(prefs: CompressMediaPrefs, tools: CompressTools, srcExt
   return { media: "images", targetKey: srcExt === ".webp" ? "webp" : "jpeg", targetCodec: srcExt === ".webp" ? "WebP" : "JPEG", ext: srcExt, action: `re-encode (${prefs.quality})`, lossless: false };
 }
 
-function pickVideoTarget(prefs: CompressMediaPrefs, tools: CompressTools, force?: string): Plan | { toolMissing: string } {
+function pickVideoTarget(prefs: CompressMediaPrefs, tools: CompressTools, srcExt: string, force?: string): PlanResult {
   if (!tools.ffmpeg) return { toolMissing: "ffmpeg (brew install ffmpeg)" };
   const denied = new Set(prefs.deny);
   // A forced codec (e.g. "h264" for a browser/upload-compatibility convert — codecs.mdx §5) wins over
@@ -281,7 +369,11 @@ function pickVideoTarget(prefs: CompressMediaPrefs, tools: CompressTools, force?
     ? force
     : prefs.prefer.find((k) => VIDEO_TARGETS[k] && !denied.has(k)) ?? "h264";
   const t = VIDEO_TARGETS[key];
-  return { media: "video", targetKey: key, targetCodec: t.label, ext: t.ext, action: `→ ${t.label} (${prefs.quality}, CRF ${videoCrf(key, prefs.quality)})`, lossless: prefs.quality === "lossless" };
+  // convert_types OFF (and no forced codec) → keep the SOURCE container extension instead of forcing .mp4
+  // (images.mdx §1.4 — the same format-preserving policy as images). ffmpeg muxes into that container.
+  const keepContainer = !prefs.convertTypes && !force && srcExt;
+  const ext = keepContainer ? srcExt : t.ext;
+  return { media: "video", targetKey: key, targetCodec: t.label, ext, action: `→ ${t.label} (${prefs.quality}, CRF ${videoCrf(key, prefs.quality)})`, lossless: prefs.quality === "lossless" };
 }
 
 /** Dry-run: what would happen + is it alpha-safe. Never touches the file. */
@@ -299,13 +391,16 @@ export function checkFile(input: string): CompressCheck {
   const settings = getCompressionSettings();
   const prefs = media === "images" ? settings.images : settings.video;
   if (!prefs.enabled) return { ...base, action: `${media} compression is disabled in settings` };
+  const srcExt = path.extname(abs).toLowerCase();
+  // Per-extension opt-OUT (images.mdx §2.2). An excluded extension is skipped BEFORE any probe.
+  if (prefs.skipExts.includes(srcExt)) return { ...base, action: "extension excluded by settings" };
   const tools = detectTools();
 
   if (media === "images") {
-    const srcExt = path.extname(abs).toLowerCase();
     const alphaUsed = imageAlphaUsed(abs, tools);
     const plan = pickImageTarget(prefs, tools, srcExt, alphaUsed);
     if ("toolMissing" in plan) return { ...base, alphaUsed, toolMissing: plan.toolMissing, action: `needs ${plan.toolMissing}` };
+    if ("skip" in plan) return { ...base, alphaUsed, action: plan.skip };
     const noAlphaTarget = !IMAGE_TARGETS[plan.targetKey]?.alpha;
     const alphaSafe = !(alphaUsed !== false && noAlphaTarget);
     return {
@@ -317,8 +412,9 @@ export function checkFile(input: string): CompressCheck {
   // video
   const info = videoInfo(abs, tools);
   const alphaUsed = info ? pixFmtHasAlpha(info.pixFmt) : null;
-  const plan = pickVideoTarget(prefs, tools);
+  const plan = pickVideoTarget(prefs, tools, srcExt);
   if ("toolMissing" in plan) return { ...base, alphaUsed, toolMissing: plan.toolMissing, action: `needs ${plan.toolMissing}` };
+  if ("skip" in plan) return { ...base, alphaUsed, action: plan.skip };
   const targetAlpha = VIDEO_TARGETS[plan.targetKey]?.alpha ?? false;
   const alphaSafe = !(alphaUsed === true && !targetAlpha);
   return {
@@ -397,10 +493,12 @@ export async function compressFile(input: string, opts?: CompressFileOpts | stri
   }
 
   const prefs = media === "images" ? settings.images : settings.video;
+  const srcExt = path.extname(abs).toLowerCase();
   const plan = media === "images"
-    ? pickImageTarget(prefs, tools, path.extname(abs).toLowerCase(), check.alphaUsed)
-    : pickVideoTarget(prefs, tools, forceVideoCodec);
+    ? pickImageTarget(prefs, tools, srcExt, check.alphaUsed)
+    : pickVideoTarget(prefs, tools, srcExt, forceVideoCodec);
   if ("toolMissing" in plan) return fail(abs, `needs ${plan.toolMissing}`, "failed", beforeBytes);
+  if ("skip" in plan) return fail(abs, plan.skip, "skipped", beforeBytes);
 
   const out = tmpOut(plan.ext);
   const inDims = media === "images" ? imageDims(abs, tools) : (videoInfo(abs, tools) && { w: videoInfo(abs, tools)!.w, h: videoInfo(abs, tools)!.h });
@@ -431,7 +529,10 @@ export async function compressFile(input: string, opts?: CompressFileOpts | stri
     return fail(abs, `refused: resolution changed ${inDims.w}×${inDims.h} → ${outDims.w}×${outDims.h}`, "blocked", beforeBytes);
   }
   const afterBytes = fs.statSync(out).size;
-  if (beforeBytes != null && afterBytes >= beforeBytes) {
+  // A COMPATIBILITY conversion (HEIC/HEIF/AVIF → JPEG, or a forced H.264 — compression.mdx §5) exists for
+  // universal playback, not shrinkage, so it is EXEMPT from the "must be smaller" guard and may grow the
+  // file. Every OTHER compress must actually gain, or we keep the original untouched.
+  if (!plan.formatConvert && beforeBytes != null && afterBytes >= beforeBytes) {
     tryUnlink(out);
     return { path: abs, status: "skipped", reason: "no gain (already well compressed)", beforeBytes, afterBytes, codec: check.targetCodec };
   }
@@ -489,6 +590,23 @@ function imageCommand(plan: Plan, abs: string, out: string, prefs: CompressMedia
   // most important one to pin to 1 under a wide fan-out. A one-off compress passes no `threads` and each
   // tool uses its own default. `capped` = an explicit small cap was requested.
   const capped = threads != null && threads > 0;
+
+  // ── HEIC / HEIF / AVIF → the PRIMARY still (images.mdx §4.1, LOCKED). A HEIC is a CONTAINER that may
+  // hold a primary image, thumbnails, depth/auxiliary images, and (Live Photos) a motion clip. We read
+  // ONLY the primary still by pinning scene `[0]` — ImageMagick's HEIF reader decodes the pitm primary
+  // image as scene 0 — and we pass NO `--with-aux` / coalesce, so no thumbnail, aux/depth image, or
+  // motion-video frame can be selected. `-auto-orient` bakes in the EXIF rotation the container carried.
+  // These always route through ImageMagick (cwebp/oxipng can't read HEIC). Never downscaled (no resize).
+  const srcExt = path.extname(abs).toLowerCase();
+  if (HEIC_FAMILY_EXT.has(srcExt)) {
+    const limit = capped ? ["-limit", "thread", String(threads)] : [];
+    const primary = `${abs}[0]`; // scene 0 = the pitm primary image — never a preview/aux/motion frame
+    const enc = plan.targetKey === "webp" && plan.lossless
+      ? ["-define", "webp:lossless=true"]
+      : ["-quality", q];
+    return { bin: magickBin(), args: [...limit, primary, "-auto-orient", ...enc, "-set", "comment", markerPayload(plan.targetKey), out] };
+  }
+
   if (plan.targetKey === "png" && tools.oxipng) {
     const t = capped ? ["--threads", String(threads)] : [];
     return { bin: "oxipng", args: ["-o", "4", ...t, "--strip", "safe", abs, "--out", out] };

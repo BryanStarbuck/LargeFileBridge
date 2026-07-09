@@ -18,6 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { getAppConfig } from "../store-model/config.service.js";
 import { listRepoFolders, getRepoConfig } from "../store-model/units.service.js";
+import { detectCloudRoots } from "./cloud-roots.js";
 
 function expandHome(p: string): string {
   return p.replace(/^~(?=\/|$)/, os.homedir());
@@ -62,6 +63,11 @@ function rawRoots(): string[] {
     const rc = getRepoConfig(folder);
     if (rc.repo.path) roots.add(expandHome(rc.repo.path));
   }
+  // Cloud-storage mounts surfaced at the top of the home column (file_system.mdx §6). These live under
+  // ~/Library/CloudStorage/ so they are already under the home root, but a mount that realpaths outside
+  // home (a FileProvider firmlink, a relocated Drive) would otherwise fail confinement — add each
+  // explicitly so browsing into a surfaced cloud root always resolves.
+  for (const cr of detectCloudRoots()) roots.add(cr.path);
   return [...roots];
 }
 

@@ -14,11 +14,18 @@ fe_port := env_var_or_default("FE_PORT", "2222")   # web app default; may be col
 auth_lib  := justfile_directory() + "/../OpenAuthFederated"
 auth_repo := "https://github.com/BryanStarbuck/OpenAuthFederated.git"
 
+# The app's local storage / state root — MUST match backend config/state-dir.ts (resolveStateDir):
+# $LFB_STATE_DIR, else ~/T/_large_files_bridge. The app's own rotating logs (log.log / error.err) live
+# here, and so does the launcher catch-all below — NO log files in /tmp (CLAUDE.md logging policy).
+state_dir := env_var_or_default("LFB_STATE_DIR", home_directory() + "/T/_large_files_bridge")
+
 webport  := code + "/packages/frontend/scripts/web-port.mjs"
 logpipe  := justfile_directory() + "/scripts/log_rotate_pipe.mjs"   # dependency-free rotating sink (5 MiB × 5)
+# Runtime scratch (pid/port) stays in /tmp — cleared on reboot so stale pidfiles never linger; these are
+# NOT logs. The launcher log itself lives in the state dir and rotates (5 MiB × 5).
 portfile := "/tmp/lfb.web.port"
-log      := "/tmp/lfb.webapp.log"
 pidfile  := "/tmp/lfb.webapp.pid"
+log      := state_dir + "/launcher.log"
 
 # launchd agent labels (schedule.service.ts: scan = 4h discovery, sync = 15m).
 scan_label := "com.largefilebridge.scan"
@@ -82,6 +89,7 @@ test:
 # Start backend (:8787) + web app (:2222, collision-resolved) in the background.
 run: setup stop
     -@rm -f {{portfile}}
+    @mkdir -p "{{state_dir}}"   # ensure the local storage / log dir exists before the sink opens the log
     # Stream stdout+stderr THROUGH the rotating sink so {{log}} is size-bounded (5 MiB × 5) instead of
     # growing unbounded. Process substitution keeps `$!` = the app pid (nohup pnpm dev), not the sink,
     # so `stop`/pidfile still target the app. `exec node` avoids leaving an extra shell around the sink.
@@ -140,7 +148,8 @@ install-agents: setup
 uninstall-agents:
     cd {{code}}/packages/backend && pnpm cli uninstall-agent scan && pnpm cli uninstall-agent sync
 
-# Remove installed deps and background run state (node_modules + /tmp files). Re-run `just setup` after.
+# Remove installed deps and background run state (node_modules + pid/port scratch + launcher log).
+# Re-run `just setup` after. Leaves the app's own log.log / error.err in the state dir intact.
 clean: stop
     -@rm -f {{log}} {{pidfile}} {{portfile}}
     rm -rf {{code}}/node_modules {{code}}/packages/*/node_modules

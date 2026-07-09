@@ -29,7 +29,12 @@ export const IMAGE_UNCOMPRESSED_EXT = new Set([".png", ".bmp", ".tif", ".tiff", 
 // floor, so a folder of small PNG icons does NOT light up. Videos have NO size floor for interest.
 export const IMAGE_INTEREST_FLOOR_BYTES = 3 * 1024 * 1024;
 // Images already in an efficient lossy format → already compressed (c).
-const IMAGE_COMPRESSED_EXT = new Set([".jpg", ".jpeg", ".webp", ".heic", ".heif", ".avif"]);
+const IMAGE_COMPRESSED_EXT = new Set([".jpg", ".jpeg", ".webp"]);
+// Apple HEIC & other HEVC/AV1-coded stills. Byte-efficient ALREADY, but poorly supported by the sites
+// people post to — so we OFFER a compatibility conversion to JPEG (images.mdx §4). They therefore carry
+// the "C" (offer) badge and count as "should", NOT "already done". Governed by the convert_types setting
+// and the per-extension checkbox at compress time (compression.service.ts pickImageTarget).
+const IMAGE_CONVERT_EXT = new Set([".heic", ".heif", ".avif"]);
 // A filename that advertises an already-compressed video encode.
 const VIDEO_COMPRESSED_MARK = /(compress|h264|x264|hevc|x265|av1|reenc|shrunk|small)/i;
 
@@ -183,6 +188,7 @@ function compressBadge(name: string, _sizeBytes: number | null, _threshold: numb
   const ext = path.extname(name).toLowerCase();
   if (IMAGE_COMPRESSED_EXT.has(ext)) return "compressed"; // c
   if (IMAGE_UNCOMPRESSED_EXT.has(ext)) return "compress"; // C — lossless/convertible
+  if (IMAGE_CONVERT_EXT.has(ext)) return "compress"; // C — HEIC/HEIF/AVIF → JPEG compatibility conversion
   if (VIDEO_EXT.has(ext)) {
     if (VIDEO_COMPRESSED_MARK.test(name)) return "compressed"; // c — name advertises a compressed encode
     return "compress"; // C — offer to (re)compress
@@ -198,6 +204,8 @@ export function compressInfo(name: string): {
   const ext = path.extname(name).toLowerCase();
   if (IMAGE_COMPRESSED_EXT.has(ext)) return { compressible: "image", compressState: "done" };
   if (IMAGE_UNCOMPRESSED_EXT.has(ext)) return { compressible: "image", compressState: "should" };
+  // HEIC/HEIF/AVIF → offer the compatibility conversion to JPEG (images.mdx §4), so "should", not "done".
+  if (IMAGE_CONVERT_EXT.has(ext)) return { compressible: "image", compressState: "should" };
   if (VIDEO_EXT.has(ext)) {
     return {
       compressible: "video",

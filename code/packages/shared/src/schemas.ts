@@ -95,6 +95,13 @@ export const AppConfigSchema = z.object({
           quality: z.enum(["low", "medium", "high", "lossless"]).default("medium"),
           prefer: z.array(z.string()).default(["jpeg", "webp"]),
           deny: z.array(z.string()).default(["jpeg2000"]),
+          // File-type conversion policy (images.mdx §2, settings.mdx §4.1.1). Both DEFAULT ON.
+          // convert_types: may a compress CHANGE the format to a better/compatible target (HEIC→JPEG,
+          // PNG→JPEG)? false = format-preserving (re-encode in place, never change the extension).
+          convert_types: z.boolean().default(true),
+          // skip_exts: per-extension OPT-OUT (default [] = every recognized ext is in scope). Lowercase,
+          // leading-dot (".heic"). An ext listed here is skipped entirely ("excluded by settings").
+          skip_exts: z.array(z.string()).default([]),
         })
         .default({}),
       video: z
@@ -103,6 +110,8 @@ export const AppConfigSchema = z.object({
           quality: z.enum(["low", "medium", "high", "lossless"]).default("medium"),
           prefer: z.array(z.string()).default(["h264", "hevc"]),
           deny: z.array(z.string()).default(["av1"]),
+          convert_types: z.boolean().default(true), // same policy for video (images.mdx §1.4)
+          skip_exts: z.array(z.string()).default([]),
         })
         .default({}),
       audio: z
@@ -111,6 +120,8 @@ export const AppConfigSchema = z.object({
           quality: z.enum(["low", "medium", "high", "lossless"]).default("medium"),
           prefer: z.array(z.string()).default(["aac"]),
           deny: z.array(z.string()).default([]),
+          convert_types: z.boolean().default(true), // uniform shape (audio disabled; fields unused)
+          skip_exts: z.array(z.string()).default([]),
         })
         .default({}),
       preserve_resolution: z.boolean().default(true), // LOCKED on (compression.mdx §5)

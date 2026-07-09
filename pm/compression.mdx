@@ -151,6 +151,24 @@ The engine builds a **plan** for a file from its kind + the user's codec prefere
     WebP** (which preserves alpha).
 * **JPEG / WebP (already lossy):** re-encode at medium quality with `mozjpeg`/`cwebp` only when it yields a
   real gain; otherwise report **"already compressed — no gain"** and change nothing.
+* **HEIC / HEIF / AVIF (Apple photos & efficient formats): a COMPATIBILITY conversion — normally → JPEG.**
+  These are byte-efficient (HEVC/AV1-coded) but **poorly supported** by the sites people post to, so the
+  default is to **convert to JPEG** for universal compatibility (governed by the `convert_types` setting
+  and the per-extension checkbox — [images.mdx §2](./images.mdx#2-the-two-settings-settings--compression)).
+  Two things make this different from a normal image compress:
+  * **The container trap — extract the PRIMARY still (LOCKED).** A HEIC is a container that can hold a
+    primary image, thumbnails, depth/auxiliary images, and (for Live Photos) a motion clip. We decode
+    **only the primary still** (the `pitm` item) — never a thumbnail, an aux/depth image, or a frame from
+    the motion video / its lead-in frames. Full rule + tooling in
+    [images.mdx §4.1](./images.mdx#41-the-heic-container-trap--extract-the-primary-still-not-a-previewmotion-frame-locked).
+  * **Exempt from the size-gain guard (§5).** JPEG is *less* efficient than HEVC, so HEIC → JPEG usually
+    produces a **larger** file. Because it is a **compatibility conversion**, not a size reduction, it is
+    **not blocked** by the "output must be smaller" rule (like the H.264 compatibility convert, §8.1) — the
+    resolution-preserving and alpha-safety invariants still apply. The alpha guard steers a HEIC with
+    **used** transparency to lossless WebP instead of JPEG.
+
+The full **file-type conversion policy** (the two settings, the per-extension scope, and the HEIC
+handling) is specified in its own part spec: **[images.mdx](./images.mdx)**. This engine honors it.
 
 ### 3.2 Video
 
@@ -160,8 +178,10 @@ The engine builds a **plan** for a file from its kind + the user's codec prefere
   **not** preserve alpha, we refuse — or, if the user's preferences include an alpha-preserving codec, we
   steer to it.
 
-Building the per-file plan (source kind → tool + target codec + quality, honoring allow/deny prefs) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `pickImageTarget()` (images) and `pickVideoTarget()` (video), assembled by `checkFile()`.
+Building the per-file plan (source kind → tool + target codec + quality, honoring allow/deny prefs, the
+`convert_types` / `skip_exts` conversion settings, and the HEIC-family → JPEG compatibility conversion with
+its `formatConvert` size-gain exemption) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `pickImageTarget()` (images) and `pickVideoTarget()` (video), assembled by `checkFile()`. HEIC/HEIF/AVIF are treated as convertible (not "already done") in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `compressInfo()` / `compressBadge()`.
 
 ---
 
@@ -192,7 +212,11 @@ output's width × height** and compares to the input:
   "compression changed the resolution — refused". We never ship a downscaled file.
 
 We also require the output to be **smaller** than the input; if it isn't, we keep the original and report
-**"no gain"**.
+**"no gain"**. **One deliberate exception:** a **compatibility conversion** — HEIC/HEIF/AVIF → JPEG (§3.1)
+or the forced H.264 convert (§8.1) — is **exempt from the size-gain check**, because its purpose is
+universal playback/compatibility, not shrinkage, and it may legitimately grow the file. The
+resolution-preserving and alpha-safety invariants are **never** waived. The exemption is carried by a
+`formatConvert` flag on the plan.
 
 Verifying the output keeps the same width × height (and is smaller) before any replacement is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — the resolution + size-gain checks inside `compressFile()` (dimensions re-measured via `videoInfo()` / `imageDims()`, i.e. `ffprobe` / `magick identify`), gated on the `preserve_resolution` setting.
@@ -248,6 +272,12 @@ Settings, per media type:
 * **Quality** — `low | medium | high | lossless` (default **medium**; prefer lossless where it applies).
 * **Prefer** — ordered list of target codecs; the first one that is **allowed** and **available** wins.
 * **Deny** — codecs the user never wants chosen (e.g. **JPEG 2000** for images, **AV1** for video).
+* **Convert file types** (`convert_types`, default **ON**) — may a compress **change the format** to a
+  better compressible / more-compatible target (HEIC → JPEG, PNG → JPEG)? Off = format-preserving only.
+  Specified in [images.mdx §2.1](./images.mdx#21-convert-file-types-when-compressing--master-toggle-default-on).
+* **Compress all file types** (`skip_exts`, default **empty = all in**) — a per-extension **opt-OUT** list;
+  every recognized extension is in scope unless the user unchecks it. Specified in
+  [images.mdx §2.2](./images.mdx#22-compress-all-file-types--scope-default-on-with-a-per-extension-opt-out-list).
 
 Good defaults (chosen for **social-media compatibility**):
 
@@ -458,6 +488,12 @@ Surfacing the codec + compressed-state and the Compress action per file is handl
 5. **PNG → JPEG** by default; **JPEG 2000** only when better **and** not denied; the user can **deny**
    specific codecs **per media type** (images / video / audio) in Settings, with **social-media-safe
    defaults** (deny `jpeg2000` / `av1`). **Audio is not compressed** (disabled) for now.
+5a. **File-type conversion (images.mdx):** two per-media settings both **default ON** — `convert_types`
+    (may change format on compress) and `skip_exts` (per-extension opt-OUT; empty = all in). **HEIC/HEIF/
+    AVIF → JPEG** is a **compatibility conversion**: it decodes the **primary still** only (never a
+    thumbnail / depth-aux / Live-Photo motion frame — [images.mdx §4.1](./images.mdx)), keeps the **same
+    pixel resolution**, and is **exempt from the size-gain guard** (§5). With `convert_types` off,
+    compression is format-preserving.
 6. Tools run via a **temp file**; the original is moved to the **LFBridge trash** (recoverable); tracking
    records the compressed + uncompressed hashes/sizes, **and** a travelling **compression record**
    (`.lfbridge/analysis/<relpath>/compression.yaml`) captures the original name/extension + size
@@ -489,7 +525,12 @@ Surfacing the codec + compressed-state and the Compress action per file is handl
   prefer lossless. TWO invariants: keep same aspect ratio + pixel resolution (never downscale, verified);
   and alpha-channel safety check (PNG %[opaque]; video pix_fmt vs target codec alpha capability). PNG→JPEG
   default; JPEG2000 optional; per-media codec allow/deny in Settings with social-media-safe defaults
-  (deny jpeg2000/av1). Temp-file → verify → recoverable replace (original to trash). View-one-file shows
+  (deny jpeg2000/av1). FILE-TYPE CONVERSION (images.mdx): per-media convert_types (default ON) + skip_exts
+  (per-ext opt-OUT, default [] = all in). HEIC/HEIF/AVIF → JPEG = COMPATIBILITY conversion: primary-still
+  decode only (pitm; never thumbnail/aux/motion frame), same resolution, EXEMPT from the size-gain guard
+  via a formatConvert flag (may grow the file, like the H.264 convert §8.1). HEIC reclassified convertible
+  in badges.ts compressInfo/compressBadge (was "already done"). Temp-file → verify → recoverable replace
+  (original to trash). View-one-file shows
   codec + compressed state. Code: /api/compress (compression.service.ts + compression.router.ts).
   ALREADY-COMPRESSED MARKER (§8.4, LOCKED, IMPLEMENTED): skip already-compressed files BEFORE any transcode, on
   re-runs AND on every peer in the mesh. Mechanism = an IN-FILE marker in the `comment` container tag

@@ -10,6 +10,19 @@ export function homeDir(): string {
   return os.homedir();
 }
 
+/** True when `abs` (an already-resolved absolute path) is the OS home directory. Compares the raw
+ *  path first, then falls back to a realpath comparison so a symlinked/firmlinked home still matches
+ *  (file_system.mdx §6 — the home column is where cloud roots are surfaced). */
+export function isHomeDir(abs: string): boolean {
+  const home = homeDir();
+  if (abs === home) return true;
+  try {
+    return fs.realpathSync.native(abs) === fs.realpathSync.native(home);
+  } catch {
+    return false;
+  }
+}
+
 /** Resolve + validate the requested path to an existing absolute directory, confined to the
  *  allow-roots (security audit finding 2 — never serve a directory outside the browse roots). */
 export function resolveDir(input: string | undefined): string {

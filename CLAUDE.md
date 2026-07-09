@@ -74,6 +74,36 @@ With AI, these days, people often use GIThub to share/backup their files across 
 
 * Repo: `https://github.com/BryanStarbuck/LargeFileBridge.git`
 
+## Local storage (state root) & logging
+
+* **Formal local storage directory (state root):** **`~/T/_large_files_bridge/`**
+  * Override with the `LFB_STATE_DIR` env var; falls back to `/tmp/_large_files_bridge`
+    only if the home path can't be built.
+  * This is the single on-disk home for everything the app persists — no database.
+  * Resolved in code: `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts`,
+    functions `resolveStateDir()` (state root) and `resolveLogDir()` (log dir; same as the state root
+    unless `LFB_LOG_DIR` is set).
+
+* **Log files live in the state root — NEVER in `/tmp`.** Three rotating files:
+  * **`~/T/_large_files_bridge/log.log`** — the app's full log (DEBUG/INFO + all higher levels).
+  * **`~/T/_large_files_bridge/error.err`** — the durable fault trail (WARN/ERROR/FATAL only,
+    written synchronously so it survives a crash).
+  * **`~/T/_large_files_bridge/launcher.log`** — the `just run` catch-all: everything `pnpm dev`
+    (Vite + backend boot) prints on stdout/stderr.
+
+* **All logs are size-bounded rotating logs: 5 MiB per file × 5 generations** (`log.log` →
+  `log.log.1` … `log.log.5`, oldest dropped). Nothing grows unbounded.
+  * Tunable via env: `LFB_LOG_MAX_BYTES` (default `5242880`) and `LFB_LOG_GENERATIONS` (default `5`).
+  * App-side rotation (`log.log` / `error.err`) implemented in
+    `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts`,
+    class `RollingFileWriter` (cached byte counter, `roll()` for rotation) with the `log.*` / `logError()` API.
+  * Launcher rotation (`launcher.log`) implemented by the dependency-free sink
+    `~/BGit/Bryan_git/LargeFileBridge/scripts/log_rotate_pipe.mjs`, which the `justfile` pipes
+    `pnpm dev` through. Its rotation policy MUST stay identical to `logging.ts` (same env vars/defaults).
+
+* **Runtime scratch (`/tmp/lfb.webapp.pid`, `/tmp/lfb.web.port`)** stays in `/tmp` on purpose — these
+  are ephemeral pid/port files (cleared on reboot so stale state never lingers), **not logs**.
+
 ## Directory layout
 
 ```

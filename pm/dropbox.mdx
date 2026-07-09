@@ -253,7 +253,66 @@ large_files:
 
 ---
 
-## 9. Acceptance criteria
+## 9. The other role — Dropbox as a browseable File System root
+
+Everything above is Dropbox's **first** role: a **Sync-List backbone** (a road that carries the small YAML
+list between the user's computers). Dropbox has a **second, completely separate role** in LFBridge, and this
+section records it so the two are never confused.
+
+| | Role 1 — **Sync-List backbone** (§1–§8) | Role 2 — **Browseable File System root** (this §9) |
+| --- | --- | --- |
+| What it is | A transport for `LargeFilesBridge_SyncList.yaml` between the user's own machines. | A place on disk the user browses and compresses inside the **File System** page. |
+| Owned by | This spec. | [file_system.mdx §4](./file_system.mdx) — this section only supplies the Dropbox-specific discovery. |
+| Gated by | `large_files.settings.backbones.dropbox.enabled`. | **Nothing** — visible whenever the Dropbox mount exists on this machine. |
+| Writes to Dropbox? | Yes — the YAML list only, into our own subfolder (§6). | **No.** Read-only directory metadata to draw and walk rows. Never writes. |
+
+> **The separation is LOCKED.** Surfacing Dropbox in the File System browser (role 2) **never** enables the
+> Dropbox backbone (role 1), **never** writes a Sync List, and **never** places bytes into Dropbox. A user with
+> `backbones.dropbox.enabled: false` still sees Dropbox at the top of the home column and can compress the
+> videos inside it. The only thing the two roles share is the **discovery path** below.
+
+### 9.1 Why Dropbox is surfaced (the product reason)
+
+The multi-gigabyte files LFBridge exists to compress and sync increasingly live **in Dropbox**, not in the
+user's plain home tree. On macOS the Dropbox client mounts under `~/Library/CloudStorage/Dropbox`, buried one
+level deep — so [file_system.mdx §4](./file_system.mdx) lifts it to the **top of the home column**, presented
+as if it sat directly in `~`. The user opens **File System** and Dropbox is simply *there*, one click from the
+big files, without having to know the `Library/CloudStorage` path exists.
+
+### 9.2 Dropbox-specific discovery for the surfaced root (reuses §3)
+
+The browseable root reuses the **same location logic** that §3 already defines for the backbone — there is one
+source of truth for "where is Dropbox on this machine":
+
+* **Primary (macOS): the CloudStorage mount.** `~/Library/CloudStorage/Dropbox` (and `Dropbox (Personal)` /
+  `Dropbox (Company)` when several accounts are linked). This is what [file_system.mdx §4.3](./file_system.mdx)
+  enumerates and classifies as `provider: "dropbox"`.
+* **Authoritative path check: `~/.dropbox/info.json`.** The same file §3 parses for the backbone gives the
+  real root path(s) per linked account — the tie-breaker when the mount name is ambiguous or relocated.
+* **Legacy `~/Dropbox` symlink de-dup (LOCKED).** Older installers leave `~/Dropbox → ~/Library/CloudStorage/
+  Dropbox`. The home column would otherwise show Dropbox twice; [file_system.mdx §4.4](./file_system.mdx)
+  de-duplicates by realpath so **exactly one** Dropbox row appears (the cloud shortcut), while an unrelated
+  `~/Dropbox alias` document is left untouched.
+
+### 9.3 Hazards carry over, read-only
+
+Dropbox's browsing role hits the **same vendor hazards** as the backbone (§4), but only in the gentle,
+read-only direction:
+
+* **Online-only / Smart Sync placeholders** are `stat`-ed for metadata **without materializing** them — we
+  never trigger a download just to draw a row or compute the interest tint
+  ([file_system.mdx §4.7](./file_system.mdx)). A placeholder video still counts toward "this folder is
+  interesting"; its bytes are only fetched if the user explicitly opens or compresses it.
+* **`.dropbox` / `.dropbox.cache` metadata** is skipped by the shared `HARD_SKIP` set (§4) during any walk.
+* **Conflicted-copy / partial files** are irrelevant to browsing — they are just more rows; the reconcile-or-
+  reject rules of §4 apply only to the *backbone* reading the YAML list, not to a human browsing folders.
+
+The Dropbox mount is discovered and classified for the File System browser (the `provider: "dropbox"` row) in code, reusing the §3 location logic:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/cloud-roots.ts` — `detectCloudRoots()` (the `Dropbox`-prefixed branch) · surfaced on the home column by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (the `isHomeDir` block + symlink de-dup).
+
+---
+
+## 10. Acceptance criteria
 
 Dropbox as a backbone is correct when **all** of the following hold:
 
@@ -283,6 +342,11 @@ Dropbox as a backbone is correct when **all** of the following hold:
    ([knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule)).
 9. The list contains **paths + CIDs only** — never bytes, never secrets — and only **allow-listed
    owners'** lists are adopted (§7).
+10. **Second role, kept separate (§9).** Dropbox is **also** surfaced as a browseable File System root at the
+    top of the home column ([file_system.mdx §4](./file_system.mdx)) — visible whenever the mount exists,
+    **regardless of** `backbones.dropbox.enabled`, reusing the §3 discovery + the legacy-`~/Dropbox`-symlink
+    de-dup. This browsing role is **read-only metadata** (placeholders are never materialized to draw a row)
+    and **never** writes to Dropbox or enables the backbone.
 
 <!--
   This is the DROPBOX backbone spec — one of three siblings (google_drive.mdx, repo__list_syns.mdx)
@@ -295,4 +359,11 @@ Dropbox as a backbone is correct when **all** of the following hold:
   computer-scope only rule. Dropbox is the file-based alternative to storage_local.mdx §9.3's IPNS transport
   for the whole-computer list. Honors knowledge/ipfs.mdx §6 (only-our-content). Do not add schema keys
   beyond backbone-local settings.backbones.dropbox.{enabled,root}.
+  §9 (SECOND ROLE): Dropbox ALSO plays a browseable-File-System-root role, OWNED by file_system.mdx §4 —
+  this spec only supplies the Dropbox-specific discovery (reuses §3: ~/Library/CloudStorage/Dropbox, the
+  ~/.dropbox/info.json path check, and the legacy ~/Dropbox->CloudStorage/Dropbox symlink de-dup). LOCKED:
+  the browsing role is READ-ONLY metadata, gated by NOTHING (shows regardless of backbones.dropbox.enabled),
+  never enables the backbone / writes a Sync List / moves bytes, never materializes a placeholder. Code:
+  cloud-roots.ts detectCloudRoots() (Dropbox branch) surfaced by fs.service.ts listDirectory() isHomeDir block.
 -->
+

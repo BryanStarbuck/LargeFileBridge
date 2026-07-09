@@ -6,7 +6,7 @@
 import { memo, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
-import { ChevronRight, File as FileIcon, Folder, Home } from "lucide-react";
+import { ChevronRight, Cloud, File as FileIcon, Folder, Home } from "lucide-react";
 import type { FsEntry, FsListing, FileSystemView } from "@lfb/shared";
 import { viewerRouteForName } from "@lfb/shared";
 import { api } from "@/api/client";
@@ -323,7 +323,22 @@ const FsRow = memo(function FsRow({
         active ? "bg-[var(--lfb-primary-tint)]" : "hover:bg-slate-100"
       }`}
     >
-      {isDir ? (
+      {entry.cloud ? (
+        // Surfaced cloud-storage root (file_system.mdx §6): a Dropbox / Google Drive / iCloud mount
+        // lifted to the top of the home column. Draw a cloud glyph so it reads as a special shortcut,
+        // tinted by the same interest level when its subtree holds big files/videos, else a sky accent.
+        (() => {
+          const interesting = isInteresting(entry.interest);
+          const { color, fill } = folderGlyphStyle(entry.interest);
+          return (
+            <Cloud
+              size={14}
+              className={`shrink-0 ${interesting ? "" : "text-sky-600"}`}
+              style={interesting ? { color, fill } : undefined}
+            />
+          );
+        })()
+      ) : isDir ? (
         // Interesting-directory folder coloring (file_system.mdx §2/§3): when `entry.interest` is set,
         // drive the glyph's outline (color/stroke) and fill from the shared helper and drop the default
         // slate; keep the plain text-slate-500 glyph when interest is null/undefined.
