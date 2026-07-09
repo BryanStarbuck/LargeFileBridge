@@ -1,0 +1,289 @@
+---
+title: LargeFileBridge — Images (handling & format conversion)
+description: How LargeFileBridge handles IMAGE files when it compresses them — specifically the FILE-TYPE CONVERSION policy that sits on top of the compression engine (compression.mdx). Two new settings, both DEFAULT ON: (1) "Convert file types" — when compressing, LFBridge may transcode a source format into a better compressible one (e.g. HEIC → JPEG, PNG → JPEG); and (2) "Compress all image (and video) file types" — every recognized image/video extension is in scope by default. Both live in the Settings → Compression section and each media type carries a per-extension checkbox list so the user can leave a specific extension OUT of conversion / compression. Apple's .heic is the flagship case: its checkbox ("Convert HEIC → JPEG") is ON by default. HEIC is a CONTAINER that can hold several items — a primary still, thumbnails, depth/auxiliary images, and (for Live Photos) a separate motion clip — so we MUST extract the PRIMARY still image (the one the `pitm` / Primary Item box points at) and NEVER a thumbnail, an auxiliary/depth image, or a frame lifted from the motion video / its lead-in frames. All image conversions keep the SAME pixel resolution (never downscale), consistent with compression.mdx. Implemented on top of the /api/compress engine (compression.service.ts) with the settings in shared/schemas.ts + SettingsPage.tsx.
+---
+
+# LargeFileBridge — Images (handling & format conversion)
+
+Compression is a **core value** ([charter](../CLAUDE.md#compression-a-core-value)). The
+[Compression engine spec](./compression.mdx) defines *how* we shrink a file (the brew tools, the
+medium-quality/prefer-lossless policy, the two hard invariants). **This spec sits one layer up** and
+defines the **image handling & FILE-TYPE CONVERSION policy** — the rules and settings that decide
+**whether** an image is converted from one format to another when we compress it, **which** extensions
+are in scope, and the one image format that needs special care: **Apple's `.heic`**.
+
+Everything here is still governed by the compression invariants — **explicit user action only**,
+**never automatic**, **same pixel resolution / never downscale**, **alpha-safety first**, **recoverable
+replace**. This spec does not repeat them; it adds the **conversion & per-extension scope** on top.
+
+Siblings this builds on and does not repeat:
+
+* [Compression engine](./compression.mdx) — the tools, the MIDDLE-quality requirement, the
+  resolution-preserving verification (§5), the alpha-channel safety check (§6), the per-media codec
+  allow/deny (§7), and the already-compressed in-file marker (§8.4). **This spec is the format-conversion
+  policy those mechanics run under.**
+* [Settings (global)](./settings.mdx) — the Settings → **Compression** section (§4.1) where the two new
+  toggles and the per-extension lists live.
+* [Codecs](./codecs.mdx) — the browser/upload-compatibility target rules (H.264 is universal-safe).
+* [Charter — Compression](../CLAUDE.md) — video-first / image-second; never alter a file unless the
+  user asks; the PNG alpha-check requirement; PNG → compressible conversion with safety checks.
+
+---
+
+## 1. Principles (LOCKED)
+
+1. **Conversion happens ONLY during a compress.** LFBridge never rewrites a file's format on its own.
+   Format conversion is a **property of the compress operation** (compression.mdx §1) — one file, several
+   checked files, or a whole table filter — never a standalone "convert everything" background job.
+2. **Convert file types — DEFAULT ON.** When compressing, LFBridge **may transcode the source format into
+   a better compressible one** (HEIC → JPEG, PNG → JPEG, etc.). This is the product default. A user who
+   wants **format-preserving** compression only (re-encode in place, never change the extension) can turn
+   it **off**, globally or per extension (§3).
+3. **Compress all recognized types — DEFAULT ON.** Every recognized **image** extension — and, by the
+   same policy, every recognized **video** extension — is **in scope** by default. The per-extension list
+   lets the user leave a **specific** extension out; the default is "all in."
+4. **Same policy shape for VIDEO.** The convert-types toggle and the per-extension scope list are **not
+   image-only** — video carries the identical pair of controls (e.g. leave `.mov` out of conversion, or
+   skip `.gif` entirely). Images are the focus of this spec; video reuses the same model.
+5. **Same pixel resolution — never downscale.** Every image conversion keeps the **same aspect ratio and
+   the same pixel resolution** as the input — this is the compression.mdx §5 invariant, and it applies
+   identically to a format change (HEIC → JPEG comes out at the HEIC's exact width × height).
+6. **Alpha-safety still wins.** A per-extension "convert" toggle never overrides the alpha check
+   (compression.mdx §6). If converting `X → JPEG` would drop a **used** alpha channel, we refuse the JPEG
+   target and steer to an alpha-preserving path **regardless** of the convert setting.
+
+---
+
+## 2. The two settings (Settings → Compression)
+
+Both settings live in the **Settings → Compression** section
+([settings.mdx §4.1](./settings.mdx#41-compression-codec-allowdeny-per-media-type)), alongside the
+existing per-media codec allow/deny + quality. Both are **per media type** (images / video), and both
+**default ON**.
+
+### 2.1 "Convert file types when compressing" — master toggle, DEFAULT ON
+
+* **ON (default):** compression may **change the format** to a better compressible target — the normal
+  behavior described in [compression.mdx §3.1](./compression.mdx#31-images) (PNG → JPEG, HEIC → JPEG,
+  etc.).
+* **OFF:** compression is **format-preserving** — it re-encodes the file **in the same format** (or does a
+  lossless recompress) and **never changes the extension**. A PNG stays a PNG (oxipng lossless); a HEIC is
+  re-encoded as HEIC (or, if that yields no gain, skipped). Nothing is converted.
+
+### 2.2 "Compress all file types" — scope, DEFAULT ON, with a per-extension opt-out list
+
+Under the master toggle sits a **per-extension checkbox list** for the media type. **Every recognized
+extension is checked (in scope) by default.** Unchecking one leaves that extension **out of compression
+entirely** (it is neither converted nor re-encoded — LFBridge skips it and reports "extension excluded by
+settings").
+
+The recognized **image** extensions (from `IMAGE_EXT`, [code](../code/packages/shared/src/media.ts)):
+`.png` · `.bmp` · `.tif`/`.tiff` · `.gif` · `.jpg`/`.jpeg` · `.webp` · **`.heic`** · `.heif` · `.avif`.
+
+Each row is a checkbox; for formats we can transcode to a compressible target, the row also shows **what
+it converts to** (the arrow), e.g.:
+
+```
+ Images — compress these types           Convert on compress
+ ┌──────────────────────────────────────────────────────────┐
+ │ [✓] .heic   →  JPEG        (Apple photos)                 │   ← §4, ON by default
+ │ [✓] .heif   →  JPEG                                       │
+ │ [✓] .png    →  JPEG  (or PNG if alpha used)               │
+ │ [✓] .avif   →  JPEG                                       │
+ │ [✓] .tiff   →  JPEG                                       │
+ │ [✓] .jpg    →  re-encode (stays JPEG)                     │
+ │ [✓] .webp   →  re-encode (stays WebP)                     │
+ │ [✓] .gif    →  lossless recompress                        │
+ └──────────────────────────────────────────────────────────┘
+   ☑ Convert file types when compressing   ☑ Compress all image types
+```
+
+The two toggles compose: the **convert** toggle governs whether the **arrow** (`→ JPEG`) is honored; the
+**per-extension checkbox** governs whether the file is **touched at all**. If convert is OFF, every arrow
+collapses to "re-encode in place"; if a checkbox is off, that extension is skipped outright.
+
+### 2.3 Where it persists
+
+The two toggles extend the existing `compression.images` / `compression.video` blocks
+([compression.mdx §7](./compression.mdx#7-codec-preference-settings-per-media-type),
+[schema](../code/packages/shared/src/schemas.ts)):
+
+```yaml
+# config.yaml  (excerpt — the compression block, new fields marked)
+compression:
+  images:
+    enabled: true
+    quality: medium
+    prefer: [jpeg, webp]
+    deny:   [jpeg2000]
+    convert_types: true          # NEW (§2.1) — may change format on compress; DEFAULT true
+    skip_exts:    []             # NEW (§2.2) — extensions left OUT of compression; DEFAULT empty (all in)
+  video:
+    enabled: true
+    quality: medium
+    prefer: [h264, hevc]
+    deny:   [av1]
+    convert_types: true          # NEW — same policy for video
+    skip_exts:    []             # NEW
+```
+
+`convert_types: true` and an empty `skip_exts: []` are the defaults, so a fresh install **converts and
+compresses everything**. The list is an **opt-OUT** (extensions to skip), which keeps "all in" as the
+default even when new extensions are added later.
+
+The two new fields belong on the compression schema, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — `AppConfigSchema.compression.images`
+/ `.video` (add `convert_types` default `true`, `skip_exts` default `[]`). **Proposed.**
+
+The Settings UI (the master toggle + the per-extension checkbox list per media type) belongs in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` —
+`SettingsPage` Compression section (backed by `compression.router.ts` `GET/PATCH /api/compress/settings`).
+**Proposed.**
+
+---
+
+## 3. How the two settings steer the engine
+
+The compression engine already chooses an image's target via `pickImageTarget`
+([compression.mdx §3.1](./compression.mdx#31-images)). The two settings gate that choice **before** it
+runs, per file:
+
+1. **`skip_exts` check first (cheapest).** If the file's extension is in the media type's `skip_exts`,
+   the engine returns `skipped` with reason **"extension excluded by settings"** — no probe, no transcode.
+2. **`convert_types` gates the format change.** With `convert_types: false`, `pickImageTarget` must **not**
+   choose a target whose extension differs from the source — it re-encodes in place (JPEG → JPEG, WebP →
+   WebP) or does a **lossless recompress** for lossless sources (PNG/BMP/TIFF/GIF via oxipng), and for a
+   source with **no** in-place option (e.g. `.heic`) it reports **"no in-place compression — conversion is
+   turned off"** and changes nothing.
+3. **With `convert_types: true` (default), normal behavior:** the source is transcoded to the first
+   allowed/available preferred target (JPEG by default), subject to the **alpha guard** (§1.6).
+
+Honoring the two settings when building the per-file plan belongs in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`pickImageTarget()` (respect `convert_types`: no extension change when off) and `checkFile()` /
+`compressFile()` (early `skip_exts` return). The same two hooks apply to `pickVideoTarget()`. **Proposed.**
+
+---
+
+## 4. Apple HEIC → JPEG (the flagship conversion) — LOCKED
+
+`.heic` is **HEIF wrapped with HEVC-coded images** — the format iPhones save photos in. It is high-
+efficiency but **poorly supported** by the sites people post to, so converting it to **JPEG** (the
+universal image format) is the right default.
+
+* **The checkbox: "Convert HEIC → JPEG" — ON by default.** In the §2.2 image list, `.heic` is checked and
+  its arrow reads `→ JPEG`. This is the product default; the user may uncheck it (then HEIC is skipped or,
+  with convert off, re-encoded in place). `.heif` and `.avif` follow the same default (→ JPEG).
+* **Same pixel resolution.** The JPEG comes out at the HEIC's **exact width × height** — no downscale
+  (§1.5, compression.mdx §5 verification still runs on the output).
+* **Quality = medium (85)** by default, like every other image target (compression.mdx §2.1.2).
+
+### 4.1 The HEIC container trap — extract the PRIMARY still, not a preview/motion frame (LOCKED)
+
+**This is the subtle correctness requirement the user called out.** A HEIC is **not** a single image — it
+is a **container** (ISO-BMFF, the same box structure as MP4) that can hold **several items** at once:
+
+* the **primary still image** — the real photo;
+* **thumbnail(s)** — small embedded previews;
+* **auxiliary / depth images** — e.g. the depth map or an alpha aux image (Portrait mode);
+* for a **Live Photo**, a short **motion clip** (a `.mov` video with its own lead-in frames). On device a
+  Live Photo is a HEIC still **plus a sidecar MOV**; when bundled (e.g. a `.livp` package) the motion
+  video travels with the still.
+
+The failure mode the user hit: **grabbing a frame out of the motion/preview video (or one of its lead-in
+frames) instead of the actual photo.** We must **always** extract the **primary still image**.
+
+**How HEIF designates the real photo — the `pitm` box.** HEIF marks exactly one item as the *cover* /
+primary image via the **Primary Item box (`pitm`)**, which stores the `item_ID` of the still to display.
+Well-behaved tools default to that item; the danger is any code path that indexes into the container
+blindly (item `[0]`, "first frame", or an auxiliary/thumbnail item) and gets the wrong picture.
+
+**Our rule (LOCKED):**
+
+* **Decode the item the `pitm` box points at — the primary still — and nothing else.** Never a thumbnail,
+  never a depth/auxiliary image, never a frame from the motion video or any lead-in frame.
+* **Never treat a HEIC like a video.** The motion clip is a **separate track / sidecar** — the still-image
+  decode path must be used, so there is no "first frame vs. real frame" ambiguity to begin with.
+* **Do not pass an item index or an aux flag.** Concretely: use libheif's primary-item decode (its default),
+  and with ImageMagick read the file **without** a bracket index and **without** `--with-aux` / coalesce —
+  a bare read of `input.heic` resolves to the primary item. Passing `input.heic[0]` or an aux flag is
+  exactly the bug (it can select a thumbnail or auxiliary image), so it is **forbidden**.
+* **Strip the sidecar/motion on convert.** The output JPEG is a **plain still** — the Live Photo motion is
+  intentionally **not** carried into the JPEG (JPEG can't hold it), and we never sample it for the image.
+
+**Tooling.** The decode runs through **libheif** (the standard HEIF library — `heif-dec`, with
+`heif-convert` a compatibility alias on libheif ≥ 1.21) or **ImageMagick built with the libheif
+delegate**. libheif's convert path decodes the **primary image** by default; ImageMagick via the delegate
+reads the primary item on a bare read. Either way we take the **primary still** and re-encode it to JPEG at
+medium quality, same resolution.
+
+Selecting the primary HEIF item and re-encoding it to JPEG (bare read / primary-item decode; **no** index,
+**no** `--with-aux`) belongs in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`pickImageTarget()` (HEIC/HEIF/AVIF → JPEG target) and `imageCommand()` (the `magick input.heic
+output.jpg` / `heif-dec` invocation, primary-item only). A `heif`/libheif delegate probe is added to
+`detectTools()` so a missing delegate degrades with an "install libheif" message, not a silent wrong
+frame. **Proposed.**
+
+> Research basis: HEIF's multi-item container and the `pitm` Primary Item box that designates the cover
+> image ([GPAC HEIF extraction wiki](https://wiki.gpac.io/Howtos/heif/heif-extraction/),
+> [HEIF file-structure walkthrough](https://github.com/spacestation93/heif_howto)); most viewers/converters
+> display only the `pitm` cover image ([Cheeky4n6Monkey — Monkey takes a
+> .heic](http://cheeky4n6monkey.blogspot.com/2017/10/monkey-takes-heic.html)); ImageMagick's HEIF delegate
+> and its ability to also pull auxiliary/depth images when asked — which we deliberately do **not** do
+> ([ImageMagick heif delegate](https://github.com/ImageMagick/heif/blob/main/README.md),
+> [HEIC depth discussion #3040](https://github.com/ImageMagick/ImageMagick/discussions/3040)); libheif's
+> `heif-dec`/`heif-convert` as the standard converter defaulting to the primary image
+> ([convert HEIF on Linux](https://kbmisc.com/blog/convert-heif-images-to-jpg-or-png-on-linux)); Live Photo
+> = still + separate motion video ([Macworld — export image & video from a HEIF Live
+> Photo](https://www.macworld.com/article/231564/how-to-export-an-image-and-a-video-out-of-a-heif-live-photo-via-macos.html)).
+
+---
+
+## 5. Acceptance criteria
+
+1. Settings → Compression carries, **per media type (images / video)**, two controls that **default ON**:
+   **"Convert file types when compressing"** (§2.1) and **"Compress all file types"** with a
+   **per-extension checkbox list** where every recognized extension is checked (in scope) by default (§2.2).
+2. **Convert OFF** ⇒ compression is **format-preserving** (re-encode in place / lossless recompress, never
+   change the extension). **A checkbox OFF** ⇒ that extension is **skipped entirely** ("excluded by
+   settings"). Both persist to `config.yaml` as `compression.<media>.convert_types` (default `true`) and
+   `skip_exts` (default `[]`, an opt-OUT list).
+3. The **same** two controls exist for **video**, not just images.
+4. **`.heic` → JPEG is ON by default** (as are `.heif` / `.avif`), converting at **medium** quality and the
+   **same pixel resolution** (never downscaled; compression.mdx §5 verification still runs).
+5. **HEIC primary-image correctness (LOCKED, §4.1):** the conversion extracts the **primary still image**
+   (the `pitm` item) and **never** a thumbnail, an auxiliary/depth image, or a frame from the Live Photo
+   **motion video** or its lead-in frames. The decode uses the **primary-item / bare-read path** with **no**
+   item index and **no** `--with-aux`; the motion clip is not carried into or sampled for the JPEG. A
+   missing libheif delegate degrades with an "install libheif" message — never a silent wrong frame.
+6. All conversions remain **explicit-action, never automatic, alpha-safe, and recoverable** — they inherit
+   every invariant from [compression.mdx](./compression.mdx); this spec only adds the conversion &
+   per-extension scope on top.
+
+<!--
+  IMAGES / FILE-TYPE CONVERSION policy layered on compression.mdx (which owns the engine + invariants).
+  TWO new Settings→Compression controls, PER MEDIA TYPE (images/video), BOTH DEFAULT ON:
+    (1) convert_types (bool, default true) — may CHANGE format on compress (HEIC→JPEG, PNG→JPEG). OFF =
+        format-preserving (re-encode in place / oxipng lossless; never change extension).
+    (2) skip_exts (string[], default []) — per-extension OPT-OUT list; "Compress all file types" = every
+        recognized ext checked/in-scope by default. Unchecked ext → skipped ("excluded by settings").
+  Persist on compression.images/.video in shared/src/schemas.ts (NEW fields convert_types=true, skip_exts=[]);
+  UI in SettingsPage.tsx Compression section; engine gates in compression.service.ts pickImageTarget/
+  pickVideoTarget (no ext change when convert off) + checkFile/compressFile (early skip_exts return). PROPOSED.
+  Same pixel resolution / never downscale / alpha-safety / explicit-only / recoverable all INHERITED from
+  compression.mdx — not re-litigated here.
+  FLAGSHIP: Apple .heic → JPEG, checkbox ON by default (also .heif/.avif). medium quality, same resolution.
+  HEIC CONTAINER TRAP (LOCKED §4.1): HEIC is an ISO-BMFF container with MULTIPLE items — primary still +
+  thumbnails + depth/aux images + (Live Photo) a motion .mov with lead-in frames. MUST extract the PRIMARY
+  still = the item the `pitm` (Primary Item) box points at. NEVER a thumbnail / aux/depth / motion-video frame
+  / lead-in "preview" frame (the exact bug the user hit). Use libheif primary-item decode (heif-dec/heif-convert,
+  default = primary) or ImageMagick libheif delegate BARE read (magick input.heic output.jpg) — NO bracket index
+  [0], NO --with-aux/coalesce (those select thumbnails/aux). Motion clip is a separate track/sidecar; stripped on
+  convert, never sampled. detectTools() gains a heif/libheif delegate probe → "install libheif" on miss, never a
+  silent wrong frame. Code: compression.service.ts pickImageTarget (HEIC/HEIF/AVIF→JPEG) + imageCommand (primary-
+  item invocation) + detectTools (heif probe). IMAGE_EXT already lists .heic/.heif/.avif (shared/src/media.ts).
+  Research: HEIF pitm primary-item box (GPAC wiki, heif_howto), viewers show pitm cover only (Cheeky4n6Monkey),
+  ImageMagick heif delegate can pull aux/depth when asked — we DON'T (IM heif README, discussion #3040), libheif
+  heif-dec/heif-convert defaults to primary (kbmisc), Live Photo = still + separate motion video (Macworld).
+-->
