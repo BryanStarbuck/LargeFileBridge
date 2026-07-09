@@ -739,6 +739,47 @@ Serving the non-secret `credentialsFile` block (`GET /api/health/auth-config`) a
 
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/health/health.router.ts` — the `GET /auth-config` route (via `authConfig()`), rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/CredentialsSetupCard.tsx` — `CredentialsSetupCard` component.
 
+### 10.1 Why a restart can STILL force re-login (client-side causes) — and the fixes (LOCKED)
+
+The server-side persistence above is necessary but **not sufficient**. On this install the two "usual
+suspects" are already ruled out — the signing secret **is** stable on disk
+(`~/T/_large_files_bridge/.auth_session_secret`, unchanged across restarts) and sessions **are** durable
+files (`users/<email>/sessions/<sid>.json`, `revoked:false`, `expireAt` = created + 10 months). Yet the
+user still reports *"when we restart the web server, we still have to re-login"* and *"a lot of timeouts."*
+The on-disk evidence explains why: a **brand-new** `sess_*` record appears on nearly every visit, and its
+`lastActiveAt` is only ~85 s after `createdAt` — i.e. the browser is **not presenting a reusable session
+cookie on the next visit**, so the boot gate (`main.tsx`) shows the sign-in page and a full Google
+round-trip mints a fresh session. The cause is **client-side / delivery**, not lost server state. This
+subsection is the authoritative list of causes and the fixes, so the work is captured and not re-diagnosed.
+
+The industry-standard remedy for "re-login after a restart" is exactly what LFB **already** does
+server-side — a **persistent external session store** (here `FileSessionStore` on disk, the Redis/DB
+equivalent) plus a **stable signing secret** and an **HttpOnly persistent cookie**
+([the JWT-session guidance](https://ianlondon.github.io/posts/dont-use-jwts-for-sessions/),
+[Spring persistent sessions](https://medium.com/@AlexanderObregon/handling-spring-boot-restarts-without-losing-user-sessions-ee634219c8ee)).
+Because that half is done, the remaining fixes are all about **cookie delivery, token refresh, and running
+the right build**:
+
+| # | Cause (client-side) | The fix |
+| --- | --- | --- |
+| 1 | **"Lots of timeouts."** Access tokens are **15 min** (`accessTokenTtlSeconds`) and the SDK re-mints them **only reactively** — the axios interceptor catches a `401`, calls `reloadSession()`, and retries. So the first call after each 15-min expiry **fails once** before recovering, which reads as a timeout/stutter. | Add a **proactive refresh**: re-mint the Bearer on a timer **before** expiry (and roll the cookie's `lastActiveAt` forward so an active tab never ages out), turning the reactive `401→reload→retry` into a silent renewal. This is a small change to the shared **OpenAuthFederated** SDK (`RealAuthCore` caches the token until ~10 s before `exp` and exposes no scheduled/forced re-mint), so it must expose a `refresh()`/schedule hook the app can call. |
+| 2 | **Cookie/origin binding in the split dev origin.** The session cookie is set during the OAuth callback and is `SameSite=Lax`, `Secure=false` in local mode; the SPA is served on one port (default **2222**) while the API/OAuth callback lives on another (**8787**), and `allowedRedirectOrigins()` scans a **16-port band** because "the web app may increment past a port collision" on restart. A cookie/redirect bound to a **drifting** origin is the most likely "restart → re-login" trigger. | **Pin the dev port** (no drift band in normal use) and serve the SPA and API through **one stable origin** so the session cookie is always presented back on the next launch. In production this is a single `Secure`+`SameSite` origin. |
+| 3 | **Fail-closed with no migration.** `readSession()` returns signed-out when a valid cookie has **no** matching durable record, because LFB never sets **`sessionStoreMigrate`**. Any transient record miss = forced re-login. | Optionally enable **`sessionStoreMigrate`** with a bounded window so a valid signed cookie **re-hydrates** across a store hiccup instead of hard-failing (weigh against the deliberate fail-closed security posture, [security.mdx](./security.mdx)). |
+| 4 | **A stale deployed/running build.** The persistence + inactivity code in `auth-frontend.ts` is **recently committed** (comment-marked as new security-audit fixes). A server that is running an **older** build predates the durable store and rotates state on restart. | **Verify the running backend contains today's `auth-frontend.ts`** (and that `resolveStateDir()` / `LFB_STATE_DIR` resolves to the **same writable path** every launch, so `loadOrCreateSecret`'s silent per-process-secret fallback — which *would* rotate on every restart — never fires). This is the **first** thing to confirm. |
+
+The persistence, TTLs, and cookie flags live in `auth-frontend.ts` (§10 above); the client-side pieces to
+change are in code:
+
+* Proactive refresh + the reactive `401` fallback: `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/axios.ts` — the response interceptor (`reloadSession()` on `401`) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/authCore.ts` — `registerAuthBridge(getToken, load)`, backed by `~/BGit/Bryan_git/OpenAuthFederated/code/packages/auth-react/src/core.ts` — `RealAuthCore.getToken()` (caches until ~10 s before `exp`; a scheduled re-mint must be added here).
+* Cookie/redirect origin + the 16-port band: `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/auth-frontend.ts` — `allowedRedirectOrigins()` and the `cookiePrefix`/`secure`/`SameSite` settings.
+* Fail-closed vs. migrate: `~/BGit/Bryan_git/OpenAuthFederated/code/packages/auth-backend/src/frontend.ts` — `readSession()` (the `sessionStoreMigrate` branch).
+* The silent-secret-rotation footgun: `~/BGit/Bryan_git/OpenAuthFederated/code/packages/auth-backend/src/session-store.ts` — `loadOrCreateSecret()` (returns a **per-process** secret if the state dir is unwritable — every restart then rotates it; guard by ensuring the state dir is writable and shared).
+
+> **Bottom line:** the durable server-state fix the user asked for is **already in the spec and the code**
+> (§10). What remains is **client-side**: proactive token refresh (kills the "timeouts"), a **stable
+> cookie origin / pinned port** (kills "restart → re-login"), and confirming the **deployed build** is the
+> current one. Do #4 (verify the build) first — it may be the whole story.
+
 ---
 
 ## 11. `peers.yaml` — the user's other computers

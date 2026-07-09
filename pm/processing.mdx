@@ -88,7 +88,8 @@ a fixed region at the **bottom-left of the main area**, offset past the 256px le
 **card per running job** (spinner + "Verb target" + an optional determinate bar) and a **"+ N queued"**
 backlog footer, **absent from the DOM while idle**.
 
-This spec adds **one** thing: the window is now a **way in** to the Processing page.
+This spec adds **two** things: the window is now a **way in** to the Processing page, and it is **capped**
+so a mass run can never wall the screen.
 
 * **Clickable.** Clicking anywhere on the dock (a card or the queued footer) **navigates to `/processing`**
   so the small window is the shortcut to the full view. The cards keep their live per-item detail; the
@@ -98,6 +99,29 @@ This spec adds **one** thing: the window is now a **way in** to the Processing p
 
 The dock's click-through to the Processing page is wired in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ProgressDock.tsx` — `ProgressDock` (an `onClick` → `navigate({ to: "/processing" })` wrapper around the card stack; `role="button"`, keyboard-activatable).
+
+### 3.1 The card cap — at most 3 live cards + a summary line (LOCKED)
+
+The user's words: *"it shoots all the way up screens … we only wanted to show at least three max of those
+progresses on the bottom, not all of them … we like the idea of one of them saying how many there are."*
+
+Now that the queue runs the **mass-compute Core Budget** in parallel ([§3a](#3a-worker-utilization--the-parallelism-read-locked), [job_queue.mdx §3](./job_queue.mdx)), a
+16-core box transcodes **~14 files at once**, so a card-per-running-job stacks a **wall of cards** up the
+screen. The dock is therefore **capped**:
+
+* **At most `MAX_DOCK_CARDS = 3` live cards** are shown at once — the most recently started running jobs.
+* **The overflow collapses into one summary line** — **"+ N more running"** — rendered directly **under**
+  the 3 cards (and above the existing **"+ N queued"** backlog footer). So during an 18,000-file run the
+  whole dock is **five short rows at most**: 3 job cards, `+ 11 more running`, `+ 17,982 queued` — never
+  the full stack.
+* The cap is a **display** limit only — nothing about the queue, the batch, or the `workers` read
+  ([§3a](#3a-worker-utilization--the-parallelism-read-locked)) changes; every running job is still counted,
+  and the **full** running list is one click away on the Processing page (§4, "Running now").
+* This mirrors the two backlog/summary rows the dock already uses (the "+ N queued" footer and sonner's
+  default 3-toast cap), so it reads as one consistent house pattern, not a special case.
+
+The 3-card cap + the "+ N more running" summary line is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ProgressDock.tsx` — `ProgressDock` (`MAX_DOCK_CARDS = 3`; `jobs.slice(0, MAX_DOCK_CARDS)` for the cards, `jobs.length − visible.length` → the "+ N more running" line, ordered before the visible cards so the column-reverse stack places it under them and above the "+ N queued" footer).
 
 ---
 
@@ -166,6 +190,34 @@ The Processing page (the three regions, the per-batch progress bar, and the fini
 rendered in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingPage.tsx` — `ProcessingPage` (subscribes to `useProgress()`; maps `jobs` → Running, `queuedByOp` → Waiting, `batches` → the batch cards with `done/failed/total` bars and the `errors[]` list). The route is registered in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/router.tsx` — `processingRoute` (`path: "/processing"`, code-split).
 
+### 4.1 An idle page starts moving when work appears elsewhere (LOCKED)
+
+The user's words: *"the page might show that there's nothing progressing because there may be nothing
+progressing. Another tab might actually add things … and then that page should be notified by the backend
+and then start to move to show progress is happening."*
+
+This is the required behavior, and it already falls out of the **one-source** design (§5) — it must never
+regress:
+
+* **The backend queue/registry/batch state is process-global**, held in the single API server
+  ([job_queue.mdx](./job_queue.mdx), [webapp.mdx §12](./webapp.mdx)). Work started **anywhere** — another
+  **browser tab**, a **"Compress inside"** run enqueued server-side, the **launchd** scan/sync worker
+  ([storage_local.mdx §13](./storage_local.mdx)) — lands in that **same** shared state.
+* **Every surface polls it** (`GET /api/progress`), so an **idle** Processing page (or the conditional nav
+  item, or the dock) **starts moving on its own** within **one poll interval** of work appearing — even
+  though *this* tab did nothing. That is the "the backend notifies the page" behavior the user described,
+  delivered by the shared state + poll rather than a per-tab push.
+* **The poll self-accelerates.** While anything is in flight the interval tightens to **~1.2 s** (from
+  ~3 s idle), so a freshly-queued batch shows up in **≤ ~1.2 s** — fast enough to read as immediate, with
+  **no** second source of truth to disagree.
+* **Latency note (and the seam if instant is ever needed).** Because it is polling, an idle tab lags by up
+  to **one interval** (≤ ~3 s) and there is **no** server push to wake a truly-backgrounded tab sooner. If
+  instant cross-tab wake is ever required, the seam is a single **SSE** stream on the same payload — but the
+  poll is the current, deliberately-simple design and is sufficient for this feature.
+
+The shared-state + polling merge (so another tab's / launchd's work surfaces here) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/progress/ProgressContext.tsx` — `ProgressProvider` (the `useQuery(["progress"], api.progress, { refetchInterval: dockBusy ? 1200 : 3000 })` poll, merged de-duped by job id with the tab's own optimistic `run()` set) against the process-global `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.registry.ts` and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` that every producer writes into.
+
 ---
 
 ## 5. The one polled source — `GET /api/progress` (extended)
@@ -206,6 +258,10 @@ The extended payload is assembled in code:
    `/processing`. It is runtime-injected (not a static yaml row) and documented in `left_bar.yaml`.
 2. **Progress window (§3):** the existing bottom-left dock still shows a card per running item + a
    "+ N queued" footer, is absent while idle, and is now **clickable to open `/processing`**.
+2a. **Dock card cap (§3.1):** the dock shows **at most 3 live cards**; any further running jobs collapse
+   into a single **"+ N more running"** summary line (under the cards, above the "+ N queued" footer), so a
+   mass compress-inside run **never walls the screen**. The cap is display-only — the full running list is
+   on the Processing page.
 3. **Processing page (§4):** `/processing` shows **Running now** (running jobs with their determinate
    detail), **Waiting** (the pending backlog, labeled per op), and **Batches** (one card per "Compress
    inside" run with a `done+failed / total` progress bar). A finished batch shows its **error list** (each
@@ -221,6 +277,10 @@ The extended payload is assembled in code:
    and `workers` (all optional); they never disagree because there is no second source of truth.
 6. **No empty chrome:** when nothing is processing, the nav item and the dock are both absent from the DOM;
    only the directly-navigated `/processing` page renders (its empty state).
+7. **Cross-tab wake (§4.1):** an **idle** Processing page (showing "Nothing is processing right now.") that
+   is open when **another tab**, a server-side batch, or the **launchd** worker queues work **starts moving
+   on its own** within one poll interval (**≤ ~1.2 s** while busy) — driven by the shared process-global
+   queue/registry state + the `GET /api/progress` poll, with no second source of truth.
 
 <!--
   The THREE surfaces for background work, all driven by GET /api/progress:
@@ -230,6 +290,13 @@ The extended payload is assembled in code:
       commented runtime entry in left_bar.yaml). May show a running+queued count badge.
    §3 BOTTOM-LEFT PROGRESS WINDOW = the existing dock (webapp.mdx §10), unchanged EXCEPT now click-through →
       /processing (ProgressDock.tsx onClick navigate).
+   §3.1 DOCK CARD CAP (LOCKED) — mass-compute runs ~cores jobs at once, so cap the dock at MAX_DOCK_CARDS=3
+      live cards + one "+ N more running" summary line (under the cards, above "+ N queued"). Display-only;
+      full list on the Processing page. ProgressDock.tsx: jobs.slice(0,3) + (jobs.length−visible.length).
+   §4.1 CROSS-TAB WAKE (LOCKED) — backend queue/registry/batch state is process-global; work started in
+      ANOTHER TAB / server-side batch / launchd worker lands in the same state, and every surface polls
+      GET /api/progress, so an IDLE Processing page starts moving on its own within one interval (~1.2s busy).
+      No server push; SSE is the seam if instant wake is ever needed. ProgressContext useQuery poll.
    §3a WORKER UTILIZATION READ (LOCKED) — now the queue runs MANY jobs at once against the Core Budget
       (parallelization.mdx, job_queue.mdx §3; mass-compute = round(cores × max_core_fraction), default 0.9),
       the Processing page shows how BUSY the machine is: a "{busy} / {budget} workers busy (~{pct}% of cores)"

@@ -1,9 +1,14 @@
-// The progress dock (webapp.mdx §10). A fixed bottom-left region, offset 272px to clear the 256px left
-// bar, sitting ABOVE the toast stack (dock bottom: 88px, toasts bottom: 16px) so the two never collide.
-// It renders ONE small card per ACTIVE job — spinner + "Verb target" + an optional determinate bar —
-// and is ABSENT from the DOM while no job runs (no empty box). Cards stack newest-on-top and each leaves
-// the instant its job finishes, so the stack drains unevenly. The offset tracks the left-bar width in
-// config/left_bar.ts; if that changes, this and main.tsx's toast offset change with it.
+// The progress dock (webapp.mdx §10, processing.mdx §3). A fixed bottom-left region, offset 272px to clear
+// the 256px left bar, sitting ABOVE the toast stack (dock bottom: 88px, toasts bottom: 16px) so the two
+// never collide. It renders ONE small card per ACTIVE job — spinner + "Verb target" + an optional
+// determinate bar — and is ABSENT from the DOM while no job runs (no empty box). Cards stack newest-on-top
+// and each leaves the instant its job finishes, so the stack drains unevenly. The offset tracks the
+// left-bar width in config/left_bar.ts; if that changes, this and main.tsx's toast offset change with it.
+//
+// CARD CAP (processing.mdx §3): the mass-compute queue runs MANY jobs at once (≈90% of cores, so a
+// 16-core box transcodes ~14 files simultaneously). Showing a card per running job stacks a wall of
+// cards up the screen. So the dock shows at most MAX_DOCK_CARDS live cards plus a single "+ N more
+// running" summary line — the full picture stays one click away on the Processing page.
 import { RefreshCw } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import type { ProgressJob } from "@lfb/shared";
@@ -12,6 +17,10 @@ import { leftBar } from "../config/left_bar.js";
 
 // 256px bar + 16px gutter. Parsed from the yaml-driven width so the dock never sits over the nav.
 const DOCK_LEFT = `calc(${leftBar.sidebarWidth} + 16px)`;
+
+// The most live cards the dock ever shows at once. Beyond this, the rest collapse into a single
+// "+ N more running" summary line (processing.mdx §3) so a mass compress-inside run never walls the screen.
+const MAX_DOCK_CARDS = 3;
 
 function detail(job: ProgressJob): string | null {
   if (job.total === undefined || job.done === undefined) return null;
@@ -56,6 +65,9 @@ export function ProgressDock() {
   const { jobs, queued } = useProgress();
   const navigate = useNavigate();
   if (jobs.length === 0 && queued <= 0) return null; // absent from the DOM while idle — no empty box
+  // Cap the live cards; the overflow becomes one summary line so the stack never covers the screen.
+  const visible = jobs.slice(0, MAX_DOCK_CARDS);
+  const moreRunning = jobs.length - visible.length;
   // The whole dock is a shortcut into the Processing page (processing.mdx §3) — click or Enter/Space opens it.
   const openProcessing = () => void navigate({ to: "/processing" });
   return (
@@ -84,7 +96,17 @@ export function ProgressDock() {
           + {queued.toLocaleString()} queued
         </div>
       )}
-      {jobs.map((job) => (
+      {/* Overflow beyond MAX_DOCK_CARDS collapses into one summary line. Rendered before the visible
+          cards so, in the column-reverse stack, it sits directly UNDER them (and above the queued footer). */}
+      {moreRunning > 0 && (
+        <div
+          className="min-w-[260px] rounded-lg border bg-white/95 px-3 py-1 text-xs text-black/50 shadow-md backdrop-blur"
+          style={{ borderColor: "var(--lfb-border)" }}
+        >
+          + {moreRunning.toLocaleString()} more running
+        </div>
+      )}
+      {visible.map((job) => (
         <Card key={job.id} job={job} />
       ))}
     </div>
