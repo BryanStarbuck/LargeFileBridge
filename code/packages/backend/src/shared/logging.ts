@@ -35,6 +35,33 @@ const logDir = resolveLogDir();
 const LOG_FILE = path.join(logDir, "log.log");
 const ERR_FILE = path.join(logDir, "error.err");
 
+// Roll filePath's .N chain in place: drop .maxBackups, shift .n → .(n+1) … .1 → .2, live file → .1.
+// Best-effort — a failed rename/remove is swallowed so a rotation never throws. Shared by
+// RollingFileWriter (below) and rotateIfOversized() (for logs written by external processes).
+function rollChain(filePath: string, maxBackups: number): void {
+  const oldest = `${filePath}.${maxBackups}`;
+  if (fs.existsSync(oldest)) fs.rmSync(oldest, { force: true });
+  for (let i = maxBackups - 1; i >= 1; i--) {
+    const from = `${filePath}.${i}`;
+    if (fs.existsSync(from)) fs.renameSync(from, `${filePath}.${i + 1}`);
+  }
+  fs.renameSync(filePath, `${filePath}.1`);
+}
+
+// Rotate a log file we do NOT write ourselves — one whose fd is held by an external process (a launchd
+// job's StandardOutPath, or a detached `ipfs daemon` we spawn with a plain append fd). We can't cap it
+// per-write like RollingFileWriter does, so we roll it at the boundary where the writer reopens it
+// (daemon (re)start / autostart (re)install): if it's already at/over the cap, roll the chain so the
+// process reopens onto a fresh empty file. Applies the same 5 MiB × 5 policy. Never throws.
+export function rotateIfOversized(filePath: string, maxBytes = MAX_BYTES, maxBackups = BACKUPS): void {
+  try {
+    const size = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
+    if (size >= maxBytes) rollChain(filePath, maxBackups);
+  } catch {
+    // best-effort — never block a daemon start/install on log rotation
+  }
+}
+
 // A size-capped, rotating, append-only writer with a CACHED byte counter (no statSync per write).
 // Never throws: a failed write falls back to process.stderr.
 class RollingFileWriter {
@@ -60,16 +87,10 @@ class RollingFileWriter {
     this.ready = true;
   }
 
-  // Rotate: drop .maxBackups, shift .n → .(n+1) … .1 → .2, move the live file to .1, reset the counter.
+  // Rotate: roll the .N chain (drop .maxBackups, shift up, live → .1), then reset the byte counter.
   private roll(): void {
     try {
-      const oldest = `${this.filePath}.${this.maxBackups}`;
-      if (fs.existsSync(oldest)) fs.rmSync(oldest, { force: true });
-      for (let i = this.maxBackups - 1; i >= 1; i--) {
-        const from = `${this.filePath}.${i}`;
-        if (fs.existsSync(from)) fs.renameSync(from, `${this.filePath}.${i + 1}`);
-      }
-      fs.renameSync(this.filePath, `${this.filePath}.1`);
+      rollChain(this.filePath, this.maxBackups);
       this.size = 0;
     } catch {
       // best-effort — keep appending to the over-cap file rather than throw

@@ -20,7 +20,7 @@ import { promisify } from "node:util";
 import type { IpfsAutostartStatus } from "@lfb/shared";
 import { updateAppConfig } from "../store-model/config.service.js";
 import { resolveStateDir } from "../../config/state-dir.js";
-import { log } from "../../shared/logging.js";
+import { log, rotateIfOversized } from "../../shared/logging.js";
 
 const run = promisify(execFile);
 
@@ -141,6 +141,13 @@ export async function installAutostart(): Promise<IpfsAutostartStatus> {
     log.error("ipfs", `Failed to write IPFS auto-start plist ${file}: ${(e as Error).message}`);
     throw e;
   }
+  // launchd holds the daemon's StandardOut/Err fds for its whole lifetime (no per-write cap), but
+  // bootout below closes them and bootstrap reopens fresh ones. Roll these now if they're at/over the
+  // 5 MiB cap so the relaunched daemon reopens onto empty files (same 5 MiB × 5 policy as every LFB log).
+  const stateRoot = resolveStateDir();
+  rotateIfOversized(path.join(stateRoot, "ipfs-autostart.log"));
+  rotateIfOversized(path.join(stateRoot, "ipfs-autostart.err"));
+
   // Re-bootstrap: bootout any stale copy first so bootstrap picks up the new plist, then enable.
   await launchctl("bootout", domainTarget());
   await launchctl("bootstrap", `gui/${uid()}`, file);

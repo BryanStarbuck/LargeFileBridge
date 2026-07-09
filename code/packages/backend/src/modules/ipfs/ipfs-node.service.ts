@@ -28,7 +28,7 @@ import {
   type StartDiagnosis,
 } from "./ipfs-config-health.service.js";
 import * as ipfs from "./ipfs.service.js";
-import { log } from "../../shared/logging.js";
+import { log, rotateIfOversized } from "../../shared/logging.js";
 
 const run = promisify(execFile);
 
@@ -376,6 +376,9 @@ async function startDaemon(opts?: { migrate?: boolean }): Promise<StartDiagnosis
     /* best effort */
   }
   const outPath = path.join(stateRoot, "ipfs-daemon.log");
+  // The detached daemon writes to this fd directly (no per-write cap), so bound it at the boundary we
+  // own: roll it here if it's already at/over 5 MiB before we reopen it for append (5 MiB × 5 policy).
+  rotateIfOversized(outPath);
   // Note where this run's output will begin, so a failure reads only what THIS start printed.
   let startOffset = 0;
   try {

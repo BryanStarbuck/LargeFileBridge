@@ -100,6 +100,15 @@ With AI, these days, people often use GIThub to share/backup their files across 
   * Launcher rotation (`launcher.log`) implemented by the dependency-free sink
     `~/BGit/Bryan_git/LargeFileBridge/scripts/log_rotate_pipe.mjs`, which the `justfile` pipes
     `pnpm dev` through. Its rotation policy MUST stay identical to `logging.ts` (same env vars/defaults).
+  * IPFS daemon logs (`ipfs-daemon.log`, `ipfs-autostart.log` / `.err`) are written by an **external
+    process** (a detached `ipfs daemon`, or launchd via `StandardOut/ErrorPath`) whose fd we don't own,
+    so `RollingFileWriter`'s per-write cap can't reach them. They obey the same 5 MiB × 5 policy via
+    `rotateIfOversized()` in `logging.ts`, called at the boundary where the writer reopens the file —
+    each daemon start (`ipfs-node.service.ts` `startDaemon()`) and each autostart (re)install
+    (`ipfs-autostart.service.ts` `installAutostart()`, whose launchd bootout/bootstrap reopens fresh
+    fds). Residual: a single daemon instance that runs continuously for months without any
+    restart/reinstall can exceed the cap until its next (re)start — in practice reboots and app
+    restarts roll it long before then.
 
 * **Runtime scratch (`/tmp/lfb.webapp.pid`, `/tmp/lfb.web.port`)** stays in `/tmp` on purpose — these
   are ephemeral pid/port files (cleared on reboot so stale state never lingers), **not logs**.
