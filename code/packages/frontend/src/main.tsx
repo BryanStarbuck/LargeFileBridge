@@ -15,6 +15,7 @@ import { ProgressDock } from "./components/ProgressDock.js";
 import { FirstTimeStorageWizardProvider } from "./components/FirstTimeStorageWizard.js";
 import { CompressInsideProvider } from "./components/compress/CompressInsideProvider.js";
 import { HotkeyProvider } from "./lib/hotkeys.js";
+import { ErrorBoundary } from "./components/ErrorBoundary.js";
 import { leftBar } from "./config/left_bar.js";
 import { clientLog } from "./lib/clientLog.js";
 import "./styles.css";
@@ -98,18 +99,31 @@ try {
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        {isSsoCallback ? <SsoCallbackPage /> : <Root />}
-        {/* Toasts: bottom-left, ~2× larger, offset clear of the 256px left bar (webapp.mdx §9). The
-            inline `left` (from the yaml-driven bar width) overrides sonner's stylesheet position so the
-            stack never sits over the nav; --width enlarges the card and text-base/roomier padding give
-            it ~2× visual weight. The progress dock (bottom: 88px) stacks above this toast row
-            (bottom: 16px) so the two never collide. */}
-        <Toaster
-          position="bottom-left"
-          richColors
-          style={{ "--width": "440px", left: BAR_CLEAR_LEFT } as CSSProperties}
-          toastOptions={{ className: "text-base", style: { padding: "14px 16px" } }}
-        />
+        {/* Stable host wrapper. Without it the top-level tree mounted straight onto the raw #root
+            container, so every auth-gate swap (Loading ↔ App ↔ SignIn) and every churning overlay
+            (ProgressDock, the wizard/compress dialog providers — all direct container children since the
+            providers between them and #root are context-only) inserted/removed via
+            insertInContainerBefore / removeChildFromContainer. That is the operation that was throwing
+            "Failed to execute 'insertBefore'/'removeChild' … not a child of this node" in the commit
+            phase (687× in the fault trail, July 5–9) and — with no error boundary — blanking the whole
+            SPA. A persistent <div> gives React a real parent so those swaps use plain insertBefore on a
+            stable node. h-full keeps AppShell's `flex h-full` height chain intact (html/body/#root are
+            height:100% in styles.css). */}
+        <div className="h-full">
+          {/* Catch a stray render/commit throw and show a recoverable card instead of a dead white page. */}
+          <ErrorBoundary>{isSsoCallback ? <SsoCallbackPage /> : <Root />}</ErrorBoundary>
+          {/* Toasts: bottom-left, ~2× larger, offset clear of the 256px left bar (webapp.mdx §9). The
+              inline `left` (from the yaml-driven bar width) overrides sonner's stylesheet position so the
+              stack never sits over the nav; --width enlarges the card and text-base/roomier padding give
+              it ~2× visual weight. The progress dock (bottom: 88px) stacks above this toast row
+              (bottom: 16px) so the two never collide. */}
+          <Toaster
+            position="bottom-left"
+            richColors
+            style={{ "--width": "440px", left: BAR_CLEAR_LEFT } as CSSProperties}
+            toastOptions={{ className: "text-base", style: { padding: "14px 16px" } }}
+          />
+        </div>
       </QueryClientProvider>
     </StrictMode>,
   );
