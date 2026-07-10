@@ -120,9 +120,14 @@ export function EntityMenuAt({
 }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const { data: view, isLoading } = useQuery({
-    queryKey: ["entity", path],
-    queryFn: () => api.entity(path),
+  // Menu-specific fetch: rollup-less (api.entityMenu) so opening the menu never triggers the expensive
+  // directory rollup walk, and under its OWN query key so a rollup-less payload never poisons the
+  // ["entity", path] cache the single-entity PAGES rely on for the rollup. `retry: 1` keeps a failed
+  // open from silently churning three slow retries before the error surfaces.
+  const { data: view, isLoading, isError, error, refetch } = useQuery({
+    queryKey: ["entity-menu", path],
+    queryFn: () => api.entityMenu(path),
+    retry: 1,
   });
 
   // After any mutation: patch the affected row's badges into the cached File-System listings in place
@@ -131,6 +136,7 @@ export function EntityMenuAt({
   // have the authoritative badges. Repo views are cheap (stored status, not a deep walk) → still refresh.
   const applyEntity = (v: EntityView) => {
     qc.setQueryData(["entity", path], v);
+    qc.setQueryData(["entity-menu", path], v); // keep the menu's own key fresh for the next open
     patchEntityBadges(qc, path, v.badges);
     qc.invalidateQueries({ queryKey: ["repo"] });
   };
@@ -169,7 +175,21 @@ export function EntityMenuAt({
 
   return (
     <MenuPortal pos={pos} onClose={onClose}>
-      {isLoading || !view ? (
+      {isError ? (
+        // Never leave the menu stuck on "Loading…": on a failed/timed-out fetch, show the error and a
+        // Retry so the menu is actionable instead of an infinite spinner (the old code had no error
+        // branch, so any failure fell through to a permanent "Loading…").
+        <div className="px-3 py-2 text-xs text-red-600">
+          <div className="mb-1">Couldn’t load actions: {(error as Error)?.message ?? "request failed"}</div>
+          <button
+            type="button"
+            onClick={() => refetch()}
+            className="rounded px-2 py-1 text-red-700 hover:bg-red-50"
+          >
+            Retry
+          </button>
+        </div>
+      ) : isLoading || !view ? (
         <div className="px-3 py-2 text-xs text-black/50">Loading…</div>
       ) : (
         <MenuList actions={actions} run={run} />

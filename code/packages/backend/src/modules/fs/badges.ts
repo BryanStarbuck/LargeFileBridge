@@ -8,7 +8,7 @@ import type { FsBadge, FsEntryKind, FolderInterest } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import { listRepoFolders, getRepoConfig, isGitWorkingTree } from "../store-model/units.service.js";
 // One source of truth for the never-descend set — shared with the scanner (scan.mdx §4).
-import { HARD_SKIP } from "../../shared/scan-filters.js";
+import { HARD_SKIP, isMacPackageDir } from "../../shared/scan-filters.js";
 import { log } from "../../shared/logging.js";
 
 // IPFS list artifacts (directory.mdx §3.4, ipfs_share_files.mdx §3). Case-insensitive match.
@@ -341,7 +341,8 @@ export function computeDirInterest(
       budget.left--;
       if (ent.name.startsWith(".")) continue;
       if (ent.isDirectory()) {
-        if (HARD_SKIP.has(ent.name) || ent.isSymbolicLink()) continue;
+        // Bundles (.app/.framework/…) are opaque — never count their internal assets as compressible.
+        if (HARD_SKIP.has(ent.name) || isMacPackageDir(ent.name) || ent.isSymbolicLink()) continue;
         stack.push({ dir: path.join(dir, ent.name), depth: depth + 1 });
         continue;
       }
@@ -396,4 +397,4 @@ export function expandHome(p: string): string {
   return p.replace(/^~(?=\/|$)/, process.env.HOME || "~");
 }
 
-export { HARD_SKIP };
+export { HARD_SKIP, isMacPackageDir };

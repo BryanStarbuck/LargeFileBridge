@@ -23,7 +23,7 @@ import { expandHome, compressInfo } from "../fs/badges.js";
 import { resolveStateDir, ensureDir } from "../../config/state-dir.js";
 import { findStorageRootForPath } from "../storage/storage.service.js";
 import { writeCompressionRecord } from "../storage/analysis.service.js";
-import { HARD_SKIP } from "../../shared/scan-filters.js";
+import { HARD_SKIP, isMacPackageDir } from "../../shared/scan-filters.js";
 import { enqueue, createBatch } from "../jobqueue/jobqueue.service.js";
 import { log } from "../../shared/logging.js";
 
@@ -252,6 +252,9 @@ const VIDEO_TARGETS: Record<string, { encoder: string; ext: string; alpha: boole
   av1: { encoder: "libaom-av1", ext: ".mp4", alpha: false, label: "AV1" },
 };
 const LOSSLESS_IMAGE_EXT = new Set([".png", ".bmp", ".tif", ".tiff", ".gif"]);
+// Source extensions `cwebp` can actually decode. It CANNOT read GIF or BMP, so those must route through
+// ImageMagick when targeting WebP (a GIF handed to cwebp fails with "Cannot read input picture file").
+const CWEBP_READABLE = new Set([".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp"]);
 
 function jpegQuality(q: CompressMediaPrefs["quality"]): number {
   return q === "high" ? 92 : q === "low" ? 70 : q === "lossless" ? 100 : 85;
@@ -611,7 +614,11 @@ function imageCommand(plan: Plan, abs: string, out: string, prefs: CompressMedia
     const t = capped ? ["--threads", String(threads)] : [];
     return { bin: "oxipng", args: ["-o", "4", ...t, "--strip", "safe", abs, "--out", out] };
   }
-  if (plan.targetKey === "webp" && tools.cwebp) {
+  if (plan.targetKey === "webp" && tools.cwebp && CWEBP_READABLE.has(srcExt)) {
+    // cwebp reads only PNG/JPEG/TIFF/WebP — it CANNOT read GIF or BMP ("Cannot read input picture file").
+    // A GIF/BMP → WebP conversion therefore falls through to the ImageMagick branch below (which decodes
+    // both, and coalesces a multi-frame GIF into an animated WebP). Gating on CWEBP_READABLE is what keeps
+    // those sources off cwebp instead of failing every one of them.
     // cwebp is single-threaded by default; `-mt` opts INTO multi-threading. A batched (capped) job stays
     // single-threaded; a one-off job turns -mt ON to use the whole machine on that lone file.
     const mt = capped ? [] : ["-mt"];
@@ -731,7 +738,9 @@ function walkCompressible(
     }
     for (const ent of entries) {
       if (ent.isDirectory()) {
-        if (HARD_SKIP.has(ent.name) || ent.name.startsWith(".")) continue;
+        // Never descend into VCS/build junk, hidden dirs, or macOS package bundles (.app/.framework/…).
+        // A bundle's internal assets are referenced by name and must never be compressed/renamed/deleted.
+        if (HARD_SKIP.has(ent.name) || ent.name.startsWith(".") || isMacPackageDir(ent.name)) continue;
         if (sel.recursive) visit(path.join(dir, ent.name), depth + 1);
       } else if (ent.isFile() && wanted(ent.name)) {
         out.push(path.join(dir, ent.name));

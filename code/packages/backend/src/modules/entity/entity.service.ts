@@ -18,6 +18,7 @@ import {
   compressInfo,
   expandHome,
   HARD_SKIP,
+  isMacPackageDir,
   VIDEO_EXT,
   IMAGE_UNCOMPRESSED_EXT,
   IMAGE_INTEREST_FLOOR_BYTES,
@@ -99,7 +100,16 @@ function transferFor(decision: Decision, cid: string | null, peers: string[]): T
 }
 
 /** Build the full EntityView for a file or directory. */
-export function buildEntityView(input: string | undefined): EntityView {
+// `rollup` (default true) controls the ONE expensive part of this call: the directory category rollup
+// (buildDirRollup — a bounded but up-to-20k-`statSync` walk that can block for seconds on large or
+// cloud-mounted trees). The ⋯ / right-click entity MENU never reads `rollup` (it only uses kind, repo,
+// decision, flags, compress state), so it fetches with rollup:false to stay instant. Only the single
+// directory PAGE (ViewOneDirectoryPage) needs the rollup and fetches with the default.
+export function buildEntityView(
+  input: string | undefined,
+  opts: { rollup?: boolean } = {},
+): EntityView {
+  const wantRollup = opts.rollup ?? true;
   const e = resolveEntity(input);
   const name = path.basename(e.abs) || e.abs;
   const flags: FileFlags = effectiveFlags(e.abs);
@@ -170,7 +180,7 @@ export function buildEntityView(input: string | undefined): EntityView {
     peers,
     compressible: comp.compressible,
     compressState: comp.compressState,
-    rollup: e.kind === "dir" ? buildDirRollup(e.abs, match) : null,
+    rollup: e.kind === "dir" && wantRollup ? buildDirRollup(e.abs, match) : null,
   };
 }
 
@@ -241,7 +251,8 @@ function buildDirRollup(dirAbs: string, match: RepoMatch | null): DirRollup {
     for (const ent of dirents) {
       if (ent.name.startsWith(".")) continue;
       if (ent.isDirectory()) {
-        if (HARD_SKIP.has(ent.name) || ent.isSymbolicLink()) continue;
+        // Bundles (.app/.framework/…) are opaque — don't roll up their internal assets. (bundles-opaque)
+        if (HARD_SKIP.has(ent.name) || isMacPackageDir(ent.name) || ent.isSymbolicLink()) continue;
         stack.push({ dir: path.join(dir, ent.name), depth: depth + 1 });
         continue;
       }

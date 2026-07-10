@@ -13,8 +13,12 @@ entityRouter.use(requireAllowListed);
 // GET /api/entity?path=<abs> — the single-entity payload (files.mdx §2, directories.mdx §3).
 entityRouter.get("/", (req, res) => {
   const p = typeof req.query.path === "string" ? req.query.path : undefined;
+  // `?rollup=0` skips the expensive directory category rollup (buildDirRollup's up-to-20k-`statSync`
+  // walk). The right-click / ⋯ menu passes it so opening the menu on a big/cloud-mounted directory is
+  // instant instead of blocking for seconds (it never reads `rollup`). Default keeps the rollup.
+  const rollup = req.query.rollup !== "0";
   try {
-    res.json({ ok: true, data: buildEntityView(p) });
+    res.json({ ok: true, data: buildEntityView(p, { rollup }) });
   } catch (e) {
     log.warn("entity", `buildEntityView failed for ${p ?? "<none>"}: ${(e as Error).message}`);
     res.status(400).json({ ok: false, error: (e as Error).message });

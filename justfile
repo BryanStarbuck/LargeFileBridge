@@ -105,22 +105,59 @@ run: setup stop
 dev: setup
     cd {{code}} && pnpm dev
 
-# Stop OUR app only: backend dev tree + backend port + our launcher pid + the web port IF it's ours.
-# IMPORTANT — reap the `tsx watch` backend FIRST. Killing only the port holder (lsof :be_port) leaves
-# the watch PARENT alive; in watch mode it just respawns a new server child (re-binding the port) or,
-# after a single-instance stand-down, lingers as an orphan that keeps HOLDING backend.lock. A live
-# lock holder makes every future `just run` backend exit(0) on boot — the API never comes up even
-# though `stop` printed "Stopped." This is the orphan swarm the code comments cite as clobbering the
-# saved allow-list. Pattern is repo-scoped (anchored on {{code}}) and matches BOTH the watcher
-# (`… packages/backend/… tsx … watch src/main.ts`) and its server child (`… tsx … src/main.ts`); it
-# never matches this recipe's own shell, which contains {{code}} but not "src/main.ts".
+# Stop OUR app only — BOTH the frontend (Vite) and the backend dev tree — then confirm the ports are
+# actually free before returning. This is what makes `just run` (which depends on `stop`) a true
+# restart: front-end AND back-end are torn down first, every time.
+#
+# Why the tree-kill AND the port loop are both needed:
+#   * macOS `pgrep -f` only sees a TRUNCATED command line. The backend `tsx watch` PARENT is matched
+#     (short argv, ends in "src/main.ts"), but its node CHILD that actually binds :8787 has a ~1 KB
+#     argv whose trailing "src/main.ts" is past the truncation cut — so a name match alone can never
+#     reap the child. We kill the parent by name (stops the respawn source) and the child by PORT.
+#   * `tsx watch` respawns its child on any source edit. On this repo the tree is continuously
+#     auto-committed, so a naive one-shot kill races the respawn and leaves an orphan holding
+#     backend.lock — every later `just run` backend then exit(0)s on boot and the API never comes up
+#     (the "orphan swarm"). The port loop below kills-and-rechecks until :be_port and the web port are
+#     genuinely free, defeating that race.
+# All matchers are repo-scoped (our @lfb/ pnpm scope, our {{code}} path, or "src/main.ts") so sister
+# apps and the launchd sync/scan worker (which runs src/cli.ts under deploy/, never src/main.ts or
+# --parallel dev) are never touched.
 stop:
-    -@pkill -f "{{code}}.*src/main.ts" 2>/dev/null || true
-    -@lsof -ti tcp:{{be_port}} | xargs kill 2>/dev/null || true
-    -@node {{webport}} stop >/dev/null 2>&1 || true
-    -@test -f {{pidfile}} && kill $(cat {{pidfile}}) 2>/dev/null || true
-    -@rm -f {{pidfile}}
-    @echo "Stopped."
+    #!/usr/bin/env bash
+    set -uo pipefail
+    self=$$
+    fe_port=$(test -f {{portfile}} && cat {{portfile}} 2>/dev/null || echo {{fe_port}})
+    # Collect this repo's dev-tree pids from three narrow matchers (run separately so we stay in the
+    # BRE subset `.*`, avoiding any pgrep ERE-alternation portability question):
+    #   @lfb/…--parallel dev   → the pnpm dev orchestrator (NOT `pnpm cli sync`)
+    #   {{code}}/packages/frontend → the Vite dev server
+    #   {{code}}…src/main.ts   → the backend `tsx watch` parent (NOT src/cli.ts sync runs)
+    kill_tree() { # $1 = signal
+      local pids
+      pids=$( { pgrep -f "@lfb/.*--parallel dev"; \
+                pgrep -f "{{code}}/packages/frontend"; \
+                pgrep -f "{{code}}.*src/main.ts"; } 2>/dev/null | sort -u | grep -vx "$self" || true )
+      [ -n "$pids" ] && kill -"$1" $pids 2>/dev/null || true
+    }
+    kill_tree TERM; sleep 0.6; kill_tree TERM; sleep 0.6; kill_tree KILL
+    # Belt-and-suspenders: free the backend port and the web port, catching a child that reparented
+    # mid-restart. Loop until both are free (or we give up after a few rounds).
+    for round in 1 2 3 4 5 6; do
+      held=""
+      for port in {{be_port}} "$fe_port"; do
+        p=$(lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null || true)
+        if [ -n "$p" ]; then held="yes"; kill -TERM $p 2>/dev/null || true; fi
+      done
+      [ -z "$held" ] && break
+      sleep 0.4
+      for port in {{be_port}} "$fe_port"; do
+        p=$(lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null || true)
+        [ -n "$p" ] && kill -KILL $p 2>/dev/null || true
+      done
+    done
+    test -f {{pidfile}} && kill "$(cat {{pidfile}})" 2>/dev/null || true
+    rm -f {{pidfile}}
+    echo "Stopped."
 
 logs:
     tail -f {{log}}

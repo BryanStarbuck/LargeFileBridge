@@ -19,7 +19,7 @@ import {
 } from "../store-model/units.service.js";
 import { readYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import { computerUnitDir, unitConfigPath, unitStatusPath } from "../../shared/store/scopes.js";
-import { HARD_SKIP, isMediaFile } from "../../shared/scan-filters.js";
+import { HARD_SKIP, isMacPackageDir, isMediaFile } from "../../shared/scan-filters.js";
 import { mapLimit, responsiveBudget } from "../../shared/concurrency.js";
 import { log } from "../../shared/logging.js";
 
@@ -194,7 +194,7 @@ async function walkUnit(root: string, threshold: number, opts: WalkOpts): Promis
       if (opts.maskPaths.some((m) => abs === m || abs.startsWith(m + path.sep))) continue;
       if (ent.isSymbolicLink()) continue;
       if (ent.isDirectory()) {
-        if (HARD_SKIP.has(ent.name)) continue;
+        if (HARD_SKIP.has(ent.name) || isMacPackageDir(ent.name)) continue; // bundles are opaque
         stack.push(abs);
         continue;
       }
@@ -360,7 +360,7 @@ async function findGitRepos(root: string, followSymlinks: boolean): Promise<stri
     }
     for (const ent of entries) {
       if (!ent.isDirectory()) continue;
-      if (HARD_SKIP.has(ent.name)) continue;
+      if (HARD_SKIP.has(ent.name) || isMacPackageDir(ent.name)) continue; // bundles are opaque
       if (ent.isSymbolicLink() && !followSymlinks) continue;
       stack.push(path.join(dir, ent.name));
     }

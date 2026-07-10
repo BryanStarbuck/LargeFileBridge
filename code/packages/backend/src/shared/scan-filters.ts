@@ -35,6 +35,25 @@ export const HARD_SKIP = new Set([
   "coverage",
 ]);
 
+// macOS package/bundle directories are OPAQUE — a `.app`, `.framework`, `.bundle`, etc. is a single
+// logical unit whose internal Resources (icons, .gif/.png assets, frameworks) are referenced BY NAME by
+// the app. Descending in to compress those assets to .webp renames them and breaks the app; deleting the
+// originals is unrecoverable. So we never walk into them — the same way Finder shows them as one item.
+// (This is how a `compress inside ~/…` walk wandered into GlanceGuest.app and rewrote its framework
+// resources.) Matched by extension on the directory name, since these are extension- not exact-name based.
+const MAC_PACKAGE_EXT = new Set([
+  ".app", ".framework", ".bundle", ".plugin", ".kext", ".xpc", ".prefpane", ".qlgenerator",
+  ".mdimporter", ".component", ".dSYM", ".pkg", ".mpkg", ".appex", ".systemextension",
+  // media / library packages that also hold many nested asset files as one opaque document
+  ".photoslibrary", ".fcpbundle", ".imovielibrary", ".tvlibrary", ".aplibrary", ".migbundle",
+  ".rtfd", ".scptd", ".download",
+]);
+
+/** True when `dirName` is a macOS package/bundle directory that must be treated as an opaque unit. */
+export function isMacPackageDir(dirName: string): boolean {
+  return MAC_PACKAGE_EXT.has(path.extname(dirName).toLowerCase());
+}
+
 // Media extensions LFBridge exists to move: git-ignored video / audio / image files that
 // were deliberately kept out of git to be bridged over IPFS (README charter). These are
 // candidates REGARDLESS of the big-file size threshold — a 6 MB git-ignored .mp4 is still a

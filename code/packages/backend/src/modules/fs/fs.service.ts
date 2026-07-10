@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { FsEntry, FsEntryKind, FsListing, FlatFileListing } from "@lfb/shared";
-import { buildBadgeContext, computeBadges, computeDirInterest, HARD_SKIP } from "./badges.js";
+import { buildBadgeContext, computeBadges, computeDirInterest, HARD_SKIP, isMacPackageDir } from "./badges.js";
 import { homeDir, isHomeDir, resolveDir } from "./paths.js";
 import { detectCloudRoots } from "./cloud-roots.js";
 import { log } from "../../shared/logging.js";
@@ -90,7 +90,8 @@ export async function listDirectory(
     }
     const abs = path.join(dirAbs, ent.name);
     const kind = kindOf(ent);
-    const collapsed = kind === "dir" && HARD_SKIP.has(ent.name); // shown, but never expandable
+    // shown, but never expandable — VCS/build junk and macOS bundles (opaque, like Finder shows them)
+    const collapsed = kind === "dir" && (HARD_SKIP.has(ent.name) || isMacPackageDir(ent.name));
 
     let sizeBytes: number | null = null;
     let modifiedAt: string | null = null;

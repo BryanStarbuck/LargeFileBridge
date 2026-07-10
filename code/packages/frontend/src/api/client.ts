@@ -212,6 +212,12 @@ export const api = {
 
   // Single-entity views + the ⋯ / right-click menus (files.mdx, directories.mdx, menus.mdx §5).
   entity: (path: string) => unwrap<EntityView>(http.get("/entity", { params: { path } })),
+  // The ⋯ / right-click MENU payload: rollup:0 skips the expensive directory walk the menu never reads
+  // (menus.mdx §5 uses only kind/repo/decision/flags/compress state), so the menu opens instantly on
+  // big/cloud-mounted directories. A 10 s per-request timeout guarantees the menu can never sit on
+  // "Loading…" forever if the backend stalls — it surfaces an error the menu can show + retry.
+  entityMenu: (path: string) =>
+    unwrap<EntityView>(http.get("/entity", { params: { path, rollup: 0 }, timeout: 10_000 })),
   setEntityFlags: (path: string, flags: { neverIpfs?: boolean; noCompress?: boolean }) =>
     unwrap<EntityView>(http.patch("/entity/flags", { path, ...flags })),
   setEntityDecision: (path: string, decision: Decision) =>
