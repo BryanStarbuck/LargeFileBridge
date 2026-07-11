@@ -24,6 +24,7 @@ import { StatusBanner, FixButton } from "../../components/ui/StatusBanner.js";
 import { Disclosure } from "../../components/ui/Disclosure.js";
 import { type Health } from "../../components/ui/health.js";
 import type { WarningDef } from "../../components/ui/warnings/registry.js";
+import { refetchUntilResolved } from "../../components/ui/warnings/resolveRefetch.js";
 import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
 import { clientLog } from "../../lib/clientLog.js";
 
@@ -202,7 +203,7 @@ export function OneRepoPage() {
     { id: "status", header: "Status", kind: "enum", accessor: (f) => f.transfer,
       cell: (f) => <TransferPill status={f.transfer} /> },
     { id: "peers", header: "Peers", kind: "int", align: "right", accessor: (f) => f.peers.length,
-      cell: (f) => <span className={f.decision === "sync" && f.peers.length === 0 ? "text-red-600" : ""}>{f.peers.length}</span> },
+      cell: (f) => <span className={f.decision === "sync" && f.cid && f.peers.length === 0 ? "text-red-600" : ""}>{f.peers.length}</span> },
     { id: "cid", header: "CID", kind: "text", accessor: (f) => f.cid,
       cell: (f) => f.cid ? <code className="text-xs text-black/60" title={f.cid} onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(f.cid!).catch((err) => clientLog.warn("OneRepoPage.copyCid", err)); toast.success("CID copied"); }}>{middleTruncate(f.cid, 16)}</code> : <span className="text-black/20">—</span> },
     { id: "changed", header: "Changed", kind: "timestamp", accessor: (f) => f.changedAt,
@@ -251,7 +252,9 @@ export function OneRepoPage() {
           onPinNow={() => pinNow.mutate(undefined)}
           pinning={pinNow.isPending}
           navigate={navigate}
-          onWarningApplied={() => qc.invalidateQueries({ queryKey: ["repo", repoId] })}
+          // Re-derive from fresh data in a short burst so the banner leaves the page as soon as the fix
+          // lands — even for eventually-consistent fixes (warnings.mdx §5.3.1).
+          onWarningApplied={() => refetchUntilResolved(qc, [["repo", repoId]])}
         />
       )}
 
@@ -356,8 +359,13 @@ function RepoVerdict({
 }) {
   const ipfsDown = detail.ipfs === "unreachable";
   const { pinned, pending, undecided } = detail.counts;
-  // Files set to pin that aren't on ANY other computer yet — pinned locally, but not backed up.
-  const noPeerCount = detail.files.filter((f) => f.decision === "sync" && f.peers.length === 0).length;
+  // Files set to pin that ALREADY pinned (have a CID) but aren't on ANY other computer yet — pinned
+  // locally, not backed up. Gate on `cid != null`: a Pin file with NO CID hasn't finished its first
+  // pin, so it's "queued to transfer" (the pending branch below), NOT a "not backed up" alarm. Without
+  // this gate, the instant you resolve "N files need a decision" by choosing Pin, those freshly-decided
+  // (still CID-less) files re-raised this yellow banner — so the warning you just fixed never looked like
+  // it left the page. This matches the documented no-peer vs. pending split (warnings.mdx §10.2.6 / §10.2.8).
+  const noPeerCount = detail.files.filter((f) => f.decision === "sync" && f.cid != null && f.peers.length === 0).length;
 
   let state: Health = "ok";
   let headline = "Everything here is pinned and backed up";
@@ -463,9 +471,15 @@ function RepoVerdict({
             label: "Ignore the selected files (git-ignore, don't pin)",
           },
         ],
-        // Right-pane subjects — id is the absolute path (what apply receives), label is repo-relative.
+        // Right-pane subjects — id is the repo-RELATIVE path (what `apply` receives and hands to
+        // api.setDecision). It MUST be relative: the backend keys `cfg.decisions` by repo-relative path
+        // and composeFileRows reads it back by relative path, exactly like the table's per-row Decision
+        // control (setDecision.mutate({ paths: [f.path] })). Bugfix: ids were previously ABSOLUTE
+        // (`${detail.path}/${f.path}`), so the fix wrote decisions under a key nobody reads — the HTTP
+        // call (and success toast) succeeded, but the file stayed "undecided" and this banner never left
+        // the page. See warnings.mdx §5.3.1 and §10.2.7.
         targets: undecidedFiles.map((f) => ({
-          id: `${detail.path}/${f.path}`,
+          id: f.path,
           label: f.path,
           sublabel: formatBytes(f.sizeBytes),
         })),

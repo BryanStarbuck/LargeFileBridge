@@ -22,6 +22,7 @@ import { usePinCid } from "../../components/usePinCid.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { StatusBanner, FixButton } from "../../components/ui/StatusBanner.js";
 import type { WarningDef } from "../../components/ui/warnings/registry.js";
+import { refetchUntilResolved } from "../../components/ui/warnings/resolveRefetch.js";
 import { DiagnosticCard } from "../../components/ui/DiagnosticCard.js";
 import { Disclosure } from "../../components/ui/Disclosure.js";
 import { StatTile, StatTileRow } from "../../components/ui/StatTile.js";
@@ -282,7 +283,9 @@ export function IpfsPage() {
           node={node}
           onFix={() => enforce.mutate()}
           fixing={enforce.isPending}
-          onWarningApplied={() => qc.invalidateQueries({ queryKey: ["ipfs"] })}
+          // Burst-refetch so the "engine isn't running" banner clears on its own once the daemon has
+          // finished booting — a single invalidate can fire while it's still coming up (warnings.mdx §5.3.1).
+          onWarningApplied={() => refetchUntilResolved(qc, [["ipfs"]])}
         />
       )}
 

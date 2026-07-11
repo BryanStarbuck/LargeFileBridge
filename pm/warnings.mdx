@@ -382,6 +382,46 @@ The fix always runs as a **background job**, not a modal that freezes the screen
    click, precisely so it disappears only when the fix has genuinely completed — no stale warnings, and
    no premature all-clear.
 
+### 5.3.1 The warning must actually leave the page — the general guarantee (LOCKED)
+
+**Rule for EVERY warning: once the user resolves a problem through the popup, the banner for that
+problem must disappear from the main page.** A success toast is not enough — the toast only says the
+*request* returned; the yellow/red rounded rectangle at the top of the page is the thing the user reads
+as "am I OK?", and it must reflect the new truth. A banner that stays up after a "fixed" toast reads as
+"my fix didn't work" even when it did. Because the banner is **derived** from query data (§1, §9), it
+clears only when a refetch re-derives the page with the detection condition now false. Two failure modes
+break that, and both are treated as **bugs**, not acceptable states:
+
+1. **The fix wrote to the wrong place, so the condition is still true (silent no-op).** The HTTP call
+   succeeds and the toast fires, but the state the warning is *derived from* never changed — so the refetch
+   re-derives the **identical** warning and it never leaves. The fix's `apply` MUST mutate the exact keys
+   the detector reads. *Canonical bug (now fixed):* the "N files need a decision" popup (§10.2.7) sent its
+   subjects as **absolute** paths, but the backend keys `cfg.decisions` — and the detector reads it — by
+   **repo-relative** path, so every decision landed under a key `composeFileRows()` never looks at; the
+   files stayed `undecided` and the banner persisted verbatim. Fix: the popup's `targets[].id` is the
+   repo-relative path, matching the table's per-row Decision control. *Guard for authors:* a warning's
+   subject `id` (what `apply` receives) must be in the **same key space** as the state the detector reads.
+
+2. **The fix is eventually consistent, so one refetch catches it mid-flight (async lag).** Some fixes
+   complete *after* the request returns — e.g. "Start IPFS" (§10.1.2) returns before the daemon finishes
+   booting, so the single `invalidate` refetches while the engine is still `unreachable` and the banner
+   lingers until a manual reload. Resolving a warning therefore re-derives the page in a short **backoff
+   burst** (t = 0, ~0.7s, ~1.6s, ~3.2s, ~6s) so the banner clears on its own the instant the fix has
+   genuinely taken. *Implemented in:* the shared helper
+   `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/warnings/resolveRefetch.ts`
+   — `refetchUntilResolved(qc, keys)`, wired into every `onWarningApplied` (`OneRepoPage.tsx` `RepoVerdict`,
+   `IpfsPage.tsx` `NodeVerdict`). Truth always wins: the burst only re-checks real state — it never hides a
+   warning optimistically — so a fix that genuinely failed leaves its (still-true) warning up (§5.5).
+
+3. **The resolved state must not instantly re-raise a *different* alarm for the same action.** Fixing a
+   warning may legitimately move the page to a new, gentler status, but it must not fire a fresh yellow
+   alarm as a side effect of the very action that resolved the first one. *Canonical bug (now fixed):*
+   choosing **Pin** on §10.2.7 set those files to `sync` with no CID yet; the "not backed up" detector
+   (§10.2.6) counted any `sync` file with zero peers — including CID-less ones — so it immediately re-raised
+   a yellow banner the moment the decision saved. The detector now gates on `cid != null` (a file that has
+   actually pinned), so a freshly-decided file falls through to the accurate **"queued to transfer"** status
+   (§10.2.8) instead. This matches the documented no-peer vs. pending split (§10.2.6 / §10.2.8).
+
 ### 5.4 Destructive / lossy confirm
 If any chosen option is destructive or lossy (drops alpha, deletes an original, rewrites a file in
 place, changes many files), the action button uses the **red** `--lfb-bad` treatment and the
@@ -864,7 +904,7 @@ Every repo answers "am I OK?" through one **RepoVerdict** banner on the One-Repo
 
 *Where shown:* One-Repo page banner, **worst-first cause #3** (IPFS up, no error); mirrored per-row on the Repos list as a red peer count (no banner).
 
-**(A) Detect it & all conditions.** `noPeerCount = detail.files.filter(f => f.decision === "sync" && f.peers.length === 0).length`; fires when `> 0`. `f.peers` comes from the manifest's `pinned_by` list — a pinned file with **zero peers exists only on this machine**. On the Repos list the same risk shows as `peerCount === 0` rendered red at the repo level, with no banner. *Computed in:* frontend `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `RepoVerdict` `noPeerCount` (line 350) + branch (lines 377–385), per-file red peers cell (lines 200–201); list mirror `ReposPage.tsx` peers column (lines 126–127, `peerCount === 0 → text-red-600`); backend `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` `peers = m?.pinned_by ?? []` (lines 207–221), `peerCountForFiles()` (lines 243–247).
+**(A) Detect it & all conditions.** `noPeerCount = detail.files.filter(f => f.decision === "sync" && f.cid != null && f.peers.length === 0).length`; fires when `> 0`. `f.peers` comes from the manifest's `pinned_by` list — a pinned file with **zero peers exists only on this machine**. The **`cid != null` gate is required** (§5.3.1 case 3): a Pin file with no CID hasn't finished its first pin, so it is **pending** (§10.2.8), *not* "not backed up" — without the gate, resolving "N files need a decision" (§10.2.7) by choosing Pin instantly re-raised this banner on the still-CID-less files, so the warning the user just fixed never appeared to leave the page. The per-row red peers cell in the table is gated the same way. On the Repos list the same risk shows as `peerCount === 0` rendered red at the repo level, with no banner. *Computed in:* frontend `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `RepoVerdict` `noPeerCount` (line 350) + branch (lines 377–385), per-file red peers cell (lines 200–201); list mirror `ReposPage.tsx` peers column (lines 126–127, `peerCount === 0 → text-red-600`); backend `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` `peers = m?.pinned_by ?? []` (lines 207–221), `peerCountForFiles()` (lines 243–247).
 
 **(B) The popup.** *What this is:* A file set to Pin is only truly **backed up** once at least one *other* of your computers has pinned it; these files have a CID but zero peers, so they live only here. *Why it matters:* if this machine dies, these files are **lost** — this is the app's headline promise (UC-2, "a file didn't show up on my other computer"). *Options:* none from this machine — the fix lives on the *other* computer. *Action button:* "See devices" (routes to `/devices`); optionally an inline "Re-announce" that runs a pin pass to re-provide the CID.
 
@@ -880,9 +920,9 @@ Every repo answers "am I OK?" through one **RepoVerdict** banner on the One-Repo
 
 **(B) The popup.** *What this is:* LFBridge found big files it doesn't yet have instructions for — **Pin** = pin and back up across your computers via IPFS; **Ignore** = leave it alone (still git-ignored, just not bridged). *Why it matters:* nothing moves for undecided files, so your backup is **incomplete** until every big file is decided. *Options:* radios — **◉ Pin all N undecided** (helper: "back them up over IPFS") / **○ Ignore all N undecided** (helper: "git-ignore, don't pin"); plus a checkbox **☐ Also remember this choice for new files here**. There is no correct auto-decision, so the popup presents the choice rather than picking. *Action button:* "Apply & pin" (or "Ignore these files" per the chosen radio).
 
-**(C) The fix.** Writes decisions in bulk: `PATCH /api/repos/:repoId/files {paths, decision}` (`updateRepoConfig` sets `decisions[p] = decision`, or deletes the entry to return a file to undecided). **Async (§5.2/§5.3):** from the warning popup the fix runs as a background job — the popup's `progress` metadata uses `kind:"pin"` (or `"ignore"` when the chosen radio is Ignore), `target:` the repo name, `doneLabel:` "N files set to pin/ignore", and invalidates `["repo", repoId]`, so the popup closes at once, a dock card + completion toast appear, and the "N files need a decision" banner disappears on the refetch once the decisions are actually written. *Fix in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files` (lines 122–150); frontend `OneRepoPage.tsx` `RepoVerdict` `repo-files-need-decision` popup + `api.setDecision`, dispatched by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` `doApply()`.
+**(C) The fix.** Writes decisions in bulk: `PATCH /api/repos/:repoId/files {paths, decision}` (`updateRepoConfig` sets `decisions[p] = decision`, or deletes the entry to return a file to undecided). **`paths` must be repo-RELATIVE** — `cfg.decisions` is keyed by relative path and `composeFileRows()` reads it back by relative path, so the popup's `targets[].id` (what `apply` hands to `api.setDecision`) is `f.path`, not the absolute path. *(Bugfix per §5.3.1 case 1: ids were absolute, so decisions landed under a key the detector never reads — the file stayed `undecided` and this banner persisted verbatim after a "fixed" toast.)* **Async (§5.2/§5.3):** from the warning popup the fix runs as a background job — the popup's `progress` metadata uses `kind:"pin"` (or `"ignore"` when the chosen radio is Ignore), `target:` the repo name, `doneLabel:` "N files set to pin/ignore", and invalidates `["repo", repoId]`; on success `onWarningApplied` also runs `refetchUntilResolved` (§5.3.1 case 2) so the banner re-derives in a burst and leaves the page as soon as the decisions are written. *Fix in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files` (lines 122–150); frontend `OneRepoPage.tsx` `RepoVerdict` `repo-files-need-decision` popup + `api.setDecision` (relative-path `targets`), dispatched by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` `doApply()`.
 
-**Notes / gaps.** Ties to the charter category-rollup ("big files git-ignored but not tracked → nudge to decide"). **Gap:** today's banner has **no action button** — the fix is only the per-row Decision dropdown / bulk menu in the table; wiring the blue-arrow bulk-decision popup here is exactly what closes the pattern.
+**Notes / gaps.** Ties to the charter category-rollup ("big files git-ignored but not tracked → nudge to decide"). The blue-arrow bulk-decision popup is wired (per-row Decision dropdown / bulk menu remain as the in-table path). **Follow-on state:** choosing Pin moves these files to **"queued to transfer"** (§10.2.8), not the "not backed up" alarm (§10.2.6), thanks to that section's `cid != null` gate — so the "needs a decision" warning genuinely leaves the page instead of being swapped for a fresh yellow one (§5.3.1 case 3).
 
 #### 10.2.8 N files are queued to transfer — `warn` (id: repo-files-pending-transfer)
 
