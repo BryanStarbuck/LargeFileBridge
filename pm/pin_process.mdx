@@ -178,23 +178,24 @@ Only the **byte work** is gated by the `pinned` opt-in (§1):
 * If the unit is **not opted in** (`pinned: false`): the pass still visits and reconciles it (steps
   1–4) but adds/pins/fetches **nothing** — until the user opts in.
 
-**Device write-back is explicitly NOT gated by `synced`.** Writing **this computer's own**
-`devices/<self>.yaml` into a Git-backed storage — and running that storage's Git cycle to carry it — is
-the "understand", not the "pin", side of §1: it puts your own identity text into your own configured
-repo, with **no** outward footprint. So a Git-backed storage runs **pull → write self device → commit →
-push every pass regardless of `synced`**; only the byte reconcile above waits on the opt-in. This is the
+**Device write-back is explicitly NOT gated by `pinned`.** Writing **this computer's own**
+`devices/<self>.yaml` into a Git-backed storage — and running that storage's **git backbone cycle** to
+carry it — is the "understand", not the "pin", side of §1: it puts your own identity text into your own
+configured repo, with **no** outward footprint. So a Git-backed storage runs its **git backbone pass
+(pull → write self device → commit → push) every pass regardless of `pinned`**; only the byte reconcile
+above waits on the opt-in. This is the
 guarantee the [every-10-minute device-registration worker](./devices.mdx#11-the-device-registration-write-back--every-10-minutes-locked)
-is built around, and it is applied to this Transfer pass too — implemented in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` —
-`syncStorageUnit(id)` (Git cycle + `writeSelfDevice` outside the `synced` gate; only `runUnitSync` inside it).
+is built around, and it is applied to this pin pass too — implemented in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` —
+`pinStorageUnit(id)` (git backbone cycle + `writeSelfDevice` outside the `pinned` gate; only `runUnitPin` inside it).
 
-**A manual Sync now is itself the opt-in.** Clicking Sync now on a not-yet-opted-in repo is an explicit
-user action, so it flips that repo to `synced: true` and does the byte work, then the every-15-min
+**A manual Pin now is itself the opt-in.** Clicking Pin now on a not-yet-opted-in repo is an explicit
+user action, so it flips that repo to `pinned: true` and does the byte work, then the every-15-min
 scheduleTask keeps it fresh. (This is the exact bug §6 records: the manual path used to be gated by the
-same `synced:false` guard as the background scheduler and silently did nothing.)
+same `pinned:false` guard as the background scheduler and silently did nothing.)
 
-The manual-vs-background gating — the background scheduler respects `synced:false`, a manual Sync now moves bytes and flips the unit's opt-in on — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncRepoFolder(folder, onlyPaths, { manual })`
+The manual-vs-background gating — the background scheduler respects `pinned:false`, a manual Pin now moves bytes and flips the unit's opt-in on — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder(folder, onlyPaths, { manual })`
 
 ---
 
@@ -202,20 +203,21 @@ The manual-vs-background gating — the background scheduler respects `synced:fa
 
 This invariant exists because it was violated in production. The defect and the rule:
 
-> **The defect.** `syncRepoFolder()` bailed at the top with `if (!cfg.synced) return`, and that guard
-> fired for the **manual** Sync now too — not just the background scheduler. A fresh repo defaults to
-> `synced: false` ([storage_local.mdx §6.2](./storage_local.mdx#62-syncrrepo_nameconfigyaml)), so clicking **Sync
-> now** returned instantly, pinned nothing, wrote no manifest — **yet the UI still toasted "Sync
-> complete."** A user could mark files and click Sync forever and nothing would ever pin. The status
+> **The defect.** `pinRepoFolder()` bailed at the top with `if (!cfg.pinned) return`, and that guard
+> fired for the **manual** Pin now too — not just the background scheduler. A fresh repo defaults to
+> `pinned: false` ([storage_local.mdx §6.2](./storage_local.mdx#62-syncrrepo_nameconfigyaml)), so clicking **Pin
+> now** returned instantly, pinned nothing, wrote no manifest — **yet the UI still toasted "Pin
+> complete."** A user could mark files and click Pin forever and nothing would ever pin. The status
 > popped up and vanished because the backend genuinely did nothing.
 
 The rules this locks in:
 
-* **A user-initiated sync must do real work.** The manual path is the repo's *primary* action; it may
-  never be short-circuited by the background-only `synced` gate (§5).
-* **Report what actually happened, not a fixed string.** A sync result carries **counts** — added,
+* **A user-initiated pin must do real work.** The manual path is the repo's *primary* action; it may
+  never be short-circuited by the background-only `pinned` gate (§5).
+* **Report what actually happened, not a fixed string.** A pin result carries **counts** — added,
   pinned, fetched, skipped, failed — and the UI reflects them. If a run was genuinely a no-op (nothing
-  eligible), say so explicitly ("Nothing to sync — no files marked Sync"), never a blanket "complete."
+  eligible), say so explicitly ("Nothing to pin — no files marked Add-to-IPFS (pin)"), never a blanket
+  "complete."
 * **Success ≠ "the call returned."** A green toast requires the work to have occurred (or an honest
   "nothing to do"), and a failure must surface, not be swallowed.
 
@@ -229,38 +231,39 @@ whether it did anything. Flag and fix such silent no-ops on sight.
 1. **Every repo is known automatically** with no user action; the pass **visits and reconciles every
    known unit** (all repos + the computer unit) regardless of opt-in (§1, §2, §5). No spec or UI copy
    frames a repo as needing to be "added"/"managed" before LFB knows it.
-2. The per-unit **`synced` flag means "opted in to IPFS pinning,"** not "managed." A `synced: false`
+2. The per-unit **`pinned` flag means "opted in to IPFS pinning,"** not "managed." A `pinned: false`
    unit is still fully known, visited, and reconciled; only byte work (add/pin/fetch) is withheld (§1,
    §5).
-3. **A synchronization is always a full pass.** No trigger — scheduled, session catch-up, or manual
-   Sync now — reduces scope to one unit (§2).
-4. A **manual Sync now on one repo prioritizes that repo (synced first, awaited) and then runs the full
-   pass over the remaining units** in the background; it never syncs one repo and stops (§2, §3).
+3. **A pin pass is always a full pass.** No trigger — scheduled, session catch-up, or manual
+   Pin now — reduces scope to one unit (§2).
+4. A **manual Pin now on one repo prioritizes that repo (pinned first, awaited) and then runs the full
+   pass over the remaining units** in the background; it never pins one repo and stops (§2, §3).
 5. The pass runs with **bounded concurrency** (default `cores − 2`) across units, and fans out per-file
    work within a unit; sequential `for…await` over a whole pass is treated as a defect (§4).
-6. A **manual Sync now is the explicit opt-in** for its repo (flips `synced: true` and moves bytes),
-   while the **background scheduler still respects `synced: false`** (§5).
-7. **No silent no-ops.** A user-initiated sync does real work or reports an honest "nothing to sync,"
+6. A **manual Pin now is the explicit opt-in** for its repo (flips `pinned: true` and moves bytes),
+   while the **background scheduler still respects `pinned: false`** (§5).
+7. **No silent no-ops.** A user-initiated pin does real work or reports an honest "nothing to pin,"
    with truthful counts; a green success toast is never shown for a run that did nothing, and failures
    surface (§6).
-8. Overlapping passes are **collapsed by a single in-flight guard**; the priority unit is always synced
+8. Overlapping passes are **collapsed by a single in-flight guard**; the priority unit is always pinned
    by its trigger and never dropped by the guard (§3).
 
 <!--
-  PRIMARY / AUTHORITATIVE spec for the synchronization PROCESS. LOCKED across specs:
-  (§1) LFB knows EVERY repo automatically — retire "LFB-managed" as an opt-in gate; `synced` means
+  PRIMARY / AUTHORITATIVE spec for the PIN PROCESS (the pin pass). LOCKED across specs:
+  (§1) LFB knows EVERY repo automatically — retire "LFB-managed" as an opt-in gate; `pinned` means
        "opted in to IPFS pinning," and it gates BYTE WORK only, never visiting/reconciling.
-  (§2) Every sync is a FULL PASS over all known units; a repo-scoped trigger sets PRIORITY, not scope.
+  (§2) Every pin pass is a FULL PASS over all known units; a repo-scoped trigger sets PRIORITY, not scope.
   (§3) Priority = order only (priority unit first + awaited, remainder in background under an overlap guard).
   (§4) Bounded-concurrency parallelism (cores-2) across units and across files; sequential is a defect.
        The cores-2 figure is the canonical RESPONSIVE budget from parallelization.mdx §1 (responsiveBudget()
-       in shared/concurrency.ts); the sync pass is its reference consumer (runs alongside interactive use,
-       leaves 2 cores for HTTP+IPFS). The inline SYNC_CONCURRENCY=cores-2 in sync.service.ts should call
+       in shared/concurrency.ts); the pin pass is its reference consumer (runs alongside interactive use,
+       leaves 2 cores for HTTP+IPFS). The inline PIN_CONCURRENCY=cores-2 in pin.service.ts should call
        responsiveBudget() so there is ONE definition — cross-ref performance.mdx P-26 (queue = mass-compute
        budget). Design in §4 unchanged; unification note only.
-  (§5) Opt-in gates add/pin/fetch; a manual Sync now IS the opt-in.
+  (§5) Opt-in gates add/pin/fetch; a manual Pin now IS the opt-in. Device write-back rides the git
+       backbone (pinStorageUnit) and is NOT gated by `pinned`.
   (§6) Never a silent no-op — report truthfully with counts (the real defect this spec learned from).
   storage_local.mdx §13, scan.mdx, one_repo.mdx §3, and sync_list.mdx §5 reference THIS file for the process
-  and must not redefine it. Keep code pointers (sync.service.ts syncAll/runPool/syncRepoFolder,
-  repos.router POST /:repoId/sync) in sync with reality.
+  and must not redefine it. Keep code pointers (pin.service.ts pinAll/runPool/pinRepoFolder,
+  repos.router POST /:repoId/pin) accurate.
 -->

@@ -1,11 +1,11 @@
 ---
 title: LargeFileBridge — Storages (the umbrella)
-description: The umbrella spec for LargeFileBridge "storages". A storage is a place LFBridge tracks and syncs large files. There are five kinds — Local (this computer's settings/config, the database replacement), Repo (any Git repo, tracked in a hidden .lfbridge/ folder in the repo root), Personal (the user's own personal_large_files_bridge directory), Company (one directory per company), and Community (one per community the user chooses to help / download / share). Every directory-based storage is a real directory hierarchy with a storage.yaml at its root declaring its name + type (and type-specific properties like company_name or community), plus a hidden .lfbridge/ tracking area holding the per-file fingerprint index and per-file media-analysis outputs (transcription, description, visuals-and-action-by-time YAML for video; content description for images). Storages sync between the user's computers over IPFS and often also keep a clone in Google Drive and Dropbox. This spec defines the storage family, the Storages left-bar tab and its children, the shared storage.yaml schema, the .lfbridge/ tracking layout, the media-analysis outputs, and how a user belongs to many storages at once. Sibling specs: storage_local.mdx, storage_repo.mdx, storage_personal.mdx, storage_company.mdx, storage_community.mdx.
+description: The umbrella spec for LargeFileBridge "storages". A storage is a place LFBridge tracks and pins large files. There are five kinds — Local (this computer's settings/config, the database replacement), Repo (any Git repo, tracked in a hidden .lfbridge/ folder in the repo root), Personal (the user's own personal_large_files_bridge directory), Company (one directory per company), and Community (one per community the user chooses to help / download / share). Every directory-based storage is a real directory hierarchy with a storage.yaml at its root declaring its name + type (and type-specific properties like company_name or community), plus a hidden .lfbridge/ tracking area holding the per-file fingerprint index and per-file media-analysis outputs (transcription, description, visuals-and-action-by-time YAML for video; content description for images). Storages are pinned between the user's computers over IPFS and often also keep a clone in Google Drive and Dropbox. This spec defines the storage family, the Storages left-bar tab and its children, the shared storage.yaml schema, the .lfbridge/ tracking layout, the media-analysis outputs, and how a user belongs to many storages at once. Sibling specs: storage_local.mdx, storage_repo.mdx, storage_personal.mdx, storage_company.mdx, storage_community.mdx.
 ---
 
 # LargeFileBridge — Storages (the umbrella)
 
-A **storage** is a place LargeFileBridge (LFB) **tracks and syncs large files**. This is the umbrella
+A **storage** is a place LargeFileBridge (LFB) **tracks and pins large files**. This is the umbrella
 spec: it defines the **family** of storages, the shared **`storage.yaml`** schema, the hidden
 **`.lfbridge/`** tracking layout, the per-file **media-analysis** outputs, and the **Storages** left-bar
 tab. Each kind then has its own detail spec.
@@ -50,15 +50,15 @@ Siblings this builds on and does not repeat:
 Two categories, and they play different roles:
 
 * **Local Storage** (`local`) is **this computer's own settings, configuration, and bookkeeping** — the
-  **database replacement** ([storage_local.mdx](./storage_local.mdx)). It does not itself sync between
+  **database replacement** ([storage_local.mdx](./storage_local.mdx)). It does not itself travel between
   computers; wipe it and a rescan rebuilds it.
 * **Directory-based storages** (`repo` · `personal` · `company` · `community`) are **real directory
   hierarchies that hold the shared large files**. They:
   1. carry a **`storage.yaml`** at their root (§3) declaring name + type + type-specific properties,
   2. carry a hidden **`.lfbridge/`** tracking area at their root (§4) — the per-file fingerprint index and
      the per-file media-analysis outputs,
-  3. **sync between the user's computers over IPFS** (git for the small files + manifest; IPFS for the
-     bytes — charter), and
+  3. **pin their large files between the user's computers over IPFS** (git for the small files +
+     manifest; IPFS for the bytes — charter), and
   4. **often also have a clone in Google Drive and/or Dropbox** (§5) — the same hierarchy mirrored to a
      cloud drive as a second, human-reachable copy.
 
@@ -202,7 +202,7 @@ Parallelizing the per-file fingerprint (head+tail read + sha256) across files un
 
 ## 5. Cloud clones (Google Drive / Dropbox)
 
-A directory-based storage's **IPFS copy is the primary sync path** between the user's computers, but a
+A directory-based storage's **IPFS copy is the primary pin path** between the user's computers, but a
 storage will **sometimes also have a clone in Google Drive and/or Dropbox** — the same directory
 hierarchy mirrored into a cloud drive as a second, human-reachable, non-IPFS copy. The `clones` block in
 `storage.yaml` (§3) records the relative path of that mirror in each connected drive (or `null`).
@@ -332,7 +332,7 @@ implemented in code:
 4. A user can belong to **many** storages at once (multiple communities + companies + personal + every
    repo). The **Storages** left-bar tab shows them: **Personal**, one child **per company**, a **Repos**
    child that routes to the Repos tab (not a long list), and the opted-in **Communities**.
-5. Storages sync between the user's computers over **IPFS** and **may also** clone to **Google Drive** and
+5. Storages are pinned between the user's computers over **IPFS** and **may also** clone to **Google Drive** and
    **Dropbox** (recorded in `storage.yaml` `clones`); the clones are mirrors, not the source of truth.
 6. **Media analysis** can produce, per file under `.lfbridge/analysis/`: a **transcript** (speech +
    time), a **description** (video summary / image contents), and **visuals-and-action-by-time** (time
@@ -349,7 +349,7 @@ implemented in code:
   block) + a hidden .lfbridge/ (files.yaml fingerprints, manifest.yaml, analysis/). Building files.yaml
   PARALLELIZES per-file fingerprinting (head+tail read + sha256) across files AND across storages under
   the RESPONSIVE budget (cores−2) via mapLimit — responsive/wide-over-files (parallelization.mdx §3;
-  tracking.service.ts indexStorageFiles). They sync over IPFS
+  tracking.service.ts indexStorageFiles). They pin over IPFS
   and may also mirror to Google Drive / Dropbox. The Storages left-bar tab groups Personal + Companies +
   a Repos link + opted-in Communities. Media analysis writes transcript/description/visuals_by_time YAML.
   Sibling detail specs: storage_local, storage_repo, storage_personal, storage_company, storage_community.

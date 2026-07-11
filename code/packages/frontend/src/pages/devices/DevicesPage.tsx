@@ -162,7 +162,7 @@ export function DevicesPage() {
           <StatusBanner
             state="ok"
             headline={`${otherCount} other computer${otherCount === 1 ? "" : "s"} keep${otherCount === 1 ? "s" : ""} copies of your files`}
-            sub="Your synced files are backed up across these machines."
+            sub="Your pinned files are backed up across these machines."
           />
         )
       )}

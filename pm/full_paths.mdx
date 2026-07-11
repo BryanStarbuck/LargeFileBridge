@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Full Paths (flat large-file table under File System)
-description: A second TAB under the File System area (route /fs/paths, tab "Full paths" beside the column-view tab). Where the File System column browser (directories.mdx) walks ONE directory level per column and shows only names, this tab shows a FLAT, recursive TanStack table of the large files under a chosen root — one row per file — with two lead columns the browser can't give you at a glance: the file NAME and its full absolute PATH. Each row has a checkbox. Above the table sits a control row built from three SEGMENTED CONTROLS (a.k.a. segmented buttons) plus the house search box and sort/filter icons: (1) a compressed filter Both · Compressed · Uncompressed (default Both), (2) a sort segmented control Size · Name · Path each with an up/down direction arrow (default Size, biggest on top), and (3) an IPFS-membership filter In IPFS · Not · Both (default Both). Action buttons — Select all, IPFS pin, Unpin — act on the checked rows. The workflow: sort by size (biggest first), flip the IPFS filter to Not to reveal the big files that aren't pinned yet, check the ones worth backing up, and click IPFS pin. It reuses the directories.mdx code badges, the one_repo.mdx sync/pin decision model, and the ipfs.mdx pin semantics. Implemented by GET /api/fs/flat (a recursive, metadata-only, big-file walk) and the FullPathsPage frontend.
+description: A second TAB under the File System area (route /fs/paths, tab "Full paths" beside the column-view tab). Where the File System column browser (directories.mdx) walks ONE directory level per column and shows only names, this tab shows a FLAT, recursive TanStack table of the large files under a chosen root — one row per file — with two lead columns the browser can't give you at a glance: the file NAME and its full absolute PATH. Each row has a checkbox. Above the table sits a control row built from three SEGMENTED CONTROLS (a.k.a. segmented buttons) plus the house search box and sort/filter icons: (1) a compressed filter Both · Compressed · Uncompressed (default Both), (2) a sort segmented control Size · Name · Path each with an up/down direction arrow (default Size, biggest on top), and (3) an IPFS-membership filter In IPFS · Not · Both (default Both). Action buttons — Select all, IPFS pin, Unpin — act on the checked rows. The workflow: sort by size (biggest first), flip the IPFS filter to Not to reveal the big files that aren't pinned yet, check the ones worth backing up, and click IPFS pin. It reuses the directories.mdx code badges, the one_repo.mdx pin decision model, and the ipfs.mdx pin semantics. Implemented by GET /api/fs/flat (a recursive, metadata-only, big-file walk) and the FullPathsPage frontend.
 ---
 
 # LargeFileBridge — Full Paths
@@ -25,7 +25,7 @@ Siblings this spec builds on and does **not** repeat:
 
 * [Directory / File System](./directories.mdx) — the **code badges** (R/r · S · C/c · i, §3) painted on
   every row here, and the recursive, **no-shell**, metadata-only walk discipline (§2/§AC9).
-* [One repo](./one_repo.mdx) — the **decision model** Sync / Ignore / Undecided (§1) that **IPFS pin /
+* [One repo](./one_repo.mdx) — the **decision model** Pin / Ignore / Undecided (§1) that **IPFS pin /
   Unpin** drive, and the standard **control row** + **pagination default 500** conventions.
 * [IPFS](./ipfs.mdx) — what "in IPFS / pinned" means; pinning here is the same **decision → sync**,
   and the only-our-content posture is unchanged (nothing here turns this machine into a gateway).
@@ -80,7 +80,7 @@ The standard app frame (256px left bar), then — inside the File System area �
 │ IPFS       │  ☑ Select all      ⬆ IPFS pin      ⬇ Unpin           3 selected             │ ← action row
 │ Scans      ├───────────────────────────────────────────────────────────────────────────┤
 │ Settings   │  ☐  Name                 Path                              Size   Changed  ⋮ │
-│            │  ☑  final_4k.mov         ~/…/Our_Movies/render/final_4k.mov 8.2GB  2h   C S ⋮│
+│            │  ☑  final_4k.mov         ~/…/Our_Movies/render/final_4k.mov 8.2GB  2h   C P ⋮│
 │            │  ☑  take_07.mov          ~/…/Our_Movies/render/take_07.mov  6.1GB  5m   C   ⋮│
 │  [account] │  ☐  poster.png           ~/…/art/poster.png                220MB  1d   C   ⋮│
 │            ├───────────────────────────────────────────────────────────────────────────┤
@@ -136,12 +136,12 @@ within — applied until the user re-ranks (their choice then persists, §3.4).
 ### 3.3 IPFS membership filter — `In IPFS · Not · Both` (default **Both**)
 
 Three segments; **In IPFS** left, **Not** middle, **Both** right; default **Both**. "In IPFS" means the
-file is **pinned / synced** — its decision is **sync** and it carries the pink **`S`** badge
+file is **pinned** — its decision is `sync` and it carries the pink **`P`** badge
 ([directories.mdx §3.2](./directories.mdx), [one_repo.mdx §1](./one_repo.mdx)):
 
 | Segment | Shows |
 | --- | --- |
-| **In IPFS** | Only files we already pin/sync (**`S`**). |
+| **In IPFS** | Only files we already pin (**`P`**). |
 | **Not** | Only files **not** pinned — the candidates the user probably wants to back up. |
 | **Both** (default) | Every large file regardless of IPFS membership. |
 
@@ -175,12 +175,12 @@ Three action buttons operate on the **checked** rows (the header checkbox select
 | Action | Effect |
 | --- | --- |
 | **Select all** | Checks every row that currently passes the filters (§3.1/§3.3/§3.4). |
-| **IPFS pin** | For each checked file, sets its decision to **sync** — pins it and starts syncing it to peers ([one_repo.mdx §4.5](./one_repo.mdx), [ipfs.mdx §4](./ipfs.mdx)). Never moves or deletes bytes. |
-| **Unpin** | For each checked file, sets its decision to **ignore** — stops pinning/syncing. The file **stays on disk**; only LFB's tracking/pin is removed ([menus.mdx §6.2](./menus.mdx)). |
+| **IPFS pin** | For each checked file, sets its decision to `sync` — pins it and starts pinning it across peers ([one_repo.mdx §4.5](./one_repo.mdx), [ipfs.mdx §4](./ipfs.mdx)). Never moves or deletes bytes. |
+| **Unpin** | For each checked file, sets its decision to **ignore** — stops pinning. The file **stays on disk**; only LFB's tracking/pin is removed ([menus.mdx §6.2](./menus.mdx)). |
 
 A **"N selected"** counter shows beside the actions; the pin/unpin buttons are disabled with nothing
 checked. Pin/Unpin reuse the per-entity decision endpoint, so — like everywhere else — a file that is
-**not inside a registered repo** cannot be synced yet; those are reported as skipped (a toast shows
+**not inside a registered repo** cannot be pinned yet; those are reported as skipped (a toast shows
 `pinned N, skipped M`), never silently dropped. Both flags apply: a file with **Never IPFS** on
 ([menus.mdx §6.6](./menus.mdx)) is refused by pin and reported as skipped.
 
@@ -215,13 +215,13 @@ everywhere ([repos.mdx §3](./repos.mdx)).
 
 | # | Column | Kind | Sort | Notes |
 | --- | --- | --- | --- | --- |
-| 0 | **`▮` Bookmark** | toggle | ✓ | **Leading** ribbon favorite toggle ([tables.mdx §1](./tables.mdx#1-the-leading-bookmark-favorite-toggle-locked)) — a control cell; flips `bookmarked` (stored in the owning sync unit's `config.yaml`, keyed by path + fingerprint — [tables.mdx §1.1](./tables.mdx#11-where-the-flag-is-stored-per-entity-type-locked)) and never navigates. |
+| 0 | **`▮` Bookmark** | toggle | ✓ | **Leading** ribbon favorite toggle ([tables.mdx §1](./tables.mdx#1-the-leading-bookmark-favorite-toggle-locked)) — a control cell; flips `bookmarked` (stored in the owning pin unit's `config.yaml`, keyed by path + fingerprint — [tables.mdx §1.1](./tables.mdx#11-where-the-flag-is-stored-per-entity-type-locked)) and never navigates. |
 | 1 | **☐ select** | — | — | Row checkbox; header checkbox selects the current page (§3.5). |
 | 2 | **Name** | text | ✓ | The file's base name, bold. Clicking it opens **View one file** ([files.mdx](./files.mdx)). |
 | 3 | **Path** | text | ✓ | The **full absolute path** — the widest column, middle-truncated with the full path on hover/`title`. Clicking opens **View one file**. |
 | 4 | **Size** | bytes | ✓ | Human-readable (`8.2 GB`), right-aligned; sorts on raw bytes. The default **secondary** sort (▼) — after Bookmarked (§3.2). |
 | 5 | **Changed** | timestamp | ✓ | `modifiedAt`, relative with an absolute tooltip. |
-| — | **badges** | — | — | The right-aligned **code badges** ([directories.mdx §3](./directories.mdx)) — here mostly **C/c** (compress) and **S** (sync/IPFS), plus **r** inside a repo and **i** for list artifacts. |
+| — | **badges** | — | — | The right-aligned **code badges** ([directories.mdx §3](./directories.mdx)) — here mostly **C/c** (compress) and **P** (pin/IPFS), plus **r** inside a repo and **i** for list artifacts. |
 | — | **`⋮`** | — | — | The row **kebab** — the **file** action catalog ([menus.mdx §5.3](./menus.mdx)); right-click on the row opens the same menu ([menus.mdx §3.1](./menus.mdx)). Never navigates. |
 
 Pagination **defaults to 500** ([repos.mdx §3.3](./repos.mdx)); the **file count** shows left of the
@@ -266,7 +266,7 @@ interface FlatFileListing {
 `files[]` are the **same `FsEntry`** the column browser returns ([directories.mdx §5](./directories.mdx))
 — `name`, absolute `path`, `sizeBytes`, `modifiedAt`, and the ordered `badges[]`. The frontend derives
 the two segmented filters from the badges: **compressed** = badge `compressed`, **uncompressed** =
-badge `compress`; **in IPFS** = badge `sync`. No new per-row shape is needed — Full paths is a
+badge `compress`; **in IPFS** = badge `pin`. No new per-row shape is needed — Full paths is a
 different *view* of the same file knowledge, not new knowledge.
 
 Streaming the flat listing into the page as rows arrive (NDJSON from `GET /api/fs/flat`) and windowing the large row set for scroll performance is handled in code:
@@ -308,11 +308,11 @@ Streaming the flat listing into the page as rows arrive (NDJSON from `GET /api/f
    icon** (§3.2/§3.4) and header clicks. The house sort dropdown exposes **1st/2nd/3rd** priority slots
    ([tables.mdx §3](./tables.mdx)); the **page default** is **Bookmarked ↓, then Size ↓**.
 6. The table carries the **shared table behavior** ([tables.mdx](./tables.mdx)): a leading **bookmark**
-   toggle (col 0, stored per file by path + fingerprint in the owning sync unit's `config.yaml`), a
+   toggle (col 0, stored per file by path + fingerprint in the owning pin unit's `config.yaml`), a
    **"Bookmarked only"** checkbox promoted to the top of the filter dropdown, and **per-user, per-page
    persistence** of the sort + filter state in `users/<email>/config.yaml`.
-7. **IPFS** segmented control (**In IPFS · Not · Both**, default Both) filters by pin/sync membership
-   (the **S** badge / decision `sync`); **Not** reveals the un-pinned backup candidates.
+7. **IPFS** segmented control (**In IPFS · Not · Both**, default Both) filters by pin membership
+   (the **P** badge / decision `sync`); **Not** reveals the un-pinned backup candidates.
 8. The **action row** — **Select all** (selects the whole filtered set), **IPFS pin** (decision →
    sync), **Unpin** (decision → ignore) — acts on checked rows, shows an **N selected** counter, never
    moves or deletes local bytes, and **reports skipped** files (not in a registered repo, or Never
@@ -333,7 +333,7 @@ Streaming the flat listing into the page as rows arrive (NDJSON from `GET /api/f
   browser (directories.mdx) returns — NOT new per-file data. Three SEGMENTED CONTROLS: compressed
   (Both·Compressed·Uncompressed, default Both, driven by the C/c badge), sort (Size·Name·Path with
   up/down arrows, default Size ▼, shares state with the house sort icon), IPFS (In IPFS·Not·Both,
-  default Both, driven by the S badge). Actions Select all / IPFS pin / Unpin reuse the one_repo.mdx
+  default Both, driven by the P badge). Actions Select all / IPFS pin / Unpin reuse the one_repo.mdx
   decision model (sync/ignore) via the per-entity decision endpoint — so files outside a registered
   repo, or with Never IPFS on, are REPORTED as skipped, never silently dropped, and no bytes ever move.
   Backend: GET /api/fs/flat (recursive, metadata-only, Node fs, bounded, honors threshold + hard-skip).

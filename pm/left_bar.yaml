@@ -11,7 +11,7 @@
 #             routes to /settings; there is no separate settings sub-bar yet.
 #
 # Product context (see README.md + CLAUDE.md charter):
-#   - Localhost web app that syncs a user's LARGE files across their own
+#   - Localhost web app that pins a user's LARGE files across their own
 #     computers via IPFS. Git tracks the small files; LFBridge moves the big,
 #     git-ignored files peer-to-peer. Node + TypeScript.
 #   - Auth: OpenAuthFederated federated Google SSO. Allow-listed users only.
@@ -36,7 +36,7 @@ Left_Nav:
         # never "LargeFileBridge" run together in the wordmark. Rendered
         # verbatim, normal tracking.
         label: "Large File Bridge"
-        alt_text: "Large File Bridge — sync large files across your computers via IPFS"
+        alt_text: "Large File Bridge — pin large files across your computers via IPFS"
         click_route: "/"
 
       # Color rules (pm/left_bar.mdx §2, LOCKED): all left-bar text is black;
@@ -53,9 +53,9 @@ Left_Nav:
           icon: "FolderGit2"
           route: "/"
           order: 1
-          description: "Every git repo on this computer that LargeFileBridge manages, with its large-file sync counts and status. This is the dedicated long list of repos; the Storages tab links here rather than re-listing them."
+          description: "Every git repo on this computer that LargeFileBridge manages, with its large-file pin counts and status. This is the dedicated long list of repos; the Storages tab links here rather than re-listing them."
 
-        # STORAGES (pm/storages.mdx) — the map of everything this user syncs. A grouping tab whose
+        # STORAGES (pm/storages.mdx) — the map of everything this user pins. A grouping tab whose
         # children are the storages the user belongs to: Personal (storage_personal.mdx), one child
         # per Company (storage_company.mdx, labeled by company_name — DERIVED at runtime from each
         # storage.yaml), a Repos child that routes to the Repos tab above (NOT a long list here), and
@@ -66,7 +66,7 @@ Left_Nav:
           icon: "HardDrive"
           route: "/storages"
           order: 2
-          description: "All the large-file storages you belong to in one map: your Personal files, each Company you're in, a Repos link to the repos list, and the Communities you carry. Each directory-based storage has a storage.yaml (name + type) and a hidden .lfbridge/ tracking area, syncs over IPFS, and may also clone to Google Drive / Dropbox. See pm/storages.mdx."
+          description: "All the large-file storages you belong to in one map: your Personal files, each Company you're in, a Repos link to the repos list, and the Communities you carry. Each directory-based storage has a storage.yaml (name + type) and a hidden .lfbridge/ tracking area, pins over IPFS, and may also clone to Google Drive / Dropbox. See pm/storages.mdx."
           children:
             - id: storages_personal
               label: "Personal"
@@ -88,7 +88,7 @@ Left_Nav:
           icon: "Columns3"
           route: "/fs"
           order: 3
-          description: "Browse your whole filesystem two ways: a Finder-style column view (/fs) and a flat Full-paths table (/fs/paths) of the large files under a folder. Each row shows code badges: R/r repo (brown), S sync (pink), C/c compress (yellow), i IPFS (blue). Folders whose subtree holds big files, videos, or heavy images get interesting-directory coloring (brown/blue tinting). Defaults to your home directory. See pm/file_system.mdx (hub + folder coloring) + pm/directories.mdx + pm/full_paths.mdx."
+          description: "Browse your whole filesystem two ways: a Finder-style column view (/fs) and a flat Full-paths table (/fs/paths) of the large files under a folder. Each row shows code badges: R/r repo (brown), P pin (pink), C/c compress (yellow), i IPFS (blue). Folders whose subtree holds big files, videos, or heavy images get interesting-directory coloring (brown/blue tinting). Defaults to your home directory. See pm/file_system.mdx (hub + folder coloring) + pm/directories.mdx + pm/full_paths.mdx."
 
         # DEVICES / PEERS (pm/devices.mdx). The registry of every COMPUTER that carries your files —
         # this Mac, a laptop, a studio tower, a server, a family iMac. The page ALWAYS shows at least
@@ -124,7 +124,7 @@ Left_Nav:
         # NAMING (pm/menus.mdx / scan.mdx): the scheduled background jobs are
         # "scheduleTasks" internally; the UI calls what they do "scans". This
         # page is the transparency+control surface for both scheduleTasks — the
-        # every-15-min one (sync bytes + read the IPFS pinset) and the every-4h
+        # every-15-min one (pin bytes + read the IPFS pinset) and the every-4h
         # discovery one — whether each is installed, on/off, and recent runs.
         - id: scans
           label: "Scans"

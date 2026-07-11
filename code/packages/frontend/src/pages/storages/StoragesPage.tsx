@@ -77,7 +77,7 @@ export function StoragesPage() {
         <Tile
           icon={<Database className="h-5 w-5" />}
           title="Local (this computer)"
-          sub="Settings & config — the database replacement. Not synced by itself."
+          sub="Settings & config — the database replacement. Not pinned by itself."
           onClick={() => navigate({ to: "/settings" })}
         />
         <Tile

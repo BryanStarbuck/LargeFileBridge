@@ -307,7 +307,7 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
     a.push({ id: "reveal", label: "Open containing folder", group: "Open", icon: <FolderOpen className="h-4 w-4" />,
       onSelect: () => ctx.navigate({ to: "/fs", search: { path: parent } }) });
 
-    // IPFS shortcuts (menus.mdx §5.3). Add hidden when Never IPFS on; Remove shown only when syncing.
+    // IPFS shortcuts (menus.mdx §5.3). Add hidden when Never IPFS on; Remove shown only when pinned.
     if (v.repo && v.decision !== "sync" && !v.flags.neverIpfs) {
       a.push({ id: "add-ipfs", label: "Add to IPFS", group: "IPFS", icon: <UploadCloud className="h-4 w-4" />,
         onSelect: () => ctx.decide.mutate("sync") });
@@ -322,7 +322,7 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
       (["sync", "ignore", "undecided"] as Decision[]).forEach((d) =>
         a.push({
           id: `dec-${d}`,
-          label: `Set decision: ${d[0].toUpperCase()}${d.slice(1)}`,
+          label: `Set decision: ${d === "sync" ? "Add to IPFS (pin)" : `${d[0].toUpperCase()}${d.slice(1)}`}`,
           group: "Decision",
           checked: v.decision === d,
           disabled: d === "sync" && v.flags.neverIpfs,
@@ -382,16 +382,16 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
   if (v.cid) a.push({ id: "copy-cid", label: "Copy CID", group: "Copy", icon: <Copy className="h-4 w-4" />, onSelect: copy(v.cid, "CID") });
   a.push({ id: "copy-path", label: "Copy path", group: "Copy", icon: <Copy className="h-4 w-4" />, onSelect: copy(v.path, "Path") });
 
-  // Danger — stop syncing (never deletes bytes, §6.2).
+  // Danger — stop pinning (never deletes bytes, §6.2).
   if (v.kind === "file" && v.decision === "sync") {
     a.push({
       id: "untrack",
-      label: "Stop syncing (untrack / unpin)",
+      label: "Stop pinning (untrack / unpin)",
       group: "Danger",
       danger: true,
       icon: <RefreshCw className="h-4 w-4" />,
       onSelect: () => {
-        if (window.confirm("Stop syncing this file? It stays on disk — only LFB's tracking is removed.")) {
+        if (window.confirm("Stop pinning this file? It stays on disk — only LFB's tracking is removed.")) {
           ctx.decide.mutate("ignore");
         }
       },

@@ -79,13 +79,13 @@ The `.lfbridge/` directory holds the committed, git-tracked artifacts for this r
   If a broad ignore rule (e.g. `*.yaml`, or a dotfile glob) would swallow the list, LFB adds an
   explicit un-ignore (`!/.lfbridge/`) so the list is always tracked. LFB verifies on scan that
   `.lfbridge/LargeFilesBridge_SyncList.yaml` is not ignored and warns loudly if it is.
-* The state-root copy (`sync/r/<repo_name>/manifest.yaml`,
+* The state-root copy (`pin/r/<repo_name>/manifest.yaml`,
   [storage_local.mdx §6.3](./storage_local.mdx#62-syncrrepo_nameconfigyaml)) remains the **local cache** of this
   committed file plus this computer's live pin state. The committed file is the **portable source of
   truth**; the state-root copy is derived.
 
 The committed in-repo list file (currently `.lfbridge/manifest.yaml`) is written by code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/manifest.service.ts` — `writeCommittedManifest` (path from `committedManifestPath`)
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `writeCommittedManifest` (path from `committedManifestPath`)
 
 ---
 
@@ -105,19 +105,19 @@ per-repo Sync List supersedes and absorbs that file.** The mapping is exact:
 In short: **the list's `files:` block equals the old manifest rows, plus settings + provenance,
 widened to the full `large_files` hierarchy.** The committed file is now a proper Sync List, not a
 bare manifest. `publish_manifest` ([repo_settings.mdx §2.4](./repo_settings.mdx#24-pinning--fetch-policy),
-`sync.publish_manifest` in storage §6.2) is what writes this committed file — the same toggle, now
+`pin.publish_manifest` in storage §6.2) is what writes this committed file — the same toggle, now
 writing the widened artifact. Existing bare `manifest.yaml` files are read and migrated in place on
 the next publish.
 
-The `publish_manifest` toggle that writes this committed file on each sync is wired in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncRepoFolder` (the `cfg.sync.publish_manifest` publish block)
+The `publish_manifest` toggle that writes this committed file on each pin pass is wired in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder` (the `cfg.pin.publish_manifest` publish block)
 
 ---
 
 ## 4. Transport is git — the asynchronous change is a `git pull`
 
 On the whole-computer backbones, the "asynchronous change from another computer" is a cloud folder
-sync. **Here it is a `git pull` / merge.** When the user (or LFB's background sync, §7) pulls the
+sync. **Here it is a `git pull` / merge.** When the user (or LFB's background pin pass, §7) pulls the
 repo on this machine, git delivers whatever `.lfbridge/LargeFilesBridge_SyncList.yaml` the peer
 committed and pushed. That incoming file is exactly the kind of asynchronous, other-computer-authored
 input the hub trust model governs — it is a set of **claims, never ground truth** (hub
@@ -131,7 +131,7 @@ input the hub trust model governs — it is a set of **claims, never ground trut
   describes, now driven by the widened list.
 
 Reading the committed list that a `git pull` delivered is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/manifest.service.ts` — `readCommittedManifest`
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `readCommittedManifest`
 
 ---
 
@@ -214,7 +214,7 @@ The payoff: two computers editing *different* files never conflict; only two com
 
 ## 7. Publishing — regenerate, then let git carry it
 
-On scan/sync (hub [§6](./sync_list.mdx#6-publishing--writing-our-list-out-to-the-backbones)), for a
+On scan or pin pass (hub [§6](./sync_list.mdx#6-publishing--writing-our-list-out-to-the-backbones)), for a
 repo with this backbone enabled, LFB regenerates the in-repo list:
 
 * **Bump `origin.revision`**, stamp `origin.written_at`, set `origin.computer_id`/`label`/`owner` to
@@ -243,7 +243,7 @@ Per hub [§5.4](./sync_list.mdx#54-when-the-same-repo-arrives-on-two-backbones):
 in a *computer*-scope list (Dropbox/Drive) **and** in its own in-repo (git) list. **The in-repo (git)
 list is AUTHORITATIVE for that repo's `files`**, because it travels **atomically with the repo's own
 commits** — the committed list and the code it describes move together, so it cannot drift from the
-repo's real state the way a separately-synced computer-list mirror can. The computer-list copy of that
+repo's real state the way a separately-carried computer-list mirror can. The computer-list copy of that
 repo is a convenience mirror only. Settings still resolve on the normal inherit chain (per-repo
 override → computer `settings` → global `config.yaml`).
 

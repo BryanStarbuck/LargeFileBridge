@@ -43,7 +43,7 @@ const VIDEO_COMPRESSED_MARK = /(compress|h264|x264|hevc|x265|av1|reenc|shrunk|sm
 
 export interface FsBadgeContext {
   thresholdBytes: number;
-  /** Registered repos: resolved absolute path → its sync decisions (for the S badge). */
+  /** Registered repos: resolved absolute path → its pin decisions (for the P badge). */
   registeredRepos: { path: string; decisions: Record<string, string> }[];
   /** The nearest git working tree at-or-above the listed directory (children are inside it). */
   enclosingRepoForChildren: string | null;
@@ -118,7 +118,7 @@ export interface BadgeResult {
 
 /**
  * Compute the ordered badge list for one entry. Order is rightmost-first
- * (directory.mdx §3.5): repo(R/r) · sync(S) · compress(C/c) · ipfs(i).
+ * (directory.mdx §3.5): repo(R/r) · pin(P) · compress(C/c) · ipfs(i).
  */
 export function computeBadges(
   childAbs: string,
@@ -136,9 +136,10 @@ export function computeBadges(
   const repo = repoBadge(childAbs, isDir, isRepoRoot, ctx);
   if (repo) badges.push(repo);
 
-  // 2. Sync badge (files whose decision is "sync"). Never IPFS forbids sync, so suppress it (menus §6.6).
-  if (isFile && fileIsSynced(childAbs, ctx) && !effectiveFlag(childAbs, ctx, "never_ipfs")) {
-    badges.push("sync");
+  // 2. Pin badge (files whose decision is "sync"). Never IPFS forbids the Add-to-IPFS (pin) decision, so
+  // suppress it (menus §6.6).
+  if (isFile && fileIsPinned(childAbs, ctx) && !effectiveFlag(childAbs, ctx, "never_ipfs")) {
+    badges.push("pin");
   }
 
   // 3. Compress badge (video/image files). "Do not compress" suppresses the "should compress" C offer.
@@ -201,8 +202,8 @@ function containsRepoBelow(dirAbs: string, ctx: FsBadgeContext): boolean {
   return false;
 }
 
-// ── sync ──────────────────────────────────────────────────────────────────────
-function fileIsSynced(fileAbs: string, ctx: FsBadgeContext): boolean {
+// ── pin ─────────────────────────────────────────────────────────────────────
+function fileIsPinned(fileAbs: string, ctx: FsBadgeContext): boolean {
   // Longest registered-repo path that encloses this file wins.
   let best: { path: string; decisions: Record<string, string> } | null = null;
   for (const r of ctx.registeredRepos) {

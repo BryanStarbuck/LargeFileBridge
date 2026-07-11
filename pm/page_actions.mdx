@@ -127,7 +127,7 @@ routing to the wizard are implemented in code:
 
 Producing actions further honour the two sticky flags ([menus.mdx §6.6](./menus.mdx)) where relevant: a
 **Do not compress** flag excludes a file from a Compress-all; **Never IPFS** excludes it from an
-Add-to-IPFS-all. (Transcribe/Describe are not gated by those flags — they don't sync or compress.)
+Add-to-IPFS-all. (Transcribe/Describe are not gated by those flags — they don't pin or compress.)
 
 ### 1.3 Rule 3 — BACKGROUND QUEUE, return immediately (LOCKED)
 
@@ -163,7 +163,7 @@ queued — computed **after** Rules 1 + 2 (the eligible remainder), never the ra
 * **Create AI descriptions** → **"{N} files will have their AI descriptions created"**.
 * Any other producing/queuing action follows the same shape: **"{N} files will …"**.
 
-Edge cases, still one honest toast (never a silent no-op — [sync_process.mdx §6](./sync_process.mdx)):
+Edge cases, still one honest toast (never a silent no-op — [pin_process.mdx §6](./pin_process.mdx)):
 
 * **Nothing eligible** (every candidate already had the output, or none were media) →
   **"All {M} files already have transcriptions — nothing to do"** (or the describe equivalent). `M` is the
@@ -182,7 +182,7 @@ that becomes queue items — so the toast and the dock never disagree.
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────┐
-│  ‹ Repos  /  Our_Movies                                    ┌ ⟳ Sync now ┐ ⋮ │ ← header: title + primary + entity ⋮
+│  ‹ Repos  /  Our_Movies                                    ┌ ⟳ Pin now  ┐ ⋮ │ ← header: title + primary + entity ⋮
 │  ~/BGit/…/Our_Movies                                       └────────────┘   │
 │                                                                             │
 │  🎬 Create Transcriptions · ✨ Create AI descriptions · 🗜 Compress videos   │ ← ONE measured row, UNDER the title;
@@ -223,14 +223,14 @@ table's own control row). Its anatomy — LOCKED to match the sister-app `.q-act
 * **Items that make no sense for the current page/selection are omitted**, not shown disabled.
 
 **Placement vs. the header.** The page **title** (and any breadcrumb + the page's single **primary**
-button such as **Sync now** / **Index files**, plus the single-entity `⋮` "more" menu when present) stays
+button such as **Pin now** / **Index files**, plus the single-entity `⋮` "more" menu when present) stays
 in the [`PageHeader`](../code/packages/frontend/src/components/ui/PageHeader.tsx). The **action-links row is
 its own row directly under that title block** — not in the header's right-aligned slot. The primary button
 remains the page's one emphasised call-to-action in the header; the action-links row is the flat list of
 everything else.
 
 **Distinct from the `⋮` bulk menu.** The table's existing selection **`⋮` bulk menu** (set decision
-Sync/Ignore/Undecided across checked rows, [one_repo.mdx §4.4](./one_repo.mdx)) stays where it is, in the
+Add to IPFS (pin)/Ignore/Undecided across checked rows, [one_repo.mdx §4.4](./one_repo.mdx)) stays where it is, in the
 control row above the table, and only appears when rows are checked. The action-links row is the
 page-level home and is always present. The two never duplicate an item.
 
@@ -274,12 +274,12 @@ page-level operations, now shown as inline links (they already run through the p
 
 | Page (spec) | Action-links (left → right) | Primary button (header, outside the row) |
 | --- | --- | --- |
-| **One repo** ([one_repo.mdx](./one_repo.mdx)) | Create Transcriptions · Create AI descriptions · Compress videos · Compress images · Git ignore · Rescan | **Sync now** |
-| **File System / a directory** ([file_system.mdx](./file_system.mdx), [directories.mdx](./directories.mdx)) | Create Transcriptions · Create AI descriptions · Compress videos · Compress images · Git ignore · Track / Sync this directory | — |
+| **One repo** ([one_repo.mdx](./one_repo.mdx)) | Create Transcriptions · Create AI descriptions · Compress videos · Compress images · Git ignore · Rescan | **Pin now** |
+| **File System / a directory** ([file_system.mdx](./file_system.mdx), [directories.mdx](./directories.mdx)) | Create Transcriptions · Create AI descriptions · Compress videos · Compress images · Git ignore · Track / Pin this directory | — |
 | **Full paths** (flat file table, [full_paths.mdx](./full_paths.mdx)) | Create Transcriptions · Create AI descriptions · Compress videos · Git ignore · IPFS pin · Unpin | — |
 | **Storage detail** ([storages.mdx](./storages.mdx)) | Create Transcriptions · Create AI descriptions · Compress videos · Re-index files | **Index files** |
 | **View one directory** ([directories.mdx](./directories.mdx)) | Create Transcriptions · Create AI descriptions · Compress all… (its files, recursive) | — |
-| **Repos list** ([repos.mdx](./repos.mdx)) | Rescan all · Sync all | **+ Add repo** (whole-list actions; rows are repos, not files) |
+| **Repos list** ([repos.mdx](./repos.mdx)) | Rescan all · Pin all | **+ Add repo** (whole-list actions; rows are repos, not files) |
 | **IPFS pins** ([ipfs.mdx](./ipfs.mdx)) | Publish IPFS list… · Re-verify pins | — |
 
 Non-list pages (settings, sign-in, IPFS dashboard, single-file viewers, etc.) do **not** carry the
@@ -421,7 +421,7 @@ The routes are mounted on the existing feature routers:
   PageHeader.tsx (renders the row beneath the title), lib/pageActions.ts (createTranscriptions/
   createDescriptions), transcribe.service planTranscribe/enqueueTranscribe, describe.service planDescribe/
   enqueueDescribe, jobqueue.service enqueue(), transcribe.router/describe.router POST /enqueue,
-  api.transcribeEnqueue/describeEnqueue. Keep in sync with file_system.mdx, job_queue.mdx (§3 Core Budget),
+  api.transcribeEnqueue/describeEnqueue. Keep consistent with file_system.mdx, job_queue.mdx (§3 Core Budget),
   parallelization.mdx (the ≈90%-of-cores media-aware drain the bulk producers feed), Transcribe.mdx,
   ai_description.mdx, menus.mdx (the other two surfaces), webapp.mdx §11–§14 (dock + concurrency), and the
   five per-page cross-refs that must reword their "Actions ▾ menu" headings to "action-links row":

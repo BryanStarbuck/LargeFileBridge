@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — The Scanning Service (Big-File Discovery)
-description: The periodic filesystem scan that discovers large files and filesystem changes. It runs on its OWN cadence — once every FOUR hours — separate from the every-15-minute background sync (storage_local.mdx §13). It is a metadata-only pass: it stats files (name, size, mtime) and NEVER opens or reads file contents. Cross-platform — scheduled by a launchd plist on Mac, cron/systemd timer on Linux, and Task Scheduler on Windows — with the Mac launchd plist as the primary target. It walks the scanner roots, discovers Git repos, applies the repo mask, and flags every file at or above the "big" threshold (default 100 MB, set in settings.mdx). Its output is written to each sync unit's status.yaml and feeds the Repos/Sync UI. This is how LFBridge notices new big files, grown files, moved/renamed files, deleted files, and newly appeared or vanished repos without any manual action. In addition to the two scheduled passes, a THIRD trigger runs while the web app is up: a LIVE FILESYSTEM WATCHER (§2.2) that subscribes to the OS's native file-change notifications (FSEvents on Mac, inotify on Linux, ReadDirectoryChangesW on Windows) over the scanner roots and reacts to files being ADDED or DELETED — not modified — updating our tracking (candidate/importance flags) and the File System tree the moment a big file or a video/image/audio file appears or vanishes, instead of waiting up to four hours for the next discovery pass.
+description: The periodic filesystem scan that discovers large files and filesystem changes. It runs on its OWN cadence — once every FOUR hours — separate from the every-15-minute background pin (storage_local.mdx §13). It is a metadata-only pass: it stats files (name, size, mtime) and NEVER opens or reads file contents. Cross-platform — scheduled by a launchd plist on Mac, cron/systemd timer on Linux, and Task Scheduler on Windows — with the Mac launchd plist as the primary target. It walks the scanner roots, discovers Git repos, applies the repo mask, and flags every file at or above the "big" threshold (default 100 MB, set in settings.mdx). Its output is written to each pin unit's status.yaml and feeds the Repos/Scans UI. This is how LFBridge notices new big files, grown files, moved/renamed files, deleted files, and newly appeared or vanished repos without any manual action. In addition to the two scheduled passes, a THIRD trigger runs while the web app is up: a LIVE FILESYSTEM WATCHER (§2.2) that subscribes to the OS's native file-change notifications (FSEvents on Mac, inotify on Linux, ReadDirectoryChangesW on Windows) over the scanner roots and reacts to files being ADDED or DELETED — not modified — updating our tracking (candidate/importance flags) and the File System tree the moment a big file or a video/image/audio file appears or vanishes, instead of waiting up to four hours for the next discovery pass.
 ---
 
 # LargeFileBridge — The Scanning Service (Big-File Discovery)
@@ -9,7 +9,7 @@ The **scan** is the periodic pass that answers one question across all of a user
 **"Have any big files — or the repos that hold them — changed since last time?"** It discovers new
 large files, notices files that have grown past the "big" threshold, spots moves/renames/deletes, and
 registers repos that have appeared or vanished. It is the eyes of LargeFileBridge (LFB); the
-[background sync](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract) is the
+[background pin](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract) is the
 hands that move the bytes.
 
 Two scheduled jobs, two cadences, on purpose:
@@ -17,11 +17,11 @@ Two scheduled jobs, two cadences, on purpose:
 | Job (scheduleTask) | Cadence | What it does | Where spec'd |
 | --- | --- | --- | --- |
 | **Discovery scheduleTask** (this file) | **every 4 hours** | Deep, whole-filesystem **discovery** — stat every candidate file, find big files + filesystem/repo changes. Metadata only; no IPFS. | this file |
-| **Sync scheduleTask** | every **15 minutes** | A **full sync pass** ([sync_process.mdx](./sync_process.mdx)): visit + reconcile **every** known unit; for units the user **opted into IPFS** (`synced: true`) add/update manifests, pin, fetch missing CIDs over IPFS **— and read the local IPFS pinset (`ipfs pin ls`) to reconcile + import already-pinned files** (§2.1). Runs units concurrently (many cores). | [storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract) · [sync_process.mdx](./sync_process.mdx) |
+| **Pin scheduleTask** | every **15 minutes** | A **full pin pass** ([pin_process.mdx](./pin_process.mdx)): visit + reconcile **every** known unit; for units the user **opted into IPFS** (`pinned: true`) add/update manifests, pin, fetch missing CIDs over IPFS **— and read the local IPFS pinset (`ipfs pin ls`) to reconcile + import already-pinned files** (§2.1). Runs units concurrently (many cores). | [storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract) · [pin_process.mdx](./pin_process.mdx) |
 
 The discovery pass is expensive (it walks the tree and stats many files), so it is throttled to **every
 four hours**. The 15-minute pass is cheap per unit and time-sensitive, so it runs over the small set the
-discovery pass has already found. The 15-min pass may do a *light* rescan of a unit it is about to sync;
+discovery pass has already found. The 15-min pass may do a *light* rescan of a unit it is about to pin;
 the **deep, full-filesystem discovery walk is the 4-hour job's alone.**
 
 Both of those are **polling** jobs on a clock. There is also a **third, event-driven trigger** — the
@@ -44,7 +44,7 @@ one concept: a *scheduleTask* is the mechanism; a *scan* is what the user watche
 * This rename covers the **scheduled process only**. The per-file **Sync** *decision*
   ([one_repo.mdx §1](./one_repo.mdx#1-the-decision-model-locked)) and the portable **Sync List**
   ([sync_list.mdx](./sync_list.mdx)) are **different concepts and keep their names.**
-* The config blocks stay where they are — `scan_process` (this discovery task, §5) and `sync_process`
+* The config blocks stay where they are — `scan_process` (this discovery task, §5) and `pin_process`
   ([storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract), the
   15-min task) — but both are understood as **scheduleTasks**, both surfaced as **scans** in the UI, and
   both gated by the **tools preflight** (§4.4).
@@ -71,11 +71,11 @@ already knows without opening the file:
 * file vs. directory vs. symlink
 
 It **never opens or reads file contents.** It does **not** hash files, does **not** compute IPFS
-CIDs, and does **not** touch IPFS at all. Hashing and CID computation are the sync's job, and only for
-files the scan has already flagged as big and that live in a `synced: true` unit. Keeping the scan to
+CIDs, and does **not** touch IPFS at all. Hashing and CID computation are the pin's job, and only for
+files the scan has already flagged as big and that live in a `pinned: true` unit. Keeping the scan to
 pure `stat` is what makes it cheap enough to run over the whole filesystem every four hours.
 
-What the scan produces is a **candidate list** per sync unit: the files that are large-file-bridge
+What the scan produces is a **candidate list** per pin unit: the files that are large-file-bridge
 payload per the **payload rule** (§4.1) — git-ignored media at *any* size, plus anything at/above the
 big threshold — with a diff against the previous scan (added / grown / shrunk / moved / deleted),
 written to that unit's `status.yaml` (§6). It changes **no** file contents and moves **no** bytes.
@@ -111,8 +111,9 @@ being IPFS-pinned locally … make that happen at the 15-minute [interval]."*
 * **Import already-pinned.** *"If we get to a computer and the files are already IPFS-pinned, import
   them."* Untracked pins are surfaced on the [IPFS page](./ipfs.mdx#4-import--the-load-bearing-feature)
   and adopted into tracking; import is **metadata-only** (record the manifest entry, mark the file
-  **Sync**) — the bytes are already pinned, so nothing is fetched, re-added, or re-pinned. An imported
-  file is present-and-pinned, i.e. it **counts as Synced** ([repos.mdx §3.2](./repos.mdx#32-columns)).
+  **Add to IPFS (pin)** — the `sync` decision value) — the bytes are already pinned, so nothing is
+  fetched, re-added, or re-pinned. An imported file is present-and-pinned, i.e. it **counts as Pinned**
+  ([repos.mdx §3.2](./repos.mdx#32-columns)).
 * **Still metadata-only.** Reading the pinset is a `pin ls` + `stat`; it opens no file and moves no
   bytes, exactly like the discovery pass (§1). It is the one place the *scan* touches IPFS at all — and
   only to *list* pins, never to serve or announce anything beyond the
@@ -121,7 +122,7 @@ being IPFS-pinned locally … make that happen at the 15-minute [interval]."*
   records a `needs_tool` gap and the app routes the user to [install it](./tools.mdx).
 
 The 15-minute pass that reads the local pinset and reconciles/refreshes each `pinned_by` claim against the manifests runs in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncRepoFolder()` (reads `ipfs.listPins()`, refreshes via `setPinClaim()`)
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()` (reads `ipfs.listPins()`, refreshes via `setPinClaim()`)
 
 ### 2.2 The live filesystem watcher — event-driven, while the web app runs (LOCKED)
 
@@ -221,7 +222,7 @@ installed / on-off model, implemented per-OS behind one installer interface.
 
 ### 3.1 The Mac launchd plist
 
-A LaunchAgent, distinct from the sync job's plist (`com.largefilebridge.sync`,
+A LaunchAgent, distinct from the pin job's plist (`com.largefilebridge.pin`,
 [storage_local.mdx §3](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)):
 
 ```xml
@@ -263,7 +264,7 @@ The scan walks the **`scanner.roots`**
 honoring `scanner.ignore_globs` and `follow_symlinks`. In one pass it does three things, in order:
 
 1. **Repo discovery.** Any directory containing a `.git` folder is registered/reconciled as a repo
-   sync unit (`sync/r/<repo_name>/`). New repos are created (default `synced: false` until the user
+   pin unit (`pin/r/<repo_name>/`). New repos are created (default `pinned: false` until the user
    opts in); already-known repos keep their settings; repos gone from disk are marked `missing` in
    their `status.yaml` — never silently deleted
    ([storage_local.mdx §7](./storage_local.mdx#7-the-scanner--discovering-repos-and-the-mask)).
@@ -348,7 +349,7 @@ build  dist  out  .docusaurus  .next  .nuxt  .svelte-kit  .turbo  coverage   ←
 **Why build outputs are skipped (second root-cause note):** a Docusaurus/Next build **copies** the
 source media into its output dir, so before this list the scan reported `Intel_Murder_Docus`'s hero
 video **twice** — once as `static/videos/x.mp4` and once as the generated `build/videos/x.mp4`.
-Build output is ephemeral and regenerated; it is **never** a sync candidate. Skipping these dirs
+Build output is ephemeral and regenerated; it is **never** a pin candidate. Skipping these dirs
 removes the phantom duplicates (Intel dropped from 27+build-dupes to a clean **27**) and is also the
 main performance lever on large trees.
 
@@ -379,7 +380,7 @@ the **tools preflight** ([tools.mdx §3](./tools.mdx#3-the-preflight--check-befo
 
 The scan's schedule/state is a hierarchical block in the app-level, computer-wide `config.yaml`
 ([storage_local.mdx §3](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)),
-parallel to `sync_process`:
+parallel to `pin_process`:
 
 ```yaml
 # ~/T/_large_files_bridge/config.yaml  (excerpt — the scanning service)
@@ -399,7 +400,7 @@ watcher:
 
 The existing `scanner:` block (roots / ignore_globs / follow_symlinks) stays where it is in
 `config.yaml` — `scan_process` adds only the **scheduling + on/off** facts, exactly mirroring how
-`sync_process` is structured. The `watcher:` block is separate because the watcher is **not** a
+`pin_process` is structured. The `watcher:` block is separate because the watcher is **not** a
 scheduled job (§2.2): it has an `enabled` switch and a debounce window, but **no** `installed`/plist —
 it exists whenever the backend is up.
 
@@ -407,12 +408,12 @@ it exists whenever the backend is up.
 
 ## 6. Output — what the scan writes
 
-The scan writes **only** operational metadata; it never writes a manifest or moves bytes. Per sync
+The scan writes **only** operational metadata; it never writes a manifest or moves bytes. Per pin
 unit it updates that unit's `status.yaml`
 ([storage_local.mdx §6.3 / §8.2](./storage_local.mdx#5-the-two-kinds-of-sync-unit--the-core-model)):
 
 ```yaml
-# sync/r/<repo_name>/status.yaml  (excerpt — written by the scan)
+# pin/r/<repo_name>/status.yaml  (excerpt — written by the scan)
 schema_version: 1
 last_scan_at: 2026-07-02T12:00:03.114Z
 scan_source: scheduled            # scheduled | manual (Rescan button)
@@ -430,13 +431,13 @@ repo_state: present               # present | missing (drive unmounted / repo de
 
 * **Move/rename detection** uses size + mtime heuristics only (no content hashing) — a file that
   vanished at path A and appeared at path B with the same size and mtime is reported as a **move**,
-  not a delete+add, so the sync can keep the existing pin instead of re-adding bytes.
-* The **computer unit** (`sync/computer/status.yaml`) gets the same shape for everything outside
+  not a delete+add, so the pin pass can keep the existing pin instead of re-adding bytes.
+* The **computer unit** (`pin/computer/status.yaml`) gets the same shape for everything outside
   repos.
-* The scan **stamps `last_scan_at`** and the change set; the **sync** later reads these to know what
+* The scan **stamps `last_scan_at`** and the change set; the **pin pass** later reads these to know what
   work to do. The scan itself pins nothing and fetches nothing.
 
-The web app reads these `status.yaml` files to show, per repo and on the Sync page: last scan time,
+The web app reads these `status.yaml` files to show, per repo and on the Scans page: last scan time,
 big-file counts, and "N new big files found" badges — all without the scan ever having opened a file.
 
 Diffing against the previous scan and writing the added/grew/deleted change set to each unit's `status.yaml` happens in code:
@@ -446,7 +447,7 @@ Diffing against the previous scan and writing the added/grew/deleted change set 
 
 ## 7. The transparency contract (installed vs. on/off)
 
-Identical in spirit to the sync process
+Identical in spirit to the pin process
 ([storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract)) — the
 web app is transparent about the scan and lets the user control it:
 
@@ -458,7 +459,7 @@ web app is transparent about the scan and lets the user control it:
 * The web app **displays** both facts (reconciled with the real launchd/cron/task state) and lets the
   user **install/uninstall** and **toggle on/off** from the UI, plus **Rescan now** on demand.
 
-This surfaces on the **Sync** page alongside the 15-min sync's own installed/on-off state, so the two
+This surfaces on the **Scans** page alongside the 15-min pin's own installed/on-off state, so the two
 scheduled jobs are visible side by side.
 
 Reading each worker's installed/enabled state reconciled against real launchd state, and the install/uninstall/enable/disable controls, live in code:
@@ -466,16 +467,16 @@ Reading each worker's installed/enabled state reconciled against real launchd st
 
 ### 7.1 The Scans page — layout & actions
 
-The **Scans** left-bar item (route `/scans`, the `SyncPage` component — formerly *Sync*) is the user's
+The **Scans** left-bar item (route `/scans`, the `ScansPage` component — formerly *Sync*) is the user's
 transparency + control surface for both scheduleTasks. Top to bottom it renders:
 
-* **The verdict banner.** A single headline about whether files are actually being kept synced (green /
-  amber / red), derived from the **transfer (15-min sync)** worker's installed/on state plus IPFS
-  liveness — e.g. *"Install the background job below so your big files sync every 15 minutes"* when the
-  sync worker is not installed.
+* **The verdict banner.** A single headline about whether files are actually being kept pinned (green /
+  amber / red), derived from the **transfer (15-min pin)** worker's installed/on state plus IPFS
+  liveness — e.g. *"Install the background job below so your big files pin every 15 minutes"* when the
+  pin worker is not installed.
 * **Two worker cards**, one per scheduleTask, each showing its **Installed** and **On/Off** pills (the
   two independent facts of §7) and its cadence, with per-card controls:
-  * **Transfer — moves your files** (the 15-min sync worker): **Install** / **Uninstall**, **Turn on** /
+  * **Transfer — moves your files** (the 15-min pin worker): **Install** / **Uninstall**, **Turn on** /
     **Turn off**.
   * **Discovery — finds new big files** (the 4-hour scan worker): the same **Install / Uninstall** and
     **Turn on / Turn off**. *(Installing creates the launchd job; turning it on/off enables/disables it —
@@ -491,10 +492,10 @@ transparency + control surface for both scheduleTasks. Top to bottom it renders:
   off (or on but nothing is bound) and green when it is actively watching.
 
 The verdict banner, the two scheduleTask worker cards, and the watcher card — with their per-card controls (Install/Uninstall + Turn-on/Turn-off for the scheduleTasks, Turn-on/Turn-off for the watcher) render in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/sync/SyncPage.tsx` — `SyncPage` (the `WorkerCard` + `WatcherCard` sub-components; scheduleTask controls call `schedule.service.ts` → `control()`, the watcher toggle calls `watcher.service.ts` → `setWatcherEnabled()`).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/scans/ScansPage.tsx` — `ScansPage` (the `WorkerCard` + `WatcherCard` sub-components; scheduleTask controls call `schedule.service.ts` → `control()`, the watcher toggle calls `watcher.service.ts` → `setWatcherEnabled()`).
 
 The watcher card's data (`enabled` / `watching` / `roots`) is served alongside the two scheduleTasks in the Scans payload, and its on/off toggle is handled, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `syncPageData()` (adds `watcher: watcherState()`); toggle route `POST /api/sync/watcher/:action` in `sync.router.ts` → `watcher.service.ts` `setWatcherEnabled()`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `jobsPageData()` (adds `watcher: watcherState()`); toggle route `POST /api/jobs/watcher/:action` in `jobs.router.ts` → `watcher.service.ts` `setWatcherEnabled()`.
 
 #### Header actions — on-demand kicks (proposed)
 
@@ -505,11 +506,11 @@ shared file `Actions ▾` menu (this is not a file-list page — [page_actions.m
 | Action | What it does | Placement | Status |
 | --- | --- | --- | --- |
 | **Scan now** | Kicks the 4-hour **discovery** scheduleTask on demand — the same detached background job the Repos-page Rescan drives (§2, §10). Separate from installing/enabling the schedule. | Header, right-aligned. | **proposed here** (the on-demand discovery run itself exists — `startScan()`, §10) |
-| **Sync now** | Kicks the 15-minute **transfer** scheduleTask on demand — one immediate full sync pass ([sync_process.mdx](./sync_process.mdx)), independent of the 15-min cadence. | Header, right-aligned, primary. | **proposed** |
+| **Pin now** | Kicks the 15-minute **transfer** scheduleTask on demand — one immediate full pin pass ([pin_process.mdx](./pin_process.mdx)), independent of the 15-min cadence. | Header, right-aligned, primary. | **proposed** |
 
 The on-demand **discovery** run these would trigger is already implemented (`startScan()` in
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scan-job.ts`, §10); surfacing
-**Scan now** / **Sync now** as buttons in `SyncPage`'s header is the proposed addition. These header
+**Scan now** / **Pin now** as buttons in `ScansPage`'s header is the proposed addition. These header
 kicks are distinct from the per-card **Install/Turn-on** controls above, which manage the *schedule*, not
 a single run.
 
@@ -520,13 +521,13 @@ a single run.
 The scan is correct when **all** hold:
 
 1. The scan runs **every 4 hours** by default (`scan_process.interval_hours: 4`), on its own schedule
-   **separate** from the every-15-minute sync, and also runs on demand from a **Rescan** action.
+   **separate** from the every-15-minute pin, and also runs on demand from a **Rescan** action.
 2. The scan is **metadata-only**: it `stat`s files for name/size/mtime and **never opens, reads, or
    hashes file contents**, and **never touches IPFS**.
 3. The scan is **cross-platform**, scheduled by a **launchd plist on Mac** (primary), and by cron /
    systemd timer on Linux and Task Scheduler on Windows — one shared Node/TS worker, per-OS installer.
 4. In one pass the scan **discovers/reconciles repos**, builds the **repo mask**, and records every
-   **candidate** per the payload rule (§4.1), attributing each file to exactly one sync unit.
+   **candidate** per the payload rule (§4.1), attributing each file to exactly one pin unit.
 4a. **Git-ignored media (video/audio/image) is a candidate regardless of size** — the size threshold
     must **never** hide the 5–100 MB git-ignored videos/images a user has chosen to bridge. Regression
     guard: rescanning `charlie-kirk` yields **46** candidates (not 3) and `Intel_Murder_Docus` yields
@@ -550,7 +551,7 @@ The scan is correct when **all** hold:
 11. The **15-minute scheduleTask reads the IPFS pinset** (`ipfs pin ls`) each run and **reconciles it
     against the manifests** — confirming/dropping `pinned_by` claims and surfacing **pinned-but-untracked**
     files as **import** candidates ([IPFS §4](./ipfs.mdx#4-import--the-load-bearing-feature)); import is
-    **metadata-only** and an imported file **counts as Synced** (§2.1). The read is metadata-only and
+    **metadata-only** and an imported file **counts as Pinned** (§2.1). The read is metadata-only and
     honors the only-our-content defaults.
 12. A scan runs the **tools preflight** first (§4.4): a missing **required** tool (`ipfs`) routes an
     interactive run to the [install-tools page](./tools.mdx) (remembering the pending scan) and makes an
@@ -696,18 +697,18 @@ The repo-units loop running as a `mapLimit()` at the responsive budget while eac
 Two fields in `storage_local.mdx` predate these instructions and must be reconciled — flagged here, not
 silently contradicted:
 
-* **Big-file threshold default.** `storage_local.mdx §3` shows `sync_process.large_file_min_bytes: 5242880`
-  (5 MiB) and `sync/r/<repo>/config.yaml → large_files.min_bytes: 5242880`. The **authoritative
+* **Big-file threshold default.** `storage_local.mdx §3` shows `pin_process.large_file_min_bytes: 5242880`
+  (5 MiB) and `pin/r/<repo>/config.yaml → large_files.min_bytes: 5242880`. The **authoritative
   default is now 100 MB**, owned by [settings.mdx](./settings.mdx). Those `storage_local.mdx` values should
   be updated to `104857600` (100 MB) and re-pointed at the settings resolution, or dropped in favor of
   the settings-owned value. (GitHub's own hard limit is 100 MB — see `README.md` — so 100 MB is the
   natural "big" default.)
 * **Scan cadence.** `storage_local.mdx §7` describes the scanner as running "on demand … and as part of the
-  background sync process (§13)" every 15 min. This file makes the **deep discovery scan its own
-  4-hour scheduled job**; the 15-min sync may still do a *light* per-unit rescan, but the
+  background pin process (§13)" every 15 min. This file makes the **deep discovery scan its own
+  4-hour scheduled job**; the 15-min pin may still do a *light* per-unit rescan, but the
   whole-filesystem discovery walk is this scan. `storage_local.mdx §7` should reference this file for the
   discovery cadence.
 
 Siblings: [settings.mdx](./settings.mdx) (global big-file threshold + units) ·
 [repo_settings.mdx](./repo_settings.mdx) (per-repo overrides, reached via the gear icon) ·
-[storage_local.mdx](./storage_local.mdx) (state root, sync units, the 15-min sync).
+[storage_local.mdx](./storage_local.mdx) (state root, pin units, the 15-min pin).

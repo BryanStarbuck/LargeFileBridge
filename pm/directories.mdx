@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Directories (File System column browser + View one directory)
-description: The combined directory spec, covering BOTH directory surfaces of LargeFileBridge. PART A — The File System (route /files, a.k.a. /fs): a Mac-Finder-column-view (Miller-column) browser that lets the user walk their whole filesystem, one directory level per column, opening a new column to the right each time a directory is clicked. It defaults to the user's HOME directory and works on Mac, Windows, and Linux. Every file and directory row carries, on its far right, a stack of single-letter CODE BADGES — white letter on a solid colored square — that surface what LargeFileBridge knows about it: R/r (repo, brown — uppercase R at a repo root, lowercase r for an ancestor of a repo or any descendant inside a repo), S (sync, bright pink — a file we track and sync), C/c (compress, yellow — bright-yellow C = should be compressed, light-yellow c = already compressed), and i (ipfs, blue — an IPFS list/share artifact, an IPFS-list markdown file, or a directory that publishes such artifacts underneath it). Badges are right-aligned and stack leftward; a row may show zero, one, or several. The File System page also PERSISTS its view state per-user (§1.3): leaving and returning restores the exact open column chain, the 1+ selected entries, and the header filters from users/<email>/config.yaml (file_system: block) so the user picks up where they left off. Its header carries FILTER CHECKBOXES (§1.4), all default ON: "Only Large Files/Dirs" (hide everything but files at/above the settings big-file threshold, default 100 MB, plus the directories that lead to them) and per-category inclusion overrides "Videos / Images / Audio" that punch holes in that size cut (a checked category's files show even when under the threshold; audio is a visibility filter only and earns no C badge). PART B — View one directory (route /dir?path=<abs>): the single-entity page for ONE directory, reached from any directory row's "View directory" action, from clicking a directory's name/path cell, or by selecting a directory in the File System browser. It shows what LargeFileBridge knows about that one directory — identity (name, absolute path, kind, repo membership), its code badges, a rollup of what's inside (counts of videos-that-can-compress, images-that-can-compress, big-not-ignored files, and big-git-ignored-not-tracked files — the charter's category rollup table), and its two sticky flags (Never IPFS, Do not compress) which apply to everything underneath it; it carries the top-right "⋮" MORE menu rendering the exact same Directory action catalog as that directory's row kebab (menus.mdx §5.2). Part A is implemented by the /api/fs backend module and the FileSystemPage frontend (code_plan.mdx §14) and adds the "File System" nav item to left_bar.yaml; Part B is implemented by the /api/entity backend module and the ViewOneDirectoryPage frontend.
+description: The combined directory spec, covering BOTH directory surfaces of LargeFileBridge. PART A — The File System (route /files, a.k.a. /fs): a Mac-Finder-column-view (Miller-column) browser that lets the user walk their whole filesystem, one directory level per column, opening a new column to the right each time a directory is clicked. It defaults to the user's HOME directory and works on Mac, Windows, and Linux. Every file and directory row carries, on its far right, a stack of single-letter CODE BADGES — white letter on a solid colored square — that surface what LargeFileBridge knows about it: R/r (repo, brown — uppercase R at a repo root, lowercase r for an ancestor of a repo or any descendant inside a repo), P (pin, bright pink — a file we track and pin), C/c (compress, yellow — bright-yellow C = should be compressed, light-yellow c = already compressed), and i (ipfs, blue — an IPFS list/share artifact, an IPFS-list markdown file, or a directory that publishes such artifacts underneath it). Badges are right-aligned and stack leftward; a row may show zero, one, or several. The File System page also PERSISTS its view state per-user (§1.3): leaving and returning restores the exact open column chain, the 1+ selected entries, and the header filters from users/<email>/config.yaml (file_system: block) so the user picks up where they left off. Its header carries FILTER CHECKBOXES (§1.4), all default ON: "Only Large Files/Dirs" (hide everything but files at/above the settings big-file threshold, default 100 MB, plus the directories that lead to them) and per-category inclusion overrides "Videos / Images / Audio" that punch holes in that size cut (a checked category's files show even when under the threshold; audio is a visibility filter only and earns no C badge). PART B — View one directory (route /dir?path=<abs>): the single-entity page for ONE directory, reached from any directory row's "View directory" action, from clicking a directory's name/path cell, or by selecting a directory in the File System browser. It shows what LargeFileBridge knows about that one directory — identity (name, absolute path, kind, repo membership), its code badges, a rollup of what's inside (counts of videos-that-can-compress, images-that-can-compress, big-not-ignored files, and big-git-ignored-not-tracked files — the charter's category rollup table), and its two sticky flags (Never IPFS, Do not compress) which apply to everything underneath it; it carries the top-right "⋮" MORE menu rendering the exact same Directory action catalog as that directory's row kebab (menus.mdx §5.2). Part A is implemented by the /api/fs backend module and the FileSystemPage frontend (code_plan.mdx §14) and adds the "File System" nav item to left_bar.yaml; Part B is implemented by the /api/entity backend module and the ViewOneDirectoryPage frontend.
 ---
 
 # LargeFileBridge — Directories
@@ -37,7 +37,7 @@ column view** (a *Miller-column* browser): a row of narrow columns, each showing
 directory level, where clicking a directory in one column **opens the next column to its right**.
 
 The point of this page is the **code badges**: a small, dense visual language of single letters that
-tells you, at a glance and at any depth, which directories are repos, which files we sync, which files
+tells you, at a glance and at any depth, which directories are repos, which files we pin, which files
 should be compressed, and which files/directories are part of an IPFS share. It complements the
 higher-level [Repos](./repos.mdx) table (which only lists *registered git repos*) by letting you see
 the **raw filesystem** with the same knowledge painted on top.
@@ -84,7 +84,7 @@ action menu** as everywhere else ([menus.mdx](./menus.mdx)):
 
 * **Right-clicking** a row opens the **file** or **directory** action catalog
   ([menus.mdx §3.1 / §5.2 / §5.3](./menus.mdx#31-right-click-opens-the-same-menu-locked)) — Open /
-  Track-Sync / Rescan / Compress… / Convert… / Git-ignore… / View on IPFS / Copy path, with
+  Track-Pin / Rescan / Compress… / Convert… / Git-ignore… / View on IPFS / Copy path, with
   compress/convert/ignore as **explicit-click confirm offers** and no action ever deleting local bytes.
 * Hovering a row reveals a small trailing **`⋮`** affordance that opens the same menu (the
   discoverable companion to right-click).
@@ -103,7 +103,7 @@ hyperlinks (each with a leading icon), directly **under the page title**, that i
 surface ([page_actions.mdx](./page_actions.mdx)). It is **not** a dropdown — it replaces the earlier
 `Actions ▾` menu — and it is distinct from the per-row `⋮` kebab / entity `⋮` more-menu owned by
 [menus.mdx §3–§5](./menus.mdx). Its links run a **batch action over the browser's files**: **Create
-Transcriptions · Create AI descriptions · Compress videos · Compress images · Git ignore · Track / Sync
+Transcriptions · Create AI descriptions · Compress videos · Compress images · Git ignore · Track / Pin
 this directory** (short labels; one measured row with a right-pinned `More ▾` overflow) — the "File System /
 a directory" row of the per-page catalog
 ([page_actions.mdx §4](./page_actions.mdx)). The three LOCKED rules (scope =
@@ -321,18 +321,18 @@ Every row can carry a stack of **code badges** on its far right. A badge is a **
 text on a solid colored square** (a small rounded chip). The **letter** names the category, the
 **color** encodes the category, and the **case** (upper vs. lower) encodes a state within it.
 
-There are five categories: **R** (repo), **S** (sync), **C** (compress), **i** (ipfs), **I** (git-ignored).
+There are five categories: **R** (repo), **P** (pin), **C** (compress), **i** (ipfs), **I** (git-ignored).
 
 | Badge | Category | Applies to | Color | Meaning |
 | --- | --- | --- | --- | --- |
 | **R** | Repo root | directory | **dark brown** | This directory **is a git repo** (its own `.git` working tree). Uppercase = it is the repo **root**. |
 | **r** | Repo ancestor | directory | **medium-light brown** | This directory is **not** a repo itself but **contains a repo** somewhere below it (a parent/ancestor of a repo). Lowercase = not a root. |
 | **r** | Repo descendant | file **or** directory | **medium brown** | This entry lives **inside** a repo (any recursive child of a repo working tree). Lowercase = not a root. |
-| **S** | Sync | file | **bright pink** | We **sync and track** this file — its decision is *sync* ([one_repo.mdx §1](./one_repo.mdx)). |
+| **P** | Pin | file | **bright pink** | We **pin and track** this file — its decision is `sync`, shown as **Add to IPFS (pin)** ([one_repo.mdx §1](./one_repo.mdx)). |
 | **C** | Compress (should) | file | **bright yellow** | This file **should be compressed** — a video (primary) or image (secondary) that looks **uncompressed**. |
 | **c** | Compressed (done) | file | **light yellow** | We have **already successfully compressed** this file. Lowercase = the finished state. |
 | **i** | IPFS | file **or** directory | **blue** | An **IPFS list / share artifact** (or a markdown list of IPFS files); on a directory, it **publishes** such artifacts underneath it. |
-| **I** | Git-ignored | file **or** directory | **near-white** (light-gray fill, hairline border, white letter) | This entry is **git-ignored** — `git check-ignore` covers it (it is not committed; it syncs via IPFS instead, [git_ignore.mdx](./git_ignore.mdx)). A deliberately faint, de-emphasized marker. |
+| **I** | Git-ignored | file **or** directory | **near-white** (light-gray fill, hairline border, white letter) | This entry is **git-ignored** — `git check-ignore` covers it (it is not committed; it is pinned via IPFS instead, [git_ignore.mdx](./git_ignore.mdx)). A deliberately faint, de-emphasized marker. |
 
 ### 3.1 The repo badge (R / r) — brown, three shades
 
@@ -355,15 +355,19 @@ no repo above or below it gets **no** repo badge.
 
 > A repo does not have to be *registered/managed* by LFB to earn its badge — the browser detects
 > `.git` on disk directly, so unregistered repos still show **R**. (Registration is what puts a repo in
-> the [Repos](./repos.mdx) table and turns on syncing; the badge is purely "is this a repo on disk".)
+> the [Repos](./repos.mdx) table and turns on pinning; the badge is purely "is this a repo on disk".)
 
-### 3.2 The sync badge (S) — bright pink, files only
+### 3.2 The pin badge (P) — bright pink, files only
 
-`S` marks a **file we sync and track**: its decision is **sync** in the owning unit's config
-([one_repo.mdx §1](./one_repo.mdx) — the `sync | ignore | undecided` decision model). "Sync it" means
-LFB will add it to the manifest, pin it, and keep it in step across the user's computers. A file that
-is only a *candidate* (big, but still `undecided`) does **not** get `S` — only a committed **sync**
-decision earns it. Directories never carry `S` (syncing is per-file).
+`P` marks a **file we pin and track**: its decision is `sync` in the owning unit's config
+([one_repo.mdx §1](./one_repo.mdx) — the `sync | ignore | undecided` decision model, whose `sync` value
+renders as **Add to IPFS (pin)**). Adding it to IPFS means LFB will add it to the manifest, pin it, and
+keep it in step across the user's computers. A file that is only a *candidate* (big, but still
+`undecided`) does **not** get `P` — only a committed `sync` decision earns it. Directories never carry
+`P` (pinning is per-file).
+
+Deciding whether a file earns the pin badge (its decision is `sync`) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `fileIsPinned()` (badge value `pin`, letter P).
 
 ### 3.3 The compress badges (C / c) — yellow, files only
 
@@ -408,7 +412,7 @@ Detecting the IPFS `i` badge — artifact names, the capped markdown/manifest co
 
 `I` marks anything **git currently ignores** — the counterpart to the [Git Ignore action](./git_ignore.mdx).
 It is how the browser shows, at a glance, that a big file is *already* handled the LFBridge way: **not
-committed to git, synced over IPFS instead** (the whole product bet — [dropbox.mdx](./dropbox.mdx)).
+committed to git, pinned over IPFS instead** (the whole product bet — [dropbox.mdx](./dropbox.mdx)).
 
 * On a **file or directory**, `I` means **`git check-ignore` covers this path** in its owning repo — a
   `.gitignore` rule (ours or the user's) ignores it. It is **detect-and-report only**: showing `I` never
@@ -418,8 +422,8 @@ committed to git, synced over IPFS instead** (the whole product bet — [dropbox
   **hairline border** carrying the shape. The user's words: *"a very light gray fill with the letter I in
   white … so light it's near white."* The border is what makes a white-on-near-white letter perceptible
   without shouting.
-* An entry can carry `I` **alongside** other badges — a synced, compressed, git-ignored video inside a repo
-  shows `r · c · I` (a common combination: LFB ignores the big file in git and syncs it over IPFS).
+* An entry can carry `I` **alongside** other badges — a pinned, compressed, git-ignored video inside a repo
+  shows `r · c · I` (a common combination: LFB ignores the big file in git and pins it over IPFS).
 
 > **Why `I` and `i` don't collide.** IPFS is **lowercase `i`, blue**; git-ignored is **uppercase `I`,
 > near-white** — the same case-encodes-state, color-encodes-category convention as `R`/`r` and `C`/`c`.
@@ -434,11 +438,11 @@ Detecting the git-ignored `I` badge (ask `git check-ignore` for the entry agains
 
 * Badges are **pinned to the far right** of the row. When a row has several, they **stack leftward**:
   the newest/rightmost slot is filled first, and each additional badge is added **to its left**.
-* The **fixed right-to-left order** (rightmost first) is: **R/r · S · C/c · i · I**. So a repo-root
+* The **fixed right-to-left order** (rightmost first) is: **R/r · P · C/c · i · I**. So a repo-root
   directory that also publishes IPFS shows, right to left, `R` then `i` (i.e. `i R` reading
-  left-to-right). A synced, uncompressed, IPFS-listed file inside a repo shows, right to left,
-  `r · S · C · i` (rendered `i C S r`); if that file is also git-ignored the leftmost `I` is added
-  (rendered `I i C S r`).
+  left-to-right). A pinned, uncompressed, IPFS-listed file inside a repo shows, right to left,
+  `r · P · C · i` (rendered `i C P r`); if that file is also git-ignored the leftmost `I` is added
+  (rendered `I i C P r`).
 * A row shows **at most one badge per category** (never both `C` and `c`, never two repo shades).
 * Zero badges is normal and common.
 
@@ -457,7 +461,7 @@ every place it renders, explains itself on hover** — the user should never hav
 > surfaces with no left bar; the floating portal tooltip remains that a11y fallback.
 
 * **Hovering (or keyboard-focusing) a badge shows a tooltip** whose **headline is the NAME the letter
-  stands for** — a short **1–3 word** phrase (e.g. **Repo root**, **Inside a repo**, **Synced**,
+  stands for** — a short **1–3 word** phrase (e.g. **Repo root**, **Inside a repo**, **Pinned**,
   **Compress**, **Compressed**, **IPFS artifact**) — followed by **one slightly-longer line** explaining
   it when a name alone isn't enough (e.g. "Tracked and bridged over IPFS across your computers."). Keep it
   to a name plus one line; this is a glance aid, not documentation.
@@ -472,7 +476,7 @@ every place it renders, explains itself on hover** — the user should never hav
 * The tooltip renders into a **body-level portal** so a table cell's or scroll region's `overflow` never
   clips it, and it never fires a duplicate native browser `title`.
 
-Computing the ordered badge list per entry (repo precedence, sync, compress, ipfs — rightmost-first) is handled in code:
+Computing the ordered badge list per entry (repo precedence, pin, compress, ipfs — rightmost-first) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `computeBadges()` (with the per-listing `buildBadgeContext()`).
 
 Naming each letter on hover — the per-badge name/description metadata (the single source shared by the hover tooltip and the legend) and the portal tooltip that shows it — is handled in code:
@@ -490,7 +494,7 @@ White letter (`#ffffff`) on the solid fills below:
 | `--lfb-badge-repo-root` | `R` | `#5b3a1a` | dark brown — repo root |
 | `--lfb-badge-repo-descendant` | `r` (inside) | `#8a5a2b` | medium brown — inside a repo |
 | `--lfb-badge-repo-ancestor` | `r` (parent) | `#b8865b` | medium-light brown — contains a repo below |
-| `--lfb-badge-sync` | `S` | `#ff2d9b` | bright pink |
+| `--lfb-badge-pin` | `P` | `#ff2d9b` | bright pink |
 | `--lfb-badge-compress` | `C` | `#f5c518` | bright yellow — should compress |
 | `--lfb-badge-compressed` | `c` | `#f3e6a6` | light yellow — already compressed (dark letter for contrast) |
 | `--lfb-badge-ipfs` | `i` | `#2f6fed` | blue (distinct from the app accent `--lfb-primary #2563eb`) |
@@ -518,7 +522,7 @@ type FsBadge =
   | "repo_root"        // R  dark brown      (dir)
   | "repo_descendant"  // r  medium brown    (file|dir, inside a repo)
   | "repo_ancestor"    // r  light brown     (dir, contains a repo below)
-  | "sync"             // S  bright pink     (file, decision === "sync")
+  | "pin"              // P  bright pink     (file, decision === "sync")
   | "compress"         // C  bright yellow   (file, video/image, looks uncompressed)
   | "compressed"       // c  light yellow    (file, video/image, already compressed)
   | "ipfs"             // i  blue            (file|dir, IPFS list/share)
@@ -531,7 +535,7 @@ interface FsEntry {
   sizeBytes: number | null;   // files only
   modifiedAt: string | null;  // ISO
   isRepoRoot: boolean;
-  badges: FsBadge[];     // ordered rightmost-first: R/r, S, C/c, i, I (§3.5)
+  badges: FsBadge[];     // ordered rightmost-first: R/r, P, C/c, i, I (§3.5)
   hasChildren: boolean;  // dir has at least one visible child (drives the disclosure)
 }
 
@@ -544,7 +548,7 @@ interface FsListing {
 ```
 
 The order of `badges[]` is authoritative — the frontend renders them in array order **right to left**,
-so the array is already sorted `[repo, sync, compress, ipfs]` per §3.5.
+so the array is already sorted `[repo, pin, compress, ipfs]` per §3.5.
 
 ### 5.1 Filter query params (§1.4) and persisted view state (§1.3)
 
@@ -589,13 +593,13 @@ a missing `selection` path is dropped — restoring is **never** an error (§1.3
    clicking a directory in an earlier column **replaces** all columns to its right. Clicking a **file**
    selects it and opens no column.
 3. Every row renders its **code badges** as **white-letter-on-solid-color** chips pinned to the **far
-   right**, stacking **leftward** in the fixed order **R/r · S · C/c · i** (§3.5), at most one badge per
+   right**, stacking **leftward** in the fixed order **R/r · P · C/c · i** (§3.5), at most one badge per
    category, zero badges allowed.
 4. **Repo badge:** a directory with its own `.git` shows **`R` (dark brown)**; any file/directory
    inside a repo shows **`r` (medium brown)**; a directory that merely **contains** a repo below shows
    **`r` (medium-light brown)**; a directory unrelated to any repo shows no repo badge. Unregistered
    repos still get their badge.
-5. **Sync badge:** a file whose decision is **sync** shows **`S` (bright pink)**; undecided/ignored
+5. **Pin badge:** a file whose decision is `sync` shows **`P` (bright pink)**; undecided/ignored
    files and all directories do not.
 6. **Compress badges:** a **video or image** file that looks **uncompressed** shows **`C` (bright
    yellow)**; one with a recorded/known-compressed variant shows **`c` (light yellow)**; non-media
@@ -662,7 +666,7 @@ One content column: a **header** (identity + primary button + `⋮`), a **badge/
 │            │  Videos that can be compressed                27     [ Compress… ]        ⋮ │
 │            │  Images that can be compressed                14     [ Compress… ]        ⋮ │
 │            │  Big files not git-ignored                     3     [ Git-ignore… ]      ⋮ │
-│            │  Big files git-ignored, not tracked            9     [ Track / Sync ]     ⋮ │
+│            │  Big files git-ignored, not tracked            9     [ Track / Pin ]      ⋮ │
 │            ├───────────────────────────────────────────────────────────────────────────┤
 │            │  Directory · inside repo Our_Movies · 53 entries · scanned 2h ago           │
 └────────────┴───────────────────────────────────────────────────────────────────────────┘
@@ -708,12 +712,12 @@ plus **header-click sort**: click a column header to sort, click again to toggle
 | 1 | **Videos that can be compressed** | n | **Compress…** (offer only, [menus.mdx §6.1](./menus.mdx)) | kebab |
 | 2 | **Images that can be compressed** | n | **Compress…** (offer only) | kebab |
 | 3 | **Big files not git-ignored** | n | **Git-ignore…** (confirm list, never silent) | kebab |
-| 4 | **Big files git-ignored, not tracked** | n | **Track / Sync** (add to a sync unit; triage inside) | kebab |
+| 4 | **Big files git-ignored, not tracked** | n | **Track / Pin** (add to a pin unit; triage inside) | kebab |
 
 Clicking a **count** deep-links into the File System browser (§1) at this directory, pre-filtered to
 that category ([menus.mdx §2](./menus.mdx)). When **Do not compress** is on, rows 1–2 still count but
 their **Compress…** action is hidden (the offer is suppressed); when **Never IPFS** is on, row 4's
-**Track / Sync** is hidden (nothing under here may be synced).
+**Track / Pin** is hidden (nothing under here may be pinned).
 
 Computing the four charter category counts by a bounded recursive walk is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `buildDirRollup()` (via `buildEntityView()`).
@@ -736,7 +740,7 @@ hidden (so the column is never blank). Contents by row:
 | --- | --- |
 | 1–2 (compressible) | **Compress…** (the same offer as the inline button; hidden only when *Do not compress* is on — then the kebab still shows the rest) · **Show matching files** (deep-link to the File System browser filtered to this category) · **Do not compress** (folder-level sticky toggle, [menus.mdx §6.6](./menus.mdx#66-the-two-sticky-flags--never-ipfs--do-not-compress-locked)) |
 | 3 (big, not git-ignored) | **Git-ignore…** (confirm list) · **Show matching files** |
-| 4 (big, git-ignored, not tracked) | **Track / Sync** (hidden when *Never IPFS* is on) · **Show matching files** · **Never IPFS** (folder-level sticky toggle) |
+| 4 (big, git-ignored, not tracked) | **Track / Pin** (hidden when *Never IPFS* is on) · **Show matching files** · **Never IPFS** (folder-level sticky toggle) |
 
 The folder-level sticky toggles in the kebab are the **same state** as the switches in the badge/flag
 strip (§7) — flipping either updates both. Compress / Git-ignore / Track remain **explicit-click
@@ -771,8 +775,8 @@ directory ([menus.mdx §6.6](./menus.mdx)).
 The badge/flag strip shows both flags as **labeled switches** (as on [files.mdx §4](./files.mdx)), but
 here they are **directory-scoped** — they cover current and future contents:
 
-* **Never IPFS** — on ⇒ no file under this directory is ever synced; turning it on clears any `sync`
-  decisions on files below; the rollup's **Track / Sync** action hides; new files that appear later are
+* **Never IPFS** — on ⇒ no file under this directory is ever pinned; turning it on clears any `sync`
+  decisions on files below; the rollup's **Track / Pin** action hides; new files that appear later are
   covered automatically (the flag is a path-scoped policy).
 * **Do not compress** — on ⇒ the **Compress…** offers (rows 1–2 and any per-file offer under here) are
   suppressed and the `C` badge is not painted for media below.
@@ -791,7 +795,7 @@ Writing the directory-scoped sticky flags — and clearing `sync` decisions belo
 * **Nothing to act on:** all four rollup counts 0 → the table shows a friendly "Nothing here needs
   attention — no uncompressed media, no big un-ignored files."
 * **Loading:** skeleton header + table.
-* **IPFS node unreachable:** the **Track / Sync** action disables with a tooltip; flag writes still save.
+* **IPFS node unreachable:** the **Track / Pin** action disables with a tooltip; flag writes still save.
 
 ---
 
@@ -806,8 +810,8 @@ Writing the directory-scoped sticky flags — and clearing `sync` decisions belo
 3. The rollup is a **TanStack `DataTable`** in the house style; clicking a **count** deep-links into the
    File System browser (§1) at this directory filtered to that category ([menus.mdx §2](./menus.mdx)).
 4. Both **sticky flags** (**Never IPFS**, **Do not compress**) show as labeled switches (§10), are
-   **directory-scoped**, write immediately, stay in sync with the menu toggles, and honor
-   [menus.mdx §6.6](./menus.mdx) — Never IPFS hides row-4 **Track / Sync** and forbids sync below; Do not
+   **directory-scoped**, write immediately, stay consistent with the menu toggles, and honor
+   [menus.mdx §6.6](./menus.mdx) — Never IPFS hides row-4 **Track / Pin** and forbids pinning below; Do not
    compress hides the **Compress…** offers; neither deletes or alters bytes.
 5. Not-found / nothing-to-do / node-unreachable / loading states render per §11.
 6. The per-directory **entity** page (Part B) and the **File System column browser** (Part A) are two
@@ -816,9 +820,9 @@ Writing the directory-scoped sticky flags — and clearing `sync` decisions belo
 
 <!--
   Combined DIRECTORIES spec. PART A (§1–§6) = the File System column BROWSER (route /files, a.k.a. /fs)
-  + the LOCKED code-badge vocabulary. LOCKED: the badge vocabulary (R/r repo brown three-shades, S sync
+  + the LOCKED code-badge vocabulary. LOCKED: the badge vocabulary (R/r repo brown three-shades, P pin
   bright pink, C/c compress yellow, i ipfs blue), the case rule (uppercase R only at a repo root;
-  everything else lowercase), and the fixed right-to-left badge order R/r · S · C/c · i. Implemented by
+  everything else lowercase), and the fixed right-to-left badge order R/r · P · C/c · i. Implemented by
   code_plan.mdx §14 (/api/fs + FileSystemPage) and surfaced by the "File System" item in left_bar.yaml.
   ALSO LOCKED in Part A: §1.3 persisted view state — the open column chain + 1+ selection + filter
   checkboxes persist to the per-user config.yaml `file_system:` block (restored on return, debounced

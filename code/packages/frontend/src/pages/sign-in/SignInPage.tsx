@@ -19,7 +19,7 @@ export function SignInPage() {
             Large File Bridge
           </h1>
           <p className="mb-6 mt-1 text-center text-sm text-black/60">
-            Sync your large files across your own computers.
+            Pin your large files across your own computers.
           </p>
           <CredentialsSetupCard
             info={data.credentialsFile}
@@ -36,7 +36,7 @@ export function SignInPage() {
     <div className="grid h-full place-items-center bg-slate-50">
       <div className="w-96 rounded-2xl border border-[var(--lfb-border)] bg-white p-8 text-center shadow-sm">
         <h1 className="text-xl font-semibold" style={{ color: "var(--lfb-primary)" }}>Large File Bridge</h1>
-        <p className="mb-6 mt-1 text-sm text-black/60">Sync your large files across your own computers.</p>
+        <p className="mb-6 mt-1 text-sm text-black/60">Pin your large files across your own computers.</p>
         <button type="button" onClick={() => void startGoogleSignIn().catch((e) => clientLog.error("SignInPage.startGoogleSignIn", e))}
           className="block w-full rounded-md bg-[var(--lfb-primary)] px-4 py-2 text-white">
           Sign in with Google

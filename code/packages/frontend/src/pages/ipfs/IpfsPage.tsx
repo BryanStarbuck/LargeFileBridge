@@ -30,7 +30,7 @@ import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js"
 import { clientLog } from "../../lib/clientLog.js";
 
 const PIN_TYPES = ["recursive", "direct", "mfs"];
-const TRACKED = ["synced", "import", "path-less"];
+const TRACKED = ["pinned", "import", "path-less"];
 
 export function IpfsPage() {
   const qc = useQueryClient();
@@ -307,14 +307,14 @@ export function IpfsPage() {
           <DiagnosticCard
             state="warn"
             title={`${untrackedCount} pinned file${untrackedCount === 1 ? "" : "s"} aren't tracked yet`}
-            summary="LFBridge found pins on this computer that it isn't managing. Import them so they sync and back up like the rest."
+            summary="LFBridge found pins on this computer that it isn't managing. Import them so they pin and back up like the rest."
             fix={
               <FixButton state="warn" onClick={() => doImport.mutate({ all: true })} disabled={doImport.isPending}>
                 <DownloadCloud className="h-4 w-4" /> Import all
               </FixButton>
             }
           >
-            "Tracked" means LFBridge has recorded the file in a repo manifest so it can keep it synced
+            "Tracked" means LFBridge has recorded the file in a repo manifest so it can keep it pinned
             across your computers. Importing is metadata-only — no bytes move, nothing on disk changes.
           </DiagnosticCard>
         </div>
@@ -380,7 +380,7 @@ export function IpfsPage() {
               <div className="text-center text-black/60">
                 {repo
                   ? "No pinned files in this repo."
-                  : "This node isn't pinning anything yet. Sync a repo to start."}
+                  : "This node isn't pinning anything yet. Pin a repo to start."}
               </div>
             }
           />
@@ -416,13 +416,13 @@ function NodeVerdict({
         whatThisIs:
           "IPFS is the local peer-to-peer engine that reads, adds, and fetches your pinned files. It's installed on this computer but isn't answering right now, so nothing can transfer.",
         whyItMatters:
-          "Pins can't be read or added and no file can move in either direction. Your Sync / Ignore decisions and metadata are safe — this is a paused pipe, not a broken file.",
+          "Pins can't be read or added and no file can move in either direction. Your Add-to-IPFS (pin) / Ignore decisions and metadata are safe — this is a paused pipe, not a broken file.",
         options: [
           {
             kind: "checkbox",
             name: "autostart",
             label: "Also keep IPFS on after I reboot",
-            helper: "Installs the reboot auto-start so syncing survives a restart.",
+            helper: "Installs the reboot auto-start so pinning survives a restart.",
             defaultChecked: true,
           },
         ],
@@ -525,9 +525,9 @@ function Posture({ ok, label }: { ok: boolean; label: string }) {
   );
 }
 
-function TrackedPill({ tracked }: { tracked: "synced" | "path-less" }) {
+function TrackedPill({ tracked }: { tracked: "pinned" | "path-less" }) {
   const map = {
-    synced: { label: "synced", cls: "bg-green-100 text-green-800" },
+    pinned: { label: "pinned", cls: "bg-green-100 text-green-800" },
     "path-less": { label: "path-less", cls: "bg-slate-100 text-slate-600" },
   } as const;
   const s = map[tracked];

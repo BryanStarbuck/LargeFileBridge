@@ -1,17 +1,17 @@
-// The Git backbone engine (git_sync.mdx). When a storage's dedicated-Git-repo backing location is ON,
+// The Git backbone engine (git_backbone.mdx). When a storage's dedicated-Git-repo backing location is ON,
 // LFB is granted permission to run REAL git — fetch, merge (automatic), add/commit, push — against THAT
-// ONE repo every sync pass, so the SDL's small YAML travels between the user's computers while IPFS
+// ONE repo every backbone cycle, so the SDL's small YAML travels between the user's computers while IPFS
 // carries the bytes. All git work flows through `simple-git`, a thin wrapper over the SYSTEM git binary,
 // so the MERGE is done by real git (the ort strategy) — the reason simple-git was chosen over
-// isomorphic-git (partial merge) and nodegit (fragile native libgit2). See git_sync.mdx §2.
+// isomorphic-git (partial merge) and nodegit (fragile native libgit2). See git_backbone.mdx §2.
 //
-// Two remote shapes (git_sync.mdx §3): a LOCAL FILE PATH to a checkout already on this box (used in
+// Two remote shapes (git_backbone.mdx §3): a LOCAL FILE PATH to a checkout already on this box (used in
 // place), or an HTTP(S)/SSH URL with no local checkout (cloned into a machine-local cache under the
-// state root, `sync/s/<id>/git/`, and managed there). Both converge on one working directory.
+// state root, `pin/s/<id>/git/`, and managed there). Both converge on one working directory.
 //
 // The engine never force-pushes and never touches a repo the user did not configure as a backbone
-// (git_sync.mdx §7). An unresolvable merge or an auth failure is SURFACED (returned as a problem), never
-// clobbered — the caller keeps syncing over IPFS regardless. Node fs + simple-git only (charter).
+// (git_backbone.mdx §7). An unresolvable merge or an auth failure is SURFACED (returned as a problem), never
+// clobbered — the caller keeps pinning over IPFS regardless. Node fs + simple-git only (charter).
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -21,7 +21,7 @@ import { expandHome } from "../fs/badges.js";
 import { isGitWorkingTree } from "../store-model/units.service.js";
 import { log } from "../../shared/logging.js";
 
-/** The shared, append-mostly SDL lists that must union-merge instead of conflicting (git_sync.mdx §4.2). */
+/** The shared, append-mostly SDL lists that must union-merge instead of conflicting (git_backbone.mdx §4.2). */
 const UNION_MERGE_PATHS = ["LargeFilesBridge_SyncList.yaml", ".lfbridge/manifest.yaml"];
 
 export type RemoteKind = "local" | "url";
@@ -35,11 +35,11 @@ export interface GitCycleResult {
   pushed?: boolean;
   /** A human-readable problem to surface on the storage (merge conflict / auth / remote error). */
   problem?: string;
-  /** Conflicted paths when git could not auto-merge (git_sync.mdx §4.3). */
+  /** Conflicted paths when git could not auto-merge (git_backbone.mdx §4.3). */
   conflicts?: string[];
 }
 
-/** Classify a configured remote: a URL (http/https/ssh/git@) vs. a local filesystem path (git_sync.mdx §3). */
+/** Classify a configured remote: a URL (http/https/ssh/git@) vs. a local filesystem path (git_backbone.mdx §3). */
 export function classifyRemote(remote: string): RemoteKind {
   const r = remote.trim();
   if (/^(https?|ssh|git):\/\//i.test(r) || /^[\w.-]+@[\w.-]+:/.test(r)) return "url";
@@ -48,7 +48,7 @@ export function classifyRemote(remote: string): RemoteKind {
 
 /**
  * A `simple-git` handle on a working directory, configured NON-INTERACTIVE so a URL remote authenticates
- * through the OS git credential helper and NEVER hangs on a password prompt (git_sync.mdx §5).
+ * through the OS git credential helper and NEVER hangs on a password prompt (git_backbone.mdx §5).
  */
 export function openRepo(workingDir: string): SimpleGit {
   // Inherit the environment, but STRIP any editor vars the user's shell exported (EDITOR / VISUAL /
@@ -66,10 +66,10 @@ export function openRepo(workingDir: string): SimpleGit {
 }
 
 /**
- * Resolve a storage's configured remote to a working directory (git_sync.mdx §3):
+ * Resolve a storage's configured remote to a working directory (git_backbone.mdx §3):
  *   • LOCAL PATH  — used in place if it is a real checkout (has `.git/`); else null (nothing to drive yet —
  *                   `ensureBackingLocations` git-inits a brand-new dedicated repo elsewhere).
- *   • URL         — cloned on first use into the machine-local cache `sync/s/<id>/git/`, opened thereafter.
+ *   • URL         — cloned on first use into the machine-local cache `pin/s/<id>/git/`, opened thereafter.
  * Returns null (and logs) if a URL clone fails, so the caller falls back to IPFS-only for this pass.
  */
 export async function resolveWorkingCopy(storageId: string, remote: string): Promise<string | null> {
@@ -80,7 +80,7 @@ export async function resolveWorkingCopy(storageId: string, remote: string): Pro
     log.info("git", `storage ${storageId}: local remote ${dir} is not a checkout yet — skipping git cycle`);
     return null;
   }
-  // URL: a machine-local cache clone LFB manages (git_sync.mdx §3.2).
+  // URL: a machine-local cache clone LFB manages (git_backbone.mdx §3.2).
   const cache = path.join(storageUnitDir(storageId), "git");
   if (fs.existsSync(path.join(cache, ".git"))) return cache;
   try {
@@ -96,7 +96,7 @@ export async function resolveWorkingCopy(storageId: string, remote: string): Pro
 
 /**
  * The Git backbone for one storage's working copy. Constructed only from a storage whose dedicated-repo
- * backing is ON (git_sync.mdx §1/§7) — there is no entry point that runs git against an arbitrary path.
+ * backing is ON (git_backbone.mdx §1/§7) — there is no entry point that runs git against an arbitrary path.
  * Use `GitBackbone.resolve(...)` to build one from a configured remote.
  */
 export class GitBackbone {
@@ -108,7 +108,7 @@ export class GitBackbone {
     this.git = openRepo(dir);
   }
 
-  /** Build a backbone from a storage's configured remote, or null if no working copy resolves (git_sync.mdx §3). */
+  /** Build a backbone from a storage's configured remote, or null if no working copy resolves (git_backbone.mdx §3). */
   static async resolve(storageId: string, remote: string): Promise<GitBackbone | null> {
     const dir = await resolveWorkingCopy(storageId, remote);
     return dir ? new GitBackbone(dir) : null;
@@ -157,7 +157,7 @@ export class GitBackbone {
     log.info("git", `${this.dir}: removed '.lfbridge/' from .gitignore so the SDL device registry can be committed`);
   }
 
-  /** Ensure the union-merge `.gitattributes` so shared append-mostly lists never conflict (git_sync.mdx §4.2). */
+  /** Ensure the union-merge `.gitattributes` so shared append-mostly lists never conflict (git_backbone.mdx §4.2). */
   ensureMergeAttributes(): void {
     const file = path.join(this.dir, ".gitattributes");
     const want = UNION_MERGE_PATHS.map((p) => `${p} merge=union`);
@@ -175,9 +175,9 @@ export class GitBackbone {
   }
 
   /**
-   * Fetch + automatic merge (git_sync.mdx §4). Merges `origin/<branch>` into the working copy with git's
+   * Fetch + automatic merge (git_backbone.mdx §4). Merges `origin/<branch>` into the working copy with git's
    * ort strategy (`--no-edit`). On a genuine conflict git cannot resolve, ABORTS the merge (leaving the
-   * tree clean) and returns the conflicted paths to surface — never a clobber (git_sync.mdx §4.3).
+   * tree clean) and returns the conflicted paths to surface — never a clobber (git_backbone.mdx §4.3).
    */
   async pull(result: GitCycleResult): Promise<void> {
     if (!(await this.hasOrigin())) return;
@@ -214,7 +214,7 @@ export class GitBackbone {
 
   /**
    * How many commits the working branch is AHEAD of its remote — `git rev-list --count origin/<branch>..HEAD`
-   * (git_sync.mdx §6.1). A missing upstream ref (fresh repo, never pushed) or any rev-list failure returns 1
+   * (git_backbone.mdx §6.1). A missing upstream ref (fresh repo, never pushed) or any rev-list failure returns 1
    * so the caller still attempts a push to establish/repair the upstream rather than silently skipping it.
    */
   private async aheadCount(branch: string): Promise<number> {
@@ -228,12 +228,12 @@ export class GitBackbone {
   }
 
   /**
-   * Stage this device's SDL changes, commit, and push (git_sync.mdx §6 steps 5–6). Big-file bytes are
+   * Stage this device's SDL changes, commit, and push (git_backbone.mdx §6 steps 5–6). Big-file bytes are
    * git-ignored, so staging the working tree only ever queues the small SDL text. On a non-fast-forward
    * reject (another computer pushed between our fetch and our push), re-pull (fetch+merge) and re-push
    * ONCE — never a force-push.
    *
-   * ALWAYS-PUSH-WHEN-AHEAD (git_sync.mdx §6.1, sync_resilience.mdx §6): the push fires whenever the branch
+   * ALWAYS-PUSH-WHEN-AHEAD (git_backbone.mdx §6.1, backbone_resilience.mdx §6): the push fires whenever the branch
    * is ahead of the remote for ANY reason — not only when THIS pass made its own commit. An earlier build
    * returned before pushing when nothing new was staged, which stranded a commit the branch already carried
    * (a machine-wide auto-commit that committed into this repo, or a prior failed push) so it never reached
@@ -249,7 +249,7 @@ export class GitBackbone {
       const hasStaged =
         staged.staged.length > 0 || staged.created.length > 0 || staged.renamed.length > 0 || staged.deleted.length > 0;
       if (hasStaged) {
-        await this.git.commit("LFB: sync device state"); // -m message → no editor invoked
+        await this.git.commit("LFB: backbone device state"); // -m message → no editor invoked
         result.committed = true;
       }
     } catch (e) {
@@ -260,7 +260,7 @@ export class GitBackbone {
     const branch = await this.branch();
     // Deliver whatever the branch is ahead by — our fresh commit AND/OR a commit that was already local
     // and unpushed (foreign auto-commit, merge commit, or an earlier failed push). Never rely on our own
-    // commit being the only reason to push (git_sync.mdx §6.1).
+    // commit being the only reason to push (git_backbone.mdx §6.1).
     if (!result.committed && (await this.aheadCount(branch)) === 0) {
       return; // truly nothing to send — not committed and not ahead
     }
@@ -268,7 +268,7 @@ export class GitBackbone {
       await this.git.push("origin", branch);
       result.pushed = true;
     } catch (e) {
-      // Likely a non-fast-forward reject: pull (fetch+merge) then push once more (git_sync.mdx §6).
+      // Likely a non-fast-forward reject: pull (fetch+merge) then push once more (git_backbone.mdx §6).
       const retry: GitCycleResult = { ran: true };
       await this.pull(retry);
       if (retry.conflicts?.length) {
@@ -345,11 +345,11 @@ export function checkIgnore(repoRoot: string, absPaths: string[]): Set<string> {
   return ignored;
 }
 
-/** Turn a fetch/push error into a user-facing problem, flagging auth failures for re-authentication (git_sync.mdx §5). */
+/** Turn a fetch/push error into a user-facing problem, flagging auth failures for re-authentication (git_backbone.mdx §5). */
 function classifyRemoteError(e: Error): string {
   const m = e.message || String(e);
   if (/auth|denied|credential|403|401|could not read Username|terminal prompts disabled/i.test(m)) {
-    return `Git authentication failed for this remote — re-authenticate it (LFB keeps syncing over IPFS meanwhile). (${m.split("\n")[0]})`;
+    return `Git authentication failed for this remote — re-authenticate it (LFB keeps pinning over IPFS meanwhile). (${m.split("\n")[0]})`;
   }
-  return `Git remote error — LFB keeps syncing over IPFS. (${m.split("\n")[0]})`;
+  return `Git remote error — LFB keeps pinning over IPFS. (${m.split("\n")[0]})`;
 }

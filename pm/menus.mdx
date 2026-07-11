@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Cell Navigation, Row "⋮" Menus & Entity "More" Menus
-description: The cross-cutting interaction spec that every table screen and every single-entity screen references instead of restating. Three linked conventions. (1) CELL NAVIGATION — clicking a cell in any TanStack table navigates to the most specific relevant screen for THAT cell (a count cell → the child list pre-filtered to that slice; a path cell → the File System browser at that path; a peers cell → Peers filtered to that entity), so the table is a set of deep links, not just whole-row navigation. (2) The ROW "⋮" KEBAB — the trailing, right-aligned per-row action menu present on every table; it drops down the actions for the ENTITY that row represents (repo, directory, file, or peer — or a pinned CID with no local entity, §5.5). The glyph is ALWAYS the vertical ⋮ (three dots up-and-down), never the horizontal ⋯. (3) The ENTITY "MORE" (⋮) MENU — on a single-entity page (view one repo / view one file / view one directory), the SAME action set appears as a top-right "more" button, because the page IS one entity. Defines the per-entity action catalogs (repo / directory / file / peer) once — LOCKED — with their grouping, destructive-action separation, permission gates, and the charter guardrails (never compress/convert/ignore/delete without an explicit user click; local files are never deleted by an unsync/untrack). Cross-links repos.mdx, one_repo.mdx, directories.mdx, ipfs.mdx, repo_settings.mdx, settings.mdx, and the operation taxonomy in webapp.mdx §11.
+description: The cross-cutting interaction spec that every table screen and every single-entity screen references instead of restating. Three linked conventions. (1) CELL NAVIGATION — clicking a cell in any TanStack table navigates to the most specific relevant screen for THAT cell (a count cell → the child list pre-filtered to that slice; a path cell → the File System browser at that path; a peers cell → Peers filtered to that entity), so the table is a set of deep links, not just whole-row navigation. (2) The ROW "⋮" KEBAB — the trailing, right-aligned per-row action menu present on every table; it drops down the actions for the ENTITY that row represents (repo, directory, file, or peer — or a pinned CID with no local entity, §5.5). The glyph is ALWAYS the vertical ⋮ (three dots up-and-down), never the horizontal ⋯. (3) The ENTITY "MORE" (⋮) MENU — on a single-entity page (view one repo / view one file / view one directory), the SAME action set appears as a top-right "more" button, because the page IS one entity. Defines the per-entity action catalogs (repo / directory / file / peer) once — LOCKED — with their grouping, destructive-action separation, permission gates, and the charter guardrails (never compress/convert/ignore/delete without an explicit user click; local files are never deleted by an unpin/untrack). Cross-links repos.mdx, one_repo.mdx, directories.mdx, ipfs.mdx, repo_settings.mdx, settings.mdx, and the operation taxonomy in webapp.mdx §11.
 ---
 
 # LargeFileBridge — Cell Navigation, Row "⋮" Menus & Entity "More" Menus
@@ -152,7 +152,7 @@ entity.
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
 │  ‹ Repos  /  Our_Movies                          ┌────────────┐  ┌───┐ │
-│  ~/BGit/…/Our_Movies                             │ ⟳ Sync now │  │ ⋮ │ │ ← entity "more" menu
+│  ~/BGit/…/Our_Movies                             │ ⟳ Pin now  │  │ ⋮ │ │ ← entity "more" menu
 │                                                  └────────────┘  └───┘ │
 └───────────────────────────────────────────────────────────────────────┘
                                                                     │
@@ -160,7 +160,7 @@ entity.
                               │  Open in File System                    │
                               │  Rescan                                 │
                               │  Repo settings…                         │
-                              │  Toggle Synced                          │
+                              │  Toggle Pinned                          │
                               │  Git ignore                             │
                               │  View pinned on IPFS                    │
                               │  Copy path                              │
@@ -169,7 +169,7 @@ entity.
                               └─────────────────────────────────────────┘
 ```
 
-* **Primary vs. more.** The single **most-common** action stays a visible button (e.g. *Sync now* on a
+* **Primary vs. more.** The single **most-common** action stays a visible button (e.g. *Pin now* on a
   repo page); everything else lives under `⋮`. The most-common action also appears **inside** the menu
   so the menu is a complete catalog.
 * **Same catalog, one source.** The page-level menu and the row kebab render from the **same** per-entity
@@ -195,9 +195,9 @@ don't resolve to a local entity. Each is used verbatim by that entity's **row ke
 | Open | **Open in File System** | navigate | → [File System](./directories.mdx) at the repo's path. |
 | Open | **View pinned on IPFS** | navigate | → [IPFS](./ipfs.mdx) filtered to this repo. |
 | Work | **Rescan** | mutate | Runs the discovery scan for this repo now (`scan` op, [webapp.mdx §11](./webapp.mdx#11-what-shows-up-in-the-dock--the-lfbridge-operation-taxonomy)). |
-| Work | **Sync now** | mutate | Push/fetch this repo's `Sync` files (`sync` op). Never changes a decision. |
+| Work | **Pin now** | mutate | Pin/fetch this repo's Add-to-IPFS (pin) files — those with the `sync` decision (`pin` op). Never changes a decision. |
 | Work | **Git ignore** | mutate | Opens the **Git Ignore pop-over dialog** ([git_ignore.mdx](./git_ignore.mdx)) scoped to this repo's working tree (Recursive checkbox shown; off = the immediate big files, on = the whole tree). Never edits `.gitignore` silently — the dialog is the confirm (§6.1). |
-| Config | **Toggle Synced** | mutate | Flip this repo's master `synced` on/off ([repo_settings §2.2](./repo_settings.mdx)). |
+| Config | **Toggle Pinned** | mutate | Flip this repo's master `pinned` on/off ([repo_settings §2.2](./repo_settings.mdx)). |
 | Config | **Repo settings…** | navigate | → [Repo settings](./repo_settings.mdx) (the gear target). |
 | Copy | **Copy path** | copy | Absolute repo path to clipboard. |
 | Danger | **Remove repo (unregister)** | mutate ⚠ | Unregisters from LFB only. **Never deletes the folder or any local file** (§6.2); confirm required. |
@@ -213,10 +213,10 @@ The repo action catalog (Open / Work / Config / Copy, and Remove-repo that unreg
 | Open | **Open in File System** | navigate | Drill into this directory in the [browser](./directories.mdx). |
 | Open | **View pinned on IPFS** | navigate | → [IPFS](./ipfs.mdx) filtered to files under this directory. |
 | Work | **Rescan** | mutate | Discovery scan of this directory now (`scan` op). |
-| Work | **Track / Sync this directory** | mutate | Add it to the computer sync unit ([storage §8](./storage_local.mdx#8-synccomputer--the-whole-computer-sync-unit)); the files inside become triage-able. |
+| Work | **Track / Pin this directory** | mutate | Add it to the computer pin unit ([storage §8](./storage_local.mdx#8-synccomputer--the-whole-computer-sync-unit)); the files inside become triage-able. |
 | Work | **Compress videos/images inside…** | mutate | Opens the **Compress Inside pop-over dialog** ([compress_inside.mdx](./compress_inside.mdx)) — a darkened-backdrop modal (Images / Videos / "also recursive" checkboxes, a **red** PNG→JPEG warning shown while Images is checked, and an **Originals** radio [Hard delete default / LargeFileBridge trash]) whose **Continue** background-queues a per-file-safe batch. The batch **fans the eligible files out across the machine's cores (≈90%)** via the **media-aware** background queue — image files wide (1 thread each), video files thread-capped — so a big folder pins the box near 90% until done, not two-at-a-time ([parallelization.mdx §5](./parallelization.mdx), [compress_inside.mdx](./compress_inside.mdx)). **Not** a `window.confirm`. Offer only, **explicit click only** (charter: video 1st, image 2nd; §6.1). |
 | Work | **Git ignore** | mutate | Opens the **Git Ignore pop-over dialog** ([git_ignore.mdx](./git_ignore.mdx)) scoped to this directory (Recursive checkbox shown; off = the immediate files via `/dir/*` + `!/dir/*/`, on = the whole folder `/dir/`). The dialog is the confirm (§6.1). |
-| Flag | **Never IPFS** (toggle) | mutate | Sticky per-directory flag: nothing under here is ever added to IPFS / synced, and no "add to IPFS" offers appear for it (§6.6). Turning it **on** clears any `sync` decisions on files below and stops offering them; turning it **off** returns them to `undecided`. |
+| Flag | **Never IPFS** (toggle) | mutate | Sticky per-directory flag: nothing under here is ever added to IPFS / pinned, and no "add to IPFS" offers appear for it (§6.6). Turning it **on** clears any `sync` decisions on files below and stops offering them; turning it **off** returns them to `undecided`. |
 | Flag | **Do not compress** (toggle) | mutate | Sticky per-directory flag: suppress the `C` "should compress" badge/offer for media under here — the user has said "leave these alone" (§6.6). |
 | Copy | **Copy path** | copy | Absolute directory path. |
 
@@ -229,23 +229,23 @@ The directory action catalog (its Open / Work / Flag groups and the Never IPFS /
 | --- | --- | --- | --- |
 | Open | **View file** / **View image** / **View video** / **View audio** | navigate | → the **View one file** experience. For a viewable medium this is the viewer ([media_viewer.mdx](./media_viewer.mdx)) — `/image`, `/video`, or `/audio` by kind; otherwise the properties page ([files.mdx](./files.mdx)). Media also offers **View properties** (`/file`) as a second Open item. (Omitted on the page itself.) |
 | Open | **Open containing folder** | navigate | → [File System](./directories.mdx) revealing this file. |
-| IPFS | **Add to IPFS** | mutate | Sets the [decision](./one_repo.mdx#1-the-decision-model-locked) to `sync`: add to the manifest, pin, and transfer to peers. Hidden when **Never IPFS** is on (§6.6). Shown when the file is not already a Sync file. |
-| IPFS | **Remove from IPFS** | mutate ⚠ | Sets the decision to `ignore`: remove from the manifest and unpin **on this machine**. **Never deletes the local bytes** (§6.2). Shown when the file is currently a Sync file. |
-| Decision | **Set decision ▸ Sync / Ignore / Undecided** | mutate | The full three-state submenu ([decision model](./one_repo.mdx#1-the-decision-model-locked)); "Add to IPFS" / "Remove from IPFS" above are the two one-click shortcuts. Changing it **never deletes** the local file. |
-| Work | **Sync now** | mutate | Queue this one file's transfer (`sync` op). Only meaningful when its decision is Sync. |
+| IPFS | **Add to IPFS** | mutate | Sets the [decision](./one_repo.mdx#1-the-decision-model-locked) to `sync`: add to the manifest, pin, and transfer to peers. Hidden when **Never IPFS** is on (§6.6). Shown when the file is not already an Add-to-IPFS (pin) file. |
+| IPFS | **Remove from IPFS** | mutate ⚠ | Sets the decision to `ignore`: remove from the manifest and unpin **on this machine**. **Never deletes the local bytes** (§6.2). Shown when the file is currently an Add-to-IPFS (pin) file. |
+| Decision | **Set decision ▸ Add to IPFS (pin) / Ignore / Undecided** | mutate | The full three-state submenu ([decision model](./one_repo.mdx#1-the-decision-model-locked)) — the frozen `sync` / `ignore` / `undecided` values; "Add to IPFS" / "Remove from IPFS" above are the two one-click shortcuts. Changing it **never deletes** the local file. |
+| Work | **Pin now** | mutate | Queue this one file's transfer (`pin` op). Only meaningful when its decision is `sync` (Add to IPFS (pin)). |
 | Work | **Compress…** | mutate | Video/image only, **explicit click** (charter §6.1); `compress` op. Hidden when **Do not compress** is on. |
 | Work | **Convert to compressible…** | mutate | PNG→JPEG etc., **after the alpha/functionality safety checks** (charter; warn before converting, §6.1). |
 | Work | **Git ignore** | mutate | Shown only when the file is big and **not** already git-ignored. Opens the **Git Ignore pop-over dialog** ([git_ignore.mdx](./git_ignore.mdx)) for this one file (no Recursive checkbox — files have no subtree); Apply writes one anchored line `/​<repo-rel path>` (§6.1). |
 | Work | **Find duplicates (fingerprint)** | mutate | Local-only perceptual/content match (charter; never networks, §6.4). |
-| Flag | **Never IPFS** (toggle) | mutate | Sticky per-file flag: this file is never added to IPFS / synced and shows no "Add to IPFS" offer (§6.6). Turning it **on** clears a `sync` decision back to `ignore`. |
+| Flag | **Never IPFS** (toggle) | mutate | Sticky per-file flag: this file is never added to IPFS / pinned and shows no "Add to IPFS" offer (§6.6). Turning it **on** clears a `sync` decision back to `ignore`. |
 | Flag | **Do not compress** (toggle) | mutate | Sticky per-file flag: suppress the `C` "should compress" badge/offer for this file (§6.6). |
 | IPFS | **View on IPFS** | navigate | → [IPFS](./ipfs.mdx) filtered to this file's CID. |
-| Copy | **Copy CID** · **Copy path** | copy | CID present only once the file is a Sync file with a CID. |
+| Copy | **Copy CID** · **Copy path** | copy | CID present only once the file is an Add-to-IPFS (pin) file with a CID. |
 | Work | **Move…** | mutate ⚠ | Move/rename the file to a new absolute path on disk (guarded: parent must exist, no overwrite). **Explicit click + confirm.** The one action here that relocates real bytes. See [media_viewer.mdx §4.4](./media_viewer.mdx). |
-| Danger | **Stop syncing (untrack / unpin)** | mutate ⚠ | Removes from the manifest and unpins **on this machine**. **Never deletes the local bytes** (§6.2); confirm required. |
+| Danger | **Stop pinning (untrack / unpin)** | mutate ⚠ | Removes from the manifest and unpins **on this machine**. **Never deletes the local bytes** (§6.2); confirm required. |
 | Danger | **Delete…** | mutate ⚠ | **Recoverable delete** — moves the file to LFBridge's trash under the state dir (`<stateDir>/trash/`); it does **not** `unlink`. Explicit click + confirm ("Move to LFBridge trash? — recoverable"). See [media_viewer.mdx §4.4](./media_viewer.mdx). |
 
-The file action catalog (Add/Remove IPFS, the three-state decision submenu, Compress, Stop syncing) is built in code:
+The file action catalog (Add/Remove IPFS, the three-state decision submenu, Compress, Stop pinning) is built in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` function.
 
 ### 5.4 Peer (a user's other computer)
@@ -269,12 +269,12 @@ rows are not a file/dir/repo/peer, so they use this **pin catalog**, so the row 
 
 | Group | Action | Kind | Notes |
 | --- | --- | --- | --- |
-| IPFS | **Import into tracking** | mutate | **Untracked pins only** — record the CID as a tracked (path-less) entry so it syncs/backs up like the rest. **Metadata-only**: no bytes move ([ipfs.mdx §4](./ipfs.mdx)). Promoted to the top for untracked rows. |
+| IPFS | **Import into tracking** | mutate | **Untracked pins only** — record the CID as a tracked (path-less) entry so it pins/backs up like the rest. **Metadata-only**: no bytes move ([ipfs.mdx §4](./ipfs.mdx)). Promoted to the top for untracked rows. |
 | IPFS | **View on IPFS** | navigate | → [IPFS](./ipfs.mdx) filtered to this CID (read-only view of **our own** pinned content, §6.5). |
 | Open | **Open containing folder** | navigate | Only when the pin has a resolvable local path; omitted otherwise. |
 | Copy | **Copy CID** | copy | The pinned root CID (monospace). Always present — the row's guaranteed action. |
 | Copy | **Copy path** | copy | Only when a local path is known. |
-| Danger | **Unpin from this computer** | mutate ⚠ | `ipfs pin rm` on this node — stops this machine serving the CID and lets GC reclaim it. **Never deletes any local file** (the bytes on disk, if any, are untouched, §6.2); confirm required. This is the pin-level twin of the file catalog's **Stop syncing** (§5.3). |
+| Danger | **Unpin from this computer** | mutate ⚠ | `ipfs pin rm` on this node — stops this machine serving the CID and lets GC reclaim it. **Never deletes any local file** (the bytes on disk, if any, are untouched, §6.2); confirm required. This is the pin-level twin of the file catalog's **Stop pinning** (§5.3). |
 
 The pin catalog for pinned-CID rows with no local entity (Import into tracking, Copy CID, Unpin) is built in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `PinKebab` component.
@@ -314,7 +314,7 @@ The explicit-click Compress OFFER with its `window.confirm` step (never compress
 > never a `.lfbridge/` path).
 
 ### 6.2 Local bytes are never deleted by LFB
-**Remove repo**, **Stop syncing (untrack/unpin)**, and **Remove peer** change only *LFB's tracking* —
+**Remove repo**, **Stop pinning (untrack/unpin)**, and **Remove peer** change only *LFB's tracking* —
 they unregister, unpin, or forget. They **never delete the user's folder or files** on disk (matching
 the decision model: "changing a decision never deletes the user's local file", [one_repo.mdx §4.5](./one_repo.mdx)).
 Every destructive item is visually separated (last, red-tinted) and requires a confirm.
@@ -339,11 +339,11 @@ Both are **persistent per-entity flags** (not one-shot actions): they are stored
 apply to **either a file or a directory**. They are the user's standing "leave this alone" wishes.
 
 * **Never IPFS** — the entity (and, for a directory, everything under it) is **never** added to IPFS or
-  synced. While it is on: no `sync` decision may be set, the **Add to IPFS** item is **hidden**, the
-  sync `S` badge never appears, and background sync skips it. Turning it **on** demotes any existing
+  pinned. While it is on: no `sync` decision may be set, the **Add to IPFS** item is **hidden**, the
+  pin `P` badge never appears, and background pinning skips it. Turning it **on** demotes any existing
   `sync` decision (a file → `ignore`; a directory → clears its files' `sync` decisions). It is a
   *policy*, stronger than a per-file `ignore` decision, and it is scoped by path so a directory's flag
-  covers new files that appear later. It **never deletes local bytes** (§6.2) — it only forbids syncing.
+  covers new files that appear later. It **never deletes local bytes** (§6.2) — it only forbids pinning.
 * **Do not compress** — suppress the `C` "should be compressed" offer and badge for this file (or all
   media under this directory). Compression is already an explicit-click-only offer (§6.1); this flag
   makes the *offer itself* go away for entities the user has judged fine as-is. It does **not** alter
@@ -354,6 +354,9 @@ apply to **either a file or a directory**. They are the user's standing "leave t
 
 The two sticky per-entity toggles — Never IPFS and Do not compress — are built and written in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the `flags` mutation via `api.setEntityFlags`).
+
+Whether a file earns the pin **`P`** badge (and Never IPFS suppressing it) is computed in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `fileIsPinned()`.
 
 ---
 
@@ -373,14 +376,14 @@ The two sticky per-entity toggles — Never IPFS and Do not compress — are bui
    [files.mdx](./files.mdx) / [directories.mdx](./directories.mdx).
 4. The **two sticky flags** — **Never IPFS** and **Do not compress** — are persistent per-entity
    toggles on both files and directories (§6.6): Never IPFS hides "Add to IPFS", forbids `sync`, and
-   suppresses the `S` badge; Do not compress suppresses the `C` badge/offer; neither deletes or alters
+   suppresses the `P` badge; Do not compress suppresses the `C` badge/offer; neither deletes or alters
    local bytes.
 5. The **entity catalogs** (repo / directory / file / peer, §5.1–§5.4) **and** the **pin catalog**
    (§5.5) are defined **once** here and used verbatim by both surfaces — no per-spec re-listing that
    can drift. Every row of every table carries the trailing vertical **`⋮`** kebab (§3), with no
    exceptions — a row that resolves to none of these still shows Copy (and any inspect/navigate item).
 6. **Charter guardrails hold** (§6): compress / convert / git-ignore are explicit-click offers with a
-   confirm step; Remove-repo / Stop-syncing / Remove-peer never delete local bytes and require confirm;
+   confirm step; Remove-repo / Stop-pinning / Remove-peer never delete local bytes and require confirm;
    fingerprint/hash never network; gated items are hidden without the claim; no action opens a public
    gateway.
 7. Every **mutating** menu action runs through the progress dock as its taxonomy op

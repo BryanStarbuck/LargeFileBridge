@@ -1,6 +1,6 @@
 // Single-entity backend for View-one-file / View-one-directory (files.mdx, directories.mdx) and the
 // ⋯ / right-click entity menus (menus.mdx §5). Builds one EntityView for any file or directory on
-// disk — its identity, code badges, repo/sync context (when inside a registered repo), compression
+// disk — its identity, code badges, repo/pin context (when inside a registered repo), compression
 // heuristic, sticky flags, and (for directories) the charter category rollup. Node fs only (charter).
 import fs from "node:fs";
 import os from "node:os";
@@ -96,7 +96,7 @@ function enclosingRepo(abs: string): RepoMatch | null {
 function transferFor(decision: Decision, cid: string | null, peers: string[]): TransferStatus {
   if (decision !== "sync") return "na";
   if (!cid) return "pending";
-  return peers.length > 0 ? "synced" : "pending";
+  return peers.length > 0 ? "pinned" : "pending";
 }
 
 /** Build the full EntityView for a file or directory. */
@@ -141,7 +141,7 @@ export function buildEntityView(
   const ctx = buildBadgeContext(parent);
   const { badges } = computeBadges(e.abs, name, e.kind, e.sizeBytes, ctx);
 
-  // Repo / sync context — only when inside a registered repo.
+  // Repo / pin context — only when inside a registered repo.
   const match = enclosingRepo(e.abs);
   let repo: EntityView["repo"] = null;
   let decision: Decision | null = null;
@@ -195,7 +195,7 @@ function buildDirRollup(dirAbs: string, match: RepoMatch | null): DirRollup {
 
   // Git-ignored big files = the enclosing repo's discovered candidates that live under this dir.
   const candidateRel = new Set<string>();
-  const candidateDecided = new Set<string>(); // candidate rels whose decision is sync (tracked)
+  const candidateDecided = new Set<string>(); // candidate rels decided Add-to-IPFS/pin (tracked)
   let scannedAt: string | null = null;
   if (match) {
     const status = getRepoStatus(match.folder);
@@ -283,7 +283,7 @@ function buildDirRollup(dirAbs: string, match: RepoMatch | null): DirRollup {
       if (size >= threshold) {
         interestBig = true;
         if (candidateRel.has(abs)) {
-          // git-ignored big file: "not tracked" when we aren't syncing it.
+          // git-ignored big file: "not tracked" when we aren't pinning it.
           if (!candidateDecided.has(abs) && !flags.neverIpfs) bigIgnoredNotTracked++;
         } else {
           bigNotIgnored++;
@@ -318,7 +318,7 @@ function buildDirRollup(dirAbs: string, match: RepoMatch | null): DirRollup {
 
 /**
  * Set the sticky flags on an entity, applying the menus.mdx §6.6 side-effects:
- * turning Never IPFS ON demotes any `sync` decision under this path back to non-sync.
+ * turning Never IPFS ON demotes any Add-to-IPFS (pin) decision under this path back to non-pinned.
  */
 export async function setEntityFlags(
   input: string,
@@ -328,7 +328,7 @@ export async function setEntityFlags(
   const before = ownFlags(abs);
   await setFileFlags(abs, patch);
 
-  // Demotion: if Never IPFS just turned on, clear `sync` decisions this flag now forbids.
+  // Demotion: if Never IPFS just turned on, clear the Add-to-IPFS (pin) decisions this flag now forbids.
   if (patch.neverIpfs === true && !before.neverIpfs) {
     const match = enclosingRepo(abs);
     if (match) {
@@ -347,8 +347,8 @@ export async function setEntityFlags(
 }
 
 /**
- * Set a file's sync decision from the entity menu (Add to IPFS = sync, Remove from IPFS = ignore).
- * Enforces menus.mdx §6.6: `sync` is refused while Never IPFS is in effect for this path.
+ * Set a file's pin decision from the entity menu (Add to IPFS = pin, Remove from IPFS = ignore).
+ * Enforces menus.mdx §6.6: the Add-to-IPFS (pin) decision is refused while Never IPFS is in effect for this path.
  */
 export async function setEntityDecision(input: string, decision: Decision): Promise<EntityView> {
   const abs = path.resolve(expandHome(input.trim()));
@@ -356,7 +356,7 @@ export async function setEntityDecision(input: string, decision: Decision): Prom
     throw new Error("Never IPFS is on for this file — turn it off before adding to IPFS.");
   }
   const match = enclosingRepo(abs);
-  if (!match) throw new Error("This file isn't inside a registered repo, so it can't be synced yet.");
+  if (!match) throw new Error("This file isn't inside a registered repo, so it can't be added to IPFS yet.");
   const rel = path.relative(match.repoPath, abs);
   await updateRepoConfig(match.folder, (c) => {
     if (decision === "undecided") delete c.decisions[rel];

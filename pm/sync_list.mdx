@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — The Sync List & Bridge Backbones
-description: The hub spec for the Sync List — the portable, human-readable YAML file (LargeFilesBridge_SyncList.yaml) that declares what LargeFileBridge should sync, and travels between a user's computers over a "bridge backbone." Defines the two scopes of list (one per COMPUTER, one per REPO), the single top-level YAML key `large_files` and its level-2 children (`settings`, `repos`, `directories`) that nest four-to-six levels deep, and the provenance/origin block that stamps who wrote each revision and when. Its centerpiece is the TRUST rule: because a backbone (Dropbox, Google Drive, or the git repo) may deliver a Sync List that was written on another computer and synced in asynchronously, THIS computer must NEVER treat an incoming list as ground truth — it reconciles the list against its own filesystem reality per-entry, verifies local claims against the local IPFS pinset, treats absences as untrusted (not deletes), and resolves conflicts by revision + content (CID/sha256). Names the three bridge backbones and links to their per-backbone specs (dropbox.mdx, google_drive.mdx, repo__list_syns.mdx), and reconciles the whole model with the on-disk state in storage_local.mdx (per-unit config.yaml + manifest.yaml, the committed in-repo manifest, and the IPNS transport).
+description: The hub spec for the Sync List — the portable, human-readable YAML file (LargeFilesBridge_SyncList.yaml) that declares what LargeFileBridge should pin, and travels between a user's computers over a "bridge backbone." Defines the two scopes of list (one per COMPUTER, one per REPO), the single top-level YAML key `large_files` and its level-2 children (`settings`, `repos`, `directories`) that nest four-to-six levels deep, and the provenance/origin block that stamps who wrote each revision and when. Its centerpiece is the TRUST rule: because a backbone (Dropbox, Google Drive, or the git repo) may deliver a Sync List that was written on another computer and carried in asynchronously, THIS computer must NEVER treat an incoming list as ground truth — it reconciles the list against its own filesystem reality per-entry, verifies local claims against the local IPFS pinset, treats absences as untrusted (not deletes), and resolves conflicts by revision + content (CID/sha256). Names the three bridge backbones and links to their per-backbone specs (dropbox.mdx, google_drive.mdx, repo__list_syns.mdx), and reconciles the whole model with the on-disk state in storage_local.mdx (per-unit config.yaml + manifest.yaml, the committed in-repo manifest, and the IPNS transport).
 ---
 
 # LargeFileBridge — The Sync List & Bridge Backbones
@@ -22,7 +22,7 @@ syncs files between your computers. LFB supports three, each with its own spec:
 > **The one rule that shapes everything here.** A backbone delivers files **asynchronously** and from
 > **other computers you do not control in that moment**. So **an incoming Sync List is a set of
 > *claims*, never ground truth.** When a `LargeFilesBridge_SyncList.yaml` changes underneath us
-> because it synced in over a backbone, this computer must **reconcile** it against its own view of
+> because it was carried in over a backbone, this computer must **reconcile** it against its own view of
 > the world — its real filesystem and its real IPFS pinset — and must **never** blindly apply it. The
 > whole trust model is [§5](#5-trust--reconciliation-the-load-bearing-rule); read it before writing
 > any code that consumes a Sync List.
@@ -36,10 +36,10 @@ This spec builds on its siblings and does not repeat them:
   values appear inside the list's `settings:` and per-repo blocks.
 * [knowledge/ipfs.mdx](../knowledge/ipfs.mdx) — CIDs, pinning, the only-our-content rule that the
   list's IPFS settings must honor.
-* [sessions.mdx](./sessions.mdx) — **when** a sync fires on a user's return. A synchronization does not
+* [sessions.mdx](./sessions.mdx) — **when** a pin pass fires on a user's return. A pin pass does not
   only run on the 15-minute launchd cadence: when a user **starts a new web session** on a computer that
-  has not synced in **> 48 hours**, LFB auto-kicks a (non-blocking) `syncAll()` so they are not working
-  against stale files. That trigger, the web-session model, and the "last synchronized" definition it
+  has not pinned in **> 48 hours**, LFB auto-kicks a (non-blocking) `pinAll()` so they are not working
+  against stale files. That trigger, the web-session model, and the "last pinned" definition it
   reads all live in sessions.mdx.
 
 ---
@@ -50,7 +50,7 @@ Four terms, used identically across all four backbone specs:
 
 | Term | Definition |
 | --- | --- |
-| **Sync List** | The portable YAML file `LargeFilesBridge_SyncList.yaml`. One top-level key `large_files`, whose level-2 children are `settings`, `repos`, and `directories`. It declares *what should be synced and where each large file is*, and is the thing that travels between computers. |
+| **Sync List** | The portable YAML file `LargeFilesBridge_SyncList.yaml`. One top-level key `large_files`, whose level-2 children are `settings`, `repos`, and `directories`. It declares *what should be pinned and where each large file is*, and is the thing that travels between computers. |
 | **Bridge backbone** | A transport channel that carries a Sync List (and, where applicable, points at the bytes) between the user's own computers. One of: **Dropbox**, **Google Drive**, **repo (git)**. A backbone is "the road"; the Sync List is "the cargo." |
 | **Scope** | Which slice of the world a given Sync List covers: **computer** (this whole machine — settings + every repo + every non-repo directory) or **repo** (exactly one repo). One computer list; many repo lists. |
 | **Reconcile** | The act of merging an incoming Sync List into this computer's own truth **without trusting it** — verifying local claims against the real filesystem + pinset, treating absences as untrusted, and resolving conflicts by revision + content ([§5](#5-trust--reconciliation-the-load-bearing-rule)). |
@@ -215,7 +215,7 @@ never by trusting the incoming absolute path.
 
 ## 5. Trust & reconciliation — the load-bearing rule
 
-**An incoming Sync List is untrusted.** A backbone can hand us a file that is stale, half-synced,
+**An incoming Sync List is untrusted.** A backbone can hand us a file that is stale, half-written,
 written by a computer that had an older or partial view, or duplicated into a conflict-copy. So
 ingesting a list is never "apply it" — it is **reconcile it**. The algorithm:
 
@@ -233,12 +233,12 @@ Any claim the list makes about **this** computer is checked against reality befo
   the disk disposes.
 
 Verifying a `pinned_by` claim for this computer against the real IPFS pinset — dropping or refreshing only our own label — is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncRepoFolder()` (checks `ipfs.listPins()`, updates via `setPinClaim()`)
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()` (checks `ipfs.listPins()`, updates via `setPinClaim()`)
 
 ### 5.2 Absence is NOT deletion (default)
 
 If the incoming list *omits* an entry this computer currently has, that is **not** a delete signal by
-default (`settings.conflict.absence_is_delete: false`). A backbone mid-sync, a selective-sync
+default (`settings.conflict.absence_is_delete: false`). A backbone mid-transfer, a selective-sync
 exclusion, or a writer that simply had not scanned that file yet all produce spurious absences.
 Deletes must be **explicit** — an entry marked `state: removed` with its own `removed_at` + `removed_by`
 provenance — so a real delete propagates but a partial file never destroys data. (An operator can opt
@@ -267,7 +267,7 @@ per the normal inherit chain (per-repo override → computer `settings` → glob
 per-backbone specs restate this from their side.
 
 The per-repo in-repo list that git carries atomically with the repo's own commits is written in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/manifest.service.ts` — `writeCommittedManifest()` (writes `<repo>/.lfbridge/manifest.yaml`)
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `writeCommittedManifest()` (writes `<repo>/.lfbridge/manifest.yaml`)
 
 ### 5.5 Backbone-delivered hazards the reader must expect
 
@@ -294,7 +294,7 @@ store layer (atomic, schema-validated), which is where the trusted, reconciled t
 
 ## 6. Publishing — writing our list out to the backbones
 
-The inverse direction. After a scan/sync, this computer writes its *own* current view as a Sync List
+The inverse direction. After a scan or pin pass, this computer writes its *own* current view as a Sync List
 and pushes it onto each enabled backbone so peers can reconcile it:
 
 * Bump `origin.revision`, stamp `origin.written_at`, set `origin.computer_id/label/owner` to **this**
@@ -312,7 +312,7 @@ are part of `settings.ipfs`: publishing a list never turns this machine into a p
 and `reprovide_strategy` stays `pinned`.
 
 Writing this computer's own view — with `pinned_by` set only for CIDs it actually pins — and publishing the committed list happen in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncRepoFolder()` (self-only `setPinClaim()`, then `writeCommittedManifest()`)
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()` (self-only `setPinClaim()`, then `writeCommittedManifest()`)
 
 ---
 
@@ -323,8 +323,8 @@ The Sync List does not replace the on-disk model — it is its **portable projec
 | Sync List (portable) | storage_local.mdx (on-disk) |
 | --- | --- |
 | `large_files.settings` | app `config.yaml` + the global `settings.mdx` values |
-| `large_files.repos.<key>` | one `sync/r/<repo_name>/` unit (`config.yaml` + `manifest.yaml`) |
-| `large_files.directories.<key>` | the `sync/computer/` unit (`config.yaml` + `manifest.yaml`) |
+| `large_files.repos.<key>` | one `pin/r/<repo_name>/` unit (`config.yaml` + `manifest.yaml`) |
+| `large_files.directories.<key>` | the `pin/computer/` unit (`config.yaml` + `manifest.yaml`) |
 | a file entry (`path`/`cid`/`size`/`sha256`/`pinned_by`) | a `manifest.yaml` file row ([storage_local.mdx §9.1](./storage_local.mdx#91-manifest-shape-per-sync-unit)) |
 | `origin` / `revision` | new provenance this spec adds; `status.yaml` records the last reconciled revision per peer |
 

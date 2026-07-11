@@ -3,7 +3,7 @@
 // .lfbridge/ tracking directory on THIS computer + where it goes (§3), and three independent backing
 // locations — a dedicated Git repo (preferred), a Google Drive location, and a Dropbox directory — each
 // ON/OFF with its own path (§4). Loads via GET, saves via PATCH; the directories themselves appear on
-// the next sync pass (§6). Matches RepoSettingsPage's Section/Toggle styling.
+// the next pin pass (§6). Matches RepoSettingsPage's Section/Toggle styling.
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "@tanstack/react-router";
 import { ChevronLeft, Info, Plus, X } from "lucide-react";
@@ -42,12 +42,12 @@ export function StorageSettingsPage() {
         <span className="font-mono">{s.root}</span> · type: <span className="capitalize">{s.type}</span>
       </div>
 
-      {/* The IPFS-pinning opt-in — gates whether this storage's mapped-dir bytes are synced over IPFS. */}
-      <Section title="Sync over IPFS" subtitle="When on, this computer adds, pins, and fetches this storage's large files over IPFS, placing each file at its grafted local path. Off by default — LFB never pins content without your say-so.">
+      {/* The IPFS-pinning opt-in — gates whether this storage's mapped-dir bytes are pinned over IPFS. */}
+      <Section title="Pin over IPFS (add)" subtitle="When on, this computer adds, pins, and fetches this storage's large files over IPFS, placing each file at its grafted local path. Off by default — LFB never pins content without your say-so.">
         <Toggle
-          label="Sync this storage's files over IPFS on this computer"
-          checked={s.synced}
-          onChange={(v) => patch.mutate({ synced: v })}
+          label="Pin this storage's files over IPFS on this computer"
+          checked={s.pinned}
+          onChange={(v) => patch.mutate({ pinned: v })}
         />
       </Section>
 
@@ -91,7 +91,7 @@ export function StorageSettingsPage() {
           onCommitPath={(v) => patch.mutate({ backing: { dropbox: { path: v } } })}
         />
         <p className="mt-3 flex items-center gap-1.5 text-xs text-black/50">
-          <Info className="h-3.5 w-3.5" /> Directories are created and updated on the next sync pass.
+          <Info className="h-3.5 w-3.5" /> Directories are created and updated on the next pin pass.
         </p>
       </Section>
 

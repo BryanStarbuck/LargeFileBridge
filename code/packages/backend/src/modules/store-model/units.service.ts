@@ -1,4 +1,4 @@
-// The two sync units (storage.mdx §5–§9). Composes RepoRow / RepoDetail for the UI.
+// The two pin units (storage.mdx §5–§9). Composes RepoRow / RepoDetail for the UI.
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -77,7 +77,7 @@ export function writeRepoManifest(folder: string, manifest: Manifest): void {
   writeYaml(unitManifestPath(repoUnitDir(folder)), { ...manifest });
 }
 
-// ── Computer unit reads/writes (storage.mdx §8; sync_process.mdx §2 — part of every full pass) ──
+// ── Computer unit reads/writes (storage.mdx §8; pin_process.mdx §2 — part of every full pass) ──
 export function getComputerConfig(): ComputerUnitConfig {
   return readYaml(unitConfigPath(computerUnitDir()), ComputerUnitConfigSchema);
 }
@@ -128,12 +128,12 @@ export async function registerRepo(absPath: string): Promise<{ folder: string; r
   await updateRepoConfig(folder, (c) => ({
     ...c,
     repo: { name, path: resolved, remote: readGitRemote(resolved) },
-    synced: false, // discovered but off until the user opts in (storage.mdx §7)
+    pinned: false, // discovered but off until the user opts in (storage.mdx §7)
   }));
   const status = UnitStatusSchema.parse({});
   status.folder_name = folder;
   writeRepoStatus(folder, status);
-  log.info("units", `Registered repo ${name} -> sync/r/${folder}`);
+  log.info("units", `Registered repo ${name} -> pin/r/${folder}`);
   return { folder, repoId };
 }
 
@@ -148,10 +148,10 @@ export function unregisterRepo(folder: string): void {
   } catch (e) {
     // force:true already tolerates absence — a throw here means the tracking state couldn't be
     // removed (e.g. permissions). Surface it before it propagates to the caller.
-    log.error("units", `Unregister repo unit sync/r/${folder} failed: ${(e as Error).message}`);
+    log.error("units", `Unregister repo unit pin/r/${folder} failed: ${(e as Error).message}`);
     throw e;
   }
-  log.info("units", `Unregistered repo unit sync/r/${folder} (local files untouched)`);
+  log.info("units", `Unregistered repo unit pin/r/${folder} (local files untouched)`);
 }
 
 // ── Row / detail composition ────────────────────────────────────────────────
@@ -169,9 +169,9 @@ export function computeRepoRow(folder: string): RepoRow {
     path: cfg.repo.path || "",
     counts,
     peerCount,
-    lastSyncAt: status.last_sync_at,
-    status: rollupStatus(cfg.synced, counts, status, files),
-    synced: cfg.synced,
+    lastPinAt: status.last_pin_at,
+    status: rollupStatus(cfg.pinned, counts, status, files),
+    pinned: cfg.pinned,
   };
 }
 
@@ -186,10 +186,10 @@ export function computeRepoDetail(folder: string, ipfs: IpfsHealth): RepoDetail 
     name: cfg.repo.name || folder,
     path: cfg.repo.path || "",
     remote: cfg.repo.remote,
-    synced: cfg.synced,
-    status: rollupStatus(cfg.synced, counts, status, files),
+    pinned: cfg.pinned,
+    status: rollupStatus(cfg.pinned, counts, status, files),
     peerCount: peerCountForFiles(files),
-    lastSyncAt: status.last_sync_at,
+    lastPinAt: status.last_pin_at,
     ipfs,
     counts,
     files,
@@ -224,16 +224,16 @@ function composeFileRows(
 function transferFor(decision: Decision, cid: string | null, peers: string[]): TransferStatus {
   if (decision !== "sync") return "na";
   if (!cid) return "pending";
-  return peers.length > 0 ? "synced" : "pending";
+  return peers.length > 0 ? "pinned" : "pending";
 }
 
 function countDecisions(files: FileRow[]): RepoCounts {
-  const counts: RepoCounts = { synced: 0, pending: 0, undecided: 0, ignored: 0 };
+  const counts: RepoCounts = { pinned: 0, pending: 0, undecided: 0, ignored: 0 };
   for (const f of files) {
     if (f.decision === "ignore") counts.ignored++;
     else if (f.decision === "undecided") counts.undecided++;
     else if (f.decision === "sync") {
-      if (f.transfer === "synced") counts.synced++;
+      if (f.transfer === "pinned") counts.pinned++;
       else counts.pending++;
     }
   }
@@ -248,17 +248,17 @@ function peerCountForFiles(files: FileRow[]): number {
 
 // Rolled-up status with the LOCKED precedence (repos.mdx §4.2).
 function rollupStatus(
-  synced: boolean,
+  pinned: boolean,
   counts: RepoCounts,
   status: UnitStatus,
   files: FileRow[],
 ): RepoStatus {
   if (status.last_error || status.repo_state === "missing") return "error";
   const transferring = files.some((f) => f.transfer === "fetching" || f.transfer === "pushing");
-  if (transferring) return "syncing";
+  if (transferring) return "pinning";
   if (counts.pending > 0) return "behind";
   if (counts.undecided > 0) return "needs_review";
-  if (!status.last_sync_at) return synced ? "never" : "never";
+  if (!status.last_pin_at) return pinned ? "never" : "never";
   return "up_to_date";
 }
 

@@ -5,7 +5,7 @@ description: How Large File Bridge fingerprints each computer, auto-names it, an
 
 # Device Identification & Disambiguation
 
-Large File Bridge syncs a user's large files across **their own computers**. To do that well it has to
+Large File Bridge pins a user's large files across **their own computers**. To do that well it has to
 know **which computers exist**, **which one it is running on right now**, and — when a user owns two
 similar machines — **how to tell them apart** without making the user hand-label each one.
 
@@ -21,11 +21,11 @@ This file is the plain-language write-up of that logic. The authoritative spec i
 
 1. **A stable random id (UUID).** Minted once on first run. It is the *durable* key — it never changes
    when hardware, the IPFS PeerID, or the nice name changes. It is stored in **two** places so it is both
-   local and synced:
+   local and carried between machines:
    * `~/T/_large_files_bridge/config.yaml → computer.id` — machine-local, never travels.
-   * copied into **every synced storage's** `.lfbridge/devices/<device>.yaml` — travels via Git /
+   * copied into **every pinned storage's** `.lfbridge/devices/<device>.yaml` — travels via Git /
      Dropbox / Google Drive.
-   Any computer answers *"which of these devices is me?"* by matching the synced `devices/*.yaml` ids
+   Any computer answers *"which of these devices is me?"* by matching the backbone-carried `devices/*.yaml` ids
    against its own local `computer.id`.
 
 2. **A hardware fingerprint.** The set of facts that identify the *physical machine*. Used to auto-name
@@ -137,14 +137,14 @@ as possible while still unique.
   `config.yaml → computer` even before any storage exists. The first launch on a brand-new machine shows
   exactly one row — this one — tagged **"This computer"**.
 * This computer writes its own `devices/<device>.yaml` into every storage it touches (create / index /
-  sync). A storage missing the current machine's entry is healed on the next pass.
+  pin). A storage missing the current machine's entry is healed on the next pass.
 
 ---
 
-## 6. Synchronization
+## 6. Git backbone
 
 The id, nice name, fingerprint, schedule, and graft ride in the self-owned `devices/<device>.yaml`,
 which is committed to the storage's Git repo (and optionally mirrored to Google Drive / Dropbox). Any
 computer that pulls the storage gets the full, up-to-date array of devices. Writes are self-owned, so two
 computers editing at once touch different files and never collide. Rename a computer or upgrade its disk
-on one machine and the next sync carries the change to every other computer's Devices / Peers table.
+on one machine and the next backbone pass carries the change to every other computer's Devices / Peers table.

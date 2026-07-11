@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Use Cases & UI Redesign
-description: A usability-led redesign of LargeFileBridge. Defines the product's one job (tell a non-expert whether their big files are safely synced across their computers, and if not, exactly what is broken and how to fix it), a single three-state health model (Broken / Improvable / Fixed) used on every screen, a progressive-disclosure rule (surface the status + the one next action; push technical detail lower or behind a chevron), the reusable diagnostic components (StatusBanner, DiagnosticCard, Disclosure, StatTile, PageHeader, Section), a set of customer use-case flows written from the non-expert's point of view, and a per-page layout redesign for every screen except the Home/Repos dashboard (which is kept as-is). This is the source of truth the page redesign code follows.
+description: A usability-led redesign of LargeFileBridge. Defines the product's one job (tell a non-expert whether their big files are safely pinned across their computers, and if not, exactly what is broken and how to fix it), a single three-state health model (Broken / Improvable / Fixed) used on every screen, a progressive-disclosure rule (surface the status + the one next action; push technical detail lower or behind a chevron), the reusable diagnostic components (StatusBanner, DiagnosticCard, Disclosure, StatTile, PageHeader, Section), a set of customer use-case flows written from the non-expert's point of view, and a per-page layout redesign for every screen except the Home/Repos dashboard (which is kept as-is). This is the source of truth the page redesign code follows.
 ---
 
 # LargeFileBridge — Use Cases & UI Redesign
@@ -94,7 +94,7 @@ sentence. A non-expert can't tell what matters.
 The rule going forward, on **every** page:
 
 1. **Row 1 — the verdict.** One line, in plain English, colored by the health model: *"Everything's
-   synced across your 3 computers."* / *"1 thing needs attention."* / *"Sync is broken."*
+   pinned across your 3 computers."* / *"1 thing needs attention."* / *"Pinning is broken."*
 2. **Row 2 — the one next action.** When not Fixed, a single primary button that does the obvious
    fix. At most one primary per screen.
 3. **Then — the working surface.** The table or the cards the user came to use.
@@ -204,30 +204,30 @@ then **where the app answers it** and **what they see**. The through-line is alw
 * **Sees:** The dashboard already answers this well (kept as-is). The redesign's contribution: every
   other page they might wander to also opens with a one-line green verdict, so the reassurance holds
   everywhere, not just home.
-* **Fixed state:** a quiet green StatusBanner: *"All 6 repos are up to date. Last sync 8 minutes
+* **Fixed state:** a quiet green StatusBanner: *"All 6 repos are up to date. Last pin 8 minutes
   ago."* Done — they leave.
 
 ### UC-2 — "A file didn't show up on my other computer."
 This is the flagship "why is it broken" flow — LFBridge's equivalent of *"why is my email in spam?"*
-The user doesn't know if the cause is: the IPFS engine is off, the file was never set to sync, the
+The user doesn't know if the cause is: the IPFS engine is off, the file was never set to pin, the
 other computer isn't a peer yet, or the transfer is still pending. **The app must diagnose it for
 them**, in order of likelihood, and hand them the fix.
 
 * **Enters:** the repo (or the file's properties page).
 * **The One-repo StatusBanner runs the diagnosis** and states the *first* real problem in plain
   English, worst-first:
-  1. **IPFS engine down (Broken):** *"Sync is paused — the IPFS engine on this computer isn't
+  1. **IPFS engine down (Broken):** *"Pinning is paused — the IPFS engine on this computer isn't
      running."* Primary: **[Start IPFS]** (→ links to the IPFS page). Everything below still loads,
      decisions still save, but transfers are paused — say so.
-  2. **File set to Ignore / Undecided (Improvable):** *"3 files here aren't set to sync yet."*
+  2. **File set to Ignore / Undecided (Improvable):** *"3 files here aren't set to pin yet."*
      Primary: **[Review files]** scrolls to / filters the table to Undecided.
-  3. **No peers backing it up (Improvable→Broken):** *"5 files are synced from this computer but
+  3. **No peers backing it up (Improvable→Broken):** *"5 files are pinned from this computer but
      aren't on any other computer yet."* Sub: *"Open LFBridge on your other machine so it can pull
      them, or add it as a peer."* Primary: **[See peers]**.
   4. **Transfer still pending (Improvable):** *"2 files are queued to transfer."* Sub: *"They'll move
-     on the next sync, or sync now."* Primary: **[Sync now]**.
+     on the next pin, or pin now."* Primary: **[Pin now]**.
 * **The file's row** carries the same verdict at file altitude via the transfer pill + a per-file
-  StatusBanner on the properties page (*"Set to sync, but on 0 other computers — not backed up
+  StatusBanner on the properties page (*"Set to pin, but on 0 other computers — not backed up
   yet."*).
 * **Outcome:** the user never has to know *which* of the four causes it was — the page told them and
   gave them the button.
@@ -251,13 +251,13 @@ them**, in order of likelihood, and hand them the fix.
 ### UC-5 — "Is this big file safe to just leave, or should I git-ignore it?"
 * **Enters:** Full-paths / directory rollup.
 * **Sees:** category rows — *"Big files that aren't git-ignored (a bad idea to check in): 3 ·
-  [Git-ignore]"* and *"Big git-ignored files we're not syncing: 7 · [Track]"*. One-click, always an
+  [Git-ignore]"* and *"Big git-ignored files we're not pinning: 7 · [Track]"*. One-click, always an
   offer, never automatic (charter: we never edit `.gitignore` for anyone).
 
-### UC-6 — "Are my background syncs even running?"
+### UC-6 — "Are my background pins even running?"
 * **Enters:** Scans page.
-* **Sees:** a StatusBanner verdict: *"Background sync is on — runs every 15 minutes."* /
-  *"Background sync is installed but turned off."* / *"Background sync isn't installed on this
+* **Sees:** a StatusBanner verdict: *"Background pinning is on — runs every 15 minutes."* /
+  *"Background pinning is installed but turned off."* / *"Background pinning isn't installed on this
   computer yet."* Then one `DiagnosticCard` per job (discovery 4h, transfer 15m) with a plain
   purpose line, Installed / On pills, last-run health, and the Install / Turn on / off / Uninstall
   actions. The launchd/plist mechanics are chevron detail.
@@ -335,7 +335,7 @@ The IPFS worst-first verdict banner (down / not-compliant / running-and-complian
 
 ### 5.2 Scans page (`/scans`) — worker transparency
 1. **PageHeader** — "Scans", subtitle *"Background jobs that keep your big files discovered and
-   synced on this computer ({computerLabel})."*
+   pinned on this computer ({computerLabel})."*
 2. **StatusBanner** — the combined verdict over both jobs (UC-6): on / installed-but-off /
    not-installed, plus an IPFS-health note when the node is down (transfers can't run).
 3. **Two `DiagnosticCard`s** — Discovery (every 4h) and Transfer (every 15m). Each: plain purpose,
@@ -353,24 +353,24 @@ The IPFS worst-first verdict banner (down / not-compliant / running-and-complian
      file/env) or red *"Not configured"* with the `CredentialsSetupCard` and the file path + schema
      behind the chevron.
    * **IPFS node** — health line + the only-our-content posture in **plain words** (*"Serving only
-     your own content ✓"* / *"Will be corrected on next sync"*); raw apiAddr/gatewayAddr/reprovide in
+     your own content ✓"* / *"Will be corrected on next pin"*); raw apiAddr/gatewayAddr/reprovide in
      a chevron. Restates the security default (charter) in words a non-expert reads.
    * **Access** — counts + **Manage access →**.
    Advanced/rarely-touched sections are collapsed `Section`s by default.
 
-### 5.4 One-repo page (`/repos/$repoId`) — where "why didn't it sync" is answered (UC-2)
+### 5.4 One-repo page (`/repos/$repoId`) — where "why didn't it pin" is answered (UC-2)
 1. **PageHeader** — breadcrumb `Repos / {name}`, the path as subtitle. Actions: **gear** (repo
-   settings), **Sync now**.
+   settings), **Pin now**.
 2. **StatusBanner** — the diagnosis engine of UC-2: worst-first verdict with the one fix
-   (IPFS down / undecided files / synced-but-no-peers / pending). This is the redesign's core payload
+   (IPFS down / undecided files / pinned-but-no-peers / pending). This is the redesign's core payload
    for this page.
-3. **Counts line** — `Sync · Undecided · Ignore` quick summary (kept), Undecided emphasized when >0.
+3. **Counts line** — `Pin · Undecided · Ignore` quick summary (kept), Undecided emphasized when >0.
 4. **Files TanStack table** — unchanged (decision select, transfer pill, peers, CID, kebab,
-   selection + bulk decision / sync-now).
-5. **"Repo details" `Disclosure`** (collapsed) — the old status strip (sync on/off, status pill,
-   peer count, last sync, IPFS ok) moves here as the mechanism.
+   selection + bulk decision / pin-now).
+5. **"Repo details" `Disclosure`** (collapsed) — the old status strip (pin on/off, status pill,
+   peer count, last pin, IPFS ok) moves here as the mechanism.
 
-The UC-2 worst-first diagnosis banner (IPFS down / undecided files / synced-but-no-peers / pending, each with its one fix) is implemented in code:
+The UC-2 worst-first diagnosis banner (IPFS down / undecided files / pinned-but-no-peers / pending, each with its one fix) is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `RepoVerdict` (renders `StatusBanner`).
 
 ### 5.5 Devices / Peers page (`/devices`)
@@ -388,11 +388,11 @@ The Peers page (empty-state guidance, per-peer rows, last-seen recency) is imple
 
 ### 5.6 File properties (`/file`) & Directory (`/dir`) pages
 * Add a small **per-entity StatusBanner** at the top under the header: the file's own verdict —
-  *"Synced · backed up on 2 computers"* (green) / *"Set to sync, but on 0 other computers"* (amber) /
+  *"Pinned · backed up on 2 computers"* (green) / *"Set to pin, but on 0 other computers"* (amber) /
   *"Not opted into IPFS pinning yet"* (neutral — the file is known/tracked, but its unit is not
-  `synced: true`; see [pin_process.mdx §1](./pin_process.mdx#1-lfb-knows-every-repo--there-is-no-lfb-managed-gate-locked)) /
-  *"Set to sync but the IPFS engine is down"* (red).
-* Keep the existing **Sync / Compression / File** cards, but render them with the shared `Section`
+  `pinned: true`; see [pin_process.mdx §1](./pin_process.mdx#1-lfb-knows-every-repo--there-is-no-lfb-managed-gate-locked)) /
+  *"Set to pin but the IPFS engine is down"* (red).
+* Keep the existing **Pin / Compression / File** cards, but render them with the shared `Section`
   so they match. The compression card stays an **offer** with the baseline reasoning as chevron
   detail (UC-4).
 The directory category rollup (the four charter category counts) is computed in code:
@@ -445,7 +445,7 @@ The directory category rollup (the four charter category counts) is computed in 
   in ≤1 click.
 * **AC-4** The three-state model is implemented in exactly one place (`ui/health.ts`) and every
   page's colors/icons come from it.
-* **AC-5** UC-2 ("a file didn't sync") is answered by the One-repo StatusBanner without the user
+* **AC-5** UC-2 ("a file didn't pin") is answered by the One-repo StatusBanner without the user
   needing to know which of the four causes applied.
 * **AC-6** Improvable (amber) offers never read as errors and never trigger an action without an
   explicit click + confirm (charter compliance).

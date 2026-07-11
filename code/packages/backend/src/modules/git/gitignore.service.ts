@@ -9,7 +9,7 @@
 //   • FILE → `/<rel>`; DIR recursive ON → `/<rel>/`; DIR recursive OFF → `/<rel>/*` + `!/<rel>/*/` (§5.2).
 //   • Each target's owning repo = nearestGitAtOrAbove; a selection may span several repos, each getting
 //     its own `.gitignore`; a path in NO repo is excluded and counted (§5.3).
-//   • NEVER emit a line that would ignore a `.lfbridge/` path (git_sync.mdx §4.2.1) — refuse such targets.
+//   • NEVER emit a line that would ignore a `.lfbridge/` path (git_backbone.mdx §4.2.1) — refuse such targets.
 //   • Skip-already-ignored via `git check-ignore`, and drop a line already present in the .gitignore;
 //     writing is append-only + idempotent, LFB only ever ADDS lines (§5.4).
 // Node fs only (no shell `find`) + the shared git helpers.
@@ -74,7 +74,7 @@ export function planGitIgnore(req: GitIgnoreRequest): GitIgnorePlan {
   const classified: Target[] = [];
 
   for (const abs of targets) {
-    // Defense-in-depth: never git-ignore the `.lfbridge/` SDL text (git_sync.mdx §4.2.1). Refuse silently.
+    // Defense-in-depth: never git-ignore the `.lfbridge/` SDL text (git_backbone.mdx §4.2.1). Refuse silently.
     if (isLfbridgePath(abs)) continue;
     let st: fs.Stats;
     try {

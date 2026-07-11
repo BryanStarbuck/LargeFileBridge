@@ -98,7 +98,7 @@ export async function addFile(absPath: string): Promise<string> {
 }
 
 /**
- * Materialize a file's bytes by CID to `destPath` — the byte side of "fetch" (sync_process.mdx / storage.mdx
+ * Materialize a file's bytes by CID to `destPath` — the byte side of "fetch" (pin_process.mdx / storage.mdx
  * §9). Streams the HTTP RPC `cat` (a single unixfs file — LFB adds one file per CID) to a temp file, then
  * renames it into place atomically, creating parent dirs. No 15s abort: large media legitimately take a
  * while; the caller bounds concurrency via the sync limiter. A partial download is cleaned up, never left

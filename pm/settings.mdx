@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Settings (Global)
-description: The global Settings page (/settings). The authoritative source for the "big file" threshold — the size cutoff at or above which a file is considered big and eligible to be bridged over IPFS. Default 100 MB. A value field with a unit dropdown on its right that toggles between MB, GB, and TB. This global threshold is inherited by every repo by default. Each repo carries a per-repo override checkbox that is OFF by default (meaning "inherit the global value"); a user can turn it ON for a single repo and type a custom value to override just that repo — see repo_settings.mdx. This file also frames the rest of the global settings surface (account, allow-list, IPFS node, scan + sync process controls) which link out to their own specs.
+description: The global Settings page (/settings). The authoritative source for the "big file" threshold — the size cutoff at or above which a file is considered big and eligible to be bridged over IPFS. Default 100 MB. A value field with a unit dropdown on its right that toggles between MB, GB, and TB. This global threshold is inherited by every repo by default. Each repo carries a per-repo override checkbox that is OFF by default (meaning "inherit the global value"); a user can turn it ON for a single repo and type a custom value to override just that repo — see repo_settings.mdx. This file also frames the rest of the global settings surface (account, allow-list, IPFS node, scan + pin process controls) which link out to their own specs.
 ---
 
 # LargeFileBridge — Settings (Global)
@@ -154,7 +154,7 @@ concerns live. Each is specified elsewhere; the page groups them into sections:
 | **Compression** | Per-media (images / video / **audio**) codec **allow/deny** + quality; social-media-safe defaults. | [compression.mdx §7](./compression.mdx#7-codec-preference-settings-per-media-type) |
 | **Parallelism** | The CPU-core budget (§4.3) — how much of the machine background compression & processing may use. | [parallelization.mdx §4](./parallelization.mdx) |
 | **Scan process** | The 4-hour discovery scan: installed / on-off / Rescan now. | [scan.mdx §7](./scan.mdx#7-the-transparency-contract-installed-vs-onoff) |
-| **Sync process** | The 15-min background sync: installed / on-off. | [storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract) |
+| **Pin process** | The 15-min background pin: installed / on-off. | [storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract) |
 | **Scanner roots** | Which top-level dirs the scan walks + global ignore globs. | [storage_local.mdx §3/§7](./storage_local.mdx#7-the-scanner--discovering-repos-and-the-mask) |
 | **IPFS node** | API/gateway multiaddrs, pin mode, reprovide. | [storage_local.mdx §3](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical) |
 | **Access / allow-list** | The OpenAuthFederated allow-listed emails (admin only). | [storage_local.mdx §4](./storage_local.mdx#4-per-logged-in-user-storage--the-per-user-requirement) |
@@ -307,7 +307,7 @@ The resolved mass-compute budget is computed live from this setting in code:
    run and records it in that unit's `status.yaml`.
 7. This page is the **authoritative source** for the threshold and its default; the older
    `large_file_min_bytes` / `large_files.min_bytes` fields in `storage_local.mdx` are re-pointed at it.
-8. The page also groups the other global concerns (scan/sync process, scanner roots, IPFS, allow-list,
+8. The page also groups the other global concerns (scan/pin process, scanner roots, IPFS, allow-list,
    account), each linking to its own spec; allow-list editing is gated to `role:admin`.
 9a. The **Compression** section (§4.1.1) carries, **per media type (images / video)**, a **"Convert file
     types"** toggle (`convert_types`, default **ON**) and a **"Compress all file types"** per-extension
@@ -328,12 +328,12 @@ The resolved mass-compute budget is computed live from this setting in code:
   sections: Compression codec allow/deny (§4.1, compression.mdx §7) PLUS the file-type CONVERSION controls
   (§4.1.1, images.mdx): per media type (images/video) a convert_types toggle (default ON) + a per-extension
   skip_exts checkbox list (default [] = all in, opt-OUT); .heic→JPEG row ON by default. proposed verify/re-scan page actions
-  (§4.2), Parallelism (§4.3), plus scan/sync process, scanner roots, IPFS node, allow-list (admin-only),
+  (§4.2), Parallelism (§4.3), plus scan/pin process, scanner roots, IPFS node, allow-list (admin-only),
   account.
   §4.3 PARALLELISM: one PERCENT slider "Use up to N% of CPU cores for background compression & processing",
   backed by performance.max_core_fraction (default 0.9 = 90%), showing the live resolved count ("≈ 14 of 16
   cores"). Tunes ONLY the mass-compute budget round(cores × max_core_fraction); the responsive budget
-  (cores − 2) for sync/scan is a FIXED, non-tunable safety floor. Read LIVE by coreBudget() — no restart.
+  (cores − 2) for pin/scan is a FIXED, non-tunable safety floor. Read LIVE by coreBudget() — no restart.
   Canonical policy = parallelization.mdx §1/§4. Code: schema field shared/src/schemas.ts
   (AppConfigSchema.performance.max_core_fraction, default 0.9); UI frontend SettingsPage.tsx (Parallelism
   section); resolved live by backend shared/concurrency.ts coreBudget() (responsiveBudget() = cores − 2).

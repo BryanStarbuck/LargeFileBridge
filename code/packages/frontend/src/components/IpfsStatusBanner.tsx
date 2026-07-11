@@ -4,8 +4,8 @@
 // blocker), never the pinset, and is suppressed on the /ipfs pages (which already tell the full story).
 //
 // Scenario priority (first true wins):
-//   A. NOT INSTALLED       → blocking "can't sync" banner → Install (routes to /ipfs/off)
-//   B. NOT RUNNING         → blocking "can't sync" banner → Start / Fix (routes to /ipfs/off; the
+//   A. NOT INSTALLED       → blocking "can't pin" banner → Install (routes to /ipfs/off)
+//   B. NOT RUNNING         → blocking "can't pin" banner → Start / Fix (routes to /ipfs/off; the
 //                            off-page shows the Config-health card when a config blocker exists, §14)
 //   C. RUNNING, no reboot  → a GENTLE, dismissible, ONE-TIME encouragement (the node is healthy right
 //      auto-start           now, so NO alarming banner — no nagging). One click turns on auto-start.
@@ -58,15 +58,15 @@ export function IpfsStatusBanner() {
   if (path.startsWith("/ipfs")) return null;
   if (!data) return null;
 
-  // Scenario A / B — the node can't sync. One blocking amber banner; the off-page sorts install vs. start
+  // Scenario A / B — the node can't pin. One blocking amber banner; the off-page sorts install vs. start
   // vs. the config-fix. When a config blocker is the reason, say so and route into the guided repair.
   if (!data.installed || !data.running) {
     const label = !data.installed ? "Install IPFS" : data.configBlocker ? "Fix IPFS" : "Start IPFS";
     const msg = !data.installed
-      ? "IPFS isn't installed — your files can't sync until it's set up."
+      ? "IPFS isn't installed — your files can't pin until it's set up."
       : data.configBlocker
-        ? "IPFS can't start — its configuration needs a quick fix before your files can sync."
-        : "IPFS isn't running — your files can't sync until it's started.";
+        ? "IPFS can't start — its configuration needs a quick fix before your files can pin."
+        : "IPFS isn't running — your files can't pin until it's started.";
     return (
       <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-8 py-2 text-sm text-amber-900">
         <AlertTriangle className="h-4 w-4 shrink-0" />
@@ -82,7 +82,7 @@ export function IpfsStatusBanner() {
   }
 
   // Scenario C — running fine, but it won't come back after a reboot. GENTLE (the node is healthy):
-  // a low-key, dismissible, one-time strip — never the alarming red/amber "can't sync" banner.
+  // a low-key, dismissible, one-time strip — never the alarming red/amber "can't pin" banner.
   if (data.autostartSupported && !data.autostartEnabled && !nudgeDismissed()) {
     const dismiss = () => {
       try {
@@ -96,7 +96,7 @@ export function IpfsStatusBanner() {
       <div className="flex items-center gap-2 border-b border-[var(--lfb-border)] bg-slate-50 px-8 py-2 text-sm text-black/70">
         <RotateCw className="h-4 w-4 shrink-0 text-[var(--lfb-primary)]" />
         <span className="flex-1">
-          IPFS is on, but it won't restart automatically after you reboot. Turn on auto-start so your files keep syncing.
+          IPFS is on, but it won't restart automatically after you reboot. Turn on auto-start so your files keep pinning.
         </span>
         <button
           onClick={() => enableAutostart.mutate()}

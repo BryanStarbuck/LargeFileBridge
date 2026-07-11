@@ -1,5 +1,5 @@
 // The machine-local per-storage settings (storage_settings.mdx). Reads/writes the local "settings file"
-// `sync/s/<storage_id>/config.yaml` under the state root — distinct from the SHARED `storage.yaml` — via
+// `pin/s/<storage_id>/config.yaml` under the state root — distinct from the SHARED `storage.yaml` — via
 // the atomic yaml-store. Holds THIS computer's choices: keep `.lfbridge/` + where, and which backing
 // locations (dedicated repo / Google Drive / Dropbox) are ON + their local paths. Also resolves the
 // PROPOSED default directory per backing type and whether the connected drive is present here (§4).
@@ -156,7 +156,7 @@ export function readStorageSettings(storageId: string): StorageSettings {
     name: row.name,
     type: row.type,
     root: row.root,
-    synced: cfg.synced,
+    pinned: cfg.pinned,
     lfbridge: {
       enabled: cfg.lfbridge.enabled,
       path: cfg.lfbridge.path,
@@ -177,7 +177,7 @@ export async function writeStorageSettings(storageId: string, patch: StorageSett
   await updateYaml(storageConfigPath(storageId), StorageUnitConfigSchema, (c) => {
     // Identity mirror is written from the live row (read-only on the page — §5).
     c.storage = { id: row.id, name: row.name, type: row.type, root: row.root };
-    if (patch.synced !== undefined) c.synced = patch.synced; // the IPFS-pinning opt-in (sync gates byte work on it)
+    if (patch.pinned !== undefined) c.pinned = patch.pinned; // the IPFS-pinning opt-in (the pin pass gates byte work on it)
     if (patch.lfbridge) {
       if (patch.lfbridge.enabled !== undefined) c.lfbridge.enabled = patch.lfbridge.enabled;
       if (patch.lfbridge.path !== undefined) c.lfbridge.path = patch.lfbridge.path;
@@ -223,20 +223,20 @@ export function resolveBackingAbsPath(loc: StorageBackingLocation): string {
 }
 
 /**
- * This computer's per-storage IPFS-pinning opt-in (the machine-local `synced` flag, default OFF). The sync
- * pass gates a storage's mapped-dir byte work on this, mirroring the repo/computer-unit `synced` opt-in
- * (sync_process.mdx §1). Reading a not-yet-configured storage returns the schema default (false).
+ * This computer's per-storage IPFS-pinning opt-in (the machine-local `pinned` flag, default OFF). The pin
+ * pass gates a storage's mapped-dir byte work on this, mirroring the repo/computer-unit `pinned` opt-in
+ * (pin_process.mdx §1). Reading a not-yet-configured storage returns the schema default (false).
  */
-export function getStorageSynced(storageId: string): boolean {
+export function getStoragePinned(storageId: string): boolean {
   try {
-    return readYaml(storageConfigPath(storageId), StorageUnitConfigSchema).synced;
+    return readYaml(storageConfigPath(storageId), StorageUnitConfigSchema).pinned;
   } catch {
     return false;
   }
 }
 
 /**
- * This storage's Git backbone remote when its dedicated-repo backing is ON (git_sync.mdx §1/§3). Returns
+ * This storage's Git backbone remote when its dedicated-repo backing is ON (git_backbone.mdx §1/§3). Returns
  * `{ remote }` where `remote` is either a LOCAL PATH to a checkout or an HTTP(S)/SSH URL — the git engine
  * classifies + resolves it. Returns null when the backbone is OFF or no remote is set (no git this pass).
  */
@@ -251,7 +251,7 @@ export function getDedicatedRepoRemote(storageId: string): { remote: string } | 
 }
 
 /**
- * The Git backbone remote LFB actually drives for a storage each pass (git_sync.mdx §1/§7, devices.mdx §12).
+ * The Git backbone remote LFB actually drives for a storage each pass (git_backbone.mdx §1/§7, devices.mdx §12).
  * Resolved in priority order:
  *   1. The EXPLICIT dedicated-repo backing (`getDedicatedRepoRemote`) — the user pointed the backbone at a
  *      path (a local checkout or a URL). Always wins.

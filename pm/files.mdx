@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — View one file
-description: The single-entity page for ONE file (route /file?path=<abs>). Reached from any file row's "View file" action, from clicking a file's name/path cell, or by selecting a file in the File System browser. It shows everything LargeFileBridge knows about that one file — identity (name, absolute path, size, created/modified, kind), its code badges (repo / sync / compress / ipfs), its sync decision + transfer status + CID + which peers hold it, its compression state, and its two sticky flags (Never IPFS, Do not compress). Because the page IS one file, it carries the top-right "⋮" MORE menu that renders the exact same File action catalog as that file's row kebab (menus.mdx §5.3) — plus the most-common action (Add to IPFS) as a visible primary button, and the two sticky flags as labeled switches. This spec defines the layout, the data payload (EntityView), the primary/more split, the flag switches, and the acceptance criteria. Implemented by the /api/entity backend module and the ViewOneFilePage frontend.
+description: The single-entity page for ONE file (route /file?path=<abs>). Reached from any file row's "View file" action, from clicking a file's name/path cell, or by selecting a file in the File System browser. It shows everything LargeFileBridge knows about that one file — identity (name, absolute path, size, created/modified, kind), its code badges (repo / pin / compress / ipfs), its pin decision + transfer status + CID + which peers hold it, its compression state, and its two sticky flags (Never IPFS, Do not compress). Because the page IS one file, it carries the top-right "⋮" MORE menu that renders the exact same File action catalog as that file's row kebab (menus.mdx §5.3) — plus the most-common action (Add to IPFS) as a visible primary button, and the two sticky flags as labeled switches. This spec defines the layout, the data payload (EntityView), the primary/more split, the flag switches, and the acceptance criteria. Implemented by the /api/entity backend module and the ViewOneFilePage frontend.
 ---
 
 # LargeFileBridge — View one file
@@ -16,8 +16,8 @@ Siblings this builds on and does not repeat:
 * [Menus](./menus.mdx) — the LOCKED **File action catalog** (§5.3), the `⋮` more-menu (§4), right-click
   (§3.1), and the two sticky flags **Never IPFS** / **Do not compress** (§6.6). This page renders that
   catalog; it never invents a different one.
-* [One repo](./one_repo.mdx) — the **decision model** (Sync / Ignore / Undecided, §1) and the
-  **transfer-status pill** (§4.6) shown here for the file's sync state.
+* [One repo](./one_repo.mdx) — the **decision model** (Pin / Ignore / Undecided, §1) and the
+  **transfer-status pill** (§4.6) shown here for the file's pin state.
 * [File System](./directories.mdx) — the **code badges** (§3) painted at the top of this page.
 * [Directories](./directories.mdx) — the sibling **View one directory** page (same shape, dir catalog).
 * [Media viewer](./media_viewer.mdx) — the **viewer-first** siblings **View one image** (`/image`) and
@@ -30,7 +30,7 @@ Siblings this builds on and does not repeat:
 
 ## 0. This page vs. the viewers
 
-`/file` is **properties-first** — identity, badges, flags, and the Sync/Compression/IPFS/File fact cards.
+`/file` is **properties-first** — identity, badges, flags, and the Pin/Compression/IPFS/File fact cards.
 It is the destination for files that are **not** a playable/viewable medium (docs, archives, source, etc.).
 
 When the file **is** a medium, the primary experience is the [media viewer](./media_viewer.mdx):
@@ -46,7 +46,7 @@ it renders a medium it offers an **Open image/video viewer** primary (§7) so th
 ## 1. Layout
 
 One content column: a **header** (identity + primary button + `⋮` more menu), a **badge/flag strip**,
-and stacked **fact cards** (Sync, Compression, IPFS, Fingerprint).
+and stacked **fact cards** (Pin, Compression, IPFS, Fingerprint).
 
 ```
 ┌────────────┬───────────────────────────────────────────────────────────────────────────┐
@@ -54,10 +54,10 @@ and stacked **fact cards** (Sync, Compression, IPFS, Fingerprint).
 │            │  ~/BGit/…/Our_Movies/render/final_4k.mov           │ + Add to IPFS│  │ ⋮ │   │ ← primary + more
 │            │                                                    └─────────────┘  └───┘   │
 │            ├───────────────────────────────────────────────────────────────────────────┤
-│            │   i  C  S  r      Never IPFS ◯off     Do not compress ◯off                  │ ← badges + flag switches
+│            │   i  C  P  r      Never IPFS ◯off     Do not compress ◯off                  │ ← badges + flag switches
 │            ├───────────────────────────────────────────────────────────────────────────┤
-│            │  Sync                                                                        │
-│            │    Decision  [Sync ▾]     Status ● Synced     Peers 3     CID bafy…  ⧉       │
+│            │  Pin                                                                         │
+│            │    Decision  [Pin ▾]      Status ● Pinned     Peers 3     CID bafy…  ⧉       │
 │            │  Compression                                                                 │
 │            │    Video · looks uncompressed · 8.2 GB      [ Compress… ]                    │
 │            │  IPFS                                                                        │
@@ -97,7 +97,7 @@ interface EntityView {
   badges: FsBadge[];         // same vocabulary as directories.mdx §3, order rightmost-first
   flags: FileFlags;
 
-  // Repo / sync context — populated when the entity is inside a registered repo.
+  // Repo / pin context — populated when the entity is inside a registered repo.
   repo: { repoId: string; name: string; relPath: string } | null;
   decision: Decision | null;     // sync | ignore | undecided (null when not in a repo)
   transfer: TransferStatus | null;
@@ -114,7 +114,7 @@ interface EntityView {
 a tracked large file in a registered repo to carry a decision). A loose file on disk still gets its
 identity, badges, compression heuristic, and both flags.
 
-Assembling this `EntityView` payload (identity, badges, repo/sync context, compression heuristic, flags) is handled in code:
+Assembling this `EntityView` payload (identity, badges, repo/pin context, compression heuristic, flags) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `buildEntityView()`, served by `entity.router.ts` → `GET /api/entity`.
 
 ---
@@ -125,15 +125,18 @@ The page follows [menus.mdx §4](./menus.mdx)'s "one primary, rest under `⋮`" 
 
 * **Primary button** = the single most useful next action for this file's state:
   * `neverIpfs` off **and** decision ≠ sync → **+ Add to IPFS** (sets decision `sync`).
-  * decision = sync → **Remove from IPFS** is *not* the primary; **Sync now** is (queue this file).
+  * decision = `sync` → **Remove from IPFS** is *not* the primary; **Pin now** is (queue this file).
   * `neverIpfs` on → no IPFS primary; the primary becomes **Compress…** if the file is compressible and
     `noCompress` is off, else there is no primary button (only `⋮`).
 * Everything from the **File catalog** ([menus.mdx §5.3](./menus.mdx)) is inside `⋮`, including the
-  primary again (the menu is a complete catalog), with destructive **Stop syncing (untrack/unpin)**
+  primary again (the menu is a complete catalog), with destructive **Stop pinning (untrack/unpin)**
   separated last.
 
 Choosing which primary button to show for the file's flags + decision is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneFilePage.tsx` — `ViewOneFilePage` → `pickPrimary()`.
+
+Queueing the file for the **Pin now** primary (POST `/repos/:id/pin`) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `api.pinNow()`.
 
 ---
 
@@ -142,8 +145,8 @@ Choosing which primary button to show for the file's flags + decision is handled
 The badge/flag strip shows both flags from [menus.mdx §6.6](./menus.mdx) as **labeled switches**, not
 buried in the menu — this is the page where a user manages a file's standing policy:
 
-* **Never IPFS** — on ⇒ the file is never synced; **Add to IPFS** disappears from the primary and menu,
-  the `S` badge cannot appear, and a `sync` decision is demoted to `ignore`. Toggling writes immediately.
+* **Never IPFS** — on ⇒ the file is never pinned; **Add to IPFS** disappears from the primary and menu,
+  the `P` badge cannot appear, and a `sync` decision is demoted to `ignore`. Toggling writes immediately.
 * **Do not compress** — on ⇒ the Compression card drops its **Compress…** offer and the `C` badge is
   suppressed; the card still reports what the file *is* (e.g. "Video · 8.2 GB"), just without the nag.
 
@@ -193,10 +196,10 @@ the transcribe hook, and the compress offer).
 
 * **File not found / moved** (`exists: false`): a card — "This file is no longer at that path." with
   **Copy path** and a link back to the [File System](./directories.mdx) at its parent directory.
-* **Not in a repo:** the Sync/IPFS cards render a muted "Not tracked — this file isn't inside a
+* **Not in a repo:** the Pin/IPFS cards render a muted "Not tracked — this file isn't inside a
   registered repo" with an **Open containing folder** link; badges, compression, and flags still show.
 * **Loading:** skeleton header + cards, no layout shift.
-* **IPFS node unreachable:** the IPFS card shows the node is down; Add-to-IPFS/Sync-now disable with a
+* **IPFS node unreachable:** the IPFS card shows the node is down; Add-to-IPFS/Pin-now disable with a
   tooltip, but decision/flag writes still save (parity with [one_repo.mdx §5](./one_repo.mdx)).
 
 ---
@@ -204,15 +207,15 @@ the transcribe hook, and the compress offer).
 ## 6. Acceptance criteria
 
 1. `/file?path=<abs>` renders **one file's** identity (name title, absolute path muted), its **code
-   badges** ([directories.mdx §3](./directories.mdx)), and stacked fact cards (Sync, Compression, IPFS, File).
+   badges** ([directories.mdx §3](./directories.mdx)), and stacked fact cards (Pin, Compression, IPFS, File).
 2. The page carries a **top-right `⋮` "more" menu** rendering the **File catalog**
    ([menus.mdx §5.3](./menus.mdx)) verbatim (the same as the row kebab), destructive item last;
    right-clicking anywhere on the page's entity opens the same menu ([menus.mdx §3.1](./menus.mdx)).
-3. The **primary button** follows §3 (Add to IPFS / Sync now / Compress… / none) based on the file's
+3. The **primary button** follows §3 (Add to IPFS / Pin now / Compress… / none) based on the file's
    flags and decision; the primary action also appears inside `⋮`.
 4. Both **sticky flags** (**Never IPFS**, **Do not compress**) show as labeled switches (§4), write
-   immediately, stay in sync with the menu toggles, and honor [menus.mdx §6.6](./menus.mdx) (Never IPFS
-   forbids sync + hides Add-to-IPFS + suppresses `S`; Do not compress suppresses `C`/the offer; neither
+   immediately, stay consistent with the menu toggles, and honor [menus.mdx §6.6](./menus.mdx) (Never IPFS
+   forbids pinning + hides Add-to-IPFS + suppresses `P`; Do not compress suppresses `C`/the offer; neither
    deletes or alters bytes).
 5. **Decision / transfer / CID / peers** render only when the file is inside a registered repo; a loose
    file shows identity + badges + compression + flags with a "Not tracked" note (§5).

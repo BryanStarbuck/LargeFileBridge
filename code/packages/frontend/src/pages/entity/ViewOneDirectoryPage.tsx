@@ -102,7 +102,7 @@ export function ViewOneDirectoryPage() {
         a.push({ id: "ignore", label: "Git-ignore…", group: "Work", icon: <EyeOff className="h-4 w-4" />,
           onSelect: () => { toast.message("Git-ignore is offered per file — open in File System to review."); } });
       else
-        a.push({ id: "track", label: "Track / Sync", group: "Work", icon: <UploadCloud className="h-4 w-4" />, onSelect: showMatching });
+        a.push({ id: "track", label: "Track / Pin", group: "Work", icon: <UploadCloud className="h-4 w-4" />, onSelect: showMatching });
     }
     a.push({ id: "show", label: "Show matching files", group: "Open", icon: <FolderOpen className="h-4 w-4" />, onSelect: showMatching });
     if (row.action === "compress")
@@ -144,7 +144,7 @@ export function ViewOneDirectoryPage() {
           return <RowAction icon={<Zap className="h-3.5 w-3.5" />} label="Compress…" onClick={compressDir} />;
         if (row.action === "ignore")
           return <RowAction icon={<EyeOff className="h-3.5 w-3.5" />} label="Git-ignore…" onClick={() => toast.message("Git-ignore is offered per file — open in File System to review.")} />;
-        return <RowAction icon={<UploadCloud className="h-3.5 w-3.5" />} label="Track / Sync" onClick={() => navigate({ to: "/fs", search: { path: v.path } })} />;
+        return <RowAction icon={<UploadCloud className="h-3.5 w-3.5" />} label="Track / Pin" onClick={() => navigate({ to: "/fs", search: { path: v.path } })} />;
       },
     },
   ];

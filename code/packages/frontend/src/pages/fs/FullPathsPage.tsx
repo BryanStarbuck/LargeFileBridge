@@ -2,7 +2,7 @@
 // root. Lead columns Name + full absolute Path, per-row checkbox, trailing ⋯ kebab. The control row is
 // built from three SEGMENTED CONTROLS (compressed / sort / IPFS) plus the house search + sort/filter
 // icons; the action row (Select all / IPFS pin / Unpin) drives the one_repo.mdx decision model
-// (sync/ignore) via the per-entity endpoint — files outside a registered repo (or with Never IPFS on)
+// (the pin ⇄ ignore decision) via the per-entity endpoint — files outside a registered repo (or with Never IPFS on)
 // are reported as skipped, never silently dropped, and no bytes ever move.
 import {
   useCallback,
@@ -65,13 +65,13 @@ type IpfsFilter = "both" | "in" | "not";
 
 const compressStateOf = (e: FsEntry): CompressFilter | "none" =>
   e.badges.includes("compressed") ? "compressed" : e.badges.includes("compress") ? "uncompressed" : "none";
-const inIpfs = (e: FsEntry): boolean => e.badges.includes("sync");
+const inIpfs = (e: FsEntry): boolean => e.badges.includes("pin");
 
-// Optimistic badge flip for the pin/unpin action (P-08) — add or remove the "sync" badge without a
+// Optimistic badge flip for the pin/unpin action (P-08) — add or remove the "pin" badge without a
 // filesystem re-walk. Preserves the backend's rightmost-first ordering closely enough for the chip row.
-const withSyncBadge = (badges: FsEntry["badges"], on: boolean): FsEntry["badges"] => {
-  const without = badges.filter((b) => b !== "sync");
-  return on ? [...without, "sync"] : without;
+const withPinBadge = (badges: FsEntry["badges"], on: boolean): FsEntry["badges"] => {
+  const without = badges.filter((b) => b !== "pin");
+  return on ? [...without, "pin"] : without;
 };
 
 const SORT_COLS = [
@@ -256,11 +256,11 @@ export function FullPathsPage() {
       toast.success(`${verb} ${ok} file${ok === 1 ? "" : "s"}${skipped ? `, skipped ${skipped}` : ""}`);
       setSelected(new Set());
       // P-08/P-23: DON'T re-walk to flip a badge. Optimistically patch the streamed rows in place —
-      // add/remove the "sync" badge on the affected rows. The next scheduled scan reconciles truth.
+      // add/remove the "pin" badge on the affected rows. The next scheduled scan reconciles truth.
       const done = new Set(okPaths);
       flat.setFiles((prev) =>
         prev.map((f) =>
-          done.has(f.path) ? { ...f, badges: withSyncBadge(f.badges, decision === "sync") } : f,
+          done.has(f.path) ? { ...f, badges: withPinBadge(f.badges, decision === "sync") } : f,
         ),
       );
       // Repo counts change — that endpoint reads status YAML (no filesystem walk), so it's cheap.

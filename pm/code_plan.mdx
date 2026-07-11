@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Code Plan (Architecture + Engineering Plan)
-description: The single build plan that maps every pm/ specification onto concrete code in the peer code/ directory. Defines the whole-app architecture — a pnpm monorepo (packages/backend NestJS + packages/frontend React/Vite + packages/shared types), the no-database YAML store at ~/T/_large_files_bridge/, the two scheduled Node workers (the 4-hour scan, the 15-minute sync) run by launchd plists on Mac, the local Kubo/IPFS client that honors the only-our-content rule, the Sync List reconcile engine, and OpenAuthFederated federated Google SSO (embedded createFederatedFrontend on the backend, FederatedProvider on the frontend, allow-list only, no anonymous account). It captures the sister-app conventions we deliberately adopt (from ~/BGit/all/app and ~/BGit/Bryan_git/EmailDeliveryHero), the full REST surface, the frontend route/page map, and a spec→code traceability table so every acceptance criterion in storage/scan/settings/sync_list/repos/one_repo/left_bar has a home in code. This file is the contract the code/ implementation follows; when code and a pm spec disagree, the pm spec wins on product behavior and this file wins on structure.
+description: The single build plan that maps every pm/ specification onto concrete code in the peer code/ directory. Defines the whole-app architecture — a pnpm monorepo (packages/backend NestJS + packages/frontend React/Vite + packages/shared types), the no-database YAML store at ~/T/_large_files_bridge/, the two scheduled Node workers (the 4-hour scan, the 15-minute pin) run by launchd plists on Mac, the local Kubo/IPFS client that honors the only-our-content rule, the Sync List reconcile engine, and OpenAuthFederated federated Google SSO (embedded createFederatedFrontend on the backend, FederatedProvider on the frontend, allow-list only, no anonymous account). It captures the sister-app conventions we deliberately adopt (from ~/BGit/all/app and ~/BGit/Bryan_git/EmailDeliveryHero), the full REST surface, the frontend route/page map, and a spec→code traceability table so every acceptance criterion in storage/scan/settings/sync_list/repos/one_repo/left_bar has a home in code. This file is the contract the code/ implementation follows; when code and a pm spec disagree, the pm spec wins on product behavior and this file wins on structure.
 ---
 
 # LargeFileBridge — Code Plan
@@ -36,7 +36,7 @@ prefix:
 | **Backend = TS REST API on Express** | sisters use NestJS-on-Express; LFB's first cut uses **lean Express + TypeScript run via `tsx`** (same `/api` prefix, helmet, fail-closed CORS, zod validation, global error handler) — a pragmatic greenfield choice that boots with no build step. The OpenAuthFederated middleware is Express-shaped, so auth wiring is identical to the sisters. NestJS remains the north-star if the API grows. | Express |
 | **Frontend = React 19 + Vite 7** | TanStack Query + TanStack Router (code-based) + Tailwind v4 + lucide + sonner + axios | same, **plus TanStack Table v8** (charter: all tables are TanStack) |
 | **Auth = OpenAuthFederated `link:` deps** | `@auth/backend` `createFederatedFrontend` mounted at `/api/v1`; `@auth/react` `FederatedProvider`; global `JwtAuthGuard` "identify, don't gate"; `@CurrentUser()`; `FileSessionStore` under state dir; `.auth_session_secret` on disk | same (see §8) |
-| **No database — atomic YAML store** | `YamlStore<T>`: tmp→fsync→rename, per-file mutex, defaults-on-absence, `updated_at` stamp | same, extended with the **three scopes** (app / user / sync-unit) LFB needs (§4) |
+| **No database — atomic YAML store** | `YamlStore<T>`: tmp→fsync→rename, per-file mutex, defaults-on-absence, `updated_at` stamp | same, extended with the **three scopes** (app / user / pin-unit) LFB needs (§4) |
 | **State root `~/T/_<app>`** | `~/T/_act3_app`, `~/T/_emaildeliveryhero`, env override | `~/T/_large_files_bridge`, env `LFB_STATE_DIR` |
 | **Rolling logger** | singleton `AppLogger` → `log.log` + `error.err`, 5 MiB × 5 backups, mirrors WARN+ into both | same |
 | **Zod-validated `config.yaml`** | PM-editable content validated fail-fast at boot | same |
@@ -44,10 +44,10 @@ prefix:
 | **`justfile` runner** | `setup / build / run / stop / logs / status`, nohup + pidfile, waits on ports | same, plus `install-agents` for the two launchd plists |
 | **Secrets out-of-repo** | `~/.credentials/<app>.json`, env wins | `~/.credentials/large_files_bridge.json`, `LFB_CREDENTIALS_FILE`, env wins |
 
-**Where we deliberately differ from the sisters:** (1) LFB has **two computer-wide sync units** and a
+**Where we deliberately differ from the sisters:** (1) LFB has **two computer-wide pin units** and a
 real **IPFS** integration — the piece neither sister has (§5–§7). (2) LFB **does** ship **launchd
 plists** for its two scheduled workers (EDH ships one; `all/app` ships none) — the background scan and
-sync are first-class product features with an install/on-off transparency contract (§6). (3) Tables
+pin are first-class product features with an install/on-off transparency contract (§6). (3) Tables
 are built on **`@tanstack/react-table`** (the charter is explicit), whereas the sisters hand-rolled a
 `DataTable`; we keep their toolbar/filter/sort *design* but drive it with the TanStack table model.
 
@@ -65,15 +65,15 @@ code/
 ├── deploy/
 │   └── launchd/
 │       ├── com.largefilebridge.scan.plist.tmpl   # StartInterval 14400 (4h)
-│       ├── com.largefilebridge.sync.plist.tmpl   # StartInterval 900   (15m)
-│       └── run-worker.mjs        # tiny Node trigger: POST /api/internal/run/{scan|sync} (not raw curl)
+│       ├── com.largefilebridge.pin.plist.tmpl   # StartInterval 900   (15m)
+│       └── run-worker.mjs        # tiny Node trigger: POST /api/internal/run/{scan|pin} (not raw curl)
 ├── packages/
 │   ├── shared/                  # @lfb/shared — types + zod schemas shared by BE + FE (no runtime deps)
 │   │   └── src/
-│   │       ├── types.ts         # RepoRow, FileRow, RepoStatus, TransferStatus, Decision, SyncProcess…
+│   │       ├── types.ts         # RepoRow, FileRow, RepoStatus, TransferStatus, Decision, PinProcess…
 │   │       ├── schemas.ts       # zod schemas for config.yaml, manifest.yaml, status.yaml, SyncList
 │   │       └── units.ts         # MB/GB/TB ↔ bytes (settings.mdx §1.2 binary multipliers)
-│   ├── backend/                 # @lfb/backend — NestJS API + scanner/sync workers + CLI
+│   ├── backend/                 # @lfb/backend — NestJS API + scanner/pin workers + CLI
 │   │   └── src/ …               # (§3)
 │   └── frontend/                # @lfb/frontend — React/Vite SPA
 │       └── src/ …               # (§9)
@@ -116,7 +116,7 @@ The Express bootstrap (helmet, CORS, auth middleware, feature-router mounts, glo
 ```
 packages/backend/src/
 ├── main.ts                      # bootstrap (above)
-├── cli.ts                       # `lfb` CLI — scan/sync/install-agent/serve (tsx/tsup); used by launchd trigger too
+├── cli.ts                       # `lfb` CLI — scan/pin/install-agent/serve (tsx/tsup); used by launchd trigger too
 ├── app.module.ts                # imports all feature modules; global APP_GUARDs: JwtAuthGuard → RolesGuard
 │
 ├── config/
@@ -156,13 +156,13 @@ packages/backend/src/
 │   │   ├── mask.ts              #   attribute each path to exactly one unit (repo subtree vs computer remainder)
 │   │   └── diff.ts              #   added/grew/shrank/moved(size+mtime)/deleted → status.yaml
 │   │
-│   ├── sync/                    # storage_local.mdx §13 — the 15-minute byte-mover
-│   │   ├── pin.service.ts      #   per synced unit: add→CID→pin→update manifest→fetch missing→status.yaml
+│   ├── pin/                    # storage_local.mdx §13 — the 15-minute byte-mover
+│   │   ├── pin.service.ts      #   per pinned unit: add→CID→pin→update manifest→fetch missing→status.yaml
 │   │   ├── manifest.service.ts  #   read/write manifest.yaml + committed <repo>/.lfbridge/manifest.yaml (§9.2)
 │   │   └── synclist.service.ts  #   LargeFilesBridge_SyncList.yaml publish + RECONCILE (sync_list.mdx §5 trust model)
 │   │
 │   ├── schedule/                # the transparency contract (installed vs on/off) for BOTH workers
-│   │   ├── schedule.service.ts  #   read/reconcile config.yaml → {scan,sync}_process vs real OS state
+│   │   ├── schedule.service.ts  #   read/reconcile config.yaml → {scan,pin}_process vs real OS state
 │   │   └── os/
 │   │       ├── launchd.ts       #   Mac (primary): render tmpl → ~/Library/LaunchAgents, bootstrap/enable/bootout
 │   │       ├── systemd.ts / windows.ts  # secondary, same installer interface
@@ -176,13 +176,13 @@ packages/backend/src/
 │   ├── fs/                      # directories.mdx — the File System column browser (Finder column view)
 │   │   ├── fs.router.ts         #   GET /fs?path=… (one directory level) · GET /fs/home (default root)
 │   │   ├── fs.service.ts        #   readdir one level (Node fs, no shell), normalize, sort, per-entry badges
-│   │   └── badges.ts            #   compute FsBadge[]: repo (R/r brown), sync (S pink), compress (C/c yellow), ipfs (i blue)
+│   │   └── badges.ts            #   compute FsBadge[]: repo (R/r brown), pin (P pink), compress (C/c yellow), ipfs (i blue)
 │   │
 │   ├── settings/                # settings.mdx + repo_settings.mdx
 │   │   └── settings.controller.ts # GET/PATCH /settings (big_file threshold, scanner roots, ipfs) · /settings/allow-list (admin)
 │   │
 │   ├── internal/                # localhost-only trigger for the launchd workers
-│   │   └── internal.controller.ts # POST /api/internal/run/scan · /run/sync (guarded to loopback)
+│   │   └── internal.controller.ts # POST /api/internal/run/scan · /run/pin (guarded to loopback)
 │   │
 │   └── health/health.controller.ts
 ```
@@ -208,7 +208,7 @@ The atomic YAML store (tmp→fsync→rename, per-file mutex, defaults-on-absence
 * **User scope** — `users/<email>/config.yaml`, `users/<email>/sessions/` — created lazily; email
   lowercased + sanitized; **no `default`/anon key** (storage_local.mdx §4).
 * **Unit scope** — `pin/computer/{config,manifest,status}.yaml` and
-  `pin/r/<repo_name>/{config,manifest,status}.yaml`. The unit opener is what makes sync state
+  `pin/r/<repo_name>/{config,manifest,status}.yaml`. The unit opener is what makes pin state
   computer-wide (outside `users/`).
 
 Every persisted file matches the storage_local.mdx §14 inventory; the Zod schemas live in `@lfb/shared` so
@@ -218,11 +218,11 @@ BE and FE agree on shape. `big_file.threshold_bytes` (settings.mdx) supersedes t
 
 ---
 
-## 5. The two sync units (implements storage_local.mdx §5–§9)
+## 5. The two pin units (implements storage_local.mdx §5–§9)
 
 * **Repo unit (PRIMARY)** — one per discovered git repo. Identity `{name, path, remote}` written by
-  the scanner; `synced` master toggle (default **off**); `large_files.follow_gitignore` seeds the
-  bridge set from the repo's `.gitignore`; per-repo `big_file_override`; `sync` pin/fetch/publish
+  the scanner; `pinned` master toggle (default **off**); `large_files.follow_gitignore` seeds the
+  bridge set from the repo's `.gitignore`; per-repo `big_file_override`; `pin` pin/fetch/publish
   policy; `access.shared/participants`. Manifest is **also committed** to
   `<repo>/.lfbridge/manifest.yaml` so git carries the list; IPFS carries the bytes.
 * **Computer unit** — everything **outside** every registered repo, with repo subtrees **masked
@@ -239,14 +239,14 @@ as at-risk.
 | Worker | Cadence | Job | launchd label | Config block |
 | --- | --- | --- | --- | --- |
 | **Scan** | 4 h (`StartInterval 14400`) | metadata-only discovery: stat big files, diff, write `status.yaml`. Never opens/hashes files, never touches IPFS. | `com.largefilebridge.scan` | `config.yaml → scan_process` |
-| **Sync** | 15 min (`StartInterval 900`) | for each `synced:true` unit: add→CID→pin→manifest→fetch missing→publish list→`status.yaml`. | `com.largefilebridge.sync` | `config.yaml → pin_process` |
+| **Pin** | 15 min (`StartInterval 900`) | for each `pinned:true` unit: add→CID→pin→manifest→fetch missing→publish list→`status.yaml`. | `com.largefilebridge.pin` | `config.yaml → pin_process` |
 
 Both carry two **independent** facts — **installed** (plist present) and **enabled** (bootstrapped/on)
-— reconciled against real `launchctl` state and surfaced on the **Sync** page. The web app can
-install/uninstall, toggle on/off, and **Rescan now / Sync now** on demand. `RunAtLoad=false` so the
+— reconciled against real `launchctl` state and surfaced on the **Scans** page. The web app can
+install/uninstall, toggle on/off, and **Rescan now / Pin now** on demand. `RunAtLoad=false` so the
 plist honors the on/off toggle. `schedule.service.ts` fronts an OS-agnostic `installer` (mac launchd
 primary; systemd/Windows secondary behind the same interface). The launchd `ProgramArguments` run
-`node deploy/launchd/run-worker.mjs {scan|sync}`, which POSTs the loopback-only
+`node deploy/launchd/run-worker.mjs {scan|pin}`, which POSTs the loopback-only
 `/api/internal/run/<worker>` route — the actual work runs in the app's TypeScript.
 
 The metadata-only discovery walk (the 4-hour scan worker: repo discovery, mask, big-file stat, diff) is in code:
@@ -273,7 +273,7 @@ peer the user's own machines), `config` (read/set).
   otherwise the app **flags out-of-compliance state** on the Settings → IPFS panel and offers to fix.
 
 **Graceful degradation:** if the daemon is unreachable, `ipfs.service` reports `unreachable`; the UI
-shows the red IPFS pill (one_repo.mdx §3.2), disables Sync-now, and lets decisions still be edited
+shows the red IPFS pill (one_repo.mdx §3.2), disables Pin-now, and lets decisions still be edited
 (they queue). The app **boots without IPFS installed** — IPFS is required to *move bytes*, not to run.
 
 ---
@@ -326,7 +326,7 @@ packages/frontend/src/
 │   ├── repos/RepoSettingsPage.tsx # route "/repos/$repoId/settings" — gear icon target (repo_settings.mdx)
 │   ├── fs/FileSystemPage.tsx    # route "/files" — Finder-style column browser + code badges (directories.mdx)
 │   ├── devices/DevicesPage.tsx  # route "/devices" (Devices / Peers)
-│   ├── sync/SyncPage.tsx        # route "/sync" — both workers' installed/on-off + activity (scan.mdx §7, storage_local.mdx §13)
+│   ├── scans/ScansPage.tsx     # route "/scans" — both workers' installed/on-off + activity (scan.mdx §7, storage_local.mdx §13)
 │   └── settings/SettingsPage.tsx + AllowListPage.tsx  # route "/settings" (settings.mdx)
 ├── components/
 │   ├── fs/{ColumnBrowser,FsColumn,FsRow,Badges}.tsx  # Miller-column browser + the code-badge chips (directories.mdx §3)
@@ -337,7 +337,7 @@ packages/frontend/src/
 │       ├── FilterPopover.tsx    #   operator-by-column-kind, ANDed, Clear/Apply, resets to page 1
 │       ├── SortPopover.tsx      #   sortable columns asc/desc
 │       └── columns kinds        #   text|int|bytes|timestamp|enum → operators, alignment, cell render
-├── api/                         # axios.ts, queryClient.ts, AuthBridge.tsx, repos.ts, settings.ts, sync.ts, peers.ts
+├── api/                         # axios.ts, queryClient.ts, AuthBridge.tsx, repos.ts, settings.ts, jobs.ts, peers.ts
 └── lib/                         # logger.ts (ships uncaught → /api/client-error), format.ts (bytes, relative time)
 ```
 
@@ -361,15 +361,15 @@ All under `/api`, all typed by `@lfb/shared`. (`/api/v1/*` is the auth middlewar
 | `GET /repos/:repoId` | repo header + status strip data | one_repo.mdx §3 |
 | `GET /repos/:repoId/files` | `FileRow[]` for the files table | one_repo.mdx §4 |
 | `PATCH /repos/:repoId/files` `{fileIds[],decision}` | set decision (per-row or bulk) | one_repo.mdx §4.4/§4.5 |
-| `POST /repos/:repoId/sync` `{fileIds?}` | Sync now (whole repo or selected) | one_repo.mdx §3.1 |
+| `POST /repos/:repoId/pin` `{fileIds?}` | Pin now (whole repo or selected) | one_repo.mdx §3.1 |
 | `GET/PATCH /repos/:repoId/settings` | per-repo settings | repo_settings.mdx |
 | `GET/PATCH /settings` | global config: `big_file`, scanner roots, IPFS node | settings.mdx |
 | `GET/PATCH /settings/allow-list` | allow-listed emails (`role:admin`) | settings.mdx §4 |
 | `GET /fs?path=…` | one directory level for the column browser: `FsEntry[]` with code badges | directories.mdx §1,§3,§5 |
 | `GET /fs/home` | the default root (OS home dir) the browser opens on | directories.mdx §1 |
 | `GET /peers` | the user's other computers | storage_local.mdx §11 |
-| `GET /sync` | both workers' installed/enabled + last-run + activity | scan.mdx §7, storage_local.mdx §13 |
-| `POST /sync/:worker/{install,uninstall,enable,disable}` | control a worker (`worker` ∈ scan\|sync) | storage_local.mdx §13 |
+| `GET /jobs` | both workers' installed/enabled + last-run + activity | scan.mdx §7, storage_local.mdx §13 |
+| `POST /jobs/:worker/{install,uninstall,enable,disable}` | control a worker (`worker` ∈ scan\|pin) | storage_local.mdx §13 |
 | `GET /auth/me` · `GET /health` · `GET /health/auth-config` · `POST /client-error` | plumbing | §8 |
 | `POST /internal/run/:worker` | loopback-only launchd trigger | §6 |
 
@@ -381,12 +381,12 @@ All under `/api`, all typed by `@lfb/shared`. (`/api/v1/*` is the auth middlewar
 
 | Spec | Primary code |
 | --- | --- |
-| storage_local.mdx (state root, 3 scopes, 2 units, manifest, store layer) | `shared/store/*`, `store-model/*`, `sync/manifest.service.ts` |
+| storage_local.mdx (state root, 3 scopes, 2 units, manifest, store layer) | `shared/store/*`, `store-model/*`, `pin/manifest.service.ts` |
 | scan.mdx (4h metadata-only discovery, mask, diff, plist) | `scanner/*`, `schedule/os/launchd.ts`, `deploy/launchd/*scan*` |
 | settings.mdx (big-file threshold MB/GB/TB, per-repo override) | `settings/*`, `@lfb/shared/units.ts`, `SettingsPage.tsx` |
 | repo_settings.mdx (gear → per-repo config) | `repos/*settings*`, `RepoSettingsPage.tsx` |
-| sync_list.mdx (LargeFilesBridge_SyncList.yaml, reconcile/trust) | `sync/synclist.service.ts`, `@lfb/shared/schemas.ts` |
-| dropbox/google_drive/repo__list_syns.mdx (backbones) | `sync/synclist.service.ts` backbone adapters (git first; Dropbox/Drive = file-copy path) |
+| sync_list.mdx (LargeFilesBridge_SyncList.yaml, reconcile/trust) | `pin/synclist.service.ts`, `@lfb/shared/schemas.ts` |
+| dropbox/google_drive/repo__list_syns.mdx (backbones) | `pin/synclist.service.ts` backbone adapters (git first; Dropbox/Drive = file-copy path) |
 | repos.mdx / one_repo.mdx (tables, decisions, status pills) | `repos/*`, `ReposPage.tsx`, `OneRepoPage.tsx`, `components/table/*` |
 | directories.mdx (File System column browser + code badges) | `modules/fs/*`, `pages/fs/FileSystemPage.tsx`, `components/fs/*`, `@lfb/shared` FsEntry/FsBadge |
 | left_bar.mdx + left_bar.yaml (nav) | `config/left_bar.ts`, `components/layout/Sidebar.tsx` |
@@ -403,14 +403,14 @@ All under `/api`, all typed by `@lfb/shared`. (`/api/v1/*` is the auth middlewar
 3. **Auth** — `link:` OpenAuthFederated, `auth-frontend`, strategy, guards; boots with DEFAULT_USER
    even without Google creds.
 4. **IPFS service** — Kubo RPC + compliance; degrades when daemon absent.
-5. **Scanner + sync + schedule** — the two workers, manifest read/write, launchd install; the
+5. **Scanner + pin + schedule** — the two workers, manifest read/write, launchd install; the
    internal trigger route.
-6. **REST modules** — repos/files/settings/peers/sync/health.
+6. **REST modules** — repos/files/settings/peers/jobs/health.
 7. **Frontend** — router + shell + left bar + DataTable + the five pages + auth flow.
 8. **Wire + verify** — `pnpm -r build` typechecks; `just run` boots the web app on :2222 + API :8787; sign-in screen
    renders; `/api/health` + `/api/repos` respond; a scan populates the Repos table.
 
-The `lfb` CLI entry (scan/sync/install-agent, also invoked by the launchd trigger) is in code:
+The `lfb` CLI entry (scan/pin/install-agent, also invoked by the launchd trigger) is in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/cli.ts` — `run()`
 
 **Sequencing note:** steps 2–6 are backend and can proceed while 7 (frontend) is built against the
@@ -468,7 +468,7 @@ column by column):
     it — resolved from the **registered repo set** (`listRepoFolders()` paths) plus a **bounded,
     depth-limited** downward probe (small budget shared across the listing) so unregistered repos still
     register as ancestors. Precedence root → descendant → ancestor, at most one.
-  * **Sync (S, pink).** The file's decision is `sync`: map the file to its owning unit (the registered
+  * **Pin (P, pink).** The file's decision is `sync`: map the file to its owning unit (the registered
     repo whose path is a prefix, else the computer unit) and read `config.decisions[relPath]`.
   * **Compress (C/c, yellow).** Video/image by extension (charter scope). First cut: a **heuristic**
     (`compress.ts` helper) — lossless/uncompressed image formats (png/bmp/tiff) and large videos →
@@ -482,7 +482,7 @@ column by column):
     publish action, and it never turns the node into a public gateway
     ([knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx)).
 
-  Badges are returned **ordered rightmost-first** — `[repo?, sync?, compress?, ipfs?]` — so the
+  Badges are returned **ordered rightmost-first** — `[repo?, pin?, compress?, ipfs?]` — so the
   frontend renders array order right-to-left (directories.mdx §3.5).
 
 The File System column-browser REST routes are in code:

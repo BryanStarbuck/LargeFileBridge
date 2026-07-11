@@ -1,22 +1,22 @@
 ---
-title: LargeFileBridge — Web Sessions & Staleness-Triggered Auto-Sync
-description: The spec for LFB's WEB-SESSION model and the freshness rule it exists to serve — automatically kicking off a synchronization when a user returns to a machine whose large files may be stale. A "web session" here is NOT the OpenAuthFederated auth session (storage_local.mdx §10, the cookie/JWT that keeps you signed in for 10 months); it is a lightweight ACTIVITY window measured from page renders. The frontend pings the backend on every route render/navigation; the backend rolls those pings into one open session and, when activity taper off for a full IDLE window (4 hours) with nothing happening, considers that session DISCONTINUED — back-dating its end to the LAST render, not to the moment the 4-hour timer fired (3 p.m. last action + 4 h → the 7 p.m. timer closes the session AT 3 p.m.). We persist the last FIVE sessions per user under users/<email>/config.yaml as a `sessions:` history (newest first), each carrying started_at, last_activity_at, and ended_at. The whole point: when a NEW session STARTS, if this computer has not synchronized in more than 48 hours, LFB automatically kicks off a synchronization so the user is not working against stale, out-of-date large files. That auto-sync is NON-BLOCKING — fire-and-forget on the server, never awaited by the HTTP request, so the UI never stalls waiting on IPFS. "Last synchronized" is the most recent of the scheduled sync worker's last run (app config pin_process.last_run_at) and every repo unit's status.yaml last_pin_at. Cross-references storage_local.mdx (§4 per-user config, §10 auth session, §13 the launchd sync worker), sync_list.mdx (what a sync actually moves), and knowledge/ipfs.mdx (pinning — what the sync ultimately does).
+title: LargeFileBridge — Web Sessions & Staleness-Triggered Auto-Pin
+description: The spec for LFB's WEB-SESSION model and the freshness rule it exists to serve — automatically kicking off a pin pass when a user returns to a machine whose large files may be stale. A "web session" here is NOT the OpenAuthFederated auth session (storage_local.mdx §10, the cookie/JWT that keeps you signed in for 10 months); it is a lightweight ACTIVITY window measured from page renders. The frontend pings the backend on every route render/navigation; the backend rolls those pings into one open session and, when activity taper off for a full IDLE window (4 hours) with nothing happening, considers that session DISCONTINUED — back-dating its end to the LAST render, not to the moment the 4-hour timer fired (3 p.m. last action + 4 h → the 7 p.m. timer closes the session AT 3 p.m.). We persist the last FIVE sessions per user under users/<email>/config.yaml as a `sessions:` history (newest first), each carrying started_at, last_activity_at, and ended_at. The whole point: when a NEW session STARTS, if this computer has not pinned in more than 48 hours, LFB automatically kicks off a pin pass so the user is not working against stale, out-of-date large files. That auto-pin is NON-BLOCKING — fire-and-forget on the server, never awaited by the HTTP request, so the UI never stalls waiting on IPFS. "Last pinned" is the most recent of the scheduled pin worker's last run (app config pin_process.last_run_at) and every repo unit's status.yaml last_pin_at. Cross-references storage_local.mdx (§4 per-user config, §10 auth session, §13 the launchd pin worker), sync_list.mdx (what a pin actually moves), and knowledge/ipfs.mdx (pinning — what the pin ultimately does).
 ---
 
-# LargeFileBridge — Web Sessions & Staleness-Triggered Auto-Sync
+# LargeFileBridge — Web Sessions & Staleness-Triggered Auto-Pin
 
 A user might not open LargeFileBridge (LFB) on a given computer for days. When they come back, the large
 files on that machine can be **stale** — a laptop that has been closed since Tuesday has whatever its
 peers pinned on Tuesday, not what changed since. This spec exists to fix exactly that: **the moment a
-user starts a new web session on a computer that has not synchronized in more than 48 hours, LFB
-automatically kicks off a synchronization** — quietly, in the background, so the user is brought
+user starts a new web session on a computer that has not pinned in more than 48 hours, LFB
+automatically kicks off a pin pass** — quietly, in the background, so the user is brought
 up-to-date without ever having to think about it or wait for it.
 
 To decide "a user is starting a new session," we need a small, robust notion of a **web session**. This
 spec defines that notion, how we persist the last five of them, and the freshness rule they drive.
 
 > **The one rule this feature is built on.** Starting a new web session on a computer that is **> 48
-> hours** since its last sync **automatically triggers a synchronization**, and that trigger is
+> hours** since its last pin **automatically triggers a pin pass**, and that trigger is
 > **non-blocking** — it is fired and forgotten on the server so the web request returns immediately and
 > the UI never blocks on IPFS. Everything else here (the 4-hour idle window, the retroactive end time,
 > the five-session history) exists to make that trigger fire correctly and exactly once per real return.
@@ -27,12 +27,11 @@ This spec does not restate its siblings; it references them:
   per-user `users/<email>/config.yaml` this history lives in.
 * [storage_local.mdx §10](./storage_local.mdx#10-auth-session--signing-secret-runtime-not-settings) — the **auth**
   session (OpenAuthFederated). §1 below draws the hard line between that and a **web** session.
-* [storage_local.mdx §13](./storage_local.mdx) — the background **launchd** sync worker (every 15 min). Our
-  auto-sync reuses the same `pinAll()` path; it just fires it *on demand* on a stale return.
-* [sync_list.mdx](./sync_list.mdx) — what a synchronization actually moves (the Sync List, CIDs, pins).
+* [storage_local.mdx §13](./storage_local.mdx) — the background **launchd** pin worker (every 15 min). Our
+  auto-pin reuses the same `pinAll()` path; it just fires it *on demand* on a stale return.
+* [sync_list.mdx](./sync_list.mdx) — what a pin pass actually moves (the Sync List, CIDs, pins).
   §4 there links back here for the on-return trigger.
-* [knowledge/ipfs.mdx §3](../knowledge/ipfs.mdx#3-pinning--telling-ipfs-to-keep-a-file) — pinning, what
-  a sync ultimately does to the bytes.
+* [knowledge/ipfs.mdx §3](../knowledge/ipfs.mdx#3-pinning--telling-ipfs-to-keep-a-file) — pinning, what a pin ultimately does to the bytes.
 
 ---
 
@@ -46,10 +45,10 @@ These two are **different things** and must never be conflated.
 | **Auth session** | The **OpenAuthFederated** login ([storage_local.mdx §10](./storage_local.mdx#10-auth-session--signing-secret-runtime-not-settings)): the signed cookie + rotating Bearer that keep the user **signed in** for up to 10 months across restarts. It is bounded by a 10-month ceiling, not by 4 hours. A single auth session spans **many** web sessions. |
 | **Render / activity ping** | A signal from the frontend that a page was **rendered** (app opened or route navigated). Each ping is one unit of "the user did something that drew a page." Rolls into the open web session. |
 | **Idle window** | The **4-hour** span of no activity after which an open web session is considered discontinued. |
-| **Stale threshold** | The **48-hour** span since the last successful sync beyond which **starting a new web session** auto-triggers a synchronization. |
-| **Last synchronized** | The most recent of: the app-config `pin_process.last_run_at` (the scheduled worker's last run) **and** every repo unit's `status.yaml` `last_pin_at`. A manual "Sync now" writes the latter; the launchd worker writes both. |
+| **Stale threshold** | The **48-hour** span since the last successful pin beyond which **starting a new web session** auto-triggers a pin pass. |
+| **Last pinned** | The most recent of: the app-config `pin_process.last_run_at` (the scheduled worker's last run) **and** every repo unit's `status.yaml` `last_pin_at`. A manual "Pin now" writes the latter; the launchd worker writes both. |
 
-The "Last synchronized" value (newest of the scheduled worker's run and every repo's `status.yaml`) is computed in code:
+The "Last pinned" value (newest of the scheduled worker's run and every repo's `status.yaml`) is computed in code:
 
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sessions/sessions.service.ts` — `lastPinAt()`
 
@@ -113,21 +112,21 @@ The 4-hour idle timer and the back-dated (last-render) session close are handled
 
 ---
 
-## 3. The freshness rule — auto-sync on a stale return (the point of all this)
+## 3. The freshness rule — auto-pin on a stale return (the point of all this)
 
 **When a new web session STARTS** (§2.1), and only then, LFB checks:
 
 ```
-now − lastSynchronized > 48 hours   ?   →   kick off a synchronization
+now − lastPinnedAt > 48 hours   ?   →   kick off a pin pass
 ```
 
-* `lastSynchronized` is the "Last synchronized" value from §1 (max of `pin_process.last_run_at` and
-  every repo's `status.yaml.last_pin_at`). If the machine has **never** synced, treat it as
+* `lastPinnedAt` is the "Last pinned" value from §1 (max of `pin_process.last_run_at` and
+  every repo's `status.yaml.last_pin_at`). If the machine has **never** pinned, treat it as
   infinitely stale → trigger.
-* If stale, LFB **kicks off a synchronization** — the same whole-computer `pinAll()` the launchd
+* If stale, LFB **kicks off a pin pass** — the same whole-computer `pinAll()` the launchd
   worker runs ([storage_local.mdx §13](./storage_local.mdx), [sync_list.mdx](./sync_list.mdx)).
 * The check runs **only on session START**, not on every ping — so a user actively working (many pings
-  inside one session) triggers **at most one** auto-sync for that return, at the moment they arrive.
+  inside one session) triggers **at most one** auto-pin for that return, at the moment they arrive.
 
 The >48h staleness check that runs only on a new session start is handled in code:
 
@@ -135,17 +134,17 @@ The >48h staleness check that runs only on a new session start is handled in cod
 
 ### 3.1 Non-blocking — never stall the UI
 
-The auto-sync is **fire-and-forget**:
+The auto-pin is **fire-and-forget**:
 
 * The server starts `pinAll()` **without awaiting it** and returns the activity-ping response
-  **immediately**. The browser gets its answer in milliseconds; the sync runs on the server afterward.
-* A guard prevents **overlapping** auto-syncs: if one is already in flight (from a near-simultaneous
+  **immediately**. The browser gets its answer in milliseconds; the pin runs on the server afterward.
+* A guard prevents **overlapping** auto-pins: if one is already in flight (from a near-simultaneous
   ping, or still running), a second start is a no-op.
-* The scheduled launchd worker and a manual "Sync now" are unaffected — this is an *additional*,
-  opportunistic trigger, not a replacement. It obeys the same per-repo `synced` gating and the same
-  only-our-content IPFS rules ([knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx)) that every sync does.
+* The scheduled launchd worker and a manual "Pin now" are unaffected — this is an *additional*,
+  opportunistic trigger, not a replacement. It obeys the same per-repo `pinned` gating and the same
+  only-our-content IPFS rules ([knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx)) that every pin does.
 
-The non-blocking, single-guarded auto-sync (fire-and-forget, never awaited by the request) is handled in code:
+The non-blocking, single-guarded auto-pin (fire-and-forget, never awaited by the request) is handled in code:
 
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sessions/sessions.service.ts` — `triggerAutoPin()` (fires `pinAll()`)
 
@@ -196,9 +195,9 @@ missing `sessions:` key defaults to an empty list (fresh user, no history yet).
 | `sessions:` shape + validation | `SessionRecordSchema` / `UserConfigSchema.sessions` in `code/packages/shared/src/schemas.ts` |
 | Per-user config read/write | `getUserConfig` / `updateUserConfig` in `code/packages/backend/src/modules/store-model/user-config.service.ts` |
 | Session lifecycle + idle timer + staleness trigger | `code/packages/backend/src/modules/sessions/sessions.service.ts` |
-| "Last synchronized" computation | `lastPinAt()` in `sessions.service.ts` (max of `pin_process.last_run_at` + repo `status.yaml`) |
+| "Last pinned" computation | `lastPinAt()` in `sessions.service.ts` (max of `pin_process.last_run_at` + repo `status.yaml`) |
 | Activity endpoint | `POST /api/sessions/activity` in `code/packages/backend/src/modules/sessions/sessions.router.ts` |
-| Non-blocking sync | fire-and-forget `pinAll()` (from `modules/pin/pin.service.ts`), never awaited |
+| Non-blocking pin | fire-and-forget `pinAll()` (from `modules/pin/pin.service.ts`), never awaited |
 | Frontend render ping | `useSessionPing()` mounted in `AppShell`, throttled, fires on mount + route change |
 
 ---
@@ -208,8 +207,8 @@ missing `sessions:` key defaults to an empty list (fresh user, no history yet).
 1. **A web session is not an auth session.** Never gate access on it, never derive identity from it.
 2. **At most one open session** per user; it is always index 0; `ended_at === null` only there.
 3. **`ended_at` is the last render**, never the timer's fire time.
-4. **The staleness check runs only on session START**, so one return → at most one auto-sync.
-5. **Auto-sync is fire-and-forget** — the activity request never awaits it; the UI never blocks.
-6. **At most one auto-sync in flight**; a second trigger while one runs is a no-op.
+4. **The staleness check runs only on session START**, so one return → at most one auto-pin.
+5. **Auto-pin is fire-and-forget** — the activity request never awaits it; the UI never blocks.
+6. **At most one auto-pin in flight**; a second trigger while one runs is a no-op.
 7. **Exactly five** sessions are retained, newest first; the sixth start evicts the oldest.
 8. **All timestamps are ISO-8601 UTC**, matching every other timestamp LFB writes.

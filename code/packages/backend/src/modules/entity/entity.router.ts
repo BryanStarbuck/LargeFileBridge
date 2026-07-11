@@ -1,5 +1,5 @@
 // REST for the single-entity views + the ⋯ / right-click entity menus (files.mdx, directories.mdx,
-// menus.mdx §5). One EntityView per file/dir; the two sticky flags; the sync decision shortcut; and
+// menus.mdx §5). One EntityView per file/dir; the two sticky flags; the pin decision shortcut; and
 // the compress OFFER (charter §6.1: explicit-click only, never automatic).
 import { Router } from "express";
 import { z } from "zod";
@@ -48,7 +48,8 @@ entityRouter.patch("/flags", async (req, res) => {
   }
 });
 
-// POST /api/entity/decision — Add to IPFS (sync) / Remove from IPFS (ignore) / Undecided.
+// POST /api/entity/decision — Add to IPFS (pin) / Remove from IPFS (ignore) / Undecided.
+// The decision body enum is the FROZEN wire value; the "pin" decision travels as literal "sync".
 entityRouter.post("/decision", async (req, res) => {
   const body = z
     .object({ path: z.string().min(1), decision: z.enum(["sync", "ignore", "undecided"]) })

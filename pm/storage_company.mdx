@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Company Storage
-description: The Company storage spec. A shared pile of a company's large files, one directory-based storage per company, e.g. ~/BGit/Bryan_git/act3_large_files_bridge/. Each carries a storage.yaml with name + type: company + a company block (company_name and company-scoped child properties) and a hidden .lfbridge/ area (fingerprint index, IPFS manifest, media-analysis outputs). A user may belong to MORE THAN ONE company, so several company storages can coexist; each appears as its own child in the Storages left-bar tab (labeled by company name). Company storages sync across the members' computers over IPFS and often also clone to a shared Google Drive / Dropbox. Sibling of storage_repo / storage_personal / storage_community; shares the storage.yaml schema and .lfbridge/ layout defined in storages.mdx.
+description: The Company storage spec. A shared pile of a company's large files, one directory-based storage per company, e.g. ~/BGit/Bryan_git/act3_large_files_bridge/. Each carries a storage.yaml with name + type: company + a company block (company_name and company-scoped child properties) and a hidden .lfbridge/ area (fingerprint index, IPFS manifest, media-analysis outputs). A user may belong to MORE THAN ONE company, so several company storages can coexist; each appears as its own child in the Storages left-bar tab (labeled by company name). Company storages are pinned across the members' computers over IPFS and often also clone to a shared Google Drive / Dropbox. Sibling of storage_repo / storage_personal / storage_community; shares the storage.yaml schema and .lfbridge/ layout defined in storages.mdx.
 ---
 
 # LargeFileBridge — Company Storage
@@ -56,7 +56,7 @@ stay in their natural directories and are brought into scope by a **list of mapp
   `devices/<self>.yaml` there on first write and every update — no manual dedicated-repo setting needed
   ([devices.mdx §11.2.1](./devices.mdx#1121-a-company--personal-tracking-repo-auto-adopts-its-own-git-root--commit--push-first-write-and-every-update-locked-learned-from-a-defect)).
 * Because it is **shared across members**, both the SDL (over Git/backbones) and the mapped big files
-  (over IPFS) sync across **the members' computers** — a company storage is the multi-user case (peers
+  (over IPFS) are carried across **the members' computers** — a company storage is the multi-user case (peers
   here include teammates' machines, within the company's allow-list).
 
 ### 1.1 A company maps a LIST of source directories (LOCKED)
@@ -136,7 +136,7 @@ children under Storages, alongside Personal, the Repos link, and their communiti
    ([devices.mdx §4](./devices.mdx)).
 4. A user may belong to **more than one** company; each is a separate storage and gets its **own child**
    (labeled by `company_name`) in the Storages tab.
-5. It syncs across the **members'** computers — the SDL over Git/backbones, the mapped big files over
+5. It is carried across the **members'** computers — the SDL over Git/backbones, the mapped big files over
    IPFS (within the company allow-list) — and often clones to a **shared** Google Drive / Dropbox;
    `.lfbridge/` holds the mapped-dir list, fingerprints, manifest, devices, bookmarks, and `analysis/`
    per [storages.mdx §4](./storages.mdx) + [syncable_data_location.mdx §2](./syncable_data_location.mdx).
@@ -149,6 +149,6 @@ children under Storages, alongside Personal, the Repos link, and their communiti
   (devices.mdx §4) — the generalization of a repo storage (one hierarchy) to many. storage.yaml: name +
   type: company + company block (company_name + child props like division/allow_list). A user may be in
   MANY companies → many company storages → one child each in the Storages tab (labeled by company_name).
-  Multi-user: SDL syncs over git/backbones, mapped big files over IPFS; often clones to a SHARED drive.
+  Multi-user: SDL travels over git/backbones, mapped big files over IPFS; often clones to a SHARED drive.
   See storages.mdx, syncable_data_location.mdx (SDL + mapped dirs), devices.mdx (graft), storage_settings.mdx.
 -->

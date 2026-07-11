@@ -145,7 +145,7 @@ function StoppedCard({
         <h2 className="text-lg font-semibold">IPFS is installed but not running</h2>
       </div>
       <p className="mt-2 max-w-2xl text-sm text-black/60">
-        {node.version ? `Kubo v${node.version}. ` : ""}Turn it on so your big files can sync across your
+        {node.version ? `Kubo v${node.version}. ` : ""}Turn it on so your big files can pin across your
         computers.
         {alreadyAuto && " IPFS is already set to start automatically when you reboot ✓."}
       </p>
@@ -224,7 +224,7 @@ function InstallCard({ node, onInstall, installing }: { node: IpfsNodeStatus; on
       </div>
       <p className="mt-2 max-w-2xl text-sm text-black/60">
         IPFS is the engine that moves your big files between your computers. It runs locally on this
-        machine — it isn't a cloud service. Install it to start syncing.
+        machine — it isn't a cloud service. Install it to start pinning.
       </p>
       <div className="mt-3 text-xs text-black/50">
         Platform: <b>{node.platform}</b>

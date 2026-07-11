@@ -61,8 +61,8 @@ const JOB_TITLE: Record<IpfsJobKind, string> = {
   upgrade: "Upgrading IPFS…",
 };
 const JOB_SUB: Record<IpfsJobKind, string> = {
-  install: "Setting up the engine that syncs your big files between your computers.",
-  start: "Bringing your node online so your big files can sync.",
+  install: "Setting up the engine that pins your big files between your computers.",
+  start: "Bringing your node online so your big files can pin.",
   stop: "Taking your node offline on this computer.",
   repair: "Migrating your configuration so IPFS can start again.",
   upgrade: "Updating to a newer, healthier version of IPFS.",

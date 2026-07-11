@@ -75,11 +75,11 @@ export function ToolsPage() {
 
   return (
     <div className="max-w-2xl">
-      <PageHeader title="Tools" subtitle="Command-line tools LargeFileBridge uses to scan, sync, and compress." />
+      <PageHeader title="Tools" subtitle="Command-line tools LargeFileBridge uses to scan, pin, and compress." />
 
       <PackageManagerCard node={node} />
 
-      <Section title="Tools" subtitle="Required tools must be present to scan and sync; optional tools enable compression.">
+      <Section title="Tools" subtitle="Required tools must be present to scan and pin; optional tools enable compression.">
         <div className="divide-y divide-[var(--lfb-border)]">
           {rows.map((r) => (
             <ToolRowView

@@ -101,7 +101,7 @@ export function SettingsPage() {
         </div>
         <p className="mt-2 text-xs text-black/50">
           Tunes background compression, fingerprinting & batch transcription (the mass-compute budget).
-          Sync and scans always keep 2 cores free and aren't affected.
+          Pinning and scans always keep 2 cores free and aren't affected.
         </p>
       </Section>
 
@@ -152,7 +152,7 @@ export function SettingsPage() {
             ? "The IPFS engine isn't answering. Start it from the IPFS page so your files can move."
             : data.ipfs.compliant
               ? "This computer serves only your own content — it is not a public gateway for the internet. This is the secure default."
-              : "This computer is serving more than your own content. It will be corrected on the next sync (or fix it now from the IPFS page)."}
+              : "This computer is serving more than your own content. It will be corrected on the next pin (or fix it now from the IPFS page)."}
         </p>
         <div className="mt-2 flex gap-4">
           <Link to="/ipfs" className="text-sm text-[var(--lfb-primary)]">Open IPFS →</Link>

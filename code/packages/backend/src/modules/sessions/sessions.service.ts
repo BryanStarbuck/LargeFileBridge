@@ -127,21 +127,21 @@ async function closeIdleSession(email: string): Promise<void> {
   }
 }
 
-/** Fire a non-blocking whole-computer sync on a stale return. Never awaited by the caller; guarded so
+/** Fire a non-blocking whole-computer pin pass on a stale return. Never awaited by the caller; guarded so
  *  only one runs at a time (sessions.mdx §3.1). Returns whether this call actually started one. */
-function triggerAutoSync(email: string, last: Date | null): boolean {
-  if (autoSyncInFlight) {
-    log.info("sessions", `Stale return for ${email}, but an auto-sync is already in flight — skipping.`);
+function triggerAutoPin(email: string, last: Date | null): boolean {
+  if (autoPinInFlight) {
+    log.info("sessions", `Stale return for ${email}, but an auto-pin is already in flight — skipping.`);
     return false;
   }
-  autoSyncInFlight = true;
-  const age = last ? `${Math.round((Date.now() - last.getTime()) / HOUR_MS)}h since last sync` : "never synced";
-  log.info("sessions", `Stale return (${age}) for ${email} — auto-kicking a background sync.`);
-  void syncAll()
-    .then(() => log.info("sessions", "Auto-sync on stale return complete."))
-    .catch((e) => log.error("sessions", `Auto-sync on stale return failed: ${(e as Error).message}`))
+  autoPinInFlight = true;
+  const age = last ? `${Math.round((Date.now() - last.getTime()) / HOUR_MS)}h since last pin` : "never pinned";
+  log.info("sessions", `Stale return (${age}) for ${email} — auto-kicking a background pin pass.`);
+  void pinAll()
+    .then(() => log.info("sessions", "Auto-pin on stale return complete."))
+    .catch((e) => log.error("sessions", `Auto-pin on stale return failed: ${(e as Error).message}`))
     .finally(() => {
-      autoSyncInFlight = false;
+      autoPinInFlight = false;
     });
   return true;
 }

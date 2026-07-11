@@ -272,12 +272,12 @@ function ActionBar({
 
   // Page-scoped hotkeys for the viewer (hotkeys.mdx §5). Keys avoid the global nav letters so there's no
   // collision; each is conditional on the action being available for this file/kind.
-  const ipfsSync = v.decision === "sync";
-  const canToggleIpfs = !!v.repo && !(!ipfsSync && v.flags.neverIpfs);
+  const ipfsPin = v.decision === "sync";
+  const canToggleIpfs = !!v.repo && !(!ipfsPin && v.flags.neverIpfs);
   useHotkeys("media-viewer", "Media viewer", [
     ...(grantUrl ? [{ keys: "o", label: "Open raw in browser", run: openRawInBrowser }] : []),
     { keys: "y", label: "Copy path", run: copyPath },
-    ...(canToggleIpfs ? [{ keys: "p", label: ipfsSync ? "Remove from IPFS" : "Add to IPFS", run: () => decide.mutate(ipfsSync ? "ignore" : "sync") }] : []),
+    ...(canToggleIpfs ? [{ keys: "p", label: ipfsPin ? "Remove from IPFS" : "Add to IPFS", run: () => decide.mutate(ipfsPin ? "ignore" : "sync") }] : []),
     ...((kind === "image" || kind === "video") && canOfferCompress(v) ? [{ keys: "k", label: "Compress…", run: onCompress }] : []),
     ...((kind === "audio" || kind === "video") ? [{ keys: "t", label: transcript ? "Re-transcribe" : "Transcribe", run: () => transcribe.run(!!transcript) }] : []),
     { keys: "m", label: "Move…", run: onMove },
@@ -287,15 +287,15 @@ function ActionBar({
   // ── Build the priority-ordered action items (media_viewer.mdx §4.1). ──
   const items: BarItem[] = [];
 
-  // IPFS primary (Add/Remove) — highest priority. Skipped for a not-in-sync file that's flagged Never-IPFS.
+  // IPFS primary (Add/Remove) — highest priority. Skipped for a not-pinned file that's flagged Never-IPFS.
   const ipfsNode = <IpfsPrimary view={v} decide={decide} ipfsReachable={ipfsReachable} />;
   if (v.repo && !(v.decision !== "sync" && v.flags.neverIpfs)) {
-    const isSync = v.decision === "sync";
+    const isPin = v.decision === "sync";
     items.push({
       key: "ipfs", priority: 100, bar: ipfsNode,
-      menu: [{ id: "ipfs", group: "IPFS", label: isSync ? "Remove from IPFS" : "Add to IPFS",
-        icon: isSync ? <DownloadCloud className="h-4 w-4" /> : <UploadCloud className="h-4 w-4" />,
-        disabled: !ipfsReachable, onSelect: () => decide.mutate(isSync ? "ignore" : "sync") }],
+      menu: [{ id: "ipfs", group: "IPFS", label: isPin ? "Remove from IPFS" : "Add to IPFS",
+        icon: isPin ? <DownloadCloud className="h-4 w-4" /> : <UploadCloud className="h-4 w-4" />,
+        disabled: !ipfsReachable, onSelect: () => decide.mutate(isPin ? "ignore" : "sync") }],
     });
   }
 
@@ -637,7 +637,7 @@ function PropertyGrid({
     ) : <span className="text-black/40">not in a repo</span>,
   });
   cells.push({ label: "Peers", node: <span className={v.decision === "sync" && v.peers.length === 0 ? "text-red-600" : ""}>{v.peers.length}</span> });
-  if (v.decision) cells.push({ label: "Decision", node: <span className="capitalize">{v.decision}</span> });
+  if (v.decision) cells.push({ label: "Decision", node: v.decision === "sync" ? <span>Add to IPFS (pin)</span> : <span className="capitalize">{v.decision}</span> });
   cells.push({ label: "Modified", node: <span title={absoluteTime(v.modifiedAt)}>{relativeTime(v.modifiedAt)}</span> });
   cells.push({ label: "Created", node: v.createdAt ? absoluteTime(v.createdAt) : "—" });
   if (kind !== "audio" && v.compressible) {
@@ -888,13 +888,13 @@ function IpfsPrimary({
   ipfsReachable: boolean;
 }) {
   if (!v.repo) return null;
-  const isSync = v.decision === "sync";
-  // Not-in-sync + Never-IPFS → no primary button (the More menu still governs).
-  if (!isSync && v.flags.neverIpfs) return null;
+  const isPin = v.decision === "sync";
+  // Not-pinned + Never-IPFS → no primary button (the More menu still governs).
+  if (!isPin && v.flags.neverIpfs) return null;
   const disabledProps = ipfsReachable
     ? {}
     : { disabled: true, title: "IPFS node unreachable — start your IPFS node to add/remove pins" };
-  return isSync ? (
+  return isPin ? (
     <button
       {...disabledProps}
       onClick={() => decide.mutate("ignore")}

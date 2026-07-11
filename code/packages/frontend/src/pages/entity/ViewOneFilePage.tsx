@@ -1,5 +1,5 @@
 // View one file (files.mdx) — the single-entity page for ONE file. Identity + badges + the two sticky
-// flag switches + fact cards (Sync / Compression / IPFS / File), with the top-right ⋯ "more" menu
+// flag switches + fact cards (Pin / Compression / IPFS / File), with the top-right ⋯ "more" menu
 // (menus.mdx §4) rendering the same File catalog as the row kebab.
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
@@ -71,7 +71,7 @@ export function ViewOneFilePage() {
         <FlagSwitches view={v} />
       </div>
 
-      {/* Per-file verdict (use_cases.mdx §5.6): synced & backed up / not backed up / not tracked. */}
+      {/* Per-file verdict (use_cases.mdx §5.6): pinned & backed up / not backed up / not tracked. */}
       {(() => {
         const fv = fileVerdict(v);
         return <StatusBanner state={fv.state} headline={fv.headline} sub={fv.sub} />;
@@ -79,7 +79,7 @@ export function ViewOneFilePage() {
 
       {/* Cards */}
       <div className="space-y-3">
-        <Card title="Sync">
+        <Card title="Pin">
           {v.repo ? (
             <div className="flex flex-wrap items-center gap-x-8 gap-y-1 text-sm">
               <span>
@@ -91,7 +91,7 @@ export function ViewOneFilePage() {
                 >
                   {(["sync", "ignore", "undecided"] as Decision[]).map((d) => (
                     <option key={d} value={d} disabled={d === "sync" && v.flags.neverIpfs}>
-                      {d[0].toUpperCase() + d.slice(1)}
+                      {d === "sync" ? "Add to IPFS (pin)" : d[0].toUpperCase() + d.slice(1)}
                     </option>
                   ))}
                 </select>
@@ -140,43 +140,43 @@ export function ViewOneFilePage() {
   );
 }
 
-// This file's own health verdict (use_cases.mdx §5.6): is it synced and actually backed up on
+// This file's own health verdict (use_cases.mdx §5.6): is it pinned and actually backed up on
 // another computer, or is it at risk / not tracked?
 function fileVerdict(v: EntityView): { state: Health; headline: string; sub?: string } {
   if (!v.repo) {
     return {
       state: "neutral",
       headline: "Not tracked — this file isn't inside a managed repo",
-      sub: "LFBridge only syncs files inside repos it manages.",
+      sub: "LFBridge only pins files inside repos it manages.",
     };
   }
   if (v.decision !== "sync") {
     if (v.decision === "ignore") {
-      return { state: "neutral", headline: "Set to Ignore — not synced", sub: "This file is deliberately not bridged." };
+      return { state: "neutral", headline: "Set to Ignore — not pinned", sub: "This file is deliberately not bridged." };
     }
     return {
       state: "warn",
-      headline: "Not set to sync yet",
-      sub: "Add it to IPFS to keep it synced across your computers.",
+      headline: "Not set to pin yet",
+      sub: "Add it to IPFS to keep it pinned across your computers.",
     };
   }
-  // decision === "sync"
+  // decision === "sync" (the FROZEN wire value for the Add-to-IPFS pin decision)
   if (v.transfer === "missing" || v.transfer === "error") {
-    return { state: "bad", headline: "Set to sync, but the copy isn't in place", sub: "The transfer failed or the file is missing — try Sync now from the repo." };
+    return { state: "bad", headline: "Set to pin, but the copy isn't in place", sub: "The transfer failed or the file is missing — try Pin now from the repo." };
   }
   if (v.peers.length === 0) {
     return {
       state: "warn",
-      headline: "Set to sync, but on 0 other computers — not backed up yet",
+      headline: "Set to pin, but on 0 other computers — not backed up yet",
       sub: "Open LFBridge on another machine so it can pull this file.",
     };
   }
-  if (v.transfer && v.transfer !== "synced") {
+  if (v.transfer && v.transfer !== "pinned") {
     return { state: "warn", headline: "Transfer in progress", sub: "This file is moving to or from your other computers." };
   }
   return {
     state: "ok",
-    headline: `Synced · backed up on ${v.peers.length} other computer${v.peers.length === 1 ? "" : "s"}`,
+    headline: `Pinned · backed up on ${v.peers.length} other computer${v.peers.length === 1 ? "" : "s"}`,
   };
 }
 
@@ -210,7 +210,7 @@ function pickPrimary(v: EntityView, decide: { mutate: (d: Decision) => void }) {
   if (v.decision === "sync") {
     return (
       <span className="flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm text-black/60">
-        <RefreshCw className="h-4 w-4" /> Syncing
+        <RefreshCw className="h-4 w-4" /> Pinning
       </span>
     );
   }

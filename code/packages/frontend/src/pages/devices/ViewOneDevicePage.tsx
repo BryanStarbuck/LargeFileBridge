@@ -208,7 +208,7 @@ export function ViewOneDevicePage() {
           device.storageCount > 0
             ? `Carries your files across ${device.storageCount} storage${device.storageCount === 1 ? "" : "s"}.`
             : device.source === "peer"
-              ? "Known from your peers list — not yet seen in a synced storage."
+              ? "Known from your peers list — not yet seen in a pinned storage."
               : undefined
         }
       />
@@ -258,7 +258,7 @@ export function ViewOneDevicePage() {
           ) : (
             <p className="py-2 text-sm text-black/50">
               No hardware fingerprint yet — this device is known only from your peers list. It fills in
-              once that computer writes itself into a synced storage.
+              once that computer writes itself into a pinned storage.
             </p>
           )}
         </section>

@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — File System (the left-bar hub + interesting-directory folder coloring)
-description: The hub spec for the "File System" left-bar item (route /fs) — the page the user lands on when they click File System in the left nav. It owns three things that are NOT owned elsewhere: (1) INTERESTING-DIRECTORY FOLDER COLORING — a folder icon is tinted to make directories that contain something worth acting on stand out. A directory is "interesting" if it, or anything under it recursively, contains a big file (≥ the big-file threshold, default 100 MB), a video, or an uncompressed image ≥ 3 MB. The highest-priority thing present picks the color: BIG FILE → brown (light-brown fill, dark-brown outline) is the most powerful; else VIDEO → blue (medium-dark-blue outline, very-light-blue near-white fill); else UNCOMPRESSED IMAGE ≥3MB → blue outline only, no fill (the least powerful). A directory with none of these keeps the plain uncolored folder glyph. This coloring is applied to EVERY folder glyph across the app — the /fs column browser, View-one-directory child lists, storage directory rows, and repo rows — not just this page. (2) CLOUD-STORAGE ROOTS SURFACED AT THE TOP OF THE HOME COLUMN (§4, macOS) — Dropbox, each Google Drive account (GoogleDrive-<email>), and iCloud Drive live under ~/Library/CloudStorage/, not directly in ~, so the home column prepends one ☁ row per detected mount, sorted to the top, "as if they were in ~," letting the user browse and compress the big files inside them without drilling Library → CloudStorage. Each row is a REAL directory row (path = the mount) so badges, interest tint, and compress/git-ignore/track actions work unchanged; it is marked FsEntry.cloud only for the cloud glyph and top-of-column sort. This is a pure BROWSING feature, wholly independent of the Dropbox/Google-Drive Sync-List BACKBONES (dropbox.mdx/google_drive.mdx) — surfacing a mount never enables a backbone, writes a Sync List, or moves bytes. A legacy ~/Dropbox→CloudStorage/Dropbox symlink is de-duplicated to one cloud row; discovery is stat-only and macOS-guarded. (3) THE ACTION-LINKS ROW under the page title (delegates behavior to page_actions.mdx). The File System page's browsing mechanics (Finder-style column browser, code badges R/r·S·C/c·i, size/media filters, persisted view state) are owned by directories.mdx Part A, and the flat Full-paths tab (/fs/paths) by full_paths.mdx — this file references them and does not restate them. Sibling of directories.mdx, full_paths.mdx, page_actions.mdx, left_bar.mdx, repos.mdx, storages.mdx, compression.mdx, settings.mdx (the threshold), and codecs.mdx (what "uncompressed" means).
+description: The hub spec for the "File System" left-bar item (route /fs) — the page the user lands on when they click File System in the left nav. It owns three things that are NOT owned elsewhere: (1) INTERESTING-DIRECTORY FOLDER COLORING — a folder icon is tinted to make directories that contain something worth acting on stand out. A directory is "interesting" if it, or anything under it recursively, contains a big file (≥ the big-file threshold, default 100 MB), a video, or an uncompressed image ≥ 3 MB. The highest-priority thing present picks the color: BIG FILE → brown (light-brown fill, dark-brown outline) is the most powerful; else VIDEO → blue (medium-dark-blue outline, very-light-blue near-white fill); else UNCOMPRESSED IMAGE ≥3MB → blue outline only, no fill (the least powerful). A directory with none of these keeps the plain uncolored folder glyph. This coloring is applied to EVERY folder glyph across the app — the /fs column browser, View-one-directory child lists, storage directory rows, and repo rows — not just this page. (2) CLOUD-STORAGE ROOTS SURFACED AT THE TOP OF THE HOME COLUMN (§4, macOS) — Dropbox, each Google Drive account (GoogleDrive-<email>), and iCloud Drive live under ~/Library/CloudStorage/, not directly in ~, so the home column prepends one ☁ row per detected mount, sorted to the top, "as if they were in ~," letting the user browse and compress the big files inside them without drilling Library → CloudStorage. Each row is a REAL directory row (path = the mount) so badges, interest tint, and compress/git-ignore/track actions work unchanged; it is marked FsEntry.cloud only for the cloud glyph and top-of-column sort. This is a pure BROWSING feature, wholly independent of the Dropbox/Google-Drive Sync-List BACKBONES (dropbox.mdx/google_drive.mdx) — surfacing a mount never enables a backbone, writes a Sync List, or moves bytes. A legacy ~/Dropbox→CloudStorage/Dropbox symlink is de-duplicated to one cloud row; discovery is stat-only and macOS-guarded. (3) THE ACTION-LINKS ROW under the page title (delegates behavior to page_actions.mdx). The File System page's browsing mechanics (Finder-style column browser, code badges R/r·P·C/c·i, size/media filters, persisted view state) are owned by directories.mdx Part A, and the flat Full-paths tab (/fs/paths) by full_paths.mdx — this file references them and does not restate them. Sibling of directories.mdx, full_paths.mdx, page_actions.mdx, left_bar.mdx, repos.mdx, storages.mdx, compression.mdx, settings.mdx (the threshold), and codecs.mdx (what "uncompressed" means).
 ---
 
 # LargeFileBridge — File System (the left-bar hub + interesting-directory folder coloring)
@@ -12,7 +12,7 @@ browsing the whole filesystem and finding the large files worth acting on.
 The **browsing mechanics** are already specified and are **not** restated here:
 
 * [directories.mdx](./directories.mdx) **Part A** — the Finder-style **column browser** at `/fs`: the
-  Miller columns, the (optional) folder/file glyph, the code badges (R/r repo · S sync · C/c compress · i
+  Miller columns, the (optional) folder/file glyph, the code badges (R/r repo · P pin · C/c compress · i
   IPFS), the size/media header filters (Only Large · Videos / Images / Audio), and the persisted view state.
 * [full_paths.mdx](./full_paths.mdx) — the **Full paths** tab at `/fs/paths`: the flat recursive TanStack
   table of large files under the current root. A tab strip switches `/fs` ↔ `/fs/paths`.
@@ -38,7 +38,7 @@ Siblings: [directories.mdx](./directories.mdx) · [full_paths.mdx](./full_paths.
 
 When a user opens the File System, most folders are noise — config, source, dot-directories. The few that
 matter are the ones holding **big files, videos, or uncompressed images** — the files LFBridge exists to
-sync and to help compress. So we **tint the folder icon** of those directories to make them stand out at a
+pin and to help compress. So we **tint the folder icon** of those directories to make them stand out at a
 glance, and we tint them **more strongly** the more important their contents.
 
 A directory is **interesting** if — considering the directory itself **and everything under it,
@@ -71,7 +71,7 @@ Priority, strongest first: **big file → video → uncompressed image**.
 | Level | Condition (anywhere in the subtree) | Folder glyph — outline | Folder glyph — fill | Meaning |
 | --- | --- | --- | --- | --- |
 | **1. Brown (strongest)** | ≥ 1 file **≥ big-file threshold** (default 100 MB) | **dark brown** | **light brown** | The important one — real large files live in here (incl. deep). |
-| **2. Blue fill (medium)** | no big file, but ≥ 1 **video** | **medium-dark blue** | **very light blue** (near white) | Video content worth syncing/compressing, nothing over the threshold yet. |
+| **2. Blue fill (medium)** | no big file, but ≥ 1 **video** | **medium-dark blue** | **very light blue** (near white) | Video content worth pinning/compressing, nothing over the threshold yet. |
 | **3. Blue outline only (weakest)** | no big file and no video, but ≥ 1 **uncompressed image ≥ 3 MB** | **blue** | **none** (transparent) | Some heavy uncompressed images; the gentlest nudge. |
 | **— Not interesting** | none of the above | default slate (unchanged) | none | Plain folder — no tint. |
 
@@ -225,15 +225,15 @@ Drive**. On macOS none of those mount in `~`; they mount **one level deep and ou
 `~/Library/CloudStorage/` (Google Drive for Desktop, the Dropbox client, and the iCloud FileProvider all
 publish their folders there). A user who opens **File System** and lands on `~` would have to know to drill
 **`Library → CloudStorage → GoogleDrive-<email>`** — a path most people have never seen — before they could
-reach the very content the product is built to compress and sync.
+reach the very content the product is built to compress and pin.
 
 So the product bet, **LOCKED**: **we lift each cloud mount to the top of the home column, presented as if it
 sat directly in `~`.** The user opens File System, and Dropbox / Google Drive / iCloud are simply *there*, at
 the top, one click away — the same first-class starting points as any home folder. This is the difference
 between "a tool that browses my disk" and "a tool that knows where my big files actually are."
 
-> **Why this is a browsing feature, not a sync feature (LOCKED).** Surfacing a mount here is **purely about
-> visibility and navigation**. It is completely independent of the cloud **sync-backbones**
+> **Why this is a browsing feature, not a backbone feature (LOCKED).** Surfacing a mount here is **purely about
+> visibility and navigation**. It is completely independent of the cloud **Sync-List backbones**
 > ([dropbox.mdx](./dropbox.mdx) / [google_drive.mdx](./google_drive.mdx), which carry the Sync List YAML
 > between the user's computers). Making Dropbox visible in the browser does **not** enable the Dropbox
 > backbone, does **not** write a Sync List into Dropbox, and does **not** move a single byte. The two ideas
@@ -320,7 +320,7 @@ least the level it has already proven, never a false plain glyph.
 Computing each surfaced mount's `interest` from the shared per-child budget (so a huge cloud mount can't starve the ordinary siblings, and the truncation floor still applies) is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (the cloud-row `computeDirInterest()` call sharing `interestPool`) · the walk itself is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `computeDirInterest()`.
 
-### 4.6 Independence from the sync-backbones (LOCKED separation)
+### 4.6 Independence from the Sync-List backbones (LOCKED separation)
 
 This is the separation that keeps the product honest, and it is **LOCKED**. **Dropbox and Google Drive each
 play two entirely separate roles**, and this section owns only the first:
@@ -341,7 +341,7 @@ The invariants that follow (all LOCKED):
 * The two share exactly one thing: the **discovery path** (`~/Library/CloudStorage/…` and, for Dropbox,
   `~/.dropbox/info.json`). The vendor specs own that discovery; §4 reuses it for browsing.
 * A user with **all backbones disabled** still sees every cloud root on the home column. Visibility is a
-  property of the **mount existing**, not of any sync being turned on.
+  property of the **mount existing**, not of any backbone being turned on.
 
 ### 4.7 Performance & the network-mount hazard (CTO note)
 
@@ -405,7 +405,7 @@ inherited from [page_actions.mdx §1–§2](./page_actions.mdx) and **not** rest
 The File System page's links (per the [page_actions.mdx §4](./page_actions.mdx) catalog), left → right:
 
 **Create Transcriptions · Create AI descriptions · Compress videos · Compress images ·
-Git ignore · Track / Sync this directory**
+Git ignore · Track / Pin this directory**
 
 * The links render in **one measured row** that keeps what fits inline and rolls the rest into a
   right-pinned **`More ▾`** menu ([page_actions.mdx §3.1](./page_actions.mdx)) — never a second row.
@@ -559,7 +559,7 @@ Enforcing downward-only containment of the recursive walk (descend into children
        per-mount rollup, Windows/Linux discovery, server-mode via vendor APIs.
    (3) ACTION-LINKS ROW (§5): delegates ALL behavior to page_actions.mdx (visible links row under the title,
        NOT the old Actions ▾ dropdown). Catalog: Create Transcriptions · Create AI descriptions · Compress
-       videos · Compress images · Git ignore · Track / Sync this directory. Labels are the SHORT forms;
+       videos · Compress images · Git ignore · Track / Pin this directory. Labels are the SHORT forms;
        the row is ONE measured line with a right-pinned "More ▾" overflow (page_actions.mdx §3.1). Compress
        links → compress_inside.mdx dialog; Git ignore → git_ignore.mdx dialog (target = the rightmost column
        that HAS a selection, §5.1 generalized).
@@ -570,12 +570,12 @@ Enforcing downward-only containment of the recursive walk (descend into children
        below the deepest col. Unopened stack => {} => server 400, NEVER a fallback walk of home or /. Backend
        walkMedia() in transcribe.service.ts enqueueTranscribe()->resolveCandidates() recurses into children
        of root only (describe.service.ts enqueueDescribe() mirrors it).
-  Does NOT restate: the Miller column browser / badges R-r·S·C-c·i / size+media filters / persisted state
+  Does NOT restate: the Miller column browser / badges R-r·P·C-c·i / size+media filters / persisted state
   (owned by directories.mdx Part A) or the flat Full-paths table /fs/paths (owned by full_paths.mdx).
   Code: interest computed in entity.service.ts buildDirRollup() (extend to emit `interest`) using
   fs/badges.ts compressInfo()/VIDEO_EXT/IMAGE_UNCOMPRESSED_EXT; rides on shared FsEntry.interest; frontend
   maps via components/fs/folderInterest.ts folderGlyphStyle(), applied at pages/fs/FileSystemPage.tsx FsRow
   <Folder> (replace text-slate-500) and every other folder glyph. Threshold = getAppConfig().big_file.
-  threshold_bytes (settings.mdx §1). Keep in sync with directories.mdx, full_paths.mdx, page_actions.mdx.
+  threshold_bytes (settings.mdx §1). Keep consistent with directories.mdx, full_paths.mdx, page_actions.mdx.
 -->
 </content>

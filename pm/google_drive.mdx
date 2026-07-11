@@ -119,7 +119,7 @@ reconcile.
 The list changes underneath us whenever Google syncs in a peer's newer copy. LFB watches for it:
 
 * **fsevents watch** on the `LargeFileBridge/` subtree of the mount, **debounced** (Drive can touch a
-  file several times as it finishes syncing), plus a **periodic poll fallback** — the background sync
+  file several times as it finishes syncing), plus a **periodic poll fallback** — the background pin
   process ([storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract),
   every 15 min) re-lists peer subfolders regardless, because file watchers on a network-backed mount
   are not fully reliable.
@@ -221,7 +221,7 @@ transport changes.
 
 ## 9. Publishing our own list
 
-The outbound direction — after a scan/sync, this computer writes its own current view into **its own
+The outbound direction — after a scan/pin, this computer writes its own current view into **its own
 subfolder** so peers can reconcile it. Per hub [§6](./sync_list.mdx#6-publishing--writing-our-list-out-to-the-backbones):
 
 * **Bump `origin.revision`** and **stamp `origin.written_at`**; set `origin.computer_id/label/owner`
