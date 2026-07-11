@@ -7,6 +7,9 @@ import path from "node:path";
 import type { FsBadge, FsEntryKind, FolderInterest } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import { listRepoFolders, getRepoConfig, isGitWorkingTree } from "../store-model/units.service.js";
+// The canonical repo-resolution + git-ignore probes live in git.service (directories.mdx §3.4a); we
+// reuse them here (and re-export nearestGitAtOrAbove below so existing importers keep resolving).
+import { nearestGitAtOrAbove, checkIgnore } from "../git/git.service.js";
 // One source of truth for the never-descend set — shared with the scanner (scan.mdx §4).
 import { HARD_SKIP, isMacPackageDir } from "../../shared/scan-filters.js";
 import { log } from "../../shared/logging.js";
@@ -48,6 +51,12 @@ export interface FsBadgeContext {
   ancestorProbeBudget: { left: number };
   /** Sticky per-entity flags (menus.mdx §6.6), snapshotted once so each row is cheap. */
   fileFlags: Array<{ path: string; never_ipfs: boolean; no_compress: boolean }>;
+  /**
+   * The child paths in this listing that `git check-ignore` covers — precomputed ONCE per listing with a
+   * single `git check-ignore --stdin` for the enclosing repo (directories.mdx §3.4a), so the `I` badge
+   * costs one spawn per column, not one per row. Empty when the directory is in no git repo.
+   */
+  gitIgnored: Set<string>;
 }
 
 /** Build the per-listing context once, so each row is cheap. */
@@ -65,13 +74,32 @@ export function buildBadgeContext(dirAbs: string): FsBadgeContext {
     never_ipfs: !!v.never_ipfs,
     no_compress: !!v.no_compress,
   }));
+  // The git-ignored `I` badge (directories.mdx §3.4a): if this listing sits inside a git repo, ask that
+  // repo — in ONE `git check-ignore --stdin` — which of its immediate children are ignored, and stash the
+  // set so each row is just a Set.has(). No enclosing repo ⇒ nothing can be git-ignored here (empty set).
+  const enclosingRepo = nearestGitAtOrAbove(dirAbs);
+  const gitIgnored = computeGitIgnoredSet(dirAbs, enclosingRepo);
   return {
     thresholdBytes: cfg.big_file.threshold_bytes,
     registeredRepos,
-    enclosingRepoForChildren: nearestGitAtOrAbove(dirAbs),
+    enclosingRepoForChildren: enclosingRepo,
     ancestorProbeBudget: { left: 4000 },
     fileFlags,
+    gitIgnored,
   };
+}
+
+/** One `git check-ignore --stdin` over this directory's immediate children (directories.mdx §3.4a). */
+function computeGitIgnoredSet(dirAbs: string, enclosingRepo: string | null): Set<string> {
+  if (!enclosingRepo) return new Set();
+  let childAbs: string[];
+  try {
+    childAbs = fs.readdirSync(dirAbs, { withFileTypes: true }).map((ent) => path.join(dirAbs, ent.name));
+  } catch {
+    return new Set(); // unreadable listing → nothing to test
+  }
+  if (childAbs.length === 0) return new Set();
+  return checkIgnore(enclosingRepo, childAbs);
 }
 
 /** Effective sticky flag for a path: its own entry OR any ancestor directory's entry (path-scoped). */
@@ -123,6 +151,11 @@ export function computeBadges(
   // 4. IPFS badge (files: artifact/markdown list; dirs: publishes one underneath).
   if (isFile && fileIsIpfsArtifact(childAbs, name, sizeBytes)) badges.push("ipfs");
   else if (isDir && dirPublishesIpfs(childAbs)) badges.push("ipfs");
+
+  // 5. Git-ignored badge (file OR dir). Order in the array does not matter — the frontend orders the
+  // stack (R/r · S · C/c · i · I); we add I last (directories.mdx §3.4a). The per-listing set was filled
+  // by one `git check-ignore --stdin` in buildBadgeContext, so this is a cheap membership test.
+  if (ctx.gitIgnored.has(childAbs)) badges.push("git_ignored");
 
   return { badges, isRepoRoot };
 }
@@ -381,20 +414,11 @@ function cacheInterest(dirAbs: string, mtimeMs: number, interest: FolderInterest
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-/** The nearest git working tree at-or-above `dir` (so a dir's children are "inside a repo"). */
-export function nearestGitAtOrAbove(dir: string): string | null {
-  let cur = path.resolve(dir);
-  // Walk up to the filesystem root.
-  for (;;) {
-    if (isGitWorkingTree(cur)) return cur;
-    const parent = path.dirname(cur);
-    if (parent === cur) return null;
-    cur = parent;
-  }
-}
-
 export function expandHome(p: string): string {
   return p.replace(/^~(?=\/|$)/, process.env.HOME || "~");
 }
 
+// nearestGitAtOrAbove is now canonical in git.service.ts (directories.mdx §3.4a); re-export it here so
+// existing importers (fsindex, …) keep resolving it from this module.
+export { nearestGitAtOrAbove } from "../git/git.service.js";
 export { HARD_SKIP, isMacPackageDir };

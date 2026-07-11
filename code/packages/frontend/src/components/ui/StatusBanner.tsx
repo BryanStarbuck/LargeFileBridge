@@ -3,6 +3,8 @@
 // unmistakable. This is the first thing on every page (except Home) — the answer to "am I OK?".
 import { type ReactNode } from "react";
 import { healthColor, healthBg, healthIcon, type Health } from "./health.js";
+import { WarningArrowButton } from "./WarningArrowButton.js";
+import type { WarningDef } from "./warnings/registry.js";
 
 export function StatusBanner({
   state,
@@ -10,12 +12,19 @@ export function StatusBanner({
   sub,
   action,
   secondary,
+  warning,
+  onWarningApplied,
 }: {
   state: Health;
   headline: ReactNode;
   sub?: ReactNode; // one sentence: "what this means for you"
   action?: ReactNode; // the ONE primary fix (at most one per screen)
   secondary?: ReactNode; // an optional small link
+  // The registry entry (warnings.mdx §8) — when present, renders the blue arrow button (§3) that
+  // opens the educate-and-fix popup (§4). This is the DEFAULT trailing affordance; `action` may still
+  // be passed alongside for a one-click primary that needs no explanation (e.g. "Sync now").
+  warning?: WarningDef;
+  onWarningApplied?: () => void;
 }) {
   const Icon = healthIcon(state);
   const color = healthColor(state);
@@ -29,10 +38,11 @@ export function StatusBanner({
         <div className="text-sm font-semibold text-black">{headline}</div>
         {sub && <div className="mt-0.5 text-sm text-black/60">{sub}</div>}
       </div>
-      {(action || secondary) && (
+      {(action || secondary || warning?.popup) && (
         <div className="flex shrink-0 items-center gap-2">
           {secondary}
           {action}
+          {warning?.popup && <WarningArrowButton warning={warning} onApplied={onWarningApplied} />}
         </div>
       )}
     </div>

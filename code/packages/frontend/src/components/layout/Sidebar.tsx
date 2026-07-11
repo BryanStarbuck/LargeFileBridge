@@ -11,6 +11,7 @@ import { api } from "../../api/client.js";
 import { clientLog } from "../../lib/clientLog.js";
 import { useProgress } from "../../progress/ProgressContext.js";
 import { NavIcon } from "./NavIcon.js";
+import { HoverInfoPanel } from "../hoverinfo/HoverInfoPanel.js";
 
 export function Sidebar({ user }: { user: CurrentUser }) {
   const path = useRouterState({ select: (s) => s.location.pathname });
@@ -175,6 +176,14 @@ export function Sidebar({ user }: { user: CurrentUser }) {
           </Link>
         )}
       </nav>
+
+      {/* Non-intrusive hover-info panel (left_bar.mdx §4.1 / non_intrusive_tooltip.mdx): a FIXED block of
+          always-white space (~two nav-item rows tall) reserved between the nav list and the account slot.
+          Because nav is flex-1 and this block + the account slot are fixed-height siblings, the space is
+          carved out above the slot and the slot never jumps when a hover starts/ends. Blank white at rest. */}
+      <div className="border-t" style={{ borderColor: "var(--lfb-border)" }}>
+        <HoverInfoPanel />
+      </div>
 
       {/* Account slot (bottom; menu expands upward) */}
       <div className="relative border-t p-2" style={{ borderColor: "var(--lfb-border)" }}>

@@ -122,8 +122,8 @@ Sync now — which syncs THIS repo first as the priority unit (moving bytes even
 * **`Actions ▾` page menu** (top-right, between Sync now and the `⋮` more menu) — the header
   **page-action** menu that operates on this repo's **files** (the whole working tree, or the checked
   subset), as opposed to the `⋮` more menu which operates on the **repo entity**. It carries **Create
-  Transcriptions · Create AI descriptions · Compress all videos… · Compress all images… · Git-ignore big
-  files… · Rescan** ([page_actions.mdx §4](./page_actions.mdx)). The two producing actions obey the LOCKED
+  Transcriptions · Create AI descriptions · Compress videos · Compress images · Git ignore · Rescan**
+  ([page_actions.mdx §4](./page_actions.mdx)). The two producing actions obey the LOCKED
   scope / skip-already-done / background-queue rules ([page_actions.mdx §1](./page_actions.mdx)): with no
   rows checked they run over **all files recursively**, skipping files that already have the output, and
   the eligible remainder is background-queued with a "{N} files will have their Transcriptions created"
@@ -131,7 +131,7 @@ Sync now — which syncs THIS repo first as the priority unit (moving bytes even
 * **`⋮` "more" menu** (top-right, next to Sync now) — because this page **is one repo**, it carries the
   **repo entity menu**: the same catalog as a Repos-table row's kebab
   ([menus.mdx §4 / §5.1](./menus.mdx#4-the-entity--more-menu--single-entity-pages)) — Open in File
-  System · View pinned on IPFS · Rescan · Sync now · Git-ignore big files… · Toggle Synced · Repo
+  System · View pinned on IPFS · Rescan · Sync now · Git ignore · Toggle Synced · Repo
   settings… · Copy path · **Remove repo (unregister)** (destructive, last, never deletes local bytes).
   *Open repo* is omitted (you are already here). Sync now appears both as the primary button and in the
   menu so the menu is a complete catalog.
@@ -246,7 +246,7 @@ properties page (`/file`) by kind, on the file's absolute path — is handled in
 
 The **File** row's kebab (and right-click) is the **file** catalog ([menus.mdx §5.3](./menus.mdx#53-file)):
 View file · Open containing folder · Add to IPFS / Remove from IPFS · Set decision ▸ · Sync now ·
-Compress… · Convert to compressible… · Git-ignore this file · Find duplicates (fingerprint) · the two
+Compress… · Convert to compressible… · Git ignore · Find duplicates (fingerprint) · the two
 sticky flags **Never IPFS** / **Do not compress** ([menus.mdx §6.6](./menus.mdx#66-the-two-sticky-flags--never-ipfs--do-not-compress-locked)) ·
 View on IPFS · Copy CID / path · **Stop syncing (untrack/unpin)** (destructive, never deletes local
 bytes). Compress/convert/ignore are **explicit-click offers with a confirm step**

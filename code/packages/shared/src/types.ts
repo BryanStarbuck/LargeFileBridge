@@ -623,7 +623,8 @@ export type FsBadge =
   | "sync" // S  bright pink     (file whose decision === "sync")
   | "compress" // C  bright yellow   (video/image file that looks uncompressed)
   | "compressed" // c  light yellow    (video/image file already compressed)
-  | "ipfs"; // i  blue            (IPFS list/share artifact, or dir publishing one)
+  | "ipfs" // i  blue            (IPFS list/share artifact, or dir publishing one)
+  | "git_ignored"; // I  near-white     (file|dir that `git check-ignore` covers — directories.mdx §3.4a)
 
 export type FsEntryKind = "dir" | "file" | "symlink" | "other";
 
@@ -696,6 +697,40 @@ export type FlatStreamEvent =
   | { t: "batch"; files: FsEntry[] }
   | { t: "done"; truncated: boolean; total: number }
   | { t: "error"; error: string };
+
+// ── Git Ignore (the pop-over dialog + the .gitignore-writing engine) — git_ignore.mdx §5/§6 ──
+// The dialog is plan-then-write: it holds a server-computed PLAN (the exact anchored, repo-root-relative
+// lines grouped by owning repo, with already-ignored + not-in-repo targets removed) and Apply commits it.
+// Exactly one of `paths` (the checked set) / `root` (a single directory) is used; neither is a 400.
+export interface GitIgnoreRequest {
+  paths?: string[]; // the checked target set (absolute paths)
+  root?: string; // a single directory (used only when `paths` is absent)
+  recursive: boolean; // directories: ON => whole folder "/<dir>/"; OFF => "/<dir>/*" + "!/<dir>/*/"
+}
+
+// The exact `.gitignore` lines to add for ONE owning repo (git_ignore.mdx §5.3).
+export interface GitIgnoreRepoLines {
+  repo: string; // absolute repo-root path whose root .gitignore receives the lines
+  repoName: string; // basename of the repo root (for the "# <repo>/.gitignore" preview header)
+  lines: string[]; // anchored, repo-root-relative lines (already-ignored + already-present removed)
+}
+
+// The plan the dialog previews (git_ignore.mdx §5) — POST /api/git/ignore/plan.
+export interface GitIgnorePlan {
+  files: number; // count of files in the target set (drives the summary shape)
+  dirs: number; // count of directories in the target set (drives the Recursive checkbox)
+  linesByRepo: GitIgnoreRepoLines[]; // the lines to write, grouped by owning repo
+  alreadyIgnored: number; // target paths git already ignores (dropped from the plan)
+  notInRepo: number; // target paths not inside any git repo (dropped from the plan)
+}
+
+// The synchronous Apply result (git_ignore.mdx §6) — POST /api/git/ignore/apply.
+export interface GitIgnoreResult {
+  written: number; // total `.gitignore` lines written across every touched repo
+  repos: number; // count of repos whose .gitignore was appended to
+  alreadyIgnored: number; // target paths git already ignored (nothing written for them)
+  notInRepo: number; // target paths not inside any git repo (nothing written for them)
+}
 
 // ── Single-entity views + sticky flags (menus.mdx §6.6, files.mdx, directories.mdx) ──
 // Two persistent per-entity flags the user sets from the ⋯ / right-click menu or the entity page.

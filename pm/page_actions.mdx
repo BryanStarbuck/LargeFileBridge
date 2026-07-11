@@ -50,6 +50,9 @@ Siblings this builds on and does not repeat:
   behaviour (scope, skip, queue, toast), those files own the *engine*.
 * [webapp.mdx §10–§14](./webapp.mdx) — the **progress dock** + job registry the queued work surfaces
   through, and the bounded-concurrency model.
+* [compress_inside.mdx](./compress_inside.mdx) / [git_ignore.mdx](./git_ignore.mdx) — the **pop-over
+  dialogs** the **Compress videos / Compress images** and **Git ignore** links open (this file owns the
+  *links*; those own the *dialogs + engines*).
 
 ---
 
@@ -139,7 +142,7 @@ This is the load-bearing difference from a per-file click: a per-file **Transcri
 open for the single run; a **page action** never does — it **enqueues and returns**.
 
 > **One core-budgeted, media-aware drain (LOCKED).** Every "do this to many files" producer — **Create
-> Transcriptions**, **Create AI descriptions**, **Compress all videos… / images…** — feeds the **one** shared
+> Transcriptions**, **Create AI descriptions**, **Compress videos / Compress images** — feeds the **one** shared
 > background drain, not a private per-action worker. That drain runs **massively parallel** against the
 > **Core Budget** ([job_queue.mdx §3](./job_queue.mdx), [parallelization.mdx](./parallelization.mdx)): the
 > mass-compute budget is `round(cores × max_core_fraction)`, default **0.9**, so a bulk page action uses
@@ -182,9 +185,9 @@ that becomes queue items — so the toast and the dock never disagree.
 │  ‹ Repos  /  Our_Movies                                    ┌ ⟳ Sync now ┐ ⋮ │ ← header: title + primary + entity ⋮
 │  ~/BGit/…/Our_Movies                                       └────────────┘   │
 │                                                                             │
-│  🎬 Create Transcriptions · ✨ Create AI descriptions · 🗜 Compress all      │ ← the action-links row, UNDER the title
-│  videos… · 🗜 Compress all images… · 🚫 Git-ignore big files… · ⟳ Rescan     │
-│                                                                             │
+│  🎬 Create Transcriptions · ✨ Create AI descriptions · 🗜 Compress videos   │ ← ONE measured row, UNDER the title;
+│  · 🗜 Compress images · 🚫 Git ignore                        ⋯ More ▾        │   what fits stays inline, the rest
+│                                                                             │   collapses into More ▾ (pinned right)
 │  128 Sync · 5 Undecided · 40 Ignore              search…       ⇅  ⛛  ⋮bulk  │ ← table control row (unchanged)
 │  ☐  render/talk.mp4     …                                                   │
 │  ☐  render/final.mov    …                                                   │
@@ -198,9 +201,12 @@ table's own control row). Its anatomy — LOCKED to match the sister-app `.q-act
   no border, no fill; `text-decoration: none` at rest, **underline on hover**; `cursor: pointer`.
 * **A leading icon in front of every label** — a `lucide-react` glyph sized to the text (~14px), rendered
   as an inline icon before the label with a small gap (`gap: 5px` inside the link).
-* **Even spacing between items** — the row is `display: flex; flex-wrap: wrap; gap: 14px; align-items:
-  center;` with a thin **`·` separator** (`color: var(--lfb-border)`) rendered between consecutive items,
-  exactly like `.q-actions .sep`. The row wraps to a second line when narrow (as drawn above).
+* **Even spacing, ONE line — never wraps** — the row is `display: flex; flex-wrap: nowrap; gap: 14px;
+  align-items: center;` with a thin **`·` separator** (`color: var(--lfb-border)`) between consecutive
+  items, exactly like `.q-actions .sep`. It is a **single row**; it does **not** wrap to a second line.
+  When the items don't all fit, the overflow collapses into a trailing **`More ▾`** menu pinned to the
+  **right** (§3.1) — never a second row. **The labels are short** so more fit inline: **Compress videos**,
+  **Compress images**, **Git ignore** (not the older "Compress all videos…" / "Git-ignore big files…").
 * **Always visible, never gated on a selection** — that is the whole point: the user can act on "all of
   them" without selecting first. When rows **are** checked, the producing items append the count to their
   label so the user knows the scope changed, e.g. **`🎬 Create Transcriptions (12)`** (12 checked); with
@@ -210,12 +216,10 @@ table's own control row). Its anatomy — LOCKED to match the sister-app `.q-act
   `color:#b91c1c` "Delete All Content" link) and always carry a **confirm step** (§4, [menus.mdx
   §6.1](./menus.mdx)) — a small web-based confirmation modal (never `window.confirm`), never a one-click
   mutation.
-* **Optional `More ▾` overflow, only when needed.** The visible row shows the page's actions inline. If a
-  page ever has **more actions than comfortably fit** (a soft cap — keep the common actions inline), the
-  least-common ones move into a trailing **`More ▾`** link that opens a small popover, exactly like the
-  reference's `.q-more-wrap` / `.q-more-menu` (which renders **only** when there are overflow items). The
-  **default is: no overflow — every action is an inline link.** We do **not** hide the whole set behind a
-  menu; the overflow is an escape hatch, not the home.
+* **Measured `More ▾` overflow, pinned right (§3.1).** The row **measures what fits** and keeps that many
+  actions inline (left → right, in catalog order); everything that does not fit collapses into a trailing
+  **`More ▾`** menu at the **right** end of the row. When everything fits, no `More ▾` renders. This is the
+  reference's `.q-more-wrap` / `.q-more-menu` made **width-aware** rather than a hand-set list.
 * **Items that make no sense for the current page/selection are omitted**, not shown disabled.
 
 **Placement vs. the header.** The page **title** (and any breadcrumb + the page's single **primary**
@@ -233,6 +237,32 @@ page-level home and is always present. The two never duplicate an item.
 The action-links row (always present on a list page, producing-item labels reflecting the checked count) is rendered in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions` component (rewritten from the old dropdown into the inline links row; fed a `scope` = a root path + the checked paths, and an action list), rendered beneath the title by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/PageHeader.tsx` — `PageHeader` (its below-title `actions` slot).
 
+### 3.1 One measured row, overflow into `More ▾` (LOCKED)
+
+The action-links row is **exactly one line high** and **calculates what fits**. The user's rule: *"We only
+have one row of action links, and then the overflow goes into the more. It calculates what fits and whatever
+does not fit rolls into the more, and the more is on the right."* Concretely:
+
+* **Measure, then split.** On layout and on every resize, the row measures its available width and walks the
+  actions **left → right in catalog order**, keeping each action inline while it still fits. The **first
+  action that would not fit — and every action after it — moves into the overflow.**
+* **`More ▾` is pinned to the right.** When any action overflows, a trailing **`More ▾`** link (a down
+  chevron `▾`) renders at the **right end** of the row and opens a small popover listing the overflowed
+  actions **in the same catalog order**. The width reserved for `More ▾` is included in the fit math so it
+  never itself causes a clipped last item.
+* **No overflow → no `More ▾`.** If every action fits, the `More ▾` link is **not** rendered at all.
+* **Order is preserved.** Overflow is purely a function of width, not importance: the actions keep their
+  catalog order across the inline row and the `More ▾` popover, so an action never jumps position. (Producing
+  actions — Create Transcriptions / Create AI descriptions — come first in the catalog, so they are the last
+  to overflow.)
+* **Selection-count labels are measured too.** When rows are checked and a producing label grows to
+  `Create Transcriptions (12)`, the row re-measures, so a wider label can push a later action into `More ▾`.
+* **Red-tinted / confirm-gated actions keep their treatment in the popover** — Compress / Git ignore look and
+  behave identically whether inline or under `More ▾`.
+
+Measuring the available width, splitting the actions into an inline set + an overflow set, and rendering the right-pinned `More ▾` popover only when the overflow set is non-empty are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions` (a `ResizeObserver` on the row container drives a `useLayoutEffect` fit pass that computes `inline[]` / `overflow[]` from each item's measured width + the `·` separators + the reserved `More ▾` width; the popover renders only when `overflow.length > 0`).
+
 ---
 
 ## 4. The per-page action catalog (LOCKED)
@@ -244,10 +274,10 @@ page-level operations, now shown as inline links (they already run through the p
 
 | Page (spec) | Action-links (left → right) | Primary button (header, outside the row) |
 | --- | --- | --- |
-| **One repo** ([one_repo.mdx](./one_repo.mdx)) | Create Transcriptions · Create AI descriptions · Compress all videos… · Compress all images… · Git-ignore big files… · Rescan | **Sync now** |
-| **File System / a directory** ([file_system.mdx](./file_system.mdx), [directories.mdx](./directories.mdx)) | Create Transcriptions · Create AI descriptions · Compress all videos… · Compress all images… · Git-ignore big files… · Track / Sync this directory | — |
-| **Full paths** (flat file table, [full_paths.mdx](./full_paths.mdx)) | Create Transcriptions · Create AI descriptions · Compress all videos… · Git-ignore big files… · IPFS pin · Unpin | — |
-| **Storage detail** ([storages.mdx](./storages.mdx)) | Create Transcriptions · Create AI descriptions · Compress all videos… · Re-index files | **Index files** |
+| **One repo** ([one_repo.mdx](./one_repo.mdx)) | Create Transcriptions · Create AI descriptions · Compress videos · Compress images · Git ignore · Rescan | **Sync now** |
+| **File System / a directory** ([file_system.mdx](./file_system.mdx), [directories.mdx](./directories.mdx)) | Create Transcriptions · Create AI descriptions · Compress videos · Compress images · Git ignore · Track / Sync this directory | — |
+| **Full paths** (flat file table, [full_paths.mdx](./full_paths.mdx)) | Create Transcriptions · Create AI descriptions · Compress videos · Git ignore · IPFS pin · Unpin | — |
+| **Storage detail** ([storages.mdx](./storages.mdx)) | Create Transcriptions · Create AI descriptions · Compress videos · Re-index files | **Index files** |
 | **View one directory** ([directories.mdx](./directories.mdx)) | Create Transcriptions · Create AI descriptions · Compress all… (its files, recursive) | — |
 | **Repos list** ([repos.mdx](./repos.mdx)) | Rescan all · Sync all | **+ Add repo** (whole-list actions; rows are repos, not files) |
 | **IPFS pins** ([ipfs.mdx](./ipfs.mdx)) | Publish IPFS list… · Re-verify pins | — |
@@ -263,12 +293,22 @@ bar ([media_viewer.mdx](./media_viewer.mdx)), not this page row. (View-one-file'
 > links are the page's pre-existing operations shown inline; their engines are specified in their own files
 > ([compression.mdx](./compression.mdx), [compress_inside.mdx](./compress_inside.mdx), [scan.mdx](./scan.mdx), [ipfs_share_files.mdx](./ipfs_share_files.mdx)).
 
-> **Compress links open the Compress Inside dialog (LOCKED).** The **Compress all videos…** /
-> **Compress all images…** action-links do **not** run inline or fire a bare `window.confirm` — they open
-> the **Compress Inside** pop-over dialog ([compress_inside.mdx](./compress_inside.mdx)) scoped to the
-> page's directory, with the **matching kind pre-checked** (videos-only or images-only). They stay
-> **red-tinted, confirm-gated offers** (§3, [menus.mdx §6.1](./menus.mdx)): the dialog *is* the confirm
-> step, and its **Continue** background-queues the per-file-safe batch.
+> **Compress links open the Compress Inside dialog (LOCKED).** The **Compress videos** / **Compress images**
+> action-links do **not** run inline or fire a bare `window.confirm` — they open the **Compress Inside**
+> pop-over dialog ([compress_inside.mdx](./compress_inside.mdx)) scoped to the page's directory, with the
+> **matching kind pre-checked** (videos-only or images-only). They stay **red-tinted, confirm-gated offers**
+> (§3, [menus.mdx §6.1](./menus.mdx)): the dialog *is* the confirm step, and its **Continue**
+> background-queues the per-file-safe batch.
+
+> **The Git ignore link opens the Git Ignore dialog (LOCKED).** The **Git ignore** action-link does **not**
+> run inline or fire a bare confirm — it opens the **Git Ignore** pop-over dialog
+> ([git_ignore.mdx](./git_ignore.mdx)) scoped to the page's **rightmost column that has a selection** (else
+> the deepest open column's directory). The dialog adapts to the selection (one file / many files /
+> directories / a mix), shows a **Recursive** checkbox when a directory is in the set, previews the exact
+> anchored `.gitignore` lines, and its **Apply Git ignore ›** / **Recursive apply ›** primary button writes
+> them into each owning repo's `.gitignore` (skip-already-ignored, multi-repo aware). It stays a **red-tinted,
+> confirm-gated offer** (§3, [menus.mdx §6.1](./menus.mdx)): the dialog *is* the confirm step
+> (charter: "Never add a `.gitignore` entry automatically").
 
 The producing actions are wired to the enqueue endpoints and toast the returned count in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createTranscriptions()` / `createDescriptions()` (call `api.transcribeEnqueue` / `api.describeEnqueue`, toast `willProcess`).
@@ -318,9 +358,10 @@ The routes are mounted on the existing feature routers:
    IPFS pins) shows a single **horizontal action-links row directly beneath the page title** — a flex row
    of **blue text hyperlinks**, each with a **leading icon**, `gap: 14px`, thin `·` separators, wrapping
    when narrow. It is **always present** (not gated on a selection) and is **not** a dropdown.
-2. **No `Actions ▾` dropdown** remains: the actions are **visible inline links** the user clicks in one
-   step. An optional trailing **`More ▾`** link appears **only** when a page has more actions than fit
-   (the default is no overflow — every action is inline).
+2. **One measured row, `More ▾` overflow (§3.1).** The actions are **visible inline links** in a **single,
+   non-wrapping row** that **measures what fits**; whatever does not fit collapses into a **right-pinned
+   `More ▾`** menu — rendered **only** when something overflows — never a second row. Labels are the **short
+   forms** (**Compress videos**, **Compress images**, **Git ignore**). No `Actions ▾` dropdown remains.
 3. **Scope (Rule 1):** with rows checked, an action runs over **exactly** the checked set and its label
    shows the count, e.g. `Create Transcriptions (N)`; with nothing checked it runs over **all files on the
    page, recursively**.
@@ -350,9 +391,13 @@ The routes are mounted on the existing feature routers:
   DESIGN REVERSAL (§0, LOCKED): this REPLACES the earlier "Actions ▾" DROPDOWN. Page actions are now VISIBLE
   inline blue hyperlinks with a leading icon, matching the sister-app processing-queue .q-actions row
   (~/BGit/all/marketing/ai/code/ui/Q/page_processing_queue.js — setupActions()/.q-actions CSS). Row sits
-  UNDER the title (PageHeader below-title slot), NOT in the header's right slot. Optional "More ▾" overflow
-  only when actions overflow; default is no overflow. Destructive links (compress/git-ignore/delete) tinted
-  red + confirm modal.
+  UNDER the title (PageHeader below-title slot), NOT in the header's right slot.
+  ONE MEASURED ROW (§3.1, LOCKED): the row is a SINGLE non-wrapping line (flex-wrap:nowrap) that MEASURES
+  what fits (ResizeObserver + useLayoutEffect) and splits actions into inline[] + overflow[]; the overflow
+  collapses into a RIGHT-PINNED "More ▾" popover rendered only when overflow.length>0 — never a second row.
+  Labels are SHORT: "Compress videos" / "Compress images" / "Git ignore" (was "Compress all videos…" /
+  "Git-ignore big files…"). Destructive links (compress/git-ignore/delete) tinted red + confirm modal.
+  Compress links → compress_inside.mdx dialog; the Git ignore link → git_ignore.mdx dialog.
 
   THREE LOCKED behavior rules (unchanged by the reversal):
    (1) SCOPE — nothing checked => ALL files on the page RECURSIVELY; ≥1 checked => exactly the checked set

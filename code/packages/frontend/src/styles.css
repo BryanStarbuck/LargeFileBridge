@@ -28,6 +28,8 @@
   --lfb-badge-compressed: #f3e6a6; /* c  light yellow (already compressed) */
   --lfb-badge-compressed-ink: #3a3320; /* dark ink for the light-yellow c */
   --lfb-badge-ipfs: #2f6fed; /* i  blue */
+  --lfb-badge-git-ignored: #f2f2f2; /* I  near-white (very light gray) fill — the quietest chip */
+  --lfb-badge-git-ignored-border: #d4d4d4; /* I  hairline border under the white letter */
 
   /* Interesting-directory folder glyph (file_system.mdx §2) — outline (stroke) + fill. The brown reuses
      the repo-badge brown and the blue reuses the IPFS-badge blue so the palette stays coherent. */
@@ -44,7 +46,7 @@
    gap:14px, thin "·" separators, underline on hover, red tint for destructive offers). */
 .lfb-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap; /* ONE measured row (page_actions.mdx §3.1); overflow collapses into "More ▾" */
   gap: 14px;
   align-items: center;
   font-size: 13px;

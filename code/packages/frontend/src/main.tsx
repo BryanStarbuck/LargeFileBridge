@@ -14,6 +14,8 @@ import { ProgressProvider } from "./progress/ProgressContext.js";
 import { ProgressDock } from "./components/ProgressDock.js";
 import { FirstTimeStorageWizardProvider } from "./components/FirstTimeStorageWizard.js";
 import { CompressInsideProvider } from "./components/compress/CompressInsideProvider.js";
+import { GitIgnoreProvider } from "./components/gitignore/GitIgnoreProvider.js";
+import { HoverInfoProvider } from "./components/hoverinfo/HoverInfoContext.js";
 import { HotkeyProvider } from "./lib/hotkeys.js";
 import { ErrorBoundary } from "./components/ErrorBoundary.js";
 import { leftBar } from "./config/left_bar.js";
@@ -74,7 +76,11 @@ function Root() {
       {/* Global keyboard shortcuts + the "?" help overlay (hotkeys.mdx). Inside the router so page
           scopes can register/unregister as routes mount. */}
       <HotkeyProvider>
-        <RouterProvider router={router} />
+        {/* Non-intrusive hover-info state (non_intrusive_tooltip.mdx §4): wraps the app so BOTH the panel in
+            the Sidebar and the lists (badge chips + FS rows) share the one active-hover payload. */}
+        <HoverInfoProvider>
+          <RouterProvider router={router} />
+        </HoverInfoProvider>
         <ProgressDock />
         {/* First-time setup wizard (Transcribe.mdx §3.5): opens when a Transcribe / Get-AI-details action
             hits `needs_setup`. Mounted here so it's inside the query + hotkey providers and only for the
@@ -83,6 +89,9 @@ function Root() {
         {/* The "Compress videos & images inside" pop-over dialog (compress_inside.mdx §2): opens when a
             directory ⋮ "Compress …inside" item or a page "Compress all…" link fires openCompressInside. */}
         <CompressInsideProvider />
+        {/* The "Git ignore" pop-over dialog (git_ignore.mdx §4): opens when a page "Git ignore" link or a
+            file/dir/repo ⋮ item fires openGitIgnore. */}
+        <GitIgnoreProvider />
       </HotkeyProvider>
     </ProgressProvider>
   );

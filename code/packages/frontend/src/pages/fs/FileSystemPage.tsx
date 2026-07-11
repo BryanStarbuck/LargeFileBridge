@@ -3,14 +3,15 @@
 // opens a new column to its right (replacing any columns further right). Every row shows its
 // code badges pinned to the far right, plus a ⋯ kebab and right-click that open the shared entity
 // action menu (menus.mdx §3/§3.1 — the same catalog as the view-one pages).
-import { memo, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 import { ChevronRight, Cloud, File as FileIcon, Folder, Home } from "lucide-react";
 import type { FsEntry, FsListing, FileSystemView } from "@lfb/shared";
 import { viewerRouteForName } from "@lfb/shared";
 import { api } from "@/api/client";
-import { Badges } from "@/components/fs/Badges";
+import { Badges, BADGE_META } from "@/components/fs/Badges";
+import { useHoverInfoSource, type HoverInfo } from "@/components/hoverinfo/HoverInfoContext";
 import { BadgeLegend } from "@/components/fs/BadgeLegend";
 import { EntityKebab, EntityMenuAt, type Action, type MenuPos } from "@/components/menu/EntityMenu";
 import { PageActions, producingActions } from "@/components/menu/PageActions";
@@ -155,11 +156,22 @@ export default function FileSystemPage() {
   // Scope = the currently-selected column's directory (deepest open column), walked recursively (there
   // is no per-row selection in the column browser, so it is always the whole current directory).
   const currentDir = stack[stack.length - 1];
+
+  // Resolve the Git Ignore target set (git_ignore.mdx §2): the RIGHTMOST open column that has a selection →
+  // its checked rows; else the deepest open column's own directory. The column browser tracks a SINGLE
+  // selected entry today (selectedFile — always in the deepest column), so when present it IS that
+  // rightmost-selected-column set → { paths: [it] }; otherwise fall back to { root: currentDir }. Written as
+  // a `paths` array so it stays forward-compatible with a future multi-select affordance.
+  const resolveGitIgnoreTarget = useCallback((): { paths?: string[]; root?: string } => {
+    if (selectedFile) return { paths: [selectedFile] };
+    return currentDir ? { root: currentDir } : {};
+  }, [selectedFile, currentDir]);
+
   const fsActions: Action[] = [
     ...producingActions(() => (currentDir ? { root: currentDir } : {})),
     compressAllVideos(currentDir),
     compressAllImages(currentDir),
-    gitIgnoreBig(),
+    gitIgnoreBig(resolveGitIgnoreTarget()),
     trackSyncDir(),
   ];
 
@@ -308,11 +320,47 @@ const FsRow = memo(function FsRow({
     onSelectFile(entry.path); // keep the row highlighted as we leave
     navigate({ to: viewerRouteForName(entry.name), search: { path: entry.path } });
   };
+
+  // Row hover feeds the non-intrusive hover-info panel (non_intrusive_tooltip.mdx §2/§3.2): a detail block
+  // (name + up to three lines: size, an interest hint, and the modified date or path) FOLLOWED BY one
+  // code-key block per badge on this entry. Combines with the CSS `group` hover (kebab reveal) — spreading
+  // the mouse/focus handlers doesn't disturb :hover.
+  const hoverPayload = useMemo<HoverInfo>(() => {
+    const lines: string[] = [];
+    if (entry.sizeBytes != null) lines.push(formatBytes(entry.sizeBytes));
+    if (entry.interest)
+      lines.push(
+        entry.interest === "big"
+          ? "Holds big files"
+          : entry.interest === "video"
+            ? "Holds videos"
+            : "Holds heavy images",
+      );
+    if (entry.modifiedAt) lines.push(new Date(entry.modifiedAt).toLocaleDateString());
+    else lines.push(middleTruncate(entry.path, 40));
+    return {
+      blocks: [
+        { kind: "detail", title: entry.name, lines: lines.slice(0, 3) },
+        ...entry.badges.map((b) => {
+          const m = BADGE_META[b];
+          return {
+            kind: "code" as const,
+            chip: { letter: m.letter, bg: m.bg, ink: m.ink, border: m.border },
+            name: m.name,
+            line: m.desc,
+          };
+        }),
+      ],
+    };
+  }, [entry]);
+  const hover = useHoverInfoSource(hoverPayload);
+
   return (
     <div
       role="button"
       tabIndex={0}
       style={FSROW_STYLE}
+      {...hover}
       onClick={() => (isDir ? onOpenDir(colIndex, entry.path) : openFile())}
       onContextMenu={(e) => {
         e.preventDefault();

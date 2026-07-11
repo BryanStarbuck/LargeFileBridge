@@ -8,7 +8,7 @@ import type { FsBadge } from "@lfb/shared";
 // The legend rows reuse the SAME name/desc as the hover tooltips (Badges.tsx → BADGE_META), so the two
 // explanations of the letters can never drift. `repo_ancestor` shares the `r` glyph with repo_descendant,
 // so it isn't listed separately here.
-const LEGEND_BADGES: FsBadge[] = ["repo_root", "repo_descendant", "sync", "compress", "compressed", "ipfs"];
+const LEGEND_BADGES: FsBadge[] = ["repo_root", "repo_descendant", "sync", "compress", "compressed", "ipfs", "git_ignored"];
 
 export function BadgeLegend({ className }: { className?: string }) {
   return (

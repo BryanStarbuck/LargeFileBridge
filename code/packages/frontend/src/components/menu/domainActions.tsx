@@ -14,6 +14,7 @@ import { Zap, EyeOff, UploadCloud, DownloadCloud, Share2 } from "lucide-react";
 import type { Action } from "./EntityMenu";
 import { notWiredToast } from "../../lib/pageActions.js";
 import { openCompressInside } from "../../lib/compressInside.js";
+import { openGitIgnore } from "../../lib/gitIgnore.js";
 
 const ICON = "h-3.5 w-3.5";
 
@@ -26,7 +27,7 @@ const ICON = "h-3.5 w-3.5";
 export function compressAllVideos(root?: string): Action {
   return {
     id: "compress-videos",
-    label: "Compress all videos…",
+    label: "Compress videos",
     icon: <Zap className={ICON} />,
     group: "Work",
     danger: true,
@@ -44,7 +45,7 @@ export function compressAllVideos(root?: string): Action {
 export function compressAllImages(root?: string): Action {
   return {
     id: "compress-images",
-    label: "Compress all images…",
+    label: "Compress images",
     icon: <Zap className={ICON} />,
     group: "Work",
     danger: true,
@@ -58,24 +59,20 @@ export function compressAllImages(root?: string): Action {
   };
 }
 
-/** Git-ignore-big-files offer — destructive, confirm-gated, red. Offered per file today. */
-export function gitIgnoreBig(): Action {
+/**
+ * Git ignore offer — opens the Git Ignore pop-over dialog (git_ignore.mdx §1/§4) scoped to the resolved
+ * target set (the checked `paths`, else the deepest open column's `root`). The dialog IS the confirm step
+ * (charter: "Never add a .gitignore entry automatically"), so it stays red-tinted (danger) but no separate
+ * ConfirmDialog is attached. `scope` carries the root/paths this action was built with (git_ignore.mdx §2).
+ */
+export function gitIgnoreBig(scope?: { root?: string; paths?: string[] }): Action {
   return {
     id: "gitignore-big",
-    label: "Git-ignore big files…",
+    label: "Git ignore",
     icon: <EyeOff className={ICON} />,
     group: "Work",
     danger: true,
-    confirm: {
-      title: "Git-ignore the big files here?",
-      body: "Adds matching big files to .gitignore so they sync via IPFS instead of being committed.",
-      confirmLabel: "Git-ignore",
-    },
-    onSelect: () =>
-      notWiredToast(
-        "Batch git-ignore isn't wired yet",
-        "review and ignore big files individually in the File System",
-      ),
+    onSelect: () => openGitIgnore({ paths: scope?.paths, root: scope?.root }),
   };
 }
 

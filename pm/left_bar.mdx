@@ -133,6 +133,28 @@ Pinned to the bottom of the bar, always visible:
 The bottom account slot and its upward-expanding, permission-gated popup menu are handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` component (the account-menu `permissionGate` filter).
 
+### 4.1 The non-intrusive hover-info panel sits just above this slot (LOCKED)
+
+Directly **above** the account slot — between the scrolling nav list and the slot — the bar reserves a
+**fixed block of always-white space** for the **non-intrusive hover-info panel**
+([non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)). This is the out-of-the-way home for the
+explanations that used to float over content: hover a **code badge**, an **interesting-folder glyph**, or a
+**file/directory row**, and its meaning appears **here** instead of in a bubble that covers the row.
+
+* **Reserved height ≈ two nav-item rows.** The bar keeps that much space beneath the last nav item, and it
+  stays **blank white at rest** — so the account slot **never jumps** when a hover starts or ends. (This is
+  why the nav list is not a bare `flex-1` that eats all the space down to the slot; a fixed panel block is
+  carved out above the slot.)
+* **Only what fits, never scrolls or grows.** The panel shows a stack of info blocks — a color-key block per
+  badge/color and an up-to-three-line detail block for a file/directory — and renders **only what fits** in
+  the reserved height; overflow is dropped, and the panel never pushes or overlaps the account slot.
+* The panel's content model, sections, and priority order are owned by
+  [non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx); this bar only **reserves the space and mounts the
+  panel** in the right place.
+
+Reserving the fixed white block and mounting the panel between the nav list and the account slot are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (a fixed-height `<div>` inserted between the closing `</nav>` and the account-slot `div`), rendering `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel`.
+
 ---
 
 ## 5. Layout & behavior
@@ -169,6 +191,10 @@ Resolving a nav item's lucide icon by name (unknown name renders nothing) is han
    claim; hover shows the light-grey fill without changing text color.
 7. The account slot sits at the bottom, is always signed-in (no anonymous state), and its popup
    expands upward.
+8. **Hover-info panel (§4.1):** a fixed block of **always-white space (~two nav-item rows tall)** sits
+   **directly above the account slot**, hosting the **non-intrusive hover-info panel**
+   ([non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)); it is blank white at rest, shows badge / folder
+   / row explanations on hover, shows **only what fits**, and **never** pushes or overlaps the account slot.
 
 <!--
   This file is the styling/behavior spec; pm/left_bar.yaml is the content source of truth the
@@ -178,4 +204,8 @@ Resolving a nav item's lucide icon by name (unknown name renders nothing) is han
   A runtime-conditional "Processing" item (§3.1) is appended as the LAST top-nav item (after Settings,
   before the account slot) ONLY while background work runs, routing to /processing — runtime-injected by
   Sidebar.tsx (NOT a static yaml row; documented as a commented entry in left_bar.yaml). See processing.mdx.
+  §4.1: a FIXED block of always-white space (~2 nav-item rows) is reserved between the nav list and the
+  account slot to host the NON-INTRUSIVE hover-info panel (non_intrusive_tooltip.mdx) — blank at rest so the
+  account slot never jumps; HoverInfoPanel.tsx mounted by Sidebar.tsx between </nav> and the account div.
+  The nav list is therefore NOT a bare flex-1 down to the slot; the panel block is carved out above it.
 -->

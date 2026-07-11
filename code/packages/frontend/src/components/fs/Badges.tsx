@@ -1,15 +1,21 @@
 // The File System code-badge chips (directory.mdx §3): white letter on a solid color square.
-// The backend orders badges[] RIGHTMOST-FIRST — [repo, sync, compress, ipfs] (directory.mdx §5) —
-// so we render the array REVERSED, giving the fixed visual left→right order  i · C/c · S · R/r
+// The backend orders badges[] RIGHTMOST-FIRST — [repo, sync, compress, ipfs, git_ignored] (directory.mdx
+// §5) — so we render the array REVERSED, giving the fixed visual left→right order  I · i · C/c · S · R/r
 // with the repo badge pinned to the far right.
-import { memo } from "react";
+//
+// Every chip is ALSO a hover source for the non-intrusive hover-info panel (non_intrusive_tooltip.mdx §2):
+// hovering/focusing a chip publishes its code-key block into the bottom-of-left-bar panel. The native
+// Tooltip is kept as the accessibility fallback (screen readers + surfaces with no left bar).
+import { memo, useMemo } from "react";
 import type { FsBadge } from "@lfb/shared";
 import { Tooltip } from "../ui/Tooltip.js";
+import { useHoverInfoSource, type HoverInfo } from "../hoverinfo/HoverInfoContext.js";
 
 interface BadgeMeta {
   letter: string;
   bg: string; // CSS var
   ink: string; // letter color
+  border?: string; // optional 1px chip border — needed for the near-white "I" (white letter on near-white)
   name: string; // the short NAME the letter stands for (1–3 words) — the tooltip headline
   desc: string; // one line explaining it, a little longer when needed
 }
@@ -67,7 +73,59 @@ export const BADGE_META: Record<FsBadge, BadgeMeta> = {
     name: "IPFS artifact",
     desc: "An IPFS share / list artifact.",
   },
+  git_ignored: {
+    letter: "I",
+    bg: "var(--lfb-badge-git-ignored)",
+    ink: "#ffffff",
+    border: "var(--lfb-badge-git-ignored-border)",
+    name: "Git-ignored",
+    desc: "Not committed to git — synced over IPFS instead.",
+  },
 };
+
+// One chip. A component (not an inline map body) so it can call the useHoverInfoSource hook at the top level
+// per badge — the chip publishes its code-key block to the hover-info panel on enter/focus.
+function BadgeChip({ b }: { b: FsBadge }) {
+  const m = BADGE_META[b];
+  const payload = useMemo<HoverInfo>(
+    () => ({
+      blocks: [
+        {
+          kind: "code",
+          chip: { letter: m.letter, bg: m.bg, ink: m.ink, border: m.border },
+          name: m.name,
+          line: m.desc,
+        },
+      ],
+    }),
+    [m],
+  );
+  const hover = useHoverInfoSource(payload);
+  return (
+    // Hover/focus the chip → the hover-info panel names what the letter stands for (non_intrusive_tooltip.mdx
+    // §2). The native Tooltip stays as the a11y fallback (directory.mdx §3.5.1).
+    <Tooltip
+      content={
+        <span className="block">
+          <span className="font-semibold">{m.name}</span>
+          <span className="mt-0.5 block text-white/75">{m.desc}</span>
+        </span>
+      }
+    >
+      <span
+        {...hover}
+        className="inline-flex h-4 w-4 items-center justify-center rounded-[3px] text-[10px] font-bold leading-none select-none"
+        style={{
+          backgroundColor: m.bg,
+          color: m.ink,
+          border: m.border ? `1px solid ${m.border}` : undefined,
+        }}
+      >
+        {m.letter}
+      </span>
+    </Tooltip>
+  );
+}
 
 // Memoized — the badge array for a row only changes identity when that row's data changes, so a table
 // re-render (scroll/keystroke/selection) doesn't rebuild every row's chips (performance.mdx P-12).
@@ -75,30 +133,9 @@ export const Badges = memo(function Badges({ badges }: { badges: FsBadge[] }) {
   if (!badges.length) return null;
   return (
     <span className="flex items-center gap-0.5">
-      {badges.slice().reverse().map((b, i) => {
-        const m = BADGE_META[b];
-        return (
-          // Hover/focus the chip → a tooltip names what the letter stands for (directory.mdx §4). One
-          // Tooltip per badge, so every place a badge renders — FS rows, Full Paths, the entity-detail
-          // header strip at the top of the page — explains itself the same way.
-          <Tooltip
-            key={`${b}-${i}`}
-            content={
-              <span className="block">
-                <span className="font-semibold">{m.name}</span>
-                <span className="mt-0.5 block text-white/75">{m.desc}</span>
-              </span>
-            }
-          >
-            <span
-              className="inline-flex h-4 w-4 items-center justify-center rounded-[3px] text-[10px] font-bold leading-none select-none"
-              style={{ backgroundColor: m.bg, color: m.ink }}
-            >
-              {m.letter}
-            </span>
-          </Tooltip>
-        );
-      })}
+      {badges.slice().reverse().map((b, i) => (
+        <BadgeChip key={`${b}-${i}`} b={b} />
+      ))}
     </span>
   );
 });

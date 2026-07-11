@@ -62,6 +62,9 @@ import type {
   CompressBatchResult,
   CompressInsideRequest,
   CompressInsidePlan,
+  GitIgnoreRequest,
+  GitIgnorePlan,
+  GitIgnoreResult,
   TranscribeTools,
   TranscribeResult,
   TranscribeBatchResult,
@@ -238,6 +241,13 @@ export const api = {
   // directory's media and returns the plan immediately; the batch drains in the background.
   compressInside: (req: CompressInsideRequest) =>
     unwrap<CompressInsidePlan>(http.post("/compress/inside", req)),
+  // Git Ignore (git_ignore.mdx §6). plan → the exact anchored .gitignore lines the dialog previews;
+  // apply → writes them into each owning repo's .gitignore (synchronous — a few lines of text). The
+  // dialog invalidates the fs/entity queries on apply so the new "I" git-ignored badge appears.
+  gitIgnorePlan: (req: GitIgnoreRequest) =>
+    unwrap<GitIgnorePlan>(http.post("/git/ignore/plan", req)),
+  gitIgnoreApply: (req: GitIgnoreRequest) =>
+    unwrap<GitIgnoreResult>(http.post("/git/ignore/apply", req)),
   // Transcribe (Transcribe.mdx). Tool status, read an existing transcript, and run transcription over one
   // file / a selected set / a directory-or-repo tree / a whole storage. Writes a .transcription sidecar beside the media.
   transcribeTools: () => unwrap<TranscribeTools>(http.get("/transcribe/tools")),

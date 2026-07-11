@@ -149,7 +149,7 @@ compressed images and videos. … doing an action like compression, and in that,
    the per-op **Waiting** backlog, the batch progress bar, and a **worker-utilization** read of how many of
    the budget's slots are busy ([processing.mdx §3a](./processing.mdx)).
 
-The same parallel queue backs the page-level **"Compress all videos… / images…"** links and the
+The same parallel queue backs the page-level **"Compress videos / Compress images"** links and the
 **"Create Transcriptions / descriptions"** page actions ([page_actions.mdx](./page_actions.mdx)) — every
 "do this to many files" producer feeds the one budgeted, parallel drain.
 

@@ -14,9 +14,11 @@
 // clobbered — the caller keeps syncing over IPFS regardless. Node fs + simple-git only (charter).
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { simpleGit, type SimpleGit } from "simple-git";
 import { storageUnitDir } from "../../shared/store/scopes.js";
 import { expandHome } from "../fs/badges.js";
+import { isGitWorkingTree } from "../store-model/units.service.js";
 import { log } from "../../shared/logging.js";
 
 /** The shared, append-mostly SDL lists that must union-merge instead of conflicting (git_sync.mdx §4.2). */
@@ -282,6 +284,65 @@ export class GitBackbone {
       }
     }
   }
+}
+
+// ── git-ignore helpers (the canonical impls; directories.mdx §3.4a, git_ignore.mdx §5) ──────────
+
+/**
+ * The nearest ancestor directory (INCLUSIVE) that is a git working-tree root — i.e. has a `.git`
+ * (directories.mdx §3.4a). Walks up to the filesystem root; returns null if the path is in no repo.
+ * The single canonical impl (badges.ts re-exports this) so "which repo owns this path" is answered
+ * one way everywhere.
+ */
+export function nearestGitAtOrAbove(dir: string): string | null {
+  let cur = path.resolve(dir);
+  for (;;) {
+    if (isGitWorkingTree(cur)) return cur;
+    const parent = path.dirname(cur);
+    if (parent === cur) return null; // reached the filesystem root
+    cur = parent;
+  }
+}
+
+/**
+ * The subset of `absPaths` that git IGNORES inside `repoRoot`, computed with ONE
+ * `git check-ignore --stdin` invocation (git_ignore.mdx §5.4). The paths are fed newline-joined on
+ * stdin and git echoes back exactly those it ignores (as given, so the returned Set holds the same
+ * absolute strings the caller passed). No shell — the git binary is exec'd directly (charter).
+ *
+ * Exit-code contract: 0 = one or more ignored (stdout lists them), 1 = NONE ignored (no output — NOT
+ * an error), ≥128 = a real failure. So a bare exit-1 (repo with no matching rule) yields an empty Set,
+ * never a throw. Any unexpected failure is logged and treated as "nothing ignored" so a listing/plan
+ * never breaks over it.
+ */
+export function checkIgnore(repoRoot: string, absPaths: string[]): Set<string> {
+  const ignored = new Set<string>();
+  if (absPaths.length === 0) return ignored;
+  let out = "";
+  try {
+    out = execFileSync("git", ["check-ignore", "--stdin"], {
+      cwd: repoRoot,
+      input: absPaths.join("\n") + "\n",
+      encoding: "utf8",
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      maxBuffer: 64 * 1024 * 1024,
+    });
+  } catch (e) {
+    // check-ignore exits 1 when NONE of the inputs are ignored — expected, not an error. Its stdout
+    // still carries whichever inputs WERE ignored (empty on a clean exit-1), so read it off the error.
+    const err = e as { status?: number; stdout?: string | Buffer };
+    if (err.status === 1 && err.stdout != null) {
+      out = err.stdout.toString();
+    } else {
+      log.warn("git", `check-ignore failed in ${repoRoot}: ${(e as Error).message}`);
+      return ignored;
+    }
+  }
+  for (const line of out.split("\n")) {
+    const p = line.trim();
+    if (p) ignored.add(p);
+  }
+  return ignored;
 }
 
 /** Turn a fetch/push error into a user-facing problem, flagging auth failures for re-authentication (git_sync.mdx §5). */

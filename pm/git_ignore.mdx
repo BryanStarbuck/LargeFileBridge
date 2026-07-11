@@ -1,0 +1,322 @@
+---
+title: LargeFileBridge — Git Ignore (the selection-aware pop-over dialog + the .gitignore-writing engine)
+description: The rich pop-over dialog behind the "Git ignore" action — the page-action link under a file-list title (page_actions.mdx §4) and the file/directory/repo triple-dot menu items (menus.mdx §5). Replaces the old bare ConfirmDialog stub with a proper darkened-backdrop pop-over that (1) resolves the TARGET SET from the RIGHTMOST COLUMN THAT HAS A SELECTION (not necessarily the physically rightmost column — the deepest column that actually has ≥1 checked row; with nothing checked anywhere it is the deepest open column's own directory), (2) shapes itself to the selection — one file, many files, one-or-more directories only, or a mix of directories and files — and (3) shows a "Recursive" checkbox ONLY when a directory is in the set. The single primary button sits bottom-right, blue-fill white-text with a trailing right chevron, and reads "Apply Git ignore ›" normally and "Recursive apply ›" while Recursive is on; a "Cancel" link sits to its LEFT. Apply writes anchored, repo-root-relative lines into each owning repo's .gitignore: a FILE → one exact line "/<repo-rel path>"; a DIRECTORY with Recursive ON → the whole folder "/<repo-rel dir>/"; a DIRECTORY with Recursive OFF → the immediate-files-only git idiom "/<dir>/*" + "!/<dir>/*/". A live PREVIEW pane shows the exact lines. Paths git ALREADY ignores are dropped (skip-already-ignored, "(N already ignored)"), a path in NO git repo is excluded with a note (git-ignore only means anything inside a repo), and a selection spanning MULTIPLE repos writes to each repo's own .gitignore, each line relative to its own repo root. LOCKED charter rule: LFB never adds a .gitignore entry on its own — this dialog IS the explicit confirm, and the whole point is to git-ignore big files so they sync via IPFS instead of being committed. Sibling of page_actions.mdx (the "Git ignore" link that opens it), menus.mdx §5 (the file/dir/repo catalog items that open it), git_sync.mdx (the git backbone whose .gitignore rules this honors), directories.mdx (the FS column browser + the new "I" git-ignored badge the applied ignore lights up), file_system.mdx §5.1 (the deepest-column scope rule this generalizes to "rightmost column with a selection"), and compress_inside.mdx (the sibling pop-over this mirrors in shape).
+---
+
+# LargeFileBridge — Git Ignore (the pop-over dialog + the `.gitignore`-writing engine)
+
+The whole reason LFBridge exists is that **git handles the small text files and IPFS handles the big
+ones** ([charter](../CLAUDE.md); [dropbox.mdx](./dropbox.mdx)). For that split to work, the big files must
+be **git-ignored** so they are not committed — LFB then syncs them over IPFS instead. This spec owns the
+**"Git ignore"** action end to end: the **pop-over dialog** the user configures, and the **engine** that
+writes the `.gitignore` lines.
+
+It is the git-side twin of [compress_inside.mdx](./compress_inside.mdx) — same darkened-backdrop pop-over
+shape, same "explicit click is the confirm" posture, same bus+provider plumbing — but it writes text to a
+`.gitignore` rather than transcoding bytes.
+
+Siblings this builds on and does not repeat:
+
+* [page_actions.mdx](./page_actions.mdx) — the page-level **"Git ignore"** action-link (§4 catalog) that
+  opens this dialog scoped to the page's selection.
+* [menus.mdx §5](./menus.mdx) — the per-entity **"Git ignore"** catalog items (repo / directory / file)
+  that open this same dialog.
+* [git_sync.mdx](./git_sync.mdx) — the **Git backbone engine**: which git operations LFB may run, and the
+  `.gitattributes`/`.gitignore` rules a synced tree already lives under. The content rules in §5 honor it
+  (never git-ignore the `.lfbridge/` SDL text, [git_sync.mdx §4.2.1](./git_sync.mdx)).
+* [directories.mdx §3](./directories.mdx) — the code-badge vocabulary; applying an ignore lights up the new
+  **`I` git-ignored badge** ([directories.mdx §3.4a](./directories.mdx)).
+* [file_system.mdx §5.1](./file_system.mdx) — the deepest-column scope rule this **generalizes** into
+  "rightmost column that has a selection" (§2).
+* [non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx) — where hovering the resulting `I` badge explains
+  "Git-ignored" without a floating tooltip.
+
+---
+
+## 1. Why a pop-over, not a bare confirm (LOCKED)
+
+Today the **Git ignore** action is a not-yet-wired stub that pops a generic
+[ConfirmDialog](./page_actions.mdx) ("Git-ignore the big files here?") and toasts "not wired yet"
+(`domainActions.tsx` — `gitIgnoreBig()`). **This spec replaces that** with a proper configuration pop-over,
+for the same reason compress got one ([compress_inside.mdx §1](./compress_inside.mdx)):
+
+* The trigger opens a **modal pop-over**: a fixed full-screen **darkened, semi-transparent backdrop**
+  (`bg-black/40`, what's behind stays faintly visible) with a **centered white card** on top — the app's
+  standard hand-rolled modal, never `window.confirm` / `window.prompt`.
+* Backdrop-click cancels, inner click does not bubble, **Esc** cancels, and the **Cancel** control is
+  focused by default so the write is never one stray **Enter** away.
+* The charter rule holds verbatim: **"Never add a `.gitignore` entry automatically."** The dialog **is** the
+  explicit confirm; nothing is written until the user clicks the primary button.
+
+The dialog is a **web modal, not a native prompt**, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/gitignore/GitIgnoreDialog.tsx` — `GitIgnoreDialog` (the fixed `bg-black/40` overlay + centered card, `stopPropagation`, Esc-to-cancel, Cancel focused).
+
+---
+
+## 2. Resolving the target set — the rightmost column that has a selection (LOCKED)
+
+The action must know **what to ignore** before it can shape the dialog. The rule generalizes the
+File-System scope rule ([file_system.mdx §5.1](./file_system.mdx)) from "the deepest open column" to
+**"the deepest (rightmost) column that actually has a selection"**:
+
+1. **Scan the open columns right → left.** The target column is the **rightmost column that has at least
+   one checked row.** This is **not** necessarily the physically rightmost open column — the user may have
+   drilled two columns deeper without checking anything there; the last column with an actual selection
+   wins.
+2. **The target set is that column's checked rows** — one row or many, files and/or directories, exactly as
+   checked.
+3. **Nothing checked anywhere → the deepest open column's own directory** is the target (a single
+   directory, treated as a one-directory selection). This matches the page-action "nothing checked = act on
+   this directory" default ([page_actions.mdx §1.1](./page_actions.mdx)), and the Recursive checkbox (§3)
+   then governs whole-folder vs immediate-files.
+4. On a **flat table** page (Full paths, a repo file list, a storage detail) there are no columns — the
+   target set is simply the **checked rows**, or, with nothing checked, the page's root directory.
+
+> **Why "has a selection", not "is rightmost" (LOCKED).** A user browses `Home → _Mirror → Politics` and
+> checks two videos in the **_Mirror** column, then clicks into **Politics** to look around without
+> checking anything. "Git ignore" must act on the two checked **_Mirror** videos, not on the empty
+> **Politics** column. The last column the user *committed a selection in* is the intent.
+
+Resolving the rightmost-selected-column target set (walk the open-column stack right→left for the first with checked rows; fall back to the deepest column's dir) is computed in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `resolveGitIgnoreTarget()` (reads the per-column checked sets from the browser state; passes `{ paths }` or `{ root }` to `openGitIgnore()`), with the flat-table twin in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/domainActions.tsx` — `gitIgnoreBig()`.
+
+---
+
+## 3. The dialog anatomy — adaptive to the selection shape (LOCKED)
+
+The dialog reshapes itself to **what is in the target set**. The four selection shapes and how the card
+reads:
+
+| Selection shape | Summary line | Recursive checkbox | Primary-button label |
+| --- | --- | --- | --- |
+| **One file** | "Git-ignore this file" + the file name | **hidden** (files have no subtree) | `Apply Git ignore ›` |
+| **Many files** (no dirs) | "Git-ignore {N} files" | **hidden** | `Apply Git ignore ›` |
+| **One or more directories** (no files) | "Git-ignore {N} folder(s)" | **shown**, default **off** | off → `Apply Git ignore ›` · on → `Recursive apply ›` |
+| **Mix of files + directories** | "Git-ignore {D} folder(s) + {F} files" | **shown**, default **off** (governs the folder part only) | off → `Apply Git ignore ›` · on → `Recursive apply ›` |
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│  🚫  Git ignore                                                 │
+│  2 folders + 4 files  ·  repo Our_Movies                        │
+│                                                                 │
+│   ☐  Recursive  (ignore the whole folder and everything under)  │ ← shown only when a folder is selected; default OFF
+│                                                                 │
+│   These lines will be added to .gitignore:                      │
+│   ┌─────────────────────────────────────────────────────────┐  │
+│   │ /Movies/Trip/*                                           │  │ ← folder, Recursive OFF → immediate files only
+│   │ !/Movies/Trip/*/                                         │  │
+│   │ /Movies/B_Roll/*                                         │  │
+│   │ !/Movies/B_Roll/*/                                       │  │
+│   │ /Movies/hero.mov                                         │  │ ← a checked file → one exact line
+│   │ /Movies/final.mp4                                        │  │
+│   └─────────────────────────────────────────────────────────┘  │
+│   3 paths already ignored — skipped.                            │ ← only when some are already ignored
+│                                                                 │
+│                              Cancel      [ Apply Git ignore › ] │ ← Cancel = link; primary = blue-fill white-text + ›
+└───────────────────────────────────────────────────────────────┘
+```
+
+The controls, all LOCKED:
+
+1. **Header** — a 🚫 (`Ban` / `EyeOff`) glyph + **"Git ignore"**, then a **summary line**: the selection
+   shape (table above) and the **owning repo(s)** — one repo name, or "N repos" when the set spans several
+   (§5.3).
+2. **Recursive checkbox** — rendered **only when the set contains at least one directory**; **default off**.
+   Its label: **"Recursive — ignore the whole folder and everything under it."** It governs the **folder**
+   entries only (files are always exact); see §5.2.
+3. **Preview pane** — a read-only, scrollable block showing the **exact `.gitignore` lines** that Apply
+   will write, recomputed live as Recursive toggles. This is the honesty of the dialog: the user sees the
+   literal text before it lands. When the set spans multiple repos the preview groups lines **by repo**
+   with a small `# <repo>/.gitignore` header per group.
+4. **Already-ignored note** — when some target paths are **already git-ignored**, a muted line **"{N} paths
+   already ignored — skipped."** and those paths are absent from the preview (§5.4).
+5. **Not-in-a-repo note** — when some target paths are **not inside any git repo**, a muted line **"{N} not
+   in a git repo — can't be git-ignored."** and they are absent from the preview (§5.3). If **every** target
+   is outside a repo the primary button is **disabled** (nothing to write).
+6. **Cancel** — a plain **link** (`var(--lfb-primary)` text, no fill) to the **left** of the primary button;
+   closes with no effect.
+7. **Primary button** — bottom-**right**, the app's primary style: **blue fill** (`var(--lfb-primary)`),
+   **white text**, a trailing **right chevron `›`**. Its label is **"Apply Git ignore ›"** normally and
+   **"Recursive apply ›"** while the Recursive checkbox is on. **Disabled** when the preview is empty (every
+   path already ignored or not in a repo).
+
+The adaptive summary, the conditionally-rendered Recursive checkbox, the live preview, and the two skip notes are rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/gitignore/GitIgnoreDialog.tsx` — `GitIgnoreDialog` (state: `recursive`; derives the shape from the plan's `files`/`dirs` counts; the primary label switches on `recursive`; the button is disabled on an empty `plan.lines`).
+
+> **The Recursive default is OFF (LOCKED, and deliberately unlike compress).** [compress_inside.mdx §3](./compress_inside.mdx)
+> defaults its recursive box **on**. Git ignore defaults it **off**, because whole-tree ignoring is the more
+> consequential act and the user asked for a checkbox they "turn on." The button label reflects the state so
+> the consequence is never hidden.
+
+---
+
+## 4. How the dialog is opened (one shared bus)
+
+Every entry point opens the **same** dialog through a single app-level provider + event bus, mirroring the
+compress-inside bus ([compress_inside.mdx §2](./compress_inside.mdx)) so no call-site wires the modal:
+
+1. **Page action-link "Git ignore"** ([page_actions.mdx §4](./page_actions.mdx)) — opens it on the resolved
+   target set (§2).
+2. **File `⋮` → "Git ignore"** ([menus.mdx §5.3](./menus.mdx)) — the one file (shown only when the file is
+   big and not already ignored).
+3. **Directory `⋮` → "Git ignore"** ([menus.mdx §5.2](./menus.mdx)) — that one directory (Recursive checkbox
+   shown).
+4. **Repo `⋮` / entity "more" → "Git ignore"** ([menus.mdx §5.1](./menus.mdx)) — the repo's whole working
+   tree as the single directory (Recursive checkbox shown; default off ignores the immediate big files, on
+   ignores the tree).
+
+Opening the dialog from anywhere is a single bus call (the target set + which repo owns it), handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/gitIgnore.ts` — `openGitIgnore()` / `onGitIgnoreRequested()` (the single-slot bus), consumed by the once-mounted `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/gitignore/GitIgnoreProvider.tsx` — `GitIgnoreProvider` (mounted at the app root in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/main.tsx`).
+
+The per-entity menu items and the page-action link call the bus instead of the old confirm, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the `git-ignore` action's `onSelect` → `openGitIgnore(...)`) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/domainActions.tsx` — `gitIgnoreBig()` (rewired from the `notWiredToast` stub to `openGitIgnore(scope)`).
+
+---
+
+## 5. The `.gitignore` content rules (LOCKED — the engine)
+
+Apply is **plan-then-write**: the dialog already holds a server-computed **plan** (the exact lines, grouped
+by repo, with already-ignored and not-in-repo paths removed); Apply just commits it. The content rules:
+
+### 5.1 Anchored, repo-root-relative lines (LOCKED)
+
+Every line LFB writes is **anchored** with a leading `/` and expressed **relative to the repo root** whose
+`.gitignore` receives it. Anchoring matters: an un-anchored `hero.mov` would ignore **every** `hero.mov`
+anywhere in the tree; `/Movies/hero.mov` ignores **exactly** that one file. LFB never writes a bare,
+un-anchored name for a specific path.
+
+### 5.2 File vs. directory, and what Recursive toggles (LOCKED)
+
+* **A file** → one exact line: **`/<repo-rel path to the file>`**. (Recursive never applies to a file.)
+* **A directory, Recursive ON** → the **whole folder**: **`/<repo-rel dir>/`** (the trailing slash ignores
+  the directory and everything beneath it — git-recursive by nature).
+* **A directory, Recursive OFF** → the **immediate files only**, using git's standard two-line idiom:
+  **`/<repo-rel dir>/*`** followed by **`!/<repo-rel dir>/*/`** (ignore everything directly in the folder,
+  then un-ignore the subdirectories so their contents stay tracked).
+* **A mix** → the file lines and the directory lines above, together; the Recursive checkbox governs **only**
+  the directory lines.
+
+> **This is the "ignore the whole folder" model (LOCKED product decision).** Selecting a directory ignores
+> the directory itself, not a walked list of the big files inside it. That keeps the written `.gitignore`
+> small and legible (one or two lines per folder) and matches the user's mental model of "ignore this
+> folder." The immediate-files-only form (Recursive off) is the git idiom for "the loose big files here but
+> not my organized subfolders."
+
+### 5.3 Which `.gitignore`, and multiple repos (LOCKED)
+
+* Each target path's **owning repo** is the nearest git working tree at or above it. The line goes into
+  **that repo's root `.gitignore`**, relative to **that** repo's root.
+* A selection may **span several repos** (e.g. two checked files in different repos). LFB writes to **each
+  repo's own `.gitignore`**, one grouped block per repo — never a single shared file.
+* A path in **no git repo** cannot be git-ignored (git-ignore only means something inside a repo). Such
+  paths are **excluded** with the §3 "not in a git repo" note; they are never written anywhere.
+* The `.lfbridge/` SDL text is **never** git-ignored ([git_sync.mdx §4.2.1](./git_sync.mdx)) — the engine
+  refuses to emit any line that would ignore a `.lfbridge/` path, as defense-in-depth against the historical
+  defect.
+
+### 5.4 Idempotent, skip-already-ignored, append-only (LOCKED)
+
+* Before planning a line, the engine asks **`git check-ignore`** (run in the owning repo) whether the path
+  is **already ignored**. Already-ignored paths are **dropped** from the plan and counted into the §3
+  "{N} already ignored" note — the engine never writes a duplicate or redundant rule.
+* Writing is **append-only and idempotent**: existing `.gitignore` content is read, the new lines that are
+  not already present are appended (preserving a trailing newline), and the file is rewritten. Re-running
+  the same Apply writes nothing new.
+* LFB **only ever adds** lines here; it never removes or rewrites a user's existing `.gitignore` rules
+  (the one exception is the SDL-committable repair in [git_sync.mdx §4.2.1](./git_sync.mdx), which is a
+  different, protective code path).
+
+Planning the lines (classify each target as file/dir/not-in-repo, group by owning repo, build anchored repo-relative lines per §5.2, drop `git check-ignore` hits, refuse `.lfbridge/`) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.service.ts` — `planGitIgnore()` (returns the `GitIgnorePlan`: `linesByRepo`, `alreadyIgnored`, `notInRepo`), using `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `nearestGitAtOrAbove()` / `checkIgnore()`.
+
+Writing the planned lines into each owning repo's root `.gitignore` (append-only, idempotent, preserve trailing newline) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.service.ts` — `applyGitIgnore()` / `appendIgnoreLines()` (mirrors the existing `ensureLfbridgeIgnored()` append pattern in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts`).
+
+---
+
+## 6. Apply → returns, then the badge lights up (LOCKED)
+
+Unlike compress, git-ignore is **fast** (it writes a few lines of text), so Apply runs **synchronously** on
+the server and returns the result — there is no background batch:
+
+* `POST /api/git/ignore/plan` with `{ paths?: string[], root?: string, recursive: boolean }` returns the
+  **`GitIgnorePlan`** the dialog previews. Exactly one of `paths` (the checked set) / `root` (the deepest
+  column's directory) is used; sending neither is a `400`.
+* `POST /api/git/ignore/apply` with the same body writes the lines and returns
+  **`{ written: number, repos: number, alreadyIgnored: number, notInRepo: number }`**.
+* On success one **toast**: **"{written} paths git-ignored"** (or, for a single repo/one path, the singular
+  form). Nothing eligible → **"Nothing to git-ignore — all {M} already ignored"** (honest no-op, never
+  silent — [sync_process.mdx §6](./sync_process.mdx)).
+* **The `I` badge turns on.** The now-ignored files/directories immediately carry the new **`I`
+  git-ignored** code badge ([directories.mdx §3.4a](./directories.mdx)) in the FS browser and on their
+  entity pages, so the effect is visible at a glance. The `fs` query is invalidated so the badge appears
+  without a manual rescan.
+
+The plan/apply routes and the client methods are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.router.ts` — `POST /ignore/plan` / `POST /ignore/apply` (mounted under `/api/git`), and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `gitIgnorePlan()` / `gitIgnoreApply()` (the latter invalidates the `fs` / `entity` queries on success so the `I` badge appears).
+
+---
+
+## 7. Acceptance criteria
+
+1. **Pop-over, not a bare confirm (§1):** the "Git ignore" action (page link or `⋮` item) opens a
+   darkened-backdrop, centered-card modal — never `window.confirm`, never the old "not wired" toast.
+   Backdrop/Esc cancels; Cancel is default-focused.
+2. **Rightmost-selected-column target (§2):** the set is the **rightmost column that has a checked row**
+   (not necessarily the physically rightmost column); with nothing checked it is the **deepest open
+   column's directory**. Checking two rows in `_Mirror` then clicking into `Politics` ignores the
+   **_Mirror** rows.
+3. **Adaptive shape (§3):** the summary and the Recursive checkbox adapt to one file / many files / one-or-
+   more directories / a mix. The Recursive checkbox appears **only** when a directory is in the set and
+   defaults **off**.
+4. **Primary button (§3):** a single bottom-right **blue-fill white-text** button with a trailing **`›`**,
+   reading **"Apply Git ignore ›"** normally and **"Recursive apply ›"** while Recursive is on, with a
+   **Cancel** link to its left. Disabled when the preview is empty.
+5. **Live preview (§3/§5):** the dialog shows the **exact** anchored, repo-root-relative `.gitignore` lines,
+   grouped by repo, recomputed as Recursive toggles.
+6. **Content rules (§5.2):** a **file** → `/<rel path>`; a **directory Recursive ON** → `/<rel dir>/`; a
+   **directory Recursive OFF** → `/<dir>/*` + `!/<dir>/*/`; a **mix** → both, Recursive governing only the
+   folder lines.
+7. **Multi-repo + not-in-repo (§5.3):** a selection spanning several repos writes to **each** repo's own
+   root `.gitignore`; a path in **no** repo is excluded with the "not in a git repo" note; a `.lfbridge/`
+   path is never ignored.
+8. **Skip-already-ignored, append-only (§5.4):** paths `git check-ignore` already covers are dropped and
+   counted ("{N} already ignored"); writing is append-only and idempotent (re-Apply writes nothing new); LFB
+   never rewrites the user's existing rules.
+9. **Apply result + badge (§6):** Apply is synchronous, toasts **"{written} paths git-ignored"** (or the
+   nothing-to-do line), and the affected entries immediately show the **`I` git-ignored badge** without a
+   manual rescan.
+
+<!--
+  The selection-aware pop-over dialog + the .gitignore-writing ENGINE behind the "Git ignore" action (the
+  page_actions.mdx §4 link + the menus.mdx §5 file/dir/repo catalog items). REPLACES the domainActions.tsx
+  gitIgnoreBig() not-wired ConfirmDialog stub. Git-side twin of compress_inside.mdx (same bg-black/40 pop-over
+  + bus+provider shape).
+  TARGET SET (§2, LOCKED): the RIGHTMOST COLUMN THAT HAS A SELECTION (walk open columns right→left for the
+  first with ≥1 checked row — NOT necessarily the physically rightmost column); nothing checked anywhere =>
+  the DEEPEST open column's own dir (single directory). Generalizes file_system.mdx §5.1. Flat tables: the
+  checked rows, else the page root. resolveGitIgnoreTarget() in FileSystemPage.tsx.
+  DIALOG (§3, LOCKED): adaptive to selection shape — one file / many files / one-or-more dirs / mix. Recursive
+  checkbox shown ONLY when a dir is in the set, DEFAULT OFF (deliberately unlike compress_inside's default-on).
+  Live PREVIEW of exact lines grouped by repo. "(N already ignored)" + "(N not in a git repo)" muted notes.
+  Cancel = LINK to the LEFT of the single PRIMARY button (bottom-right, blue fill / white text / trailing
+  right chevron ›). Label "Apply Git ignore ›" normally, "Recursive apply ›" while Recursive on. Disabled when
+  preview empty. GitIgnoreDialog.tsx.
+  CONTENT RULES (§5, LOCKED — the engine): ANCHORED, repo-root-relative lines (leading /). FILE → "/<rel>";
+  DIR Recursive ON → "/<rel dir>/"; DIR Recursive OFF → "/<dir>/*" + "!/<dir>/*/" (immediate files only, keep
+  subdirs tracked); MIX → both (Recursive governs only the dir lines). "IGNORE THE WHOLE FOLDER" product
+  decision (NOT a walked big-file list). Each path's OWNING repo = nearestGitAtOrAbove; line goes in THAT
+  repo's root .gitignore, relative to THAT root. Multi-repo => write each repo's own .gitignore. Not-in-a-repo
+  => excluded + note. NEVER ignore a .lfbridge/ path (git_sync.mdx §4.2.1). Skip-already-ignored via git
+  check-ignore. Append-only + idempotent; LFB only ADDS lines, never rewrites user rules. planGitIgnore()/
+  applyGitIgnore()/appendIgnoreLines() in backend modules/git/gitignore.service.ts (mirrors describe.service
+  ensureLfbridgeIgnored append pattern); nearestGitAtOrAbove()/checkIgnore() in git.service.ts.
+  APPLY (§6): SYNCHRONOUS (writes text, no background batch). POST /api/git/ignore/plan + /apply
+  {paths?|root?, recursive}. Toast "{written} paths git-ignored" / nothing-to-do. On success the new "I"
+  git-ignored badge (directories.mdx §3.4a) turns on (invalidate fs/entity queries). gitignore.router.ts,
+  client.gitIgnorePlan/gitIgnoreApply. Bus: lib/gitIgnore.ts openGitIgnore()/onGitIgnoreRequested(),
+  GitIgnoreProvider.tsx mounted in main.tsx. Keep in sync with page_actions.mdx §4, menus.mdx §5, git_sync.mdx
+  §4.2.1, directories.mdx §3.4a (the I badge), file_system.mdx §5.1, compress_inside.mdx.
+-->
+</content>
+</invoke>

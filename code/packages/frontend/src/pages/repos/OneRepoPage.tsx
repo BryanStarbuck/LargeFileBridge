@@ -6,7 +6,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
-import { RefreshCw, Settings, ChevronLeft, Network, UploadCloud } from "lucide-react";
+import { RefreshCw, Settings, ChevronLeft, Network } from "lucide-react";
 import { toast } from "sonner";
 import type { FileRow, Decision, RepoDetail, SyncCounts, SyncNowResult } from "@lfb/shared";
 import { formatBytes, viewerRouteForName } from "@lfb/shared";
@@ -23,6 +23,7 @@ import { PageHeader } from "../../components/ui/PageHeader.js";
 import { StatusBanner, FixButton } from "../../components/ui/StatusBanner.js";
 import { Disclosure } from "../../components/ui/Disclosure.js";
 import { type Health } from "../../components/ui/health.js";
+import type { WarningDef } from "../../components/ui/warnings/registry.js";
 import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
 import { clientLog } from "../../lib/clientLog.js";
 
@@ -243,9 +244,11 @@ export function OneRepoPage() {
       {detail && (
         <RepoVerdict
           detail={detail}
+          repoId={repoId}
           onSyncNow={() => syncNow.mutate(undefined)}
           syncing={syncNow.isPending}
           navigate={navigate}
+          onWarningApplied={() => qc.invalidateQueries({ queryKey: ["repo", repoId] })}
         />
       )}
 
@@ -335,14 +338,18 @@ export function OneRepoPage() {
 // ── UC-2 diagnosis: name the first real cause, worst-first, and hand over the one fix. ──────────
 function RepoVerdict({
   detail,
+  repoId,
   onSyncNow,
   syncing,
   navigate,
+  onWarningApplied,
 }: {
   detail: RepoDetail;
+  repoId: string;
   onSyncNow: () => void;
   syncing: boolean;
   navigate: ReturnType<typeof useNavigate>;
+  onWarningApplied?: () => void;
 }) {
   const ipfsDown = detail.ipfs === "unreachable";
   const { synced, pending, undecided } = detail.counts;
@@ -355,16 +362,40 @@ function RepoVerdict({
     ? `Last sync ${relativeTime(detail.lastSyncAt)} · ${detail.peerCount} peer${detail.peerCount === 1 ? "" : "s"}.`
     : undefined;
   let action: React.ReactNode = undefined;
+  // The educate-and-fix warning (warnings.mdx §8) that backs the blue arrow → popup on this banner.
+  // Wired for the two flagship causes (IPFS-down §10.1.2 / files-need-decision §10.2.7); the other
+  // branches keep their inline FixButton until they get their own registry defs.
+  let warning: WarningDef | undefined = undefined;
 
   if (ipfsDown) {
     state = "bad";
     headline = "Syncing is paused — the IPFS engine on this computer isn't running";
     sub = "Decisions still save, but no files can move until IPFS starts.";
-    action = (
-      <FixButton state="bad" onClick={() => navigate({ to: "/ipfs" })}>
-        <UploadCloud className="h-4 w-4" /> Open IPFS
-      </FixButton>
-    );
+    warning = {
+      id: "repo-ipfs-down",
+      state: "bad",
+      headline,
+      sub,
+      popup: {
+        whatThisIs:
+          "IPFS is the local peer-to-peer engine LFBridge uses to move big files between your own computers. It's set up on this machine but isn't running right now, so no bytes can transfer.",
+        whyItMatters:
+          "Your Sync / Ignore decisions still save, but a file that lives only on another computer can't arrive here, and a file only here can't reach the others. Nothing is lost — this is a paused pipe, not a broken file.",
+        options: [
+          {
+            kind: "checkbox",
+            name: "autostart",
+            label: "Also keep IPFS on after I reboot",
+            helper: "Installs the reboot auto-start so syncing survives a restart.",
+            defaultChecked: true,
+          },
+        ],
+        actionLabel: "Start IPFS",
+        apply: async (sel) => {
+          await api.ipfsDaemon({ action: "start", autostart: !!sel.checks.autostart });
+        },
+      },
+    };
   } else if (detail.status === "error") {
     state = "bad";
     headline = "This repo hit an error on its last sync";
@@ -387,6 +418,46 @@ function RepoVerdict({
     state = "warn";
     headline = `${undecided} file${undecided === 1 ? "" : "s"} need${undecided === 1 ? "s" : ""} a decision`;
     sub = "Choose Sync or Ignore for them in the table below so LFBridge knows what to move.";
+    const undecidedPaths = detail.files
+      .filter((f) => f.decision === "undecided")
+      .map((f) => `${detail.path}/${f.path}`);
+    warning = {
+      id: "repo-files-need-decision",
+      state: "warn",
+      headline,
+      sub,
+      popup: {
+        whatThisIs: `LFBridge found ${undecided} large file${undecided === 1 ? "" : "s"} in this repo that you haven't told it what to do with yet. Until you decide, ${
+          undecided === 1 ? "it is" : "they are"
+        } neither backed up over IPFS nor git-ignored.`,
+        whyItMatters: (
+          <ul className="list-disc space-y-0.5 pl-4">
+            <li>A file left undecided is not synced to your other computers — if this machine dies, it's gone.</li>
+            <li>It also isn't git-ignored, so git may try to commit it.</li>
+          </ul>
+        ),
+        options: [
+          {
+            kind: "radio",
+            group: "decision",
+            value: "sync",
+            label: `Sync all ${undecided} (back ${undecided === 1 ? "it" : "them"} up over IPFS)`,
+            defaultSelected: true,
+          },
+          {
+            kind: "radio",
+            group: "decision",
+            value: "ignore",
+            label: `Ignore all ${undecided} (git-ignore, don't sync)`,
+          },
+        ],
+        actionLabel: (sel) => (sel.radios.decision === "ignore" ? "Ignore these files" : "Apply & sync"),
+        apply: async (sel) => {
+          const decision = (sel.radios.decision as Decision) || "sync";
+          await api.setDecision(repoId, undecidedPaths, decision);
+        },
+      },
+    };
   } else if (pending > 0) {
     state = "warn";
     headline = `${pending} file${pending === 1 ? " is" : "s are"} queued to transfer`;
@@ -402,5 +473,14 @@ function RepoVerdict({
     sub = "Set files to Sync below, or from the File System, to start bridging them.";
   }
 
-  return <StatusBanner state={state} headline={headline} sub={sub} action={action} />;
+  return (
+    <StatusBanner
+      state={state}
+      headline={headline}
+      sub={sub}
+      action={action}
+      warning={warning}
+      onWarningApplied={onWarningApplied}
+    />
+  );
 }

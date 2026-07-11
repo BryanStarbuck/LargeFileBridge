@@ -11,7 +11,7 @@ opens that directory's **`⋮`** menu, and picks **"Compress videos/images insid
 dialog with no options. **This spec replaces it with a proper pop-over configuration dialog** and wires
 **Continue** to a background, **per-file-safe** batch compression of that directory.
 
-The same dialog also backs the page-level **"Compress all videos… / Compress all images…"** action-links
+The same dialog also backs the page-level **"Compress videos / Compress images"** action-links
 ([page_actions.mdx §4](./page_actions.mdx)) on any file-list page — those links open this dialog scoped to
 the page's directory, with the matching kind pre-checked.
 
@@ -55,7 +55,7 @@ first-time-storage wizard ([Transcribe.mdx §3.5](./Transcribe.mdx)) so no call-
 
 1. **Directory `⋮` → "Compress videos/images inside…"** ([menus.mdx §5.2](./menus.mdx)) opens it scoped to
    that directory, both kinds pre-checked.
-2. **Page action-links "Compress all videos…" / "Compress all images…"** ([page_actions.mdx §4](./page_actions.mdx))
+2. **Page action-links "Compress videos" / "Compress images"** ([page_actions.mdx §4](./page_actions.mdx))
    open it scoped to the page's directory, with **only the clicked kind** pre-checked (videos-only or
    images-only) so the label matches what the user asked for.
 
@@ -264,7 +264,7 @@ The Continue toast is emitted from the plan in code:
    safety of §4 is unchanged. Already-compressed media is skipped, not re-encoded.
 8. **Notification (§6):** one honest toast on Continue ("{N} files will be compressed" / the nothing-to-do
    line) and a finish summary that names the error count when non-zero.
-9. **Page-action reuse (§2):** the page-level "Compress all videos… / Compress all images…" links open the
+9. **Page-action reuse (§2):** the page-level "Compress videos / Compress images" links open the
    same dialog scoped to the page's directory with the matching kind pre-checked.
 10. **Durable skip across passes & mesh (§5, [compression.mdx §8.4](./compression.mdx)):** a **second run**
    over the same tree (e.g. after a reboot mid-run) and a **first run on another computer** that already
@@ -276,7 +276,7 @@ The Continue toast is emitted from the plan in code:
 
 <!--
   The rich pop-over dialog behind the directory ⋮ "Compress videos/images inside…" (menus.mdx §5.2) and the
-  page-action "Compress all videos…/images…" links (page_actions.mdx §4). REPLACES the old window.confirm.
+  page-action "Compress videos / Compress images" links (page_actions.mdx §4). REPLACES the old window.confirm.
   DIALOG (§3, LOCKED): Images checkbox · Videos checkbox · "also recursive" checkbox (DEFAULT ON) · a red
   "Warning: PNG files will be turned into JPEG files." line shown ONLY while Images is checked · an
   "Originals" RADIO group [ Hard delete (DEFAULT) | LargeFileBridge trash (recoverable) ] · Continue/Cancel;

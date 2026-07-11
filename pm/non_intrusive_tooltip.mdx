@@ -1,0 +1,181 @@
+---
+title: LargeFileBridge — Non-intrusive Tooltips (the bottom-of-left-bar hover-info panel)
+description: A dedicated, out-of-the-way HOVER-INFO panel pinned to the BOTTOM of the left bar, directly ABOVE the account slot (the signed-in name/email lines). Instead of a floating tooltip that covers whatever the user is pointing at, hovering an important thing — a code badge (R/r·S·C/c·i·I), an interesting-folder glyph, or a file/directory row — publishes its explanation into this fixed panel, so the meaning appears WITHOUT occluding content. The panel occupies a RESERVED block of always-white space kept under the nav list — roughly the height of TWO nav-item rows — that stays white when nothing is hovered (so the account slot never jumps). Its content is a stack of INFO BLOCKS of two kinds: (1) CODE-KEY blocks — the same rounded-rectangle colored letter chip shown in the list, followed by its 1-3 word NAME and one short line of meaning; an entity with several codes stacks one code block per code. (2) A DETAIL block — up to THREE lines of extra information about the hovered file/directory (name, size, path, modified…), OUTSIDE the color keys. Blocks are grouped into two sections — "about this file/directory" and "what the codes mean" — and the panel shows ONLY WHAT FITS in the reserved height (top-priority blocks first; overflow is dropped, never scrolled, never grown, the account slot never pushed). This REPLACES the floating portal tooltip for these left-bar-adjacent surfaces (a native title/aria-label stays for accessibility). Sibling of left_bar.mdx (the bar that reserves the space and renders the panel above the account slot), directories.mdx §3.5.1 (the badge explanations that now surface here), file_system.mdx §1-§3 (the interesting-folder color key), and git_ignore.mdx (the new I git-ignored badge that explains itself here).
+---
+
+# LargeFileBridge — Non-intrusive Tooltips (the left-bar hover-info panel)
+
+A floating tooltip has one flaw: it **covers the thing you are pointing at**, and often the rows around it.
+LFBridge's lists are dense with **colored letter chips** (the code badges — [directories.mdx §3](./directories.mdx))
+and **tinted folder glyphs** (the interesting-directory coloring — [file_system.mdx §1–§3](./file_system.mdx)),
+and a user shouldn't have to memorize any of them. So instead of a pop-up bubble, we give those
+explanations a **fixed home that never occludes anything**: a **hover-info panel** pinned to the **bottom
+of the left bar**, just **above the account slot**.
+
+The user's words: *"an area where we effectively have what we call non-intrusive tooltips … right above
+where the login email address is … When we hover over certain things that are important, we display what
+that is or what that means over there."*
+
+Siblings this builds on and does not repeat:
+
+* [left_bar.mdx](./left_bar.mdx) — the bar itself; it **reserves the white space** for this panel and
+  **renders the panel** above the account slot (§4 there). This file owns what goes *in* the panel.
+* [directories.mdx §3.5.1](./directories.mdx) — the per-badge name/description metadata (`BADGE_META`). Those
+  same names/lines are what a hovered badge shows **here** instead of in a floating bubble.
+* [file_system.mdx §1–§3](./file_system.mdx) — the interesting-folder color key (brown/blue/outline). A
+  hovered tinted glyph explains its color here.
+* [git_ignore.mdx](./git_ignore.mdx) — the new **`I` git-ignored** badge, one of the codes explained here.
+
+---
+
+## 1. Where the panel lives (LOCKED)
+
+* The panel is a **fixed region at the very bottom of the left bar**, **directly above the account slot**
+  (the avatar + signed-in name + Google email lines, [left_bar.mdx §4](./left_bar.mdx)). It is **snapped to
+  the bottom**, between the scrolling nav list and the account slot.
+* It occupies a **reserved block of always-white space** whose height is about **two nav-item rows** — the
+  user's rule: *"think of the height as two left-bar entries … always that much white space under the
+  left-bar entries, and make sure that that's white."*
+* **At rest the panel is blank white.** Reserving the space (rather than growing on demand) means the
+  account slot **never jumps** when a hover starts or ends — the layout is stable; only the panel's
+  *contents* appear and disappear.
+* The panel **never scrolls and never grows.** It shows **only what fits** in the reserved height; anything
+  beyond is dropped (§3). It must never push the account slot down or overlap it.
+
+The reserved white block + the panel mount sit between the nav list and the account slot in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (a fixed-height `<div>` inserted between the closing `</nav>` and the account-slot `div`), rendering `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel`.
+
+---
+
+## 2. What can populate it — the hover sources (LOCKED)
+
+Hovering (or keyboard-focusing) any of these **important** things publishes an explanation into the panel;
+moving off clears it (a short debounce prevents flicker between adjacent chips):
+
+* **A code badge chip** — R/r · S · C/c · i · **I** ([directories.mdx §3](./directories.mdx)). The panel
+  shows that badge's **code-key block** (§3.1).
+* **An interesting-folder glyph** — the brown/blue/outline tinted `<Folder>` / `<Cloud>`
+  ([file_system.mdx §2](./file_system.mdx)). The panel shows the matching **color key** (big-file / video /
+  image) as a code-key block.
+* **A file or directory row** — hovering the row (not a specific chip) shows the **detail block** for that
+  entity (§3.2) **followed by** a code-key block for **each** badge the entity carries. This is the "hover a
+  directory or item, and if there's more information we might want to display it" case.
+
+> **This replaces the floating tooltip for these surfaces (LOCKED).** The old portal tooltip
+> ([directories.mdx §3.5.1](./directories.mdx)) covered content; for badges and folder glyphs the
+> explanation now lands in this panel instead. A native `title` / `aria-label` is still set on the chip for
+> **accessibility** (screen readers, and surfaces with no left bar), but the visible, non-intrusive
+> explanation is the panel. Tooltips elsewhere in the app that are **not** about code keys (e.g. a truncated
+> path's full text) are unaffected.
+
+Each hoverable element registers itself as a source via one shared hook, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoContext.tsx` — `useHoverInfoSource(payload)` (returns `{ onMouseEnter, onMouseLeave, onFocus, onBlur }` that set/clear the app-level hover state), consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/fs/Badges.tsx` — `Badges` (per chip) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FsRow` (the row + the folder glyph).
+
+---
+
+## 3. The content model — info blocks, only what fits (LOCKED)
+
+The panel renders an ordered list of **info blocks**, grouped into two labeled **sections**. It fills the
+reserved height **top-to-bottom by priority** and **drops** any block that would overflow — it never scrolls
+and never grows.
+
+### 3.1 Code-key block (a rounded-rectangle letter + its meaning)
+
+One block per code, so an entity with several codes **stacks one block per code**, one over the other
+(the user: *"it might have more than one, so they'll stack one over the other to show each one of those
+and explain what those are"*). Each block is a single line:
+
+* the **exact chip** shown in the list — the rounded-rectangle colored square with its white letter
+  (`R`/`S`/`C`/`i`/`I`, or a folder-color swatch), rendered from the **same** `BADGE_META` / folder-color
+  tokens so it can never drift;
+* the **name** — a 1–3 word phrase (bold): *Repo root*, *Synced*, *Compress*, *Compressed*, *IPFS
+  artifact*, **Git-ignored**, *Big files here*, *Video here* …;
+* **one short line** of meaning when the name alone isn't enough.
+
+These blocks are the **"what the codes mean"** section.
+
+### 3.2 Detail block (up to three lines about the entity)
+
+When the hovered thing is a **file or directory** (a row, not a bare chip), the panel also shows **one
+detail block** with **at most three lines** of extra information — the user's rule: *"we might want to use
+up to three lines there to give more information about that, but not more than three lines. This is outside
+of those color keys."* Typical lines: the **name**, the **size** (and, for a directory, a short rollup like
+"12 videos • 3 GB"), and the **modified date** or the **absolute path** (middle-truncated). This is the
+**"about this file/directory"** section, and it renders **above** the code keys for a row hover.
+
+### 3.3 Only what fits (LOCKED)
+
+* The reserved height (~two nav rows) bounds the panel. Blocks are laid out **in priority order** and the
+  first block that would exceed the height — and every block after it — is **not rendered**. There is **no
+  scrollbar** and the panel **does not expand**.
+* **Priority order** (so the most useful survive truncation):
+  1. On a **badge/glyph hover**: that badge's code-key block first, then any sibling codes on the same
+     entity.
+  2. On a **row hover**: the **detail block** first, then the entity's code-key blocks (most-significant
+     code first — the badge order R → I, [directories.mdx §3.5](./directories.mdx)).
+* Because the panel treats each block as an independent unit and shows **only what fits**, a busy entity
+  with many codes may show just some of them — that is intended; the rest are simply not shown rather than
+  scrolled or crammed.
+
+The block list, the two sections, the priority order, and the fit-or-drop layout (measure the reserved height, render blocks until the next would overflow, never scroll/grow) are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel` (builds the ordered `blocks[]` from the active `HoverInfo` payload; the fit-or-drop pass), with the payload shape in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoContext.tsx` — `HoverInfo` / `HoverInfoBlock` (`{ kind: "code", chip, name, line } | { kind: "detail", title, lines }`).
+
+---
+
+## 4. The app-level hover state (LOCKED shape)
+
+A single app-level context holds **the one currently-hovered payload** (or none). Sources set it on enter,
+clear it on leave; the panel reads it. One writer at a time — the most recent hover wins — so moving from a
+chip to a row cleanly swaps the content.
+
+* The provider wraps the app once (near the sidebar, so the panel and every list share it).
+* `useHoverInfoSource(payload)` gives an element the enter/leave/focus/blur handlers; passing a **stable**
+  payload avoids needless re-renders.
+* A brief **clear debounce** (≈120 ms) keeps the panel from flickering blank while the pointer crosses the
+  1-px gap between two adjacent chips.
+
+The provider, the single-slot hover state, and the clear debounce are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoContext.tsx` — `HoverInfoProvider` / `useHoverInfo()` (read) / `useHoverInfoSource()` (write), mounted at the app root in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/main.tsx`.
+
+---
+
+## 5. Acceptance criteria
+
+1. **Placement (§1):** a fixed hover-info panel sits at the **bottom of the left bar, directly above the
+   account slot**, occupying a **reserved block of white space ~two nav-item rows tall** that is **blank
+   white at rest**; the account slot never jumps when a hover begins or ends.
+2. **Never intrusive (§1/§2):** the panel **never scrolls, never grows, never pushes or overlaps** the
+   account slot; explanations that used to float over content (badge / folder-glyph tooltips) now appear
+   **here** instead of a bubble, while a `title`/`aria-label` remains for accessibility.
+3. **Hover sources (§2):** hovering (or focusing) a **code badge**, an **interesting-folder glyph**, or a
+   **file/directory row** populates the panel; leaving clears it (debounced against flicker).
+4. **Code-key blocks (§3.1):** each shows the **exact rounded-rectangle letter chip** from the list plus its
+   **name** and one short line; an entity with several codes **stacks one block per code**.
+5. **Detail block (§3.2):** hovering a file/directory row shows **up to three lines** of extra info about it
+   (name, size/rollup, modified/path), **outside** the color keys, above the code keys.
+6. **Only what fits (§3.3):** blocks render in priority order and any that would overflow the reserved
+   height are **dropped** (no scrollbar, no growth); a busy entity may show only some of its codes.
+7. **Single source of truth:** the chips and names come from the **same** `BADGE_META` / folder-color tokens
+   the list uses ([directories.mdx §3.5.1](./directories.mdx)), so the panel and the list can never drift.
+
+<!--
+  The NON-INTRUSIVE hover-info panel pinned to the BOTTOM of the left bar, directly ABOVE the account slot
+  (left_bar.mdx §4). Replaces the FLOATING portal tooltip for code badges + interesting-folder glyphs (a
+  title/aria stays for a11y). User's ask: reserve ~TWO nav-item rows of ALWAYS-WHITE space under the nav;
+  blank white at rest so the account slot never jumps; show ONLY WHAT FITS (drop overflow, never scroll,
+  never grow, never push the account slot).
+  CONTENT (§3): ordered INFO BLOCKS in two sections — "about this file/directory" (a DETAIL block, up to
+  THREE lines: name/size/rollup/modified/path, OUTSIDE the color keys) and "what the codes mean" (CODE-KEY
+  blocks: the exact rounded-rect letter chip + 1-3 word name + one short line; ONE block per code, stacked
+  when an entity has several). Priority: badge/glyph hover → that code first then siblings; row hover →
+  detail first then codes (badge order R→I). Fit-or-drop in HoverInfoPanel.tsx.
+  STATE (§4): one app-level context holds the single currently-hovered payload; sources set on enter / clear
+  on leave via useHoverInfoSource(payload); ≈120ms clear debounce. HoverInfoProvider/useHoverInfo/
+  useHoverInfoSource in components/hoverinfo/HoverInfoContext.tsx (payload HoverInfo / HoverInfoBlock =
+  {kind:"code",chip,name,line} | {kind:"detail",title,lines}); provider mounted in main.tsx; panel rendered
+  by Sidebar.tsx between </nav> and the account slot; sources = Badges.tsx (per chip) + FsRow (row + folder
+  glyph) in FileSystemPage.tsx. Chips/names reuse BADGE_META + folder-color tokens (directories.mdx §3.5.1)
+  so panel & list never drift. Keep in sync with left_bar.mdx §4, directories.mdx §3.5.1, file_system.mdx
+  §1-§3, git_ignore.mdx (the I badge).
+-->
+</content>

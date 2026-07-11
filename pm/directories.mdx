@@ -103,8 +103,9 @@ hyperlinks (each with a leading icon), directly **under the page title**, that i
 surface ([page_actions.mdx](./page_actions.mdx)). It is **not** a dropdown — it replaces the earlier
 `Actions ▾` menu — and it is distinct from the per-row `⋮` kebab / entity `⋮` more-menu owned by
 [menus.mdx §3–§5](./menus.mdx). Its links run a **batch action over the browser's files**: **Create
-Transcriptions · Create AI descriptions · Compress all videos… · Compress all images… · Git-ignore big
-files… · Track / Sync this directory** — the "File System / a directory" row of the per-page catalog
+Transcriptions · Create AI descriptions · Compress videos · Compress images · Git ignore · Track / Sync
+this directory** (short labels; one measured row with a right-pinned `More ▾` overflow) — the "File System /
+a directory" row of the per-page catalog
 ([page_actions.mdx §4](./page_actions.mdx)). The three LOCKED rules (scope =
 checked-subset-else-whole-page-recursive, skip-already-done, background queue) and the toast wording
 are inherited from that spec and **not** restated here.
@@ -320,7 +321,7 @@ Every row can carry a stack of **code badges** on its far right. A badge is a **
 text on a solid colored square** (a small rounded chip). The **letter** names the category, the
 **color** encodes the category, and the **case** (upper vs. lower) encodes a state within it.
 
-There are four categories: **R** (repo), **S** (sync), **C** (compress), **i** (ipfs).
+There are five categories: **R** (repo), **S** (sync), **C** (compress), **i** (ipfs), **I** (git-ignored).
 
 | Badge | Category | Applies to | Color | Meaning |
 | --- | --- | --- | --- | --- |
@@ -331,6 +332,7 @@ There are four categories: **R** (repo), **S** (sync), **C** (compress), **i** (
 | **C** | Compress (should) | file | **bright yellow** | This file **should be compressed** — a video (primary) or image (secondary) that looks **uncompressed**. |
 | **c** | Compressed (done) | file | **light yellow** | We have **already successfully compressed** this file. Lowercase = the finished state. |
 | **i** | IPFS | file **or** directory | **blue** | An **IPFS list / share artifact** (or a markdown list of IPFS files); on a directory, it **publishes** such artifacts underneath it. |
+| **I** | Git-ignored | file **or** directory | **near-white** (light-gray fill, hairline border, white letter) | This entry is **git-ignored** — `git check-ignore` covers it (it is not committed; it syncs via IPFS instead, [git_ignore.mdx](./git_ignore.mdx)). A deliberately faint, de-emphasized marker. |
 
 ### 3.1 The repo badge (R / r) — brown, three shades
 
@@ -402,22 +404,57 @@ gateway (the only-our-content rule, [knowledge/ipfs.mdx §6](../knowledge/ipfs.m
 Detecting the IPFS `i` badge — artifact names, the capped markdown/manifest content peek, and a directory that publishes one underneath — is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `fileIsIpfsArtifact()` and `dirPublishesIpfs()`.
 
+### 3.4a The git-ignored badge (I) — near-white, files and directories
+
+`I` marks anything **git currently ignores** — the counterpart to the [Git Ignore action](./git_ignore.mdx).
+It is how the browser shows, at a glance, that a big file is *already* handled the LFBridge way: **not
+committed to git, synced over IPFS instead** (the whole product bet — [dropbox.mdx](./dropbox.mdx)).
+
+* On a **file or directory**, `I` means **`git check-ignore` covers this path** in its owning repo — a
+  `.gitignore` rule (ours or the user's) ignores it. It is **detect-and-report only**: showing `I` never
+  writes anything; the [Git Ignore dialog](./git_ignore.mdx) is the only thing that *adds* an ignore.
+* **Deliberately faint (LOCKED look).** Git-ignored is a **de-emphasized** state, so its chip is the
+  quietest in the vocabulary: a **near-white** (very light gray) fill with a **white letter `I`** and a
+  **hairline border** carrying the shape. The user's words: *"a very light gray fill with the letter I in
+  white … so light it's near white."* The border is what makes a white-on-near-white letter perceptible
+  without shouting.
+* An entry can carry `I` **alongside** other badges — a synced, compressed, git-ignored video inside a repo
+  shows `r · c · I` (a common combination: LFB ignores the big file in git and syncs it over IPFS).
+
+> **Why `I` and `i` don't collide.** IPFS is **lowercase `i`, blue**; git-ignored is **uppercase `I`,
+> near-white** — the same case-encodes-state, color-encodes-category convention as `R`/`r` and `C`/`c`.
+> The color gulf (saturated blue vs. near-white) and the case difference keep them distinct; the
+> non-intrusive hover panel ([non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)) names either on hover
+> so there is never ambiguity.
+
+Detecting the git-ignored `I` badge (ask `git check-ignore` for the entry against its owning repo, with the result cached on the listing's badge context) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `computeBadges()` (the `git_ignored` push, using `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `checkIgnore()` / `nearestGitAtOrAbove()`, batched per directory in `buildBadgeContext()` so a column costs one `git check-ignore --stdin` per repo, not one spawn per row).
+
 ### 3.5 Ordering & stacking (LOCKED)
 
 * Badges are **pinned to the far right** of the row. When a row has several, they **stack leftward**:
   the newest/rightmost slot is filled first, and each additional badge is added **to its left**.
-* The **fixed right-to-left order** (rightmost first) is: **R/r · S · C/c · i**. So a repo-root
+* The **fixed right-to-left order** (rightmost first) is: **R/r · S · C/c · i · I**. So a repo-root
   directory that also publishes IPFS shows, right to left, `R` then `i` (i.e. `i R` reading
   left-to-right). A synced, uncompressed, IPFS-listed file inside a repo shows, right to left,
-  `r · S · C · i` (rendered `i C S r`).
+  `r · S · C · i` (rendered `i C S r`); if that file is also git-ignored the leftmost `I` is added
+  (rendered `I i C S r`).
 * A row shows **at most one badge per category** (never both `C` and `c`, never two repo shades).
 * Zero badges is normal and common.
 
 ### 3.5.1 Hover tooltip — name what the letter stands for (LOCKED)
 
 A single colored letter is opaque to anyone who hasn't memorized the vocabulary. So **every badge, in
-every place it renders, explains itself on hover** — the user should never have to guess what `S` or `i`
-means, and should never have to open the legend to find out.
+every place it renders, explains itself on hover** — the user should never have to guess what `S`, `i`, or
+`I` means, and should never have to open the legend to find out.
+
+> **The explanation now surfaces in the non-intrusive panel, not a floating bubble (LOCKED).** Hovering a
+> badge publishes its **name + meaning** into the **hover-info panel at the bottom of the left bar**
+> ([non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)) — an out-of-the-way area that **does not cover**
+> the row or its neighbors. An entity with several badges stacks **one code-key block per badge** there. The
+> chip + name come from the **same** `BADGE_META` the legend uses (below), so panel, tooltip, and legend can
+> never drift. A native `title` / `aria-label` is still set on the chip for **accessibility** and for
+> surfaces with no left bar; the floating portal tooltip remains that a11y fallback.
 
 * **Hovering (or keyboard-focusing) a badge shows a tooltip** whose **headline is the NAME the letter
   stands for** — a short **1–3 word** phrase (e.g. **Repo root**, **Inside a repo**, **Synced**,
@@ -457,9 +494,14 @@ White letter (`#ffffff`) on the solid fills below:
 | `--lfb-badge-compress` | `C` | `#f5c518` | bright yellow — should compress |
 | `--lfb-badge-compressed` | `c` | `#f3e6a6` | light yellow — already compressed (dark letter for contrast) |
 | `--lfb-badge-ipfs` | `i` | `#2f6fed` | blue (distinct from the app accent `--lfb-primary #2563eb`) |
+| `--lfb-badge-git-ignored` | `I` | `#f2f2f2` | near-white (very light gray) fill — the quietest chip |
+| `--lfb-badge-git-ignored-border` | `I` | `#d4d4d4` | hairline border that carries the shape under the white letter |
 
 The light-yellow `c` is the one fill light enough that its letter uses a **dark** ink (`#3a3320`)
-rather than white, to stay legible — the only exception to "white letter".
+rather than white, to stay legible — the only exception to "white letter". The git-ignored `I` keeps the
+**white** letter (`#ffffff`) as the user asked, but on its near-white fill the letter alone would be
+invisible, so the **`--lfb-badge-git-ignored-border` hairline** is what makes the chip perceptible — a
+deliberately faint, de-emphasized marker for a de-emphasized state.
 
 Rendering the ordered white-letter-on-color badge chips (with their hover tooltips) from a row's `badges[]`, and the badge legend, is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/fs/Badges.tsx` — `Badges` component (legend in `BadgeLegend.tsx` — `BadgeLegend`).
@@ -479,7 +521,8 @@ type FsBadge =
   | "sync"             // S  bright pink     (file, decision === "sync")
   | "compress"         // C  bright yellow   (file, video/image, looks uncompressed)
   | "compressed"       // c  light yellow    (file, video/image, already compressed)
-  | "ipfs";            // i  blue            (file|dir, IPFS list/share)
+  | "ipfs"             // i  blue            (file|dir, IPFS list/share)
+  | "git_ignored";     // I  near-white      (file|dir, git check-ignore covers it — §3.4a)
 
 interface FsEntry {
   name: string;
@@ -488,7 +531,7 @@ interface FsEntry {
   sizeBytes: number | null;   // files only
   modifiedAt: string | null;  // ISO
   isRepoRoot: boolean;
-  badges: FsBadge[];     // ordered rightmost-first: R/r, S, C/c, i (§3.5)
+  badges: FsBadge[];     // ordered rightmost-first: R/r, S, C/c, i, I (§3.5)
   hasChildren: boolean;  // dir has at least one visible child (drives the disclosure)
 }
 

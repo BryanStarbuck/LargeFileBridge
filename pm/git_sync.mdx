@@ -188,6 +188,13 @@ smell to hunt for**: any code path that git-ignores the very SDL text a Git back
 Ensuring the SDL text is committable on every backbone commit (strip a bare `.lfbridge/` ignore) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.ensureSdlCommittable()` (called from `commitAndPush()` alongside `ensureMergeAttributes()`). The complementary fix — LFB no longer **adds** the ignore for a personal/company/community SDL repo in the first place, only for a `repo`-type code repo — is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `reconcileLfbridgeIgnore(root, type)` (`ignoreLfbridge` for `type: repo`, `unignoreLfbridge` otherwise), called from `ensureStorage()` and `ensureBackingLocations()`.
 
+> **The user-facing Git Ignore action honors this too (LOCKED).** The **Git Ignore dialog**
+> ([git_ignore.mdx](./git_ignore.mdx)) — the deliberate, user-driven way to git-ignore big files so they
+> sync over IPFS instead of committing — writes **anchored, repo-root-relative** lines and **refuses to emit
+> any line that would ignore a `.lfbridge/` path**, as defense-in-depth against re-introducing this defect
+> from the UI. It only ever **adds** big-file ignore lines; the SDL text it never touches
+> ([git_ignore.mdx §5.3–§5.4](./git_ignore.mdx)).
+
 ### 4.3 The strategy, and the fallback when git truly cannot resolve
 
 * LFB merges with git's default **ort** recursive strategy (`git merge --no-edit`), which resolves the

@@ -161,7 +161,7 @@ entity.
                               │  Rescan                                 │
                               │  Repo settings…                         │
                               │  Toggle Synced                          │
-                              │  Git-ignore big files                   │
+                              │  Git ignore                             │
                               │  View pinned on IPFS                    │
                               │  Copy path                              │
                               │  ───────────────────────────────────── │
@@ -196,7 +196,7 @@ don't resolve to a local entity. Each is used verbatim by that entity's **row ke
 | Open | **View pinned on IPFS** | navigate | → [IPFS](./ipfs.mdx) filtered to this repo. |
 | Work | **Rescan** | mutate | Runs the discovery scan for this repo now (`scan` op, [webapp.mdx §11](./webapp.mdx#11-what-shows-up-in-the-dock--the-lfbridge-operation-taxonomy)). |
 | Work | **Sync now** | mutate | Push/fetch this repo's `Sync` files (`sync` op). Never changes a decision. |
-| Work | **Git-ignore big files…** | mutate | One-click ignore of big, not-yet-ignored files (charter nudge; opens a confirm list — never edits `.gitignore` silently, §6.1). |
+| Work | **Git ignore** | mutate | Opens the **Git Ignore pop-over dialog** ([git_ignore.mdx](./git_ignore.mdx)) scoped to this repo's working tree (Recursive checkbox shown; off = the immediate big files, on = the whole tree). Never edits `.gitignore` silently — the dialog is the confirm (§6.1). |
 | Config | **Toggle Synced** | mutate | Flip this repo's master `synced` on/off ([repo_settings §2.2](./repo_settings.mdx)). |
 | Config | **Repo settings…** | navigate | → [Repo settings](./repo_settings.mdx) (the gear target). |
 | Copy | **Copy path** | copy | Absolute repo path to clipboard. |
@@ -215,7 +215,7 @@ The repo action catalog (Open / Work / Config / Copy, and Remove-repo that unreg
 | Work | **Rescan** | mutate | Discovery scan of this directory now (`scan` op). |
 | Work | **Track / Sync this directory** | mutate | Add it to the computer sync unit ([storage §8](./storage_local.mdx#8-synccomputer--the-whole-computer-sync-unit)); the files inside become triage-able. |
 | Work | **Compress videos/images inside…** | mutate | Opens the **Compress Inside pop-over dialog** ([compress_inside.mdx](./compress_inside.mdx)) — a darkened-backdrop modal (Images / Videos / "also recursive" checkboxes, a **red** PNG→JPEG warning shown while Images is checked, and an **Originals** radio [Hard delete default / LargeFileBridge trash]) whose **Continue** background-queues a per-file-safe batch. The batch **fans the eligible files out across the machine's cores (≈90%)** via the **media-aware** background queue — image files wide (1 thread each), video files thread-capped — so a big folder pins the box near 90% until done, not two-at-a-time ([parallelization.mdx §5](./parallelization.mdx), [compress_inside.mdx](./compress_inside.mdx)). **Not** a `window.confirm`. Offer only, **explicit click only** (charter: video 1st, image 2nd; §6.1). |
-| Work | **Git-ignore big files inside…** | mutate | Confirm-list ignore of big files under here (§6.1). |
+| Work | **Git ignore** | mutate | Opens the **Git Ignore pop-over dialog** ([git_ignore.mdx](./git_ignore.mdx)) scoped to this directory (Recursive checkbox shown; off = the immediate files via `/dir/*` + `!/dir/*/`, on = the whole folder `/dir/`). The dialog is the confirm (§6.1). |
 | Flag | **Never IPFS** (toggle) | mutate | Sticky per-directory flag: nothing under here is ever added to IPFS / synced, and no "add to IPFS" offers appear for it (§6.6). Turning it **on** clears any `sync` decisions on files below and stops offering them; turning it **off** returns them to `undecided`. |
 | Flag | **Do not compress** (toggle) | mutate | Sticky per-directory flag: suppress the `C` "should compress" badge/offer for media under here — the user has said "leave these alone" (§6.6). |
 | Copy | **Copy path** | copy | Absolute directory path. |
@@ -235,7 +235,7 @@ The directory action catalog (its Open / Work / Flag groups and the Never IPFS /
 | Work | **Sync now** | mutate | Queue this one file's transfer (`sync` op). Only meaningful when its decision is Sync. |
 | Work | **Compress…** | mutate | Video/image only, **explicit click** (charter §6.1); `compress` op. Hidden when **Do not compress** is on. |
 | Work | **Convert to compressible…** | mutate | PNG→JPEG etc., **after the alpha/functionality safety checks** (charter; warn before converting, §6.1). |
-| Work | **Git-ignore this file** | mutate | Shown only when the file is big and **not** already git-ignored (§6.1). |
+| Work | **Git ignore** | mutate | Shown only when the file is big and **not** already git-ignored. Opens the **Git Ignore pop-over dialog** ([git_ignore.mdx](./git_ignore.mdx)) for this one file (no Recursive checkbox — files have no subtree); Apply writes one anchored line `/​<repo-rel path>` (§6.1). |
 | Work | **Find duplicates (fingerprint)** | mutate | Local-only perceptual/content match (charter; never networks, §6.4). |
 | Flag | **Never IPFS** (toggle) | mutate | Sticky per-file flag: this file is never added to IPFS / synced and shows no "Add to IPFS" offer (§6.6). Turning it **on** clears a `sync` decision back to `ignore`. |
 | Flag | **Do not compress** (toggle) | mutate | Sticky per-file flag: suppress the `C` "should compress" badge/offer for this file (§6.6). |
@@ -290,11 +290,12 @@ These are charter rules the menus must honor — they are **why** several action
 
 ### 6.1 Never act on files without an explicit click
 **Compress, convert (PNG→compressible), and git-ignore are OFFERS, not automatic.** They exist in the
-menu, but selecting one **opens a confirm step** (a review list for the ignore/compress set; the
-alpha-channel/functionality warning for a convert) — LFB never compresses, converts, or writes a
-`.gitignore` entry on its own (charter: "Never compress or alter a file unless the user explicitly
-asks"; "Never add a `.gitignore` entry automatically"). Once confirmed, the work runs through the
-progress dock as its `compress` / `ignore` op ([webapp.mdx §11](./webapp.mdx#11-what-shows-up-in-the-dock--the-lfbridge-operation-taxonomy)).
+menu, but selecting one **opens a pop-over configuration dialog** that *is* the confirm step — the
+[Compress Inside dialog](./compress_inside.mdx) for compress, the [Git Ignore dialog](./git_ignore.mdx)
+for git-ignore, and the alpha-channel/functionality warning for a convert — LFB never compresses,
+converts, or writes a `.gitignore` entry on its own (charter: "Never compress or alter a file unless the
+user explicitly asks"; "Never add a `.gitignore` entry automatically"). Once applied, the work runs
+through the progress dock as its `compress` / `ignore` op ([webapp.mdx §11](./webapp.mdx#11-what-shows-up-in-the-dock--the-lfbridge-operation-taxonomy)).
 
 The explicit-click Compress OFFER with its `window.confirm` step (never compresses a file on its own) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` `compress` handler.
@@ -303,6 +304,14 @@ The explicit-click Compress OFFER with its `window.confirm` step (never compress
 > **Compress videos/images inside…** is **superseded** by the pop-over configuration dialog in
 > [compress_inside.mdx](./compress_inside.mdx) (four inputs + a per-file-safe background batch). The
 > single-file **Compress…** offer (§5.3) is unchanged — it stays the confirm-gated per-file offer above.
+
+> **Git ignore is no longer a bare confirm (§5.1–§5.3).** The old **Git-ignore…** items fired a generic
+> ConfirmDialog (or a not-yet-wired stub). They are **superseded** by the pop-over **Git Ignore dialog**
+> ([git_ignore.mdx](./git_ignore.mdx)): it resolves the target from the **rightmost column with a selection**,
+> adapts to the selection shape, shows a **Recursive** checkbox for directories, **previews the exact
+> `.gitignore` lines**, and its **Apply Git ignore ›** / **Recursive apply ›** button writes anchored,
+> repo-root-relative lines into each owning repo's `.gitignore` (skip-already-ignored, multi-repo aware,
+> never a `.lfbridge/` path).
 
 ### 6.2 Local bytes are never deleted by LFB
 **Remove repo**, **Stop syncing (untrack/unpin)**, and **Remove peer** change only *LFB's tracking* —

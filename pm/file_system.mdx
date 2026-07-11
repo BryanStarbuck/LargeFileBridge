@@ -404,12 +404,17 @@ inherited from [page_actions.mdx §1–§2](./page_actions.mdx) and **not** rest
 
 The File System page's links (per the [page_actions.mdx §4](./page_actions.mdx) catalog), left → right:
 
-**Create Transcriptions · Create AI descriptions · Compress all videos… · Compress all images… ·
-Git-ignore big files… · Track / Sync this directory**
+**Create Transcriptions · Create AI descriptions · Compress videos · Compress images ·
+Git ignore · Track / Sync this directory**
 
+* The links render in **one measured row** that keeps what fits inline and rolls the rest into a
+  right-pinned **`More ▾`** menu ([page_actions.mdx §3.1](./page_actions.mdx)) — never a second row.
 * The producing pair (Create Transcriptions / Create AI descriptions) is present on every file-list page.
-* Compress / Git-ignore links are **red-tinted explicit offers with a confirm modal** ([page_actions.mdx
-  §3](./page_actions.mdx), [menus.mdx §6.1](./menus.mdx)) — never a one-click mutation.
+* Compress / Git ignore links are **red-tinted explicit offers with a confirm modal** ([page_actions.mdx
+  §3](./page_actions.mdx), [menus.mdx §6.1](./menus.mdx)) — never a one-click mutation. **Compress videos /
+  Compress images** open the **Compress Inside** dialog ([compress_inside.mdx](./compress_inside.mdx));
+  **Git ignore** opens the **Git Ignore** dialog ([git_ignore.mdx](./git_ignore.mdx)), whose target is the
+  **rightmost column that has a selection** (§5.1 generalized — [git_ignore.mdx §2](./git_ignore.mdx)).
 * Scope is the **deepest (rightmost) open column's directory** walked recursively when nothing is checked,
   or the checked rows when the browser has a selection ([directories.mdx §1.2](./directories.mdx)) — with
   the **containment guarantee locked in §5.1** below.
@@ -500,8 +505,10 @@ Enforcing downward-only containment of the recursive walk (descend into children
    materialization); each mount's interest uses the shared per-child budget; detected mounts are added to the
    browse allow-roots so browsing in always resolves, while the secret denylist still applies.
 10. **Action-links row (§5):** the File System page shows the standard action-links row under its title with
-    the catalog items above, following [page_actions.mdx](./page_actions.mdx) (visible links, not a
-    dropdown); compress/git-ignore are red-tinted confirm-gated offers.
+    the **short-label** catalog items above (**Compress videos · Compress images · Git ignore**), following
+    [page_actions.mdx](./page_actions.mdx) — a **single measured row** with a right-pinned **`More ▾`**
+    overflow (§3.1), not a dropdown, never a second row. Compress / Git ignore are red-tinted confirm-gated
+    offers opening the [Compress Inside](./compress_inside.mdx) / [Git Ignore](./git_ignore.mdx) dialogs.
 11. **Scope containment (§5.1):** with nothing checked, a producing action's scope is the **deepest
    (rightmost) open column's directory**, walked **recursively downward only**. Walking
    `Home → _Mirror → Politics → Charlie_Kirk_Mi` and clicking **Create Transcriptions** processes **only
@@ -552,7 +559,10 @@ Enforcing downward-only containment of the recursive walk (descend into children
        per-mount rollup, Windows/Linux discovery, server-mode via vendor APIs.
    (3) ACTION-LINKS ROW (§5): delegates ALL behavior to page_actions.mdx (visible links row under the title,
        NOT the old Actions ▾ dropdown). Catalog: Create Transcriptions · Create AI descriptions · Compress
-       all videos… · Compress all images… · Git-ignore big files… · Track / Sync this directory.
+       videos · Compress images · Git ignore · Track / Sync this directory. Labels are the SHORT forms;
+       the row is ONE measured line with a right-pinned "More ▾" overflow (page_actions.mdx §3.1). Compress
+       links → compress_inside.mdx dialog; Git ignore → git_ignore.mdx dialog (target = the rightmost column
+       that HAS a selection, §5.1 generalized).
        §5.1 SCOPE CONTAINMENT (LOCKED): with nothing checked, scope = the DEEPEST (rightmost) open column's
        dir = currentDir = stack[stack.length-1], walked RECURSIVELY DOWNWARD ONLY. Never ascends to a parent
        column (Politics/_Mirror/home) or touches a sibling dir. "Deepest" = last opened column, not last

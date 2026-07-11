@@ -21,6 +21,7 @@ import { PinToggle } from "../../components/PinToggle.js";
 import { usePinCid } from "../../components/usePinCid.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { StatusBanner, FixButton } from "../../components/ui/StatusBanner.js";
+import type { WarningDef } from "../../components/ui/warnings/registry.js";
 import { DiagnosticCard } from "../../components/ui/DiagnosticCard.js";
 import { Disclosure } from "../../components/ui/Disclosure.js";
 import { StatTile, StatTileRow } from "../../components/ui/StatTile.js";
@@ -276,7 +277,14 @@ export function IpfsPage() {
         }
       />
 
-      {node && <NodeVerdict node={node} onFix={() => enforce.mutate()} fixing={enforce.isPending} />}
+      {node && (
+        <NodeVerdict
+          node={node}
+          onFix={() => enforce.mutate()}
+          fixing={enforce.isPending}
+          onWarningApplied={() => qc.invalidateQueries({ queryKey: ["ipfs"] })}
+        />
+      )}
 
       {node && !nodeDown && (
         <StatTileRow>
@@ -385,13 +393,52 @@ export function IpfsPage() {
 }
 
 // ── The verdict banner (use_cases.mdx §5.1 row 2) — worst-first: down > non-compliant > OK. ──────
-function NodeVerdict({ node, onFix, fixing }: { node: IpfsNodeCard; onFix: () => void; fixing: boolean }) {
+function NodeVerdict({
+  node,
+  onFix,
+  fixing,
+  onWarningApplied,
+}: {
+  node: IpfsNodeCard;
+  onFix: () => void;
+  fixing: boolean;
+  onWarningApplied?: () => void;
+}) {
   if (node.health === "unreachable") {
+    // Gap-close (warnings.mdx §10.1.2): this verdict previously had no Fix. The blue arrow now opens
+    // the educate-and-fix popup that actually starts the daemon (with an optional keep-on-reboot).
+    const warning: WarningDef = {
+      id: "ipfs-not-running",
+      state: "bad",
+      headline: "The IPFS engine isn't running",
+      sub: "Your files can't move between computers until it starts.",
+      popup: {
+        whatThisIs:
+          "IPFS is the local peer-to-peer engine that reads, adds, and fetches your pinned files. It's installed on this computer but isn't answering right now, so nothing can transfer.",
+        whyItMatters:
+          "Pins can't be read or added and no file can move in either direction. Your Sync / Ignore decisions and metadata are safe — this is a paused pipe, not a broken file.",
+        options: [
+          {
+            kind: "checkbox",
+            name: "autostart",
+            label: "Also keep IPFS on after I reboot",
+            helper: "Installs the reboot auto-start so syncing survives a restart.",
+            defaultChecked: true,
+          },
+        ],
+        actionLabel: "Start IPFS",
+        apply: async (sel) => {
+          await api.ipfsDaemon({ action: "start", autostart: !!sel.checks.autostart });
+        },
+      },
+    };
     return (
       <StatusBanner
         state="bad"
         headline="The IPFS engine isn't running"
         sub="Your files can't move between computers until it starts. Decisions still save; transfers are paused."
+        warning={warning}
+        onWarningApplied={onWarningApplied}
       />
     );
   }
