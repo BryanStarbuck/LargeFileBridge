@@ -37,9 +37,9 @@ export function RepoSettingsPage() {
       <h1 className="mb-1 mt-2 text-2xl font-bold">Repo settings — {s.name}</h1>
       <div className="mb-6 text-sm text-black/50">{s.path}</div>
 
-      <Section title="Sync">
-        <Toggle label="Synced (bridge this repo's big files)" checked={s.synced}
-          onChange={(v) => patch.mutate({ synced: v })} />
+      <Section title="Pin">
+        <Toggle label="Pinned (bridge this repo's big files)" checked={s.pinned}
+          onChange={(v) => patch.mutate({ pinned: v })} />
       </Section>
 
       <Section title="Big-file threshold override">

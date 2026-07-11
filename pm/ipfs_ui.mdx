@@ -495,11 +495,11 @@ Reusable progress/error/security/auto-start building blocks shared with the runn
 ## 13. Auto-start on reboot (keep IPFS on)
 
 The problem: after a machine restart, the IPFS daemon is **not** running, and nothing brings it back —
-so files silently stop syncing until the user notices and turns it on. Auto-start fixes that.
+so files silently stop pinning until the user notices and turns it on. Auto-start fixes that.
 
 * **Mechanism (macOS).** A per-user **launchd LaunchAgent** — `com.largefilebridge.ipfs` — written to
   `~/Library/LaunchAgents/`, running the **absolute** `ipfs daemon --enable-gc` at **login/boot**
-  (`RunAtLoad`). It is a **sibling** of the scan/sync worker agents ([pm/scan.mdx](./scan.mdx)) but a
+  (`RunAtLoad`). It is a **sibling** of the scan/pin worker agents ([pm/scan.mdx](./scan.mdx)) but a
   distinct, purpose-built plist.
 * **`RunAtLoad` yes, `KeepAlive` no (deliberate).** We want *"start once at reboot/login,"* **not**
   *"relaunch whenever it exits."* With `KeepAlive` off, the app's own **On/Off toggle** still works — a
@@ -692,7 +692,7 @@ detail**.
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │   ◐  Starting IPFS…                                              phase: starting│  ← BIG status hero
-│      Bringing your node online so your big files can sync.                     │
+│      Bringing your node online so your big files can be pinned.                │
 │      ● Initialize repository   ● Start service   ○ Verify health   ○ Keep-on   │  ← step chips (lit as they pass)
 │                                                                               │
 │   ▸ Show technical details (terminal)                                          │  ← collapsed BY DEFAULT

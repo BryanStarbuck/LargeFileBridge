@@ -142,16 +142,16 @@ Sequential pinning is a **defect to fix**, not an acceptable baseline. Any place
 **Canonical budget (unified — one definition).** The `cores − 2` figure this pass uses is now the canonical
 **RESPONSIVE budget** defined in [parallelization.mdx §1](./parallelization.mdx) and exposed as
 `responsiveBudget()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts`.
-The sync pass is its **reference consumer** — the work that runs *alongside* interactive use, so it leaves 2
+The pin pass is its **reference consumer** — the work that runs *alongside* interactive use, so it leaves 2
 cores for the web app + IPFS node rather than running hot at ~90% like the mass-compute budget the job queue
-draws ([performance.mdx P-26](./performance.mdx)). The inline `SYNC_CONCURRENCY = cores − 2` in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` should be
+draws ([performance.mdx P-26](./performance.mdx)). The inline `PIN_CONCURRENCY = cores − 2` in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` should be
 **expressed via `responsiveBudget()`** so there is exactly **one** definition of the number, not a second
 copy that can drift. The two-level fan-out design above is unchanged — this only unifies *where the count
 comes from*.
 
 The bounded fan-out — a `cores − 2` pool across units and one shared `cores − 2` limiter that caps ALL per-file add/pin/fetch work — is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `runPool` + `SYNC_CONCURRENCY` (units) and `ipfsLimiter` + `runUnitSync` (per-file `Promise.all` through the limiter)
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `runPool` + `PIN_CONCURRENCY` (units) and `ipfsLimiter` + `runUnitPin` (per-file `Promise.all` through the limiter)
 
 ---
 
