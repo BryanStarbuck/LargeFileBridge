@@ -427,6 +427,14 @@ function NodeVerdict({
           },
         ],
         actionLabel: "Start IPFS",
+        // §5.3 — async: close the popup, show a dock card while the daemon boots, toast on done, and
+        // refetch the IPFS status so this "engine isn't running" banner clears once it's actually up.
+        progress: {
+          kind: "configure",
+          target: "IPFS engine",
+          doneLabel: "IPFS started",
+          invalidate: [["ipfs"]],
+        },
         apply: async (sel) => {
           await api.ipfsDaemon({ action: "start", autostart: !!sel.checks.autostart });
         },

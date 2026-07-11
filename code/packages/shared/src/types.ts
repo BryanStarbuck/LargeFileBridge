@@ -519,7 +519,8 @@ export type ProgressKind =
   | "fingerprint"
   | "ignore"
   | "import"
-  | "install";
+  | "install"
+  | "configure"; // engine start / config-repair fixes (e.g. Start IPFS from a warning popup)
 
 // One in-flight job as reported by GET /api/progress (server-side) or held optimistically in the
 // browser. `done`/`total` are present only for DETERMINATE jobs (a bar is drawn); `unit` labels the

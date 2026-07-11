@@ -1,6 +1,23 @@
 
 WebApp = Large File Bridge
 
+## Product name — always spell it out in user-facing English
+
+* Anywhere the product name appears in **user-facing English wording inside the
+  product** — UI labels, buttons, banners, notifications, tooltips, onboarding
+  copy, error/warning messages, help text, marketing copy — always write the
+  full three words: **"Large File Bridge"**. Never abbreviate it there.
+* **Do NOT use** abbreviations like **LFB**, **LFBridge**, or **LFB** in any
+  English the user reads in the product.
+  * Example — write: "Large File Bridge found 5 large files in this repo…"
+  * Not: "LFB found 5 large files…" or "LFBridge found 5 large files…"
+* Abbreviations **are fine** for non-user-facing, technical contexts:
+  filesystem directory names, code identifiers, env-var prefixes (`LFB_*`),
+  YAML/CSV file contents and keys, log lines, and internal docs/comments.
+* Rule of thumb: **if a customer reads it as a sentence in the app, spell out
+  "Large File Bridge"; if it's a path, key, or code token, abbreviating is
+  acceptable.**
+
 # Large File Bridge — Charter
 
 `LargeFileBridge` is a syncing big files across a user's computers via IPFS.

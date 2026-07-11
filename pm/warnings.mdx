@@ -349,22 +349,38 @@ warning — its **`targets`** (the actual list of files/directories the warning 
 * The action button is **disabled** until the request is valid: a required radio must be picked **and**,
   for a file-scoped warning, **at least one subject must remain checked**. Its label shows the **live
   checked count** (§4.6).
-* On click, it enters a **pending** state: button shows a spinner + present-tense label ("Applying…",
-  "Starting IPFS…", "Compressing…"), is disabled, and the popup blocks further edits. Cancel stays
-  available and, if pressed mid-apply, requests cancellation where the backend supports it (compression,
-  scans) or is disabled where it cannot (a git-ignore write).
+* On click, the fix runs **asynchronously** — it does **NOT** block the popup. The popup **closes
+  immediately** and the work is **handed off to the Progress dock** (§5.3) so the user can keep working
+  while it runs. (There is a brief guard: the button flips to "Applying…" only for the instant between
+  click and hand-off; it is not a sustained blocking state.) For a **destructive/lossy** fix the second
+  confirm tap (§5.4) happens **before** hand-off, while the popup is still open.
 * **Apply acts on exactly the checked subjects — never the unchecked ones.** The fix receives the chosen
   options **and** the array of checked target ids (§8 `apply(sel, checkedTargetIds)`); it runs Task X
   over precisely that set. Unchecked files are left untouched and the warning may remain (now naming the
   smaller leftover set) on the next refresh.
+* **The fix is dispatched through the shared Progress runner** — `useProgress().run()` in
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/progress/ProgressContext.tsx`,
+  method `run()`. That is what makes it asynchronous, gives it a dock card while it runs, fires the
+  completion notification, and refreshes the page data (§5.3). The registry's `popup.progress`
+  metadata (§8) tells the runner the job `kind`, the dock `target` text, the completion `doneLabel`,
+  and the query keys to `invalidate` when it settles.
 
-### 5.3 Success
-* On success the popup either **closes** and the underlying page + banner **re-derive** their state
-  (the warning disappears or downgrades because its detection condition is now false), OR, for
-  long-running work (compress, big pin), it **hands off to the Progress dock**
-  (`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ProgressDock.tsx`) and closes.
-* A brief success confirmation is acceptable inline before close ("Done — 6 files set to pin"). The
-  banner must reflect the new truth on the next data refresh — **no stale warnings**.
+### 5.3 Success — asynchronous hand-off, bottom notification, then the warning disappears
+The fix always runs as a **background job**, not a modal that freezes the screen. The sequence is:
+1. **The popup closes at once** and the fix begins running in the background.
+2. **A card appears in the Progress dock** (bottom-left,
+   `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ProgressDock.tsx`) — a
+   spinner + "{verb} {target}" — for as long as the work runs. Implemented by the optimistic-job path
+   in `progress/ProgressContext.tsx`, method `run()`.
+3. **When it finishes, a completion toast fires** at the bottom ("6 files set to pin", "IPFS started")
+   — the "has it finished?" confirmation. This is the `toast.success(doneLabel)` at the end of
+   `run()`; a failure instead fires `toast.error` (§5.5).
+4. **The page data is invalidated and refetched** (the `invalidate` keys from `popup.progress`), so the
+   banner **re-derives** its state from the fresh truth. Because the detection condition is now false,
+   **the warning disappears (or downgrades)** on that refetch — **the warning must never linger once the
+   work is actually done**. The banner reflecting the new truth is gated on the refetch, not on the
+   click, precisely so it disappears only when the fix has genuinely completed — no stale warnings, and
+   no premature all-clear.
 
 ### 5.4 Destructive / lossy confirm
 If any chosen option is destructive or lossy (drops alpha, deletes an original, rewrites a file in
@@ -374,10 +390,17 @@ silent destructive apply. This mirrors the charter rule: **never compress or alt
 user explicitly asks**, and warn before losing data (alpha channel, etc.).
 
 ### 5.5 Error
-If the fix fails, the popup **stays open**, keeps the chosen options, and shows a red inline error line
-(`text-sm text-[var(--lfb-bad)]`) with the plain-English reason + a "Try again" affordance (the action
-button re-enables). The durable fault is written to the app error log
-(`~/T/_large_files_bridge/error.err`).
+Because the fix runs asynchronously after the popup closes (§5.2/§5.3), a failure surfaces as a **red
+error toast** at the bottom ("Setting decisions failed", "Starting IPFS failed"), fired by the
+`toast.error` branch of `run()` in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/progress/ProgressContext.tsx`. The dock card
+leaves and, because the fix did not change anything, the follow-up refetch of the `invalidate` keys sees
+the **unchanged truth** — so the **warning stays** (its condition is still true) and the user can re-open
+the arrow and try again. (No success toast fires when every job in the batch failed.) The durable fault is also written to the app error log
+(`~/T/_large_files_bridge/error.err`) and the browser client log. (Exception — a fix whose second confirm
+is still pending, or one dispatched without `popup.progress` metadata, uses the legacy in-popup path:
+the popup stays open and shows a red inline error line, `text-sm text-[var(--lfb-bad)]`, with a "Try
+again" affordance.)
 
 ### 5.6 Dismiss / snooze
 * **Cancel / Esc / backdrop / ×** — closes, no change; the warning remains (it's still true).
@@ -463,14 +486,29 @@ type WarningDef = {
     destructive?: (sel) => boolean;     // true → red button + confirm (§5.4)
     canApply?: (sel) => boolean;        // extra gate; radios-satisfied & ≥1 checked target are implicit
     dismissible?: boolean;              // Improvable offers only; never for `bad`
+    // ASYNC HAND-OFF (§5.2/§5.3). When present, Apply does NOT block the popup: the popup closes at
+    // once, the fix runs as a background job via useProgress().run(), a dock card tracks it, a
+    // completion toast fires when it settles, and the `invalidate` keys refetch so the banner
+    // re-derives and the warning disappears. Omit ⇒ legacy in-popup blocking apply (spinner + inline
+    // error). Every catalogued fix SHOULD supply this so no fix freezes the UI.
+    progress?: {
+      kind: ProgressKind | ((sel) => ProgressKind);    // dock verb + taxonomy ("pin"/"ignore" by radio, "compress", "configure", …)
+      target: string | ((sel, checkedTargetIds) => string);   // dock card text after the verb (repo name, "IPFS engine", …)
+      doneLabel?: string | ((sel, n: number) => string);      // completion toast ("6 files set to pin"); default "N jobs complete"
+      invalidate?: unknown[][];                        // react-query keys to refetch on success → warning disappears
+    };
     // THE FIX — receives the chosen options AND the ids of the CHECKED targets (§5.2). Runs Task X over
     // exactly those ids; unchecked subjects are never touched. checkedTargetIds is [] when no targets.
+    // When `progress` is set this runs as the background job's task; otherwise it is awaited in-popup.
     apply: (sel, checkedTargetIds: string[]) => Promise<void>;
   };
 };
 ```
 
 * A warning **without** a `popup` is informational — banner only, **no arrow button**.
+* A `popup` **with `progress`** runs its fix **asynchronously** (dock card + completion toast +
+  invalidate-driven disappearance, §5.3); a `popup` **without** it falls back to the in-popup blocking
+  apply. New warnings **should** set `progress`.
 * A `popup` **with `targets`** renders the **two-pane** wide layout (§4.0) and its subjects list (§4.5);
   a `popup` **without `targets`** renders the **single-pane** one-click layout.
 * The **live checked count** (§4.6) is derived by the popup from the checked target set — it is NOT
@@ -554,7 +592,7 @@ IPFS (Kubo) is the local peer-to-peer engine that actually moves large git-ignor
 
 **(B) The popup.** *What this is:* the daemon is installed but stopped (or crashed, or reachable only on a wrong API address), so pins can't be read, added, or fetched and transfers between your computers are paused — but your Add to IPFS (pin)/Ignore decisions and metadata are still saved to config. *Why it matters:* no bytes move in either direction; a file that lives only on another machine can't arrive here, and a file only here can't reach the others. Nothing is lost — this is a paused pipe, not a broken file. *Options:* a checkbox "Also keep IPFS on after I reboot" (installs the auto-start LaunchAgent alongside starting — see §10.1.11). *Action button:* "Start IPFS".
 
-**(C) The fix.** POST `/api/ipfs/daemon {action:"start"}` → `controlDaemon("start")`: a watchable job that runs `ensureInit` → `startDaemon` (detached `ipfs daemon --enable-gc`, waits up to 30 s for health) → `enforceCompliance`. Passing `{autostart:true}` also installs the reboot LaunchAgent; `{migrate:true}` covers a repo-migration failure (§10.1.5). If start fails, `diagnoseStartFailure()` names the real cause (deprecated config / migrate / port / lock) instead of a fake timeout, routing to §10.1.3–§10.1.7. *Fix in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.router.ts` — `POST /daemon` (lines 51–69) → `ipfs-node.service.ts` `controlDaemon()` (lines 485–558), `startDaemon()` (lines 369–425); frontend `IpfsOffPage.tsx` `StoppedCard` (lines 128–214).
+**(C) The fix.** POST `/api/ipfs/daemon {action:"start"}` → `controlDaemon("start")`: a watchable job that runs `ensureInit` → `startDaemon` (detached `ipfs daemon --enable-gc`, waits up to 30 s for health) → `enforceCompliance`. Passing `{autostart:true}` also installs the reboot LaunchAgent; `{migrate:true}` covers a repo-migration failure (§10.1.5). If start fails, `diagnoseStartFailure()` names the real cause (deprecated config / migrate / port / lock) instead of a fake timeout, routing to §10.1.3–§10.1.7. **Async (§5.2/§5.3):** from the warning popup the fix runs as a background job — the popup's `progress` metadata uses `kind:"configure"`, `target:"IPFS engine"`, `doneLabel:"IPFS started"`, and invalidates `["ipfs"]` (and, on the repo page, `["repo", repoId]`), so a dock card shows while the daemon boots, a completion toast fires, and the banner clears on refetch. *Fix in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.router.ts` — `POST /daemon` (lines 51–69) → `ipfs-node.service.ts` `controlDaemon()` (lines 485–558), `startDaemon()` (lines 369–425); frontend popup wiring `IpfsPage.tsx` `NodeBanner` warning and `OneRepoPage.tsx` `RepoVerdict` `repo-ipfs-down`, dispatched by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` `doApply()`; legacy `IpfsOffPage.tsx` `StoppedCard` (lines 128–214).
 
 **Notes / gaps.** Merges `ipfs-not-running-appwide`, `ipfs-not-running`, `ipfs-node-unreachable-verdict`, `ipfs-node-unreachable-page`, and the Settings/entity `ipfs-node-unreachable` renderings. **Gap:** the `/ipfs/pins` NodeVerdict red banner has **no wired Fix button** (lines 388–397 pass no `action` prop) — it relies on the DiagnosticCard below (copyable `ipfs daemon` / `brew install ipfs`) and on the app-wide banner routing to `/ipfs/off`; the compliance verdict on the *same* component (§10.1.8) does have a Fix, so this is an inconsistency worth closing. **Gap:** the MediaViewer only greys the IPFS button with a tooltip — no page-level banner. Note two different endpoints/types back this (`api.ipfs` → `IpfsNodeCard` on `/ipfs/pins` vs `api.ipfsNode` → `IpfsNodeStatus` on the dashboard); `api_addr` misconfiguration is a distinct sub-cause the popup should distinguish from a plain "off."
 
@@ -842,7 +880,7 @@ Every repo answers "am I OK?" through one **RepoVerdict** banner on the One-Repo
 
 **(B) The popup.** *What this is:* LFBridge found big files it doesn't yet have instructions for — **Pin** = pin and back up across your computers via IPFS; **Ignore** = leave it alone (still git-ignored, just not bridged). *Why it matters:* nothing moves for undecided files, so your backup is **incomplete** until every big file is decided. *Options:* radios — **◉ Pin all N undecided** (helper: "back them up over IPFS") / **○ Ignore all N undecided** (helper: "git-ignore, don't pin"); plus a checkbox **☐ Also remember this choice for new files here**. There is no correct auto-decision, so the popup presents the choice rather than picking. *Action button:* "Apply & pin" (or "Ignore these files" per the chosen radio).
 
-**(C) The fix.** Writes decisions in bulk: `PATCH /api/repos/:repoId/files {paths, decision}` (`updateRepoConfig` sets `decisions[p] = decision`, or deletes the entry to return a file to undecided). *Fix in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files` (lines 122–150); frontend mutation `OneRepoPage.tsx` `setDecision` (lines 54–62).
+**(C) The fix.** Writes decisions in bulk: `PATCH /api/repos/:repoId/files {paths, decision}` (`updateRepoConfig` sets `decisions[p] = decision`, or deletes the entry to return a file to undecided). **Async (§5.2/§5.3):** from the warning popup the fix runs as a background job — the popup's `progress` metadata uses `kind:"pin"` (or `"ignore"` when the chosen radio is Ignore), `target:` the repo name, `doneLabel:` "N files set to pin/ignore", and invalidates `["repo", repoId]`, so the popup closes at once, a dock card + completion toast appear, and the "N files need a decision" banner disappears on the refetch once the decisions are actually written. *Fix in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files` (lines 122–150); frontend `OneRepoPage.tsx` `RepoVerdict` `repo-files-need-decision` popup + `api.setDecision`, dispatched by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` `doApply()`.
 
 **Notes / gaps.** Ties to the charter category-rollup ("big files git-ignored but not tracked → nudge to decide"). **Gap:** today's banner has **no action button** — the fix is only the per-row Decision dropdown / bulk menu in the table; wiring the blue-arrow bulk-decision popup here is exactly what closes the pattern.
 

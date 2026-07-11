@@ -170,6 +170,7 @@ const VERBS: Record<ProgressKind, string> = {
   ignore: "Ignoring",
   import: "Importing",
   install: "Installing",
+  configure: "Configuring",
 };
 export function verb(kind: ProgressKind): string {
   return VERBS[kind] ?? "Working";

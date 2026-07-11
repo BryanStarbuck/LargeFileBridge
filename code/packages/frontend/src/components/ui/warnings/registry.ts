@@ -4,6 +4,7 @@
 // repo detail / ipfs status / file list the page already loads), so the banner and popup can never
 // disagree with the truth on screen. The §10 catalog documents one WarningDef per canonical warning.
 import type { ReactNode } from "react";
+import type { ProgressKind } from "@lfb/shared";
 import type { Health } from "../health.js";
 
 // A single option in the popup's options region (warnings.mdx §4.3). Radios model a mutually
@@ -68,9 +69,26 @@ export type WarningPopupSpec = {
   canApply?: (sel: WarningSelection) => boolean;
   // Improvable OFFERS only may be dismissed "don't offer again" (§5.6). Never for `bad`.
   dismissible?: boolean;
+  // ASYNC HAND-OFF (§5.2/§5.3). When present, Apply does NOT block the popup: the popup closes at once
+  // and `apply` runs as a BACKGROUND JOB via useProgress().run() — a dock card tracks it, a completion
+  // toast fires when it settles (or a red error toast on failure), and the `invalidate` query keys are
+  // refetched so the banner re-derives and the warning disappears once the work is actually done. Omit
+  // ⇒ legacy in-popup blocking apply (spinner + inline error). New warnings SHOULD supply this.
+  progress?: {
+    // Dock verb + taxonomy ("pin" | "ignore" | "compress" | "configure" | …). May depend on the chosen
+    // options (e.g. the Pin/Ignore radio → "pin" vs "ignore") so the dock verb matches the actual work.
+    kind: ProgressKind | ((sel: WarningSelection) => ProgressKind);
+    // Dock card text after the verb (repo name, "IPFS engine"); may depend on the choices/checked set.
+    target: string | ((sel: WarningSelection, checkedTargetIds: string[]) => string);
+    // Completion toast text ("6 files set to pin"); default is the generic "N jobs complete".
+    doneLabel?: string | ((sel: WarningSelection, count: number) => string);
+    // react-query keys to refetch on SUCCESS (nothing runs on failure) → the warning disappears.
+    invalidate?: unknown[][];
+  };
   // THE FIX (§5.2/§5.3). Receives the chosen options AND the ids of the CHECKED targets — runs Task X
   // over exactly those ids (unchecked subjects untouched); `checkedTargetIds` is [] when there are no
-  // targets. Resolve = success (popup closes, page refetches); reject with an Error = stay open + show it.
+  // targets. With `progress` this IS the background job's task; without it, it is awaited in-popup
+  // (resolve = success → popup closes + page refetches; reject with an Error = stay open + show it).
   apply: (sel: WarningSelection, checkedTargetIds: string[]) => Promise<void>;
 };
 

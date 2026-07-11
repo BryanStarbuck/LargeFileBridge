@@ -394,6 +394,14 @@ function RepoVerdict({
           },
         ],
         actionLabel: "Start IPFS",
+        // §5.3 — async: close the popup, show a dock card while the daemon boots, toast on done, and
+        // refetch this repo so the "pinning paused" banner clears once IPFS is actually up.
+        progress: {
+          kind: "configure",
+          target: "IPFS engine",
+          doneLabel: "IPFS started",
+          invalidate: [["repo", repoId]],
+        },
         apply: async (sel) => {
           await api.ipfsDaemon({ action: "start", autostart: !!sel.checks.autostart });
         },
@@ -463,6 +471,15 @@ function RepoVerdict({
         })),
         targetNoun: "file",
         actionLabel: (sel) => (sel.radios.decision === "ignore" ? "Ignore" : "Apply & pin"),
+        // §5.3 — async: hand off to the dock (verb tracks the Pin/Ignore choice), toast on done, and
+        // refetch this repo so the "N files need a decision" banner disappears once decisions are written.
+        progress: {
+          kind: (sel) => (sel.radios.decision === "ignore" ? "ignore" : "pin"),
+          target: detail.name,
+          doneLabel: (sel, n) =>
+            `${n} file${n === 1 ? "" : "s"} set to ${sel.radios.decision === "ignore" ? "ignore" : "pin"}`,
+          invalidate: [["repo", repoId]],
+        },
         apply: async (_sel, checkedPaths) => {
           const decision = (_sel.radios.decision as Decision) || "sync";
           await api.setDecision(repoId, checkedPaths, decision);

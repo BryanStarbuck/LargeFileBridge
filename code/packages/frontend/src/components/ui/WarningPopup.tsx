@@ -13,6 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, Search } from "lucide-react";
 import { healthColor, healthIcon } from "./health.js";
 import { Disclosure } from "./Disclosure.js";
+import { useProgress } from "../../progress/ProgressContext.js";
 import {
   initialCheckedTargets,
   initialSelection,
@@ -43,6 +44,7 @@ export function WarningPopup({
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false); // second tap needed for a destructive apply
+  const { run } = useProgress(); // §5.3 — async fixes hand off to the bottom Progress dock
 
   const Icon = healthIcon(warning.state);
   const color = healthColor(warning.state);
@@ -99,10 +101,39 @@ export function WarningPopup({
       setConfirming(true); // §5.4 — explicit second tap for a lossy/destructive fix
       return;
     }
+    const ids = [...checked];
+
+    // ASYNC PATH (§5.2/§5.3) — when the warning declares `progress`, the fix runs as a background job:
+    // close the popup at once, hand off to the Progress dock (spinner card), and let run() fire the
+    // completion toast + refetch the `invalidate` keys so the banner re-derives and the warning
+    // disappears once the work is actually done. Errors surface as run()'s red toast (§5.5).
+    if (popup.progress) {
+      const p = popup.progress;
+      const kind = typeof p.kind === "function" ? p.kind(sel) : p.kind;
+      const target = typeof p.target === "function" ? p.target(sel, ids) : p.target;
+      const batchLabel = typeof p.doneLabel === "function" ? p.doneLabel(sel, ids.length) : p.doneLabel;
+      onClose(); // async hand-off — do not block the popup
+      await run(
+        [
+          {
+            kind,
+            target,
+            task: async () => {
+              await popup.apply(sel, ids);
+              onApplied?.();
+            },
+          },
+        ],
+        { invalidate: p.invalidate, batchLabel },
+      );
+      return;
+    }
+
+    // LEGACY BLOCKING PATH — no `progress` metadata: await in-popup and show inline errors.
     setApplying(true);
     setError(null);
     try {
-      await popup.apply(sel, [...checked]);
+      await popup.apply(sel, ids);
       onApplied?.();
       onClose();
     } catch (e) {
