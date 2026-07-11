@@ -16,4 +16,13 @@ export interface LfbColumn<T> {
   // table switches to a fixed layout and emits a <colgroup> so columns don't get squeezed (tables.mdx).
   // Columns without a width share the remaining space.
   width?: string;
+  // Responsive column priority (repos.mdx §3.2.1 / tables.mdx §4a). LOWER number = MORE important
+  // (kept longest); HIGHER = hidden first as the table narrows. UNDEFINED = pinned (never auto-hidden —
+  // the identity/verdict columns). Hiding is presentation-only: a hidden column still appears in the
+  // Sort/Filter dropdowns.
+  priority?: number;
+  // Minimum on-screen width (px) this column needs to render on one line. Drives the responsive budget:
+  // while the sum of visible columns' minWidths (+ leading select + trailing kebab) exceeds the
+  // container, the lowest-priority column is dropped. Sensible defaults by kind when omitted.
+  minWidth?: number;
 }

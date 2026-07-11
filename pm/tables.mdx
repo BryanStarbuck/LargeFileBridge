@@ -222,6 +222,24 @@ tables:
 
 ---
 
+## 4a. Responsive column priority (LOCKED, site-wide)
+
+Every table **prioritizes its columns** and **hides the lowest-priority ones as the table narrows** so a
+cell **never wraps to a second line**. This is a shared `DataTable` behavior — all tables inherit it. The
+full model (the master column stack-rank, the LOWER-number-is-more-important convention, the pinned
+identity/verdict columns that never drop, the min-width budget that drives it, and the rule that hidden
+columns still appear in the Sort/Filter dropdowns) is specified once in
+[repos.mdx §3.2.1](./repos.mdx#321-responsive-column-priority--drop-the-least-important-column-as-the-table-narrows-locked)
+and applies to **every** table. Each table assigns a `priority` (+ optional `minWidth`) per column;
+columns with no `priority` are pinned. Site-wide rule the product owner set: **Peers is the single
+lowest priority (hides first), Size is second-lowest (hides next)**; a table's identity column (Name /
+Repo / File) and its Status verdict are pinned. Implemented in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx`
+(`useResponsiveColumns()`), typed on `LfbColumn` (`priority`, `minWidth`) in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts`.
+
+---
+
 ## 5. Acceptance criteria
 
 1. **Repos, the Full-paths files table, and Communities** each have a **leading ribbon bookmark

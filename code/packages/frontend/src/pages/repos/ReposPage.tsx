@@ -104,10 +104,14 @@ export function ReposPage() {
       accessor: (r) => r.name,
       cell: (r) => <span className="font-semibold text-black">{r.name}</span>,
     },
+    // Responsive column priority (repos.mdx §3.2.1): LOWER number = kept longer; undefined = pinned
+    // (bookmark · name · status never hide). Peers (10) hides first, then Ignored (8), Path (7)…
     {
       id: "path",
       header: "Path",
       kind: "text",
+      priority: 7,
+      minWidth: 160,
       accessor: (r) => r.path,
       cell: (r) => (
         <span className="text-black/50" title={r.path}>
@@ -115,17 +119,17 @@ export function ReposPage() {
         </span>
       ),
     },
-    { id: "synced", header: "Synced", kind: "int", align: "right", accessor: (r) => r.counts.synced,
+    { id: "synced", header: "Synced", kind: "int", align: "right", priority: 6, minWidth: 80, accessor: (r) => r.counts.synced,
       cell: (r) => <span className="text-green-700">{r.counts.synced}</span> },
-    { id: "pending", header: "Pending", kind: "int", align: "right", accessor: (r) => r.counts.pending,
+    { id: "pending", header: "Pending", kind: "int", align: "right", priority: 5, minWidth: 80, accessor: (r) => r.counts.pending,
       cell: (r) => <span className={r.counts.pending > 0 ? "text-amber-600" : ""}>{r.counts.pending}</span> },
-    { id: "undecided", header: "Undecided", kind: "int", align: "right", accessor: (r) => r.counts.undecided,
+    { id: "undecided", header: "Undecided", kind: "int", align: "right", priority: 3, minWidth: 88, accessor: (r) => r.counts.undecided,
       cell: (r) => <span className={r.counts.undecided > 0 ? "text-[var(--lfb-primary)] font-medium" : ""}>{r.counts.undecided}</span> },
-    { id: "ignored", header: "Ignored", kind: "int", align: "right", accessor: (r) => r.counts.ignored,
+    { id: "ignored", header: "Ignored", kind: "int", align: "right", priority: 8, minWidth: 78, accessor: (r) => r.counts.ignored,
       cell: (r) => <span className="text-black/40">{r.counts.ignored}</span> },
-    { id: "peers", header: "Peers", kind: "int", align: "right", accessor: (r) => r.peerCount,
+    { id: "peers", header: "Peers", kind: "int", align: "right", priority: 10, minWidth: 72, accessor: (r) => r.peerCount,
       cell: (r) => <span className={r.peerCount === 0 ? "text-red-600" : ""}>{r.peerCount}</span> },
-    { id: "lastSync", header: "Last sync", kind: "timestamp", accessor: (r) => r.lastSyncAt,
+    { id: "lastSync", header: "Last sync", kind: "timestamp", priority: 4, minWidth: 96, accessor: (r) => r.lastSyncAt,
       cell: (r) => <span title={absoluteTime(r.lastSyncAt)}>{relativeTime(r.lastSyncAt)}</span> },
     { id: "status", header: "Status", kind: "enum", accessor: (r) => r.status, filterOptions: STATUS_OPTIONS,
       cell: (r) => <RepoStatusPill status={r.status} /> },

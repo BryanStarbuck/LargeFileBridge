@@ -289,7 +289,7 @@ export function FullPathsPage() {
       selected.size > 0 ? { paths: [...selected] } : root ? { root } : {},
     ),
     compressAllVideos(root ?? undefined),
-    gitIgnoreBig(),
+    gitIgnoreBig(selected.size > 0 ? { paths: [...selected] } : root ? { root } : {}),
     {
       id: "ipfs-pin",
       label: "IPFS pin",

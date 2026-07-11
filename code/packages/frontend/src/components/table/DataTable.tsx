@@ -7,7 +7,7 @@
 //  * P-03 the selection checkbox column is rendered by hand (leading cell), NOT baked into the TanStack
 //    column model, so `tanColumns` no longer depends on the unstable `selection` object.
 //  * P-05 the search box is debounced — filtering the dataset runs once per pause, not per keypress.
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -90,11 +90,23 @@ export function DataTable<T>({
     [searchKeys],
   );
 
+  // Responsive column priority (repos.mdx §3.2.1 / tables.mdx §4a): measure the container and hide the
+  // lowest-priority columns until the min-width budget fits — so a cell never wraps to a second line.
+  // The BODY/HEAD render from `visibleColumns`; the Sort/Filter dropdowns keep using the full `columns`
+  // so a hidden column can still be sorted/filtered.
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const containerW = useContainerWidth(wrapRef);
+  const hiddenCount = columns.filter((c) => c.priority !== undefined).length > 0; // any priorities set?
+  const visibleColumns = useMemo(
+    () => (hiddenCount ? computeVisibleColumns(columns, containerW, !!selection) : columns),
+    [columns, containerW, selection, hiddenCount],
+  );
+
   // Column model — selection is NOT part of it (P-03), so this only rebuilds when the caller's
   // logical columns change, never when a checkbox toggles.
   const tanColumns = useMemo<ColumnDef<T>[]>(
     () =>
-      columns.map((c) => ({
+      visibleColumns.map((c) => ({
         id: c.id,
         header: c.header,
         accessorFn: (row) => c.accessor(row),
@@ -109,7 +121,7 @@ export function DataTable<T>({
         cell: ({ row }) => (c.cell ? c.cell(row.original) : String(c.accessor(row.original) ?? "")),
         meta: { align: c.align },
       })),
-    [columns],
+    [visibleColumns],
   );
 
   const table = useReactTable({
@@ -179,12 +191,13 @@ export function DataTable<T>({
   // Fixed column widths (charter Tables / devices.mdx §6): when any column declares a `width`, switch to
   // a fixed table layout and emit a <colgroup> so wide-enough columns keep their width instead of being
   // squeezed. Columns with no width share what's left. The leading select + trailing kebab get their own.
-  const hasWidths = columns.some((c) => c.width);
+  const hasWidths = visibleColumns.some((c) => c.width);
 
   return (
     // Full-page-height (repos.mdx §3.3.1): fill mode makes this a flex column so the body scroll
     // region below grows to the bottom of the viewport; the control row + footer stay pinned (shrink-0).
-    <div className={fillHeight ? "flex min-h-0 flex-1 flex-col" : ""}>
+    // wrapRef is measured for responsive column hiding (repos.mdx §3.2.1).
+    <div ref={wrapRef} className={fillHeight ? "flex min-h-0 flex-1 flex-col" : ""}>
       {/* Control row (repos.mdx §3.1) */}
       <div className="flex shrink-0 items-center gap-2 py-2">
         <div className="relative flex-1 max-w-sm">
@@ -340,7 +353,7 @@ export function DataTable<T>({
             {hasWidths && (
               <colgroup>
                 {selection && <col style={{ width: "2rem" }} />}
-                {columns.map((c) => (
+                {visibleColumns.map((c) => (
                   <col key={c.id} style={c.width ? { width: c.width } : undefined} />
                 ))}
                 <col style={{ width: "3rem" }} />
@@ -490,6 +503,56 @@ export function DataTable<T>({
       </div>
     </div>
   );
+}
+
+// ── Responsive column priority (repos.mdx §3.2.1 / tables.mdx §4a) ──────────────
+// Measure a container's live content width with a ResizeObserver (re-runs on window/layout resize).
+function useContainerWidth(ref: RefObject<HTMLElement | null>): number {
+  const [w, setW] = useState<number>(Infinity);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    setW(el.clientWidth);
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) setW(e.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  return w;
+}
+
+// Default min on-screen width (px) per column kind when a column doesn't set `minWidth` (repos.mdx §3.2.1).
+const KIND_MIN: Record<string, number> = { text: 140, timestamp: 96, enum: 100, int: 72, bytes: 84 };
+function colMinWidth<T>(c: LfbColumn<T>): number {
+  return c.minWidth ?? KIND_MIN[c.kind] ?? 100;
+}
+// Fixed overhead the data columns share the row with: leading select cell + trailing chevron/kebab cell.
+const OVERHEAD_BASE = 56; // trailing chevron/kebab cell + cell-padding slack
+const SELECT_W = 32; // leading selection checkbox cell
+
+// Hide the lowest-priority columns until the min-width budget fits the container — so a cell never wraps
+// to a second line (repos.mdx §3.2.1). Columns with UNDEFINED `priority` are PINNED (never dropped); the
+// rest drop by highest `priority` number first (least important). On-screen order is preserved.
+export function computeVisibleColumns<T>(
+  columns: LfbColumn<T>[],
+  containerW: number,
+  hasSelection: boolean,
+): LfbColumn<T>[] {
+  if (!isFinite(containerW) || containerW <= 0) return columns; // pre-measure → show everything
+  const overhead = OVERHEAD_BASE + (hasSelection ? SELECT_W : 0);
+  const shown = new Set(columns.map((c) => c.id));
+  const budget = () =>
+    overhead + columns.filter((c) => shown.has(c.id)).reduce((s, c) => s + colMinWidth(c), 0);
+  // Drop the largest-priority-number (least important) column first; never touch pinned (undefined) ones.
+  const droppable = columns
+    .filter((c) => c.priority !== undefined)
+    .sort((a, b) => b.priority! - a.priority!);
+  for (const c of droppable) {
+    if (budget() <= containerW) break;
+    shown.delete(c.id);
+  }
+  return columns.filter((c) => shown.has(c.id));
 }
 
 // ── Multi-level sort helpers (tables.mdx §3.2) ──────────────────────────────────

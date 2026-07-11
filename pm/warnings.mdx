@@ -260,13 +260,77 @@ Between education and the footer, the popup renders the warning's **options** (f
   "Install background sync", "Fix & apply". A **right chevron** (Lucide `ChevronRight`, `h-4 w-4`)
   sits at the **right side** of the button, after the label (`inline-flex items-center gap-1`).
   Disabled while no valid option is chosen or while applying (§5.2).
+* **When the warning has a subjects list (§4.5), the button label carries the LIVE checked count** —
+  "Apply & sync **— 4 files**", "Compress **3 videos**", "Git-ignore **7 files**". The count is the
+  number of **currently-checked** subjects and **updates the instant** the user checks/unchecks a row
+  (§4.6). If **zero** subjects are checked the button is **disabled** — there is nothing to act on.
 
 > **Locked footer grammar (every warning popup):** Cancel is a **hyperlink on the left**; the action is
-> a **blue (or red-if-destructive) button on the right** with **white text + a right chevron**. The
+> a **blue (or red-if-destructive) button on the right** with **white text + a right chevron**, and —
+> when the warning targets specific files/directories — the **live checked count** in the label. The
 > label changes per warning; the shape never does.
 
 **Component:** `WarningPopup` (new), in
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx`.
+
+### 4.5 The subjects list — the actual files/directories, with checkboxes (LOCKED for file-scoped warnings)
+
+The single most important addition to the popup: **when a warning is about specific files or
+directories, the popup MUST list them.** A non-expert cannot act on "6 files need a decision" without
+seeing *which* 6. The **right column** of the two-pane layout (§4.0) is that list — the warning's
+**`targets`** (§8).
+
+* **What it is.** A scrollable list of the exact subjects the warning found — one row per file (or
+  directory). Each row shows a **checkbox**, the **name/path** (repo-relative or middle-truncated
+  absolute path), and a **sublabel** (size, and/or the fuller path). Media rows may show a small type
+  glyph. The list is the honest, itemized answer to "*which ones?*".
+* **The list header.** A title naming the subject — **"Files this applies to"** / **"Directories this
+  applies to"** / **"Videos this applies to"** — plus the **live count** "**{checked} of {total}
+  selected**" (§4.6) and two quiet link affordances: **"Select all"** and **"Clear"** (select-none).
+  A per-column search box appears when the list is long (> ~30 rows).
+* **Every row is checked by default.** The popup opens with the found set — exactly the count in the
+  headline (the "6") — **all checked**, because the offer *is* "apply Task X to these 6." A
+  `defaultChecked: false` on a target opts a row out at open (rare; e.g. a file we suspect but aren't
+  sure about).
+* **Unchecking excludes.** The user reviews the list and **unchecks any file they don't want the action
+  applied to**. Task X (the fix) is then applied **only to the checked rows** — never to the unchecked
+  ones. This is the core promise: *the popup proposes a set; the user prunes it; Apply acts on exactly
+  what remains checked.*
+* **The action button reflects the pruned set.** As rows are unchecked, the footer button's count falls
+  (§4.4/§4.6): "Apply & sync — 6 files" → uncheck two → "Apply & sync — 4 files". Zero checked ⇒ button
+  disabled.
+* **Selection is independent of the radios/checkboxes on the left.** The left column's **options**
+  (§4.3) decide *what* Task X is (Sync vs. Ignore; which codec; keep-or-replace). The right column's
+  **row checkboxes** decide *which subjects* Task X runs on. Apply receives **both**: the chosen options
+  **and** the list of checked target ids.
+* **Directory-scoped warnings** work the same way, listing directories (e.g. "Compress videos & images
+  inside" per directory). A directory row may show a rollup count (e.g. "12 videos") as its sublabel.
+* **Scale.** For a large found set the list is windowed/virtualized and paged like the app's tables
+  ([tables.mdx](./tables.mdx)); "Select all"/"Clear" operate on the **whole** found set, not just the
+  visible window, and the count reflects the whole set. If the found set was itself capped by a scan
+  cap (e.g. 5,000-file truncation, §10.4), the pane says so and the count is "of the first N."
+
+**Not shown when there are no targets.** A warning with no `targets` (a one-click engine/config/worker
+fix) renders **single-pane** (§4.0) with **no** right column — there is nothing to itemize.
+
+**Component:** the subjects pane is part of `WarningPopup.tsx`; the row model is `WarningTarget` (§8).
+It reuses the app's checkbox + middle-truncate + `formatBytes` conventions.
+
+### 4.6 The live count (the "6" that updates)
+
+Everywhere the popup states **how many subjects the action will touch**, that number is the count of
+**currently-checked** targets and is **reactive** — it recomputes on every check/uncheck with no
+round-trip:
+
+* the **list header**: "**{checked} of {total} selected**";
+* the **footer action button**: "…**— {checked} files**";
+* any **inline count in the educate copy or options** that refers to "these N" should bind to the
+  checked count too, so the whole popup agrees (e.g. an option label "Sync the selected files" rather
+  than a frozen "Sync all 6" once the user has started unchecking).
+
+This gives the user **confirmation before they commit**: they watch the number fall from 6 to 4 as they
+uncheck two, and the button says "Apply & sync — 4 files," so there is no ambiguity about what is about
+to happen. The count is derived state (`checked.size`), never stored redundantly.
 
 ---
 
@@ -274,16 +338,25 @@ Between education and the footer, the popup renders the warning's **options** (f
 
 ### 5.1 Open
 Arrow (§3) or a page action link opens the popup for a given warning `id`. The popup reads the
-warning's registry entry (§8) for its education copy, options, and fix action, plus any **live payload**
-(the actual file list / counts / CIDs) fetched or passed in.
+warning's registry entry (§8) for its education copy, options, fix action, and — for a file-scoped
+warning — its **`targets`** (the actual list of files/directories the warning found). The subjects list
+(§4.5) renders those targets **all checked**, so the popup opens showing exactly the found set (the
+"6").
 
-### 5.2 Choose → Apply
-* The action button is **disabled** until the chosen options form a valid, applyable request (e.g. a
-  radio must be picked when the warning requires a choice).
+### 5.2 Choose → prune → Apply
+* The user does three independent things, in any order: picks the **options** (what Task X is, §4.3),
+  **prunes the subjects list** (unchecks any file to exclude it, §4.5), and reads the education.
+* The action button is **disabled** until the request is valid: a required radio must be picked **and**,
+  for a file-scoped warning, **at least one subject must remain checked**. Its label shows the **live
+  checked count** (§4.6).
 * On click, it enters a **pending** state: button shows a spinner + present-tense label ("Applying…",
   "Starting IPFS…", "Compressing…"), is disabled, and the popup blocks further edits. Cancel stays
   available and, if pressed mid-apply, requests cancellation where the backend supports it (compression,
   scans) or is disabled where it cannot (a git-ignore write).
+* **Apply acts on exactly the checked subjects — never the unchecked ones.** The fix receives the chosen
+  options **and** the array of checked target ids (§8 `apply(sel, checkedTargetIds)`); it runs Task X
+  over precisely that set. Unchecked files are left untouched and the warning may remain (now naming the
+  smaller leftover set) on the next refresh.
 
 ### 5.3 Success
 * On success the popup either **closes** and the underlying page + banner **re-derive** their state
@@ -355,33 +428,53 @@ scope" MAY live in `backend/src/modules/health` if we want a single endpoint (§
 
 Every warning is one typed record. Adding a warning = adding a record + a §10 catalog section.
 
+The page builds each `WarningDef` **from live data** (`ctx` — the repo detail / ipfs status / file
+list the page already loads), so the banner and popup can never disagree with the data. The implemented
+shape is in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/warnings/registry.ts`:
+
 ```ts
+// One subject the warning is about — a file or directory (§4.5). The right-pane row model.
+type WarningTarget = {
+  id: string;             // stable key — usually the absolute path
+  label: string;          // display name (repo-relative or middle-truncated path)
+  sublabel?: string;      // size and/or fuller path, shown muted under the label
+  defaultChecked?: boolean; // default true; false opts the row OUT at open (rare)
+};
+
 type WarningDef = {
-  id: string;                    // stable kebab id, e.g. "files-need-decision"
-  severity: (ctx) => Health;     // "warn" | "bad" | "neutral" — from live data, uses health.ts
-  scope: "file" | "directory" | "repo" | "ipfs" | "device" | "storage" | "computer" | "global";
-  // BANNER (§2)
-  headline: (ctx) => string;     // count-correct, plural-correct, plain English
-  sub: (ctx) => string;          // one sentence
-  // POPUP (§4)
+  id: string;                    // stable kebab id, e.g. "repo-files-need-decision"
+  state: Health;                 // "warn" | "bad" — drives banner + popup colors (from health.ts)
+  scope?: "file" | "directory" | "repo" | "ipfs" | "device" | "storage" | "computer" | "global";
+  // BANNER (§2) — count-correct, plural-correct, plain English
+  headline: string;
+  sub?: string;
+  // POPUP (§4). Omit entirely = informational-only (no arrow button).
   popup?: {
-    whatThisIs: (ctx) => ReactNode;   // "What this is" education
-    whyItMatters: (ctx) => ReactNode; // "Why it matters" bullets
-    details?: (ctx) => ReactNode;     // optional Disclosure content
-    options?: OptionSpec[];           // radios/checkboxes (§4.3); [] = one-click fix
-    actionLabel: (ctx, opts) => string; // footer button label, e.g. "Apply & sync"
-    destructive?: (opts) => boolean;    // true → red button + confirm (§5.4)
-    dismissible?: boolean;              // Improvable offers only; false for bad
-    apply: (ctx, opts) => Promise<void>;// THE FIX — calls the owning backend module
+    whatThisIs: ReactNode;              // "What this is" education
+    whyItMatters: ReactNode;            // "Why it matters" bullets
+    details?: ReactNode;                // optional Disclosure content
+    options?: WarningOption[];          // left-column radios/checkboxes (§4.3); [] = no options
+    // THE SUBJECTS LIST (§4.5) — the actual files/directories, rendered right-pane with checkboxes.
+    // Present ⇒ two-pane, wide (≤ 80vw) layout; absent ⇒ single-pane one-click fix.
+    targets?: WarningTarget[];
+    targetNoun?: string;                // "file" (default) | "directory" | "video" … for count text
+    actionLabel: string | ((sel) => string); // base label; the live "— N {noun}s" count is appended
+    destructive?: (sel) => boolean;     // true → red button + confirm (§5.4)
+    canApply?: (sel) => boolean;        // extra gate; radios-satisfied & ≥1 checked target are implicit
+    dismissible?: boolean;              // Improvable offers only; never for `bad`
+    // THE FIX — receives the chosen options AND the ids of the CHECKED targets (§5.2). Runs Task X over
+    // exactly those ids; unchecked subjects are never touched. checkedTargetIds is [] when no targets.
+    apply: (sel, checkedTargetIds: string[]) => Promise<void>;
   };
 };
 ```
 
-* **`ctx`** is the live payload for the scope (the repo detail, the ipfs status, the file list, the
-  counts) — the same data the page already loads.
 * A warning **without** a `popup` is informational — banner only, **no arrow button**.
-* `severity`, `headline`, `sub` are derived from `ctx` so the banner and popup can never disagree with
-  the data.
+* A `popup` **with `targets`** renders the **two-pane** wide layout (§4.0) and its subjects list (§4.5);
+  a `popup` **without `targets`** renders the **single-pane** one-click layout.
+* The **live checked count** (§4.6) is derived by the popup from the checked target set — it is NOT
+  stored on the def. `actionLabel` gives the verb ("Apply & sync"); the popup appends "— {n} {noun}s".
 
 **Rollup.** A page collects the live warnings for its scope, sorts by `worst()` severity then a fixed
 priority, and shows the **top** one in the banner (§9). `health.ts::worst()` is the rollup rule.
@@ -416,6 +509,20 @@ Each subsection below is one warning. Every one documents the three mandated par
 * **(B) Popup** — what the educate body says, the options/checkboxes, and the action-button label.
 * **(C) Fix** — what pressing the button concretely does (the backend action/endpoint and its side
   effects), or, if there is no safe auto-fix, the manual next step it routes the user to.
+
+> **File-scoped rule (applies to every catalog entry below).** If a warning is **about a specific set
+> of files or directories** — it says "N files/videos/images/big files …" — then its popup **MUST**
+> supply `targets` (§8) and render the **two-pane** subjects list (§4.5): the actual items, each with a
+> checkbox, all checked at open, with a **live count** (§4.6) and apply-to-checked-only semantics
+> (§5.2). This covers, at minimum: every "N files need a decision" (§10.2.7), "N synced files aren't on
+> any other computer" (§10.2.6 / §10.3.5), "N files failed to sync" (§10.2.9), every "videos/images
+> here can be compressed" (§10.3.9–§10.3.11, §10.4.7–§10.4.8, §10.5.*), "big files aren't git-ignored /
+> big git-ignored files aren't tracked" (§10.3.7–§10.3.8, §10.4.9–§10.4.10), the pin/untracked-import
+> backlog (§10.1.14), and the compress/describe batch offers. An **engine/config/worker/credential**
+> warning that is NOT about a file set (Start IPFS, Fix gateway, Install background sync, Add a
+> credential) stays **single-pane** with no subjects list. Where a §10 entry's (B) predates this rule
+> and doesn't mention the list, the rule still governs — the list is required whenever the entry's own
+> detection produces an itemizable set.
 
 > The sections below are populated from a full code scan. They are ordered by scope (repo → IPFS →
 > devices/sync → files/directories → file-system rollup → compression → storages → scanner/jobs →

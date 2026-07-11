@@ -127,7 +127,7 @@ export function OneRepoPage() {
     ...producingActions(pageScope),
     compressAllVideos(detail?.path),
     compressAllImages(detail?.path),
-    gitIgnoreBig(),
+    gitIgnoreBig(pageScope()),
     { id: "rescan", label: "Rescan", icon: <RefreshCw className="h-3.5 w-3.5" />, group: "Work", onSelect: rescanRepo },
   ];
 
@@ -418,18 +418,19 @@ function RepoVerdict({
     state = "warn";
     headline = `${undecided} file${undecided === 1 ? "" : "s"} need${undecided === 1 ? "s" : ""} a decision`;
     sub = "Choose Sync or Ignore for them in the table below so LFBridge knows what to move.";
-    const undecidedPaths = detail.files
-      .filter((f) => f.decision === "undecided")
-      .map((f) => `${detail.path}/${f.path}`);
+    // The subjects list (warnings.mdx §4.5): the actual undecided files, each a checkable row with its
+    // size, all checked at open. Apply runs the chosen decision over exactly the CHECKED rows.
+    const undecidedFiles = detail.files.filter((f) => f.decision === "undecided");
     warning = {
       id: "repo-files-need-decision",
       state: "warn",
+      scope: "file",
       headline,
       sub,
       popup: {
         whatThisIs: `LFBridge found ${undecided} large file${undecided === 1 ? "" : "s"} in this repo that you haven't told it what to do with yet. Until you decide, ${
           undecided === 1 ? "it is" : "they are"
-        } neither backed up over IPFS nor git-ignored.`,
+        } neither backed up over IPFS nor git-ignored. Review the list on the right — uncheck any file you want to leave out.`,
         whyItMatters: (
           <ul className="list-disc space-y-0.5 pl-4">
             <li>A file left undecided is not synced to your other computers — if this machine dies, it's gone.</li>
@@ -441,20 +442,27 @@ function RepoVerdict({
             kind: "radio",
             group: "decision",
             value: "sync",
-            label: `Sync all ${undecided} (back ${undecided === 1 ? "it" : "them"} up over IPFS)`,
+            label: "Sync the selected files (back them up over IPFS)",
             defaultSelected: true,
           },
           {
             kind: "radio",
             group: "decision",
             value: "ignore",
-            label: `Ignore all ${undecided} (git-ignore, don't sync)`,
+            label: "Ignore the selected files (git-ignore, don't sync)",
           },
         ],
-        actionLabel: (sel) => (sel.radios.decision === "ignore" ? "Ignore these files" : "Apply & sync"),
-        apply: async (sel) => {
-          const decision = (sel.radios.decision as Decision) || "sync";
-          await api.setDecision(repoId, undecidedPaths, decision);
+        // Right-pane subjects — id is the absolute path (what apply receives), label is repo-relative.
+        targets: undecidedFiles.map((f) => ({
+          id: `${detail.path}/${f.path}`,
+          label: f.path,
+          sublabel: formatBytes(f.sizeBytes),
+        })),
+        targetNoun: "file",
+        actionLabel: (sel) => (sel.radios.decision === "ignore" ? "Ignore" : "Apply & sync"),
+        apply: async (_sel, checkedPaths) => {
+          const decision = (_sel.radios.decision as Decision) || "sync";
+          await api.setDecision(repoId, checkedPaths, decision);
         },
       },
     };

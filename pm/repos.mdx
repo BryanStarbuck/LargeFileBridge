@@ -136,7 +136,8 @@ the floating popovers, never the data surface).
 
 ### 3.2 Columns
 
-Column order, left to right. Numeric columns are right-aligned, `tabular-nums`.
+Column order, left to right. Numeric columns are right-aligned, `tabular-nums`. Each column also carries
+a **responsive priority** that decides which columns hide as the table narrows — see **§3.2.1**.
 
 | # | Column | Kind | Sort | Filter | Notes |
 | --- | --- | --- | --- | --- | --- |
@@ -152,6 +153,67 @@ Column order, left to right. Numeric columns are right-aligned, `tabular-nums`.
 | 9 | **Status** | enum | ✓ | ✓ | `status` (§4.2) as a colored pill. `filterOptions` = the `RepoStatus` values. |
 | — | *(chevron)* | — | — | — | Trailing **› right chevron** affordance (opens the repo, same as the row click). |
 | — | **`⋮`** | — | — | — | The row **kebab** — the **repo** action catalog ([menus.mdx §3 / §5.1](./menus.mdx#3-the-row--kebab--every-table-has-one)). A control cell: it opens the menu, never the row. Right-click on the row opens the same menu ([menus.mdx §3.1](./menus.mdx#31-right-click-opens-the-same-menu-locked)). |
+
+### 3.2.1 Responsive column priority — drop the least-important column as the table narrows (LOCKED)
+
+The table must **never wrap a cell onto a second line** to make everything fit. Instead, **every column
+carries a priority**, and as the available width shrinks, the table **hides the lowest-priority visible
+column first**, then the next, and so on — so what remains always fits on one line. As the window widens
+again, hidden columns **reappear** in reverse order (highest priority first). This runs on the shared
+`DataTable`, so every table inherits it.
+
+**The trigger (plain-language).** If a cell would **wrap to two rows** because the row is too narrow,
+that is the signal to **remove a column** — and if one isn't enough, remove **two or three** — until
+every row is a single line again. In code we achieve this with a **per-column minimum width budget**:
+the sum of the visible columns' minimum widths (plus the leading select + trailing chevron/kebab) must
+fit the container; while it doesn't, the **lowest-priority** visible column is dropped and the budget
+recomputed. Implemented in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` —
+`useResponsiveColumns()` (measures the container with a `ResizeObserver`, drops lowest-priority columns
+until the min-width budget fits), driven by the per-column `priority` + `minWidth` fields on
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts` — `LfbColumn`.
+
+**Priority numbers — LOWER number = MORE important (kept longest); HIGHER number = dropped first.** The
+master stack-rank below covers **every column that can appear** across LFB's repo-style/file tables (the
+Repos list uses the subset it has; a files table that adds **Size** slots it in at the same rank). Two
+special rules the user set: **Peers is the single lowest priority (dropped first)**, and **Size is
+second-lowest (dropped next)**.
+
+| Priority | Column | Pinned? | Drop behavior | Rationale |
+| --- | --- | --- | --- | --- |
+| **1** | **Repo / File (name)** | **Pinned — never drops** | never | The row's identity. Without it the row is meaningless. |
+| **2** | **Status** | **Pinned — never drops** | never | The "am I OK?" verdict (§4.2) — the whole point of the screen. |
+| **0** | **`▮` Bookmark** (leading toggle) | **Pinned — never drops** | never | A tiny fixed-width control; always fits, always useful. Rendered leftmost regardless. |
+| **3** | **Undecided** | no | dropped 8th | Actionable — files that need a decision now. |
+| **4** | **Last sync** | no | dropped 7th | "When did this last move?" — high-value reassurance/alarm. |
+| **5** | **Pending** | no | dropped 6th | In-flight transfers. |
+| **6** | **Synced** | no | dropped 5th | Reassurance count of backed-up files. |
+| **7** | **Path** | no | dropped 4th | Useful but long and already middle-truncated with a tooltip; the name carries identity. |
+| **8** | **Ignored** | no | dropped 3rd | Least-actionable count. |
+| **9** | **Size** | no | **dropped 2nd** | *(File tables only — not on the Repos list.)* Second-lowest per the rule. |
+| **10** | **Peers** | no | **dropped 1st** | **Lowest priority — the first to go.** Redundancy detail; the Status verdict already flags "not backed up." |
+
+**Drop order as the Repos list narrows** (it has no Size column, so the sequence skips priority 9):
+`Peers` (10) → `Ignored` (8) → `Path` (7) → `Synced` (6) → `Pending` (5) → `Last sync` (4) → `Undecided`
+(3). It **stops** before ever dropping the three pinned columns (**Bookmark · Repo · Status**), which
+always remain so the table is never useless. The trailing **› chevron** and **`⋮` kebab** control cell
+also always remain (they are not priority columns).
+
+**Rules.**
+* A column with **no `priority`** set is **treated as pinned** (never auto-hidden) — hiding is
+  **opt-in** per table by assigning a priority; the Repos list assigns one to every column per the table
+  above.
+* **Pinned columns** (Bookmark, Repo, Status) never drop even at the narrowest width; if even those
+  don't fit, the pinned set may scroll horizontally rather than wrap — pinned identity/verdict beats
+  everything.
+* **Sort & filter still reach hidden columns.** A column being responsively hidden from the body does
+  **not** remove it from the **Sort** and **Filter** dropdowns (§3.1) — the user can still sort/filter by
+  Peers even when the Peers column is hidden at the current width. (Hiding is presentation-only.)
+* **Persistence.** Responsive hiding is derived from **live width**, not a saved preference — it is not
+  written to `config.yaml`. The per-user sort/filter persistence ([tables.mdx §4](./tables.mdx)) is
+  unaffected.
+* **`minWidth`.** Each column declares a sensible `minWidth` (px) used for the budget; sensible defaults
+  by kind — text ≈ 140, timestamp ≈ 96, enum ≈ 100, int ≈ 72, toggle ≈ 40 — overridable per column.
 
 ### 3.3 Pagination — LOCKED
 
@@ -186,19 +248,23 @@ The Repos table has **nothing beneath it** (the table is the last thing on the p
 // pages/repos/columns.ts — kinds drive the filter operators & alignment.
 import type { ColumnDef } from "@tanstack/react-table";
 
+// On-screen column ORDER stays the §3.2 order (left→right below). `priority` only decides which columns
+// HIDE as width shrinks: LOWER = more important (kept longest); undefined = pinned (never auto-hidden).
 export const repoColumns: ColumnDef<RepoRow>[] = [
-  // Leading control cell — a favorite/ribbon toggle. Not a navigable cell (see §5.1, §8).
+  // Leading control cell — a favorite/ribbon toggle. Not a navigable cell (see §5.1, §8). Pinned.
   { id: "bookmark",  header: "",          kind: "toggle", align: "center", accessor: r => r.bookmarked },
-  { id: "name",      header: "Repo",      kind: "text",      accessor: r => r.name },
-  { id: "path",      header: "Path",      kind: "text",      accessor: r => r.path },
-  { id: "synced",    header: "Synced",    kind: "int",  align: "right", accessor: r => r.counts.synced },
-  { id: "pending",   header: "Pending",   kind: "int",  align: "right", accessor: r => r.counts.pending },
-  { id: "undecided", header: "Undecided", kind: "int",  align: "right", accessor: r => r.counts.undecided },
-  { id: "ignored",   header: "Ignored",   kind: "int",  align: "right", accessor: r => r.counts.ignored },
-  { id: "peers",     header: "Peers",     kind: "int",  align: "right", accessor: r => r.peerCount },
-  { id: "lastSync",  header: "Last sync", kind: "timestamp",  accessor: r => r.lastSyncAt },
-  { id: "status",    header: "Status",    kind: "enum", filterOptions: STATUS_OPTIONS, accessor: r => r.status },
+  { id: "name",      header: "Repo",      kind: "text",      accessor: r => r.name },                       // pinned (P1)
+  { id: "path",      header: "Path",      kind: "text",      accessor: r => r.path, priority: 7, minWidth: 160 },
+  { id: "synced",    header: "Synced",    kind: "int",  align: "right", accessor: r => r.counts.synced, priority: 6, minWidth: 80 },
+  { id: "pending",   header: "Pending",   kind: "int",  align: "right", accessor: r => r.counts.pending, priority: 5, minWidth: 80 },
+  { id: "undecided", header: "Undecided", kind: "int",  align: "right", accessor: r => r.counts.undecided, priority: 3, minWidth: 88 },
+  { id: "ignored",   header: "Ignored",   kind: "int",  align: "right", accessor: r => r.counts.ignored, priority: 8, minWidth: 78 },
+  { id: "peers",     header: "Peers",     kind: "int",  align: "right", accessor: r => r.peerCount, priority: 10, minWidth: 72 },
+  { id: "lastSync",  header: "Last sync", kind: "timestamp",  accessor: r => r.lastSyncAt, priority: 4, minWidth: 96 },
+  { id: "status",    header: "Status",    kind: "enum", filterOptions: STATUS_OPTIONS, accessor: r => r.status }, // pinned (P2)
 ];
+// Peers (10) hides first, then Ignored (8), Path (7), Synced (6), Pending (5), Last sync (4), Undecided
+// (3); the pinned Bookmark · Repo · Status never hide. A files table adds `{ id:"size", …, priority: 9 }`.
 ```
 
 ---

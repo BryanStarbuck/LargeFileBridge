@@ -35,29 +35,59 @@ export type WarningSelection = {
   checks: Record<string, boolean>; // checkbox name -> checked
 };
 
+// One subject the warning is about — a file or directory (warnings.mdx §4.5). Rendered as a row in the
+// popup's right-pane subjects list, each with its own checkbox. Apply runs Task X over exactly the
+// CHECKED subjects; unchecked rows are left untouched.
+export type WarningTarget = {
+  id: string; // stable key — usually the absolute path (also what apply() receives)
+  label: string; // display name (repo-relative or middle-truncated absolute path)
+  sublabel?: string; // size and/or fuller path, shown muted under the label
+  defaultChecked?: boolean; // default true; false opts the row OUT at open (rare)
+};
+
 export type WarningPopupSpec = {
   // §4.2 — the two mandatory education blocks.
   whatThisIs: ReactNode; // "What this is" — plain-English what LFBridge found and what it means
   whyItMatters: ReactNode; // "Why it matters" — the consequence to the user's files
   details?: ReactNode; // optional Disclosure content (the file list, CIDs, the exact command)
-  // §4.3 — zero or more options. Empty/omitted = a one-click fix (no options region).
+  // §4.3 — zero or more left-column options. Empty/omitted = no options region.
   options?: WarningOption[];
-  // §4.4 — the blue action button label; may depend on the chosen options.
+  // §4.5 — THE SUBJECTS LIST: the actual files/directories this warning is about. Present ⇒ the popup
+  // renders the WIDE two-pane layout (§4.0) with a right-pane checklist (all checked at open); absent ⇒
+  // the narrow single-pane one-click layout.
+  targets?: WarningTarget[];
+  // Noun for the live count in the header/button ("file" default → "— 4 files"). e.g. "video", "directory".
+  targetNoun?: string;
+  // §4.4 — the blue action button label; may depend on the chosen options. When `targets` are present
+  // the popup appends the LIVE checked count ("— {n} {noun}s"); do NOT bake a count into this string.
   actionLabel: string | ((sel: WarningSelection) => string);
   // True when the chosen options are destructive/lossy → red button + inline confirm (§5.4).
   destructive?: (sel: WarningSelection) => boolean;
-  // Gate the action button (default: enabled). Return false while the choice is incomplete (§5.2).
+  // Extra gate on the action button (default: enabled). Radios-satisfied AND (when targets exist)
+  // ≥1 checked subject are enforced implicitly by the popup — this is for anything beyond that (§5.2).
   canApply?: (sel: WarningSelection) => boolean;
   // Improvable OFFERS only may be dismissed "don't offer again" (§5.6). Never for `bad`.
   dismissible?: boolean;
-  // THE FIX (§5.2/§5.3). Calls the owning backend module. Resolve = success (popup closes and the
-  // page refetches); reject with an Error = the popup stays open and shows the message (§5.5).
-  apply: (sel: WarningSelection) => Promise<void>;
+  // THE FIX (§5.2/§5.3). Receives the chosen options AND the ids of the CHECKED targets — runs Task X
+  // over exactly those ids (unchecked subjects untouched); `checkedTargetIds` is [] when there are no
+  // targets. Resolve = success (popup closes, page refetches); reject with an Error = stay open + show it.
+  apply: (sel: WarningSelection, checkedTargetIds: string[]) => Promise<void>;
 };
+
+export type WarningScope =
+  | "file"
+  | "directory"
+  | "repo"
+  | "ipfs"
+  | "device"
+  | "storage"
+  | "computer"
+  | "global";
 
 export type WarningDef = {
   id: string; // stable kebab id, e.g. "files-need-decision"
   state: Health; // "warn" (Improvable) | "bad" (Broken) — drives the banner + popup colors
+  scope?: WarningScope; // what the warning is about (warnings.mdx §8); informational/routing only
   headline: string; // count-correct, plural-correct, plain English — same text as the banner
   sub?: string; // one sentence: "what this means for you"
   popup?: WarningPopupSpec; // omit for informational-only (no arrow button, no popup)
@@ -89,4 +119,20 @@ export function radiosSatisfied(popup: WarningPopupSpec | undefined, sel: Warnin
 
 export function resolveActionLabel(popup: WarningPopupSpec, sel: WarningSelection): string {
   return typeof popup.actionLabel === "function" ? popup.actionLabel(sel) : popup.actionLabel;
+}
+
+// The set of target ids checked when the popup opens: every target except those explicitly
+// defaultChecked:false (§4.5 — "every row is checked by default").
+export function initialCheckedTargets(popup?: WarningPopupSpec): Set<string> {
+  const s = new Set<string>();
+  for (const t of popup?.targets ?? []) if (t.defaultChecked !== false) s.add(t.id);
+  return s;
+}
+
+// English pluralization for the live count noun ("file" → "files", "1 file"). Handles the common
+// LFB nouns (file, directory, video, image); falls back to +s.
+export function pluralizeNoun(noun: string, n: number): string {
+  if (n === 1) return noun;
+  if (noun.endsWith("y")) return noun.slice(0, -1) + "ies"; // directory → directories
+  return noun + "s";
 }
