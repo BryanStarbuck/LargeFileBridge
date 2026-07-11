@@ -70,9 +70,9 @@ export function RepoSettingsPage() {
       </Section>
 
       <Section title="Pinning / fetch policy">
-        <Toggle label="Pin locally" checked={s.sync.pinLocally} onChange={(v) => patch.mutate({ sync: { ...s.sync, pinLocally: v } })} />
-        <Toggle label="Fetch missing from peers" checked={s.sync.fetchMissing} onChange={(v) => patch.mutate({ sync: { ...s.sync, fetchMissing: v } })} />
-        <Toggle label="Publish committed manifest (git carries the list)" checked={s.sync.publishManifest} onChange={(v) => patch.mutate({ sync: { ...s.sync, publishManifest: v } })} />
+        <Toggle label="Pin locally" checked={s.pin.pinLocally} onChange={(v) => patch.mutate({ pin: { ...s.pin, pinLocally: v } })} />
+        <Toggle label="Fetch missing from peers" checked={s.pin.fetchMissing} onChange={(v) => patch.mutate({ pin: { ...s.pin, fetchMissing: v } })} />
+        <Toggle label="Publish committed manifest (git carries the list)" checked={s.pin.publishManifest} onChange={(v) => patch.mutate({ pin: { ...s.pin, publishManifest: v } })} />
       </Section>
 
       <Section title="Sharing">

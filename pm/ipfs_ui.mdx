@@ -743,16 +743,16 @@ all** (the charter's no-nagging rule holds).
 ### 17.1 Scenario A — IPFS is not installed
 
 * **Trigger:** no `ipfs` CLI and no reachable daemon.
-* **App-start behavior:** the app-wide banner reads *"IPFS isn't installed — your files can't sync,"*
+* **App-start behavior:** the app-wide banner reads *"IPFS isn't installed — your files can't pin,"*
   action **Install IPFS**, routing to **`/ipfs/off`**, which renders the **Install card** (§7.1).
 * **Agree-button (Install) behavior:** starts the cross-platform install **job** (§7.2/§16) —
   detect → install → init → start → compliance → (offer keep-on-reboot). On done, redirect to `/ipfs`.
-* This is a **blocker**: nothing syncs without a node.
+* This is a **blocker**: nothing pins without a node.
 
 ### 17.2 Scenario B — IPFS is installed but not running
 
 * **Trigger:** CLI present, daemon not answering (the classic **post-reboot** state, or a crash).
-* **App-start behavior:** banner reads *"IPFS isn't running — your files can't sync,"* action **Start
+* **App-start behavior:** banner reads *"IPFS isn't running — your files can't pin,"* action **Start
   IPFS**, routing to **`/ipfs/off`**, which renders the **two-button turn-on choice** (§12.1) — unless
   **config health** finds a blocker (§14), in which case the **Config-health card takes over** (you
   can't turn it on until the config is fixed; this is the crash-recovery path).

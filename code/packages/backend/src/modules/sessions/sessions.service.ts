@@ -1,15 +1,15 @@
-// Web-session tracking + the > 48h "stale return" auto-sync (sessions.mdx).
+// Web-session tracking + the > 48h "stale return" auto-pin (sessions.mdx).
 //
 // A "web session" is a usage window measured from page renders — NOT the auth session (storage.mdx
 // §10). The frontend pings on every render; we fold pings into one open session and, once 4 hours pass
 // with no render, discontinue it (back-dated to the LAST render). The whole point: when a NEW session
-// STARTS on a computer that has not synced in > 48h, kick off a NON-BLOCKING synchronization so the
+// STARTS on a computer that has not pinned in > 48h, kick off a NON-BLOCKING pin pass so the
 // user is not working against stale files.
 import type { SessionActivityResult, SessionRecord } from "@lfb/shared";
 import { getUserConfig, updateUserConfig } from "../store-model/user-config.service.js";
 import { getAppConfig } from "../store-model/config.service.js";
 import { listRepoFolders, getRepoStatus } from "../store-model/units.service.js";
-import { syncAll } from "../sync/sync.service.js";
+import { pinAll } from "../pin/pin.service.js";
 import { log } from "../../shared/logging.js";
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -21,23 +21,23 @@ const MAX_SESSIONS = 5; // sessions.mdx §4 — keep the last five, newest first
 // every ping; when it fires with no intervening activity it discontinues the open session.
 const idleTimers = new Map<string, NodeJS.Timeout>();
 
-// A single guard so a near-simultaneous stale return can't launch two overlapping auto-syncs
+// A single guard so a near-simultaneous stale return can't launch two overlapping auto-pins
 // (sessions.mdx §3.1 / invariant 6). Module-scope = process-wide, which is what we want here.
-let autoSyncInFlight = false;
+let autoPinInFlight = false;
 
-/** "Last synchronized" (sessions.mdx §1): newest of the scheduled worker's last run and every repo's
- *  status.yaml last_sync_at (a manual "Sync now" only writes the latter). null ⇒ never synced. */
-export function lastSyncAt(): Date | null {
+/** "Last pinned" (sessions.mdx §1): newest of the scheduled worker's last run and every repo's
+ *  status.yaml last_pin_at (a manual "Pin now" only writes the latter). null ⇒ never pinned. */
+export function lastPinAt(): Date | null {
   let newest: number | null = null;
   const consider = (iso: string | null | undefined): void => {
     if (!iso) return;
     const t = Date.parse(iso);
     if (!Number.isNaN(t) && (newest === null || t > newest)) newest = t;
   };
-  consider(getAppConfig().sync_process.last_run_at);
+  consider(getAppConfig().pin_process.last_run_at);
   for (const folder of listRepoFolders()) {
     try {
-      consider(getRepoStatus(folder).last_sync_at);
+      consider(getRepoStatus(folder).last_pin_at);
     } catch {
       // An unreadable/half-written unit status must not break freshness detection — skip it.
     }
