@@ -43,7 +43,7 @@ export function watcherState(): WatcherState {
 
 /**
  * Turn the live watcher on or off from the web app (the Scans-page card). Persists `watcher.enabled`
- * and re-syncs the runtime: startWatcher() re-reads config and binds when enabled, or no-ops after a
+ * and reconciles the runtime: startWatcher() re-reads config and binds when enabled, or no-ops after a
  * clean stop when disabled. Unlike the scheduleTasks there is no install step — a watcher exists only
  * while this process runs, so "enabled" is the only switch (scan.mdx §2.2 / §5).
  */

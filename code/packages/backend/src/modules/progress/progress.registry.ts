@@ -1,5 +1,5 @@
 // The in-process job registry (webapp.mdx §12 source B, §14). Every long-running server job — a manual
-// sync, a compress, a hash pass — registers here so GET /api/progress can surface it and the web app's
+// pin, a compress, a hash pass — registers here so GET /api/progress can surface it and the web app's
 // progress dock can show a live card, even for work THIS browser tab did not start (e.g. a launchd
 // worker run). It is a plain in-memory map: the process is the single API server, and a job that
 // outlives a restart is not "in flight" anymore, so persistence would be wrong.

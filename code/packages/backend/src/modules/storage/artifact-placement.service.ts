@@ -11,7 +11,7 @@
 //      storage whose MAPPED source dir (via this device's graft) contains it, else PERSONAL as the default
 //      catch-all for anything under ~. Its artifact is written under the storage's DEDICATED GIT REPO when
 //      that backing is enabled (mirroring the file's hierarchy, NOT git-ignored — the repo exists to hold
-//      and sync these), else under the storage's own root.
+//      and pin these), else under the storage's own root.
 //   C. First-time signal — no Personal storage exists and nothing owns the file → needsSetup:true so the
 //      action routes to the setup wizard (Transcribe.mdx §3.5) instead of writing somewhere surprising.
 //   D. Last resort — literally beside the media (its own directory is the root), the narrow legacy fallback.

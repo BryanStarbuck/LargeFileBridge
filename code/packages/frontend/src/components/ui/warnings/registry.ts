@@ -7,7 +7,7 @@ import type { ReactNode } from "react";
 import type { Health } from "../health.js";
 
 // A single option in the popup's options region (warnings.mdx §4.3). Radios model a mutually
-// exclusive decision (Sync all / Ignore all); checkboxes model independent toggles (remember choice,
+// exclusive decision (Pin all / Ignore all); checkboxes model independent toggles (remember choice,
 // convert PNG→JPEG). A destructive/lossy option upgrades the footer button to the red treatment and
 // requires an explicit confirm (§5.4).
 export type WarningOption =

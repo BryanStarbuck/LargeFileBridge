@@ -38,7 +38,7 @@ export function coreBudget(fraction?: number): number {
 
 /**
  * The RESPONSIVE budget (parallelization.mdx §1): `cores − 2`, leaving 2 cores for the HTTP loop + the
- * IPFS node. For work that runs ALONGSIDE interactive use (the sync pass — pin_process.mdx §4, the
+ * IPFS node. For work that runs ALONGSIDE interactive use (the pin pass — pin_process.mdx §4, the
  * scan/index walks). NOT user-tunable — a fixed safety floor.
  */
 export function responsiveBudget(): number {

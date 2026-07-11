@@ -217,7 +217,7 @@ export async function describeOne(
       }
     });
 
-    // Keep the sidecars out of Git only in a PLAIN repo; a dedicated repo (rule B) is meant to hold+sync it.
+    // Keep the sidecars out of Git only in a PLAIN repo; a dedicated repo (rule B) is meant to hold+pin it.
     if (gitIgnore) ensureLfbridgeIgnored(root);
     fs.mkdirSync(path.dirname(descriptionPath), { recursive: true });
     fs.writeFileSync(

@@ -325,7 +325,7 @@ The Sync List does not replace the on-disk model — it is its **portable projec
 | `large_files.settings` | app `config.yaml` + the global `settings.mdx` values |
 | `large_files.repos.<key>` | one `pin/r/<repo_name>/` unit (`config.yaml` + `manifest.yaml`) |
 | `large_files.directories.<key>` | the `pin/computer/` unit (`config.yaml` + `manifest.yaml`) |
-| a file entry (`path`/`cid`/`size`/`sha256`/`pinned_by`) | a `manifest.yaml` file row ([storage_local.mdx §9.1](./storage_local.mdx#91-manifest-shape-per-sync-unit)) |
+| a file entry (`path`/`cid`/`size`/`sha256`/`pinned_by`) | a `manifest.yaml` file row ([storage_local.mdx §9.1](./storage_local.mdx#91-manifest-shape-per-pin-unit)) |
 | `origin` / `revision` | new provenance this spec adds; `status.yaml` records the last reconciled revision per peer |
 
 Transport mapping: the **repo (git) backbone** is [storage_local.mdx §9.2](./storage_local.mdx#92-repo-manifests-travel-via-git-the-elegant-part)

@@ -20,7 +20,7 @@ const ANALYSIS_DIR = "analysis";
 const ANALYSIS_FILES: Record<string, string> = {
   visuals_by_time: "visuals_by_time.yaml",
 };
-// Keep in sync with TRANSCRIPTION_EXT / AI_DESCRIPTION_EXT in storage/artifact-placement.service.ts.
+// Keep consistent with TRANSCRIPTION_EXT / AI_DESCRIPTION_EXT in storage/artifact-placement.service.ts.
 // Inlined (not imported) to avoid an import cycle — artifact-placement imports LFBRIDGE_DIR from here.
 const TRANSCRIPTION_EXT = ".transcription";
 const AI_DESCRIPTION_EXT = ".ai_description";

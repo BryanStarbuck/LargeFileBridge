@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Storage Settings (Per-Storage)
-description: The per-storage settings page. Reached from a SINGLE storage — the gear icon on the storage detail page header, the row ⋮ kebab / right-click on a storage row in the Storages table, and the entity ⋮ "more" menu on the storage detail page — all opening this page scoped to that one storage. It controls the machine-local choices for that storage: whether this computer keeps the hidden .lfbridge/ tracking directory and WHERE it goes, and which BACKING LOCATIONS the storage is materialized into — a dedicated Git repo (preferred when available), a Google Drive location, and a Dropbox directory — each independently ON/OFF with its own path. LFB picks good default directories that the user can change. The settings persist to a machine-local per-storage config file (pin/s/<storage_id>/config.yaml) — the local "settings file" distinct from the SHARED storage.yaml, because where the hidden dir and each mirror live differs per computer. On each sync pass, LFB reads these settings and, for every enabled backing location, CREATES the directory if missing and UPDATES it. Sibling of repo_settings.mdx (the per-repo counterpart) and storages.mdx (the storage family + storage.yaml + .lfbridge layout).
+description: The per-storage settings page. Reached from a SINGLE storage — the gear icon on the storage detail page header, the row ⋮ kebab / right-click on a storage row in the Storages table, and the entity ⋮ "more" menu on the storage detail page — all opening this page scoped to that one storage. It controls the machine-local choices for that storage: whether this computer keeps the hidden .lfbridge/ tracking directory and WHERE it goes, and which BACKING LOCATIONS the storage is materialized into — a dedicated Git repo (preferred when available), a Google Drive location, and a Dropbox directory — each independently ON/OFF with its own path. LFB picks good default directories that the user can change. The settings persist to a machine-local per-storage config file (pin/s/<storage_id>/config.yaml) — the local "settings file" distinct from the SHARED storage.yaml, because where the hidden dir and each mirror live differs per computer. On each pin pass, LFB reads these settings and, for every enabled backing location, CREATES the directory if missing and UPDATES it. Sibling of repo_settings.mdx (the per-repo counterpart) and storages.mdx (the storage family + storage.yaml + .lfbridge layout).
 ---
 
 # LargeFileBridge — Storage Settings (Per-Storage)
@@ -19,7 +19,7 @@ It answers two questions the charter leaves per-computer:
    with its own directory?
 
 LFB **picks good default directories**; the user can change any of them. The choices persist to a
-**machine-local** per-storage config file (§5), which the **sync pass** then reads to **create and
+**machine-local** per-storage config file (§5), which the **pin pass** then reads to **create and
 update** the enabled directories (§6).
 
 Siblings this builds on and does not repeat:
@@ -80,7 +80,7 @@ The one distinction this page turns on. A storage has **two** kinds of configura
 * **Shared / travels with the storage** — the storage's **identity** and its **canonical** mirror paths.
   This is [`storage.yaml`](./storages.mdx#3-storageyaml--the-per-storage-descriptor-locked-shape): `name`,
   `type`, the type block, and the **`clones`** block (the canonical relative Drive/Dropbox paths). It
-  syncs between computers, so every machine agrees on *what* the storage is.
+  travels between computers via the git backbone, so every machine agrees on *what* the storage is.
 * **Machine-local / per-computer** — **this computer's** choices for the storage: whether `.lfbridge/`
   is kept and **where** it goes on this box, and whether each backing location is **enabled** and its
   **resolved local path** on this box. This is the **`pin/s/<storage_id>/config.yaml`** file under the
@@ -88,7 +88,7 @@ The one distinction this page turns on. A storage has **two** kinds of configura
 
 Why split them: a Google Drive folder is at a different absolute path on a laptop than on a work tower;
 a machine may have the dedicated repo cloned but no Dropbox; a server may keep `.lfbridge/` on a
-faster volume. Those are **per-computer** facts and must **not** be forced into the synced descriptor.
+faster volume. Those are **per-computer** facts and must **not** be forced into the shared descriptor.
 The descriptor says *where the Drive mirror lives relative to the drive*; the machine-local config says
 *is it turned on here, and what is its absolute path here*.
 
@@ -124,7 +124,7 @@ The `.lfbridge/` constant, the ensure-directory, and the git-ignore-on-init beha
 
 ## 4. Backing locations — dedicated repo · Google Drive · Dropbox
 
-The heart of the page. Beyond its **IPFS** copy (the primary cross-computer sync path,
+The heart of the page. Beyond its **IPFS** copy (the primary cross-computer pin path,
 [pin_process.mdx](./pin_process.mdx)), a storage can be **materialized into one or more backing
 locations** — real directories that hold the same hierarchy as a second, human-reachable copy. Each is
 **independently ON/OFF** and carries **its own directory**. LFB proposes a good **default directory**;
@@ -148,18 +148,18 @@ the user can change it.
   For a **repo** storage the dedicated repo **is** the repo itself, so this is pre-satisfied and shown
   read-only.
 * **Turning this ON is the permission grant.** It authorizes LFB to run **`git fetch`, `git merge`
-  (automatic), `git add`/`commit`, and `git push`** on that repo on **every sync pass** — the
+  (automatic), `git add`/`commit`, and `git push`** on that repo on **every pin pass** — the
   [git_backbone.mdx](./git_backbone.mdx) engine (`simple-git` over the system git binary) — so the SDL's small
   text is pulled, merged, and pushed between the user's computers while IPFS carries the bytes. No Git
   command runs against a storage whose backbone is off.
-* When ON and a **local path** does not exist, the **sync pass creates it** (and `git init`s it if it is
+* When ON and a **local path** does not exist, the **pin pass creates it** (and `git init`s it if it is
   meant to be a repo) and keeps it updated (§6); a **URL** remote is cloned on first use instead.
 * **It also becomes the home for this storage's derived artifacts (LOCKED).** Once the dedicated repo is
   ON, transcripts and AI descriptions for any file this storage **owns but that lives out in the wider
   filesystem** (a mapped source directory, or — for Personal — anywhere under `~`) are written **under the
   dedicated repo** as **sidecars**, mirroring the file's hierarchy with the media's extension replaced
   (`<dedicatedRepo>/<rel-without-ext>.transcription`, `<dedicatedRepo>/<rel-without-ext>.ai_description`).
-  They are **not** git-ignored there — the dedicated repo exists to **hold and sync** these artifacts, so
+  They are **not** git-ignored there — the dedicated repo exists to **hold and carry** these artifacts, so
   we simply put them in. This is the authoritative placement rule B in
   [Transcribe.mdx §3.4](./Transcribe.mdx); turning the dedicated repo ON is precisely what moves those
   sidecars off the beside-the-media fallback and into the repo (mirrored). Turning it OFF returns them to
@@ -184,11 +184,11 @@ the user can change it.
 ### 4.4 Rules across all three
 
 * Each backing location is **independent** — any combination (repo only, repo + Drive, all three, none)
-  is valid. With **none** enabled, the storage still syncs over IPFS; the backing locations are
+  is valid. With **none** enabled, the storage still pins over IPFS; the backing locations are
   **additional** human-reachable mirrors, never the source of truth
   ([storages.mdx §5](./storages.mdx#5-cloud-clones-google-drive--dropbox)).
 * **Defaults are proposed, never forced.** LFB pre-fills a sensible directory for each; nothing is
-  created until the user enables it **and** the sync pass runs (§6). This honors the charter rule that
+  created until the user enables it **and** the pin pass runs (§6). This honors the charter rule that
   LFB **surfaces and offers** but does not act on the filesystem on its own.
 * A location whose connected drive is **not present** on this computer (no Dropbox, Drive not linked)
   shows disabled with a "connect Drive/Dropbox first" hint rather than erroring.
@@ -235,7 +235,7 @@ Reading/writing the shared mapped-directory list (add/remove rows → `.lfbridge
 
 Everything on this page (except the canonical `clones` paths, which go to `storage.yaml`) writes to a
 **machine-local** per-storage config under the Local state root — the direct parallel to the per-repo
-`pin/r/<repo_name>/config.yaml` ([storage_local.mdx §6](./storage_local.mdx#6-syncrrepo_name--the-per-repo-sync-unit-primary)):
+`pin/r/<repo_name>/config.yaml` ([storage_local.mdx §6](./storage_local.mdx#6-pinrrepo_name--the-per-repo-pin-unit-primary)):
 
 ```yaml
 # ~/T/_large_files_bridge/pin/s/<storage_id>/config.yaml   (machine-local — the "settings file")
@@ -281,10 +281,10 @@ The settings form itself (the `.lfbridge/` checkbox + location picker and the th
 
 ---
 
-## 6. The sync pass creates & updates the enabled directories
+## 6. The pin pass creates & updates the enabled directories
 
-The settings on this page are **inert until a sync pass runs**. During the **full pass**
-([pin_process.mdx §2](./pin_process.mdx#2-every-synchronization-is-a-full-pass-locked)), for each
+The settings on this page are **inert until a pin pass runs**. During the **full pass**
+([pin_process.mdx §2](./pin_process.mdx)), for each
 storage LFB reads its machine-local config (§5) and, **for every enabled backing location**:
 
 1. **Ensure the directory exists** — create it (and `git init` a dedicated repo) if missing; a location
@@ -300,7 +300,7 @@ offer, never act on files unasked). Turning a location **off** stops updating it
 the directory that is already there.
 
 Materializing each enabled backing location during the pass (create-if-missing + ensure `.lfbridge/` + update the mirror) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureBackingLocations(id)` (new; called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncAll()` per known storage, through the same bounded `cores − 2` limiter as repo/computer units).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureBackingLocations(id)` (new; called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinAll()` per known storage, through the same bounded `cores − 2` limiter as repo/computer units).
 
 ---
 
@@ -333,7 +333,7 @@ The page is a single scrollable settings form (no table beneath it, so it does n
  │       │ Apps/LFB/ACT3                                 │  (connect Dropbox)│
  │       └──────────────────────────────────────────────┘                   │
  │                                                                           │
- │   ⓘ Directories are created and updated on the next sync pass.            │
+ │   ⓘ Directories are created and updated on the next pin pass.             │
  │                                                    [ Cancel ] [ Save ]     │
  └───────────────────────────────────────────────────────────────────────────┘
 ```
@@ -360,7 +360,7 @@ The page is a single scrollable settings form (no table beneath it, so it does n
    **`pin/s/<storage_id>/config.yaml`** (the local settings file); the **canonical** Drive/Dropbox
    relative paths persist to the **shared** `storage.yaml → clones`. Neither restates repo-specific
    settings owned by [repo_settings.mdx](./repo_settings.mdx).
-5. Settings are **inert until a sync pass**: on each pass, for **every enabled** backing location LFB
+5. Settings are **inert until a pin pass**: on each pass, for **every enabled** backing location LFB
    **creates the directory if missing** (and `git init`s a dedicated repo), ensures its `.lfbridge/`,
    and **updates** the mirror; a **disabled** location is left untouched (never auto-created, never
    deleted). Nothing is created merely by saving the form.
@@ -380,12 +380,12 @@ The page is a single scrollable settings form (no table beneath it, so it does n
   directory — dedicated Git repo (preferred; IS the repo for a repo storage), Google Drive, Dropbox —
   with good default dirs the user can change. LOCKED split (§2): machine-local enable-flags + absolute
   paths live in pin/s/<storage_id>/config.yaml (the local "settings file"); canonical Drive/Dropbox
-  relative paths live in the SHARED storage.yaml clones. (§6) Settings are inert until a sync pass — the
+  relative paths live in the SHARED storage.yaml clones. (§6) Settings are inert until a pin pass — the
   pass creates-if-missing + ensures .lfbridge/ + updates each ENABLED location; disabled = untouched
   (never auto-created/deleted). Code pointers: StorageSettingsPage.tsx, StorageKebab in RowKebabs.tsx,
   storage-settings.service.ts (read/write + resolveBackingLocations), storage.router GET/PATCH
-  /:id/settings, storage.service ensureBackingLocations() called by sync.service syncAll(). Keep in
-  sync with repo_settings.mdx (per-repo counterpart), storages.mdx (storage.yaml + .lfbridge + clones),
+  /:id/settings, storage.service ensureBackingLocations() called by pin.service pinAll(). Keep
+  aligned with repo_settings.mdx (per-repo counterpart), storages.mdx (storage.yaml + .lfbridge + clones),
   google_drive.mdx / dropbox.mdx (the mirrors), pin_process.mdx §2/§4 (the pass), menus.mdx (add a
   storage entity catalog whose Config group carries "Storage settings…").
 -->

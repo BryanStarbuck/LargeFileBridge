@@ -36,7 +36,7 @@ Then hard-refresh the browser (favicons cache aggressively).
 |------|-------|-------|
 | `document.ico` | filled page with text lines, royal blue | **active** — clearest "file", best small-size legibility |
 | `file.ico` | blank page, folded corner | minimal, clean silhouette |
-| `copy.ico` | two stacked pages | reads as "files" (plural) — fits a file-syncing app |
+| `copy.ico` | two stacked pages | reads as "files" (plural) — fits a large-file app |
 | `archive.ico` | page with a zipper | ties to the app's compression feature |
 | `box.ico` | 3D box / package | best for "something large" — distinctive silhouette |
 | `database.ico` | stacked cylinders | data / storage feel |

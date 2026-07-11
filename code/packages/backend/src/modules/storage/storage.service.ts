@@ -314,7 +314,7 @@ function findRowById(id: string): StorageRow | null {
   return discoverRows().find((r) => r.id === id) ?? null;
 }
 
-/** Ids of every discovered directory-based storage (excludes repos + local) — the sync pass iterates these. */
+/** Ids of every discovered directory-based storage (excludes repos + local) — the pin pass iterates these. */
 export function listStorageIds(): string[] {
   return discoverRows().map((r) => r.id);
 }
@@ -348,7 +348,7 @@ export function initStorageById(id: string): StorageDetail {
  * Create the ONE Personal storage from scratch — the first-time setup wizard's commit step (Transcribe.mdx
  * §3.5, storage_personal.mdx §3b). Personal always roots at the canonical
  * `~/BGit/Bryan_git/personal_large_files_bridge/` (storage_personal.mdx §1); the user's only choice is
- * whether it is a **dedicated Git repo** (versioned + synced, artifacts tracked) or a **plain folder**.
+ * whether it is a **dedicated Git repo** (versioned + pinned, artifacts tracked) or a **plain folder**.
  * Idempotent: an existing Personal storage is returned as-is.
  *
  *   • Always: create the root dir, `ensureStorage(root, "personal")` (writes storage.yaml + .lfbridge/).
@@ -436,7 +436,7 @@ export async function setBookmark(storageId: string, relPath: string, on: boolea
   return { storageId: row.id, bookmarked: next.bookmarked };
 }
 
-// ── backing locations — materialize enabled mirrors on a sync pass (storage_settings.mdx §6) ──────────
+// ── backing locations — materialize enabled mirrors on a pin pass (storage_settings.mdx §6) ──────────
 // For each ENABLED backing location (dedicated repo / Google Drive / Dropbox): create the directory if
 // missing (git init a dedicated repo), ensure its hidden `.lfbridge/` (git-ignored inside a repo), and
 // leave it ready for the mirror update. A DISABLED location is left untouched — never created, never

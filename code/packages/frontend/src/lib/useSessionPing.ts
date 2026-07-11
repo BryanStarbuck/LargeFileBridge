@@ -1,5 +1,5 @@
 // Web-session render ping (sessions.mdx §2.1). Reports "a page was rendered" to the backend on app
-// open and on every route navigation, so the server can track web sessions and auto-sync a stale
+// open and on every route navigation, so the server can track web sessions and auto-pin on a stale
 // return. Throttled — the windows we drive are measured in hours (4h idle / 48h stale), so at most one
 // ping per THROTTLE_MS is plenty; the FIRST render after mount is always reported so a fresh return is
 // detected immediately. Fire-and-forget: a failed ping must never disturb the page.

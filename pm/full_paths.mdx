@@ -23,7 +23,7 @@ and pin them in one click.
 
 Siblings this spec builds on and does **not** repeat:
 
-* [Directory / File System](./directories.mdx) — the **code badges** (R/r · S · C/c · i, §3) painted on
+* [Directory / File System](./directories.mdx) — the **code badges** (R/r · P · C/c · i, §3) painted on
   every row here, and the recursive, **no-shell**, metadata-only walk discipline (§2/§AC9).
 * [One repo](./one_repo.mdx) — the **decision model** Pin / Ignore / Undecided (§1) that **IPFS pin /
   Unpin** drive, and the standard **control row** + **pagination default 500** conventions.
@@ -164,7 +164,7 @@ summary chips); the icon dropdowns are the fallback for anything finer. This pag
 persist per user** in `users/<email>/config.yaml` `tables.views`
 ([tables.mdx §4](./tables.mdx#4-persistence--sort--filter-saved-per-user-per-page-locked)).
 
-The client-side derivation of the three segmented filters (from the C/c and S badges) and the shared sort state is handled in code:
+The client-side derivation of the three segmented filters (from the C/c and P badges) and the shared sort state is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (the `filtered` memo + `setSort()`).
 
 ### 3.5 Action row — `Select all · IPFS pin · Unpin`

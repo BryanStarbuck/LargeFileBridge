@@ -112,7 +112,7 @@ export async function transcribeOne(input: string, overwrite = false): Promise<T
     return result(abs, "skipped", transcriptPath, null, "already transcribed");
   }
   // Only keep the sidecars out of Git for a PLAIN repo (rule A). A dedicated repo (rule B) exists to hold
-  // and sync these artifacts, so we deliberately do NOT gitignore there (Transcribe.mdx §3.4).
+  // and pin these artifacts, so we deliberately do NOT gitignore there (Transcribe.mdx §3.4).
   if (gitIgnore) ensureTranscribeIgnored(root);
 
   const r = await track("transcribe", name, (report) =>

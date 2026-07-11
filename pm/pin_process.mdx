@@ -63,7 +63,7 @@ Wording rule for all specs and UI copy: prefer **"every repo on this computer"**
 
 A **pin pass** is one traversal of **every unit LFB knows on this computer** — every discovered repo
 (`pin/r/<repo_name>/`) **plus** the computer unit (`pin/computer/`,
-[storage_local.mdx §8](./storage_local.mdx#8-synccomputer--the-whole-computer-sync-unit)). One pass = the whole
+[storage_local.mdx §8](./storage_local.mdx#8-pincomputer--the-whole-computer-pin-unit)). One pass = the whole
 machine, always.
 
 **No trigger reduces the scope to a single unit.** The three triggers differ only in *when* and *what
@@ -71,7 +71,7 @@ runs first*, never in *what gets covered*:
 
 | Trigger | Source | Scope | Order |
 | --- | --- | --- | --- |
-| **Scheduled** — 15-min scheduleTask | launchd/cron ([storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract)) | Full pass | Natural order |
+| **Scheduled** — 15-min scheduleTask | launchd/cron ([storage_local.mdx §13](./storage_local.mdx#13-the-background-pin-process--the-transparency-contract)) | Full pass | Natural order |
 | **Session catch-up** — > 48h stale | a returning web session ([sessions.mdx §3](./sessions.mdx)) | Full pass | Natural order |
 | **Manual — "Pin now" on a repo** | the repo page / row kebab / bulk ([one_repo.mdx §3.1](./one_repo.mdx#31-header)) | **Full pass** | **That repo first (priority §3)**, then the rest |
 
@@ -205,7 +205,7 @@ This invariant exists because it was violated in production. The defect and the 
 
 > **The defect.** `pinRepoFolder()` bailed at the top with `if (!cfg.pinned) return`, and that guard
 > fired for the **manual** Pin now too — not just the background scheduler. A fresh repo defaults to
-> `pinned: false` ([storage_local.mdx §6.2](./storage_local.mdx#62-syncrrepo_nameconfigyaml)), so clicking **Pin
+> `pinned: false` ([storage_local.mdx §6.2](./storage_local.mdx#62-pinrrepo_nameconfigyaml)), so clicking **Pin
 > now** returned instantly, pinned nothing, wrote no manifest — **yet the UI still toasted "Pin
 > complete."** A user could mark files and click Pin forever and nothing would ever pin. The status
 > popped up and vanished because the backend genuinely did nothing.

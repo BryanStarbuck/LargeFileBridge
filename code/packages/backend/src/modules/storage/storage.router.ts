@@ -23,7 +23,7 @@ storagesRouter.use(requireAllowListed);
 // The per-storage settings PATCH payload (storage_settings.mdx §5). All fields optional (partial update).
 const BackingPatch = z.object({ enabled: z.boolean(), path: z.string().nullable() }).partial();
 const StorageSettingsPatch = z.object({
-  synced: z.boolean().optional(),
+  pinned: z.boolean().optional(),
   lfbridge: z.object({ enabled: z.boolean(), path: z.string().nullable() }).partial().optional(),
   backing: z
     .object({

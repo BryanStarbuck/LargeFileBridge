@@ -15,7 +15,7 @@ export function PageHeader({
   actions?: ReactNode;
   // The page action-links row (page_actions.mdx §3): a horizontal row of blue hyperlinks rendered
   // directly BENEATH the title block (NOT in the header's right-aligned `actions` slot). The page's
-  // single primary button (Sync now / Index files / + Add repo) stays in `actions`; this row is separate.
+  // single primary button (Pin now / Index files / + Add repo) stays in `actions`; this row is separate.
   actionsRow?: ReactNode;
   above?: ReactNode; // e.g. a breadcrumb / back link that sits over the title
 }) {

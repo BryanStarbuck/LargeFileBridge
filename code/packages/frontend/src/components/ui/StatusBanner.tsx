@@ -22,7 +22,7 @@ export function StatusBanner({
   secondary?: ReactNode; // an optional small link
   // The registry entry (warnings.mdx §8) — when present, renders the blue arrow button (§3) that
   // opens the educate-and-fix popup (§4). This is the DEFAULT trailing affordance; `action` may still
-  // be passed alongside for a one-click primary that needs no explanation (e.g. "Sync now").
+  // be passed alongside for a one-click primary that needs no explanation (e.g. "Pin now").
   warning?: WarningDef;
   onWarningApplied?: () => void;
 }) {

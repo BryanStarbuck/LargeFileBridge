@@ -151,7 +151,7 @@ The debounced search/filter input hook is in code:
 
 ### 🟠 P-06 — Time formatting allocates `Date` objects per cell per render · T2
 - **Where:** `lib/format.ts` `relativeTime`/`absoluteTime` (called in `changed`,
-  `lastSync`, `seen`, etc. columns, plus `absoluteTime` in `title=` attributes).
+  `lastPin`, `seen`, etc. columns, plus `absoluteTime` in `title=` attributes).
 - **Symptom:** 500 rows × 2 time columns × (`new Date` + `Date.now` +
   `toLocaleString`) on every render. `toLocaleString` is comparatively expensive.
 - **Fix (architecture):** With windowing (P-01) only ~30 rows format at a time, which
@@ -162,7 +162,7 @@ The debounced search/filter input hook is in code:
 ### 🟠 P-07 — Global 5s poll runs on every page forever, hitting a blocking endpoint · T4
 - **Where:** `components/ScanProgressBar.tsx` (mounted in `AppShell`, `refetchInterval`
   1s running / **5s always otherwise**), `pages/repos/ReposPage.tsx` (a **second**
-  independent `scanStatus` poll), `pages/sync/SyncPage.tsx` (`refetchInterval: 10_000`).
+  independent `scanStatus` poll), `pages/scans/ScansPage.tsx` (`refetchInterval: 10_000`).
 - **Symptom:** Even when idle, the app polls `/api/repos/scan-status` every 5s on
   every page, in every tab, including background tabs — and that endpoint shares the
   thread the blocking walk (P-04) can occupy. ReposPage doubles it.
@@ -337,18 +337,18 @@ The rAF-coalesced scroll handler that skips re-renders when the window start is 
 - **Fix:** Add `loading="lazy"` to complete P-13. (The real large-image win is the
   backend downscaled-preview endpoint, still a follow-up.)
 
-### 🟠 P-23 — The pin pass synced units one-at-a-time (sequential, ignoring 20–30 cores) · throughput
+### 🟠 P-23 — The pin pass pinned units one-at-a-time (sequential, ignoring 20–30 cores) · throughput
 - **Where:** `code/packages/backend/src/modules/pin/pin.service.ts` — `pinAll()` was a
   `for (const folder of listRepoFolders()) { await pinRepoFolder(folder) }` serial loop.
-- **Symptom:** A synchronization is a **full pass** over every known unit
-  ([pin_process.mdx §2](./pin_process.mdx#2-every-synchronization-is-a-full-pass-locked)); syncing
-  100+ repos strictly one-after-another leaves a many-core machine almost idle and makes a manual **Sync
+- **Symptom:** A pin pass is a **full pass** over every known unit
+  ([pin_process.mdx §2](./pin_process.mdx#2-every-synchronization-is-a-full-pass-locked)); pinning
+  100+ repos strictly one-after-another leaves a many-core machine almost idle and makes a manual **Pin
   now** background pass drag on far longer than it should.
 - **Fix (done):** Fan the pass out on two levels, both capped at `cores − 2`: a `runPool()` across
   **units** and one shared `ipfsLimiter` across **all per-file** add/pin/fetch work (independent IPFS
   calls now run under `Promise.all`, not a `for…await` loop). The single limiter keeps total in-flight
   ops bounded no matter how units × files multiply; the store layer's per-file mutex + atomic writes
-  ([storage_local.mdx §15](./storage_local.mdx#15-the-store-layer-how-code-touches-disk)) make concurrent syncs
+  ([storage_local.mdx §15](./storage_local.mdx#15-the-store-layer-how-code-touches-disk)) make concurrent pins
   safe. The pass now also covers the **computer unit** (`pin/computer/`), sharing the same generic
   `runUnitPin` core as repos. Priority + parallelism design is LOCKED in
   [pin_process.mdx §3/§4](./pin_process.mdx#4-parallelism--many-cores-bounded-concurrency-locked-design).
@@ -479,7 +479,7 @@ Five properties, each mapping to an aspect of "performance in all ways":
 5. **One source of truth.** The indexer reuses `HARD_SKIP`
    (`code/packages/backend/src/shared/scan-filters.ts`) and the badge logic
    (`code/packages/backend/src/modules/fs/badges.ts`) — and, longer term, reads the scanner's
-   persisted `status.yaml` so the FS pages and the Repos/Sync pages agree and never double-walk.
+   persisted `status.yaml` so the FS pages and the Repos/Scans pages agree and never double-walk.
 
 ### Aspect 1 — Backend: the index service and the streaming walk
 

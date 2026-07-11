@@ -65,7 +65,7 @@ function buildTrackedIndex(): Map<string, TrackedInfo> {
     }
   }
 
-  // Computer-unit manifest — path-less imported pins and whole-computer sync entries.
+  // Computer-unit manifest — path-less imported pins and whole-computer pin entries.
   try {
     const computer = readYaml(COMPUTER_MANIFEST(), ManifestSchema);
     for (const f of computer.files) {
@@ -126,7 +126,7 @@ export async function computeIpfsPage(): Promise<IpfsPageData> {
   const rows: IpfsPinRow[] = pins.map((p) => {
     const info = index.get(p.cid);
     if (info) {
-      const tracked: IpfsTracked = info.path ? "synced" : "path-less";
+      const tracked: IpfsTracked = info.path ? "pinned" : "path-less";
       return {
         cid: p.cid,
         file: info.path ? path.basename(info.path) : null,

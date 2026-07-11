@@ -4,9 +4,9 @@
 //
 // It creates the ONE Personal storage at its canonical root (~/BGit/Bryan_git/personal_large_files_bridge/)
 // and lets the user pick HOW it is kept:
-//   • Dedicated Git repo (recommended) — versioned + synced; transcripts/descriptions are tracked in the
+//   • Dedicated Git repo (recommended) — versioned + pinned; transcripts/descriptions are tracked in the
 //     repo (placement rule B, NOT git-ignored).
-//   • Plain folder — the same folder, not a git repo; results kept locally and synced over IPFS.
+//   • Plain folder — the same folder, not a git repo; results kept locally and pinned over IPFS.
 // On success it re-runs the original action (`retry`) so the user lands back where they clicked — no reload.
 //
 // Matches the app's hand-rolled modal pattern (CredentialsMissingDialog / ReposPage AddRepoDialog): a fixed
@@ -73,7 +73,7 @@ export function FirstTimeStorageWizardProvider() {
 
         <p className="mt-2 text-sm text-black/70">
           Before Large File Bridge can {req.actionLabel} this file, it needs a place to keep the results and
-          sync them across your computers. This happens once.
+          pin them across your computers. This happens once.
         </p>
         <p className="mt-2 truncate rounded-md bg-black/5 px-3 py-2 font-mono text-xs text-black/60" title={req.mediaPath}>
           {req.mediaPath}
@@ -87,14 +87,14 @@ export function FirstTimeStorageWizardProvider() {
             icon={<FolderGit2 className="h-5 w-5" />}
             title="Dedicated Git repo"
             recommended
-            body="Versioned and synced to your other computers. Your transcripts & AI descriptions are tracked in the repo."
+            body="Versioned and pinned to your other computers. Your transcripts & AI descriptions are tracked in the repo."
           />
           <OptionRow
             selected={!dedicatedRepo}
             onSelect={() => setDedicatedRepo(false)}
             icon={<Folder className="h-5 w-5" />}
             title="Plain folder"
-            body="The same folder, not a Git repo. Results are kept locally and synced over IPFS."
+            body="The same folder, not a Git repo. Results are kept locally and pinned over IPFS."
           />
         </div>
 

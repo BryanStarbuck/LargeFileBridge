@@ -1,5 +1,5 @@
 // The scan (scan.mdx): metadata-only discovery. Stat big files; never open/read/hash them.
-// Runs the whole-filesystem discovery walk that feeds the Repos/Sync UI.
+// Runs the whole-filesystem discovery walk that feeds the Repos/Scans UI.
 import fs from "node:fs";
 import path from "node:path";
 import ignore, { type Ignore } from "ignore";
@@ -218,7 +218,7 @@ async function walkUnit(root: string, threshold: number, opts: WalkOpts): Promis
       const followsGitignore = opts.ignore != null;
       // THE FIX (scan.mdx §4.1): a git-ignored *media* file is a large-file-bridge payload
       // regardless of the big-file size threshold. Videos/audio/images excluded from git are
-      // exactly what we sync over IPFS; the 100 MB threshold must not hide the 5–100 MB ones.
+      // exactly what we pin over IPFS; the 100 MB threshold must not hide the 5–100 MB ones.
       // Non-media git-ignored files (and the computer unit, which has no gitignore) still use
       // the pure size gate, so junk (.env, logs) and generic files aren't swept in.
       const gitIgnoredMedia = gitIgnored && isMediaFile(ent.name);
@@ -273,7 +273,7 @@ function diffStatus(
   for (const p of prev.candidates) if (!nowByPath.has(p.path)) deletedPaths.push(p.path);
 
   // Move/rename detection (scan.mdx §6 / AC #7): a file that vanished at path A and reappeared at
-  // path B with the SAME size and mtime is a MOVE, not a delete+add — so the sync keeps the existing
+  // path B with the SAME size and mtime is a MOVE, not a delete+add — so the pin pass keeps the existing
   // pin instead of re-adding bytes. Pure metadata heuristic (size+mtime); never hashes content (§1).
   const moved: Array<{ from: string; to: string }> = [];
   const sig = (c: { size: number; modified_at?: string }): string => `${c.size}|${c.modified_at ?? ""}`;

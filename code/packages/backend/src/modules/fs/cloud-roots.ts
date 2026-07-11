@@ -8,9 +8,9 @@
 // LFBridge exists to help them find and compress. This module discovers those mounts so the home
 // column can lift them to its top level, "almost as if they were in ~".
 //
-// This is a pure BROWSING convenience and is INDEPENDENT of the cloud sync-backbones
+// This is a pure BROWSING convenience and is INDEPENDENT of the cloud backbones
 // (large_files.settings.backbones.{dropbox,google_drive}). Surfacing a mount here never enables a
-// backbone, never writes a Sync List, and never moves bytes — it only makes the mount visible and
+// backbone, never writes a `LargeFilesBridge_SyncList.yaml`, and never moves bytes — it only makes the mount visible and
 // walkable in the column browser. Metadata-only: Node fs stats, never the `find` shell (charter +
 // macOS-indexing rule).
 import fs from "node:fs";

@@ -1,7 +1,7 @@
 // The device registry + the graft (devices.mdx). Each computer records ITSELF as one self-owned file in
 // a storage's Syncable Data Location: `<storageRoot>/.lfbridge/devices/<sanitized-name>.yaml` (devices.mdx
 // §2–§3). The registry travels with the SDL so every computer sees the full set; a device writes only its
-// own file and treats the others as claims (same trust model as the Sync List). The GRAFT (§4) maps the
+// own file and treats the others as claims (same trust model as the `LargeFilesBridge_SyncList.yaml`). The GRAFT (§4) maps the
 // storage's machine-independent mapped-dir keys onto THIS computer's absolute local paths. Node fs only.
 import fs from "node:fs";
 import path from "node:path";

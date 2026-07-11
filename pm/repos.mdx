@@ -1,15 +1,15 @@
 ---
 title: LargeFileBridge — Repos
-description: The landing screen (route /) — one TanStack Table listing every git repo on THIS computer that LargeFileBridge manages. One row per repo, with a leading bookmark (favorite) toggle, the repo name, local path, large-file counts (Synced / Pending / Undecided / Ignored), peer count, last-sync time, and a rolled-up sync status. Above the table sits the standard control row (search box + icon-only filter and sort dropdowns). Clicking a row opens that repo's per-file sync screen (one_repo.mdx). Defines the table columns, the leading bookmark toggle (persisted per-repo in config.yaml), the RepoRow type, the add-repo action, the row → one_repo navigation, pagination at 500, and empty/loading states.
+description: The landing screen (route /) — one TanStack Table listing every git repo on THIS computer that LargeFileBridge manages. One row per repo, with a leading bookmark (favorite) toggle, the repo name, local path, large-file counts (Pinned / Pending / Undecided / Ignored), peer count, last-pin time, and a rolled-up pin status. Above the table sits the standard control row (search box + icon-only filter and sort dropdowns). Clicking a row opens that repo's per-file screen (one_repo.mdx). Defines the table columns, the leading bookmark toggle (persisted per-repo in config.yaml), the RepoRow type, the add-repo action, the row → one_repo navigation, pagination at 500, and empty/loading states.
 ---
 
 # LargeFileBridge — Repos
 
 The **Repos** page is the landing view of LargeFileBridge and the screen users live in. It answers
-one question at a glance: *for every repo on this computer, are my large files in sync across my
+one question at a glance: *for every repo on this computer, are my large files pinned across my
 other machines?* It is a header over **one TanStack Table** — **one row per repo, for every git repo on
 this computer** (LFB discovers and knows them all automatically — there is no "managed" opt-in;
-[sync_process.mdx §1](./sync_process.mdx#1-lfb-knows-every-repo--there-is-no-lfb-managed-gate-locked)) —
+[pin_process.mdx §1](./pin_process.mdx#1-lfb-knows-every-repo--there-is-no-lfb-managed-gate-locked)) —
 with the standard search / filter / sort control row above it.
 
 The left bar's **Repos** item (order 1, icon `FolderGit2`, route `/` — source of truth
@@ -25,7 +25,7 @@ This spec builds on the siblings and does not repeat them:
   git-ignored files peer-to-peer over IPFS.
 * [Left bar](./left_bar.mdx) — the left navigation (data source of truth `pm/left_bar.yaml`); this
   document does not redefine it and only shows where it sits.
-* [One repo](./one_repo.mdx) — the per-file sync screen a row click opens.
+* [One repo](./one_repo.mdx) — the per-file screen a row click opens.
 
 ---
 
@@ -35,9 +35,9 @@ Three terms, used consistently across every spec and every screen:
 
 | Term | Definition |
 | --- | --- |
-| **Repo** | **Any** git repository on this computer. LFBridge **discovers and knows every repo automatically** — a repo is never "unmanaged" ([sync_process.mdx §1](./sync_process.mdx#1-lfb-knows-every-repo--there-is-no-lfb-managed-gate-locked)); IPFS pinning of its bytes is the only opt-in. It has a local **path**, a **name** (the folder name), a git-ignore that excludes the big files, and a **manifest** (checked into git) listing the large files by path + IPFS CID. |
+| **Repo** | **Any** git repository on this computer. LFBridge **discovers and knows every repo automatically** — a repo is never "unmanaged" ([pin_process.mdx §1](./pin_process.mdx#1-lfb-knows-every-repo--there-is-no-lfb-managed-gate-locked)); IPFS pinning of its bytes is the only opt-in. It has a local **path**, a **name** (the folder name), a git-ignore that excludes the big files, and a **manifest** (checked into git) listing the large files by path + IPFS CID. |
 | **Large file** | A big, git-ignored file inside a repo (video, image, model weights, dataset, render output). LFBridge — not git — is responsible for moving its bytes between your computers. |
-| **Decision** | Per large file, whether LFBridge should move it: **Sync**, **Ignore** (deliberately not synced), or **Undecided** (LFBridge found it but the user has not yet chosen). Defined in full on the [One repo](./one_repo.mdx) screen; the Repos table only shows the **counts** per decision. |
+| **Decision** | Per large file, whether LFBridge should move it: **Add to IPFS (pin)** (stored decision value `sync`), **Ignore** (deliberately not pinned), or **Undecided** (LFBridge found it but the user has not yet chosen). Defined in full on the [One repo](./one_repo.mdx) screen; the Repos table only shows the **counts** per decision. |
 
 ```ts
 // The per-repo summary the backend returns for each Repos-table row.
@@ -47,24 +47,24 @@ export interface RepoRow {
   name: string;          // folder name
   path: string;          // absolute local path
   counts: {
-    synced: number;      // large files in sync (CID present + pinned locally) — INCLUDES files
+    pinned: number;      // large files pinned (CID present + pinned locally) — INCLUDES files
                          //   that were already IPFS-pinned and got imported (ipfs.mdx §4)
-    pending: number;     // decided "Sync" but not yet transferred (fetch/push queued)
-    undecided: number;   // found by LFBridge, no Sync/Ignore decision yet
-    ignored: number;     // decided "Ignore" — deliberately not synced
+    pending: number;     // decided "Add to IPFS (pin)" but not yet transferred (fetch/push queued)
+    undecided: number;   // found by LFBridge, no pin/Ignore decision yet
+    ignored: number;     // decided "Ignore" — deliberately not pinned
   };
   peerCount: number;     // how many of your computers currently pin this repo
-  lastSyncAt: string | null;  // ISO date-time of the last completed sync, or null
-  status: RepoStatus;    // rolled-up sync status (see §4.2)
+  lastPinAt: string | null;  // ISO date-time of the last completed pin pass, or null
+  status: RepoStatus;    // rolled-up pin status (see §4.2)
 }
 
 export type RepoStatus =
-  | "up_to_date"   // every "Sync" file present locally and on >=1 peer
-  | "syncing"      // a transfer is in progress
+  | "up_to_date"   // every "Add to IPFS (pin)" file present locally and on >=1 peer
+  | "pinning"      // a transfer is in progress
   | "behind"       // pending > 0 (files owed in or out)
   | "needs_review" // undecided > 0 (user has decisions to make)
-  | "error"        // last sync failed / IPFS node unreachable
-  | "never";       // repo added, never synced
+  | "error"        // last pin failed / IPFS node unreachable
+  | "never";       // repo added, never pinned
 ```
 
 The per-repo summary row (`RepoRow`) each table row shows is assembled by the backend in code:
@@ -84,8 +84,8 @@ header**, the **top-right Add repo button**, and the **Repos table** with its co
 │            │                                                         └──────────────┘   │
 │ Repos ◀    ├───────────────────────────────────────────────────────────────────────────┤
 │ Peers      │  search…                                                      ⇅   ⛛        │ ← control row
-│ Sync       ├───────────────────────────────────────────────────────────────────────────┤
-│ Settings   │     Repo        Path             Synced Pending Undec Ignored Peers Last     │
+│ Scans      ├───────────────────────────────────────────────────────────────────────────┤
+│ Settings   │     Repo        Path             Pinned Pending Undec Ignored Peers Last     │
 │            │  ▮  Our_Movies  ~/BGit/…/Movies   128    2       5     40      3   09:14 › ⋮│ ← ▮ = solid yellow (bookmarked)
 │            │  ▯  render_farm ~/work/render       0    311      0      0      1   —     › ⋮│ ← ▯ = gray outline (not bookmarked)
 │            │  ▮  photos_2026 ~/Pictures/2026    980    0      12      0      2   06:30 › ⋮│ ← trailing ⋮ = row kebab (repo catalog)
@@ -144,12 +144,12 @@ a **responsive priority** that decides which columns hide as the table narrows �
 | 0 | **`▮` Bookmark** | toggle | ✓ | ✓ | **Leading** column — a ribbon **favorite** toggle (§8). A **control cell**: clicking it flips `bookmarked` and **never opens the repo**. Solid **yellow** when on, thin **gray outline** (white fill) when off. Sort surfaces bookmarked repos first; filter = Bookmarked yes/no. |
 | 1 | **Repo** | text | ✓ | ✓ (contains) | Folder name, bold. |
 | 2 | **Path** | text | ✓ | ✓ (contains) | Absolute local path, muted, middle-truncated with a tooltip of the full path. |
-| 3 | **Synced** | int | ✓ | ✓ | `counts.synced`. Green metric. **Counts already-pinned files too:** any large file that was **already IPFS-pinned** on this computer and got **imported** into tracking ([ipfs.mdx §4](./ipfs.mdx#4-import--the-load-bearing-feature)) is present-and-pinned, i.e. **Synced** — so `Synced` reflects both LFB-synced and adopted-already-pinned files. The word is **Synced** (a state), never "Sync." |
+| 3 | **Pinned** | int | ✓ | ✓ | `counts.pinned`. Green metric. **Counts already-pinned files too:** any large file that was **already IPFS-pinned** on this computer and got **imported** into tracking ([ipfs.mdx §4](./ipfs.mdx#4-import--the-load-bearing-feature)) is present-and-pinned, i.e. **Pinned** — so `Pinned` reflects both LFB-pinned and adopted-already-pinned files. The word is **Pinned** (a state), never "Pin." |
 | 4 | **Pending** | int | ✓ | ✓ | `counts.pending`. Amber when > 0. |
 | 5 | **Undecided** | int | ✓ | ✓ | `counts.undecided`. Accent-highlighted when > 0 (there are decisions to make). |
 | 6 | **Ignored** | int | ✓ | ✓ | `counts.ignored`. Muted. |
 | 7 | **Peers** | int | ✓ | ✓ | `peerCount` — how many of your computers pin this repo. `0` renders red (nothing backing it up). |
-| 8 | **Last sync** | timestamp | ✓ | ✓ | `lastSyncAt`, relative (`2h ago`) with an absolute tooltip; `—` if never. |
+| 8 | **Last pin** | timestamp | ✓ | ✓ | `lastPinAt`, relative (`2h ago`) with an absolute tooltip; `—` if never. |
 | 9 | **Status** | enum | ✓ | ✓ | `status` (§4.2) as a colored pill. `filterOptions` = the `RepoStatus` values. |
 | — | *(chevron)* | — | — | — | Trailing **› right chevron** affordance (opens the repo, same as the row click). |
 | — | **`⋮`** | — | — | — | The row **kebab** — the **repo** action catalog ([menus.mdx §3 / §5.1](./menus.mdx#3-the-row--kebab--every-table-has-one)). A control cell: it opens the menu, never the row. Right-click on the row opens the same menu ([menus.mdx §3.1](./menus.mdx#31-right-click-opens-the-same-menu-locked)). |
@@ -185,16 +185,16 @@ second-lowest (dropped next)**.
 | **2** | **Status** | **Pinned — never drops** | never | The "am I OK?" verdict (§4.2) — the whole point of the screen. |
 | **0** | **`▮` Bookmark** (leading toggle) | **Pinned — never drops** | never | A tiny fixed-width control; always fits, always useful. Rendered leftmost regardless. |
 | **3** | **Undecided** | no | dropped 8th | Actionable — files that need a decision now. |
-| **4** | **Last sync** | no | dropped 7th | "When did this last move?" — high-value reassurance/alarm. |
+| **4** | **Last pin** | no | dropped 7th | "When did this last move?" — high-value reassurance/alarm. |
 | **5** | **Pending** | no | dropped 6th | In-flight transfers. |
-| **6** | **Synced** | no | dropped 5th | Reassurance count of backed-up files. |
+| **6** | **Pinned** | no | dropped 5th | Reassurance count of backed-up files. |
 | **7** | **Path** | no | dropped 4th | Useful but long and already middle-truncated with a tooltip; the name carries identity. |
 | **8** | **Ignored** | no | dropped 3rd | Least-actionable count. |
 | **9** | **Size** | no | **dropped 2nd** | *(File tables only — not on the Repos list.)* Second-lowest per the rule. |
 | **10** | **Peers** | no | **dropped 1st** | **Lowest priority — the first to go.** Redundancy detail; the Status verdict already flags "not backed up." |
 
 **Drop order as the Repos list narrows** (it has no Size column, so the sequence skips priority 9):
-`Peers` (10) → `Ignored` (8) → `Path` (7) → `Synced` (6) → `Pending` (5) → `Last sync` (4) → `Undecided`
+`Peers` (10) → `Ignored` (8) → `Path` (7) → `Pinned` (6) → `Pending` (5) → `Last pin` (4) → `Undecided`
 (3). It **stops** before ever dropping the three pinned columns (**Bookmark · Repo · Status**), which
 always remain so the table is never useless. The trailing **› chevron** and **`⋮` kebab** control cell
 also always remain (they are not priority columns).
@@ -255,15 +255,15 @@ export const repoColumns: ColumnDef<RepoRow>[] = [
   { id: "bookmark",  header: "",          kind: "toggle", align: "center", accessor: r => r.bookmarked },
   { id: "name",      header: "Repo",      kind: "text",      accessor: r => r.name },                       // pinned (P1)
   { id: "path",      header: "Path",      kind: "text",      accessor: r => r.path, priority: 7, minWidth: 160 },
-  { id: "synced",    header: "Synced",    kind: "int",  align: "right", accessor: r => r.counts.synced, priority: 6, minWidth: 80 },
+  { id: "pinned",    header: "Pinned",    kind: "int",  align: "right", accessor: r => r.counts.pinned, priority: 6, minWidth: 80 },
   { id: "pending",   header: "Pending",   kind: "int",  align: "right", accessor: r => r.counts.pending, priority: 5, minWidth: 80 },
   { id: "undecided", header: "Undecided", kind: "int",  align: "right", accessor: r => r.counts.undecided, priority: 3, minWidth: 88 },
   { id: "ignored",   header: "Ignored",   kind: "int",  align: "right", accessor: r => r.counts.ignored, priority: 8, minWidth: 78 },
   { id: "peers",     header: "Peers",     kind: "int",  align: "right", accessor: r => r.peerCount, priority: 10, minWidth: 72 },
-  { id: "lastSync",  header: "Last sync", kind: "timestamp",  accessor: r => r.lastSyncAt, priority: 4, minWidth: 96 },
+  { id: "lastPin",   header: "Last pin",  kind: "timestamp",  accessor: r => r.lastPinAt, priority: 4, minWidth: 96 },
   { id: "status",    header: "Status",    kind: "enum", filterOptions: STATUS_OPTIONS, accessor: r => r.status }, // pinned (P2)
 ];
-// Peers (10) hides first, then Ignored (8), Path (7), Synced (6), Pending (5), Last sync (4), Undecided
+// Peers (10) hides first, then Ignored (8), Path (7), Pinned (6), Pending (5), Last pin (4), Undecided
 // (3); the pinned Bookmark · Repo · Status never hide. A files table adds `{ id:"size", …, priority: 9 }`.
 ```
 
@@ -288,14 +288,14 @@ owed in or out; **Peers = 0** means nothing is backing this repo up.
 
 | `status` | Meaning | Pill |
 | --- | --- | --- |
-| `up_to_date` | Every "Sync" file present locally and on ≥1 peer. | green |
-| `syncing` | A transfer is in progress right now. | blue (accent), animated |
+| `up_to_date` | Every "Add to IPFS (pin)" file present locally and on ≥1 peer. | green |
+| `pinning` | A transfer is in progress right now. | blue (accent), animated |
 | `behind` | `pending > 0` — files owed in or out. | amber |
 | `needs_review` | `undecided > 0` — the user has decisions to make. | accent outline |
-| `error` | Last sync failed, or the IPFS node is unreachable. | red |
-| `never` | Repo added but never synced. | grey |
+| `error` | Last pin failed, or the IPFS node is unreachable. | red |
+| `never` | Repo added but never pinned. | grey |
 
-Precedence when several could apply: `error` > `syncing` > `behind` > `needs_review` > `up_to_date`
+Precedence when several could apply: `error` > `pinning` > `behind` > `needs_review` > `up_to_date`
 > `never`.
 
 ---
@@ -304,7 +304,7 @@ Precedence when several could apply: `error` > `syncing` > `behind` > `needs_rev
 
 ### 5.1 Whole-row and per-cell targets
 
-**Clicking a bare part of a row opens that repo** — it navigates to the per-file sync screen
+**Clicking a bare part of a row opens that repo** — it navigates to the per-file screen
 ([One repo](./one_repo.mdx)) at `/repos/$repoId`. The whole row is the default hit target
 (`cursor-pointer`, hover highlight), routed via TanStack Router; the trailing **›** chevron is the
 visual affordance and goes to the same place.
@@ -321,12 +321,12 @@ user exactly where they meant to go instead of opening the repo and re-filtering
 | **`▮` Bookmark** | **Nothing — toggles the favorite** (§8). A control cell like `⋮`: it flips `bookmarked` and **never navigates**. |
 | **Repo** | The repo page (`/repos/$repoId`) — same as the row. |
 | **Path** | The [File System](./directories.mdx) browser revealed at that repo path. |
-| **Synced** | The repo's files table filtered to **transfer = synced**. |
+| **Pinned** | The repo's files table filtered to **transfer = pinned**. |
 | **Pending** | The repo's files table filtered to **Pending**. |
 | **Undecided** | The repo's files table filtered to **Undecided** (the triage queue). |
 | **Ignored** | The repo's files table filtered to **decision = Ignore**. |
 | **Peers** | [Peers](./left_bar.mdx) filtered to this repo (which of your computers pin it). |
-| **Last sync** | The repo page (its status strip / recent activity). |
+| **Last pin** | The repo page (its status strip / recent activity). |
 | **Status** | The repo page. |
 | **`⋮`** | Opens the **repo action menu** — **never navigates** (§5.2). |
 
@@ -337,7 +337,7 @@ A linking cell shows a pointer cursor + hover emphasis; the counts read as click
 
 The trailing **`⋮` kebab** opens the **repo** action catalog
 ([menus.mdx §5.1](./menus.mdx#51-repo)) — Open / Open in File System / View pinned on IPFS / Rescan /
-Sync now / Git ignore / Toggle Synced / Repo settings… / Copy path / **Remove repo**
+Pin now / Git ignore / Toggle Pinned / Repo settings… / Copy path / **Remove repo**
 (destructive, last). Right-clicking the row opens the same menu
 ([menus.mdx §3.1](./menus.mdx#31-right-click-opens-the-same-menu-locked)). The kebab is a control cell:
 it opens the menu and never opens the repo.
@@ -375,7 +375,7 @@ operations:
 
 * **Rescan all** — re-run the scan across **every** repo on this computer (the per-repo Rescan
   [menus.mdx §5.1](./menus.mdx#51-repo), lifted to all rows).
-* **Sync all** — kick a sync on every repo that has pending work (the per-repo **Sync now**, lifted to all
+* **Pin all** — kick a pin pass on every repo that has pending work (the per-repo **Pin now**, lifted to all
   rows).
 
 Scope resolves as usual ([page_actions.mdx §1.1](./page_actions.mdx)) — the **checked** repos if any rows
@@ -392,8 +392,8 @@ implemented in code:
 * **No repos:** the table is replaced by a dashed card — "No repos yet. Add your first repo →"
   (opens the Add-repo dialog).
 * **Loading:** skeleton rows sized to the columns, so there is no layout shift.
-* **Refetch:** existing rows stay visible until new data replaces them; a repo mid-sync shows the
-  animated `syncing` pill without blocking interaction.
+* **Refetch:** existing rows stay visible until new data replaces them; a repo mid-pin shows the
+  animated `pinning` pill without blocking interaction.
 
 ---
 
@@ -433,14 +433,14 @@ The leading ribbon toggle and its optimistic flip are implemented in code:
 ### 8.3 Persistence — it lives in the repo's `config.yaml` (LOCKED)
 
 The bookmark is a **local, per-computer** preference (a favorite *this machine's* user set), so it
-persists in that repo's **sync-unit `config.yaml`** — the same file that holds `synced`,
-`big_file_override`, etc. — **not** in the shared manifest and **not** synced to peers.
+persists in that repo's **pin-unit `config.yaml`** — the same file that holds `pinned`,
+`big_file_override`, etc. — **not** in the shared manifest and **not** replicated to peers.
 
 ```yaml
-# sync/r/<repo>/config.yaml  (excerpt)
+# pin/r/<repo>/config.yaml  (excerpt)
 schema_version: 1
 repo: { name: charlie-kirk, path: /Users/…/charlie-kirk, remote: … }
-synced: false
+pinned: false
 bookmarked: true          # ← the favorite flag (default false). Written by the bookmark toggle.
 big_file_override: { … }
 ```
@@ -478,7 +478,7 @@ is its **reference implementation**. In short:
 1. The brand header shows **"Repos"** as normal text; the left-bar Repos item routes here (`/`).
 2. The page is **one TanStack Table**, flat/chromeless, **one row per repo — every git repo on this
    computer** (all known automatically, no "managed" opt-in), with columns: a
-   leading **bookmark toggle**, then Repo, Path, Synced, Pending, Undecided, Ignored, Peers, Last sync,
+   leading **bookmark toggle**, then Repo, Path, Pinned, Pending, Undecided, Ignored, Peers, Last pin,
    Status (in that order), plus a trailing **›** chevron.
 3. The **control row** above the table has a left **search box** and **icon-only** filter (`⛛`) and
    sort dropdowns on the right — no text labels, no button boxes; the icon colors when active;
@@ -491,7 +491,7 @@ is its **reference implementation**. In short:
    the trailing chevron does the same. **Each data cell is additionally a deep link** per §5.1 (counts
    → the repo's files filtered to that slice; Path → File System; Peers → Peers filtered to the repo).
    The **`⋮` kebab** (and right-click) opens the **repo** action menu ([menus.mdx §5.1](./menus.mdx#51-repo))
-   and never navigates. The **Synced** count includes files that were **already IPFS-pinned and imported**
+   and never navigates. The **Pinned** count includes files that were **already IPFS-pinned and imported**
    ([ipfs.mdx §4](./ipfs.mdx#4-import--the-load-bearing-feature)).
 7. **+ Add repo** registers a git repo by folder path, validates it is a git working tree, scans its
    large git-ignored files (new ones start Undecided), and rejects duplicates.
@@ -503,10 +503,11 @@ is its **reference implementation**. In short:
 
 <!--
   Keep this page aligned with one_repo.mdx (the per-file screen a row opens) and left_bar.yaml (the
-  nav). LOCKED across specs: vocabulary Repo → Large file → Decision (Sync / Ignore / Undecided);
-  the four per-repo counts (Synced / Pending / Undecided / Ignored); the RepoStatus enum + pill
-  colors + precedence (§4.2); the standard control row (search left; icon-only sort/filter right);
-  the leading bookmark toggle (§8) — solid-yellow/gray-outline ribbon, control cell, persisted in the
-  repo's config.yaml; pagination default 500 with the item count shown. All tables are TanStack
-  tables. The left bar lives in ./left_bar.mdx + pm/left_bar.yaml — never redefine it here.
+  nav). LOCKED across specs: vocabulary Repo → Large file → Decision (Add to IPFS (pin) / Ignore /
+  Undecided; pin decision wire value `sync`); the four per-repo counts (Pinned / Pending / Undecided /
+  Ignored); the RepoStatus enum + pill colors + precedence (§4.2); the standard control row (search
+  left; icon-only sort/filter right); the leading bookmark toggle (§8) — solid-yellow/gray-outline
+  ribbon, control cell, persisted in the repo's config.yaml; pagination default 500 with the item count
+  shown. All tables are TanStack tables. The left bar lives in ./left_bar.mdx + pm/left_bar.yaml —
+  never redefine it here.
 -->

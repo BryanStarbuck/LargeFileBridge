@@ -3,7 +3,7 @@
 //   • pinned      → a SOLID pin filled with our dark blue (--lfb-pin)
 //   • not pinned  → the same pin as an OUTLINE, no fill, muted (--lfb-pin-muted)
 // Click toggles. Purely presentational: the caller wires `onToggle` to whatever "pin" means on
-// that surface (pin/unpin a CID on the IPFS page; the sync⇄ignore decision on a repo file).
+// that surface (pin/unpin a CID on the IPFS page; the pin⇄ignore decision on a repo file).
 import { memo } from "react";
 import { Pin } from "lucide-react";
 

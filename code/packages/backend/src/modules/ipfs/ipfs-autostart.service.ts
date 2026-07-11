@@ -24,7 +24,7 @@ import { log, rotateIfOversized } from "../../shared/logging.js";
 
 const run = promisify(execFile);
 
-// Fixed LaunchAgent label — sibling to com.largefilebridge.{scan,sync} (schedule.service.ts).
+// Fixed LaunchAgent label — sibling to com.largefilebridge.{scan,pin} (schedule.service.ts).
 export const IPFS_AUTOSTART_LABEL = "com.largefilebridge.ipfs";
 
 function supported(): boolean {

@@ -99,7 +99,7 @@ to the spec that owns the detail.
 | **Batch describe** ([ai_description.mdx](./ai_description.mdx)) | **network** (not core-bound) | fixed small (≈4–6) | The heavy wait is a vision-API round-trip, not local CPU; overlap I/O, don't burn cores. |
 | **Storage fingerprint / index** ([storages.mdx §4.1](./storages.mdx)) | **responsive** | **wide** over files | head+tail byte reads + hash are I/O-ish; parallelize but keep the app live. |
 | **Scan — repo units** ([scan.mdx](./scan.mdx)) | **responsive** | **wide** over units | independent stat-only walks; run many units at once, leave 2 cores for HTTP. |
-| **Sync pass — units × files** ([pin_process.mdx §4](./pin_process.mdx)) | **responsive** | two levels, one shared limiter | already shipped (P-23); IPFS + the app must stay responsive. |
+| **Pin pass — units × files** ([pin_process.mdx §4](./pin_process.mdx)) | **responsive** | two levels, one shared limiter | already shipped (P-23); IPFS + the app must stay responsive. |
 | **On-the-fly stream / one-off compress** | — (no batch) | single job, **all cores** | not bulk — one interactive file may use the whole box (§2 corollary). |
 
 The two most-parallel, most-visible consumers are the **queue** ([job_queue.mdx §3](./job_queue.mdx)) and
@@ -186,7 +186,7 @@ The same parallel queue backs the page-level **"Compress videos / Compress image
      job's threads (pass the cap into the tool). One-off single-file action = NOT a batch → may use ALL cores.
   §3 MAP of consumers → budget + fan-out shape (the inventory): compress-image (mass, wide, 1thr) ·
      compress-video (mass, narrow, videoThreads≈4) · transcribe (mass, narrow) · describe (NETWORK, fixed
-     ~4–6, not core-bound) · fingerprint/index (responsive, wide) · scan units (responsive, wide) · sync
+     ~4–6, not core-bound) · fingerprint/index (responsive, wide) · scan units (responsive, wide) · pin
      (responsive, two-level, shipped) · one-off stream/compress (no batch, all cores).
   §4 KNOB: performance.max_core_fraction ∈ (0,1], default 0.9, read LIVE by coreBudget() (no restart),
      Settings "Parallelism" control shows resolved N-of-M cores. responsive budget is NOT tunable.

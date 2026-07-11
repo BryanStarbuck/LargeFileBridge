@@ -27,9 +27,9 @@ portfile := "/tmp/lfb.web.port"
 pidfile  := "/tmp/lfb.webapp.pid"
 log      := state_dir + "/launcher.log"
 
-# launchd agent labels (schedule.service.ts: scan = 4h discovery, sync = 15m).
+# launchd agent labels (schedule.service.ts: scan = 4h discovery, pin = 15m).
 scan_label := "com.largefilebridge.scan"
-sync_label := "com.largefilebridge.sync"
+pin_label := "com.largefilebridge.pin"
 
 default:
     @just --list
@@ -120,7 +120,7 @@ dev: setup
 #     (the "orphan swarm"). The port loop below kills-and-rechecks until :be_port and the web port are
 #     genuinely free, defeating that race.
 # All matchers are repo-scoped (our @lfb/ pnpm scope, our {{code}} path, or "src/main.ts") so sister
-# apps and the launchd sync/scan worker (which runs src/cli.ts under deploy/, never src/main.ts or
+# apps and the launchd pin/scan worker (which runs src/cli.ts under deploy/, never src/main.ts or
 # --parallel dev) are never touched.
 stop:
     #!/usr/bin/env bash
@@ -129,9 +129,9 @@ stop:
     fe_port=$(test -f {{portfile}} && cat {{portfile}} 2>/dev/null || echo {{fe_port}})
     # Collect this repo's dev-tree pids from three narrow matchers (run separately so we stay in the
     # BRE subset `.*`, avoiding any pgrep ERE-alternation portability question):
-    #   @lfb/…--parallel dev   → the pnpm dev orchestrator (NOT `pnpm cli sync`)
+    #   @lfb/…--parallel dev   → the pnpm dev orchestrator (NOT `pnpm cli pin`)
     #   {{code}}/packages/frontend → the Vite dev server
-    #   {{code}}…src/main.ts   → the backend `tsx watch` parent (NOT src/cli.ts sync runs)
+    #   {{code}}…src/main.ts   → the backend `tsx watch` parent (NOT src/cli.ts pin runs)
     kill_tree() { # $1 = signal
       local pids
       pids=$( { pgrep -f "@lfb/.*--parallel dev"; \
@@ -168,22 +168,22 @@ status:
       lsof -ti tcp:$p >/dev/null 2>&1 && echo "web app  :$p UP" || echo "web app  :$p down"
     @lsof -ti tcp:{{be_port}} >/dev/null 2>&1 && echo "backend  :{{be_port}} UP" || echo "backend  :{{be_port}} down"
     @launchctl list | grep -q {{scan_label}} && echo "agent scan  (4h)  LOADED" || echo "agent scan  (4h)  not loaded"
-    @launchctl list | grep -q {{sync_label}} && echo "agent sync  (15m) LOADED" || echo "agent sync  (15m) not loaded"
+    @launchctl list | grep -q {{pin_label}} && echo "agent pin   (15m) LOADED" || echo "agent pin   (15m) not loaded"
 
 # One-shot discovery scan (no waiting for the 4h agent) — same code path the agent runs.
 scan: setup
     cd {{code}}/packages/backend && pnpm cli scan
 
-# One-shot IPFS sync (no waiting for the 15m agent) — same code path the agent runs.
-sync: setup
-    cd {{code}}/packages/backend && pnpm cli sync
+# One-shot IPFS pin/add (no waiting for the 15m agent) — same code path the agent runs.
+pin: setup
+    cd {{code}}/packages/backend && pnpm cli pin
 
-# Install + enable both launchd agents (scan 4h, sync 15m).
+# Install + enable both launchd agents (scan 4h, pin 15m).
 install-agents: setup
-    cd {{code}}/packages/backend && pnpm cli install-agent scan && pnpm cli install-agent sync
+    cd {{code}}/packages/backend && pnpm cli install-agent scan && pnpm cli install-agent pin
 
 uninstall-agents:
-    cd {{code}}/packages/backend && pnpm cli uninstall-agent scan && pnpm cli uninstall-agent sync
+    cd {{code}}/packages/backend && pnpm cli uninstall-agent scan && pnpm cli uninstall-agent pin
 
 # Remove installed deps and background run state (node_modules + pid/port scratch + launcher log).
 # Re-run `just setup` after. Leaves the app's own log.log / error.err in the state dir intact.

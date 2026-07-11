@@ -9,7 +9,7 @@ The **scan** is the periodic pass that answers one question across all of a user
 **"Have any big files — or the repos that hold them — changed since last time?"** It discovers new
 large files, notices files that have grown past the "big" threshold, spots moves/renames/deletes, and
 registers repos that have appeared or vanished. It is the eyes of LargeFileBridge (LFB); the
-[background pin](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract) is the
+[background pin](./storage_local.mdx#13-the-background-pin-process--the-transparency-contract) is the
 hands that move the bytes.
 
 Two scheduled jobs, two cadences, on purpose:
@@ -17,7 +17,7 @@ Two scheduled jobs, two cadences, on purpose:
 | Job (scheduleTask) | Cadence | What it does | Where spec'd |
 | --- | --- | --- | --- |
 | **Discovery scheduleTask** (this file) | **every 4 hours** | Deep, whole-filesystem **discovery** — stat every candidate file, find big files + filesystem/repo changes. Metadata only; no IPFS. | this file |
-| **Pin scheduleTask** | every **15 minutes** | A **full pin pass** ([pin_process.mdx](./pin_process.mdx)): visit + reconcile **every** known unit; for units the user **opted into IPFS** (`pinned: true`) add/update manifests, pin, fetch missing CIDs over IPFS **— and read the local IPFS pinset (`ipfs pin ls`) to reconcile + import already-pinned files** (§2.1). Runs units concurrently (many cores). | [storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract) · [pin_process.mdx](./pin_process.mdx) |
+| **Pin scheduleTask** | every **15 minutes** | A **full pin pass** ([pin_process.mdx](./pin_process.mdx)): visit + reconcile **every** known unit; for units the user **opted into IPFS** (`pinned: true`) add/update manifests, pin, fetch missing CIDs over IPFS **— and read the local IPFS pinset (`ipfs pin ls`) to reconcile + import already-pinned files** (§2.1). Runs units concurrently (many cores). | [storage_local.mdx §13](./storage_local.mdx#13-the-background-pin-process--the-transparency-contract) · [pin_process.mdx](./pin_process.mdx) |
 
 The discovery pass is expensive (it walks the tree and stats many files), so it is throttled to **every
 four hours**. The 15-minute pass is cheap per unit and time-sensitive, so it runs over the small set the
@@ -45,7 +45,7 @@ one concept: a *scheduleTask* is the mechanism; a *scan* is what the user watche
   ([one_repo.mdx §1](./one_repo.mdx#1-the-decision-model-locked)) and the portable **Sync List**
   ([sync_list.mdx](./sync_list.mdx)) are **different concepts and keep their names.**
 * The config blocks stay where they are — `scan_process` (this discovery task, §5) and `pin_process`
-  ([storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract), the
+  ([storage_local.mdx §13](./storage_local.mdx#13-the-background-pin-process--the-transparency-contract), the
   15-min task) — but both are understood as **scheduleTasks**, both surfaced as **scans** in the UI, and
   both gated by the **tools preflight** (§4.4).
 
@@ -98,7 +98,7 @@ The metadata-only discovery pass that stats candidates and never opens files run
 
 ### 2.1 The 15-minute scheduleTask reads the IPFS pinset (import already-pinned)
 
-The **15-minute scheduleTask** ([storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract))
+The **15-minute scheduleTask** ([storage_local.mdx §13](./storage_local.mdx#13-the-background-pin-process--the-transparency-contract))
 does the byte work — but it now also **reads the local IPFS pinset (`ipfs pin ls`)** every run and
 **reconciles it against the manifests**, so *"what files are being IPFS-pinned locally"* is always
 current without waiting on the 4-hour walk. Charter: *"Part of that scan is to look at what files are
@@ -410,7 +410,7 @@ it exists whenever the backend is up.
 
 The scan writes **only** operational metadata; it never writes a manifest or moves bytes. Per pin
 unit it updates that unit's `status.yaml`
-([storage_local.mdx §6.3 / §8.2](./storage_local.mdx#5-the-two-kinds-of-sync-unit--the-core-model)):
+([storage_local.mdx §6.3 / §8.2](./storage_local.mdx#5-the-two-kinds-of-pin-unit--the-core-model)):
 
 ```yaml
 # pin/r/<repo_name>/status.yaml  (excerpt — written by the scan)
@@ -448,7 +448,7 @@ Diffing against the previous scan and writing the added/grew/deleted change set 
 ## 7. The transparency contract (installed vs. on/off)
 
 Identical in spirit to the pin process
-([storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract)) — the
+([storage_local.mdx §13](./storage_local.mdx#13-the-background-pin-process--the-transparency-contract)) — the
 web app is transparent about the scan and lets the user control it:
 
 * **Installed** — is the scan scheduler present on this machine? (`scan_process.installed`, the plist

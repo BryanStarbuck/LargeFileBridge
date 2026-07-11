@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Communities
-description: The Communities page spec. A community is a publisher of large public files (videos first) that a user can subscribe to. Subscribing has two intents — GET their videos (consume for yourself) or SUPPORT them (rebroadcast/pin to keep their content secure and redundant). LFB analyzes this computer's total disk space and its free space OUTSIDE the IPFS datastore, derives a community storage budget and a per-community recommended amount to keep secure, and lets the user set each community's backup mode to one of three states: Block (sync nothing), Recommended (LFB picks a subset that fits the budget — the default), or Full backup (pin the whole library). Stays inside the charter's only-our-content default: rebroadcasting is an explicit, per-community opt-in that pins a chosen publisher's files, never a general public gateway/relay. All tables are TanStack tables. A future opt-in prompt (out of scope now) will ask whether the user will follow our recommended-subset guidelines.
+description: The Communities page spec. A community is a publisher of large public files (videos first) that a user can subscribe to. Subscribing has two intents — GET their videos (consume for yourself) or SUPPORT them (rebroadcast/pin to keep their content secure and redundant). LFB analyzes this computer's total disk space and its free space OUTSIDE the IPFS datastore, derives a community storage budget and a per-community recommended amount to keep secure, and lets the user set each community's backup mode to one of three states: Block (pin nothing), Recommended (LFB picks a subset that fits the budget — the default), or Full backup (pin the whole library). Stays inside the charter's only-our-content default: rebroadcasting is an explicit, per-community opt-in that pins a chosen publisher's files, never a general public gateway/relay. All tables are TanStack tables. A future opt-in prompt (out of scope now) will ask whether the user will follow our recommended-subset guidelines.
 ---
 
 # LargeFileBridge — Communities
@@ -23,7 +23,7 @@ Subscribing is an act with an **intent** and a **budget**. This page is where th
 > community is helping keep **already-public** content alive across more machines.
 
 Siblings: [Left bar](./left_bar.mdx) (adds the **Communities** nav item) ·
-[Storage](./storage_local.mdx) (the state root + sync units this reuses) ·
+[Storage](./storage_local.mdx) (the state root + pin units this reuses) ·
 [IPFS](./ipfs.mdx) (the local pinset these subscriptions add to) ·
 [Security](./security.mdx) (the only-our-content policy §7 keeps us inside).
 
@@ -66,13 +66,12 @@ A community record is small, human-readable, and lives in the state tree as YAML
 | `name` | Display name. |
 | `publisher` | Who runs it (handle / identity the files are published under). |
 | `description` | One line of what they publish. |
-| `library` | The set of large files the community publishes → each with its IPFS **CID**, size, duration/resolution (for videos), and published date. This is the manifest we sync against. |
+| `library` | The set of large files the community publishes → each with its IPFS **CID**, size, duration/resolution (for videos), and published date. This is the manifest we pin against. |
 | `totals` | Rolled-up counts and bytes: total items, total size, video count, image count. |
 | `subscription` | The user's choices for this community — **intent** (§3) and **backup mode** (§4). Absent = not subscribed. |
 
 The `library` is the same shape as the large-file manifests in [storage_local.mdx](./storage_local.mdx) §9 —
-a list of files mapped to CIDs and pin state — so a community is, mechanically, **just another sync
-unit** whose bytes happen to be owned by someone else.
+a list of files mapped to CIDs and pin state — so a community is, mechanically, **just another pin unit** whose bytes happen to be owned by someone else.
 
 ---
 
@@ -97,8 +96,8 @@ the bytes.
 
 Every community sits in exactly **one** of three backup modes. This is the core control on the page:
 
-1. **Block** — *sync nothing.* Do not download or pin any of this community's files. The default for
-   every community until the user acts. A previously-synced community set back to **Block**
+1. **Block** — *pin nothing.* Do not download or pin any of this community's files. The default for
+   every community until the user acts. A previously-pinned community set back to **Block**
    **unpins** its content (stops rebroadcasting). This is the charter-safe resting state (§1).
 2. **Recommended** — *let LFB choose a subset that fits the budget.* LFB pins the **recommended
    amount to keep secure** for this community (§5) — a subset of the library selected within the
@@ -107,7 +106,7 @@ Every community sits in exactly **one** of three backup modes. This is the core 
    ignoring the recommended cap (still bounded by real free disk — §5 headroom is never violated).
 
 The mode is a single control per row (a 3-way segmented control: **Block · Recommended · Full**).
-Changing it re-plans what gets pinned on the next sync and updates the live budget meter (§6).
+Changing it re-plans what gets pinned on the next pin and updates the live budget meter (§6).
 
 ---
 
@@ -139,7 +138,7 @@ combined** — the amount the **user is willing to give** to communities.
   `[0 … free_outside_ipfs − headroom]`). This one number answers the charter question *"how much
   storage is this user willing to do for community videos."*
 * The budget is **computer-wide** (a property of this machine's disk), stored on the app-level
-  config, not per-user — consistent with sync state being computer-owned in
+  config, not per-user — consistent with pin state being computer-owned in
   [storage_local.mdx](./storage_local.mdx) §2.
 
 ### 5.3 The recommended amount to keep secure (per community)
@@ -180,7 +179,7 @@ its **own** header buttons (right-aligned in the header), not the shared file `A
 | Action | What it does | Placement | Status |
 | --- | --- | --- | --- |
 | **Add community (by publisher id)** | Prompts for a publisher id / slug and adds that community as a subscribable row (defaulting to **Block**, §4). This is how a user follows a publisher LFB hasn't already surfaced. | Header, right-aligned, primary. | **proposed** |
-| **Sync / refresh community catalog** | Re-fetches every subscribed community's `library` manifest (§2) and re-plans pins against the budget (§5), so newly-published videos appear without waiting on the background pass. | Header, right-aligned. | **proposed** |
+| **Refresh community catalog** | Re-fetches every subscribed community's `library` manifest (§2) and re-plans pins against the budget (§5), so newly-published videos appear without waiting on the background pass. | Header, right-aligned. | **proposed** |
 
 Neither is implemented yet, so no code pointer. When built, they render in the `PageHeader` `actions`
 slot of `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/communities/CommunitiesPage.tsx`
@@ -236,22 +235,22 @@ Table behavior (all charter defaults):
 
 ## 8. State & storage
 
-A community subscription is a **sync unit** like any other (see [storage_local.mdx](./storage_local.mdx) §5–§9),
+A community subscription is a **pin unit** like any other (see [storage_local.mdx](./storage_local.mdx) §5–§9),
 stored **computer-wide** (owned by the machine, not the logged-in user):
 
 ```
 ~/T/_large_files_bridge/
 ├── config.yaml                 # + community_budget: the machine's community storage budget (§5.2)
-└── sync/
+└── pin/
     └── c/                      # one folder PER SUBSCRIBED COMMUNITY (mirrors pin/r/<repo>/)
         └── <community_id>/
             ├── config.yaml     #   intent (get/support) + backup_mode (block|recommended|full) + bookmarked
             ├── manifest.yaml   #   the community library → CID + local pin state
-            └── status.yaml     #   machine-written last-scan / last-sync cache
+            └── status.yaml     #   machine-written last-scan / last-pin cache
 ```
 
 * `pin/c/<community_id>/` mirrors `pin/r/<repo_name>/` — same three files, same store layer, same
-  atomic writes. A community is mechanically a repo-shaped sync unit whose bytes are someone else's.
+  atomic writes. A community is mechanically a repo-shaped pin unit whose bytes are someone else's.
 * `config.yaml` (app-level) gains **`community_budget`** — the single computer-wide budget number.
 * **Block** communities may keep a record (so the choice sticks) but hold **no pins**.
 
@@ -278,7 +277,7 @@ stored **computer-wide** (owned by the machine, not the logged-in user):
 3. Each community has an **intent** (Get and/or Support) and a **backup mode** that is exactly one of
    **Block · Recommended · Full**, defaulting to **Block** until the user acts.
 4. **Recommended** pins a subset within the budget (the *recommended amount to keep secure*); **Full**
-   pins the whole library; **Block** pins nothing and unpins anything previously synced. Reserved
+   pins the whole library; **Block** pins nothing and unpins anything previously pinned. Reserved
    **headroom is never violated**, including under Full.
 5. The community list is a **TanStack table** with the standard control row (search + one filter icon
    + one sort icon), 500/page default, full-page height (rows scroll inside; page does not), and the
@@ -288,7 +287,7 @@ stored **computer-wide** (owned by the machine, not the logged-in user):
 6. Rebroadcasting stays **charter-compliant** (§1): it is a per-community opt-in that pins a chosen
    publisher's public files only — never a general public gateway/relay — and the node's
    only-our-content default is not flipped.
-7. Subscriptions persist as computer-wide sync units under `pin/c/<community_id>/`, and the budget
+7. Subscriptions persist as computer-wide pin units under `pin/c/<community_id>/`, and the budget
    persists as `community_budget` in the app-level `config.yaml`.
 8. The "will you follow our guidelines?" prompt is **not** implemented (§9) — only the manual
    Block/Recommended/Full controls exist in this version.
@@ -298,6 +297,6 @@ stored **computer-wide** (owned by the machine, not the logged-in user):
   publisher's PUBLIC files; it is content storage, NOT a public gateway/relay, and does not flip the
   only-our-content default (charter). Default mode is Block. The three backup states are exactly
   Block / Recommended / Full. Budget = free-outside-IPFS minus headroom; headroom is never crossed.
-  Communities are computer-wide sync units (pin/c/<id>/), mirroring pin/r/<repo>/. The follow-our-
+  Communities are computer-wide pin units (pin/c/<id>/), mirroring pin/r/<repo>/. The follow-our-
   guidelines prompt (§9) is deferred. All tables are TanStack (charter).
 -->

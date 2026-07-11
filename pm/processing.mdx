@@ -34,7 +34,7 @@ Siblings this builds on and does not repeat:
 
 **Background work is "processing"** when either of these is true:
 
-* at least one **job is running** (a registry card — a compress/transcribe/describe/sync/scan in flight,
+* at least one **job is running** (a registry card — a compress/transcribe/describe/pin/scan in flight,
   [webapp.mdx §12](./webapp.mdx)), **or**
 * the **queue has a pending backlog** (tasks waiting to start, [job_queue.mdx §4](./job_queue.mdx)), **or**
 * a **batch is still active** (a "Compress inside" run not yet finished, [job_queue.mdx](./job_queue.mdx)).
@@ -165,7 +165,7 @@ The page is a standard list screen ([tables.mdx](./tables.mdx) house style, [Pag
 with three stacked regions, each shown only when it has content:
 
 1. **Running now** — one row per **running job** (the registry cards, [webapp.mdx §12](./webapp.mdx)):
-   the verb + target + a determinate bar/percent where the job reports it (a compress file's %, a sync's
+   the verb + target + a determinate bar/percent where the job reports it (a compress file's %, a pin's
    MB). This is the same data the dock shows, given room to breathe. Atop this region sits the
    **worker-utilization read** (§3a) — **"12 / 14 workers busy (~90% of cores)"** — so the user sees the mass
    parallelization ([parallelization.mdx](./parallelization.mdx)) actually filling the Core Budget.
@@ -201,7 +201,7 @@ regress:
 
 * **The backend queue/registry/batch state is process-global**, held in the single API server
   ([job_queue.mdx](./job_queue.mdx), [webapp.mdx §12](./webapp.mdx)). Work started **anywhere** — another
-  **browser tab**, a **"Compress inside"** run enqueued server-side, the **launchd** scan/sync worker
+  **browser tab**, a **"Compress inside"** run enqueued server-side, the **launchd** scan/pin worker
   ([storage_local.mdx §13](./storage_local.mdx)) — lands in that **same** shared state.
 * **Every surface polls it** (`GET /api/progress`), so an **idle** Processing page (or the conditional nav
   item, or the dock) **starts moving on its own** within **one poll interval** of work appearing — even

@@ -80,7 +80,7 @@ The `.lfbridge/` directory holds the committed, git-tracked artifacts for this r
   explicit un-ignore (`!/.lfbridge/`) so the list is always tracked. LFB verifies on scan that
   `.lfbridge/LargeFilesBridge_SyncList.yaml` is not ignored and warns loudly if it is.
 * The state-root copy (`pin/r/<repo_name>/manifest.yaml`,
-  [storage_local.mdx §6.3](./storage_local.mdx#62-syncrrepo_nameconfigyaml)) remains the **local cache** of this
+  [storage_local.mdx §6.3](./storage_local.mdx#62-pinrrepo_nameconfigyaml)) remains the **local cache** of this
   committed file plus this computer's live pin state. The committed file is the **portable source of
   truth**; the state-root copy is derived.
 
@@ -349,7 +349,7 @@ large_files:
 8. LFB writes the list **deterministically** — file entries **sorted by `path`**, stable key ordering,
    one entry per line-group, byte-stable formatting — so independent edits on two computers merge
    cleanly and only genuine content forks collide (§6).
-9. On scan/sync, LFB **regenerates** the list (bump `origin.revision`, stamp `written_at`, write only
+9. On scan or pin pass, LFB **regenerates** the list (bump `origin.revision`, stamp `written_at`, write only
    self-verifiable `pinned_by`, deterministic + atomic write), but **does NOT force git commits/pushes
    unless configured** — it respects the user's git workflow and never creates/switches branches.
 10. When a repo appears on both a computer list and its own in-repo list, the **in-repo (git) list is

@@ -1,6 +1,6 @@
 // GET /api/progress (webapp.mdx §12, §14). The progress dock's active-job set is the UNION of two
 // server sources folded into one list:
-//   A. the in-process job registry (progress.registry.ts) — manual syncs, compress, hash, … , and
+//   A. the in-process job registry (progress.registry.ts) — manual pins, compress, hash, … , and
 //   B. the detached discovery scan job (scan-job.ts), which already tracks its own live progress and
 //      runs under launchd on its own 4h schedule.
 // Folding the scan job in here (rather than making the scanner import the registry) keeps the scanner

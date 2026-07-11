@@ -9,7 +9,7 @@ import path from "node:path";
 //  * Build-output directories: generated, ephemeral, and (crucially) they DUPLICATE the
 //    source media that already lives under the repo. Walking them made the scan report
 //    the same movie twice — once from `static/videos/x.mp4` and once from the Docusaurus
-//    `build/videos/x.mp4` copy (scan.mdx §4). We never sync generated output.
+//    `build/videos/x.mp4` copy (scan.mdx §4). We never pin generated output.
 export const HARD_SKIP = new Set([
   // vcs / deps / os
   ".git",
@@ -17,13 +17,13 @@ export const HARD_SKIP = new Set([
   ".Trash",
   ".cache",
   "Caches",
-  // cloud-backbone bookkeeping — Dropbox/Google-Drive metadata that must never be walked or synced
+  // cloud-backbone bookkeeping — Dropbox/Google-Drive metadata that must never be walked or pinned
   // (dropbox.mdx §4, google_drive.mdx §5). These are the vendors' own scratch dirs, not payload.
   ".dropbox",
   ".dropbox.cache",
   ".tmp.drivedownload",
   ".driveupload",
-  // build outputs (generated — regenerated on demand, so never a sync candidate)
+  // build outputs (generated — regenerated on demand, so never a pin candidate)
   "build",
   "dist",
   "out",
@@ -73,7 +73,7 @@ const IMAGE_EXT = new Set([
   ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".heic", ".heif", ".avif",
 ]);
 
-/** True when `name` is a video / audio / image file — LFBridge's sync payload. */
+/** True when `name` is a video / audio / image file — LFBridge's pin payload. */
 export function isMediaFile(name: string): boolean {
   const ext = path.extname(name).toLowerCase();
   return VIDEO_EXT.has(ext) || AUDIO_EXT.has(ext) || IMAGE_EXT.has(ext);

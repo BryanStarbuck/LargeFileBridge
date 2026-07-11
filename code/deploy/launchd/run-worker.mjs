@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // launchd/cron trigger: POST the loopback-only run route so the work runs in the app's TS
 // (scan.mdx §3.1 — deliberately Node, never raw curl). Args: <worker> <apiPort>.
-const worker = process.argv[2] || "sync";
+const worker = process.argv[2] || "pin";
 const port = process.argv[3] || process.env.LFB_API_PORT || "8787";
 const url = `http://127.0.0.1:${port}/api/internal/run/${worker}`;
 

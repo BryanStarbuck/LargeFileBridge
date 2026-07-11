@@ -489,7 +489,7 @@ export async function compressFile(input: string, opts?: CompressFileOpts | stri
   const media = check.media;
 
   // §8.4 — the already-compressed marker. If this file already carries our in-file marker (from a prior
-  // pass here, or because a peer compressed it and it synced over IPFS), skip it BEFORE any transcode — the
+  // pass here, or because a peer compressed it and it pinned over IPFS), skip it BEFORE any transcode — the
   // whole point is to never re-encode a file we (or another of the user's computers) already compressed.
   if (isAlreadyCompressed(abs, media, tools)) {
     return { path: abs, status: "skipped", reason: "already compressed (marker)", beforeBytes, afterBytes: beforeBytes, codec: check.targetCodec };

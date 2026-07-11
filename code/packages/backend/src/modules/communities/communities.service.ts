@@ -2,7 +2,7 @@
 // can subscribe to; subscribing carries an INTENT (Get/Support) and a BACKUP MODE (Block · Recommended
 // · Full) bounded by a storage BUDGET LFB derives from this computer's real free disk. On disk each
 // subscribed community materializes as a community storage (storage_community.mdx); its per-community
-// subscription choices live computer-wide under sync/c/<community_id>/config.yaml (§8), and the single
+// subscription choices live computer-wide under pin/c/<community_id>/config.yaml (§8), and the single
 // machine-wide budget lives on the app-level config.yaml as `community_budget` (§5.2).
 //
 // Charter compliance (§1): Support = "pin this publisher's PUBLIC files to add redundancy," an explicit,
@@ -162,7 +162,7 @@ export async function getCommunitiesPage(): Promise<CommunitiesPageData> {
     root: b.row.root,
     library: b.library,
     subscription: b.sub,
-    // No bytes are pinned by this subsystem until a sync pass wires the plan; report the honest 0 vs the
+    // No bytes are pinned by this subsystem until a pin pass wires the plan; report the honest 0 vs the
     // planned target so the meter never overstates coverage (§5.3 "degrade gracefully and says so").
     keepingSecureBytes: 0,
     targetBytes: b.sub.backupMode === "block" ? 0 : Math.round(targets.get(b.row.id) ?? 0),
@@ -183,7 +183,7 @@ export async function setCommunityBudget(bytes: number | null): Promise<Communit
   return computeStorageMath();
 }
 
-/** Apply a partial update to one community's subscription (§3–§4). Persists to sync/c/<id>/config.yaml. */
+/** Apply a partial update to one community's subscription (§3–§4). Persists to pin/c/<id>/config.yaml. */
 export async function setCommunitySubscription(
   communityId: string,
   patch: CommunitySubscriptionPatch,

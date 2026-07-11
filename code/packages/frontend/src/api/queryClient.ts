@@ -6,7 +6,7 @@ export const queryClient = new QueryClient({
       staleTime: 5_000,
       refetchOnWindowFocus: false,
       // Don't run polling intervals in hidden/background tabs — an idle background tab shouldn't keep
-      // hammering the scan-status / sync endpoints (performance.mdx P-07).
+      // hammering the scan-status / jobs endpoints (performance.mdx P-07).
       refetchIntervalInBackground: false,
       retry: 1,
     },

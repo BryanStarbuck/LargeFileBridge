@@ -33,6 +33,8 @@ import { reconcileWorkerSchedules, ensureDeviceWorkerDefaultOn } from "./modules
 import { startWatchdog } from "./modules/schedule/watchdog.service.js";
 import { acquireSingleInstanceLock } from "./shared/single-instance.js";
 import { startWatcher, stopWatcher } from "./modules/watcher/watcher.service.js";
+import { resolveStateDir } from "./config/state-dir.js";
+import { migrateSyncToPin } from "./config/migrate-sync-to-pin.js";
 import { log } from "./shared/logging.js";
 
 async function bootstrapState(): Promise<void> {
@@ -104,6 +106,12 @@ async function main(): Promise<void> {
     );
     process.exit(0);
   }
+
+  // One-time, idempotent compat migration (sync → pin): rewrite legacy on-disk state (the `sync/` unit
+  // dirs, `sync_process`/`synced`/`sync:`/`last_sync_at` keys, and the old `com.largefilebridge.sync`
+  // LaunchAgent) into the new `pin` shape BEFORE any config is read/written below. Best-effort; never
+  // throws. Runs only in the instance that holds the single-instance lock.
+  migrateSyncToPin(resolveStateDir());
 
   await bootstrapState();
   const cfg = getAppConfig();

@@ -81,7 +81,7 @@ export async function addFile(absPath: string): Promise<string> {
     form.append("file", blob, absPath);
     // `add` uploads the whole file; its duration scales with file size (a 1.4 GB video far exceeds the
     // 15s control-call cap). Disable the wall-clock timeout (timeoutMs: 0) so large media can finish —
-    // the sync limiter bounds concurrency, so this can't stampede the daemon.
+    // the pin limiter bounds concurrency, so this can't stampede the daemon.
     const res = await rpc("add", { query: { pin: "true", "cid-version": "1" }, body: form, timeoutMs: 0 });
     const text = await res.text();
     // add streams NDJSON; the final line has the root entry.
@@ -101,7 +101,7 @@ export async function addFile(absPath: string): Promise<string> {
  * Materialize a file's bytes by CID to `destPath` — the byte side of "fetch" (pin_process.mdx / storage.mdx
  * §9). Streams the HTTP RPC `cat` (a single unixfs file — LFB adds one file per CID) to a temp file, then
  * renames it into place atomically, creating parent dirs. No 15s abort: large media legitimately take a
- * while; the caller bounds concurrency via the sync limiter. A partial download is cleaned up, never left
+ * while; the caller bounds concurrency via the pin limiter. A partial download is cleaned up, never left
  * as a truncated final file.
  */
 export async function catToFile(cid: string, destPath: string): Promise<void> {

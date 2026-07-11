@@ -4,7 +4,7 @@
 // trail) — unmounted the ENTIRE root, leaving a blank white page on every route (Processing included).
 // This catches those throws, logs them to the fault trail via clientLog, and shows a recoverable card
 // instead of a dead screen. Primary recovery is a full reload (a container-DOM error can leave React's
-// internal tree out of sync, so a clean remount is the safe path); a lighter "Try again" resets state.
+// internal tree out of step, so a clean remount is the safe path); a lighter "Try again" resets state.
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { clientLog } from "../lib/clientLog.js";
 
