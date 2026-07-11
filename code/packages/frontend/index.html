@@ -1,8 +1,17 @@
 <!doctype html>
-<html lang="en">
+<!-- translate="no" + the notranslate class opt this SPA out of Google Translate / Chrome
+     auto-translate. Those tools swap React-managed TEXT NODES out from under the reconciler,
+     after which React's commit-phase removeChild/insertBefore hits a node that is "not a child
+     of this node" and throws NotFoundError (~700× in error.err, pure React-internal stacks with
+     zero app frames — the classic translation-extension signature). Opting out is the standard,
+     effective prevention. See also the <meta name="google" content="notranslate"> below. -->
+<html lang="en" translate="no" class="notranslate">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Belt-and-suspenders with the html translate="no": tells Google Translate to leave the
+         whole document alone so it can't mutate React's text nodes and crash the reconciler. -->
+    <meta name="google" content="notranslate" />
     <!-- Stable ownership marker: lets the port resolver tell OUR web server apart from a
          foreign process squatting on the port (code_plan.mdx §2, port collision policy). -->
     <meta name="x-app" content="large-file-bridge" />
@@ -18,7 +27,9 @@
     <title>Large File Bridge</title>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- notranslate here too: the app shell is where a translation mutation would unmount
+         everything, so double-mark it (in addition to <html translate="no">). -->
+    <div id="root" class="notranslate" translate="no"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

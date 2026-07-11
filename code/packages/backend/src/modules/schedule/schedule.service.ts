@@ -43,17 +43,26 @@ function installer(): SchedulerInstaller {
 // in — and callers verify the result exists (buildInstallOpts) so a future move can never fail silently.
 function triggerScriptPath(): string {
   const rel = path.join("deploy", "launchd", "run-worker.mjs");
-  let dir = path.dirname(fileURLToPath(import.meta.url));
+  const start = path.dirname(fileURLToPath(import.meta.url));
+  let dir = start;
+  // Anchor for the not-found fallback: the PARENT of the `packages` segment — i.e. the repo `code/` root,
+  // where deploy/launchd/ actually lives. Capturing it by name (not by a fixed `../` count) is what makes
+  // the wrong `code/packages/deploy/...` path impossible to synthesize under ANY run layout (tsx-from-src or
+  // a compiled dist tree): the fallback always names `code/deploy/...`, never `packages/deploy/...`.
+  let codeRoot: string | null = null;
   for (let hops = 0; hops < 12; hops++) {
     const candidate = path.join(dir, rel);
-    if (fs.existsSync(candidate)) return candidate;
+    if (fs.existsSync(candidate)) return candidate; // the real, existing trampoline — first ancestor that has it
+    if (codeRoot === null && path.basename(dir) === "packages") codeRoot = path.dirname(dir);
     const parent = path.dirname(dir);
     if (parent === dir) break; // reached the filesystem root — stop
     dir = parent;
   }
-  // Not found by walking up. Return the canonical location (5 levels up: schedule → modules → src → backend
-  // → packages → code) so the "missing trigger script" guard names a real, checkable path in its warning.
-  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../deploy/launchd/run-worker.mjs");
+  // Not found by walking up (a genuinely broken tree). Name the canonical location so the "missing trigger
+  // script" guard warns about a real, checkable path — anchored on the `code/` root (parent of `packages/`)
+  // so it can never point into the nonexistent `packages/deploy/...` that caused the original silent crash.
+  if (codeRoot !== null) return path.join(codeRoot, rel);
+  return path.resolve(start, "../../../../../deploy/launchd/run-worker.mjs");
 }
 
 function labelFor(kind: WorkerKind): string {

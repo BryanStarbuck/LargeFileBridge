@@ -17,22 +17,36 @@ function apiBase(): string {
   return `http://${host}:${port}/api/v0`;
 }
 
+// Short cap for cheap control calls (id/health, config, pin checks) so daemon-down detection stays
+// fast. Data-transfer ops whose duration scales with file size (e.g. `add`) MUST override this —
+// pass `timeoutMs: 0` to disable the wall-clock cap entirely (see addFile).
+const RPC_TIMEOUT_MS = 15000;
+
 async function rpc(
   cmd: string,
-  opts: { query?: Record<string, string>; args?: string[]; body?: FormData } = {},
+  opts: {
+    query?: Record<string, string>;
+    args?: string[];
+    body?: FormData;
+    // Per-call wall-clock timeout in ms. Defaults to the short RPC_TIMEOUT_MS. Use 0 to disable the
+    // cap for large data transfers (an aborted `add` of a multi-GB video is the bug this fixes).
+    timeoutMs?: number;
+  } = {},
 ) {
   const params = new URLSearchParams(opts.query);
   for (const a of opts.args ?? []) params.append("arg", a); // repeated ?arg=…&arg=…
   const qs = params.toString() ? `?${params.toString()}` : "";
   const url = `${apiBase()}/${cmd}${qs}`;
+  const timeoutMs = opts.timeoutMs ?? RPC_TIMEOUT_MS;
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 15000);
+  // timeoutMs <= 0 means "no timeout": don't arm the aborter at all (used by size-scaled ops like add).
+  const t = timeoutMs > 0 ? setTimeout(() => ctrl.abort(), timeoutMs) : undefined;
   try {
     const res = await fetch(url, { method: "POST", body: opts.body, signal: ctrl.signal });
     if (!res.ok) throw new Error(`ipfs ${cmd} -> ${res.status} ${await res.text()}`);
     return res;
   } finally {
-    clearTimeout(t);
+    if (t) clearTimeout(t);
   }
 }
 
@@ -65,7 +79,10 @@ export async function addFile(absPath: string): Promise<string> {
     const blob = await (fs as unknown as { openAsBlob(p: string): Promise<Blob> }).openAsBlob(absPath);
     const form = new FormData();
     form.append("file", blob, absPath);
-    const res = await rpc("add", { query: { pin: "true", "cid-version": "1" }, body: form });
+    // `add` uploads the whole file; its duration scales with file size (a 1.4 GB video far exceeds the
+    // 15s control-call cap). Disable the wall-clock timeout (timeoutMs: 0) so large media can finish —
+    // the sync limiter bounds concurrency, so this can't stampede the daemon.
+    const res = await rpc("add", { query: { pin: "true", "cid-version": "1" }, body: form, timeoutMs: 0 });
     const text = await res.text();
     // add streams NDJSON; the final line has the root entry.
     const lines = text.trim().split("\n").filter(Boolean);

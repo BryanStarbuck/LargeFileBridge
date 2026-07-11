@@ -19,7 +19,7 @@ import { HoverInfoProvider } from "./components/hoverinfo/HoverInfoContext.js";
 import { HotkeyProvider } from "./lib/hotkeys.js";
 import { ErrorBoundary } from "./components/ErrorBoundary.js";
 import { leftBar } from "./config/left_bar.js";
-import { clientLog } from "./lib/clientLog.js";
+import { clientLog, errMessage } from "./lib/clientLog.js";
 import "./styles.css";
 
 // The bottom-left offset that clears the left bar for BOTH the toast stack and the progress dock
@@ -27,13 +27,40 @@ import "./styles.css";
 // change in config/left_bar.ts moves both surfaces together.
 const BAR_CLEAR_LEFT = `calc(${leftBar.sidebarWidth} + 16px)`;
 
+// Some browser TRANSLATION tools (Google Translate / Chrome auto-translate) swap React-managed text
+// nodes out from under the reconciler. React's next commit then calls removeChild/insertBefore on a
+// node that is no longer where it expects it and throws a NotFoundError with a PURE React-internal
+// stack (zero app frames). We opt the document out of translation in index.html (html translate="no"
+// + notranslate), but a user's extension can still force it — so treat THIS specific signature as a
+// known, non-fatal event: log it at WARN (not ERROR) and rate-limit it so it can't flood error.err
+// the way it did before (~700 entries). Everything else keeps flowing to the fault trail at ERROR.
+function isTranslationDomError(err: unknown): boolean {
+  const name = (err as { name?: unknown })?.name;
+  const msg = err instanceof Error ? err.message : typeof err === "string" ? err : String((err as { message?: unknown })?.message ?? "");
+  const isNotFound = name === "NotFoundError" || /NotFoundError/.test(msg);
+  return isNotFound && /removeChild|insertBefore/.test(msg) && /not a child of this node/.test(msg);
+}
+
+// Rate-limit: log the 1st occurrence and then every 100th, so the signal stays visible without spam.
+let translationDomHits = 0;
+function reportGlobal(context: string, err: unknown): void {
+  if (isTranslationDomError(err)) {
+    translationDomHits += 1;
+    if (translationDomHits === 1 || translationDomHits % 100 === 0) {
+      clientLog.warn(context, `[translation-extension DOM mutation, non-fatal, x${translationDomHits}] ${errMessage(err)}`);
+    }
+    return;
+  }
+  clientLog.error(context, err);
+}
+
 // Catch-all fault trail: anything that escapes a component (a thrown render, an un-.catch()'d promise)
 // still reaches error.err via the client-log bridge instead of dying silently in the devtools console.
 window.addEventListener("error", (e) => {
-  clientLog.error("window.error", e.error ?? e.message);
+  reportGlobal("window.error", e.error ?? e.message);
 });
 window.addEventListener("unhandledrejection", (e) => {
-  clientLog.error("window.unhandledrejection", e.reason);
+  reportGlobal("window.unhandledrejection", e.reason);
 });
 
 // Boot gate order (security.mdx §3): 1) first-run Security Setup (who may sign in — unauthenticated),
