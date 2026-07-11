@@ -49,7 +49,7 @@ Every primary table's **leading (column 0)** cell is a **ribbon bookmark** toggl
 * **Accessible** — `<button aria-pressed={bookmarked} aria-label="Bookmark this <entity>">`,
   keyboard-focusable, toggles on `Enter`/`Space`, tooltip *"Bookmark" / "Bookmarked"*.
 * **Local, per-computer preference.** A bookmark is a favorite *this machine's user* set — **not**
-  synced to peers, **never** in the shared manifest. It survives rescans (discovery reconciles
+  shared to peers, **never** in the shared manifest. It survives rescans (discovery reconciles
   without clobbering user fields). Default **`false`**.
 
 ### 1.1 Where the flag is stored, per entity type (LOCKED)
@@ -58,9 +58,9 @@ The flag lives **with the entity**, in the local state tree ([storage_local.mdx]
 
 | Table | Entity | `bookmarked` stored in |
 | --- | --- | --- |
-| Repos | a repo | `sync/r/<repo>/config.yaml` (Repos §8.3 — already LOCKED). |
-| Communities | a community | `sync/c/<community_id>/config.yaml` (communities.mdx §8). |
-| Full-paths (files) | a large file | a small **bookmark set** in the **owning sync unit's** `config.yaml` (the repo's `sync/r/<repo>/config.yaml`, or `sync/computer/config.yaml` for files outside any repo), keyed by the file's **path + fingerprint** — because a file has no `config.yaml` of its own. |
+| Repos | a repo | `pin/r/<repo>/config.yaml` (Repos §8.3 — already LOCKED). |
+| Communities | a community | `pin/c/<community_id>/config.yaml` (communities.mdx §8). |
+| Full-paths (files) | a large file | a small **bookmark set** in the **owning pin unit's** `config.yaml` (the repo's `pin/r/<repo>/config.yaml`, or `pin/computer/config.yaml` for files outside any repo), keyed by the file's **path + fingerprint** — because a file has no `config.yaml` of its own. |
 
 * **API shape** mirrors Repos: `POST /api/<entity>/:id/bookmark` with `{ bookmarked: boolean }`,
   idempotent, writes the flag and returns the updated row; unknown id → 404. For files the id is the
@@ -179,7 +179,7 @@ has no saved sort for that page.
 * **Where:** the logged-in user's personal config —
   `users/<email>/config.yaml`, under the existing **`tables.views`** map
   ([storage_local.mdx](./storage_local.mdx) §4, the tier for per-user "prefs / last view"). **Not** computer-wide,
-  **not** in any sync unit — it is *this user's* view of *this page*.
+  **not** in any pin unit — it is *this user's* view of *this page*.
 * **Keyed by table id.** `tables.views.<tableId>` (`repos`, `files`, `communities`, …). Each entry
   stores the **ordered sort keys** and the **active filters** (including **Bookmarked only**, and the
   search text if we choose to persist it).

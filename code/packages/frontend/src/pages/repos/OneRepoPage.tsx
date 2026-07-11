@@ -1,6 +1,6 @@
 // The per-repo screen (one_repo.mdx + use_cases.mdx §5.4). The StatusBanner here is the UC-2
 // diagnosis engine: "a file didn't show up on my other computer" — it names the FIRST real cause
-// worst-first (IPFS down → synced-but-no-peers → undecided → pending) and hands over the one fix,
+// worst-first (IPFS down → pinned-but-no-peers → undecided → pending) and hands over the one fix,
 // so a non-expert never has to guess which of the four it was. The files table is unchanged; the old
 // status strip moves into a collapsed "Repo details" disclosure.
 import { useState } from "react";
@@ -8,7 +8,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
 import { RefreshCw, Settings, ChevronLeft, Network } from "lucide-react";
 import { toast } from "sonner";
-import type { FileRow, Decision, RepoDetail, SyncCounts, SyncNowResult } from "@lfb/shared";
+import type { FileRow, Decision, RepoDetail, PinCounts, PinNowResult } from "@lfb/shared";
 import { formatBytes, viewerRouteForName } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
@@ -27,17 +27,20 @@ import type { WarningDef } from "../../components/ui/warnings/registry.js";
 import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
 import { clientLog } from "../../lib/clientLog.js";
 
+// "sync" is the FROZEN wire value for the Add-to-IPFS (pin) decision; it renders as "Add to IPFS (pin)".
 const DECISIONS: Decision[] = ["sync", "ignore", "undecided"];
+const decisionLabel = (d: Decision): string =>
+  d === "sync" ? "Add to IPFS (pin)" : d[0].toUpperCase() + d.slice(1);
 
-/** Human summary of what a sync run actually did — the honest counts, never a fixed string (sync_process.mdx §6). */
-function syncSummary(c: SyncCounts): string {
-  if (c.eligible === 0) return "Nothing to sync — no files marked Sync";
+/** Human summary of what a pin run actually did — the honest counts, never a fixed string (pin_process.mdx §6). */
+function pinSummary(c: PinCounts): string {
+  if (c.eligible === 0) return "Nothing to pin — no files marked Pin";
   const parts: string[] = [];
   if (c.added) parts.push(`${c.added} added`);
   if (c.fetched) parts.push(`${c.fetched} fetched`);
   if (c.skipped) parts.push(`${c.skipped} already up-to-date`);
   if (c.failed) parts.push(`${c.failed} failed`);
-  return parts.length ? `Sync done — ${parts.join(", ")}` : "Nothing to sync — no files marked Sync";
+  return parts.length ? `Pin done — ${parts.join(", ")}` : "Nothing to pin — no files marked Pin";
 }
 
 export function OneRepoPage() {
@@ -62,18 +65,18 @@ export function OneRepoPage() {
     },
   });
 
-  const syncNow = useMutation({
-    mutationFn: (paths?: string[]) => api.syncNow(repoId, paths),
-    onSuccess: (r: SyncNowResult) => {
+  const pinNow = useMutation({
+    mutationFn: (paths?: string[]) => api.pinNow(repoId, paths),
+    onSuccess: (r: PinNowResult) => {
       qc.setQueryData(["repo", repoId], r.detail);
-      // Report what the run ACTUALLY did, never a blanket "complete" (sync_process.mdx §6): an honest
-      // "nothing to sync" for a no-op, real counts otherwise, and an error toast when only failures occurred.
-      const summary = syncSummary(r.counts);
+      // Report what the run ACTUALLY did, never a blanket "complete" (pin_process.mdx §6): an honest
+      // "nothing to pin" for a no-op, real counts otherwise, and an error toast when only failures occurred.
+      const summary = pinSummary(r.counts);
       if (r.counts.failed > 0 && r.counts.added === 0 && r.counts.fetched === 0) toast.error(summary);
       else toast.success(summary);
     },
     onError: (e: Error) => {
-      clientLog.error("OneRepoPage.syncNow", e);
+      clientLog.error("OneRepoPage.pinNow", e);
       toast.error(e.message);
     },
   });
@@ -112,7 +115,7 @@ export function OneRepoPage() {
   };
 
   // The action-links row (page_actions.mdx §4 — One repo): producing pair · Compress all videos… ·
-  // Compress all images… · Git-ignore big files… · Rescan. Sync now stays the header primary.
+  // Compress all images… · Git-ignore big files… · Rescan. Pin now stays the header primary.
   const rescanRepo = async () => {
     try {
       const r = await api.rescan();
@@ -133,8 +136,8 @@ export function OneRepoPage() {
 
   const columns: LfbColumn<FileRow>[] = [
     {
-      // Same toggle pin as everywhere (ipfs.mdx §3): solid dark-blue = pinned (this file is synced
-      // over IPFS), outline = not. Toggling flips the sync⇄ignore decision that governs the pin.
+      // Same toggle pin as everywhere (ipfs.mdx §3): solid dark-blue = pinned (this file is pinned
+      // over IPFS), outline = not. Toggling flips the pin⇄ignore decision that governs the pin.
       id: "pinned",
       header: "Pin",
       kind: "text",
@@ -190,7 +193,7 @@ export function OneRepoPage() {
         >
           {DECISIONS.map((d) => (
             <option key={d} value={d}>
-              {d[0].toUpperCase() + d.slice(1)}
+              {decisionLabel(d)}
             </option>
           ))}
         </select>
@@ -229,13 +232,13 @@ export function OneRepoPage() {
               <Settings className="h-4 w-4" />
             </button>
             <button
-              onClick={() => syncNow.mutate(undefined)}
-              disabled={syncNow.isPending || ipfsDown}
-              title={ipfsDown ? "IPFS node unreachable" : "Sync this repo now"}
+              onClick={() => pinNow.mutate(undefined)}
+              disabled={pinNow.isPending || ipfsDown}
+              title={ipfsDown ? "IPFS node unreachable" : "Pin this repo now"}
               className="flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:opacity-50"
             >
-              <RefreshCw className={`h-4 w-4 ${syncNow.isPending ? "animate-spin" : ""}`} />
-              {syncNow.isPending ? "Syncing…" : "Sync now"}
+              <RefreshCw className={`h-4 w-4 ${pinNow.isPending ? "animate-spin" : ""}`} />
+              {pinNow.isPending ? "Pinning…" : "Pin now"}
             </button>
           </>
         }
@@ -245,8 +248,8 @@ export function OneRepoPage() {
         <RepoVerdict
           detail={detail}
           repoId={repoId}
-          onSyncNow={() => syncNow.mutate(undefined)}
-          syncing={syncNow.isPending}
+          onPinNow={() => pinNow.mutate(undefined)}
+          pinning={pinNow.isPending}
           navigate={navigate}
           onWarningApplied={() => qc.invalidateQueries({ queryKey: ["repo", repoId] })}
         />
@@ -255,7 +258,7 @@ export function OneRepoPage() {
       {/* Summary counts (quick filters would live here) */}
       {c && (
         <div className="mb-1 text-sm text-black/70">
-          {c.synced + c.pending} Sync ·{" "}
+          {c.pinned + c.pending} Pin ·{" "}
           <span className={c.undecided > 0 ? "text-[var(--lfb-primary)] font-medium" : ""}>{c.undecided} Undecided</span> ·{" "}
           {c.ignored} Ignore
         </div>
@@ -295,12 +298,12 @@ export function OneRepoPage() {
                   {DECISIONS.map((d) => (
                     <button key={d} className="block w-full px-3 py-1.5 text-left text-sm hover:bg-slate-100"
                       onClick={() => { setDecision.mutate({ paths: [...selected], decision: d }); setBulkOpen(false); }}>
-                      Set to {d[0].toUpperCase() + d.slice(1)}
+                      {d === "sync" ? "Add to IPFS (pin)" : `Set to ${decisionLabel(d)}`}
                     </button>
                   ))}
                   <button className="block w-full px-3 py-1.5 text-left text-sm hover:bg-slate-100 text-[var(--lfb-primary)]"
-                    onClick={() => { syncNow.mutate([...selected]); setBulkOpen(false); }}>
-                    Sync now (selected)
+                    onClick={() => { pinNow.mutate([...selected]); setBulkOpen(false); }}>
+                    Pin now (selected)
                   </button>
                   <button className="block w-full px-3 py-1.5 text-left text-sm hover:bg-slate-100"
                     disabled={compressBatch.isPending}
@@ -320,10 +323,10 @@ export function OneRepoPage() {
         <div className="mt-3">
           <Disclosure label="Repo details">
             <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
-              <span>Sync <b>{detail.synced ? "on" : "off"}</b></span>
+              <span>Pinned <b>{detail.pinned ? "on" : "off"}</b></span>
               <span className="flex items-center gap-1">Status <RepoStatusPill status={detail.status} /></span>
               <span>Peers <b>{detail.peerCount}</b></span>
-              <span>Last sync <b title={absoluteTime(detail.lastSyncAt)}>{relativeTime(detail.lastSyncAt)}</b></span>
+              <span>Last pin <b title={absoluteTime(detail.lastPinAt)}>{relativeTime(detail.lastPinAt)}</b></span>
               <span style={{ color: ipfsDown ? "var(--lfb-bad)" : "var(--lfb-ok)" }}>
                 IPFS {ipfsDown ? "unreachable" : "ok"}
               </span>
@@ -339,27 +342,27 @@ export function OneRepoPage() {
 function RepoVerdict({
   detail,
   repoId,
-  onSyncNow,
-  syncing,
+  onPinNow,
+  pinning,
   navigate,
   onWarningApplied,
 }: {
   detail: RepoDetail;
   repoId: string;
-  onSyncNow: () => void;
-  syncing: boolean;
+  onPinNow: () => void;
+  pinning: boolean;
   navigate: ReturnType<typeof useNavigate>;
   onWarningApplied?: () => void;
 }) {
   const ipfsDown = detail.ipfs === "unreachable";
-  const { synced, pending, undecided } = detail.counts;
-  // Files set to sync that aren't on ANY other computer yet — synced locally, but not backed up.
+  const { pinned, pending, undecided } = detail.counts;
+  // Files set to pin that aren't on ANY other computer yet — pinned locally, but not backed up.
   const noPeerCount = detail.files.filter((f) => f.decision === "sync" && f.peers.length === 0).length;
 
   let state: Health = "ok";
-  let headline = "Everything here is synced and backed up";
-  let sub: string | undefined = detail.lastSyncAt
-    ? `Last sync ${relativeTime(detail.lastSyncAt)} · ${detail.peerCount} peer${detail.peerCount === 1 ? "" : "s"}.`
+  let headline = "Everything here is pinned and backed up";
+  let sub: string | undefined = detail.lastPinAt
+    ? `Last pin ${relativeTime(detail.lastPinAt)} · ${detail.peerCount} peer${detail.peerCount === 1 ? "" : "s"}.`
     : undefined;
   let action: React.ReactNode = undefined;
   // The educate-and-fix warning (warnings.mdx §8) that backs the blue arrow → popup on this banner.
@@ -369,7 +372,7 @@ function RepoVerdict({
 
   if (ipfsDown) {
     state = "bad";
-    headline = "Syncing is paused — the IPFS engine on this computer isn't running";
+    headline = "Pinning is paused — the IPFS engine on this computer isn't running";
     sub = "Decisions still save, but no files can move until IPFS starts.";
     warning = {
       id: "repo-ipfs-down",
@@ -380,13 +383,13 @@ function RepoVerdict({
         whatThisIs:
           "IPFS is the local peer-to-peer engine LFBridge uses to move big files between your own computers. It's set up on this machine but isn't running right now, so no bytes can transfer.",
         whyItMatters:
-          "Your Sync / Ignore decisions still save, but a file that lives only on another computer can't arrive here, and a file only here can't reach the others. Nothing is lost — this is a paused pipe, not a broken file.",
+          "Your Add-to-IPFS (pin) / Ignore decisions still save, but a file that lives only on another computer can't arrive here, and a file only here can't reach the others. Nothing is lost — this is a paused pipe, not a broken file.",
         options: [
           {
             kind: "checkbox",
             name: "autostart",
             label: "Also keep IPFS on after I reboot",
-            helper: "Installs the reboot auto-start so syncing survives a restart.",
+            helper: "Installs the reboot auto-start so pinning survives a restart.",
             defaultChecked: true,
           },
         ],
@@ -398,16 +401,16 @@ function RepoVerdict({
     };
   } else if (detail.status === "error") {
     state = "bad";
-    headline = "This repo hit an error on its last sync";
-    sub = "Open the details below, or try Sync now.";
+    headline = "This repo hit an error on its last pin";
+    sub = "Open the details below, or try Pin now.";
     action = (
-      <FixButton state="bad" onClick={onSyncNow} disabled={syncing}>
-        <RefreshCw className="h-4 w-4" /> Sync now
+      <FixButton state="bad" onClick={onPinNow} disabled={pinning}>
+        <RefreshCw className="h-4 w-4" /> Pin now
       </FixButton>
     );
   } else if (noPeerCount > 0) {
     state = "warn";
-    headline = `${noPeerCount} synced file${noPeerCount === 1 ? " isn't" : "s aren't"} on any other computer yet`;
+    headline = `${noPeerCount} pinned file${noPeerCount === 1 ? " isn't" : "s aren't"} on any other computer yet`;
     sub = "They live only on this machine — not backed up. Open LFBridge on your other computer so it can pull them.";
     action = (
       <FixButton state="warn" onClick={() => navigate({ to: "/devices" })}>
@@ -417,7 +420,7 @@ function RepoVerdict({
   } else if (undecided > 0) {
     state = "warn";
     headline = `${undecided} file${undecided === 1 ? "" : "s"} need${undecided === 1 ? "s" : ""} a decision`;
-    sub = "Choose Sync or Ignore for them in the table below so LFBridge knows what to move.";
+    sub = "Choose Add to IPFS (pin) or Ignore for them in the table below so LFBridge knows what to move.";
     // The subjects list (warnings.mdx §4.5): the actual undecided files, each a checkable row with its
     // size, all checked at open. Apply runs the chosen decision over exactly the CHECKED rows.
     const undecidedFiles = detail.files.filter((f) => f.decision === "undecided");
@@ -433,7 +436,7 @@ function RepoVerdict({
         } neither backed up over IPFS nor git-ignored. Review the list on the right — uncheck any file you want to leave out.`,
         whyItMatters: (
           <ul className="list-disc space-y-0.5 pl-4">
-            <li>A file left undecided is not synced to your other computers — if this machine dies, it's gone.</li>
+            <li>A file left undecided is not pinned to your other computers — if this machine dies, it's gone.</li>
             <li>It also isn't git-ignored, so git may try to commit it.</li>
           </ul>
         ),
@@ -442,14 +445,14 @@ function RepoVerdict({
             kind: "radio",
             group: "decision",
             value: "sync",
-            label: "Sync the selected files (back them up over IPFS)",
+            label: "Add the selected files to IPFS (pin) — back them up over IPFS",
             defaultSelected: true,
           },
           {
             kind: "radio",
             group: "decision",
             value: "ignore",
-            label: "Ignore the selected files (git-ignore, don't sync)",
+            label: "Ignore the selected files (git-ignore, don't pin)",
           },
         ],
         // Right-pane subjects — id is the absolute path (what apply receives), label is repo-relative.
@@ -459,7 +462,7 @@ function RepoVerdict({
           sublabel: formatBytes(f.sizeBytes),
         })),
         targetNoun: "file",
-        actionLabel: (sel) => (sel.radios.decision === "ignore" ? "Ignore" : "Apply & sync"),
+        actionLabel: (sel) => (sel.radios.decision === "ignore" ? "Ignore" : "Apply & pin"),
         apply: async (_sel, checkedPaths) => {
           const decision = (_sel.radios.decision as Decision) || "sync";
           await api.setDecision(repoId, checkedPaths, decision);
@@ -469,16 +472,16 @@ function RepoVerdict({
   } else if (pending > 0) {
     state = "warn";
     headline = `${pending} file${pending === 1 ? " is" : "s are"} queued to transfer`;
-    sub = "They'll move on the next scheduled sync, or sync them now.";
+    sub = "They'll move on the next scheduled pin, or pin them now.";
     action = (
-      <FixButton state="warn" onClick={onSyncNow} disabled={syncing}>
-        <RefreshCw className="h-4 w-4" /> Sync now
+      <FixButton state="warn" onClick={onPinNow} disabled={pinning}>
+        <RefreshCw className="h-4 w-4" /> Pin now
       </FixButton>
     );
-  } else if (synced === 0) {
+  } else if (pinned === 0) {
     state = "neutral";
-    headline = "Nothing set to sync in this repo yet";
-    sub = "Set files to Sync below, or from the File System, to start bridging them.";
+    headline = "Nothing set to pin in this repo yet";
+    sub = "Add files to IPFS (pin) below, or from the File System, to start bridging them.";
   }
 
   return (

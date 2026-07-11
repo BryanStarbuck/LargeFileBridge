@@ -217,7 +217,7 @@ The client method + the API surface are in code:
 
 ## 6. The notification (LOCKED wording)
 
-On Continue, one toast states what was queued (never a silent start — [sync_process.mdx §6](./sync_process.mdx)):
+On Continue, one toast states what was queued (never a silent start — [pin_process.mdx §6](./pin_process.mdx)):
 
 * **Something eligible** → **"{N} files will be compressed"** (with the breakdown implied by the plan —
   e.g. images + videos). `N` is the `queued` figure from the plan.
@@ -307,7 +307,7 @@ The Continue toast is emitted from the plan in code:
   compressInside.ts (bus) + lib/pageActions.ts + api client.compressInside; backend compression.service.ts
   (compressFile deleteOriginal + runAsync + enqueueCompressInside/walkCompressible), compression.router POST
   /inside, jobqueue.service.ts (compress op + createBatch/recordBatchResult), progress.router (batches in the
-  payload). Keep in sync with compression.mdx, menus.mdx §5.2, page_actions.mdx §4, job_queue.mdx,
+  payload). Keep consistent with compression.mdx, menus.mdx §5.2, page_actions.mdx §4, job_queue.mdx,
   parallelization.mdx (the media-aware core-budget policy), processing.mdx.
 -->
 </content>

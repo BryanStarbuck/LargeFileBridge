@@ -16,7 +16,7 @@ export interface SchedulerInstaller {
 
 export interface InstallOpts {
   label: string;
-  worker: "scan" | "sync" | "device";
+  worker: "scan" | "pin" | "device";
   intervalSeconds: number;
   nodeBin: string;
   triggerScript: string;

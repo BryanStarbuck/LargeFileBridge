@@ -3,10 +3,10 @@
 //
 //   A. Browser-initiated jobs (optimistic). Pages route their long actions through useProgress().run()
 //      instead of a blocking mutate: on click a card is added, the request fires, and the card leaves
-//      when it settles — so "Sync all" / "Compress selected" show every item at once and drain
+//      when it settles — so "Pin all" / "Compress selected" show every item at once and drain
 //      unevenly (bounded by mapLimit, §13).
 //   B. Server-initiated jobs (polled). GET /api/progress is polled — gently while idle, faster while
-//      the dock is non-empty — and merged in, so a scan/sync started by launchd or ANOTHER TAB also
+//      the dock is non-empty — and merged in, so a scan/pin started by launchd or ANOTHER TAB also
 //      shows. A/B are de-duplicated by job id (a server id is stable; optimistic ids are prefixed).
 //
 // A card exists iff a job is actually running — never fake progress.
@@ -160,7 +160,6 @@ export function useProgress(): ProgressCtx {
 // The card verb per operation kind (webapp.mdx §11). Exported so the dock renders the same label.
 const VERBS: Record<ProgressKind, string> = {
   scan: "Scanning",
-  sync: "Syncing",
   pin: "Pinning",
   publish: "Publishing",
   compress: "Compressing",

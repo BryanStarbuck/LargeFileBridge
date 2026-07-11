@@ -286,7 +286,7 @@ in the background**. LFBridge is a **long-job** app — a scan walks thousands o
 add/pin/publish moves hundreds of megabytes, a video compress runs `ffmpeg` for minutes, a
 content-fingerprint pass hashes whole files. None of that is instant, and today the UI gives **no live
 signal** while it runs (the current endpoints simply **block** — `POST /api/repos/rescan` awaits
-`scanAll()`, `POST /api/repos/:repoId/sync` awaits `syncRepoFolder()` — and return only when finished;
+`scanAll()`, `POST /api/repos/:repoId/sync` awaits `pinRepoFolder()` — and return only when finished;
 `repos.router.ts:43`, `:90`). Part II fixes that.
 
 The blocking handlers Part II reshapes into job-registering endpoints are today in code:
@@ -549,7 +549,7 @@ doubled when the same job comes back on the poll.
 * `modules/progress/progress.registry.ts` — **new.** In-process job registry:
   `begin(kind, target) → id`, `report(id, {done,total,unit})`, `end(id)`, `list()`.
 * `modules/progress/progress.router.ts` — **new.** `GET /api/progress` → `{ jobs }` (allow-listed).
-* `modules/scanner/scanner.service.ts`, `modules/sync/sync.service.ts` — register a job at start,
+* `modules/scanner/scanner.service.ts`, `modules/pin/pin.service.ts` — register a job at start,
   `report()` progress as they walk/add bytes, `end()` on finish; run their per-item work through
   `mapLimit`; serialize the state write.
 * `modules/repos/repos.router.ts` — `/rescan` and `/:repoId/sync` register jobs (so both manual and

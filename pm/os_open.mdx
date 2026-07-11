@@ -142,7 +142,7 @@ guardrail and adds one process-hygiene rule:
   loop or hold the HTTP request open. A spawn error is logged and surfaced as a 400, never crashes the
   server.
 * **Explicit user action only.** Hand-off happens only on a deliberate click; nothing here runs on a
-  timer, during a scan, or during a background sync.
+  timer, during a scan, or during a background pin.
 
 The path confinement (`assertAllowedPath` + secret-stash denylist), the existence check, and the detached/unref'd spawn are handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/os-open.ts` — `openInOs(req, input)` (calling `assertAllowedPath` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/allow-root.ts`).
@@ -252,5 +252,5 @@ The priority-based overflow into the "More" menu is handled in code:
   Code pointers: fs/os-open.ts (platformFamily/isLocalRequest/platformInfo/openCommand/openInOs),
   fs/fs.router.ts (GET /platform, POST /os-open), fs/allow-root.ts (assertAllowedPath), shared/types.ts
   (PlatformInfo, OsOpenResult), frontend lib/os.ts, api/client.ts, MediaViewer OpenCompound/ActionBar.
-  Keep in sync with media_viewer.mdx §4 (action bar) — that file references this one for the OS-open half.
+  Keep consistent with media_viewer.mdx §4 (action bar) — that file references this one for the OS-open half.
 -->

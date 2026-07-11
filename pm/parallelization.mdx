@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Mass Parallelization & the Core Budget (use up to ~90% of the machine's cores)
-description: The canonical, cross-cutting policy for running MANY files of heavy work at once. A lot of the app's real cost is bulk, embarrassingly-parallel file work — compress every video/image inside a directory, transcribe a whole repo, describe a batch, fingerprint/index a storage, walk many repo units in a scan, add+pin many files in a sync pass. Modern machines have many cores; doing that work one-file-at-a-time (or at a fixed tiny cap like 2) wastes 90% of the box. This spec defines ONE shared notion — the CORE BUDGET — and how every bulk operation draws from it: the mass-compute budget is round(cores × max_core_fraction) with max_core_fraction defaulting to 0.9 (use up to ~90% of cores), and the responsive budget is cores − 2 (leave 2 cores for the web app + IPFS) for work that runs alongside interactive use. It defines the MEDIA-AWARE rule for compression (image tools are single-threaded → fan WIDE, one job per core; ffmpeg is internally multi-threaded → fan NARROWER and cap each job's threads so N video jobs don't oversubscribe), the anti-oversubscription rule (a per-job internal thread cap × job concurrency ≈ the budget, never cores²), the single global-settings knob that tunes the fraction, and where each consumer lives in code. Sibling of job_queue.mdx (the queue that draws the compute budget), compression.mdx / compress_inside.mdx (the media-aware compress consumer + the user's triple-dot flow), scan.mdx (parallel unit walks), storages.mdx (parallel fingerprint/index), sync_process.mdx §4 (the responsive-budget consumer already shipped), performance.mdx (P-23/P-25 the throughput rationale), webapp.mdx §13 (the mapLimit primitive), and settings.mdx (the knob).
+description: The canonical, cross-cutting policy for running MANY files of heavy work at once. A lot of the app's real cost is bulk, embarrassingly-parallel file work — compress every video/image inside a directory, transcribe a whole repo, describe a batch, fingerprint/index a storage, walk many repo units in a scan, add+pin many files in a pin pass. Modern machines have many cores; doing that work one-file-at-a-time (or at a fixed tiny cap like 2) wastes 90% of the box. This spec defines ONE shared notion — the CORE BUDGET — and how every bulk operation draws from it: the mass-compute budget is round(cores × max_core_fraction) with max_core_fraction defaulting to 0.9 (use up to ~90% of cores), and the responsive budget is cores − 2 (leave 2 cores for the web app + IPFS) for work that runs alongside interactive use. It defines the MEDIA-AWARE rule for compression (image tools are single-threaded → fan WIDE, one job per core; ffmpeg is internally multi-threaded → fan NARROWER and cap each job's threads so N video jobs don't oversubscribe), the anti-oversubscription rule (a per-job internal thread cap × job concurrency ≈ the budget, never cores²), the single global-settings knob that tunes the fraction, and where each consumer lives in code. Sibling of job_queue.mdx (the queue that draws the compute budget), compression.mdx / compress_inside.mdx (the media-aware compress consumer + the user's triple-dot flow), scan.mdx (parallel unit walks), storages.mdx (parallel fingerprint/index), pin_process.mdx §4 (the responsive-budget consumer already shipped), performance.mdx (P-23/P-25 the throughput rationale), webapp.mdx §13 (the mapLimit primitive), and settings.mdx (the knob).
 ---
 
 # LargeFileBridge — Mass Parallelization & the Core Budget
@@ -9,8 +9,8 @@ Large File Bridge's heaviest moments are **bulk file work**: the user opens a di
 picks **"Compress videos & images inside…"** ([compress_inside.mdx](./compress_inside.mdx)) over a folder of
 300 clips; runs **"Create Transcriptions"** across a whole repo ([page_actions.mdx](./page_actions.mdx));
 **indexes/fingerprints** a storage ([storages.mdx §4.1](./storages.mdx)); **scans** many repo units
-([scan.mdx](./scan.mdx)); **adds + pins** hundreds of files in a **sync pass**
-([sync_process.mdx](./sync_process.mdx)). Every one of those is **embarrassingly parallel** — the files are
+([scan.mdx](./scan.mdx)); **adds + pins** hundreds of files in a **pin pass**
+([pin_process.mdx](./pin_process.mdx)). Every one of those is **embarrassingly parallel** — the files are
 independent — and every one of them is the kind of work a **many-core machine should chew through in
 parallel**, not one file at a time.
 
@@ -38,7 +38,7 @@ for two different kinds of work:
   transcode. It runs hot on purpose.
 * **Responsive budget** = `max(1, cores − 2)`. This leaves **2 cores** for the web app's HTTP loop + the
   IPFS node, for work that runs **alongside** interactive use or shares the box with a latency-sensitive
-  service — the **sync pass** ([sync_process.mdx §4](./sync_process.mdx), already shipped) and the
+  service — the **pin pass** ([pin_process.mdx §4](./pin_process.mdx), already shipped) and the
   **scan/index walks** ([scan.mdx](./scan.mdx)). Slightly cooler so the app never feels frozen.
 
 Which budget a consumer uses is a **deliberate choice per operation** (§3 table), and that choice is the
@@ -99,7 +99,7 @@ to the spec that owns the detail.
 | **Batch describe** ([ai_description.mdx](./ai_description.mdx)) | **network** (not core-bound) | fixed small (≈4–6) | The heavy wait is a vision-API round-trip, not local CPU; overlap I/O, don't burn cores. |
 | **Storage fingerprint / index** ([storages.mdx §4.1](./storages.mdx)) | **responsive** | **wide** over files | head+tail byte reads + hash are I/O-ish; parallelize but keep the app live. |
 | **Scan — repo units** ([scan.mdx](./scan.mdx)) | **responsive** | **wide** over units | independent stat-only walks; run many units at once, leave 2 cores for HTTP. |
-| **Sync pass — units × files** ([sync_process.mdx §4](./sync_process.mdx)) | **responsive** | two levels, one shared limiter | already shipped (P-23); IPFS + the app must stay responsive. |
+| **Sync pass — units × files** ([pin_process.mdx §4](./pin_process.mdx)) | **responsive** | two levels, one shared limiter | already shipped (P-23); IPFS + the app must stay responsive. |
 | **On-the-fly stream / one-off compress** | — (no batch) | single job, **all cores** | not bulk — one interactive file may use the whole box (§2 corollary). |
 
 The two most-parallel, most-visible consumers are the **queue** ([job_queue.mdx §3](./job_queue.mdx)) and
@@ -159,7 +159,7 @@ The same parallel queue backs the page-level **"Compress videos / Compress image
 
 1. **One shared helper (§1):** `concurrency.ts` exposes `logicalCores()`, `coreBudget(fraction?)`
    (mass-compute, default 0.9 via the knob), and `responsiveBudget()` (`cores − 2`). No consumer computes a
-   core count on its own; the old inline `SYNC_CONCURRENCY = cores − 2` is expressed via `responsiveBudget()`.
+   core count on its own; the old inline `PIN_CONCURRENCY = cores − 2` is expressed via `responsiveBudget()`.
 2. **Mass-compute ≈ 90% (§1/§4):** on an N-core machine a bulk compress/fingerprint run drives ≈
    `round(N × 0.9)` cores' worth of work, tunable by `performance.max_core_fraction`, effective on the next
    run with no restart.
@@ -168,7 +168,7 @@ The same parallel queue backs the page-level **"Compress videos / Compress image
    `ffmpeg -threads` cap; a **one-off single-file** compress/stream passes **no** cap and may use all cores.
 4. **The map (§3):** the queue's `compress` op is **media-aware** (image vs video budgets); transcribe is
    mass-compute-narrow; describe is network-parallel (not core-bound); fingerprint/scan use the responsive
-   budget; the shipped sync pass is the responsive-budget reference consumer.
+   budget; the shipped pin pass is the responsive-budget reference consumer.
 5. **The knob (§4):** `performance.max_core_fraction` (default 0.9) exists in the config schema, is read live
    by `coreBudget()`, and is editable in Settings with the resolved core count shown.
 6. **The flow (§5):** the triple-dot "Compress inside" run enqueues per-media-kind tasks that drain against
@@ -180,7 +180,7 @@ The same parallel queue backs the page-level **"Compress videos / Compress image
      - mass-compute = max(1, round(cores × max_core_fraction)), default fraction 0.9 → "up to ~90% of cores".
        For pure batch CPU the user kicked off + is watching (compress, fingerprint, batch transcode).
      - responsive = max(1, cores − 2). Leaves 2 cores for HTTP + IPFS. For work alongside interactive use
-       (sync pass — already shipped P-23, scan/index walks).
+       (pin pass — already shipped P-23, scan/index walks).
   §2 ANTI-OVERSUBSCRIPTION (LOCKED): concurrentJobs × threadsPerJob ≈ budget, NEVER cores². Single-threaded
      tool → fan WIDE (budget jobs × 1 thread). Multi-threaded tool (ffmpeg/whisper) → fan NARROW + CAP each
      job's threads (pass the cap into the tool). One-off single-file action = NOT a batch → may use ALL cores.
@@ -196,8 +196,8 @@ The same parallel queue backs the page-level **"Compress videos / Compress image
   Code: shared/concurrency.ts (logicalCores/coreBudget/responsiveBudget + mapLimit), schemas.ts
   (AppConfigSchema.performance.max_core_fraction), compression.service.ts (CompressFileOpts.threads →
   ffmpeg/oxipng/cwebp/magick), jobqueue.service.ts (media-aware caps), scanner.service.ts + tracking.service.ts
-  (parallel walks/fingerprint), sync.service.ts (responsiveBudget). Keep in sync with job_queue.mdx §3,
-  compression.mdx, compress_inside.mdx, processing.mdx §3a, scan.mdx, storages.mdx §4.1, sync_process.mdx §4,
+  (parallel walks/fingerprint), pin.service.ts (responsiveBudget). Keep in sync with job_queue.mdx §3,
+  compression.mdx, compress_inside.mdx, processing.mdx §3a, scan.mdx, storages.mdx §4.1, pin_process.mdx §4,
   performance.mdx (P-23/P-25), webapp.mdx §13, settings.mdx.
 -->
 </content>

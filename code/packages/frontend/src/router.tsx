@@ -98,7 +98,7 @@ const ipfsPinsRoute = createRoute({
 const scansRoute = createRoute({
   getParentRoute: () => appLayout,
   path: "/scans",
-  component: lazyRouteComponent(() => import("./pages/sync/SyncPage.js"), "SyncPage"),
+  component: lazyRouteComponent(() => import("./pages/scans/ScansPage.js"), "ScansPage"),
 });
 const allowListRoute = createRoute({
   getParentRoute: () => appLayout,

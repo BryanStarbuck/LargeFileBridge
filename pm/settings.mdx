@@ -83,7 +83,7 @@ big_file:
 ```
 
 This `big_file` block is the authoritative home of the threshold. It **supersedes** the older
-`sync_process.large_file_min_bytes` / per-repo `large_files.min_bytes` defaults in
+`pin_process.large_file_min_bytes` / per-repo `large_files.min_bytes` defaults in
 [storage_local.mdx §3/§6](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical), which
 should be re-pointed at this value (see [scan.mdx §9](./scan.mdx#9-reconciliation-with-existing-specs)).
 
@@ -134,7 +134,7 @@ The per-repo override persists in that repo's own config
 ([storage_local.mdx §6.2](./storage_local.mdx#62-syncrrepo_nameconfigyaml)):
 
 ```yaml
-# sync/r/<repo_name>/config.yaml  (excerpt — the per-repo threshold override)
+# pin/r/<repo_name>/config.yaml  (excerpt — the per-repo threshold override)
 big_file_override:
   enabled: false                # the checkbox — OFF = inherit the global threshold
   value: 100                    # only meaningful when enabled: true
@@ -268,7 +268,7 @@ count** so the abstract percentage is never ambiguous:
   the user explicitly kicked off** (compression, fingerprinting, batch transcode). Turning the slider
   down keeps more headroom on a laptop; turning it up pushes a workstation harder.
 * **What it does NOT tune — the RESPONSIVE budget.** Work that runs **alongside** interactive use — the
-  15-min **sync pass** and the discovery **scan/index walks** — draws the **responsive budget**
+  15-min **pin pass** and the discovery **scan/index walks** — draws the **responsive budget**
   (`cores − 2`, leaving 2 cores for the web app + IPFS). That floor is a **fixed safety margin and is not
   user-tunable**; the slider never touches it.
 * **Live, no restart.** The resolved core count shown beside the slider is exactly what the next bulk
@@ -317,7 +317,7 @@ The resolved mass-compute budget is computed live from this setting in code:
    for background compression & processing"* — backed by `performance.max_core_fraction` (default
    **0.9 = 90%**), with the **live resolved core count** ("≈ 14 of 16 cores") shown beside it. It tunes
    **only** the mass-compute budget (`round(cores × max_core_fraction)`); the responsive budget
-   (`cores − 2`) for the sync pass and scan walks is a **fixed, non-tunable** safety floor. `coreBudget()`
+   (`cores − 2`) for the pin pass and scan walks is a **fixed, non-tunable** safety floor. `coreBudget()`
    reads the value **live**, so a change takes effect on the next bulk run with no restart
    ([parallelization.mdx §4](./parallelization.mdx)).
 

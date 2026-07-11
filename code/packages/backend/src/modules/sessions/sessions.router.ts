@@ -1,6 +1,6 @@
 // Web-session activity endpoint (sessions.mdx §5). The frontend pings here on every page render; we
 // roll pings into the user's open session and, on a new session that lands on a >48h-stale machine,
-// fire a non-blocking sync. Best-effort: a tracking hiccup must never break the page, so failures
+// fire a non-blocking pin pass. Best-effort: a tracking hiccup must never break the page, so failures
 // return an inert result rather than a 500.
 import { Router } from "express";
 import type { SessionActivityResult } from "@lfb/shared";
@@ -37,5 +37,5 @@ sessionsRouter.get("/", (req, res) => {
 });
 
 function inert(): SessionActivityResult {
-  return { newSession: false, autoSyncTriggered: false, lastSyncAt: null };
+  return { newSession: false, autoPinTriggered: false, lastPinAt: null };
 }

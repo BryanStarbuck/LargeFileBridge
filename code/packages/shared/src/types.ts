@@ -2,10 +2,13 @@
 // These mirror the LOCKED vocabulary in pm/repos.mdx and pm/one_repo.mdx.
 
 // ── Decision model (one_repo.mdx §1, LOCKED) ────────────────────────────────
+// FROZEN wire value: the "sync" literal is stored in on-disk `decisions:` maps and travels between
+// computers (it drives git-ignore + SyncList membership), so it is deliberately NOT renamed. In the
+// UI it is always presented as "Add to IPFS (pin)". Do not rename this value.
 export type Decision = "sync" | "ignore" | "undecided";
 
 export type TransferStatus =
-  | "synced"
+  | "pinned"
   | "pending"
   | "fetching"
   | "pushing"
@@ -16,14 +19,14 @@ export type TransferStatus =
 // ── Repo rollup status (repos.mdx §1/§4.2, LOCKED) ──────────────────────────
 export type RepoStatus =
   | "up_to_date"
-  | "syncing"
+  | "pinning"
   | "behind"
   | "needs_review"
   | "error"
   | "never";
 
 export interface RepoCounts {
-  synced: number;
+  pinned: number;
   pending: number;
   undecided: number;
   ignored: number;
@@ -37,9 +40,9 @@ export interface RepoRow {
   path: string;
   counts: RepoCounts;
   peerCount: number;
-  lastSyncAt: string | null;
+  lastPinAt: string | null;
   status: RepoStatus;
-  synced: boolean; // per-repo master toggle (one_repo.mdx §3.2)
+  pinned: boolean; // per-repo master toggle (one_repo.mdx §3.2)
 }
 
 // One row of the files table on the One-repo screen (one_repo.mdx §1).
@@ -60,10 +63,10 @@ export interface RepoDetail {
   name: string;
   path: string;
   remote: string | null;
-  synced: boolean;
+  pinned: boolean;
   status: RepoStatus;
   peerCount: number;
-  lastSyncAt: string | null;
+  lastPinAt: string | null;
   ipfs: IpfsHealth;
   counts: RepoCounts;
   files: FileRow[];
@@ -71,11 +74,11 @@ export interface RepoDetail {
 
 export type IpfsHealth = "ok" | "unreachable";
 
-// What a single sync run actually DID — so the UI reports the truth, never a fixed "complete" string
-// (sync_process.mdx §6). `eligible` is how many files were marked "sync" this run: 0 means there was
-// nothing to sync (an honest no-op), not a failure.
-export interface SyncCounts {
-  eligible: number; // files marked "sync" this run (0 ⇒ nothing to sync)
+// What a single pin run actually DID — so the UI reports the truth, never a fixed "complete" string
+// (pin_process.mdx §6). `eligible` is how many files were marked "sync" (the FROZEN wire decision that
+// means "add to IPFS") this run: 0 means there was nothing to pin (an honest no-op), not a failure.
+export interface PinCounts {
+  eligible: number; // files marked "sync" (add-to-IPFS) this run (0 ⇒ nothing to pin)
   added: number; // files newly added to IPFS this run
   pinned: number; // files this run ensured a local pin for (added + fetched-and-pinned)
   fetched: number; // missing files materialized from a peer this run
@@ -83,10 +86,10 @@ export interface SyncCounts {
   failed: number; // files whose add/pin/fetch errored
 }
 
-// The POST /repos/:id/sync response: the refreshed repo detail plus what THIS run did (sync_process.mdx §6).
-export interface SyncNowResult {
+// The POST /repos/:id/pin response: the refreshed repo detail plus what THIS run did (pin_process.mdx §6).
+export interface PinNowResult {
   detail: RepoDetail;
-  counts: SyncCounts;
+  counts: PinCounts;
 }
 
 // ── The IPFS page (ipfs.mdx) — the local pinset as ground truth ──────────────
@@ -94,10 +97,10 @@ export interface SyncNowResult {
 export type IpfsPinType = "recursive" | "direct" | "mfs";
 
 // Tracked state (ipfs.mdx §5.1):
-//   synced    — pinned AND in a manifest with a known local path (the normal state)
+//   pinned    — pinned AND in a manifest with a known local path (the normal state)
 //   import    — pinned but NOT in any manifest (the actionable import candidate)
 //   path-less — tracked (in a manifest) but with no resolvable local path
-export type IpfsTracked = "synced" | "import" | "path-less";
+export type IpfsTracked = "pinned" | "import" | "path-less";
 
 export interface IpfsPinRow {
   cid: string; // the pinned root CID
@@ -413,7 +416,7 @@ export interface RepoSettings {
   name: string;
   path: string;
   remote: string | null;
-  synced: boolean;
+  pinned: boolean;
   bigFileOverride: {
     enabled: boolean;
     value: number;
@@ -424,7 +427,7 @@ export interface RepoSettings {
     includeGlobs: string[];
     excludeGlobs: string[];
   };
-  sync: {
+  pin: {
     pinLocally: boolean;
     fetchMissing: boolean;
     publishManifest: boolean;
@@ -436,7 +439,7 @@ export interface RepoSettings {
 }
 
 // ── Scheduled workers — the transparency contract (scan.mdx §7, storage.mdx §13)
-export type WorkerKind = "scan" | "sync" | "device";
+export type WorkerKind = "scan" | "pin" | "device";
 
 export interface WorkerState {
   kind: WorkerKind;
@@ -446,9 +449,10 @@ export interface WorkerState {
   label: string;
   lastRunAt: string | null;
   lastRunOk: boolean | null;
-  // Derived (sync_resilience.mdx §7): true when the worker is installed + enabled but its last successful
-  // run is older than 2× its interval (or it has never run) — the "automatic syncing has silently stalled"
-  // signal, distinct from off (disabled) and failed (ran with an error). Computed on read, never stored.
+  // Derived (backbone_resilience.mdx §7): true when the worker is installed + enabled but its last
+  // successful run is older than 2× its interval (or it has never run) — the "an automatic job has
+  // silently stalled" signal, distinct from off (disabled) and failed (ran with an error). Computed on
+  // read, never stored.
   overdue: boolean;
 }
 
@@ -462,9 +466,9 @@ export interface WatcherState {
   pending: number;
 }
 
-export interface SyncPageData {
+export interface JobsPageData {
   scan: WorkerState;
-  sync: WorkerState;
+  pin: WorkerState;
   device: WorkerState; // the every-10-min device-registration write-back (devices.mdx §12)
   watcher: WatcherState;
   computerLabel: string;
@@ -503,10 +507,9 @@ export interface RescanResult {
 // ── Progress dock (webapp.mdx §10–§12) ──────────────────────────────────────
 // The app-shell progress dock's operation taxonomy (webapp.mdx §11). One small card type; the VERB
 // and any progress detail come from the job's kind. Both browser-initiated (optimistic) and
-// server-side background-worker (launchd scan/sync) jobs flow through the same dock.
+// server-side background-worker (launchd scan/pin) jobs flow through the same dock.
 export type ProgressKind =
   | "scan"
-  | "sync"
   | "pin"
   | "publish"
   | "compress"
@@ -569,12 +572,12 @@ export interface EnqueuePlan {
 
 // ── Web session activity ping (sessions.mdx) ────────────────────────────────
 // Response to POST /api/sessions/activity. `newSession` is true when this ping STARTED a fresh web
-// session (a return after the 4h idle window); `autoSyncTriggered` is true when that start was on a
-// > 48h-stale machine and a non-blocking syncAll() was fired.
+// session (a return after the 4h idle window); `autoPinTriggered` is true when that start was on a
+// > 48h-stale machine and a non-blocking pinAll() was fired.
 export interface SessionActivityResult {
   newSession: boolean;
-  autoSyncTriggered: boolean;
-  lastSyncAt: string | null; // "last synchronized" the staleness check read (ISO), or null if never
+  autoPinTriggered: boolean;
+  lastPinAt: string | null; // "last pinned" the staleness check read (ISO), or null if never
 }
 
 // ── Auth (mirrors @auth/backend AuthUser, trimmed) ──────────────────────────
@@ -615,12 +618,12 @@ export interface AuthConfig {
 
 // ── File System column browser (directory.mdx) ──────────────────────────────
 // One code badge painted on a file/dir row. White letter on a solid color.
-// Ordered rightmost-first when they stack: repo(R/r) · sync(S) · compress(C/c) · ipfs(i).
+// Ordered rightmost-first when they stack: repo(R/r) · pin(P) · compress(C/c) · ipfs(i).
 export type FsBadge =
   | "repo_root" // R  dark brown      (dir — its own .git working tree)
   | "repo_descendant" // r  medium brown    (file|dir inside a repo)
   | "repo_ancestor" // r  light brown     (dir that contains a repo below it)
-  | "sync" // S  bright pink     (file whose decision === "sync")
+  | "pin" // P  bright pink     (file whose decision === "sync" — the frozen add-to-IPFS wire value)
   | "compress" // C  bright yellow   (video/image file that looks uncompressed)
   | "compressed" // c  light yellow    (video/image file already compressed)
   | "ipfs" // i  blue            (IPFS list/share artifact, or dir publishing one)
@@ -737,7 +740,7 @@ export interface GitIgnoreResult {
 // They apply to a file OR a directory (a directory's flag covers everything under it), survive
 // rescans, and NEVER delete or alter local bytes.
 export interface FileFlags {
-  neverIpfs: boolean; // never add to IPFS / sync this entity (forbids the sync decision)
+  neverIpfs: boolean; // never add to IPFS / pin this entity (forbids the Add-to-IPFS "sync" decision)
   noCompress: boolean; // suppress the "should compress" (C) offer/badge for this entity
 }
 
@@ -766,7 +769,7 @@ export interface EntityView {
   badges: FsBadge[]; // same vocabulary/order as directory.mdx §3
   flags: FileFlags;
 
-  // Repo / sync context — populated only when the entity is inside a REGISTERED repo.
+  // Repo / pin context — populated only when the entity is inside a REGISTERED repo.
   repo: { repoId: string; name: string; relPath: string } | null;
   decision: Decision | null; // null when not in a repo (files.mdx §2)
   transfer: TransferStatus | null;
@@ -1138,7 +1141,7 @@ export interface StoragesPageData {
 export type CommunityBackupMode = "block" | "recommended" | "full";
 
 // The per-community subscription choices (communities.mdx §3–§4). Persisted computer-wide under
-// `sync/c/<community_id>/config.yaml`.
+// `pin/c/<community_id>/config.yaml`.
 export interface CommunitySubscription {
   get: boolean;       // intent: consume the videos for yourself (§3)
   support: boolean;   // intent: rebroadcast/pin to keep the community secure (§3)
@@ -1361,7 +1364,7 @@ export interface StorageSettings {
   name: string;            // read-only identity (written by discovery — §5)
   type: StorageType;
   root: string;
-  synced: boolean;         // the per-storage IPFS-pinning opt-in (default OFF) — gates mapped-dir byte work
+  pinned: boolean;         // the per-storage IPFS-pinning opt-in (default OFF) — gates mapped-dir byte work
   lfbridge: {
     enabled: boolean;      // keep .lfbridge/ on THIS computer (default ON — §3)
     path: string | null;   // null = default <root>/.lfbridge/ ; else an absolute override
@@ -1381,7 +1384,7 @@ export interface StorageBackingPatch {
   path?: string | null;
 }
 export interface StorageSettingsPatch {
-  synced?: boolean;
+  pinned?: boolean;
   lfbridge?: { enabled?: boolean; path?: string | null };
   backing?: {
     dedicatedRepo?: StorageBackingPatch;

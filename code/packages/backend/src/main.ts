@@ -12,7 +12,7 @@ import { fsRouter } from "./modules/fs/fs.router.js";
 import { entityRouter } from "./modules/entity/entity.router.js";
 import { mediaRouter } from "./modules/media/media.router.js";
 import { settingsRouter } from "./modules/settings/settings.router.js";
-import { syncRouter } from "./modules/sync/sync.router.js";
+import { jobsRouter } from "./modules/pin/jobs.router.js";
 import { sessionsRouter } from "./modules/sessions/sessions.router.js";
 import { peersRouter } from "./modules/peers/peers.router.js";
 import { devicesRouter } from "./modules/peers/devices.router.js";
@@ -57,13 +57,13 @@ async function bootstrapState(): Promise<void> {
   await reconcileWorkerSchedules().catch((e) =>
     log.warn("main", `worker schedule reconcile failed: ${(e as Error).message}`),
   );
-  // Start the in-process watchdog (sync_resilience.mdx §3): while the app runs, it backstops a dead/stale
+  // Start the in-process watchdog (backbone_resilience.mdx §3): while the app runs, it backstops a dead/stale
   // OS trigger by running any overdue worker in-process and repairing its launchd job — so the data flow
   // can never be silently halted by a broken trigger. Best-effort; a failure here never blocks boot.
   try {
     startWatchdog();
   } catch (e) {
-    log.warn("main", `sync watchdog failed to start: ${(e as Error).message}`);
+    log.warn("main", `pin watchdog failed to start: ${(e as Error).message}`);
   }
 }
 
@@ -136,8 +136,8 @@ async function main(): Promise<void> {
   app.use("/api/entity", entityRouter);
   app.use("/api/media", mediaRouter);
   app.use("/api/settings", settingsRouter);
-  app.use("/api/sync", syncRouter);
-  app.use("/api/sessions", sessionsRouter); // web-session activity ping + stale-return auto-sync (sessions.mdx)
+  app.use("/api/jobs", jobsRouter);
+  app.use("/api/sessions", sessionsRouter); // web-session activity ping + stale-return auto-pin (sessions.mdx)
   app.use("/api/peers", peersRouter);
   app.use("/api/devices", devicesRouter); // the Devices / Peers table: self + peers + registry (devices.mdx §6)
   app.use("/api/ipfs", ipfsRouter);

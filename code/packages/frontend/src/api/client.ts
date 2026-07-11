@@ -2,11 +2,11 @@
 import type {
   RepoRow,
   RepoDetail,
-  SyncNowResult,
+  PinNowResult,
   FileRow,
   RepoSettings,
   GlobalSettings,
-  SyncPageData,
+  JobsPageData,
   PeerRow,
   DeviceRow,
   CurrentUser,
@@ -109,7 +109,7 @@ export const api = {
   rescan: () => unwrap<RescanResult>(http.post("/repos/rescan")),
   scanStatus: () => unwrap<ScanJob>(http.get("/repos/scan-status")),
   // Progress dock (webapp.mdx §12 source B) — every in-flight server-side job (registry + active scan),
-  // so a launchd or other-tab sync/scan still shows a card. Polled by the ProgressProvider.
+  // so a launchd or other-tab pin/scan still shows a card. Polled by the ProgressProvider.
   progress: () => unwrap<ProgressListResult>(http.get("/progress")),
   // Remove repo (unregister, menus.mdx §5.1) — LFB tracking only; never deletes local files.
   removeRepo: (repoId: string) =>
@@ -119,8 +119,8 @@ export const api = {
   repoFiles: (repoId: string) => unwrap<FileRow[]>(http.get(`/repos/${repoId}/files`)),
   setDecision: (repoId: string, paths: string[], decision: Decision) =>
     unwrap<RepoDetail>(http.patch(`/repos/${repoId}/files`, { paths, decision })),
-  syncNow: (repoId: string, paths?: string[]) =>
-    unwrap<SyncNowResult>(http.post(`/repos/${repoId}/sync`, paths ? { paths } : {})),
+  pinNow: (repoId: string, paths?: string[]) =>
+    unwrap<PinNowResult>(http.post(`/repos/${repoId}/pin`, paths ? { paths } : {})),
 
   repoSettings: (repoId: string) => unwrap<RepoSettings>(http.get(`/repos/${repoId}/settings`)),
   patchRepoSettings: (repoId: string, patch: Partial<Record<string, unknown>>) =>
@@ -138,15 +138,15 @@ export const api = {
     unwrap<string[]>(http.patch("/settings/allow-list", { emails })),
 
   // Web-session activity ping (sessions.mdx). Fired on app open + each route render; the server rolls
-  // it into the open session and, on a stale return (>48h), kicks a non-blocking sync.
+  // it into the open session and, on a stale return (>48h), kicks a non-blocking pin.
   recordActivity: () => unwrap<SessionActivityResult>(http.post("/sessions/activity")),
 
-  syncPage: () => unwrap<SyncPageData>(http.get("/sync")),
+  jobsPage: () => unwrap<JobsPageData>(http.get("/jobs")),
   controlWorker: (worker: WorkerKind, action: "install" | "uninstall" | "enable" | "disable") =>
-    unwrap<WorkerState>(http.post(`/sync/${worker}/${action}`)),
+    unwrap<WorkerState>(http.post(`/jobs/${worker}/${action}`)),
   // The live filesystem watcher (scan.mdx §2.2) — enable/disable only (no install step).
   controlWatcher: (action: "enable" | "disable") =>
-    unwrap<WatcherState>(http.post(`/sync/watcher/${action}`)),
+    unwrap<WatcherState>(http.post(`/jobs/watcher/${action}`)),
 
   peers: () => unwrap<PeerRow[]>(http.get("/peers")),
   // The Devices / Peers table (devices.mdx §6) — self + peers.yaml + registry, unioned & disambiguated.
@@ -303,7 +303,7 @@ export const api = {
   storageDetail: (id: string) => unwrap<StorageDetail>(http.get(`/storages/${id}`)),
   initStorage: (id: string) => unwrap<StorageDetail>(http.post(`/storages/${id}/init`)),
   // First-time setup wizard commit (Transcribe.mdx §3.5): create the ONE Personal storage at its canonical
-  // root; `dedicatedRepo` makes it a git repo whose artifacts are tracked+synced (not git-ignored).
+  // root; `dedicatedRepo` makes it a git repo whose artifacts are tracked+pinned (not git-ignored).
   createPersonalStorage: (dedicatedRepo: boolean) =>
     unwrap<StorageDetail>(http.post("/storages/personal/create", { dedicatedRepo })),
   // Where a media file's derived artifacts (transcript / AI description) will land, and whether the

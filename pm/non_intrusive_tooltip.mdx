@@ -86,9 +86,9 @@ One block per code, so an entity with several codes **stacks one block per code*
 and explain what those are"*). Each block is a single line:
 
 * the **exact chip** shown in the list — the rounded-rectangle colored square with its white letter
-  (`R`/`S`/`C`/`i`/`I`, or a folder-color swatch), rendered from the **same** `BADGE_META` / folder-color
+  (`R`/`P`/`C`/`i`/`I`, or a folder-color swatch), rendered from the **same** `BADGE_META` / folder-color
   tokens so it can never drift;
-* the **name** — a 1–3 word phrase (bold): *Repo root*, *Synced*, *Compress*, *Compressed*, *IPFS
+* the **name** — a 1–3 word phrase (bold): *Repo root*, *Pinned*, *Compress*, *Compressed*, *IPFS
   artifact*, **Git-ignored**, *Big files here*, *Video here* …;
 * **one short line** of meaning when the name alone isn't enough.
 
@@ -175,7 +175,7 @@ The provider, the single-slot hover state, and the clear debounce are implemente
   {kind:"code",chip,name,line} | {kind:"detail",title,lines}); provider mounted in main.tsx; panel rendered
   by Sidebar.tsx between </nav> and the account slot; sources = Badges.tsx (per chip) + FsRow (row + folder
   glyph) in FileSystemPage.tsx. Chips/names reuse BADGE_META + folder-color tokens (directories.mdx §3.5.1)
-  so panel & list never drift. Keep in sync with left_bar.mdx §4, directories.mdx §3.5.1, file_system.mdx
+  so panel & list never drift. Keep consistent with left_bar.mdx §4, directories.mdx §3.5.1, file_system.mdx
   §1-§3, git_ignore.mdx (the I badge).
 -->
 </content>

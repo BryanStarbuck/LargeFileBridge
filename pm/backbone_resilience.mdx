@@ -1,27 +1,27 @@
 ---
-title: LargeFileBridge — Sync Resilience (the data flow must never silently stop)
-description: The authoritative spec for keeping LargeFileBridge's cross-computer data flow ALIVE. The web app on each computer is the only thing running this repo, so if its sync machinery stalls, two computers silently drift apart — one keeps committing locally, the other never sees it, and the user "can't find" work that was supposedly synced. This spec turns that failure class into a first-class requirement: enumerate every way the flow can stop (the OS trigger job dies or points at a stale path, the history diverges because something OTHER than LFB committed into the repo, a local commit is left stranded/unpushed, a merge conflict, an auth failure, IPFS down, the app not running), and for EACH one lock a detection, a self-healing recovery, and a way it is surfaced. Locks the never-stop guarantees: (1) an in-process WATCHDOG in the always-on web app that runs any overdue worker itself and repairs a drifted/dead launchd job, so a broken OS trigger can never silently halt the flow; (2) FOREIGN-COMMITTER coexistence — LFB is not assumed to be the only committer of the repo, so it tolerates and DELIVERS commits it did not author (e.g. a machine-wide auto-commit), never force-pushing and never discarding them; (3) the ALWAYS-PUSH-WHEN-AHEAD rule — a push is attempted whenever the local branch is ahead of the remote for ANY reason, not only when this pass made its own commit, so a stranded commit can never sit forever; (4) STALENESS surfacing — a worker that has not run within twice its interval is flagged overdue on the Sync page. Written from a real incident (2026-07-07, §8). Sibling of git_sync.mdx (the fetch/merge/commit/push engine this hardens), sync_process.mdx (the full pass), devices.mdx (the every-10-min device write-back), and storage_local.mdx §13 (the background-process transparency contract).
+title: LargeFileBridge — Backbone Resilience (the data flow must never silently stop)
+description: The authoritative spec for keeping LargeFileBridge's cross-computer data flow ALIVE. The web app on each computer is the only thing running this repo, so if its backbone machinery stalls, two computers silently drift apart — one keeps committing locally, the other never sees it, and the user "can't find" work that was supposedly pinned. This spec turns that failure class into a first-class requirement: enumerate every way the flow can stop (the OS trigger job dies or points at a stale path, the history diverges because something OTHER than LFB committed into the repo, a local commit is left stranded/unpushed, a merge conflict, an auth failure, IPFS down, the app not running), and for EACH one lock a detection, a self-healing recovery, and a way it is surfaced. Locks the never-stop guarantees: (1) an in-process WATCHDOG in the always-on web app that runs any overdue worker itself and repairs a drifted/dead launchd job, so a broken OS trigger can never silently halt the flow; (2) FOREIGN-COMMITTER coexistence — LFB is not assumed to be the only committer of the repo, so it tolerates and DELIVERS commits it did not author (e.g. a machine-wide auto-commit), never force-pushing and never discarding them; (3) the ALWAYS-PUSH-WHEN-AHEAD rule — a push is attempted whenever the local branch is ahead of the remote for ANY reason, not only when this pass made its own commit, so a stranded commit can never sit forever; (4) STALENESS surfacing — a worker that has not run within twice its interval is flagged overdue on the Scans page. Written from a real incident (2026-07-07, §8). Sibling of git_backbone.mdx (the fetch/merge/commit/push engine this hardens), pin_process.mdx (the full pass), devices.mdx (the every-10-min device write-back), and storage_local.mdx §13 (the background-process transparency contract).
 ---
 
-# LargeFileBridge — Sync Resilience
+# LargeFileBridge — Backbone Resilience
 
 The whole point of LargeFileBridge is that a file made on one computer shows up on the user's other
 computers. That promise is only as good as the machinery that keeps the flow moving. On each computer
 the **web app is the only thing running this repo** — there is no separate daemon, no server in the
 middle. So when that machinery stalls, nothing else notices: one computer keeps committing work
 locally, the other never receives it, and the user goes looking for files that were "supposed to be
-synced" and **isn't finding them**. That is the exact shape of the [§8 incident](#8-the-incident-that-motivated-this-spec-2026-07-07).
+pinned" and **isn't finding them**. That is the exact shape of the [§8 incident](#8-the-incident-that-motivated-this-spec-2026-07-07).
 
 This spec makes **"the data flow never silently stops"** a first-class requirement. It is not enough
-for the [Git backbone](./git_sync.mdx) and the [sync pass](./sync_process.mdx) to be correct **when they
+for the [Git backbone](./git_backbone.mdx) and the [pin pass](./pin_process.mdx) to be correct **when they
 run** — the harder guarantee is that they **keep running**, and that when a link in the chain breaks it
 **self-heals or is surfaced**, never fails silent.
 
 Read the engine first; this spec hardens it, it does not restate it:
 
-* [git_sync.mdx](./git_sync.mdx) — the fetch → merge → commit → push cycle this spec keeps alive (§6 there
+* [git_backbone.mdx](./git_backbone.mdx) — the fetch → merge → commit → push cycle this spec keeps alive (§6 there
   is the ordered cycle; §6.1 there is the always-push-when-ahead rule this spec requires).
-* [sync_process.mdx](./sync_process.mdx) — the full pass, and the three triggers (scheduled / session
+* [pin_process.mdx](./pin_process.mdx) — the full pass, and the three triggers (scheduled / session
   catch-up / manual) that fire it.
 * [devices.mdx](./devices.mdx) — the every-10-minute device write-back, the most frequent carrier of the
   flow and the first thing to go quiet when a trigger dies.
@@ -45,7 +45,7 @@ Three properties fall out of that guarantee, and the rest of this spec is how ea
 2. **Forward progress is not conditional on LFB being the sole author.** The flow keeps moving even when
    something else committed into the repo, or a previous push was left half-done (§4, §6).
 3. **Anything unrecoverable is visible.** A merge conflict, an auth failure, or a stalled worker becomes
-   a surfaced problem on the Sync page — never a swallowed error (§5, §7).
+   a surfaced problem on the Scans page — never a swallowed error (§5, §7).
 
 ---
 
@@ -56,12 +56,12 @@ Each row is a way the flow has stopped or could stop. For each: how LFB **detect
 
 | # | Failure | Detection | Recovery | Surfaced |
 | --- | --- | --- | --- | --- |
-| **F1** | **OS trigger dead** — the launchd job crashes on every fire (e.g. a stale `run-worker.mjs` path after a code move), so no pass ever runs | worker `last_run_at` goes stale past 2× its interval (§7) | the in-process **watchdog** runs the pass itself AND calls `reconcileWorkerSchedules()` to rewrite + reload the plist (§3) | **overdue** flag on the Sync page (§7) |
+| **F1** | **OS trigger dead** — the launchd job crashes on every fire (e.g. a stale `run-worker.mjs` path after a code move), so no pass ever runs | worker `last_run_at` goes stale past 2× its interval (§7) | the in-process **watchdog** runs the pass itself AND calls `reconcileWorkerSchedules()` to rewrite + reload the plist (§3) | **overdue** flag on the Scans page (§7) |
 | **F2** | **Diverged history** — the branch has local commits AND the remote has commits, because something OTHER than LFB committed into the repo (a machine-wide auto-commit) or a prior push was rejected | every cycle fetches; a non-fast-forward push, or a non-zero ahead-count, reveals it | **fetch → auto-merge → push** — the merge folds in the remote, the push delivers the local side; never force, never discard (§4, §5) | only if the merge truly conflicts (F4) |
 | **F3** | **Stranded local commit** — the branch is ahead of the remote but this pass had nothing of its own to commit, so the old code returned before pushing and the commit sat forever | `origin/<branch>..HEAD` ahead-count > 0 (§6) | **always push when ahead** — a push is attempted whenever the branch is ahead, not only after a fresh commit (§6) | — (it just flows) |
-| **F4** | **Unresolvable merge conflict** — git itself declines to auto-merge | `git merge` exits conflicted | **abort** the merge (tree stays clean), keep syncing over IPFS, and **surface** the conflicted paths ([git_sync.mdx §4.3](./git_sync.mdx#43-the-strategy-and-the-fallback-when-git-truly-cannot-resolve)) | conflict problem on the storage |
-| **F5** | **Auth failure on a URL remote** — no cached credential / expired token | fetch/push classified as an auth error ([git_sync.mdx §5](./git_sync.mdx#5-credentials-for-a-url-remote--the-os-git-credential-helper-never-a-prompt)) | keep syncing over IPFS; do **not** hang or retry blindly | "re-authenticate this Git remote" problem |
-| **F6** | **IPFS node down** — bytes can't move even though git text can | `ipfs.health() !== "ok"` at the top of a unit sync | skip byte work this pass, keep the git text flowing, retry next pass | unit error on the storage |
+| **F4** | **Unresolvable merge conflict** — git itself declines to auto-merge | `git merge` exits conflicted | **abort** the merge (tree stays clean), keep pinning over IPFS, and **surface** the conflicted paths ([git_backbone.mdx §4.3](./git_backbone.mdx#43-the-strategy-and-the-fallback-when-git-truly-cannot-resolve)) | conflict problem on the storage |
+| **F5** | **Auth failure on a URL remote** — no cached credential / expired token | fetch/push classified as an auth error ([git_backbone.mdx §5](./git_backbone.mdx#5-credentials-for-a-url-remote--the-os-git-credential-helper-never-a-prompt)) | keep pinning over IPFS; do **not** hang or retry blindly | "re-authenticate this Git remote" problem |
+| **F6** | **IPFS node down** — bytes can't move even though git text can | `ipfs.health() !== "ok"` at the top of a unit pin | skip byte work this pass, keep the git text flowing, retry next pass | unit error on the storage |
 | **F7** | **App not running** — the web app is closed, so nothing (not even the watchdog) runs | the launchd trigger still fires the OS worker independently of the app; on next app start, boot reconcile + watchdog catch up | OS worker keeps the 10/15-min cadence while the app is down; the app re-converges on launch | last-run age visible on next open |
 
 The load-bearing insight: **F1, F2, and F3 are the ones that fail *silently*** — they produce no error,
@@ -84,7 +84,7 @@ lightweight heartbeat re-evaluates each **installed + enabled** worker on a fixe
   configured interval** (plus a small slack), or it has **never** run. Twice absorbs one legitimately
   missed fire and clock skew; beyond that the OS trigger is presumed dead.
 * **Run it in-process.** For an overdue worker the app runs **the same work the OS worker would have**
-  — `syncDeviceRegistrations()` for `device`, `syncAll()` for `sync`, `startScan("scheduled")` for
+  — `pushDeviceBackbone()` for `device`, `pinAll()` for `pin`, `startScan("scheduled")` for
   `scan` — inside the app process, and stamps the run. The flow moves **now**, without waiting for the
   next reboot.
 * **Repair the trigger.** Running in-process also calls `reconcileWorkerSchedules()`, which **rewrites
@@ -92,7 +92,7 @@ lightweight heartbeat re-evaluates each **installed + enabled** worker on a fixe
   the OS cadence resumes on its own and the app stops having to cover for it.
 * **Never a thundering herd.** The heartbeat is single-flighted (one tick at a time), the per-storage
   Git lock and the pass in-flight guard still serialize the actual work
-  ([sync_process.mdx §3](./sync_process.mdx#3-prioritization--order-never-scope)), and the timer is
+  ([pin_process.mdx §3](./pin_process.mdx#3-prioritization--order-never-scope)), and the timer is
   `unref`'d so it never keeps the process alive on its own.
 
 This is the property that makes the guarantee real: **as long as the web app runs at all, the flow
@@ -108,7 +108,7 @@ The in-process watchdog — overdue detection, running the overdue worker's pass
 ## 4. Foreign-committer coexistence — LFB is not the only author (LOCKED)
 
 The Git backbone was originally written as if **LFB were the sole committer** of the SDL repo: it
-commits `LFB: sync device state`, and it assumed the only reason a push could be rejected was another of
+commits `LFB: backbone device state`, and it assumed the only reason a push could be rejected was another of
 the user's computers pushing the same LFB text. **That assumption is false in the field.** The SDL repo
 is a normal git repo on the user's disk, and other things commit into it:
 
@@ -128,7 +128,7 @@ LFB exists to do. The locked rules:
   including a foreign commit — LFB **pushes** it (§6). The foreign committer's work reaches the other
   computers through LFB's normal push, merged cleanly with whatever the remote advanced to.
 * **Never force-push, ever.** Coexistence is by **merge**, never by overwrite
-  ([git_sync.mdx §1](./git_sync.mdx#1-what-lfb-is-permitted-to-do--the-granted-git-operations-locked)).
+  ([git_backbone.mdx §1](./git_backbone.mdx#1-what-lfb-is-permitted-to-do--the-granted-git-operations-locked)).
   If the remote also advanced, LFB fetches and auto-merges first, then pushes the merge.
 
 This is why the flow can survive a repo where two different mechanisms commit. The [incident](#8-the-incident-that-motivated-this-spec-2026-07-07)
@@ -137,7 +137,7 @@ computer advanced the remote, and the branch diverged — a state LFB must merge
 on.
 
 Tolerating and delivering commits LFB did not author (merge the remote, then push the local side; never force, never discard) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.pull()` (fetch + auto-merge of the remote) followed by `GitBackbone.commitAndPush()` (pushes whenever the branch is ahead, §6), both driven per storage by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncStorageUnitInner(id)` and `ensureDeviceRegisteredInner(id)`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.pull()` (fetch + auto-merge of the remote) followed by `GitBackbone.commitAndPush()` (pushes whenever the branch is ahead, §6), both driven per storage by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnitInner(id)` and `ensureDeviceRegisteredInner(id)`.
 
 ---
 
@@ -147,7 +147,7 @@ When the local branch and the remote have **both** advanced (F2), one pass recon
 
 1. **Fetch** `origin/<branch>` — learn where the remote actually is.
 2. **Auto-merge** it into the working copy with git's **ort** strategy
-   ([git_sync.mdx §4](./git_sync.mdx#4-automatic-merge--why-conflicts-are-rare-and-how-git-resolves-them-locked)).
+   ([git_backbone.mdx §4](./git_backbone.mdx#4-automatic-merge--why-conflicts-are-rare-and-how-git-resolves-them-locked)).
    Because device files are self-owned and shared lists are `merge=union`, and because a foreign commit
    usually adds **new** paths, this merge succeeds automatically in the overwhelming majority of cases —
    the local side (foreign commit included) and the remote side both survive.
@@ -155,12 +155,12 @@ When the local branch and the remote have **both** advanced (F2), one pass recon
 
 If step 2 hits a conflict git genuinely cannot resolve (F4), LFB **aborts** the merge (working tree left
 clean), keeps moving bytes over IPFS, and **surfaces** the conflicted paths for the user to resolve with
-their own tools ([git_sync.mdx §4.3](./git_sync.mdx#43-the-strategy-and-the-fallback-when-git-truly-cannot-resolve)).
+their own tools ([git_backbone.mdx §4.3](./git_backbone.mdx#43-the-strategy-and-the-fallback-when-git-truly-cannot-resolve)).
 It does **not** guess, and it does **not** clobber — but it also does **not** silently stop the rest of
 the flow: every other storage and the IPFS byte work continue.
 
 The fetch → auto-merge → push recovery for a diverged branch, and the abort-and-surface fallback for a true conflict, are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.pull()` (merge or `--abort` + record conflicts) and `GitBackbone.commitAndPush()` (the non-fast-forward re-pull-then-push retry). The surfaced conflict/auth problem is logged and attached to the pass by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncStorageUnitInner(id)`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.pull()` (merge or `--abort` + record conflicts) and `GitBackbone.commitAndPush()` (the non-fast-forward re-pull-then-push retry). The surfaced conflict/auth problem is logged and attached to the pass by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnitInner(id)`.
 
 ---
 
@@ -204,7 +204,7 @@ silent stall (F1) visible **before** the user notices missing files:
 
 * A worker that is **installed + enabled** but whose last successful run is older than **twice its
   interval** (the same threshold the watchdog uses, §3) is flagged **overdue**.
-* The Sync page reflects **overdue** as a warning on that worker's card — "automatic syncing hasn't run
+* The Scans page reflects **overdue** as a warning on that worker's card — "automatic pinning hasn't run
   when it should have" — distinct from "off" (the user chose that) and "failed" (it ran and errored).
 * Overdue is **derived**, not stored: it is computed from `last_run_at` + the configured interval on
   every read, so it is always current and needs no extra write path.
@@ -214,8 +214,8 @@ Because the watchdog (§3) is *also* acting on the same signal, an overdue state
 surfacing it still matters for the window where the **app itself was down** (F7) and for giving the user
 an honest picture of the background process's health.
 
-Deriving the **overdue** flag from `last_run_at` + interval and returning it in the Sync page worker state is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `isWorkerOverdue(intervalSeconds, lastRunAt)` and `workerState(kind)` (sets `overdue` when installed + enabled). The field rides `WorkerState` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` and is rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/sync/SyncPage.tsx` — `workerHealth(state)`.
+Deriving the **overdue** flag from `last_run_at` + interval and returning it in the Scans page worker state is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `isWorkerOverdue(intervalSeconds, lastRunAt)` and `workerState(kind)` (sets `overdue` when installed + enabled). The field rides `WorkerState` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` and is rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/scans/ScansPage.tsx` — `workerHealth(state)`.
 
 ---
 
@@ -223,21 +223,21 @@ Deriving the **overdue** flag from `last_run_at` + interval and returning it in 
 
 A condensed postmortem, because the rules above are only legible against the failure that produced them.
 
-**Setup.** The user's Personal SDL repo (`personal_large_files_bridge`) is synced between two
+**Setup.** The user's Personal SDL repo (`personal_large_files_bridge`) is carried between two
 computers — a Mac Pro tower (`bryan-mac-pro`) and a MacBook Pro laptop (`bryanstarbuck-macbook-pro`) —
-via the [Git backbone](./git_sync.mdx). Each runs the LFB web app; nothing else.
+via the [Git backbone](./git_backbone.mdx). Each runs the LFB web app; nothing else.
 
 **What broke, in order.**
 
 1. **The tower's OS workers died silently (F1).** A code move left the tower's launchd jobs pointing at
    an old `packages/deploy/launchd/run-worker.mjs` path. Every fire crashed with `MODULE_NOT_FOUND`
    (550 of them in `error.err`) and **nothing reached the app** — so the tower's every-10-minute device
-   write-back and 15-minute sync pass **stopped running entirely** around 15:21. The plists were later
+   write-back and 15-minute pin pass **stopped running entirely** around 15:21. The plists were later
    rewritten to the correct path, but the **loaded** jobs were never reloaded, so they stayed dead.
 2. **A foreign auto-commit diverged the branch (F2/F4-adjacent).** At 16:58 a machine-wide `Bryan 26
    Tower` auto-commit committed 30 transcription text files into the repo locally — but of course did
    **not** push (it isn't LFB).
-3. **The laptop kept advancing the remote.** Its LFB happily pushed `LFB: sync device state` every 10
+3. **The laptop kept advancing the remote.** Its LFB happily pushed `LFB: backbone device state` every 10
    minutes, moving `origin/main` forward — but it **never received the transcriptions**, because the
    tower never pushed them.
 4. **The commit was stranded (F3).** Even after the tower's app was restarted, the branch was diverged
@@ -258,7 +258,7 @@ than an accident that happened to work; and the overdue signal (§7) makes the s
 
 > **Note (out of scope here).** The user expected ~300 transcriptions but only **30** `.txt` files ever
 > existed under `.transcribe/` on the tower. That is a **transcription-side** gap (the other ~270 were
-> never written into the synced directory), not a sync failure — the sync correctly delivered every file
+> never written into the git working copy), not a backbone failure — the backbone correctly delivered every file
 > that was actually present. Tracked separately in [Transcribe.mdx](./Transcribe.mdx).
 
 ---
@@ -279,13 +279,13 @@ than an accident that happened to work; and the overdue signal (§7) makes the s
 5. **The non-fast-forward retry still holds** — a push rejected because the remote advanced re-fetches,
    re-merges, and re-pushes once, never force (§5, §6).
 6. **Staleness is surfaced.** A worker installed + enabled but not run within **2× its interval** is
-   flagged **overdue** on the Sync page, distinct from off and from failed (§7).
+   flagged **overdue** on the Scans page, distinct from off and from failed (§7).
 7. **Nothing fails silent.** An unrecoverable merge conflict, an auth failure, or a down IPFS node
    becomes a **surfaced problem** on the storage/worker while the rest of the flow keeps moving — never a
    swallowed error (§2, §5).
 
 <!--
-  AUTHORITATIVE spec for SYNC RESILIENCE — keeping the cross-computer data flow ALIVE, not just correct
+  AUTHORITATIVE spec for BACKBONE RESILIENCE — keeping the cross-computer data flow ALIVE, not just correct
   when it runs. Written from the 2026-07-07 incident (§8). LOCKED:
   (§1) Guarantee: the flow never stops SILENTLY — keep running, self-heal, or surface. No silent stall.
   (§2) Failure taxonomy F1..F7 with detection/recovery/surfacing. F1/F2/F3 are the silent ones.
@@ -295,14 +295,14 @@ than an accident that happened to work; and the overdue signal (§7) makes the s
        started in main.ts bootstrapState.
   (§4) FOREIGN-COMMITTER coexistence: LFB is not the only committer; tolerate + DELIVER commits it didn't
        author (machine-wide auto-commit), merge not overwrite, never force-push. Code: git.service pull()+
-       commitAndPush() via sync.service syncStorageUnitInner/ensureDeviceRegisteredInner.
+       commitAndPush() via pin.service pinStorageUnitInner/ensureDeviceRegisteredInner.
   (§5) Divergence recovery: fetch→auto-merge→push clean path; abort+surface on true conflict, IPFS continues.
   (§6) ALWAYS-PUSH-WHEN-AHEAD: push whenever origin/<branch>..HEAD > 0, not only after a fresh commit; the
        fix for the stranded-commit defect. Do NOT rely on device-file timestamp churn. Code: git.service
        commitAndPush() (committed || aheadCount>0) + aheadCount().
   (§7) STALENESS surfacing: derived `overdue` (installed+enabled && last ok > 2× interval) on WorkerState;
-       Sync page shows it. Code: schedule.service isWorkerOverdue/workerState, shared types WorkerState.overdue,
-       SyncPage workerHealth.
-  Keep in sync with git_sync.mdx (§6.1 always-push, §4/§5 merge), sync_process.mdx (the pass + watchdog note),
+       Scans page shows it. Code: schedule.service isWorkerOverdue/workerState, shared types WorkerState.overdue,
+       ScansPage workerHealth.
+  Keep in sync with git_backbone.mdx (§6.1 always-push, §4/§5 merge), pin_process.mdx (the pass + watchdog note),
   devices.mdx (the 10-min write-back), storage_local.mdx §13 (transparency contract + overdue).
 -->

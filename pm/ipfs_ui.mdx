@@ -43,9 +43,9 @@ Siblings this spec builds on and does not repeat:
 
 ## 1. Use case
 
-A user runs LargeFileBridge to sync their large, git-ignored files across their own computers over
+A user runs LargeFileBridge to pin their large, git-ignored files across their own computers over
 IPFS. IPFS is the engine underneath — but most users have **never run an IPFS node** and have no
-mental model of it. When something isn't syncing, the first question is almost always *"is IPFS even
+mental model of it. When something isn't pinning, the first question is almost always *"is IPFS even
 running?"* Today the answer is buried in a red/green word on the Scans page.
 
 This page exists so that a user can, without leaving the app or opening a terminal:
@@ -389,11 +389,11 @@ Design rules:
 ## 10. The app-wide "IPFS is not running" nudge
 
 Per the prompt: even **outside** the IPFS page, if IPFS is missing or off, the user should be told —
-because nothing will sync and they may not know why.
+because nothing will pin and they may not know why.
 
 * A slim **banner** (app frame, above the routed content) appears on **every** page **only when** the
   node is **not installed** or **not running**. It reads e.g. *"IPFS isn't running — your files can't
-  sync"* with a single button: **Install IPFS** (not installed) or **Start IPFS** (installed, off).
+  pin"* with a single button: **Install IPFS** (not installed) or **Start IPFS** (installed, off).
 * The button either starts the install/start **job** in place (with a link into the progress view) or
   navigates to `/ipfs`.
 * **It must NOT appear when the node is installed and running** — a healthy node is silent. No nagging.
@@ -454,7 +454,7 @@ fixes.
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  ●(amber)  IPFS is installed but not running                                  │
-│  Kubo v0.29. Turn it on so your big files can sync across your computers.      │
+│  Kubo v0.29. Turn it on so your big files can be pinned across your computers. │
 │                                                                               │
 │  ↻ Automatically restart when you reboot                                      │  ← label ABOVE button 1
 │  [ ⏻ Turn On IPFS ]  Turns IPFS on now AND sets it to start automatically      │  ← PRIMARY (filled)

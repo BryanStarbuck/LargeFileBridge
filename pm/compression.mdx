@@ -6,7 +6,7 @@ description: How LargeFileBridge compresses IMAGE and VIDEO files (audio is out 
 # LargeFileBridge — Compression
 
 Compression is a **core value** ([charter](../CLAUDE.md#compression-a-core-value)): many large files people
-sync are **uncompressed when they don't need to be**. LFBridge finds those and, **only when the user
+pin are **uncompressed when they don't need to be**. LFBridge finds those and, **only when the user
 asks**, compresses them — **images** and **video** (audio is out of scope for now, planned later).
 
 This spec defines the compression **engine**: the quality-controllable brew tools we drive, the
@@ -403,10 +403,10 @@ When the engine compresses a file, it stamps a small tag **into the output's own
 standard **`comment`** field, which nothing else uses — recording that **LargeFileBridge already compressed
 this**. This is the layer the user asked for by name: *"find a property in an MP4 file or other video files
 or JPG files that are unused and we are allowed to use."* Its whole virtue is that it **rides with the
-file's bytes**: when the compressed file syncs to another computer over IPFS
+file's bytes**: when the compressed file is pinned to another computer over IPFS
 ([ipfs.mdx](../knowledge/ipfs.mdx)) the marker arrives **inside** it, so **every** machine — regardless of
 storage type — reads the same "already compressed" truth from the file itself. It does **not** depend on any
-sidecar syncing, which is why it works even for `repo` storages whose `.lfbridge/` is git-ignored and never
+sidecar travel, which is why it works even for `repo` storages whose `.lfbridge/` is git-ignored and never
 travels ([storage_local.mdx](./storage_local.mdx), `repo` storages).
 
 * **No new tool — written inline by the encoder we already run (LOCKED).** Because every compress already

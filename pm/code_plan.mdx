@@ -148,7 +148,7 @@ packages/backend/src/
 │   │
 │   ├── store-model/             # typed accessors over the YAML store for each unit kind
 │   │   ├── config.service.ts    #   app config.yaml (settings.mdx writes here)
-│   │   ├── units.service.ts     #   sync/computer + sync/r/<repo> config/manifest/status
+│   │   ├── units.service.ts     #   pin/computer + pin/r/<repo> config/manifest/status
 │   │   └── peers.service.ts     #   peers.yaml
 │   │
 │   ├── scanner/                 # scan.mdx — the 4-hour discovery worker
@@ -157,7 +157,7 @@ packages/backend/src/
 │   │   └── diff.ts              #   added/grew/shrank/moved(size+mtime)/deleted → status.yaml
 │   │
 │   ├── sync/                    # storage_local.mdx §13 — the 15-minute byte-mover
-│   │   ├── sync.service.ts      #   per synced unit: add→CID→pin→update manifest→fetch missing→status.yaml
+│   │   ├── pin.service.ts      #   per synced unit: add→CID→pin→update manifest→fetch missing→status.yaml
 │   │   ├── manifest.service.ts  #   read/write manifest.yaml + committed <repo>/.lfbridge/manifest.yaml (§9.2)
 │   │   └── synclist.service.ts  #   LargeFilesBridge_SyncList.yaml publish + RECONCILE (sync_list.mdx §5 trust model)
 │   │
@@ -207,8 +207,8 @@ The atomic YAML store (tmp→fsync→rename, per-file mutex, defaults-on-absence
 * **App scope** — `config.yaml`, `peers.yaml` at the state root.
 * **User scope** — `users/<email>/config.yaml`, `users/<email>/sessions/` — created lazily; email
   lowercased + sanitized; **no `default`/anon key** (storage_local.mdx §4).
-* **Unit scope** — `sync/computer/{config,manifest,status}.yaml` and
-  `sync/r/<repo_name>/{config,manifest,status}.yaml`. The unit opener is what makes sync state
+* **Unit scope** — `pin/computer/{config,manifest,status}.yaml` and
+  `pin/r/<repo_name>/{config,manifest,status}.yaml`. The unit opener is what makes sync state
   computer-wide (outside `users/`).
 
 Every persisted file matches the storage_local.mdx §14 inventory; the Zod schemas live in `@lfb/shared` so
@@ -239,7 +239,7 @@ as at-risk.
 | Worker | Cadence | Job | launchd label | Config block |
 | --- | --- | --- | --- | --- |
 | **Scan** | 4 h (`StartInterval 14400`) | metadata-only discovery: stat big files, diff, write `status.yaml`. Never opens/hashes files, never touches IPFS. | `com.largefilebridge.scan` | `config.yaml → scan_process` |
-| **Sync** | 15 min (`StartInterval 900`) | for each `synced:true` unit: add→CID→pin→manifest→fetch missing→publish list→`status.yaml`. | `com.largefilebridge.sync` | `config.yaml → sync_process` |
+| **Sync** | 15 min (`StartInterval 900`) | for each `synced:true` unit: add→CID→pin→manifest→fetch missing→publish list→`status.yaml`. | `com.largefilebridge.sync` | `config.yaml → pin_process` |
 
 Both carry two **independent** facts — **installed** (plist present) and **enabled** (bootstrapped/on)
 — reconciled against real `launchctl` state and surfaced on the **Sync** page. The web app can

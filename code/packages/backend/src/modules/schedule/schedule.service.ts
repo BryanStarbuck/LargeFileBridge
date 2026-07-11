@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { WorkerKind, WorkerState, SyncPageData, AppConfig } from "@lfb/shared";
+import type { WorkerKind, WorkerState, JobsPageData, AppConfig } from "@lfb/shared";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
 import { peerRows } from "../store-model/peers.service.js";
 import { launchdInstaller } from "./os/launchd.js";
@@ -34,7 +34,7 @@ function installer(): SchedulerInstaller {
 }
 
 // The launchd/cron worker trampoline: code/deploy/launchd/run-worker.mjs. Every scheduled worker (scan,
-// sync, device) runs `node <this> <worker> <port>`, which POSTs the loopback /api/internal/run route. If
+// pin, device) runs `node <this> <worker> <port>`, which POSTs the loopback /api/internal/run route. If
 // this path is wrong the OS job dies instantly with MODULE_NOT_FOUND — SILENTLY, since a dead launchd job
 // writes nothing to our logs and never reaches stampRun. That exact bug shipped once: a brittle `../`
 // hop-count assumed `deploy/` lived under `packages/` and resolved to code/packages/deploy/... (nonexistent),
@@ -68,7 +68,7 @@ function triggerScriptPath(): string {
 function labelFor(kind: WorkerKind): string {
   if (kind === "scan") return "com.largefilebridge.scan";
   if (kind === "device") return "com.largefilebridge.device";
-  return "com.largefilebridge.sync";
+  return getAppConfig().pin_process.label;
 }
 
 // The transparency-contract config block for a worker kind (installed / enabled / interval / last-run).
@@ -76,18 +76,18 @@ function labelFor(kind: WorkerKind): string {
 function processBlock(c: AppConfig, kind: WorkerKind) {
   if (kind === "scan") return c.scan_process;
   if (kind === "device") return c.device_process;
-  return c.sync_process;
+  return c.pin_process;
 }
 
 function intervalFor(kind: WorkerKind): number {
   const c = getAppConfig();
   if (kind === "scan") return c.scan_process.interval_hours * 3600;
   if (kind === "device") return c.device_process.interval_minutes * 60;
-  return c.sync_process.interval_minutes * 60;
+  return c.pin_process.interval_minutes * 60;
 }
 
 // A worker is OVERDUE when its last successful run is older than TWICE its interval (plus a slack), or it
-// has never run (sync_resilience.mdx §3/§7). 2× absorbs one legitimately-missed fire and clock skew; past
+// has never run (backbone_resilience.mdx §3/§7). 2× absorbs one legitimately-missed fire and clock skew; past
 // that the OS trigger is presumed dead. Shared by workerState() (the surfaced flag) and the watchdog (the
 // backstop that acts on it) so both use one threshold. A run means a SUCCESSFUL run — a stamped failure
 // still counts as "ran" for age, but a null stamp (never ran) is overdue.
@@ -120,11 +120,11 @@ export async function workerState(kind: WorkerKind): Promise<WorkerState> {
   };
 }
 
-export async function syncPageData(): Promise<SyncPageData> {
+export async function jobsPageData(): Promise<JobsPageData> {
   const c = getAppConfig();
   return {
     scan: await workerState("scan"),
-    sync: await workerState("sync"),
+    pin: await workerState("pin"),
     device: await workerState("device"),
     watcher: watcherState(),
     computerLabel: c.computer.label,
@@ -199,7 +199,7 @@ export async function control(
 // ALREADY installed — it never installs or enables a worker the user hasn't opted into. Best-effort: a
 // launchctl/OS hiccup is logged, not fatal to boot.
 export async function reconcileWorkerSchedules(): Promise<void> {
-  for (const kind of ["scan", "sync", "device"] as WorkerKind[]) {
+  for (const kind of ["scan", "pin", "device"] as WorkerKind[]) {
     const inst = installer();
     const label = labelFor(kind);
     try {
@@ -235,7 +235,7 @@ export async function reconcileWorkerSchedules(): Promise<void> {
 }
 
 /**
- * The device-registration worker (devices.mdx §11) is ON BY DEFAULT — unlike the scan/sync workers it
+ * The device-registration worker (devices.mdx §11) is ON BY DEFAULT — unlike the scan/pin workers it
  * needs no explicit user Install. On first boot LFB auto-installs + enables its launchd job so this
  * computer's device info starts writing back to your Git repos every 10 minutes with zero action. Runs
  * exactly ONCE, latched by `device_process.auto_provisioned`: if the user later turns it OFF, it stays off

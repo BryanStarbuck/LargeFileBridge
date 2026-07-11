@@ -1,17 +1,17 @@
-// The synchronization process (sync_process.mdx). A synchronization is ALWAYS a full pass over every
+// The pin process (pin_process.mdx). A pin pass is ALWAYS a full pass over every
 // known unit — every repo PLUS the computer unit (storage.mdx §5/§8). Per unit the byte work is:
 // read pinset -> add -> CID -> pin -> update manifest -> fetch missing -> reconcile pin cache ->
 // publish manifest. The local IPFS pinset (`ipfs pin ls`) is the source of truth for pin state; the
 // manifest `pinned_by` is a stale cache we verify and refresh against it here (storage.mdx §9.5).
 //
-// Parallelism (sync_process.mdx §4): the pass fans out across units, and WITHIN a unit the independent
+// Parallelism (pin_process.mdx §4): the pass fans out across units, and WITHIN a unit the independent
 // per-file add/pin and fetch operations fan out too — all heavy IPFS work is drawn through ONE global
 // limiter (`ipfsLimiter`, size `cores − 2`) so total in-flight operations stay bounded no matter how
 // units × files multiply. Concurrent state writes are safe because the store layer serializes per file
 // with atomic temp-then-rename (storage.mdx §15).
 import fs from "node:fs";
 import path from "node:path";
-import { ManifestSchema, UnitStatusSchema, type Manifest, type ManifestFile, type UnitStatus, type Decision, type SyncCounts } from "@lfb/shared";
+import { ManifestSchema, UnitStatusSchema, type Manifest, type ManifestFile, type UnitStatus, type Decision, type PinCounts } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import {
   listRepoFolders,
@@ -32,7 +32,7 @@ import { writeCommittedManifest, readCommittedManifest } from "./manifest.servic
 import { listStorageIds, ensureBackingLocations, getStorageRow } from "../storage/storage.service.js";
 import { readStorageIndex } from "../storage/tracking.service.js";
 import { writeSelfDevice, resolveGraftedPath } from "../storage/devices.service.js";
-import { getStorageSynced, readMappedDirsForRoot, getGitBackboneRemote } from "../storage/storage-settings.service.js";
+import { getStoragePinned, readMappedDirsForRoot, getGitBackboneRemote } from "../storage/storage-settings.service.js";
 import { GitBackbone, type GitCycleResult } from "../git/git.service.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { responsiveBudget } from "../../shared/concurrency.js";
@@ -44,10 +44,10 @@ function computerLabel(): string {
 
 // One global concurrency budget for ALL heavy IPFS work in a pass — the canonical RESPONSIVE budget
 // (`cores − 2`, parallelization.mdx §1) so a 20–30-core machine stays busy while 2 cores keep the web app
-// + IPFS node responsive (sync_process.mdx §4). Drawn from the ONE shared helper so there is no second
+// + IPFS node responsive (pin_process.mdx §4). Drawn from the ONE shared helper so there is no second
 // core-count definition. Every add/pin/fetch runs through `ipfsLimiter.run(...)`, so unit-level and
 // file-level fan-out share the same ceiling and never oversubscribe the box.
-const SYNC_CONCURRENCY = responsiveBudget();
+const PIN_CONCURRENCY = responsiveBudget();
 
 class Limiter {
   private active = 0;
@@ -64,12 +64,12 @@ class Limiter {
     }
   }
 }
-const ipfsLimiter = new Limiter(SYNC_CONCURRENCY);
+const ipfsLimiter = new Limiter(PIN_CONCURRENCY);
 
 let passInFlight = false;
 
-/** A fresh, all-zero sync tally — the honest baseline for a no-op run (sync_process.mdx §6). */
-function zeroCounts(): SyncCounts {
+/** A fresh, all-zero pin tally — the honest baseline for a no-op run (pin_process.mdx §6). */
+function zeroCounts(): PinCounts {
   return { eligible: 0, added: 0, pinned: 0, fetched: 0, skipped: 0, failed: 0 };
 }
 
@@ -85,9 +85,9 @@ async function runPool<T>(items: T[], limit: number, fn: (item: T) => Promise<vo
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 }
 
-// ── The generic unit-sync core ──────────────────────────────────────────────
-// A UnitTarget adapts either a repo unit or the computer unit onto the one sync algorithm below, so the
-// full pass (sync_process.mdx §2) treats them identically. Repo files resolve under the working tree;
+// ── The generic unit-pin core ───────────────────────────────────────────────
+// A UnitTarget adapts either a repo unit or the computer unit onto the one pin algorithm below, so the
+// full pass (pin_process.mdx §2) treats them identically. Repo files resolve under the working tree;
 // computer files are already absolute (the scanner labels them absolute — storage.mdx §8). `publish`
 // is git for a repo (storage.mdx §9.2) and (for now) a no-op for the computer unit whose IPNS transport
 // (storage.mdx §9.3) is a separate follow-up.
@@ -109,9 +109,9 @@ interface UnitTarget {
   preflightError?: () => string | null;
 }
 
-async function runUnitSync(t: UnitTarget, onlyPaths?: Set<string>): Promise<SyncCounts> {
+async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCounts> {
   // Tally what this run actually does so the caller can report the truth, never a fixed "complete"
-  // string (sync_process.mdx §6). Incremented inside the parallel closures below — safe because JS runs
+  // string (pin_process.mdx §6). Incremented inside the parallel closures below — safe because JS runs
   // each synchronous span between awaits atomically, so counter bumps never interleave.
   const counts = zeroCounts();
   const missing = t.preflightError?.();
@@ -130,11 +130,11 @@ async function runUnitSync(t: UnitTarget, onlyPaths?: Set<string>): Promise<Sync
 
   // Learn from the filesystem which CIDs are REALLY pinned right now. The local IPFS pinset is the
   // source of truth; our manifest `pinned_by` is a stale cache we verify and refresh against it every
-  // sync (storage.mdx §9.5). Read it once up front, and keep it current as we pin below.
+  // pin pass (storage.mdx §9.5). Read it once up front, and keep it current as we pin below.
   const pinset = new Set((await ipfs.listPins()).map((p) => p.cid));
 
-  // Add + pin any new / changed / no-longer-pinned Sync-decided file — IN PARALLEL, bounded by the
-  // global limiter (sync_process.mdx §4). Each task owns a distinct path key, so the shared `byPath` /
+  // Add + pin any new / changed / no-longer-pinned Add-to-IPFS-decided file — IN PARALLEL, bounded by the
+  // global limiter (pin_process.mdx §4). Each task owns a distinct path key, so the shared `byPath` /
   // `pinset` mutations never collide (JS runs each synchronous span between awaits atomically).
   const toAdd = Object.entries(t.decisions).filter(
     ([rel, decision]) => decision === "sync" && (!onlyPaths || onlyPaths.has(rel)),
@@ -174,10 +174,10 @@ async function runUnitSync(t: UnitTarget, onlyPaths?: Set<string>): Promise<Sync
           });
           counts.added++;
           counts.pinned++; // add pins recursively, so an add is also a pin
-          log.info("sync", `Added+pinned ${rel} -> ${cid}`);
+          log.info("pin", `Added+pinned ${rel} -> ${cid}`);
         } catch (e) {
           counts.failed++;
-          log.error("sync", `add failed for ${rel}: ${(e as Error).message}`);
+          log.error("pin", `add failed for ${rel}: ${(e as Error).message}`);
         }
       }),
     ),
@@ -210,10 +210,10 @@ async function runUnitSync(t: UnitTarget, onlyPaths?: Set<string>): Promise<Sync
             }
             await ipfs.catToFile(entry.cid, abs); // …then write the bytes to the resolved local path
             counts.fetched++;
-            log.info("sync", `Fetched ${entry.path} -> ${abs} (${entry.cid})`);
+            log.info("pin", `Fetched ${entry.path} -> ${abs} (${entry.cid})`);
           } catch (e) {
             counts.failed++;
-            log.warn("sync", `fetch failed for ${entry.path}: ${(e as Error).message}`);
+            log.warn("pin", `fetch failed for ${entry.path}: ${(e as Error).message}`);
           }
         }),
       ),
@@ -222,7 +222,7 @@ async function runUnitSync(t: UnitTarget, onlyPaths?: Set<string>): Promise<Sync
 
   // Refresh the pin cache against ground truth: this computer belongs in `pinned_by` for a CID iff the
   // local pinset actually holds it now (storage.mdx §9.5). Stale self-claims (a pin lost since the last
-  // sync) are dropped here. Peer claims are left untouched — we can only verify our own.
+  // pin pass) are dropped here. Peer claims are left untouched — we can only verify our own.
   for (const entry of byPath.values()) {
     if (!entry.cid) continue;
     setPinClaim(entry, t.label, pinset.has(entry.cid));
@@ -239,58 +239,58 @@ async function runUnitSync(t: UnitTarget, onlyPaths?: Set<string>): Promise<Sync
     try {
       t.publish(next);
     } catch (e) {
-      log.warn("sync", `publish manifest failed for ${t.name}: ${(e as Error).message}`);
+      log.warn("pin", `publish manifest failed for ${t.name}: ${(e as Error).message}`);
     }
   }
 
-  t.writeStatus({ ...t.status, last_sync_at: new Date().toISOString(), last_error: null });
+  t.writeStatus({ ...t.status, last_pin_at: new Date().toISOString(), last_error: null });
   log.info(
-    "sync",
-    `Synced ${t.name}: ${next.files.length} file(s) — added ${counts.added}, fetched ${counts.fetched}, pinned ${counts.pinned}, skipped ${counts.skipped}, failed ${counts.failed}.`,
+    "pin",
+    `Pinned ${t.name}: ${next.files.length} file(s) — added ${counts.added}, fetched ${counts.fetched}, pinned ${counts.pinned}, skipped ${counts.skipped}, failed ${counts.failed}.`,
   );
   return counts;
 }
 
 /**
- * Sync one repo (used by Sync-now and the scheduled worker). onlyPaths optional = whole repo.
+ * Pin one repo (used by Pin-now and the scheduled worker). onlyPaths optional = whole repo.
  *
- * `opts.manual` marks an explicit user "Sync now" (one_repo.mdx §3.1) vs. the background scheduler.
- * The per-repo `synced` flag gates the BACKGROUND scheduler only (one_repo.mdx §3.2: "skips this repo
- * during background syncs"). A manual Sync now is the repo's primary action and must move bytes even
+ * `opts.manual` marks an explicit user "Pin now" (one_repo.mdx §3.1) vs. the background scheduler.
+ * The per-repo `pinned` flag gates the BACKGROUND scheduler only (one_repo.mdx §3.2: "skips this repo
+ * during background pin passes"). A manual Pin now is the repo's primary action and must move bytes even
  * when the flag is off — otherwise the button silently no-ops while the UI still reports success
- * (sync_process.mdx §6). Because clicking Sync now is the user explicitly opting this repo in, a manual
- * run on an off repo also flips `synced=true` so the every-15-min background sync keeps it fresh.
+ * (pin_process.mdx §6). Because clicking Pin now is the user explicitly opting this repo in, a manual
+ * run on an off repo also flips `pinned=true` so the every-15-min background pin pass keeps it fresh.
  */
-export async function syncRepoFolder(
+export async function pinRepoFolder(
   folder: string,
   onlyPaths?: Set<string>,
   opts: { manual?: boolean } = {},
-): Promise<SyncCounts> {
+): Promise<PinCounts> {
   const cfg = getRepoConfig(folder);
-  if (!cfg.synced) {
+  if (!cfg.pinned) {
     if (!opts.manual) {
-      log.info("sync", `Skip ${folder}: synced=false.`);
+      log.info("pin", `Skip ${folder}: pinned=false.`);
       return zeroCounts(); // background scheduler respects the opt-in — an honest no-op tally
     }
-    await updateRepoConfig(folder, (c) => ({ ...c, synced: true }));
-    cfg.synced = true;
-    log.info("sync", `${folder}: manual Sync now — enabling background sync (synced=true).`);
+    await updateRepoConfig(folder, (c) => ({ ...c, pinned: true }));
+    cfg.pinned = true;
+    log.info("pin", `${folder}: manual Pin now — enabling background pinning (pinned=true).`);
   }
   const repoPath = expandHome(cfg.repo.path);
-  return runUnitSync(
+  return runUnitPin(
     {
       kind: "repo",
       name: folder,
       label: computerLabel(),
       decisions: cfg.decisions,
-      fetchMissing: cfg.sync.fetch_missing,
+      fetchMissing: cfg.pin.fetch_missing,
       resolveAbs: (rel) => path.join(repoPath, rel),
       manifest: getRepoManifest(folder),
       status: getRepoStatus(folder),
       writeManifest: (m) => writeRepoManifest(folder, m),
       writeStatus: (s) => writeRepoStatus(folder, s),
       // Publish the committed in-repo manifest so git carries the list (storage.mdx §9.2).
-      publish: cfg.sync.publish_manifest ? (m) => writeCommittedManifest(repoPath, m) : undefined,
+      publish: cfg.pin.publish_manifest ? (m) => writeCommittedManifest(repoPath, m) : undefined,
       preflightError: () => (isGitWorkingTree(repoPath) ? null : "repo missing"),
     },
     onlyPaths,
@@ -298,23 +298,23 @@ export async function syncRepoFolder(
 }
 
 /**
- * Sync the computer unit — everything large OUTSIDE any repo (storage.mdx §8). Part of every full pass
- * (sync_process.mdx §2). Its files are stored with absolute paths, so `resolveAbs` is (home-expanded)
+ * Pin the computer unit — everything large OUTSIDE any repo (storage.mdx §8). Part of every full pass
+ * (pin_process.mdx §2). Its files are stored with absolute paths, so `resolveAbs` is (home-expanded)
  * identity. It has no git to carry its manifest; the IPNS transport (storage.mdx §9.3) is a follow-up,
  * so `publish` is omitted for now — the local manifest + pins are still written and reconciled.
  */
-export async function syncComputerUnit(): Promise<void> {
+export async function pinComputerUnit(): Promise<void> {
   const cfg = getComputerConfig();
-  if (!cfg.synced) {
-    log.info("sync", "Skip computer unit: synced=false.");
+  if (!cfg.pinned) {
+    log.info("pin", "Skip computer unit: pinned=false.");
     return;
   }
-  await runUnitSync({
+  await runUnitPin({
     kind: "computer",
     name: "computer",
     label: computerLabel(),
     decisions: cfg.decisions,
-    fetchMissing: cfg.sync.fetch_missing,
+    fetchMissing: cfg.pin.fetch_missing,
     resolveAbs: (rel) => expandHome(rel),
     manifest: getComputerManifest(),
     status: getComputerStatus(),
@@ -323,11 +323,11 @@ export async function syncComputerUnit(): Promise<void> {
   });
 }
 
-async function syncRepoSafe(folder: string): Promise<void> {
+async function pinRepoSafe(folder: string): Promise<void> {
   try {
-    await syncRepoFolder(folder);
+    await pinRepoFolder(folder);
   } catch (e) {
-    log.error("sync", `sync ${folder} failed: ${(e as Error).message}`);
+    log.error("pin", `pin ${folder} failed: ${(e as Error).message}`);
   }
 }
 
@@ -339,7 +339,7 @@ async function syncRepoSafe(folder: string): Promise<void> {
  *   • known mapped key, grafted here      → the grafted absolute path;
  *   • known mapped key, NOT grafted here  → null (known-but-absent — don't add/fetch/place it here);
  *   • not a mapped key (pre-mapped-dir index shape, files under the SDL root) → storage-root-relative.
- * This is the sync-pass call site the graft resolver was built for (syncable_data_location.mdx §5).
+ * This is the pin-pass call site the graft resolver was built for (syncable_data_location.mdx §5).
  */
 function resolveStorageAbs(root: string, rel: string, mappedKeys: Set<string>): string | null {
   const sep = rel.indexOf(path.sep) >= 0 ? path.sep : "/";
@@ -354,8 +354,8 @@ function resolveStorageAbs(root: string, rel: string, mappedKeys: Set<string>): 
   return path.join(root, rel); // pre-mapped-dir model: the file lives under the SDL root
 }
 
-// Serialize all Git-cycle work PER STORAGE. The every-10-min device worker and the every-15-min sync pass
-// (plus a manual Sync now) all hit THIS one backend process over loopback, and their cadences coincide —
+// Serialize all Git-cycle work PER STORAGE. The every-10-min device worker and the every-15-min pin pass
+// (plus a manual Pin now) all hit THIS one backend process over loopback, and their cadences coincide —
 // two of them running git add/commit/push in the SAME working copy at once corrupts the index. This keyed
 // chain guarantees at most one pass touches a given storage's repo at a time; different storages still run
 // concurrently. In-process is sufficient because every trigger routes through this single process.
@@ -374,24 +374,24 @@ function withStorageGitLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Sync one directory-based storage (personal / company / community) as a unit, placing each file through
- * this computer's device graft (`resolveStorageAbs` → devices.mdx §4). Repos sync as their own repo
+ * Pin one directory-based storage (personal / company / community) as a unit, placing each file through
+ * this computer's device graft (`resolveStorageAbs` → devices.mdx §4). Repos pin as their own repo
  * units and the settings-only "local" storage has no bytes, so both are skipped. Byte work is gated by
- * the per-storage `synced` opt-in (default OFF — charter), mirroring the repo/computer-unit gate
- * (sync_process.mdx §1): a not-opted-in storage is still known and visited, but nothing is added/pinned/
+ * the per-storage `pinned` opt-in (default OFF — charter), mirroring the repo/computer-unit gate
+ * (pin_process.mdx §1): a not-opted-in storage is still known and visited, but nothing is added/pinned/
  * fetched. Its file list is the tracking index; its manifest is the SDL's `.lfbridge/manifest.yaml`.
  * The whole unit runs under the per-storage Git lock so it never races the device worker on the same repo.
  */
-export function syncStorageUnit(id: string): Promise<void> {
-  return withStorageGitLock(id, () => syncStorageUnitInner(id));
+export function pinStorageUnit(id: string): Promise<void> {
+  return withStorageGitLock(id, () => pinStorageUnitInner(id));
 }
 
-async function syncStorageUnitInner(id: string): Promise<void> {
+async function pinStorageUnitInner(id: string): Promise<void> {
   const row = getStorageRow(id);
   if (!row || row.type === "local" || row.type === "repo") return;
   const root = expandHome(row.root);
 
-  // Git backbone (git_sync.mdx §6): if this storage's dedicated Git repo is ON, FETCH + auto-MERGE the
+  // Git backbone (git_backbone.mdx §6): if this storage's dedicated Git repo is ON, FETCH + auto-MERGE the
   // user's other computers' SDL edits BEFORE we touch anything, so the incoming devices/manifest/analysis
   // are merged in first. This pull happens EVERY pass even when we have nothing to change (devices.mdx
   // §12), so edits made on another computer land here. A merge conflict or auth failure is surfaced and we
@@ -403,23 +403,23 @@ async function syncStorageUnitInner(id: string): Promise<void> {
     await gitBackbone.pull(gitResult).catch((e) => {
       gitResult.problem = `Git pull failed: ${(e as Error).message}`;
     });
-    if (gitResult.problem) log.warn("sync", `storage ${id} git: ${gitResult.problem}`);
+    if (gitResult.problem) log.warn("pin", `storage ${id} git: ${gitResult.problem}`);
   }
 
   // DEVICE WRITE-BACK (devices.mdx §12) — write this computer's own device file REGARDLESS of the IPFS
-  // `synced` opt-in. Writing your own identity text to your own configured repo has no outward footprint
-  // (sync_process.mdx §1), so it is never gated the way byte work is. This also gives path resolution the
+  // `pinned` opt-in. Writing your own identity text to your own configured repo has no outward footprint
+  // (pin_process.mdx §1), so it is never gated the way byte work is. This also gives path resolution the
   // graft to read below. Committed + pushed by the Git cycle at the end of this function.
   try {
     writeSelfDevice(root);
   } catch (e) {
-    log.warn("sync", `writeSelfDevice for storage ${id} failed: ${(e as Error).message}`);
+    log.warn("pin", `writeSelfDevice for storage ${id} failed: ${(e as Error).message}`);
   }
 
-  // BYTE WORK is the ONLY thing gated by the per-storage `synced` opt-in (charter, sync_process.mdx §1/§5):
+  // BYTE WORK is the ONLY thing gated by the per-storage `pinned` opt-in (charter, pin_process.mdx §1/§5):
   // a not-opted-in storage is still visited, its device info written & pushed, but no bytes are added/
   // pinned/fetched. When opted in, reconcile every indexed large file through this computer's graft.
-  if (getStorageSynced(id)) {
+  if (getStoragePinned(id)) {
     const decisions: Record<string, Decision> = {};
     for (const f of readStorageIndex(root)) decisions[f.path] = "sync";
 
@@ -427,7 +427,7 @@ async function syncStorageUnitInner(id: string): Promise<void> {
     // a grafted hierarchy vs. a plain SDL-relative path.
     const mappedKeys = new Set(readMappedDirsForRoot(root).mapped.map((m) => m.key));
 
-    await runUnitSync({
+    await runUnitPin({
       kind: "storage",
       name: `storage:${id}`,
       label: computerLabel(),
@@ -442,10 +442,10 @@ async function syncStorageUnitInner(id: string): Promise<void> {
       writeStatus: () => {},
     });
   } else {
-    log.info("sync", `Storage ${id}: synced=false — device info kept current, no byte work.`);
+    log.info("pin", `Storage ${id}: pinned=false — device info kept current, no byte work.`);
   }
 
-  // Git backbone (git_sync.mdx §6 steps 5–6): after the reconcile has refreshed this device's own files
+  // Git backbone (git_backbone.mdx §6 steps 5–6): after the reconcile has refreshed this device's own files
   // (device file, manifest, analysis), STAGE the self-owned SDL text, COMMIT, and PUSH — with a
   // fetch-merge-push retry on a non-fast-forward reject. Big bytes are git-ignored, so only the small
   // text is ever committed. A push/auth problem is surfaced (logged) and never blocks the IPFS work.
@@ -453,18 +453,18 @@ async function syncStorageUnitInner(id: string): Promise<void> {
     await gitBackbone.commitAndPush(gitResult).catch((e) => {
       gitResult.problem = `Git push failed: ${(e as Error).message}`;
     });
-    if (gitResult.problem) log.warn("sync", `storage ${id} git: ${gitResult.problem}`);
-    else if (gitResult.pushed) log.info("sync", `storage ${id} git: pushed device state to remote`);
+    if (gitResult.problem) log.warn("pin", `storage ${id} git: ${gitResult.problem}`);
+    else if (gitResult.pushed) log.info("pin", `storage ${id} git: pushed device state to remote`);
   }
 }
 
 /**
  * Ensure THIS device's registration is written & pushed to ONE storage's Git backbone (devices.mdx §12) —
  * the unit of work the every-10-minute device worker runs for each Git-backed storage. It is the storage
- * sync narrowed to just the device write-back, DECOUPLED from the IPFS `synced` opt-in: writing your own
- * identity text to your OWN configured repo has no outward footprint (sync_process.mdx §1).
+ * pin pass narrowed to just the device write-back, DECOUPLED from the IPFS `pinned` opt-in: writing your own
+ * identity text to your OWN configured repo has no outward footprint (pin_process.mdx §1).
  *
- * Strict order (git_sync.mdx §6), matching the user's requirement — before it ever modifies the repo it
+ * Strict order (git_backbone.mdx §6), matching the user's requirement — before it ever modifies the repo it
  * pulls, and it always pushes after:
  *   1. resolve the working copy → git fetch → auto-merge  (ALWAYS, even with nothing to change, so another
  *      computer's edits are pulled down);
@@ -473,7 +473,7 @@ async function syncStorageUnitInner(id: string): Promise<void> {
  *
  * A storage with no Git backbone still gets its local device file refreshed (it travels once a backbone is
  * turned on). Returns the Git cycle result so the caller can surface a problem; never throws for a per-
- * storage fault (the pass contains it). Runs under the per-storage Git lock so it never races the sync pass
+ * storage fault (the pass contains it). Runs under the per-storage Git lock so it never races the pin pass
  * on the same repo.
  */
 export function ensureDeviceRegistered(id: string): Promise<GitCycleResult> {
@@ -495,7 +495,7 @@ async function ensureDeviceRegisteredInner(id: string): Promise<GitCycleResult> 
     await gitBackbone.pull(result).catch((e) => {
       result.problem = `Git pull failed: ${(e as Error).message}`;
     });
-    if (result.problem) log.warn("sync", `device-reg storage ${id} git: ${result.problem}`);
+    if (result.problem) log.warn("pin", `device-reg storage ${id} git: ${result.problem}`);
   }
 
   // 2. WRITE/UPDATE this device's own file (self-owned). Runs even without a backbone so the local file
@@ -503,7 +503,7 @@ async function ensureDeviceRegisteredInner(id: string): Promise<GitCycleResult> 
   try {
     writeSelfDevice(root);
   } catch (e) {
-    log.warn("sync", `device-reg writeSelfDevice for storage ${id} failed: ${(e as Error).message}`);
+    log.warn("pin", `device-reg writeSelfDevice for storage ${id} failed: ${(e as Error).message}`);
   }
 
   // 3. COMMIT + PUSH this device's own SDL text (skips an empty commit; non-fast-forward retry inside).
@@ -511,8 +511,8 @@ async function ensureDeviceRegisteredInner(id: string): Promise<GitCycleResult> 
     await gitBackbone.commitAndPush(result).catch((e) => {
       result.problem = `Git push failed: ${(e as Error).message}`;
     });
-    if (result.problem) log.warn("sync", `device-reg storage ${id} git: ${result.problem}`);
-    else if (result.pushed) log.info("sync", `device-reg storage ${id} git: pushed device info to remote`);
+    if (result.problem) log.warn("pin", `device-reg storage ${id} git: ${result.problem}`);
+    else if (result.pushed) log.info("pin", `device-reg storage ${id} git: pushed device info to remote`);
   }
   return result;
 }
@@ -523,21 +523,21 @@ async function ensureDeviceRegisteredInner(id: string): Promise<GitCycleResult> 
  * current in the repo, pulling first so another computer's edits land here even when we have nothing to
  * write. Decoupled from the IPFS opt-in and bounded by the same limiter; a per-storage fault is contained.
  */
-export async function syncDeviceRegistrations(): Promise<void> {
+export async function pushDeviceBackbone(): Promise<void> {
   const ids = safeStorageIds();
-  await runPool(ids, SYNC_CONCURRENCY, async (id) => {
+  await runPool(ids, PIN_CONCURRENCY, async (id) => {
     try {
       await ensureDeviceRegistered(id);
     } catch (e) {
-      log.error("sync", `device registration for storage ${id} failed: ${(e as Error).message}`);
+      log.error("pin", `device registration for storage ${id} failed: ${(e as Error).message}`);
     }
   });
 }
 
-/** Sync one storage without letting a per-storage fault throw the pass. */
-function syncStorageSafe(id: string): Promise<void> {
-  return syncStorageUnit(id).catch((e) =>
-    log.error("sync", `sync storage ${id} failed: ${(e as Error).message}`),
+/** Pin one storage without letting a per-storage fault throw the pass. */
+function pinStorageSafe(id: string): Promise<void> {
+  return pinStorageUnit(id).catch((e) =>
+    log.error("pin", `pin storage ${id} failed: ${(e as Error).message}`),
   );
 }
 
@@ -546,7 +546,7 @@ function safeStorageIds(): string[] {
   try {
     return listStorageIds();
   } catch (e) {
-    log.error("sync", `list storages failed: ${(e as Error).message}`);
+    log.error("pin", `list storages failed: ${(e as Error).message}`);
     return [];
   }
 }
@@ -556,39 +556,39 @@ async function ensureBackingSafe(id: string): Promise<void> {
   try {
     ensureBackingLocations(id);
   } catch (e) {
-    log.error("sync", `ensure backing for storage ${id} failed: ${(e as Error).message}`);
+    log.error("pin", `ensure backing for storage ${id} failed: ${(e as Error).message}`);
   }
 }
 
 /**
- * The full sync pass over every known unit — every repo PLUS the computer unit — with bounded
- * concurrency (sync_process.mdx §2/§4). `opts.priorityDone` names a unit a caller already synced first
- * (a manual Sync now) so we do not sync it twice; the pass then covers the remaining units. Overlapping
- * passes are collapsed by the in-flight guard; the priority unit itself is always synced by its caller,
+ * The full pin pass over every known unit — every repo PLUS the computer unit — with bounded
+ * concurrency (pin_process.mdx §2/§4). `opts.priorityDone` names a unit a caller already pinned first
+ * (a manual Pin now) so we do not pin it twice; the pass then covers the remaining units. Overlapping
+ * passes are collapsed by the in-flight guard; the priority unit itself is always pinned by its caller,
  * never gated by the guard.
  */
-export async function syncAll(opts: { priorityDone?: string } = {}): Promise<void> {
+export async function pinAll(opts: { priorityDone?: string } = {}): Promise<void> {
   if (passInFlight) {
-    log.info("sync", "Full sync pass already running — skipping duplicate.");
+    log.info("pin", "Full pin pass already running — skipping duplicate.");
     return;
   }
   passInFlight = true;
   try {
     const repos = listRepoFolders().filter((f) => f !== opts.priorityDone);
-    await runPool(repos, SYNC_CONCURRENCY, syncRepoSafe);
+    await runPool(repos, PIN_CONCURRENCY, pinRepoSafe);
     // The computer unit is part of the full pass too (storage.mdx §8).
-    await syncComputerUnit().catch((e) =>
-      log.error("sync", `sync computer unit failed: ${(e as Error).message}`),
+    await pinComputerUnit().catch((e) =>
+      log.error("pin", `pin computer unit failed: ${(e as Error).message}`),
     );
-    // Directory-based storages (personal/company/community) are units too: sync each through this
+    // Directory-based storages (personal/company/community) are units too: pin each through this
     // computer's device graft (devices.mdx §4) so its mapped-dir files resolve to the right local paths.
     // Bounded by the same limiter; per-storage failure is contained.
     const storageIds = safeStorageIds();
-    await runPool(storageIds, SYNC_CONCURRENCY, syncStorageSafe);
+    await runPool(storageIds, PIN_CONCURRENCY, pinStorageSafe);
     // Materialize each storage's ENABLED backing locations (storage_settings.mdx §6) — create-if-missing
     // + ensure .lfbridge/. Bounded by the same limiter as units; per-storage failure is contained so it
     // never throws the pass.
-    await runPool(storageIds, SYNC_CONCURRENCY, ensureBackingSafe);
+    await runPool(storageIds, PIN_CONCURRENCY, ensureBackingSafe);
   } finally {
     passInFlight = false;
   }
@@ -606,7 +606,7 @@ function setPinClaim(entry: ManifestFile, label: string, pinned: boolean): void 
 
 function markUnitError(t: UnitTarget, msg: string): void {
   t.writeStatus({ ...t.status, last_error: msg });
-  log.warn("sync", `${t.name}: ${msg}`);
+  log.warn("pin", `${t.name}: ${msg}`);
 }
 
 function expandHome(p: string): string {

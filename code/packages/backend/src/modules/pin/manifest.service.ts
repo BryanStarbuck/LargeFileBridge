@@ -31,7 +31,7 @@ function hasConflictMarkers(raw: string): boolean {
  * Missing file -> schema defaults (defaults-on-absence, storage.mdx §15).
  * Merge-conflict markers -> QUARANTINE the half-merged file and REFUSE to load it (§5.1): never parse a
  *   half-merged file as if it were valid — even if it parsed it would be a lie. Throwing here keeps the
- *   caller from overwriting the previous good copy (the unit sync aborts and retains prior state).
+ *   caller from overwriting the previous good copy (the unit pin pass aborts and retains prior state).
  */
 export function readCommittedManifest(repoPath: string): Manifest {
   const file = committedManifestPath(repoPath);

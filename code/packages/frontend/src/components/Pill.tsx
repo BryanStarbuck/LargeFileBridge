@@ -3,7 +3,7 @@ import type { RepoStatus, TransferStatus } from "@lfb/shared";
 
 const REPO: Record<RepoStatus, { label: string; cls: string }> = {
   up_to_date: { label: "up to date", cls: "bg-green-100 text-green-800" },
-  syncing: { label: "syncing", cls: "bg-blue-100 text-blue-800 animate-pulse" },
+  pinning: { label: "pinning", cls: "bg-blue-100 text-blue-800 animate-pulse" },
   behind: { label: "behind", cls: "bg-amber-100 text-amber-800" },
   needs_review: { label: "needs review", cls: "border border-[var(--lfb-primary)] text-[var(--lfb-primary)]" },
   error: { label: "error", cls: "bg-red-100 text-red-800" },
@@ -11,7 +11,7 @@ const REPO: Record<RepoStatus, { label: string; cls: string }> = {
 };
 
 const TRANSFER: Record<TransferStatus, { label: string; cls: string }> = {
-  synced: { label: "Synced", cls: "bg-green-100 text-green-800" },
+  pinned: { label: "Pinned", cls: "bg-green-100 text-green-800" },
   pending: { label: "Pending", cls: "bg-amber-100 text-amber-800" },
   fetching: { label: "Fetching", cls: "bg-blue-100 text-blue-800 animate-pulse" },
   pushing: { label: "Pushing", cls: "bg-blue-100 text-blue-800 animate-pulse" },

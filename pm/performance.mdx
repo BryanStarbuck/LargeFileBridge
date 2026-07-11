@@ -337,11 +337,11 @@ The rAF-coalesced scroll handler that skips re-renders when the window start is 
 - **Fix:** Add `loading="lazy"` to complete P-13. (The real large-image win is the
   backend downscaled-preview endpoint, still a follow-up.)
 
-### 🟠 P-23 — The sync pass synced units one-at-a-time (sequential, ignoring 20–30 cores) · throughput
-- **Where:** `code/packages/backend/src/modules/sync/sync.service.ts` — `syncAll()` was a
-  `for (const folder of listRepoFolders()) { await syncRepoFolder(folder) }` serial loop.
+### 🟠 P-23 — The pin pass synced units one-at-a-time (sequential, ignoring 20–30 cores) · throughput
+- **Where:** `code/packages/backend/src/modules/pin/pin.service.ts` — `pinAll()` was a
+  `for (const folder of listRepoFolders()) { await pinRepoFolder(folder) }` serial loop.
 - **Symptom:** A synchronization is a **full pass** over every known unit
-  ([sync_process.mdx §2](./sync_process.mdx#2-every-synchronization-is-a-full-pass-locked)); syncing
+  ([pin_process.mdx §2](./pin_process.mdx#2-every-synchronization-is-a-full-pass-locked)); syncing
   100+ repos strictly one-after-another leaves a many-core machine almost idle and makes a manual **Sync
   now** background pass drag on far longer than it should.
 - **Fix (done):** Fan the pass out on two levels, both capped at `cores − 2`: a `runPool()` across
@@ -349,16 +349,16 @@ The rAF-coalesced scroll handler that skips re-renders when the window start is 
   calls now run under `Promise.all`, not a `for…await` loop). The single limiter keeps total in-flight
   ops bounded no matter how units × files multiply; the store layer's per-file mutex + atomic writes
   ([storage_local.mdx §15](./storage_local.mdx#15-the-store-layer-how-code-touches-disk)) make concurrent syncs
-  safe. The pass now also covers the **computer unit** (`sync/computer/`), sharing the same generic
-  `runUnitSync` core as repos. Priority + parallelism design is LOCKED in
-  [sync_process.mdx §3/§4](./sync_process.mdx#4-parallelism--many-cores-bounded-concurrency-locked-design).
+  safe. The pass now also covers the **computer unit** (`pin/computer/`), sharing the same generic
+  `runUnitPin` core as repos. Priority + parallelism design is LOCKED in
+  [pin_process.mdx §3/§4](./pin_process.mdx#4-parallelism--many-cores-bounded-concurrency-locked-design).
 - **Follow-up:** Publish the computer unit's manifest over **IPNS** (storage_local.mdx §9.3) — the transport
   is not yet built, so its local manifest + pins are written but not yet advertised to peers.
 
-The bounded-concurrency sync pass is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncAll` + `runPool` + `SYNC_CONCURRENCY` (units) and `ipfsLimiter` + `runUnitSync` (per-file) + `syncComputerUnit`
+The bounded-concurrency pin pass is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinAll` + `runPool` + `PIN_CONCURRENCY` (units) and `ipfsLimiter` + `runUnitPin` (per-file) + `pinComputerUnit`
 
-**Now unified with P-26.** P-23 (sync pass → the **responsive** budget, `cores − 2`) and P-26 below (the
+**Now unified with P-26.** P-23 (pin pass → the **responsive** budget, `cores − 2`) and P-26 below (the
 job queue → the **mass-compute** budget, `round(cores × 0.9)`) no longer each roll their own core count:
 both draw from the **same** shared helper, and the two named budgets are defined in one place —
 [parallelization.mdx §1](./parallelization.mdx).
@@ -377,7 +377,7 @@ both draw from the **same** shared helper, and the two named budgets are defined
   `concurrentJobs × threadsPerJob ≈ budget` and **never `cores²`** (the anti-oversubscription rule,
   [parallelization.mdx §2](./parallelization.mdx)). Tunable live via `performance.max_core_fraction` — the
   same 300-file run now pins ≈90% of the box until done instead of crawling two-at-a-time. Unified with the
-  sync pass (P-23) under the one shared helper — see the note above.
+  pin pass (P-23) under the one shared helper — see the note above.
 
 The media-aware, core-budgeted queue drain — per-op caps and the image-vs-video bucket that shape the
 fan-out — is in code:

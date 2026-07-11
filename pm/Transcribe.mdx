@@ -50,7 +50,7 @@ For one media file, transcription is:
    model) — as a **`.transcription` sidecar beside the media**, mirrored under the owning storage root
    (§3): the media's name with its extension replaced (`talk.mp3` → `talk.transcription`).
 5. **Report truthfully** — word count on success; an honest skip/error otherwise (never a silent
-   "done"; the [sync_process.mdx §6](./sync_process.mdx#6-never-a-silent-no-op--report-truthfully-locked-learned-from-a-defect)
+   "done"; the [pin_process.mdx §6](./pin_process.mdx#6-never-a-silent-no-op--report-truthfully-locked-learned-from-a-defect)
    rule applies here too).
 
 Transcription is **always an explicit user action** — like compression, LFBridge **offers**, it never
@@ -206,7 +206,7 @@ product owner described: we are usually in some subdirectory *under* a repo, so 
 * `root` = that ancestor · `rel` = the media file's path **relative to it**.
 * If the root is a **Git repo**, the sidecars are kept out of commits with a **`*.transcription`
   git-ignore** nudge (the AI-description producer adds `*.ai_description`) so plain repos never bloat
-  commits; the bytes sync over IPFS. A repo's own per-repo config UI is
+  commits; the bytes are pinned over IPFS. A repo's own per-repo config UI is
   [repo_settings.mdx](./repo_settings.mdx) — reached *because* we detected we are inside a repo.
 
 **B. Owning storage by mapping — routed to the dedicated repo (the fix, LOCKED).** When walk-up finds
@@ -221,7 +221,7 @@ nothing (the file is out in the wider filesystem), the file is still **owned** b
     the artifact is written **under that dedicated repo**, mirroring the file's hierarchy —
     `<dedicatedRepo>/<rel-without-ext>.transcription`. `rel` is the file's path relative to its
     **mapped-dir root** (prefixed by the mapped-dir key), or relative to **`~`** for the personal default
-    catch-all. The sidecars are **NOT git-ignored** here — the dedicated repo **exists to hold and sync
+    catch-all. The sidecars are **NOT git-ignored** here — the dedicated repo **exists to hold and back up
     these artifacts**, so we just put them in (the product owner: *"it won't need to add the `.gitignore` if
     you have a dedicated git repo — it'll just put it in there"*).
   * If the owning storage has **no** dedicated repo enabled, the artifact goes under the storage's own
@@ -276,7 +276,7 @@ to a **first-time setup wizard** instead of producing a file in a surprising pla
 The backend reports `needsSetup` from the same placement resolver; every derived-artifact launcher checks it
 and, when set, opens the wizard (via a global request bus, so no entry point needs bespoke wiring) and
 re-runs the original action once a Personal storage exists. The wizard offers exactly the two choices above
-— **Dedicated Git repo** (recommended; artifacts tracked + synced, placement rule B) or **Plain folder** —
+— **Dedicated Git repo** (recommended; artifacts tracked + backed up, placement rule B) or **Plain folder** —
 and commits by creating the one Personal storage at its canonical root. Implemented in code:
 * `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveArtifactPlacement()` (the `needsSetup` flag).
 * `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.router.ts` — `GET /api/storages/placement` (what-would-this-do) · `POST /api/storages/personal/create` (the wizard's commit).
@@ -427,7 +427,7 @@ The transcription REST surface (tools / read-transcript / file / batch / tree / 
    **no** `.transcribe/` directory), **mirroring the media file's relative directory path** under the
    owning storage's placement root and keeping the media's own base name with the extension **replaced**
    (`render/talk.mp3` → `<root>/render/talk.transcription`). In a plain Git repo `*.transcription` is
-   git-ignored; in a dedicated repo it is committed and synced.
+   git-ignored; in a dedicated repo it is committed and backed up.
 4. The **owning storage root** is the nearest ancestor with `storage.yaml` / `.lfbridge/` / `.git/`;
    when none exists, the file's own directory is the base.
 5. The engine is **copied into this repo's `tools/` directory** (the ACT3-internal copy is **not**
@@ -451,7 +451,7 @@ The transcription REST surface (tools / read-transcript / file / batch / tree / 
        transcription — mirror the media file's relative dir path under the placement root, keep the media
        base name with the extension REPLACED by .transcription (talk.mp3 → talk.transcription). NOT the
        local state dir. Token is a single constant (TRANSCRIPTION_EXT in artifact-placement.service.ts).
-       git-ignore *.transcription in a plain repo; commit+sync it in a dedicated repo. Caveat: talk.mp3 and
+       git-ignore *.transcription in a plain repo; commit + back up it in a dedicated repo. Caveat: talk.mp3 and
        talk.wav in one folder collide on talk.transcription (accepted tradeoff). Supersedes storages.mdx
        §6's transcript.yaml sketch for transcripts.
   (§5) engine = our Transcribe.js COPIED into code/packages/backend/src/tools/transcribe/Transcribe.ts as
@@ -470,6 +470,6 @@ The transcription REST surface (tools / read-transcript / file / batch / tree / 
   parseSegmentEndSec), frontend lib/useTranscribeFile.ts (pending+toast+progress invalidation),
   components/TranscribeSetupCard.tsx (setup+Re-check), MediaViewer ActionBar/MediaAnalysis, EntityMenu
   buildActions, RowKebabs RepoKebab, StorageDetailPage. Mirrors compression.mdx's engine+router shape.
-  Keep in sync with media_viewer.mdx §4/§6, menus.mdx §5, and webapp.mdx §10–§14 (progress dock/registry).
+  Keep consistent with media_viewer.mdx §4/§6, menus.mdx §5, and webapp.mdx §10–§14 (progress dock/registry).
 -->
 </content>

@@ -10,7 +10,7 @@ import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
 import { RepoGear, RepoKebab } from "../../components/menu/RowKebabs.js";
 import { PageActions } from "../../components/menu/PageActions.js";
-import { syncAllRepos } from "../../components/menu/domainActions.js";
+import { pinAllRepos } from "../../components/menu/domainActions.js";
 import type { Action } from "../../components/menu/EntityMenu.js";
 import { RepoStatusPill } from "../../components/Pill.js";
 import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
@@ -18,7 +18,7 @@ import { clientLog } from "../../lib/clientLog.js";
 
 const STATUS_OPTIONS: RepoStatus[] = [
   "up_to_date",
-  "syncing",
+  "pinning",
   "behind",
   "needs_review",
   "error",
@@ -119,8 +119,8 @@ export function ReposPage() {
         </span>
       ),
     },
-    { id: "synced", header: "Synced", kind: "int", align: "right", priority: 6, minWidth: 80, accessor: (r) => r.counts.synced,
-      cell: (r) => <span className="text-green-700">{r.counts.synced}</span> },
+    { id: "pinned", header: "Pinned", kind: "int", align: "right", priority: 6, minWidth: 80, accessor: (r) => r.counts.pinned,
+      cell: (r) => <span className="text-green-700">{r.counts.pinned}</span> },
     { id: "pending", header: "Pending", kind: "int", align: "right", priority: 5, minWidth: 80, accessor: (r) => r.counts.pending,
       cell: (r) => <span className={r.counts.pending > 0 ? "text-amber-600" : ""}>{r.counts.pending}</span> },
     { id: "undecided", header: "Undecided", kind: "int", align: "right", priority: 3, minWidth: 88, accessor: (r) => r.counts.undecided,
@@ -129,13 +129,13 @@ export function ReposPage() {
       cell: (r) => <span className="text-black/40">{r.counts.ignored}</span> },
     { id: "peers", header: "Peers", kind: "int", align: "right", priority: 10, minWidth: 72, accessor: (r) => r.peerCount,
       cell: (r) => <span className={r.peerCount === 0 ? "text-red-600" : ""}>{r.peerCount}</span> },
-    { id: "lastSync", header: "Last sync", kind: "timestamp", priority: 4, minWidth: 96, accessor: (r) => r.lastSyncAt,
-      cell: (r) => <span title={absoluteTime(r.lastSyncAt)}>{relativeTime(r.lastSyncAt)}</span> },
+    { id: "lastPin", header: "Last pin", kind: "timestamp", priority: 4, minWidth: 96, accessor: (r) => r.lastPinAt,
+      cell: (r) => <span title={absoluteTime(r.lastPinAt)}>{relativeTime(r.lastPinAt)}</span> },
     { id: "status", header: "Status", kind: "enum", accessor: (r) => r.status, filterOptions: STATUS_OPTIONS,
       cell: (r) => <RepoStatusPill status={r.status} /> },
   ];
 
-  // The action-links row (page_actions.mdx §4 — Repos list): Rescan all · Sync all. Rows are repos, not
+  // The action-links row (page_actions.mdx §4 — Repos list): Rescan all · Pin all. Rows are repos, not
   // files, so there is NO producing pair here. + Add repo stays the header primary.
   const repoListActions: Action[] = [
     {
@@ -146,7 +146,7 @@ export function ReposPage() {
       disabled: scanning || rescan.isPending,
       onSelect: () => rescan.mutate(),
     },
-    syncAllRepos(),
+    pinAllRepos(),
   ];
 
   return (

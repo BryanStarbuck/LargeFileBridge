@@ -5,7 +5,7 @@
 //
 // IMPORTANT — honesty about backends (page_actions.mdx §4 / task): a batch endpoint does not exist yet
 // for per-type compression (videos-only / images-only), for batch git-ignore of big files, for
-// track/sync-a-whole-directory, for "Sync all" across repos, or for "Publish IPFS list". Rather than
+// track/pin-a-whole-directory, for "Pin all" across repos, or for "Publish IPFS list". Rather than
 // fabricate routes, these offers open the confirm modal (for the destructive ones) and then surface a
 // graceful "not yet wired" toast in the app's existing style (notWiredToast → toast.message). The
 // genuinely-wired offers (Create Transcriptions/Descriptions, Rescan, Re-index, Re-verify, per-directory
@@ -76,30 +76,30 @@ export function gitIgnoreBig(scope?: { root?: string; paths?: string[] }): Actio
   };
 }
 
-/** Track / Sync this directory offer — not batch-wired; points to per-file decisions. */
-export function trackSyncDir(): Action {
+/** Track / Pin this directory offer — not batch-wired; points to per-file decisions. */
+export function trackPinDir(): Action {
   return {
-    id: "track-sync-dir",
-    label: "Track / Sync this directory",
+    id: "track-pin-dir",
+    label: "Track / Add to IPFS (pin) this directory",
     icon: <UploadCloud className={ICON} />,
     group: "Work",
     onSelect: () =>
       notWiredToast(
         "Whole-directory tracking isn't wired yet",
-        "mark files Sync from the File System or the Full paths table",
+        "add files to IPFS (pin) from the File System or the Full paths table",
       ),
   };
 }
 
-/** Sync all repos (Repos list) — not batch-wired; sync is per-repo today. */
-export function syncAllRepos(): Action {
+/** Pin all repos (Repos list) — not batch-wired; pinning is per-repo today. */
+export function pinAllRepos(): Action {
   return {
-    id: "sync-all",
-    label: "Sync all",
+    id: "pin-all",
+    label: "Pin all",
     icon: <UploadCloud className={ICON} />,
     group: "Work",
     onSelect: () =>
-      notWiredToast("Sync-all isn't wired yet", "open a repo and use Sync now"),
+      notWiredToast("Pin-all isn't wired yet", "open a repo and use Pin now"),
   };
 }
 

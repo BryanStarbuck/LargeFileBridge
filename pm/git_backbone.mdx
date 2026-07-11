@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — The Git Backbone Engine (fetch · merge · commit · push)
-description: The authoritative spec for how LargeFileBridge drives Git as a sync backbone. When a storage (most often the user's Personal storage) is configured with a Git repo, LFB is granted permission to run the real Git commands — git fetch, git merge (with automatic merge), git add/commit, and git push — on every sync pass, so the small travelling text of the Syncable Data Location (the storage descriptor, the device registry, the mapped-directory list, the IPFS manifest/CID list, and the derived-artifact records) is pulled down, merged, and pushed back up between the user's own computers. Locks the LIBRARY choice (simple-git, a thin wrapper over the system git binary — chosen over isomorphic-git and nodegit because real merges must be done by real git), the two REMOTE shapes a user can configure (a LOCAL FILE PATH to a checked-out working tree on this box, versus an HTTP(S) URL to a Git server that is NOT mapped to the local filesystem, which LFB clones into a machine-local working-copy cache), the pull cycle (fetch → merge with the ort strategy → resolve/report conflicts), the push cycle (stage only this device's self-owned files → commit → push, retry-on-reject by re-pulling and re-merging), the auto-merge design that makes conflicts rare (self-owned per-device files + union-merge .gitattributes for append-mostly lists), the credential model for URL remotes (the OS git credential helper / a stored token, never LFB prompting for a password), and the permission/compliance boundary (LFB touches ONLY the user's own configured repos, never a third party's, honoring the charter's no-public-relay posture). Sibling of storage_settings.mdx (where the Git backbone is turned on per storage), storage_personal.mdx (the canonical two-computer use case that drives this), syncable_data_location.mdx (the SDL text this engine carries), devices.mdx (the self-owned device files that ride it), and sync_process.mdx (the full pass this cycle runs inside).
+description: The authoritative spec for how LargeFileBridge drives Git as a git backbone. When a storage (most often the user's Personal storage) is configured with a Git repo, LFB is granted permission to run the real Git commands — git fetch, git merge (with automatic merge), git add/commit, and git push — on every pin pass, so the small travelling text of the Syncable Data Location (the storage descriptor, the device registry, the mapped-directory list, the IPFS manifest/CID list, and the derived-artifact records) is pulled down, merged, and pushed back up between the user's own computers. Locks the LIBRARY choice (simple-git, a thin wrapper over the system git binary — chosen over isomorphic-git and nodegit because real merges must be done by real git), the two REMOTE shapes a user can configure (a LOCAL FILE PATH to a checked-out working tree on this box, versus an HTTP(S) URL to a Git server that is NOT mapped to the local filesystem, which LFB clones into a machine-local working-copy cache), the pull cycle (fetch → merge with the ort strategy → resolve/report conflicts), the push cycle (stage only this device's self-owned files → commit → push, retry-on-reject by re-pulling and re-merging), the auto-merge design that makes conflicts rare (self-owned per-device files + union-merge .gitattributes for append-mostly lists), the credential model for URL remotes (the OS git credential helper / a stored token, never LFB prompting for a password), and the permission/compliance boundary (LFB touches ONLY the user's own configured repos, never a third party's, honoring the charter's no-public-relay posture). Sibling of storage_settings.mdx (where the Git backbone is turned on per storage), storage_personal.mdx (the canonical two-computer use case that drives this), syncable_data_location.mdx (the SDL text this engine carries), devices.mdx (the self-owned device files that ride it), and pin_process.mdx (the full pass this cycle runs inside).
 ---
 
 # LargeFileBridge — The Git Backbone Engine
@@ -14,7 +14,7 @@ tool for versioning small text and reconciling edits made on two machines at onc
 This spec is the **authoritative** description of how LFB drives that Git repo. When the user turns the
 **Git backbone** on for a storage ([storage_settings.mdx §4.1](./storage_settings.mdx#41-dedicated-git-repo-preferred-when-available)),
 they are **granting LFB permission** to run the real Git commands on that repo — **`git fetch`,
-`git merge` (with automatic merge), `git add` / `git commit`, and `git push`** — on **every sync pass**.
+`git merge` (with automatic merge), `git add` / `git commit`, and `git push`** — on **every pin pass**.
 Nothing else in the product moves the SDL's YAML between computers; this engine does.
 
 Read the shared model first; this spec does not restate it:
@@ -27,7 +27,7 @@ Read the shared model first; this spec does not restate it:
   inventory, §2) and the **trust/reconcile** rule this engine obeys when two devices edit at once.
 * [devices.mdx](./devices.mdx) — the **self-owned** `devices/<device>.yaml` files that are the main
   thing this engine commits and pushes; self-ownership is what makes auto-merge safe (§4).
-* [sync_process.mdx](./sync_process.mdx) — the **full pass** this pull/merge/push cycle runs inside,
+* [pin_process.mdx](./pin_process.mdx) — the **full pass** this pull/merge/push cycle runs inside,
   once per storage that has a Git backbone.
 
 ---
@@ -101,7 +101,7 @@ storage's Git backbone at **that local path**.
 * LFB treats that directory **as the working copy** — it reads and writes the SDL YAML there directly,
   and runs `fetch` / `merge` / `commit` / `push` **in place** against whatever `origin` the user's clone
   already has.
-* This is the preferred, simplest shape: the user manages the clone; LFB just keeps it synced. Because
+* This is the preferred, simplest shape: the user manages the clone; LFB just keeps it pinned. Because
   the repo is a real checkout, the user can also inspect it with their own Git tools.
 
 ### 3.2 An HTTP(S) URL — a Git server not mapped to the local filesystem
@@ -112,7 +112,7 @@ and we have to go talk to that Git server without it being mapped to the local f
 owns the working copy:
 
 * On first use LFB **clones the URL into a machine-local working-copy cache** under the state root —
-  `~/T/_large_files_bridge/sync/s/<storage_id>/git/` — a hidden checkout LFB manages, **not** a place
+  `~/T/_large_files_bridge/pin/s/<storage_id>/git/` — a hidden checkout LFB manages, **not** a place
   the user browses. (This cache is machine-local scaffolding, exactly like the rest of
   [storage_local.mdx](./storage_local.mdx); wipe it and the next pass re-clones.)
 * Every pass thereafter runs `fetch` / `merge` / `commit` / `push` inside that cached checkout, against
@@ -128,7 +128,7 @@ user-managed checkout (local path) or an LFB-managed cache clone (URL). §4–§
 working directory and do not care which shape it came from.
 
 Resolving the configured remote to a working directory — using the local path in place, or clone-on-first-use / open-thereafter for a URL — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `resolveWorkingCopy(storageId, remote)` (returns `{ dir, origin }`; clones a URL remote into `sync/s/<id>/git/` via `resolveStateDir()`, opens a local path directly). The remote itself (kind + value) is persisted per-storage by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `writeStorageSettings()`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `resolveWorkingCopy(storageId, remote)` (returns `{ dir, origin }`; clones a URL remote into `pin/s/<id>/git/` via `resolveStateDir()`, opens a local path directly). The remote itself (kind + value) is persisted per-storage by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `writeStorageSettings()`.
 
 ---
 
@@ -190,7 +190,7 @@ Ensuring the SDL text is committable on every backbone commit (strip a bare `.lf
 
 > **The user-facing Git Ignore action honors this too (LOCKED).** The **Git Ignore dialog**
 > ([git_ignore.mdx](./git_ignore.mdx)) — the deliberate, user-driven way to git-ignore big files so they
-> sync over IPFS instead of committing — writes **anchored, repo-root-relative** lines and **refuses to emit
+> pin over IPFS instead of committing — writes **anchored, repo-root-relative** lines and **refuses to emit
 > any line that would ignore a `.lfbridge/` path**, as defense-in-depth against re-introducing this defect
 > from the UI. It only ever **adds** big-file ignore lines; the SDL text it never touches
 > ([git_ignore.mdx §5.3–§5.4](./git_ignore.mdx)).
@@ -201,14 +201,14 @@ Ensuring the SDL text is committable on every backbone commit (strip a bare `.lf
   overwhelming majority of real-world cases (including renames) on its own.
 * If — despite §4.1/§4.2 — git reports a **genuine conflict** it cannot auto-resolve, LFB does **not**
   guess and does **not** clobber. It **aborts the merge** (`git merge --abort`, leaving the working copy
-  clean), records the conflicted paths, and **surfaces them in the UI** as a sync problem on that
+  clean), records the conflicted paths, and **surfaces them in the UI** as a backbone problem on that
   storage, so the user can resolve it with their own Git tools. Reconciliation of *content* claims (a
   stale `pinned_by`, a superseded revision) still follows the SDL trust rules
   ([sync_list.mdx §5.3](./sync_list.mdx#53-conflict-resolution)); this fallback is only for the rare
   textual conflict git itself declines.
 
 Performing the automatic merge (ort strategy, `--no-edit`), writing the `merge=union` `.gitattributes` when the backbone is enabled, and the abort-and-surface fallback on an unresolvable conflict, are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `merge()` (calls `git.merge(['--no-edit'])`, catches a conflict → `git.merge(['--abort'])` and returns a `GitConflict` the pass records) and `ensureMergeAttributes(dir)` (writes `.gitattributes`). The surfaced problem is written into the storage's `status.yaml` by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncStorageUnit(id)`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `merge()` (calls `git.merge(['--no-edit'])`, catches a conflict → `git.merge(['--abort'])` and returns a `GitConflict` the pass records) and `ensureMergeAttributes(dir)` (writes `.gitattributes`). The surfaced problem is written into the storage's `status.yaml` by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnit(id)`.
 
 ---
 
@@ -224,20 +224,20 @@ its own password prompt and **never** stores a plaintext password in its own con
   LFB can.
 * If authentication **fails** (no cached credential, expired token), LFB **surfaces a clear "connect /
   re-authenticate this Git remote" problem** on the storage rather than hanging or retrying blindly —
-  and simply keeps syncing over IPFS in the meantime (the Git backbone is an *additional* path, never
+  and simply keeps pinning over IPFS in the meantime (the Git backbone is an *additional* path, never
   the only one).
 * This honors the charter's security posture: no secrets in LFB's own files, no phone-home, and the
   user stays in control of what LFB can reach.
 
 Running git with a non-interactive, credential-helper-backed environment and turning an auth failure into a surfaced storage problem (not a hang) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `openRepo()` sets `GIT_TERMINAL_PROMPT=0` and inherits the OS credential helper; `push()` / `fetch()` classify an auth error into a `GitAuthProblem` surfaced by `syncStorageUnit(id)`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `openRepo()` sets `GIT_TERMINAL_PROMPT=0` and inherits the OS credential helper; `push()` / `fetch()` classify an auth error into a `GitAuthProblem` surfaced by `pinStorageUnit(id)`.
 
 ---
 
-## 6. The sync cycle — where Git runs inside the pass (LOCKED order)
+## 6. The backbone cycle — where Git runs inside the pass (LOCKED order)
 
-Every storage that has the Git backbone enabled runs **one Git cycle per sync pass**
-([sync_process.mdx §2](./sync_process.mdx#2-every-synchronization-is-a-full-pass-locked)), in this fixed
+Every storage that has the Git backbone enabled runs **one Git cycle per pin pass**
+([pin_process.mdx §2](./pin_process.mdx#2-every-synchronization-is-a-full-pass-locked)), in this fixed
 order, wrapped around the storage's normal reconcile + IPFS byte work:
 
 1. **Resolve the working copy** (§3) — local path in place, or clone/open the URL cache.
@@ -245,7 +245,7 @@ order, wrapped around the storage's normal reconcile + IPFS byte work:
 3. **`git merge` (auto)** — fold their SDL edits into this working copy (§4); on an unresolvable
    conflict, abort + surface and continue with IPFS-only for this pass.
 4. **Reconcile against the merged SDL** — now that the incoming devices/manifest/analysis are merged in,
-   run the storage's normal reconcile ([sync_process.mdx §5](./sync_process.mdx#5-what-a-pass-does-per-unit--and-what-the-opt-in-gates)):
+   run the storage's normal reconcile ([pin_process.mdx §5](./pin_process.mdx#5-what-a-pass-does-per-unit--and-what-the-opt-in-gates)):
    fetch/pin the marked CIDs to their **grafted** local paths ([devices.mdx §4](./devices.mdx#4-the-graft--machine-independent-hierarchy--local-paths-locked)),
    inherit derived artifacts, write this device's own `devices/<device>.yaml`, update `manifest.yaml`.
 5. **`git add` (self-owned only) → `git commit`** — stage **only this device's** files (§4.1) plus any
@@ -265,17 +265,17 @@ device's own `devices/<self>.yaml` → commit → push — for every Git-backed 
 storage is opted into IPFS pinning. Its step 2 fetch+merge runs **every 10 minutes even when this computer
 has nothing to change**, so device edits made on another computer are pulled down. Because it and the
 15-minute pass share one process, both take a **per-storage lock** so they never run git on the same
-working copy at once (`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts`
+working copy at once (`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts`
 — `ensureDeviceRegistered(id)` under `withStorageGitLock`).
 
 Driving this ordered cycle for each Git-backed storage inside the full pass — fetch/merge before reconcile, commit/push after, with the non-fast-forward retry — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncStorageUnit(id)` calls `GitBackbone.pull()` (fetch+merge) before `runUnitSync(...)` and `GitBackbone.commitAndPush()` after, both from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` (`pull()`, `commitAndPush()` with the fetch-merge-push retry). Only storages whose `backing.dedicated_repo.enabled` is true run the cycle; the rest sync over IPFS alone.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnit(id)` calls `GitBackbone.pull()` (fetch+merge) before `runUnitPin(...)` and `GitBackbone.commitAndPush()` after, both from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` (`pull()`, `commitAndPush()` with the fetch-merge-push retry). Only storages whose `backing.dedicated_repo.enabled` is true run the cycle; the rest pin over IPFS alone.
 
 ### 6.1 Always push when the branch is ahead — deliver stranded / foreign commits (LOCKED, learned from a defect)
 
 Step 6's push must fire whenever the local branch is **ahead of the remote — for ANY reason** — not only
 when *this* pass produced its own commit. This is a locked correctness rule because its absence stranded a
-commit in production (the [2026-07-07 incident](./sync_resilience.mdx#8-the-incident-that-motivated-this-spec-2026-07-07)):
+commit in production (the [2026-07-07 incident](./backbone_resilience.mdx#8-the-incident-that-motivated-this-spec-2026-07-07)):
 
 > **The defect.** `commitAndPush()` staged the tree and, **if nothing new was staged, returned before it
 > ever called `git push`.** So a branch that was *already* ahead of the remote — because something OTHER
@@ -291,7 +291,7 @@ a commit left behind by an earlier failed push. The non-fast-forward retry (step
 must **not** rely on the device write-back's `updated_at` churn to force a push (it usually does, which is
 what *accidentally* masked the bug); a pass that legitimately writes nothing must still deliver a branch
 that is ahead. This is the Git-layer half of the broader resilience contract in
-[sync_resilience.mdx §6](./sync_resilience.mdx#6-always-push-when-the-branch-is-ahead-locked-learned-from-a-defect)
+[backbone_resilience.mdx §6](./backbone_resilience.mdx#6-always-push-when-the-branch-is-ahead-locked-learned-from-a-defect)
 (and its §4 foreign-committer coexistence rule).
 
 Attempting the push whenever the branch is ahead of the remote — not only after a fresh local commit — via an ahead-count check is handled in code:
@@ -329,20 +329,20 @@ Enforcing that Git operations only ever target a user-configured storage backbon
 
 1. Turning on a storage's **Git backbone** ([storage_settings.mdx §4.1](./storage_settings.mdx#41-dedicated-git-repo-preferred-when-available))
    grants LFB permission to run **`git fetch`, `git merge` (automatic), `git add`/`commit`, and
-   `git push`** against **that one repo** on **every sync pass** — and no Git command runs against a
+   `git push`** against **that one repo** on **every pin pass** — and no Git command runs against a
    storage whose backbone is off (§1).
 2. The Git library is **`simple-git`** driving the **system `git` binary**, so the **merge is done by
    real git** (ort strategy); `isomorphic-git` and `nodegit` are explicitly rejected (§2).
 3. LFB accepts **two remote shapes**: a **local file path** to a checked-out working tree (used in
    place), and an **HTTP(S) URL** with **no** local checkout (cloned into a machine-local
-   `sync/s/<id>/git/` cache and managed there). Both converge on one working copy the rest of the engine
+   `pin/s/<id>/git/` cache and managed there). Both converge on one working copy the rest of the engine
    operates on (§3).
 4. Concurrent edits from two of the user's computers **merge automatically**: self-owned per-device
    files never collide, append-mostly shared lists merge by **`merge=union`**, and only a **genuine**
    git conflict is surfaced — via **`merge --abort` + a UI problem**, never a clobber or a force-push
    (§4).
 5. A **URL** remote authenticates through the **OS git credential helper** with `GIT_TERMINAL_PROMPT=0`;
-   an auth failure is **surfaced** as a "re-authenticate" problem while IPFS sync continues — LFB never
+   an auth failure is **surfaced** as a "re-authenticate" problem while IPFS pinning continues — LFB never
    prompts for or stores a plaintext password (§5).
 6. The per-pass **cycle order is fixed**: resolve working copy → fetch → auto-merge → reconcile/pin to
    grafted paths → stage self-owned + commit → push, with a **fetch-merge-push retry** on a
@@ -353,12 +353,12 @@ Enforcing that Git operations only ever target a user-configured storage backbon
 <!--
   AUTHORITATIVE spec for LFB's GIT BACKBONE ENGINE. Turning on a storage's Git backbone (storage_settings
   §4.1) GRANTS LFB permission to run REAL git — fetch, merge (auto), add/commit, push — against THAT ONE
-  repo every sync pass; nothing else moves the SDL YAML between computers. LOCKED decisions:
+  repo every pin pass; nothing else moves the SDL YAML between computers. LOCKED decisions:
   (§1) closed operation set + two boundaries: only user-configured repos, never destructive/force.
   (§2) LIBRARY = simple-git over the SYSTEM git binary (real git does the merge, ort strategy). Reject
        isomorphic-git (partial merge) and nodegit (native libgit2, fragile install).
   (§3) TWO remote shapes: LOCAL FILE PATH = an existing checkout used in place; HTTP(S) URL = no local
-       checkout, LFB clones into a machine-local cache sync/s/<id>/git/ and manages it. Both converge on
+       checkout, LFB clones into a machine-local cache pin/s/<id>/git/ and manages it. Both converge on
        one working dir.
   (§4) AUTOMATIC MERGE: self-owned per-device files don't collide; shared append-mostly lists (SyncList,
        manifest) get .gitattributes merge=union; genuine conflict → merge --abort + surface, never clobber.
@@ -369,8 +369,8 @@ Enforcing that Git operations only ever target a user-configured storage backbon
   (§7) Compliance: git only ever targets a user-configured backbone — the git analogue of no-public-relay.
   New code: modules/git/git.service.ts (GitBackbone: openRepo/resolveWorkingCopy/fetch/merge/pull/
   commitSelf/push/commitAndPush + ensureMergeAttributes), simple-git dep in backend package.json, wired
-  into sync.service syncStorageUnit (pull before reconcile, commitAndPush after). Keep in sync with
+  into pin.service pinStorageUnit (pull before reconcile, commitAndPush after). Keep in sync with
   storage_settings.mdx §4.1 (the toggle + remote), storage_personal.mdx (the two-computer use case that
   drives this), syncable_data_location.mdx (the SDL text carried), devices.mdx (self-owned files that ride
-  it), sync_process.mdx (the full pass this runs inside).
+  it), pin_process.mdx (the full pass this runs inside).
 -->

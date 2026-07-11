@@ -1,24 +1,24 @@
 ---
-title: LargeFileBridge — The Synchronization Process (the Sync Pass)
-description: The authoritative spec for what happens when LargeFileBridge synchronizes — the "sync pass." A synchronization is ALWAYS a full pass over every unit LFB knows on this computer (every git repo it has discovered, plus the computer unit), never one repo in isolation. However it is triggered — the 15-minute scheduleTask, the 48-hour session catch-up, or a manual "Sync now" on a single repo — it runs the full pass; a repo-scoped trigger only sets PRIORITY (that repo syncs first, then the pass continues over the rest). The pass fans out with bounded concurrency across units and across files within a unit, because modern machines have many cores; sequential syncing is a defect, not a baseline. This spec retires the notion of an "LFB-managed" repo: LFB knows and understands EVERY repo on the filesystem automatically, with no user action required — what requires an explicit, user-confirmed action is IPFS pinning/adding a unit's bytes (the per-unit `synced` opt-in), which gates the byte work but never the visiting/reconciling. It also locks the truthful-reporting invariant learned from a real defect: a manual sync must do real work and report what it actually did — never a silent no-op that toasts "complete." Reconciles with storage_local.mdx (on-disk units + §13 background process), scan.mdx (the scheduleTasks + pinset reconcile), one_repo.mdx (the Sync-now button), and sync_list.mdx (the trust/reconcile rules).
+title: LargeFileBridge — The Pin Pass (add to IPFS)
+description: The authoritative spec for what happens when LargeFileBridge pins — the "pin pass," the every-15-minute pass that adds files to IPFS and pins them. A pin pass is ALWAYS a full pass over every unit LFB knows on this computer (every git repo it has discovered, plus the computer unit), never one repo in isolation. However it is triggered — the 15-minute scheduleTask, the 48-hour session catch-up, or a manual "Pin now" on a single repo — it runs the full pass; a repo-scoped trigger only sets PRIORITY (that repo pins first, then the pass continues over the rest). The pass fans out with bounded concurrency across units and across files within a unit, because modern machines have many cores; sequential pinning is a defect, not a baseline. This spec retires the notion of an "LFB-managed" repo: LFB knows and understands EVERY repo on the filesystem automatically, with no user action required — what requires an explicit, user-confirmed action is IPFS pinning/adding a unit's bytes (the per-unit `pinned` opt-in), which gates the byte work but never the visiting/reconciling. It also locks the truthful-reporting invariant learned from a real defect: a manual pin must do real work and report what it actually did — never a silent no-op that toasts "complete." Reconciles with storage_local.mdx (on-disk units + §13 background process), scan.mdx (the scheduleTasks + pinset reconcile), one_repo.mdx (the Pin-now button), and sync_list.mdx (the trust/reconcile rules).
 ---
 
-# LargeFileBridge — The Synchronization Process (the Sync Pass)
+# LargeFileBridge — The Pin Pass (add to IPFS)
 
-This is the **primary, authoritative** spec for the act of synchronizing. Three neighbors describe
-*pieces* of it and defer here for the process itself:
+This is the **primary, authoritative** spec for the act of pinning — adding files to IPFS and pinning
+them. Three neighbors describe *pieces* of it and defer here for the process itself:
 
-* [storage_local.mdx](./storage_local.mdx) — where sync state lives on disk (per-unit `config.yaml` +
-  `manifest.yaml`) and the **background sync process** transparency contract (§13). The *mechanics of
+* [storage_local.mdx](./storage_local.mdx) — where pin state lives on disk (per-unit `config.yaml` +
+  `manifest.yaml`) and the **background pin process** transparency contract (§13). The *mechanics of
   a pass* are here; storage owns the *state a pass reads and writes*.
 * [scan.mdx](./scan.mdx) — the two **scheduleTasks** (4-hour discovery + 15-minute pinset) that
-  *trigger* work. A **scan** discovers; a **sync pass** (this file) moves bytes.
-* [one_repo.mdx](./one_repo.mdx) — the **Sync now** button on a repo page. The button is one *trigger*
+  *trigger* work. A **scan** discovers; a **pin pass** (this file) moves bytes.
+* [one_repo.mdx](./one_repo.mdx) — the **Pin now** button on a repo page. The button is one *trigger*
   of the pass defined here.
 * [sync_list.mdx](./sync_list.mdx) — the **trust & reconciliation** rules (§5 there) a pass applies
   when it reads any incoming list. The pass never *trusts*; it *reconciles*.
 
-The sync pass runs LFB's own TypeScript-on-Node worker (never raw shell/`curl`), identically on a
+The pin pass runs LFB's own TypeScript-on-Node worker (never raw shell/`curl`), identically on a
 laptop and on a server; only the resolved state root changes.
 
 ---
@@ -29,17 +29,17 @@ laptop and on a server; only the resolved state root changes.
 turned on in LFB before LFB knows about it. LFB **discovers and understands every git repository on
 the filesystem automatically** ([storage_local.mdx §7](./storage_local.mdx#7-the-scanner--discovering-repos-and-the-mask),
 [scan.mdx](./scan.mdx)). Knowing a repo, tracking its large files, computing its counts, showing it in
-the UI, and **reconciling it during a sync pass** all require **zero** user action.
+the UI, and **reconciling it during a pin pass** all require **zero** user action.
 
 Two distinct concepts — keep them separate everywhere:
 
 | Concept | Who triggers it | What it means |
 | --- | --- | --- |
-| **Known / understood** | **Automatic** — the scanner | LFB has discovered this repo (or the computer unit), tracks its big files, reflects it in the UI, and **visits it every sync pass**. Every repo on disk is known. There is no opt-in to be known. |
-| **IPFS-enabled (opted in to pin)** | **Explicit user action** — a confirmed choice | LFB may **add bytes to IPFS, pin them, and fetch them from peers** for this unit. This is the **only** thing that is opt-in. It is `synced: true` in the unit's `config.yaml` (storage_local.mdx §6.2). |
+| **Known / understood** | **Automatic** — the scanner | LFB has discovered this repo (or the computer unit), tracks its big files, reflects it in the UI, and **visits it every pin pass**. Every repo on disk is known. There is no opt-in to be known. |
+| **IPFS-enabled (opted in to pin)** | **Explicit user action** — a confirmed choice | LFB may **add bytes to IPFS, pin them, and fetch them from peers** for this unit. This is the **only** thing that is opt-in. It is `pinned: true` in the unit's `config.yaml` (storage_local.mdx §6.2). |
 
-So the per-unit **`synced`** flag does **not** mean "managed vs. unmanaged." It means **"the user has
-opted this unit into IPFS pinning/adding."** A `synced: false` repo is **not** invisible or ignored —
+So the per-unit **`pinned`** flag does **not** mean "managed vs. unmanaged." It means **"the user has
+opted this unit into IPFS pinning/adding."** A `pinned: false` repo is **not** invisible or ignored —
 it is fully known and fully visited by the pass; LFB simply does not add/pin/fetch its bytes until the
 user opts in. This matches the charter: LFB never turns a computer into a pinner of content without an
 explicit, user-confirmed action, and it never quietly mutates a repo.
@@ -50,7 +50,7 @@ explicit, user-confirmed action, and it never quietly mutates a repo.
 > the two produced the "managed" mental model, which made a fresh repo look like it "wasn't in LFB"
 > when in fact LFB knew it perfectly well and was merely not pinning it yet.
 
-Discovering and registering every git working tree with no user action (identity + `synced` seeded off, i.e. pinning-not-yet-opted-in) is handled in code:
+Discovering and registering every git working tree with no user action (identity + `pinned` seeded off, i.e. pinning-not-yet-opted-in) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `registerRepo`
 
 Wording rule for all specs and UI copy: prefer **"every repo on this computer"** / **"known repo"** /
@@ -59,10 +59,10 @@ Wording rule for all specs and UI copy: prefer **"every repo on this computer"**
 
 ---
 
-## 2. Every synchronization is a FULL PASS (LOCKED)
+## 2. Every pin pass is a FULL PASS (LOCKED)
 
-A **sync pass** is one traversal of **every unit LFB knows on this computer** — every discovered repo
-(`sync/r/<repo_name>/`) **plus** the computer unit (`sync/computer/`,
+A **pin pass** is one traversal of **every unit LFB knows on this computer** — every discovered repo
+(`pin/r/<repo_name>/`) **plus** the computer unit (`pin/computer/`,
 [storage_local.mdx §8](./storage_local.mdx#8-synccomputer--the-whole-computer-sync-unit)). One pass = the whole
 machine, always.
 
@@ -73,11 +73,11 @@ runs first*, never in *what gets covered*:
 | --- | --- | --- | --- |
 | **Scheduled** — 15-min scheduleTask | launchd/cron ([storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract)) | Full pass | Natural order |
 | **Session catch-up** — > 48h stale | a returning web session ([sessions.mdx §3](./sessions.mdx)) | Full pass | Natural order |
-| **Manual — "Sync now" on a repo** | the repo page / row kebab / bulk ([one_repo.mdx §3.1](./one_repo.mdx#31-header)) | **Full pass** | **That repo first (priority §3)**, then the rest |
+| **Manual — "Pin now" on a repo** | the repo page / row kebab / bulk ([one_repo.mdx §3.1](./one_repo.mdx#31-header)) | **Full pass** | **That repo first (priority §3)**, then the rest |
 
-The load-bearing rule the button must honor: **a manual Sync now on one repo prioritizes that repo but
+The load-bearing rule the button must honor: **a manual Pin now on one repo prioritizes that repo but
 still runs the full pass.** It does the user's repo first (so their result is immediate) and then keeps
-going across every other known unit. It must **never** sync one repo and stop.
+going across every other known unit. It must **never** pin one repo and stop.
 
 **A fourth, implicit trigger: the in-process watchdog backstop.** The three triggers above are all
 *external* to the running app — a launchd fire, a returning session, a button. If the **launchd trigger
@@ -86,12 +86,12 @@ So the always-on web app **watches its own workers**: any installed + enabled wo
 within twice its interval is **run in-process** and its OS job is **repaired**, so a dead OS trigger can
 never silently halt the pass while the app is up. This backstop — and the full taxonomy of ways the flow
 can stall and how each self-heals or is surfaced — is specified in
-[sync_resilience.mdx](./sync_resilience.mdx) (§3 the watchdog, §7 the overdue signal), implemented in
+[backbone_resilience.mdx](./backbone_resilience.mdx) (§3 the watchdog, §7 the overdue signal), implemented in
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/watchdog.service.ts` —
 `startWatchdog()`.
 
-The full pass over **every repo plus the computer unit**, and a manual Sync now that syncs the clicked repo first (as the priority unit) then runs the pass over the remaining units in the background, are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncAll({ priorityDone })` (repos fan out via `runPool`, then `syncComputerUnit()`; both repo and computer share one generic `runUnitSync` core), invoked after the priority repo by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/repos/:repoId/sync`
+The full pass over **every repo plus the computer unit**, and a manual Pin now that pins the clicked repo first (as the priority unit) then runs the pass over the remaining units in the background, are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinAll({ priorityDone })` (repos fan out via `runPool`, then `pinComputerUnit()`; both repo and computer share one generic `runUnitPin` core), invoked after the priority repo by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/repos/:repoId/pin`
 
 ---
 
@@ -99,28 +99,28 @@ The full pass over **every repo plus the computer unit**, and a manual Sync now 
 
 When a pass is triggered from a specific repo, that repo's unit is the **priority unit**:
 
-* It is synced **first and awaited**, so the UI can return that repo's fresh detail immediately and the
+* It is pinned **first and awaited**, so the UI can return that repo's fresh detail immediately and the
   button feels instant.
 * The rest of the pass then runs, in the **background**, so the response is never blocked by a long
   fan-out over 100+ repos.
 * Priority changes **order only**. The remaining units are still all covered.
 
-A paths-scoped manual sync (bulk **Sync now (selected)**, [one_repo.mdx §4.4](./one_repo.mdx#44-bulk-actions))
+A paths-scoped manual pin (bulk **Pin now (selected)**, [one_repo.mdx §4.4](./one_repo.mdx#44-bulk-actions))
 prioritizes this repo restricted to the selected files, then the full pass follows for the rest.
 
 **Overlap guard.** Passes are idempotent, but overlapping passes waste work, so a single in-flight
-guard collapses a second pass that starts while one is running (rapid Sync-now clicks, or a
-scheduleTask that fires mid-pass). The **priority unit is always synced by its own trigger** and is
+guard collapses a second pass that starts while one is running (rapid Pin-now clicks, or a
+scheduleTask that fires mid-pass). The **priority unit is always pinned by its own trigger** and is
 never dropped by the guard — only the shared *remainder* fan-out is de-duplicated.
 
 Answering with the priority repo's detail immediately, then running the remainder pass in the background under the in-flight guard, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncAll` (`passInFlight` guard) + `repos.router.ts` `POST /:repoId/sync` (`void syncAll({ priorityDone })`)
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinAll` (`passInFlight` guard) + `repos.router.ts` `POST /:repoId/pin` (`void pinAll({ priorityDone })`)
 
 ---
 
 ## 4. Parallelism — many cores, bounded concurrency (LOCKED design)
 
-Modern machines have **20–30 cores**; syncing units one-at-a-time wastes almost all of them. A sync
+Modern machines have **20–30 cores**; pinning units one-at-a-time wastes almost all of them. A pin
 pass is **concurrent by default**:
 
 * **One global budget for all heavy work.** Every add/pin/fetch is drawn through a **single limiter**
@@ -129,14 +129,14 @@ pass is **concurrent by default**:
   big pass. Concurrent state writes are safe because every write goes through the store layer's
   **per-file mutex + atomic temp-then-rename**
   ([storage_local.mdx §15](./storage_local.mdx#15-the-store-layer-how-code-touches-disk)).
-* **Across units.** Units sync concurrently.
+* **Across units.** Units pin concurrently.
 * **Within a unit.** A unit's independent per-file operations (add + pin new/changed files, fetch
   missing CIDs) **fan out in parallel** through the same global limiter — not a strict file-by-file
   loop. Ordering within a unit does not matter; each file owns a distinct manifest-row key, so the
   shared in-memory manifest/pinset maps are mutated without collision.
 * **The priority unit** starts immediately; the remainder fan out behind it.
 
-Sequential syncing is a **defect to fix**, not an acceptable baseline. Any place that still loops
+Sequential pinning is a **defect to fix**, not an acceptable baseline. Any place that still loops
 `for … await` over units or files across a pass should be flagged and converted to the pool/limiter.
 
 **Canonical budget (unified — one definition).** The `cores − 2` figure this pass uses is now the canonical

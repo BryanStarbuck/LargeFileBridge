@@ -1,7 +1,7 @@
 // Loopback-only trigger the launchd workers hit (code_plan §6). Not for browsers.
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { startScan } from "../scanner/scan-job.js";
-import { syncAll, syncDeviceRegistrations } from "../sync/sync.service.js";
+import { pinAll, pushDeviceBackbone } from "../pin/pin.service.js";
 import { stampRun } from "../schedule/schedule.service.js";
 import { log } from "../../shared/logging.js";
 
@@ -29,19 +29,19 @@ internalRouter.post("/run/:worker", async (req, res) => {
     // info is written & pushed to each Git-backed storage's repo, pulling first even with nothing to
     // change. Decoupled from the IPFS opt-in.
     if (worker === "device") {
-      await syncDeviceRegistrations();
+      await pushDeviceBackbone();
       await stampRun("device", true);
       return res.json({ ok: true, data: { ran: worker } });
     }
-    if (worker === "sync") await syncAll();
+    if (worker === "pin") await pinAll();
     else return res.status(400).json({ ok: false, error: "unknown worker" });
-    await stampRun("sync", true);
+    await stampRun("pin", true);
     res.json({ ok: true, data: { ran: worker } });
   } catch (e) {
     log.error("internal", `${worker} run failed: ${(e as Error).message}`);
     // Stamp the failed run best-effort — a stamp write error here must not mask the original failure.
-    if (worker === "sync" || worker === "device") {
-      await stampRun(worker as "sync" | "device", false).catch((se) =>
+    if (worker === "pin" || worker === "device") {
+      await stampRun(worker as "pin" | "device", false).catch((se) =>
         log.error("internal", `stamping failed ${worker} run failed: ${(se as Error).message}`),
       );
     }

@@ -19,7 +19,7 @@ import {
   compressAllVideos,
   compressAllImages,
   gitIgnoreBig,
-  trackSyncDir,
+  trackPinDir,
 } from "@/components/menu/domainActions";
 import { folderGlyphStyle, isInteresting } from "@/components/fs/folderInterest";
 import { useWindowedRows } from "@/components/table/useWindowedRows";
@@ -152,7 +152,7 @@ export default function FileSystemPage() {
   const deepest = selectedFile ?? stack[stack.length - 1] ?? "";
 
   // The action-links row (page_actions.mdx §4 / file_system.mdx §4 — File System): producing pair ·
-  // Compress all videos… · Compress all images… · Git-ignore big files… · Track / Sync this directory.
+  // Compress all videos… · Compress all images… · Git-ignore big files… · Track / Pin this directory.
   // Scope = the currently-selected column's directory (deepest open column), walked recursively (there
   // is no per-row selection in the column browser, so it is always the whole current directory).
   const currentDir = stack[stack.length - 1];
@@ -172,7 +172,7 @@ export default function FileSystemPage() {
     compressAllVideos(currentDir),
     compressAllImages(currentDir),
     gitIgnoreBig(resolveGitIgnoreTarget()),
-    trackSyncDir(),
+    trackPinDir(),
   ];
 
   return (

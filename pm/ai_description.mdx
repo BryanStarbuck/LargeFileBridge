@@ -130,7 +130,7 @@ shared by the viewer tab and the storage table (which now detects the sidecar ra
 `.lfbridge/analysis/`). When the artifact lands in a **plain** repo (placement rule A) generating also
 ensures that repo git-ignores **`*.ai_description`** (the same nudge transcription makes for
 `*.transcription`) so descriptions never bloat commits; when it lands in the owning storage's **dedicated
-Git repo** (rule B) it is **deliberately not** git-ignored — that repo exists to track and sync the
+Git repo** (rule B) it is **deliberately not** git-ignored — that repo exists to track and back up the
 artifacts.
 
 Resolving the description path via the shared ordered placement rule, reading back a done description, and writing the `.ai_description` sidecar (with the git-ignore nudge only when the placement flags it) are handled in code:
@@ -406,7 +406,7 @@ or OpenAI. That is unavoidable for a hosted vision model, so it is fenced by str
 
 * **Always explicit, always user-initiated.** A description is generated **only** on a deliberate
   **Generate** (or **Regenerate**) click. It **never** runs automatically — not on a scan, not on a
-  background sync, not on viewing a file.
+  background pin, not on viewing a file.
 * **Entirely separate from perceptual fingerprinting.** The charter's **perceptual / content-fingerprint
   matching** (PhotoDNA-style) is a *different* feature that must run **entirely locally and must never
   phone home**. AI description is **not** that feature and must never be confused with it — fingerprinting
@@ -463,7 +463,7 @@ The adapter module is annotated as the one deliberate outbound path, and the upl
    ordered rule), **no** `.lfbridge/analysis/` directory. It is a self-contained `done` YAML record
    `{ source, status, engine, provider, generated, kind, description }` — so the Storage table's
    **`description` indicator** lights up from the sidecar's presence. In a plain repo `*.ai_description` is
-   git-ignored; in a dedicated repo it is committed and synced.
+   git-ignored; in a dedicated repo it is committed and backed up.
 3. Providers are the pluggable adapters **Gemini / OpenAI / Grok**; **only Gemini describes video**;
    selection is requested → configured-default → first available that supports the kind (preference Gemini,
    OpenAI, Grok). Keys resolve **config → env → (Gemini only) the shared `~/.config/GoogleCloud/apikey.yaml`**
@@ -523,5 +523,5 @@ The adapter module is annotated as the one deliberate outbound path, and the upl
   (getPrompt/promptView/customizePrompt/savePrompt/resetPrompt), describe.router.ts (/api/describe),
   schemas.ts AppConfigSchema.ai, types.ts (DescribeKind/Provider/ProvidersStatus/View/Result/PromptView),
   frontend MediaViewer MediaAnalysis, ToolsPage AiDescriptionSection, lib/describe.ts, api/client.ts.
-  Keep in sync with Transcribe.mdx (sibling tab), media_viewer.mdx §6, storages.mdx §6.
+  Keep consistent with Transcribe.mdx (sibling tab), media_viewer.mdx §6, storages.mdx §6.
 -->

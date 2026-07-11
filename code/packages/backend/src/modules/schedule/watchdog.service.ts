@@ -1,8 +1,8 @@
-// The in-process sync watchdog (sync_resilience.mdx §3). The launchd/cron worker is only ONE trigger, and
+// The in-process pin watchdog (backbone_resilience.mdx §3). The launchd/cron worker is only ONE trigger, and
 // OS triggers are brittle: a plist can point at a moved run-worker.mjs, a job can be booted out and never
 // re-bootstrapped, an upgrade can rename a path. When that happens the job crashes on every fire and writes
 // NOTHING to our own logs — the most dangerous stall because it is perfectly silent (the 2026-07-07
-// incident, sync_resilience.mdx §8). So the always-on web app watches its OWN workers: any installed +
+// incident, backbone_resilience.mdx §8). So the always-on web app watches its OWN workers: any installed +
 // enabled worker that has gone overdue (last successful run older than 2× its interval, isWorkerOverdue) is
 // (a) run in-process right now, so the flow moves without waiting for a reboot, and (b) repaired via
 // reconcileWorkerSchedules(), which rewrites the plist with the correct interval + trigger path and reloads
@@ -10,18 +10,18 @@
 // the flow.
 import type { WorkerKind } from "@lfb/shared";
 import { workerState, reconcileWorkerSchedules, stampRun } from "./schedule.service.js";
-import { syncAll, syncDeviceRegistrations } from "../sync/sync.service.js";
+import { pinAll, pushDeviceBackbone } from "../pin/pin.service.js";
 import { startScan } from "../scanner/scan-job.js";
 import { log } from "../../shared/logging.js";
 
 // Re-evaluate every 5 minutes — frequent enough that a dead worker is caught well within its own cadence
-// (device 10 min, sync 15 min), cheap enough to be negligible. The first check is delayed (startWatchdog)
+// (device 10 min, pin 15 min), cheap enough to be negligible. The first check is delayed (startWatchdog)
 // so it never races boot provisioning.
 const CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const INITIAL_DELAY_MS = 60 * 1000;
 
 // The workers the watchdog covers, most-frequent first (the device write-back is the flow's main carrier).
-const WATCHED: WorkerKind[] = ["device", "sync", "scan"];
+const WATCHED: WorkerKind[] = ["device", "pin", "scan"];
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let ticking = false; // single-flight: never let two ticks overlap
@@ -33,12 +33,12 @@ async function runWorkerInProcess(kind: WorkerKind): Promise<void> {
     return;
   }
   if (kind === "device") {
-    await syncDeviceRegistrations();
+    await pushDeviceBackbone();
     await stampRun("device", true);
     return;
   }
-  await syncAll();
-  await stampRun("sync", true);
+  await pinAll();
+  await stampRun("pin", true);
 }
 
 /** One heartbeat: run and repair any overdue worker. Single-flighted; never throws (a fault is logged). */
@@ -65,7 +65,7 @@ async function tick(): Promise<void> {
         log.info("watchdog", `${kind} worker: in-process run complete`);
       } catch (e) {
         // stamp the in-process failure so the overdue signal (and the next tick) reflect reality
-        if (kind === "device" || kind === "sync") await stampRun(kind, false).catch(() => {});
+        if (kind === "device" || kind === "pin") await stampRun(kind, false).catch(() => {});
         log.error("watchdog", `${kind} worker in-process run failed: ${(e as Error).message}`);
       }
       healedAny = true;
@@ -94,5 +94,5 @@ export function startWatchdog(): void {
   timer.unref?.();
   const kick = setTimeout(() => void tick(), INITIAL_DELAY_MS);
   kick.unref?.();
-  log.info("watchdog", `sync watchdog started — checks every ${CHECK_INTERVAL_MS / 60000} min`);
+  log.info("watchdog", `pin watchdog started — checks every ${CHECK_INTERVAL_MS / 60000} min`);
 }

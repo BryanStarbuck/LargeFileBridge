@@ -26,7 +26,7 @@ picks the route from a filename is `viewerRouteForName` in
 
 Siblings this builds on and does not repeat:
 
-* [View one file](./files.mdx) — the entity identity, the two sticky flags, the sync/compression/IPFS
+* [View one file](./files.mdx) — the entity identity, the two sticky flags, the pin/compression/IPFS
   fact cards, and the top-right `⋮` more menu. The viewer pages reuse that same `EntityView` payload and
   the same `⋮` menu; they only re-front it around a big media surface.
 * [Menus](./menus.mdx) — the LOCKED **File action catalog** (§5.3) and the `⋮` more-menu (§4). The
@@ -204,7 +204,7 @@ whose value is unknown shows `—` (or is omitted) rather than stretching the gr
 | | | | | |
 | --- | --- | --- | --- | --- |
 | **Size** 8.2 GB | **Dimensions** 3840×2160 | **Codec** H.264 · MP4 | **Repo** Our_Movies | **Peers** 3 |
-| **Modified** 2h ago | **Created** May 1 | **Compress** looks uncompressed | **Decision** Sync | **Badges** i C r |
+| **Modified** 2h ago | **Created** May 1 | **Compress** looks uncompressed | **Decision** Add to IPFS (pin) | **Badges** i C r |
 
 Audio swaps **Dimensions** for **Duration** and drops the image/video-only cells (§4). The grid never
 grows past ~3 rows — extra facts live in the `⋮` menu or the properties page, so the media keeps its space.
@@ -273,8 +273,8 @@ handled in code:
 * **Transcribe / Re-transcribe** — audio + video only; runs Whisper locally
   ([Transcribe.mdx](./Transcribe.mdx)). Also reachable as the Transcription tab's Generate button (§6).
 * **Copy path** · **View properties** (`/file`) · **↷ Move** (§4.5).
-* **In the More menu:** **Never publish via IPFS** (the `neverIpfs` sticky flag — forbids the sync
-  decision), **Do not compress** (the `noCompress` sticky flag), **Copy CID**, and **🗑 Delete…**
+* **In the More menu:** **Never publish via IPFS** (the `neverIpfs` sticky flag — forbids the
+  Add-to-IPFS (pin) decision), **Do not compress** (the `noCompress` sticky flag), **Copy CID**, and **🗑 Delete…**
   (recoverable move-to-trash, confirm-gated — §4.5).
 
 ### 4.3 Type-specific actions (think like a PM)

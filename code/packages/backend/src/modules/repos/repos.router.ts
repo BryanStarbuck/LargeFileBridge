@@ -13,7 +13,7 @@ import {
   updateRepoConfig,
 } from "../store-model/units.service.js";
 import { startScan, getScanJob } from "../scanner/scan-job.js";
-import { syncRepoFolder, syncAll } from "../sync/sync.service.js";
+import { pinRepoFolder, pinAll } from "../pin/pin.service.js";
 import { track } from "../progress/progress.registry.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { requireAllowListed } from "../auth/identify.js";
@@ -149,29 +149,29 @@ reposRouter.patch("/:repoId/files", async (req, res) => {
   }
 });
 
-// POST /api/repos/:repoId/sync — Sync now (whole repo or selected files).
-reposRouter.post("/:repoId/sync", async (req, res) => {
+// POST /api/repos/:repoId/pin — Pin now (whole repo or selected files).
+reposRouter.post("/:repoId/pin", async (req, res) => {
   const body = z.object({ paths: z.array(z.string()).optional() }).safeParse(req.body ?? {});
   const folder = folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   const only = body.success && body.data.paths ? new Set(body.data.paths) : undefined;
   try {
-    // Sync THIS repo first as the priority unit (manual = explicit opt-in), then answer immediately so
-    // the button feels instant. A manual Sync now is still a FULL PASS: after responding we run the
+    // Pin THIS repo first as the priority unit (manual = explicit opt-in), then answer immediately so
+    // the button feels instant. A manual Pin now is still a FULL PASS: after responding we run the
     // pass over every OTHER known unit in the background so it never blocks the response
-    // (sync_process.mdx §2/§3). `priorityDone` stops the pass re-syncing the repo we just did.
-    // Register the manual sync in the progress registry so the dock shows a live card — including for
+    // (pin_process.mdx §2/§3). `priorityDone` stops the pass re-pinning the repo we just did.
+    // Register the manual pin in the progress registry so the dock shows a live card — including for
     // a poll from another tab (webapp.mdx §12 source B). track() always ends the job, success or error.
     const repoName = getRepoConfig(folder).repo.name || folder;
-    // Report what the run ACTUALLY did (counts), never a fixed "complete" string (sync_process.mdx §6).
-    const counts = await track("sync", repoName, () => syncRepoFolder(folder, only, { manual: true }));
+    // Report what the run ACTUALLY did (counts), never a fixed "complete" string (pin_process.mdx §6).
+    const counts = await track("pin", repoName, () => pinRepoFolder(folder, only, { manual: true }));
     const detail = computeRepoDetail(folder, await ipfs.health());
     res.json({ ok: true, data: { detail, counts } });
-    void syncAll({ priorityDone: folder }).catch((e) =>
-      log.error("repos", `full pass after manual sync of ${folder} failed: ${(e as Error).message}`),
+    void pinAll({ priorityDone: folder }).catch((e) =>
+      log.error("repos", `full pass after manual pin of ${folder} failed: ${(e as Error).message}`),
     );
   } catch (e) {
-    log.error("repos", `${folder}: sync failed: ${(e as Error).message}`);
+    log.error("repos", `${folder}: pin failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
 });
@@ -197,7 +197,7 @@ reposRouter.patch("/:repoId/settings", async (req, res) => {
   const p = patch.data;
   try {
     await updateRepoConfig(folder, (c) => {
-    if (p.synced !== undefined) c.synced = p.synced;
+    if (p.pinned !== undefined) c.pinned = p.pinned;
     if (p.bigFileOverride) c.big_file_override = { ...c.big_file_override, ...p.bigFileOverride };
     if (p.largeFiles)
       c.large_files = {
@@ -205,11 +205,11 @@ reposRouter.patch("/:repoId/settings", async (req, res) => {
         include_globs: p.largeFiles.includeGlobs ?? c.large_files.include_globs,
         exclude_globs: p.largeFiles.excludeGlobs ?? c.large_files.exclude_globs,
       };
-    if (p.sync)
-      c.sync = {
-        pin_locally: p.sync.pinLocally ?? c.sync.pin_locally,
-        fetch_missing: p.sync.fetchMissing ?? c.sync.fetch_missing,
-        publish_manifest: p.sync.publishManifest ?? c.sync.publish_manifest,
+    if (p.pin)
+      c.pin = {
+        pin_locally: p.pin.pinLocally ?? c.pin.pin_locally,
+        fetch_missing: p.pin.fetchMissing ?? c.pin.fetch_missing,
+        publish_manifest: p.pin.publishManifest ?? c.pin.publish_manifest,
       };
     if (p.access)
       c.access = {
@@ -226,7 +226,7 @@ reposRouter.patch("/:repoId/settings", async (req, res) => {
 });
 
 const RepoSettingsPatch = z.object({
-  synced: z.boolean().optional(),
+  pinned: z.boolean().optional(),
   bigFileOverride: z
     .object({ enabled: z.boolean(), value: z.number(), unit: z.enum(["MB", "GB", "TB"]) })
     .partial()
@@ -239,7 +239,7 @@ const RepoSettingsPatch = z.object({
     })
     .partial()
     .optional(),
-  sync: z
+  pin: z
     .object({ pinLocally: z.boolean(), fetchMissing: z.boolean(), publishManifest: z.boolean() })
     .partial()
     .optional(),
@@ -256,7 +256,7 @@ function toRepoSettings(repoId: string, folder: string): RepoSettings {
     name: c.repo.name || folder,
     path: c.repo.path,
     remote: c.repo.remote,
-    synced: c.synced,
+    pinned: c.pinned,
     bigFileOverride: {
       enabled: c.big_file_override.enabled,
       value: c.big_file_override.value,
@@ -267,10 +267,10 @@ function toRepoSettings(repoId: string, folder: string): RepoSettings {
       includeGlobs: c.large_files.include_globs,
       excludeGlobs: c.large_files.exclude_globs,
     },
-    sync: {
-      pinLocally: c.sync.pin_locally,
-      fetchMissing: c.sync.fetch_missing,
-      publishManifest: c.sync.publish_manifest,
+    pin: {
+      pinLocally: c.pin.pin_locally,
+      fetchMissing: c.pin.fetch_missing,
+      publishManifest: c.pin.publish_manifest,
     },
     access: { shared: c.access.shared, participants: c.access.participants },
   };

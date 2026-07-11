@@ -5,7 +5,7 @@ description: The knowledge base and product contract for VIDEO CODECS — the ar
 
 # LargeFileBridge — Video codecs, browser playback & on-the-fly streaming
 
-`LargeFileBridge` syncs and previews large media across a user's computers. Video is the primary large
+`LargeFileBridge` pins and previews large media across a user's computers. Video is the primary large
 file (charter §Compression). A recurring problem: the browser opens a `/video?path=…` page and shows
 
 > This browser can't play this file ’s codec (H.264).
@@ -131,7 +131,7 @@ equal quality**:
 | **MPEG-2** | ~2× the bits | Legacy. |
 
 **The tension:** the codec that compresses best (AV1) is the least compatible; the most compatible
-(H.264) compresses worst. LFBridge resolves it by **purpose**: for **storage/sync compression** the user
+(H.264) compresses worst. LFBridge resolves it by **purpose**: for **storage/pin compression** the user
 picks their preferred codec ([compression.mdx §7](./compression.mdx)) and we encode at the **middle** of
 the CRF range (**CRF 21** H.264/AV1, **CRF 24** HEVC) **at the source resolution — never downscaling**
 (the LOCKED middle-quality hard requirement, [compression.mdx §2.1](./compression.mdx)); for **a

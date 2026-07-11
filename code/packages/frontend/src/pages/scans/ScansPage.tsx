@@ -1,5 +1,5 @@
 // The Scans page (scan.mdx §7, storage.mdx §13, use_cases.mdx §5.2 + UC-6). Leads with the verdict:
-// "will my files keep syncing on their own?" — then one DiagnosticCard per background job with a
+// "will my files keep pinning on their own?" — then one DiagnosticCard per background job with a
 // plain purpose line, Installed/On pills, last-run health, control actions, and the launchd mechanics
 // tucked behind the chevron.
 import { useEffect } from "react";
@@ -18,52 +18,52 @@ function workerHealth(s: WorkerState): Health {
   if (!s.installed) return "neutral";
   if (!s.enabled) return "warn";
   if (s.lastRunOk === false) return "bad";
-  if (s.overdue) return "warn"; // installed + on but hasn't run when it should (sync_resilience.mdx §7)
+  if (s.overdue) return "warn"; // installed + on but hasn't run when it should (backbone_resilience.mdx §7)
   return "ok";
 }
 
-export function SyncPage() {
-  const { data, error } = useQuery({ queryKey: ["syncPage"], queryFn: api.syncPage, refetchInterval: 10_000 });
+export function ScansPage() {
+  const { data, error } = useQuery({ queryKey: ["jobs"], queryFn: api.jobsPage, refetchInterval: 10_000 });
   // The Scans payload poll runs every 10s; a fetch failure otherwise stays invisible (no toast on a
   // background refetch), so mirror it to error.err. Warn (not error) — a transient poll miss self-heals.
   useEffect(() => {
-    if (error) clientLog.warn("SyncPage.syncPage.poll", error);
+    if (error) clientLog.warn("ScansPage.jobsPage.poll", error);
   }, [error]);
   const ipfsDown = data?.ipfs !== "ok";
 
   // The verdict is about the every-15-min transfer job — that's what keeps files moving on their own.
   const verdict: { state: Health; headline: string; sub: string } = (() => {
     if (!data) return { state: "neutral", headline: "Loading…", sub: "" };
-    const t = data.sync;
+    const t = data.pin;
     if (!t.installed)
       return {
         state: "warn",
-        headline: "Automatic syncing isn't installed yet",
-        sub: "Install the background job below so your big files sync every 15 minutes without you opening the app.",
+        headline: "Automatic pinning isn't installed yet",
+        sub: "Install the background job below so your big files pin every 15 minutes without you opening the app.",
       };
     if (!t.enabled)
       return {
         state: "warn",
-        headline: "Automatic syncing is installed but turned off",
-        sub: "Turn it on below to keep your files synced in the background.",
+        headline: "Automatic pinning is installed but turned off",
+        sub: "Turn it on below to keep your files pinned in the background.",
       };
     if (t.lastRunOk === false)
       return {
         state: "bad",
-        headline: "The last background sync failed",
-        sub: "Automatic syncing is on, but the most recent run hit an error — see the transfer job below.",
+        headline: "The last background pin failed",
+        sub: "Automatic pinning is on, but the most recent run hit an error — see the transfer job below.",
       };
     if (t.overdue)
       return {
         state: "warn",
-        headline: "Automatic syncing is overdue",
+        headline: "Automatic pinning is overdue",
         sub: "The background job hasn't run when it should have. The app is retrying it in the background and repairing the schedule; if it stays overdue, reinstall the transfer job below.",
       };
     return {
       state: ipfsDown ? "bad" : "ok",
       headline: ipfsDown
-        ? "Automatic syncing is on, but the IPFS engine is down"
-        : "Your big files sync automatically",
+        ? "Automatic pinning is on, but the IPFS engine is down"
+        : "Your big files pin automatically",
       sub: ipfsDown
         ? "The 15-minute job is running, but transfers can't move until the IPFS engine starts."
         : `Runs every 15 minutes on this computer (${data.computerLabel}).`,
@@ -76,8 +76,8 @@ export function SyncPage() {
         title="Scans"
         subtitle={
           data
-            ? `Background jobs that keep your big files discovered and synced on this computer (${data.computerLabel}).`
-            : "Background jobs that keep your big files discovered and synced on this computer."
+            ? `Background jobs that keep your big files discovered and pinned on this computer (${data.computerLabel}).`
+            : "Background jobs that keep your big files discovered and pinned on this computer."
         }
       />
 
@@ -86,10 +86,10 @@ export function SyncPage() {
       {data && (
         <div className="space-y-4">
           <WorkerCard
-            worker="sync"
+            worker="pin"
             title="Transfer — moves your files"
-            purpose="Every 15 minutes: pushes and pulls bytes over IPFS for the repos you sync."
-            state={data.sync}
+            purpose="Every 15 minutes: pushes and pulls bytes over IPFS for the repos you pin."
+            state={data.pin}
           />
           <WorkerCard
             worker="device"
@@ -126,11 +126,11 @@ function WatcherCard({ state }: { state: WatcherState }) {
   const control = useMutation({
     mutationFn: (action: "enable" | "disable") => api.controlWatcher(action),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["syncPage"] });
+      qc.invalidateQueries({ queryKey: ["jobs"] });
       toast.success("Live watch updated");
     },
     onError: (e: Error) => {
-      clientLog.error("SyncPage.controlWatcher", e);
+      clientLog.error("ScansPage.controlWatcher", e);
       toast.error(e.message);
     },
   });
@@ -196,12 +196,12 @@ function WorkerCard({
   const control = useMutation({
     mutationFn: (action: "install" | "uninstall" | "enable" | "disable") => api.controlWorker(worker, action),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["syncPage"] });
+      qc.invalidateQueries({ queryKey: ["jobs"] });
       toast.success(`${title} updated`);
     },
     onError: (e: Error) => {
       // A worker install/uninstall/enable/disable failed — surface to the user AND log to error.err.
-      clientLog.error(`SyncPage.controlWorker.${worker}`, e);
+      clientLog.error(`ScansPage.controlWorker.${worker}`, e);
       toast.error(e.message);
     },
   });

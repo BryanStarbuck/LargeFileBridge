@@ -211,7 +211,7 @@ Columns:
 
 | Column | Shows |
 | --- | --- |
-| **`▮` Bookmark** | **Leading** ribbon favorite toggle ([tables.mdx §1](./tables.mdx#1-the-leading-bookmark-favorite-toggle-locked)) — a control cell; flips `bookmarked` (stored in `sync/c/<community_id>/config.yaml`, §8) and never navigates. |
+| **`▮` Bookmark** | **Leading** ribbon favorite toggle ([tables.mdx §1](./tables.mdx#1-the-leading-bookmark-favorite-toggle-locked)) — a control cell; flips `bookmarked` (stored in `pin/c/<community_id>/config.yaml`, §8) and never navigates. |
 | **Community** | Name + publisher + one-line description. |
 | **Library** | Item count and total size (e.g. `142 videos · 88 GB`). |
 | **Intent** | **Get** / **Support** toggles (both allowed) — §3. |
@@ -243,14 +243,14 @@ stored **computer-wide** (owned by the machine, not the logged-in user):
 ~/T/_large_files_bridge/
 ├── config.yaml                 # + community_budget: the machine's community storage budget (§5.2)
 └── sync/
-    └── c/                      # one folder PER SUBSCRIBED COMMUNITY (mirrors sync/r/<repo>/)
+    └── c/                      # one folder PER SUBSCRIBED COMMUNITY (mirrors pin/r/<repo>/)
         └── <community_id>/
             ├── config.yaml     #   intent (get/support) + backup_mode (block|recommended|full) + bookmarked
             ├── manifest.yaml   #   the community library → CID + local pin state
             └── status.yaml     #   machine-written last-scan / last-sync cache
 ```
 
-* `sync/c/<community_id>/` mirrors `sync/r/<repo_name>/` — same three files, same store layer, same
+* `pin/c/<community_id>/` mirrors `pin/r/<repo_name>/` — same three files, same store layer, same
   atomic writes. A community is mechanically a repo-shaped sync unit whose bytes are someone else's.
 * `config.yaml` (app-level) gains **`community_budget`** — the single computer-wide budget number.
 * **Block** communities may keep a record (so the choice sticks) but hold **no pins**.
@@ -288,7 +288,7 @@ stored **computer-wide** (owned by the machine, not the logged-in user):
 6. Rebroadcasting stays **charter-compliant** (§1): it is a per-community opt-in that pins a chosen
    publisher's public files only — never a general public gateway/relay — and the node's
    only-our-content default is not flipped.
-7. Subscriptions persist as computer-wide sync units under `sync/c/<community_id>/`, and the budget
+7. Subscriptions persist as computer-wide sync units under `pin/c/<community_id>/`, and the budget
    persists as `community_budget` in the app-level `config.yaml`.
 8. The "will you follow our guidelines?" prompt is **not** implemented (§9) — only the manual
    Block/Recommended/Full controls exist in this version.
@@ -298,6 +298,6 @@ stored **computer-wide** (owned by the machine, not the logged-in user):
   publisher's PUBLIC files; it is content storage, NOT a public gateway/relay, and does not flip the
   only-our-content default (charter). Default mode is Block. The three backup states are exactly
   Block / Recommended / Full. Budget = free-outside-IPFS minus headroom; headroom is never crossed.
-  Communities are computer-wide sync units (sync/c/<id>/), mirroring sync/r/<repo>/. The follow-our-
+  Communities are computer-wide sync units (pin/c/<id>/), mirroring pin/r/<repo>/. The follow-our-
   guidelines prompt (§9) is deferred. All tables are TanStack (charter).
 -->

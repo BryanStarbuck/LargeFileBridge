@@ -1,6 +1,6 @@
 // The File System code-badge chips (directory.mdx §3): white letter on a solid color square.
-// The backend orders badges[] RIGHTMOST-FIRST — [repo, sync, compress, ipfs, git_ignored] (directory.mdx
-// §5) — so we render the array REVERSED, giving the fixed visual left→right order  I · i · C/c · S · R/r
+// The backend orders badges[] RIGHTMOST-FIRST — [repo, pin, compress, ipfs, git_ignored] (directory.mdx
+// §5) — so we render the array REVERSED, giving the fixed visual left→right order  I · i · C/c · P · R/r
 // with the repo badge pinned to the far right.
 //
 // Every chip is ALSO a hover source for the non-intrusive hover-info panel (non_intrusive_tooltip.mdx §2):
@@ -45,11 +45,11 @@ export const BADGE_META: Record<FsBadge, BadgeMeta> = {
     name: "Contains a repo",
     desc: "A git repo sits somewhere below this folder.",
   },
-  sync: {
-    letter: "S",
-    bg: "var(--lfb-badge-sync)",
+  pin: {
+    letter: "P",
+    bg: "var(--lfb-badge-pin)",
     ink: "#fff",
-    name: "Synced",
+    name: "Pinned",
     desc: "Tracked and bridged over IPFS across your computers.",
   },
   compress: {
@@ -79,7 +79,7 @@ export const BADGE_META: Record<FsBadge, BadgeMeta> = {
     ink: "#ffffff",
     border: "var(--lfb-badge-git-ignored-border)",
     name: "Git-ignored",
-    desc: "Not committed to git — synced over IPFS instead.",
+    desc: "Not committed to git — pinned over IPFS instead.",
   },
 };
 

@@ -68,7 +68,7 @@ export const AppConfigSchema = z.object({
   // MASS-COMPUTE core budget — round(cores × fraction) — used for user-kicked-off batch CPU work
   // (compression, fingerprinting, batch transcode). Default 0.9 = "use up to ~90% of cores". Read LIVE
   // by shared/concurrency.ts coreBudget(), so a change takes effect on the next bulk run with no restart.
-  // The responsive budget (cores − 2) for sync/scan is a fixed safety floor and is NOT configured here.
+  // The responsive budget (cores − 2) for pin/scan is a fixed safety floor and is NOT configured here.
   performance: z
     .object({
       max_core_fraction: z.number().min(0.01).max(1).default(0.9),
@@ -140,7 +140,7 @@ export const AppConfigSchema = z.object({
         .object({
           api_key: z.string().nullable().default(null),
           // Default to the `gemini-flash-latest` ALIAS (image + video) so we auto-track Google's newest
-          // GA Flash and never hard-break on a retirement. Kept in sync with DEFAULT_GEMINI_MODEL in
+          // GA Flash and never hard-break on a retirement. Kept aligned with DEFAULT_GEMINI_MODEL in
           // backend describe/models.ts; retired ids are auto-healed on load (ai_description.mdx §3.4).
           model: z.string().default("gemini-flash-latest"),
         })
@@ -159,12 +159,15 @@ export const AppConfigSchema = z.object({
         .default({}),
     })
     .default({}),
-  sync_process: z
+  // The IPFS add/pin background worker (pin_process.mdx). Renamed from the legacy `sync_process` block;
+  // the one-time startup migration rewrites an old on-disk `sync_process` (and its
+  // `com.largefilebridge.sync` label) into this shape.
+  pin_process: z
     .object({
       installed: z.boolean().default(false),
       enabled: z.boolean().default(false),
       interval_minutes: z.number().default(15),
-      label: z.string().default("com.largefilebridge.sync"),
+      label: z.string().default("com.largefilebridge.pin"),
       last_run_at: iso.nullable().default(null),
       last_run_ok: z.boolean().nullable().default(null),
     })
@@ -173,10 +176,10 @@ export const AppConfigSchema = z.object({
   // ONE job is: make sure THIS computer's device info (its self-owned devices/<self>.yaml) is written and
   // pushed up to each Git-backed storage's repo — pulling first (git fetch + auto-merge) EVERY run even
   // when there is nothing to change, so another computer's edits land here. Decoupled from the per-storage
-  // IPFS `synced` opt-in: writing your own identity text to your OWN configured repo has no outward
-  // footprint (sync_process.mdx §1), so it runs whenever the Git backbone is on. `enabled` is the "turn it
+  // IPFS `pinned` opt-in: writing your own identity text to your OWN configured repo has no outward
+  // footprint (pin_process.mdx §1), so it runs whenever the Git backbone is on. `enabled` is the "turn it
   // on" switch (the user's "I turn that on"). Same transparency contract (installed/on-off/last-run) as the
-  // sync + scan workers (storage_local.mdx §13).
+  // pin + scan workers (storage_local.mdx §13).
   device_process: z
     .object({
       installed: z.boolean().default(false),
@@ -185,7 +188,7 @@ export const AppConfigSchema = z.object({
       label: z.string().default("com.largefilebridge.device"),
       last_run_at: iso.nullable().default(null),
       last_run_ok: z.boolean().nullable().default(null),
-      // ON BY DEFAULT (devices.mdx §11.1). Unlike scan/sync, the device worker needs no explicit user
+      // ON BY DEFAULT (devices.mdx §11.1). Unlike scan/pin, the device worker needs no explicit user
       // Install — on first boot LFB auto-installs + enables its launchd job. This one-time latch records
       // that the auto-on happened, so if the user later turns it OFF it stays off (we never force it back).
       auto_provisioned: z.boolean().default(false),
@@ -255,9 +258,9 @@ export const AppConfigSchema = z.object({
 export type AppConfig = z.infer<typeof AppConfigSchema>;
 
 // ── per-community subscription config (communities.mdx §8) ──────────────────
-// `sync/c/<community_id>/config.yaml`: the user's per-community choices — intent (get/support) +
+// `pin/c/<community_id>/config.yaml`: the user's per-community choices — intent (get/support) +
 // backup mode (block|recommended|full) + the leading bookmark toggle. Computer-wide (owned by the
-// machine, not the logged-in user), mirroring the repo/storage sync units.
+// machine, not the logged-in user), mirroring the repo/storage pin units.
 export const CommunitySubscriptionSchema = z.object({
   schema_version: z.number().default(1),
   updated_at: iso.optional(),
@@ -279,8 +282,8 @@ export const RepoUnitConfigSchema = z.object({
       remote: z.string().nullable().default(null),
     })
     .default({}),
-  synced: z.boolean().default(false),
-  bookmarked: z.boolean().default(false), // user favorite (repos.mdx §8) — local, not synced to peers
+  pinned: z.boolean().default(false),
+  bookmarked: z.boolean().default(false), // user favorite (repos.mdx §8) — local, not shared to peers
   big_file_override: z
     .object({
       enabled: z.boolean().default(false),
@@ -295,7 +298,7 @@ export const RepoUnitConfigSchema = z.object({
       exclude_globs: z.array(z.string()).default([]),
     })
     .default({}),
-  sync: z
+  pin: z
     .object({
       pin_locally: z.boolean().default(true),
       fetch_missing: z.boolean().default(true),
@@ -308,7 +311,8 @@ export const RepoUnitConfigSchema = z.object({
       participants: z.array(z.string()).default([]),
     })
     .default({}),
-  // Per-file decisions (one_repo.mdx §1). Keyed by relative path.
+  // Per-file decisions (one_repo.mdx §1). Keyed by relative path. The "sync" value is a FROZEN wire
+  // literal (= add-to-IPFS / pin) that travels between computers — do not rename it.
   decisions: z.record(z.enum(["sync", "ignore", "undecided"])).default({}),
 });
 export type RepoUnitConfig = z.infer<typeof RepoUnitConfigSchema>;
@@ -317,22 +321,23 @@ export type RepoUnitConfig = z.infer<typeof RepoUnitConfigSchema>;
 export const ComputerUnitConfigSchema = z.object({
   schema_version: z.number().default(1),
   updated_at: iso.optional(),
-  synced: z.boolean().default(false),
+  pinned: z.boolean().default(false),
   roots: z.array(z.string()).default([]),
   exclude_globs: z.array(z.string()).default([]),
-  sync: z
+  pin: z
     .object({
       pin_locally: z.boolean().default(true),
       fetch_missing: z.boolean().default(true),
       publish_manifest_ipns: z.boolean().default(true),
     })
     .default({}),
+  // "sync" is a FROZEN wire literal (= add-to-IPFS / pin) that travels between computers — do not rename.
   decisions: z.record(z.enum(["sync", "ignore", "undecided"])).default({}),
 });
 export type ComputerUnitConfig = z.infer<typeof ComputerUnitConfigSchema>;
 
 // ── per-storage machine-local config.yaml (storage_settings.mdx §5) ─────────
-// sync/s/<storage_id>/config.yaml — the local "settings file" distinct from the SHARED storage.yaml.
+// pin/s/<storage_id>/config.yaml — the local "settings file" distinct from the SHARED storage.yaml.
 // Holds THIS computer's choices: keep .lfbridge/ + where, and which backing locations are ON + their
 // absolute local paths. The `storage:` block is an identity mirror written by discovery (read-only).
 const StorageBackingSchema = z
@@ -352,10 +357,10 @@ export const StorageUnitConfigSchema = z.object({
       root: z.string().default(""),
     })
     .default({}),
-  // The per-storage IPFS-pinning opt-in (sync_process.mdx §1 semantics, mirrored for storages). Default
+  // The per-storage IPFS-pinning opt-in (pin_process.mdx §1 semantics, mirrored for storages). Default
   // OFF — a storage is known & visited every pass, but its mapped-dir bytes are added/pinned/fetched only
   // once the user opts in. Charter: never pin content without an explicit, user-confirmed action.
-  synced: z.boolean().default(false),
+  pinned: z.boolean().default(false),
   lfbridge: z
     .object({
       enabled: z.boolean().default(true), // keep .lfbridge/ on this computer (default ON — §3)
@@ -394,7 +399,7 @@ export type ManifestFile = z.infer<typeof ManifestFileSchema>;
 export const UnitStatusSchema = z.object({
   schema_version: z.number().default(1),
   last_scan_at: iso.nullable().default(null),
-  last_sync_at: iso.nullable().default(null),
+  last_pin_at: iso.nullable().default(null),
   scan_source: z.enum(["scheduled", "manual"]).default("scheduled"),
   effective_threshold_bytes: z.number().default(104857600),
   big_file_count: z.number().default(0),
@@ -446,7 +451,7 @@ export type Peers = z.infer<typeof PeersSchema>;
 // ── web-session history (sessions.mdx §4) ────────────────────────────────────
 // One usage window measured from page renders — NOT the auth session (storage.mdx §10). `ended_at`
 // is null while open, otherwise it EQUALS `last_activity_at` (the session ends at the last render,
-// not at the moment the 4-hour idle timer fires). Drives the > 48h "stale return" auto-sync.
+// not at the moment the 4-hour idle timer fires). Drives the > 48h "stale return" auto-pin.
 export const SessionRecordSchema = z.object({
   started_at: iso,
   last_activity_at: iso,
@@ -474,7 +479,7 @@ export type MappedDirs = z.infer<typeof MappedDirsSchema>;
 
 // ── devices/<device>.yaml (devices.mdx §3) ──────────────────────────────────
 // One SELF-OWNED file per computer in the SDL's `.lfbridge/devices/`. Carries this device's identity,
-// its per-storage sync schedule, and the GRAFT — how the storage's machine-independent mapped-dir keys
+// its per-storage backbone schedule, and the GRAFT — how the storage's machine-independent mapped-dir keys
 // map onto THIS computer's absolute local paths (devices.mdx §4).
 export const DeviceScheduleWindowSchema = z.object({
   days: z.array(z.string()).default([]), // e.g. ["mon","tue",…]
@@ -499,7 +504,7 @@ export const DeviceFileSchema = z.object({
     .default({}),
   schedule: z
     .object({
-      enabled: z.boolean().default(true), // does this device sync this storage at all
+      enabled: z.boolean().default(true), // does this device pin this storage at all
       interval_minutes: z.number().default(15), // cadence (default matches the 15-min background pass)
       windows: z.array(DeviceScheduleWindowSchema).default([]), // optional specific times/windows
     })

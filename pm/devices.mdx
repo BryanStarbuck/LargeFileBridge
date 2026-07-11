@@ -167,7 +167,7 @@ graft:
 * **`schedule`** is per-device **and** per-storage: the studio tower might sync a company storage every
   15 minutes; a metered laptop might restrict it to an overnight window. It layers on top of the global
   15-minute background pass ([storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract),
-  [sync_process.mdx](./sync_process.mdx)) — the pass still runs, but a storage whose device `schedule`
+  [pin_process.mdx](./pin_process.mdx)) — the pass still runs, but a storage whose device `schedule`
   says "not now / not wanted" is visited and reconciled without byte work, honoring the same opt-in
   discipline as `synced`.
 * **`graft`** has one entry per mapped directory (keyed by `mapped_dirs.yaml`'s `key`, §4).
@@ -196,12 +196,12 @@ Each device's graft turns those into **this computer's absolute paths**.
   thing that resolves a file locally, mirroring
   [sync_list.mdx §4](./sync_list.mdx#4-what-travels-vs-what-stays-local)'s rule that the absolute
   `identity.path` is the writer's and the reader re-resolves locally.
-* **Pull to the right place.** When the sync pass fetches a marked CID, it writes the bytes to the
+* **Pull to the right place.** When the pin pass fetches a marked CID, it writes the bytes to the
   **grafted** local path (creating parent directories), so computer 2 lands each file where its graft
   says — the core of walkthrough step 7.
 
 Resolving a tracked file's machine-independent (mapped-dir key + relpath) identity to this device's absolute local path via the graft, and **materializing** the fetched bytes there, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `resolveGraftedPath(storageRoot, mappedKey, relPath)`, wired into the sync pass by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncStorageUnit(id)` (via `resolveStorageAbs`, the storage unit's `resolveAbs` in `runUnitSync`; the unit runs in `syncAll` gated by the per-storage `synced` opt-in). The fetch step of `runUnitSync` now pins the CID **and** writes the bytes to the resolved local path via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `catToFile(cid, destPath)` (atomic temp-then-rename, parent dirs created). A mapped dir this device has **not** grafted resolves to `null` and is left **known-but-absent** — never fetched or placed here.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `resolveGraftedPath(storageRoot, mappedKey, relPath)`, wired into the pin pass by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnit(id)` (via `resolveStorageAbs`, the storage unit's `resolveAbs` in `runUnitPin`; the unit runs in `pinAll` gated by the per-storage `synced` opt-in). The fetch step of `runUnitPin` now pins the CID **and** writes the bytes to the resolved local path via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `catToFile(cid, destPath)` (atomic temp-then-rename, parent dirs created). A mapped dir this device has **not** grafted resolves to `null` and is left **known-but-absent** — never fetched or placed here.
 
 ---
 
@@ -306,7 +306,7 @@ device:
   **Remove peer** (forgets it from `peers.yaml`; touches no remote content and no local bytes, per
   [menus.mdx §5.4](./menus.mdx)). Two more are **proposed** for this page's header:
   * **Ping / re-announce to this peer** *(proposed)* — dial the device's PeerID and refresh `last_seen`,
-    so a user can confirm reachability instead of waiting for the next sync pass. No pointer yet — not
+    so a user can confirm reachability instead of waiting for the next pin pass. No pointer yet — not
     implemented.
   * **Show files this device carries** *(proposed)* — filter the pinset/file view to the CIDs this
     device's `pinned_by` claims cover, answering "what does this computer hold for me?". No pointer yet.
@@ -347,7 +347,7 @@ header), not the shared file `Actions ▾` menu ([page_actions.mdx](./page_actio
 | Action | What it does | Placement | Status |
 | --- | --- | --- | --- |
 | **Add a computer** | Opens pairing help — how to install LFB on a second machine and have it join this storage's registry (§9). It is the empty-state nudge promoted to a persistent header button. | Header, right-aligned, primary. | **proposed** |
-| **Refresh peers / re-announce** | Re-reads `peers.yaml` + each storage's `devices/` registry and re-announces this device, refreshing `last_seen` health colours without waiting on the sync pass. | Header, right-aligned. | **proposed** |
+| **Refresh peers / re-announce** | Re-reads `peers.yaml` + each storage's `devices/` registry and re-announces this device, refreshing `last_seen` health colours without waiting on the pin pass. | Header, right-aligned. | **proposed** |
 
 Neither is implemented yet, so no code pointer. When built, they render in the `PageHeader` `actions`
 slot of `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` —
@@ -444,7 +444,7 @@ Guaranteeing the self row (config-seeded) and self-writing into each storage's r
 
 The whole point is that this data **stays synchronized across the user's computers**. The mechanism is
 already the SDL's Git-backed travel ([syncable_data_location.mdx](./syncable_data_location.mdx)), driven
-by the [Git backbone engine](./git_sync.mdx) (`git fetch` → automatic `merge` → `commit` → `push` each
+by the [Git backbone engine](./git_backbone.mdx) (`git fetch` → automatic `merge` → `commit` → `push` each
 pass); [storage_personal.mdx](./storage_personal.mdx) is the canonical two-computer walkthrough of a
 device registering itself and discovering the user's other machines:
 
@@ -474,7 +474,7 @@ that write-back.
 ### 11.1 A dedicated 10-minute worker, separate from the 15-minute transfer
 
 Device write-back is its **own** scheduled worker, on its **own** cadence — **every 10 minutes** — so it
-is independent of the every-15-minute IPFS **Transfer** pass ([sync_process.mdx](./sync_process.mdx),
+is independent of the every-15-minute IPFS **Transfer** pass ([pin_process.mdx](./pin_process.mdx),
 [storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract)).
 It carries the **same transparency contract** as the Transfer and Discovery workers — **installed /
 on-off / last-run**, controllable from the web app. Every 10 minutes it visits each directory storage and
@@ -493,7 +493,7 @@ on; here's the switch if you ever want it off."*
 ### 11.2 It is NOT gated by the IPFS opt-in
 
 Writing your **own** device identity text to your **own** configured Git repo has **no outward
-footprint** — it is the "understand", not the "pin", side of [sync_process.mdx §1](./sync_process.mdx#1-lfb-knows-every-repo--there-is-no-lfb-managed-gate).
+footprint** — it is the "understand", not the "pin", side of [pin_process.mdx §1](./pin_process.mdx#1-lfb-knows-every-repo--there-is-no-lfb-managed-gate).
 So the write-back runs **whenever the storage's Git backbone is on**, *decoupled* from the per-storage
 `synced` (IPFS pinning) opt-in. A Personal storage the user has **not** opted into IPFS pinning still
 gets its device registry written and pushed — exactly the case the user was worried about. Only the
@@ -521,7 +521,7 @@ that."*
 * An **explicit** dedicated-repo backing (a path the user set) still **wins** when present; the auto-adopt
   is the **fallback** so the common case — a company/personal tracking repo that is its own git checkout —
   "just works" without a settings trip.
-* This is **not** a widening of the [charter's no-relay / git compliance boundary](./git_sync.mdx#7-compliance-boundary--the-charters-no-relay-posture-in-git-terms).
+* This is **not** a widening of the [charter's no-relay / git compliance boundary](./git_backbone.mdx#7-compliance-boundary--the-charters-no-relay-posture-in-git-terms).
   A plain **code** repo (storage type `repo`) is **never** adopted — those get `.lfbridge/` **git-ignored**
   and are explicitly excluded. LFB only ever commits **our own** device registry into **our own**
   dedicated tracking repo, which is exactly "our own content between our own machines".
@@ -530,12 +530,12 @@ that."*
   before a remote is wired up.
 
 Resolving the Git backbone remote — the explicit dedicated-repo backing first, then the company/personal-root auto-adopt fallback — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getGitBackboneRemote(storageId)` (falls back to the storage root when a company/personal storage's `<root>/.git` exists), consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncStorageUnitInner()` and `ensureDeviceRegisteredInner()`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getGitBackboneRemote(storageId)` (falls back to the storage root when a company/personal storage's `<root>/.git` exists), consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnitInner()` and `ensureDeviceRegisteredInner()`.
 
 ### 11.3 The strict order — always pull before modifying, always push after (LOCKED)
 
 Before it **ever modifies** the repo, the check runs the Git backbone cycle
-([git_sync.mdx §6](./git_sync.mdx#6-the-sync-cycle--where-git-runs-inside-the-pass-locked-order)) in a
+([git_backbone.mdx §6](./git_backbone.mdx#6-the-sync-cycle--where-git-runs-inside-the-pass-locked-order)) in a
 fixed order, matching the user's requirement verbatim:
 
 1. **`git fetch` → `git merge` (automatic)** — pull the repo down **first**, so another computer's edits
@@ -563,7 +563,7 @@ Turning the worker **on by default** on first boot — auto-install + enable, la
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `ensureDeviceWorkerDefaultOn()`, called at boot from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts` — `bootstrapState()` (before `reconcileWorkerSchedules()`).
 
 The pass itself — for every Git-backed storage, pull → write self device → commit → push, decoupled from the IPFS opt-in and serialized per storage — is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sync/sync.service.ts` — `syncDeviceRegistrations()` (the whole pass, run by the `device` worker via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/internal/internal.router.ts` — `POST /api/internal/run/device`) and `ensureDeviceRegistered(id)` (one storage's pull → `writeSelfDevice(root)` → commit/push under `withStorageGitLock`). The same decoupling is applied to the regular Transfer pass so it, too, writes device info even when a storage is not IPFS-opted-in: `syncStorageUnit(id)` now runs the Git pull + `writeSelfDevice` + commit/push regardless of `synced`, and gates only the byte reconcile behind it.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pushDeviceBackbone()` (the whole pass, run by the `device` worker via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/internal/internal.router.ts` — `POST /api/internal/run/device`) and `ensureDeviceRegistered(id)` (one storage's pull → `writeSelfDevice(root)` → commit/push under `withStorageGitLock`). The same decoupling is applied to the regular Transfer pass so it, too, writes device info even when a storage is not IPFS-opted-in: `pinStorageUnit(id)` now runs the Git pull + `writeSelfDevice` + commit/push regardless of `synced`, and gates only the byte reconcile behind it.
 
 ---
 
@@ -580,7 +580,7 @@ The pass itself — for every Git-backed storage, pull → write self device →
    (cadence + optional time windows), and the **graft** (§3).
 4. The **graft** maps each mapped source directory (keyed in `mapped_dirs.yaml`) to **this computer's
    absolute local path**, with `wanted:false` / `local_path:null` meaning known-but-absent here; the
-   sync pass **fetches marked CIDs to the grafted local path**, never to the writer's path (§4).
+   pin pass **fetches marked CIDs to the grafted local path**, never to the writer's path (§4).
 5. The travelling **device registry** and the machine-local **`peers.yaml`** are kept distinct and
    cross-reference by **device id** (§5).
 6. The **Devices / Peers** page (`/devices`) renders a **full-width TanStack table** (search + filter +
@@ -625,7 +625,7 @@ The pass itself — for every Git-backed storage, pull → write self device →
   others are claims — same trust as sync_list §5). §3 a device file carries id/name/owner + HARDWARE +
   this device's SCHEDULE (cadence + optional time windows) + the GRAFT. §4 the GRAFT (LOCKED) maps
   machine-independent identity (mapped-dir key from syncable_data_location §3 + relpath) onto THIS
-  computer's absolute paths; wanted:false/local_path:null = known-but-absent; the sync pass fetches CIDs
+  computer's absolute paths; wanted:false/local_path:null = known-but-absent; the pin pass fetches CIDs
   to the grafted path (never the writer's canonical path, per sync_list §4). §5 device registry (travels)
   vs peers.yaml (machine-local) — cross-ref by device id. §6 the Devices/Peers PAGE = a full-width,
   fixed-width TanStack table with a LEAN column set — Device (name+disambiguation+a rolled-up descriptor
@@ -645,18 +645,18 @@ The pass itself — for every Git-backed storage, pull → write self device →
   §11 THE DEVICE-REGISTRATION WRITE-BACK: a DEDICATED every-10-min worker (its own installed/on-off/last-run
   contract, config `device_process`, label com.largefilebridge.device) whose one job is guaranteeing THIS
   computer's device info is written+pushed to each Git-backed storage's repo. DECOUPLED from the IPFS
-  `synced` opt-in (own-identity-to-own-repo = no outward footprint, per sync_process §1). Strict order:
+  `synced` opt-in (own-identity-to-own-repo = no outward footprint, per pin_process §1). Strict order:
   git fetch→auto-merge (ALWAYS, even with nothing to change, so other computers' edits land) → writeSelfDevice
   → add/commit/push. Serialized per storage (withStorageGitLock) so it never races the 15-min Transfer pass.
   New code: schemas.ts device_process; schedule.service workerState/control("device"); internal.router
-  POST /run/device; sync.service syncDeviceRegistrations()/ensureDeviceRegistered() + the same decoupling in
-  syncStorageUnit (git cycle + writeSelfDevice run regardless of synced; only byte work gated); SyncPage
-  "Device registration" WorkerCard. Keep in sync with git_sync.mdx §6, sync_process.mdx §1/§5, storage_personal.mdx §7.
+  POST /run/device; sync.service pushDeviceBackbone()/ensureDeviceRegistered() + the same decoupling in
+  pinStorageUnit (git cycle + writeSelfDevice run regardless of synced; only byte work gated); SyncPage
+  "Device registration" WorkerCard. Keep in sync with git_backbone.mdx §6, pin_process.mdx §1/§5, storage_personal.mdx §7.
   §11.2.1 AUTO-ADOPT (learned from a defect): a company/personal *_large_files_bridge tracking repo whose OWN
   root is a git checkout auto-adopts that root as its Git backbone — no manual dedicated-repo setting — so the
   self device file is committed+pushed on first write and every update (fixed: the Act3 company repo wrote
   devices/<self>.yaml but never git add/commit/pushed it). Explicit dedicated-repo backing still wins; a plain
-  code repo (type `repo`) is never adopted (.lfbridge/ stays git-ignored) so git_sync.mdx §7 holds. Code:
+  code repo (type `repo`) is never adopted (.lfbridge/ stays git-ignored) so git_backbone.mdx §7 holds. Code:
   storage-settings.service getGitBackboneRemote() (explicit-then-root fallback) consumed by sync.service
-  syncStorageUnitInner()/ensureDeviceRegisteredInner(). Keep in sync with git_sync.mdx §1/§7, storage_company.mdx.
+  pinStorageUnitInner()/ensureDeviceRegisteredInner(). Keep in sync with git_backbone.mdx §1/§7, storage_company.mdx.
 -->
