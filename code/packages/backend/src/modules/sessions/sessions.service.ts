@@ -78,12 +78,12 @@ export async function recordActivity(email: string): Promise<SessionActivityResu
 
   armIdleTimer(email);
 
-  // Staleness is checked ONLY when a new session starts (invariant 4) → at most one auto-sync per return.
-  const last = lastSyncAt();
-  let autoSyncTriggered = false;
-  if (newSession && isStale(last, now)) autoSyncTriggered = triggerAutoSync(email, last);
+  // Staleness is checked ONLY when a new session starts (invariant 4) → at most one auto-pin per return.
+  const last = lastPinAt();
+  let autoPinTriggered = false;
+  if (newSession && isStale(last, now)) autoPinTriggered = triggerAutoPin(email, last);
 
-  return { newSession, autoSyncTriggered, lastSyncAt: last ? last.toISOString() : null };
+  return { newSession, autoPinTriggered, lastPinAt: last ? last.toISOString() : null };
 }
 
 function withinIdle(lastActivityIso: string, now: Date): boolean {
