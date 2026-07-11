@@ -768,27 +768,27 @@ all** (the charter's no-nagging rule holds).
 ### 17.3 Scenario C — running, but won't come back after a reboot
 
 * **Trigger:** installed **and** running, but reboot **auto-start is off** (`autostart.supported &&
-  !autostart.enabled`). Sync works *now*, but the next restart silently drops the node — the exact
+  !autostart.enabled`). Pinning works *now*, but the next restart silently drops the node — the exact
   failure this whole feature exists to end.
 * **App-start behavior — deliberately gentle (LOCKED).** Because the node is **healthy right now**, we
-  must **not** show the alarming red/amber "can't sync" banner (that would violate no-nagging). Instead
+  must **not** show the alarming red/amber "can't pin" banner (that would violate no-nagging). Instead
   we show a **low-prominence, dismissible, one-time** encouragement — an **info** strip (or the blue
   card on the dashboard, §18) reading *"IPFS is on, but it won't restart automatically after you
-  reboot. Turn on auto-start so your files keep syncing."* with a single **Turn on auto-start** button.
+  reboot. Turn on auto-start so your files keep pinning."* with a single **Turn on auto-start** button.
   * It is **dismissible** and, once dismissed (or once auto-start is enabled), it does not return —
     this is encouragement, not a nag. It never blocks a page.
 * **Agree-button (Turn on auto-start) behavior:** `POST /autostart {action:"install"}` (§13) — writes
   and loads the launchd LaunchAgent. On success the strip disappears and the dashboard's control flips
   to its quiet "on ✓" status (§18). No daemon restart, no interruption.
 
-The dismissible, one-time auto-start encouragement (distinct from the blocking "can't sync" banner, shown only when running-but-not-auto-starting) is rendered in code:
+The dismissible, one-time auto-start encouragement (distinct from the blocking "can't pin" banner, shown only when running-but-not-auto-starting) is rendered in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/IpfsStatusBanner.tsx` — `IpfsStatusBanner`
 
 ---
 
 ## 18. Auto-start on reboot — the "encourage it" control & prominence rules
 
-Auto-start is something we **want** the user to turn on (it's what keeps files syncing after a
+Auto-start is something we **want** the user to turn on (it's what keeps files pinning after a
 restart), so when it's **off** we make the offer **prominent**; once it's **on**, we get out of the way
 and reduce it to a **quiet status line**.
 

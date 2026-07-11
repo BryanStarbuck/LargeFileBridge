@@ -47,7 +47,7 @@ export function lastPinAt(): Date | null {
 
 /**
  * Record one render/navigation ping for `email`. Extends the open session, or (after a >4h gap, or on
- * a first-ever ping) starts a new one and, if this machine is >48h stale, fires a non-blocking sync.
+ * a first-ever ping) starts a new one and, if this machine is >48h stale, fires a non-blocking pin pass.
  */
 export async function recordActivity(email: string): Promise<SessionActivityResult> {
   const now = new Date();

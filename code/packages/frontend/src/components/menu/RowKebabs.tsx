@@ -124,18 +124,18 @@ export function RepoKebab({ repo }: { repo: RepoRow }) {
       },
     },
     {
-      id: "sync",
-      label: "Sync now",
+      id: "pin",
+      label: "Pin now",
       group: "Work",
       icon: <UploadCloud className="h-4 w-4" />,
       onSelect: async () => {
         try {
-          await api.syncNow(repo.repoId);
+          await api.pinNow(repo.repoId);
           refreshRepos();
-          toast.success(`Syncing ${repo.name}`);
+          toast.success(`Pinning ${repo.name}`);
         } catch (e) {
-          clientLog.error("RowKebabs.syncNow", e);
-          toast.error(e instanceof Error ? e.message : "Sync failed");
+          clientLog.error("RowKebabs.pinNow", e);
+          toast.error(e instanceof Error ? e.message : "Pin failed");
         }
       },
     },
