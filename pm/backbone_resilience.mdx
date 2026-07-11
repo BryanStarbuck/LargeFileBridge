@@ -25,7 +25,7 @@ Read the engine first; this spec hardens it, it does not restate it:
   catch-up / manual) that fire it.
 * [devices.mdx](./devices.mdx) — the every-10-minute device write-back, the most frequent carrier of the
   flow and the first thing to go quiet when a trigger dies.
-* [storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract) —
+* [storage_local.mdx §13](./storage_local.mdx#13-the-background-pin-process--the-transparency-contract) —
   the transparency contract (installed / on-off / last-run) this spec extends with an **overdue** signal.
 
 ---
@@ -198,7 +198,7 @@ Attempting the push whenever the branch is ahead of the remote (not only after a
 
 ## 7. Staleness surfacing — an overdue worker is visible (LOCKED)
 
-The [transparency contract](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract)
+The [transparency contract](./storage_local.mdx#13-the-background-pin-process--the-transparency-contract)
 already exposes each worker's **installed / on-off / last-run**. This spec adds the signal that makes a
 silent stall (F1) visible **before** the user notices missing files:
 

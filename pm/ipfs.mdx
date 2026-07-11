@@ -59,7 +59,7 @@ Siblings this spec builds on and does not repeat:
 | Term | Definition |
 | --- | --- |
 | **Pin** | A CID this node is keeping (`ipfs pin ls`): **recursive** (a DAG root + children), **direct** (one block), **indirect** (kept because a parent is recursive), or **MFS** (implicit pin, [ipfs.mdx §3/§7](../knowledge/ipfs.mdx#3-pinning--telling-ipfs-to-keep-a-file)). Only recursive/direct/MFS roots are listed as their own rows; indirect blocks are rolled under their root. |
-| **Tracked** | A pinned CID that LFB **knows about** — it appears in a repo or computer-unit [manifest](./storage_local.mdx#91-manifest-shape-per-sync-unit) as a file LFB pins. Tracked pins are the normal, expected state. |
+| **Tracked** | A pinned CID that LFB **knows about** — it appears in a repo or computer-unit [manifest](./storage_local.mdx#91-manifest-shape-per-pin-unit) as a file LFB pins. Tracked pins are the normal, expected state. |
 | **Untracked (pinned)** | A CID this node pins that is **not** in any LFB manifest — pinned before LFB existed, pinned by hand, or pinned by another tool. It is real, kept content LFB is not yet managing. **These are the import candidates.** |
 | **Import** | Bring an untracked pin under LFB tracking: attach it to a file/unit, record it in the manifest ([storage §9](./storage_local.mdx#9-the-manifest--ipfs-pin-model)), and thereafter treat it as **Pinned**. Import **adds tracking**; it never re-pins, re-downloads, or moves bytes (the pin already exists). |
 
@@ -161,8 +161,8 @@ and — when it can resolve the CID to a local file path (via MFS, or a file on 
 to that CID) — the **file**. Import attaches that pin to LFB's tracking:
 
 1. **Resolve a target unit.** If the pinned file lives inside a known repo/directory, import attaches it
-   to that unit's [manifest](./storage_local.mdx#91-manifest-shape-per-sync-unit); otherwise it attaches to the
-   [computer unit](./storage_local.mdx#8-synccomputer--the-whole-computer-sync-unit).
+   to that unit's [manifest](./storage_local.mdx#91-manifest-shape-per-pin-unit); otherwise it attaches to the
+   [computer unit](./storage_local.mdx#8-pincomputer--the-whole-computer-pin-unit).
 2. **Record, don't move.** Import writes the manifest entry (`path` when known, `cid`, `size`, hashes)
    and sets the file's decision `sync` (shown as **Add to IPFS (pin)**, [one_repo §1](./one_repo.mdx#1-the-decision-model-locked)). The
    bytes are already pinned, so **nothing is fetched, re-added, or re-pinned** — import is metadata only.

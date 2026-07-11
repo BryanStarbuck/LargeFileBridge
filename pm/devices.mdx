@@ -166,7 +166,7 @@ graft:
 
 * **`schedule`** is per-device **and** per-storage: the studio tower might pin a company storage every
   15 minutes; a metered laptop might restrict it to an overnight window. It layers on top of the global
-  15-minute background pass ([storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract),
+  15-minute background pass ([storage_local.mdx §13](./storage_local.mdx#13-the-background-pin-process--the-transparency-contract),
   [pin_process.mdx](./pin_process.mdx)) — the pass still runs, but a storage whose device `schedule`
   says "not now / not wanted" is visited and reconciled without byte work, honoring the same opt-in
   discipline as `pinned`.
@@ -475,7 +475,7 @@ that write-back.
 
 Device write-back is its **own** scheduled worker, on its **own** cadence — **every 10 minutes** — so it
 is independent of the every-15-minute IPFS **Transfer** pass ([pin_process.mdx](./pin_process.mdx),
-[storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract)).
+[storage_local.mdx §13](./storage_local.mdx#13-the-background-pin-process--the-transparency-contract)).
 It carries the **same transparency contract** as the Transfer and Discovery workers — **installed /
 on-off / last-run**, controllable from the web app. Every 10 minutes it visits each directory storage and
 makes sure this computer's device info is **present and current** in that storage's repo, writing/updating

@@ -31,7 +31,7 @@ This spec does not restate its siblings; it references them:
 * [sync_list.mdx](./sync_list.mdx) — the **private** Sync List (your computers only). §2 contrasts the two.
 * [repo_settings.mdx](./repo_settings.mdx) — the per-repo settings page; this feature adds one block to it.
 * [scan.mdx](./scan.mdx) — the scan that discovers repos; detection (§4) runs there.
-* [storage_local.mdx §6.2](./storage_local.mdx#62-syncrrepo_nameconfigyaml) — the per-repo `config.yaml` this block lives in ·
+* [storage_local.mdx §6.2](./storage_local.mdx#62-pinrrepo_nameconfigyaml) — the per-repo `config.yaml` this block lives in ·
   [storage_local.mdx §9](./storage_local.mdx#9-the-manifest--ipfs-pin-model) — the CIDs we publish come from the manifest.
 * [one_repo.mdx](./one_repo.mdx) — where the "is a share site" indicator shows on a repo's page.
 
@@ -253,7 +253,7 @@ Absence of signals is a definite **no** — most repos are private-only and neve
 
 ## 5. Config — the per-repo `public_ipfs_share` block (OFF by default)
 
-Everything lives in that repo's own [`pin/r/<repo_name>/config.yaml`](./storage_local.mdx#62-syncrrepo_nameconfigyaml)
+Everything lives in that repo's own [`pin/r/<repo_name>/config.yaml`](./storage_local.mdx#62-pinrrepo_nameconfigyaml)
 — never the global config — as a new sibling of the existing per-repo blocks
 ([repo_settings.mdx §3](./repo_settings.mdx#3-persistence--one-repo-config-file)). It is a set of
 **on/off options plus the detected facts**:
@@ -392,7 +392,7 @@ as a public gateway/relay, refuse and warn — publishing a list must never requ
 | only-our-content / no public gateway | [knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule) | §7 — publishing a list is compatible; the node stays private |
 | The private cross-computer list | [sync_list.mdx](./sync_list.mdx) | §2 — the opposite-audience counterpart; a repo can be both |
 | Where CIDs come from | [storage_local.mdx §9](./storage_local.mdx#9-the-manifest--ipfs-pin-model) | The published artifacts are **derived from** the manifest CIDs |
-| Per-repo config & settings UI | [repo_settings.mdx](./repo_settings.mdx) / [storage_local.mdx §6.2](./storage_local.mdx#62-syncrrepo_nameconfigyaml) | The `public_ipfs_share` block + its toggles |
+| Per-repo config & settings UI | [repo_settings.mdx](./repo_settings.mdx) / [storage_local.mdx §6.2](./storage_local.mdx#62-pinrrepo_nameconfigyaml) | The `public_ipfs_share` block + its toggles |
 | Discovery | [scan.mdx](./scan.mdx) | Detection (§4) runs during the scan and writes the detected facts |
 | Per-repo page | [one_repo.mdx](./one_repo.mdx) | The share-site indicator (§8) |
 

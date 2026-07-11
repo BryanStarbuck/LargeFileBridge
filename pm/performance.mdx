@@ -341,7 +341,7 @@ The rAF-coalesced scroll handler that skips re-renders when the window start is 
 - **Where:** `code/packages/backend/src/modules/pin/pin.service.ts` — `pinAll()` was a
   `for (const folder of listRepoFolders()) { await pinRepoFolder(folder) }` serial loop.
 - **Symptom:** A pin pass is a **full pass** over every known unit
-  ([pin_process.mdx §2](./pin_process.mdx#2-every-synchronization-is-a-full-pass-locked)); pinning
+  ([pin_process.mdx §2](./pin_process.mdx#2-every-pin-pass-is-a-full-pass-locked)); pinning
   100+ repos strictly one-after-another leaves a many-core machine almost idle and makes a manual **Pin
   now** background pass drag on far longer than it should.
 - **Fix (done):** Fan the pass out on two levels, both capped at `cores − 2`: a `runPool()` across

@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- The 15-minute background sync (storage.mdx §13). Installed by the web app / justfile. -->
+<!-- The 15-minute background pin/add-to-IPFS pass (storage_local.mdx §13). Installed by the web app / justfile. -->
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.largefilebridge.sync</string>
+  <key>Label</key><string>com.largefilebridge.pin</string>
   <key>ProgramArguments</key>
   <array>
     <string>__NODE_BIN__</string>
     <string>__TRIGGER_SCRIPT__</string>
-    <string>sync</string>
+    <string>pin</string>
     <string>__API_PORT__</string>
   </array>
   <key>StartInterval</key><integer>900</integer>

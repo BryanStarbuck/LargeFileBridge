@@ -120,7 +120,7 @@ The list changes underneath us whenever Google syncs in a peer's newer copy. LFB
 
 * **fsevents watch** on the `LargeFileBridge/` subtree of the mount, **debounced** (Drive can touch a
   file several times as it finishes syncing), plus a **periodic poll fallback** — the background pin
-  process ([storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract),
+  process ([storage_local.mdx §13](./storage_local.mdx#13-the-background-pin-process--the-transparency-contract),
   every 15 min) re-lists peer subfolders regardless, because file watchers on a network-backed mount
   are not fully reliable.
 * In **Stream files** mode, a watch may not fire on a placeholder until the bytes are pulled. LFB may

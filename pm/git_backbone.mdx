@@ -237,7 +237,7 @@ Running git with a non-interactive, credential-helper-backed environment and tur
 ## 6. The backbone cycle — where Git runs inside the pass (LOCKED order)
 
 Every storage that has the Git backbone enabled runs **one Git cycle per pin pass**
-([pin_process.mdx §2](./pin_process.mdx#2-every-synchronization-is-a-full-pass-locked)), in this fixed
+([pin_process.mdx §2](./pin_process.mdx#2-every-pin-pass-is-a-full-pass-locked)), in this fixed
 order, wrapped around the storage's normal reconcile + IPFS byte work:
 
 1. **Resolve the working copy** (§3) — local path in place, or clone/open the URL cache.

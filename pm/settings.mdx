@@ -131,7 +131,7 @@ only goes out of their way to override when a specific repo needs it (e.g. a rep
 where they want a lower cutoff, or a video repo where they want a higher one).
 
 The per-repo override persists in that repo's own config
-([storage_local.mdx §6.2](./storage_local.mdx#62-syncrrepo_nameconfigyaml)):
+([storage_local.mdx §6.2](./storage_local.mdx#62-pinrrepo_nameconfigyaml)):
 
 ```yaml
 # pin/r/<repo_name>/config.yaml  (excerpt — the per-repo threshold override)
@@ -154,7 +154,7 @@ concerns live. Each is specified elsewhere; the page groups them into sections:
 | **Compression** | Per-media (images / video / **audio**) codec **allow/deny** + quality; social-media-safe defaults. | [compression.mdx §7](./compression.mdx#7-codec-preference-settings-per-media-type) |
 | **Parallelism** | The CPU-core budget (§4.3) — how much of the machine background compression & processing may use. | [parallelization.mdx §4](./parallelization.mdx) |
 | **Scan process** | The 4-hour discovery scan: installed / on-off / Rescan now. | [scan.mdx §7](./scan.mdx#7-the-transparency-contract-installed-vs-onoff) |
-| **Pin process** | The 15-min background pin: installed / on-off. | [storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract) |
+| **Pin process** | The 15-min background pin: installed / on-off. | [storage_local.mdx §13](./storage_local.mdx#13-the-background-pin-process--the-transparency-contract) |
 | **Scanner roots** | Which top-level dirs the scan walks + global ignore globs. | [storage_local.mdx §3/§7](./storage_local.mdx#7-the-scanner--discovering-repos-and-the-mask) |
 | **IPFS node** | API/gateway multiaddrs, pin mode, reprovide. | [storage_local.mdx §3](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical) |
 | **Access / allow-list** | The OpenAuthFederated allow-listed emails (admin only). | [storage_local.mdx §4](./storage_local.mdx#4-per-logged-in-user-storage--the-per-user-requirement) |

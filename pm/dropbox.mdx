@@ -165,7 +165,7 @@ LFB learns that a peer's list changed two ways, both feeding the same reconcile 
   into one reconcile pass. Ignore events under `.dropbox` / `.dropbox.cache` (§4).
 * **Periodic poll fallback.** fsevents can miss events (placeholders materializing, a machine waking
   from sleep, a missed distributed notification), so the **background pin process**
-  ([storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract), the
+  ([storage_local.mdx §13](./storage_local.mdx#13-the-background-pin-process--the-transparency-contract), the
   launchd job every 15 min) also **polls** the subtree each run: list peer subfolders, stat each
   `LargeFilesBridge_SyncList.yaml`, and reconcile any whose mtime/size changed since last seen.
 
@@ -334,7 +334,7 @@ Dropbox as a backbone is correct when **all** of the following hold:
    before reading), selective-sync exclusions (spurious absence, not delete), `.dropbox` /
    `.dropbox.cache` metadata (ignored), partial/zero-byte files (rejected, previous kept).
 7. Change detection uses an **fsevents watch with debounce** plus a **periodic poll fallback** via
-   the background pin process ([storage_local.mdx §13](./storage_local.mdx#13-the-background-sync-process--the-transparency-contract));
+   the background pin process ([storage_local.mdx §13](./storage_local.mdx#13-the-background-pin-process--the-transparency-contract));
    a changed peer file triggers reconciliation, never a blind apply.
 8. Publishing bumps `revision`, stamps `written_at`, writes **only self-verifiable `pinned_by`**
    claims, writes **atomically** (temp-then-rename in our own subfolder), only when
