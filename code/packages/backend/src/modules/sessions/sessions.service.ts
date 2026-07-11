@@ -93,7 +93,7 @@ function withinIdle(lastActivityIso: string, now: Date): boolean {
 }
 
 function isStale(last: Date | null, now: Date): boolean {
-  if (!last) return true; // never synced ⇒ infinitely stale
+  if (!last) return true; // never pinned ⇒ infinitely stale
   return now.getTime() - last.getTime() > STALE_MS;
 }
 

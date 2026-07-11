@@ -167,14 +167,15 @@ For **every** known unit the pass visits, it always **reconciles** (no opt-in re
    [scan.mdx §2.1](./scan.mdx#21-the-15-minute-scheduletask-reads-the-ipfs-pinset-import-already-pinned)).
 3. **Reconcile any incoming Sync List** — never trusted, always reconciled per
    [sync_list.mdx §5](./sync_list.mdx#5-trust--reconciliation-the-load-bearing-rule).
-4. **Write `status.yaml`** — last sync time, counts, errors — so the UI reflects the visit.
+4. **Write `status.yaml`** — last pin time, counts, errors — so the UI reflects the visit.
 
-Only the **byte work** is gated by the `synced` opt-in (§1):
+Only the **byte work** is gated by the `pinned` opt-in (§1):
 
-* If the unit is **opted in** (`synced: true`): add new/changed `sync`-decided files to IPFS, pin
+* If the unit is **opted in** (`pinned: true`): add new/changed files marked **Add to IPFS (pin)** (the
+  `sync` decision value — frozen on disk, rendered in the UI as "Add to IPFS (pin)") to IPFS, pin
   locally, fetch missing manifest CIDs from peers, and (if `publish_manifest`) write the committed
   in-repo manifest so git carries the list.
-* If the unit is **not opted in** (`synced: false`): the pass still visits and reconciles it (steps
+* If the unit is **not opted in** (`pinned: false`): the pass still visits and reconciles it (steps
   1–4) but adds/pins/fetches **nothing** — until the user opts in.
 
 **Device write-back is explicitly NOT gated by `synced`.** Writing **this computer's own**

@@ -147,19 +147,19 @@ export function RepoKebab({ repo }: { repo: RepoRow }) {
       onSelect: () => runTranscribeTree(repo.path, repo.name),
     },
     {
-      id: "toggle-synced",
-      label: repo.synced ? "Synced: on" : "Synced: off",
+      id: "toggle-pin",
+      label: repo.pinned ? "Pinned: on" : "Pinned: off",
       group: "Config",
       icon: <ToggleRight className="h-4 w-4" />,
-      checked: repo.synced,
+      checked: repo.pinned,
       onSelect: async () => {
         try {
-          await api.patchRepoSettings(repo.repoId, { synced: !repo.synced });
+          await api.patchRepoSettings(repo.repoId, { pinned: !repo.pinned });
           refreshRepos();
-          toast.success(`${repo.name} sync ${repo.synced ? "paused" : "enabled"}`);
+          toast.success(`${repo.name} pinning ${repo.pinned ? "paused" : "enabled"}`);
         } catch (e) {
-          clientLog.error("RowKebabs.toggleSynced", e);
-          toast.error(e instanceof Error ? e.message : "Couldn't change sync setting");
+          clientLog.error("RowKebabs.togglePinned", e);
+          toast.error(e instanceof Error ? e.message : "Couldn't change pin setting");
         }
       },
     },
