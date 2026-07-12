@@ -29,6 +29,9 @@ import { analyzeFile } from "./analysis.service.js";
 // (writeSelfDevice) — used only inside functions, never at module-eval time — safe under NodeNext ESM.
 import { readStorageSettings, writeStorageSettings } from "./storage-settings.service.js";
 import { writeSelfDevice } from "./devices.service.js";
+// Lazy import cycle with repo-storage.service (it imports storageSid from here) — used only inside
+// functions, never at module-eval time — safe under NodeNext ESM, same pattern as the imports above.
+import { ensureRepoStorageDoc } from "./repo-storage.service.js";
 import { log } from "../../shared/logging.js";
 
 const STORAGE_YAML = "storage.yaml";
