@@ -67,18 +67,41 @@ todoRouter.delete("/batches/:id", (req, res) => {
   res.json({ ok: true, data: { dismissed: true } });
 });
 
-// POST /api/todo/batches/:id/apply — carry out the checked recommendations. Body: { paths?: string[] }
-// (repo-relative; default = all items). Writes decisions + queues effects, then returns the counts.
+// POST /api/todo/batches/:id/apply — carry out the checked recommendations. Body:
+//   { paths?: string[], perRow?: { [path]: { ipfs?, ignore?, compress? } } }
+// `paths` (repo-relative) is the set of INCLUDED rows (default = all items). `perRow` carries each row's
+// PER-AXIS toggles from the wide popup (warnings.mdx §4.5.1) so a user can pin-but-not-compress one file
+// and compress-only another; when a row is absent from `perRow` we fall back to its stored recommendation.
 todoRouter.post("/batches/:id/apply", async (req, res) => {
   const found = readBatchById(req.params.id);
   if (!found) return res.status(404).json({ ok: false, error: "batch not found" });
   const doc = found.doc;
-  const body = z.object({ paths: z.array(z.string()).optional() }).safeParse(req.body ?? {});
+  const body = z
+    .object({
+      paths: z.array(z.string()).optional(),
+      perRow: z
+        .record(
+          z.string(),
+          z.object({ ipfs: z.boolean().optional(), ignore: z.boolean().optional(), compress: z.boolean().optional() }),
+        )
+        .optional(),
+    })
+    .safeParse(req.body ?? {});
+  const perRow = body.success ? body.data.perRow : undefined;
   const keep = new Set(body.success && body.data.paths ? body.data.paths : doc.items.map((i) => i.path));
   const chosen = doc.items.filter((i) => keep.has(i.path));
   const by = currentUser(req).email;
   const root = doc.storageRoot;
   const result = { applied: 0, pins: 0, gitignored: 0, compressed: 0, transcribed: 0 };
+
+  // The effective axes for one item: the popup's per-row toggles when supplied, else the item's stored
+  // recommendation (recommend.gitignore ↔ the "ignore" axis). This is what makes the three toggles real.
+  const effAxes = (i: (typeof doc.items)[number]) => {
+    const o = perRow?.[i.path];
+    if (o) return { ipfs: !!o.ipfs, ignore: !!o.ignore, compress: !!o.compress };
+    const r = i.recommend ?? {};
+    return { ipfs: !!r.ipfs, ignore: !!r.gitignore, compress: !!r.compress };
+  };
 
   try {
     if (doc.kind === "transcribe") {
@@ -91,23 +114,41 @@ todoRouter.post("/batches/:id/apply", async (req, res) => {
       return res.json({ ok: true, data: result });
     }
 
-    const pullDown = chosen.filter((i) => i.category === "pull_down").map((i) => i.path);
-    const pin = chosen.filter((i) => i.category === "pin").map((i) => i.path);
-    const compress = chosen.filter((i) => i.category === "compress_video" || i.category === "compress_image");
-
+    // Bucket the chosen rows by their EFFECTIVE axes (not just their category).
+    const pullDown = chosen.filter((i) => i.category === "pull_down" && effAxes(i).ipfs).map((i) => i.path);
+    const compress = chosen.filter(
+      (i) => (i.category === "compress_video" || i.category === "compress_image") && effAxes(i).compress,
+    );
+    // Decisions (pin / git-ignore) apply only inside a repo. Group non-pull-down rows by their (ipfs,ignore)
+    // combo so each combo is one recordDecision call; pull-down rows carry only their git-ignore axis here
+    // (their pin/fetch is done by pullMissing below).
+    const acted = new Set<string>();
     if (doc.scope === "repo" && doc.repoId) {
       const folder = folderForRepoId(doc.repoId);
       if (folder) {
-        if (pin.length) {
-          await recordDecision(folder, pin, { ipfs: true, gitignore: true }, by);
-          result.pins += pin.length;
-          result.gitignored += pin.length;
-          result.applied += pin.length;
+        const combos = new Map<string, { ipfs: boolean; gitignore: boolean; paths: string[] }>();
+        for (const i of chosen) {
+          const a = effAxes(i);
+          const isPull = i.category === "pull_down";
+          // pull-down rows: pin is handled by pullMissing; only their ignore axis becomes a decision here.
+          const wantIpfs = isPull ? false : a.ipfs;
+          const wantIgnore = a.ignore;
+          if (!wantIpfs && !wantIgnore) continue;
+          const key = `${wantIpfs}|${wantIgnore}`;
+          const g = combos.get(key) ?? { ipfs: wantIpfs, gitignore: wantIgnore, paths: [] };
+          g.paths.push(i.path);
+          combos.set(key, g);
+          acted.add(i.path);
+        }
+        for (const g of combos.values()) {
+          await recordDecision(folder, g.paths, { ipfs: g.ipfs, gitignore: g.gitignore }, by);
+          if (g.ipfs) result.pins += g.paths.length;
+          if (g.gitignore) result.gitignored += g.paths.length;
         }
         if (pullDown.length) {
           const r = await pullMissing(root, pullDown, { compress: false, by });
           result.pins += r.pulled;
-          result.applied += pullDown.length;
+          for (const p of pullDown) acted.add(p);
         }
       }
     }
@@ -125,9 +166,10 @@ todoRouter.post("/batches/:id/apply", async (req, res) => {
         })),
       );
       result.compressed += compress.length;
-      result.applied += compress.length;
+      for (const i of compress) acted.add(i.path);
     }
 
+    result.applied = acted.size;
     res.json({ ok: true, data: result });
   } catch (e) {
     log.error("todo", `apply ${req.params.id} failed: ${(e as Error).message}`);

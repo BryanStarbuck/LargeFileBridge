@@ -1,14 +1,16 @@
 // The To Do page (to_do.mdx): the aggregated per-storage TO DO Batch slugs. Only batches WITH work
 // show; each is a compact card with a blue chevron (open the batch popup) and a red trash (dismiss).
 // A header link runs the on-demand "Show what could be transcribed" scan and adds transcribe slugs.
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Trash2, ListTodo, Loader2, X } from "lucide-react";
+import { ChevronRight, Trash2, ListTodo, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import type { TodoBatchSummary, TodoBatchDetail, TodoBatchItem, TodoCategory } from "@lfb/shared";
-import { formatBytes } from "@lfb/shared";
+import { formatBytes, mediaKindForName } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
+import { WarningPopup } from "../../components/ui/WarningPopup.js";
+import type { WarningDef, WarningTarget, WarningTargetAxes } from "../../components/ui/warnings/registry.js";
 import { clientLog } from "../../lib/clientLog.js";
 
 const SCOPE_LABEL: Record<string, string> = {
@@ -225,115 +227,106 @@ function recommendLabel(it: TodoBatchItem): string {
   }
 }
 
+// The recommended per-row action axes for one batch item (warnings.mdx §4.5.1). Pre-checked ("on") where
+// the engine recommends an action (recommend.gitignore ↔ the "ignore" axis); an axis absent ⇒ no toggle
+// on that row (N/A). Falls back to a category default so a non-transcribe row always leads with toggles.
+function axesForItem(it: TodoBatchItem): WarningTargetAxes | undefined {
+  const r = it.recommend ?? {};
+  const axes: WarningTargetAxes = {};
+  if (r.ipfs) axes.ipfs = "on";
+  if (r.gitignore) axes.ignore = "on";
+  if (r.compress) axes.compress = "on";
+  if (Object.keys(axes).length) return axes;
+  switch (it.category) {
+    case "pull_down":
+    case "pin":
+      return { ipfs: "on", ignore: "on" };
+    case "git_ignore":
+      return { ignore: "on" };
+    case "compress_video":
+    case "compress_image":
+      return { compress: "on" };
+    default:
+      return undefined;
+  }
+}
+
+// The To-Do batch popup (to_do.mdx §6/§7) — the wide two-pane WarningPopup: right pane = the file list
+// with per-row action toggles (pin/ignore/compress) pre-checked where recommended; left pane educates and
+// flips to a full-size media preview on hover (Space plays a previewed video, §4.5.2/§4.5.3).
 function BatchPopup({ id, onClose }: { id: string; onClose: () => void }) {
   const qc = useQueryClient();
   const { data: batch, isLoading } = useQuery<TodoBatchDetail>({
     queryKey: ["todo", "batch", id],
     queryFn: () => api.todoBatch(id),
   });
-  const isTranscribe = batch?.kind === "transcribe";
-  const [checked, setChecked] = useState<Set<string> | null>(null);
-  // Seed the checked set to ALL items the first time the batch loads (default-checked, to_do.mdx §6/§7).
-  const items = batch?.items ?? [];
-  const checkedSet = checked ?? new Set(items.map((it) => it.path));
 
-  const apply = useMutation({
-    mutationFn: (paths: string[]) => api.applyTodoBatch(id, paths),
-    onSuccess: (r) => {
-      toast.success(
-        isTranscribe
-          ? `Transcribing ${r.transcribed} file${r.transcribed === 1 ? "" : "s"} in the background`
-          : `Applied to ${r.applied} file${r.applied === 1 ? "" : "s"}`,
-      );
-      qc.invalidateQueries({ queryKey: ["todo", "batches"] });
-      qc.invalidateQueries({ queryKey: ["repo"] });
-      onClose();
-    },
-    onError: (e: Error) => {
-      clientLog.error("TodoPage.apply", e);
-      toast.error(e.message);
-    },
-  });
+  const warning = useMemo<WarningDef | null>(() => {
+    if (!batch) return null;
+    const isTranscribe = batch.kind === "transcribe";
+    const targets: WarningTarget[] = batch.items.map((it) => {
+      const kind = mediaKindForName(it.path);
+      return {
+        id: it.path,
+        label: it.path,
+        sublabel: `${formatBytes(it.sizeBytes)} · ${recommendLabel(it)}`,
+        // Transcribe is a single action → single include checkbox; every other batch → per-row toggles.
+        axes: isTranscribe ? undefined : axesForItem(it),
+        preview: kind ? { kind, url: "" } : undefined, // url resolved lazily via mediaGrant on hover
+      };
+    });
+    return {
+      id: `todo-${id}`,
+      state: "warn",
+      scope: "storage",
+      headline: `${isTranscribe ? "Transcribe" : "Review"} · ${batch.storageName}`,
+      popup: {
+        whatThisIs: sentence(batch),
+        whyItMatters: isTranscribe
+          ? "A transcript makes each clip searchable and lets you find spoken words across your library."
+          : "These recommendations back up your files across your computers, keep big files out of Git, and reclaim space — you decide, per file, which to apply.",
+        targets,
+        targetNoun: "file",
+        actionLabel: isTranscribe ? "Transcribe" : "Apply",
+        apply: async (_sel, ids, perRow) => {
+          const r = await api.applyTodoBatch(id, ids, perRow);
+          toast.success(
+            isTranscribe
+              ? `Transcribing ${r.transcribed} file${r.transcribed === 1 ? "" : "s"} in the background`
+              : `Applied to ${r.applied} file${r.applied === 1 ? "" : "s"}`,
+          );
+          qc.invalidateQueries({ queryKey: ["todo", "batches"] });
+          qc.invalidateQueries({ queryKey: ["repo"] });
+        },
+      },
+    };
+  }, [batch, id, qc]);
 
-  const toggle = (p: string) => {
-    const next = new Set(checkedSet);
-    if (next.has(p)) next.delete(p);
-    else next.add(p);
-    setChecked(next);
-  };
-
-  // Transcribe popups are large (~80% of the screen, to_do.mdx §7); a normal batch popup is medium.
-  const sizeClass = isTranscribe ? "h-[80vh] w-[80vw]" : "max-h-[80vh] w-[42rem]";
-
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={onClose}>
-      <div
-        className={`flex flex-col overflow-hidden rounded-xl bg-white shadow-2xl ${sizeClass}`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b px-5 py-3" style={{ borderColor: "var(--lfb-border)" }}>
-          <div className="min-w-0">
-            <h2 className="truncate text-base font-semibold text-black">
-              {isTranscribe ? "Transcribe" : "Review"} · {batch?.storageName ?? "…"}
-            </h2>
-            <p className="text-xs text-black/50">
-              {isTranscribe
-                ? "These media files have no transcription yet. Uncheck any to skip."
-                : "Large File Bridge recommends these actions. Uncheck any file to leave it out."}
-            </p>
-          </div>
-          <button onClick={onClose} className="rounded-md p-1.5 hover:bg-slate-100">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3">
-          {isLoading ? (
-            <p className="text-center text-black/50">Loading…</p>
-          ) : items.length === 0 ? (
-            <p className="text-center text-black/50">Nothing to act on.</p>
-          ) : (
-            <table className="w-full text-sm">
-              <tbody>
-                {items.map((it) => (
-                  <tr key={it.path} className="border-b last:border-0" style={{ borderColor: "var(--lfb-border)" }}>
-                    <td className="w-6 py-1.5 align-top">
-                      <input
-                        type="checkbox"
-                        checked={checkedSet.has(it.path)}
-                        onChange={() => toggle(it.path)}
-                        aria-label={`include ${it.path}`}
-                      />
-                    </td>
-                    <td className="py-1.5">
-                      <div className="break-all text-black">{it.path}</div>
-                      <div className="text-xs text-black/40">
-                        {formatBytes(it.sizeBytes)} · {recommendLabel(it)}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        <div className="flex items-center justify-between border-t px-5 py-3" style={{ borderColor: "var(--lfb-border)" }}>
-          <button onClick={onClose} className="text-sm text-black/60 hover:text-black">
-            Cancel
-          </button>
-          <button
-            onClick={() => apply.mutate([...checkedSet])}
-            disabled={apply.isPending || checkedSet.size === 0}
-            className="flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-3.5 py-1.5 text-sm text-white disabled:opacity-50"
-          >
-            {apply.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
-            {isTranscribe
-              ? `Transcribe ${checkedSet.size} file${checkedSet.size === 1 ? "" : "s"}`
-              : `Apply to ${checkedSet.size} file${checkedSet.size === 1 ? "" : "s"}`}
-          </button>
+  if (isLoading || !warning || !batch) {
+    return (
+      <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={onClose}>
+        <div className="rounded-xl bg-white px-6 py-5 text-sm text-black/50 shadow-xl" onClick={(e) => e.stopPropagation()}>
+          <Loader2 className="mr-2 inline h-4 w-4 animate-spin" />
+          Loading…
         </div>
       </div>
-    </div>
+    );
+  }
+
+  const root = batch.storageRoot.replace(/\/+$/, "");
+  return (
+    <WarningPopup
+      warning={warning}
+      onClose={onClose}
+      resolvePreviewUrl={async (t) => {
+        try {
+          const g = await api.mediaGrant(`${root}/${t.id}`);
+          return g.url;
+        } catch (e) {
+          clientLog.error("TodoPage.preview", e as Error);
+          return null;
+        }
+      }}
+    />
   );
 }

@@ -367,8 +367,17 @@ export const api = {
   todoBatch: (id: string) => unwrap<TodoBatchDetail>(http.get(`/todo/batches/${encodeURIComponent(id)}`)),
   dismissTodoBatch: (id: string) =>
     unwrap<{ dismissed: boolean }>(http.delete(`/todo/batches/${encodeURIComponent(id)}`)),
-  applyTodoBatch: (id: string, paths?: string[]) =>
-    unwrap<TodoApplyResult>(http.post(`/todo/batches/${encodeURIComponent(id)}/apply`, paths ? { paths } : {})),
+  applyTodoBatch: (
+    id: string,
+    paths?: string[],
+    perRow?: Record<string, { ipfs?: boolean; ignore?: boolean; compress?: boolean }>,
+  ) =>
+    unwrap<TodoApplyResult>(
+      http.post(`/todo/batches/${encodeURIComponent(id)}/apply`, {
+        ...(paths ? { paths } : {}),
+        ...(perRow ? { perRow } : {}),
+      }),
+    ),
   transcribeScan: () => unwrap<TranscribeScanResult>(http.post("/todo/transcribe-scan", {})),
 
   // Media viewer (media_viewer.mdx §2). grant → a short-lived same-origin URL the <img>/<video>

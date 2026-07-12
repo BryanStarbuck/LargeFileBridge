@@ -49,9 +49,12 @@ function buildDoc(
   const id = opts.kind === "transcribe" ? `${scope}:${slug}:transcribe` : `${scope}:${slug}`;
 
   // Preserve a prior dismissal only while the batch's contents haven't materially changed (to_do_batches.mdx §3.3).
+  // "Materially changed" = the SET of file paths differs (a new file appearing, or one applied and one added,
+  // keeps the same count but is a real change) — so compare the path sets, not just the count.
   const prev = readPreviousBatch(scope, name, opts.kind);
-  const unchanged = prev && prev.items.length === items.length;
-  const dismissed = !!(prev?.dismissed && unchanged);
+  const prevPaths = prev ? new Set(prev.items.map((i) => i.path)) : null;
+  const samePaths = !!prevPaths && prevPaths.size === items.length && items.every((i) => prevPaths.has(i.path));
+  const dismissed = !!(prev?.dismissed && samePaths);
 
   return {
     schema_version: 1,
