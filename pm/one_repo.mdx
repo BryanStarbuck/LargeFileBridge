@@ -45,6 +45,14 @@ Independently of the decision, an **Add-to-IPFS (pin)** file (decision value `sy
 status** — where its bytes are relative to the network (§4.2). A file's decision is user intent; its
 transfer status is reality.
 
+> **This table is the IPFS axis only — one of two.** The full decision the user makes has **two
+> independent axes** — **Add to IPFS (pin)** *and* **Add to git ignore** — each on/off separately, and it
+> is recorded (with who/when/the Storage ID) in a **repo-level, team-shared** ledger so a whole team
+> shares one set of decisions. That is specified end to end in **[decisions.mdx](./decisions.mdx)**. The
+> three-state enum here is the **frozen IPFS-axis projection** of that ledger (`ipfs:true → sync`,
+> `ipfs:false → ignore`, no record → undecided) — this screen keeps rendering it verbatim; the wire value
+> `sync` is never renamed. The git-ignore axis is applied through [git_ignore.mdx](./git_ignore.mdx).
+
 ```ts
 // One row of the files table.
 export interface FileRow {
@@ -299,6 +307,25 @@ Writing a per-file decision (single or bulk) to the repo's `config.yaml` is hand
 
 Each file's `transfer` value (pinned / pending / na, derived from its decision, CID, and peer pins) is computed by the backend in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `transferFor` (called by `composeFileRows`)
+
+### 4.8 Decision provenance — who decided, and when (team-aware)
+
+Because decisions are now a **team-shared, attributed** record ([decisions.mdx §3/§10](./decisions.mdx)),
+this screen surfaces *who* decided each file and *when* — a decision the team can't inspect is barely
+better than none:
+
+* **Hover the Decision cell** → a non-intrusive tooltip ([non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)):
+  *"Add to IPFS + git-ignored · decided by bob@acme.com · Jul 12, 2:32 PM"*. A small person/clock glyph
+  marks a file decided by **someone else on the team** (vs. you), so others' choices are visible at a
+  glance.
+* **Filter/sort by decider** — the Decision column filter adds *decided by me / by a teammate /
+  policy-decided / undecided*; sorting by the decided-at time surfaces the most recently triaged first.
+* **Overrides are visible, not silent** — when a teammate's pulled-in decision changes an axis on a file
+  this machine already acted on, the change shows immediately in the provenance and a **quiet, dismissible**
+  dock note summarizes it ([decisions.mdx §11](./decisions.mdx)); it never deletes local or pinned bytes.
+
+The per-row `decidedBy` / `decidedAt` (joined from the folded shared ledger) that this tooltip and filter read are added to each `FileRow` by the backend in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows` (joins `foldLedger()` from `storage/decisions.service.ts`); rendered in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx`.
 
 ---
 

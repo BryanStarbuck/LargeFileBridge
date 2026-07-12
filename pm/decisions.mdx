@@ -1,0 +1,720 @@
+---
+title: LargeFileBridge — Decisions (the two-axis per-file decision + the shared, team-visible decision ledger)
+description: The authoritative spec for what LargeFileBridge remembers when a user decides what to do with a large file. Replaces the old single mutually-exclusive Pin-XOR-Ignore choice with TWO INDEPENDENT AXES — "Add to IPFS (pin)" on/off and "Add to git ignore" on/off — surfaced as two CHECKBOXES (not radios), because a big video usually wants BOTH (git-ignored so git never commits it AND pinned so it is backed up across your computers), and "both off" (reviewed, leave it) is itself a valid, sticky decision that stops the warning from coming back. Every decision is written to a REPO-LEVEL, TEAM-SHARED ledger — .lfbridge/decisions.yaml — that travels via the git backbone (union-merged like the manifest), so a ten-person team shares one set of decisions and no one is re-asked about a file a teammate already triaged. Each decision record carries: whether we ASKED, the two axes (ipfs, gitignore), WHICH USER decided (allow-listed email), WHEN (timestamp), and the SID (Storage ID) that binds the decision to its storage even when a teammate has not materialized the file locally. Defines the record schema, the append-only-then-folded merge model, the machine-local reconciliation into the FROZEN decisions map (sync/ignore/undecided), the consent gate (keeping .lfbridge/ on this computer), and every multi-user situation. Sibling of one_repo.mdx (the per-file UI that writes decisions), repos.mdx (the vocabulary), warnings.mdx §10.2.7 (the educate-and-fix popup that now shows the two checkboxes), git_ignore.mdx (the gitignore axis engine), storage_repo.mdx / storage_local.mdx (where the ledger lives on disk), and git_backbone.mdx (the union-merge transport).
+---
+
+# LargeFileBridge — Decisions
+
+When LargeFileBridge finds a large file it does not yet have instructions for, it asks the user what to
+do. **This spec owns what that question is, what we remember about the answer, and where we remember it
+so a whole team shares one answer.** It is the source of truth every decision surface follows — the
+per-row Decision control ([one_repo.mdx §4.5](./one_repo.mdx)), the bulk menu, the file kebab
+([menus.mdx §5.3](./menus.mdx)), and the "N files need a decision" educate-and-fix popup
+([warnings.mdx §10.2.7](./warnings.mdx)).
+
+This spec builds on the siblings and does not repeat them:
+
+* [one_repo.mdx](./one_repo.mdx) — the per-repo screen and the LOCKED three-state **IPFS-axis** vocabulary
+  (Add to IPFS (pin) / Ignore / Undecided; wire value `sync`). This spec **layers a second axis on top**
+  without renaming that frozen value.
+* [repos.mdx](./repos.mdx) — the Repo → Large file → Decision vocabulary and the per-repo counts.
+* [warnings.mdx §10.2.7](./warnings.mdx) — the educate-and-fix popup that surfaces the decision; this
+  spec changes its options from **radios** to the **two checkboxes** defined here.
+* [git_ignore.mdx](./git_ignore.mdx) — the engine that actually writes `.gitignore` lines (the
+  git-ignore axis's "apply"); this spec only records the **decision** to use it.
+* [storage_repo.mdx](./storage_repo.mdx) / [storage_local.mdx](./storage_local.mdx) — where the ledger
+  file physically lives (`<repo>/.lfbridge/decisions.yaml`) and how the machine-local `decisions:` map
+  reconciles from it.
+* [git_backbone.mdx](./git_backbone.mdx) — the git engine that carries the ledger between the user's
+  computers and their teammates, and the **union-merge** rule that keeps concurrent edits conflict-free.
+* [storage_settings.mdx §3](./storage_settings.mdx) — the machine-local "keep `.lfbridge/` on this
+  computer" control that is the **consent gate** for writing the shared ledger (§6).
+
+---
+
+## 1. Two independent axes — not one mutually-exclusive choice (LOCKED)
+
+The old model made the user pick **one** of *Pin* or *Ignore* — a single radio group. That is wrong:
+the two things are **orthogonal**, and the most common correct outcome for a big file is **both at
+once**:
+
+* **Add to IPFS (pin)** — back the file up across the user's computers over IPFS. Independent boolean.
+* **Add to git ignore** — write the file into the repo's `.gitignore` so Git never tries to commit the
+  big bytes. Independent boolean.
+
+The canonical big-file flow the whole product exists for — *git handles the small files, IPFS handles
+the big ones* ([charter](../CLAUDE.md)) — is exactly **git-ignore it AND pin it**. A single Pin-XOR-Ignore
+radio **cannot express that**, which is why the decision must be **two checkboxes**, each on/off
+independently:
+
+| Add to IPFS | Add to git ignore | Meaning |
+| --- | --- | --- |
+| ✅ on | ✅ on | The recommended big-file outcome: git-ignored so it is never committed, **and** pinned so it is backed up across your computers. |
+| ✅ on | ⬜ off | Pin/back up the bytes over IPFS, but **leave Git tracking it** (rare — a file the team wants committed *and* mirrored). |
+| ⬜ off | ✅ on | Git-ignore it (keep it out of commits) but **do not** pin it — a purely local file the team does not back up. |
+| ⬜ off | ⬜ off | **"Reviewed — leave it as-is."** A deliberate, recorded no-op: neither pinned nor newly git-ignored. This is a **valid decision**, not the absence of one (§2). |
+
+**Both-off is a real answer.** The user may "turn both off or both on." Turning both off records that the
+user *looked at these files and chose to do nothing* — which is precisely what stops the warning from
+reappearing (§2, §7). The prior model had no way to say "I saw it, leave it," so a re-scan kept re-raising
+the same yellow banner; that is the bug this fixes.
+
+**The two axes are surfaced as two checkboxes** ([warnings.mdx §4.3](./warnings.mdx), option kind
+`checkbox`) — never a radio group — in the popup, the bulk actions, and the per-file menu:
+
+```
+What do you want to do with the 6 selected files?
+
+  ☑  Add them to IPFS        back them up across your computers over IPFS
+  ☑  Add to git ignore       keep Git from committing these big files
+
+                                              [ Cancel ]   [ Apply — 6 files › ]
+```
+
+Both boxes default **checked** (the recommended both-on outcome), and the **Apply button is enabled even
+when both are unchecked** — because both-off is a valid, sticky decision. (This is the one place the
+generic popup's "a required radio must be picked" gate does **not** apply — there is no required radio,
+only two optional checkboxes; see [warnings.mdx §5.2](./warnings.mdx).)
+
+The two-checkbox options and the both-off-is-valid Apply gate are declared where the warning is built, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `RepoVerdict` `repo-files-need-decision` popup (`options` = two `kind:"checkbox"` entries; `canApply` returns true regardless of the boxes).
+
+---
+
+## 2. A decision is a first-class, recorded event — "have we asked?" (LOCKED)
+
+The whole point of remembering a decision is **to never ask twice**. A file is in exactly one of two
+states, and the state is derived from whether a **decision record** exists for it:
+
+| State | Definition | Behavior |
+| --- | --- | --- |
+| **Undecided** | **No decision record** exists for the file in the ledger (§3). | LFB surfaces it (the triage queue, the "N files need a decision" warning). It does nothing to the bytes. |
+| **Decided** | A decision record exists — the user was **asked** and answered, on either or both axes (including **both-off**). | LFB never re-asks. It applies the recorded axes and the warning leaves the page for good. |
+
+The record's **`asked: true`** field is the anchor: once it is written, the file is **Decided** — even if
+both axes are false. This is the durable "we already asked about this file" state the product previously
+lacked (the gitignore engine, for one, kept no such memory — [git_ignore.mdx](./git_ignore.mdx) reads
+`.gitignore` live and had no "already offered" record).
+
+> **This is the fix for "I did this before but the warning came back."** The warning re-appeared because
+> nothing persisted a sticky "reviewed" state that survives a re-scan and is visible to the whole team.
+> A written decision record — shared, timestamped, attributed — makes the warning leave and stay gone.
+
+Deriving Undecided vs. Decided from the presence of a folded decision record (not from a bare enum default) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `foldLedger()` (a path with no folded record is `undecided`; a folded record with `asked: true` is Decided, a tombstone `asked: false` returns it to Undecided), projected by `reconcile()`.
+
+---
+
+## 3. The decision record — every field, and why (LOCKED)
+
+Each decision is one record. It carries exactly what the user asked us to remember, plus the identity
+needed for a **team** to share it:
+
+```yaml
+# <repo>/.lfbridge/decisions.yaml  — the SHARED, team-visible decision ledger (committed; §4)
+schema_version: 1
+
+# Append-only decision EVENTS. The reader folds them to current state: the latest decided_at per
+# (sid, path) wins (§5). Keeping this an append log is what makes concurrent team edits union-merge
+# without conflicts (§5, git_backbone.mdx §4.2).
+events:
+  - sid: 3f9c1a…                 # SID — the STORAGE ID of the storage this decision belongs to (§3.1)
+    path: render/final_4k.mov    # repo-relative path — the stable key even when the file is ABSENT locally (§3.2)
+    fingerprint: 9f2c…           # optional content fingerprint from files.yaml — identity beyond the path (§3.2)
+    asked: true                  # we surfaced the file and the user answered (§2). Always true for a real record.
+    ipfs: true                   # AXIS 1 — Add to IPFS (pin): the user chose to back it up over IPFS
+    gitignore: true              # AXIS 2 — Add to git ignore: the user chose to keep Git from committing it
+    decided_by: bryan@act3ai.com # WHICH USER decided — the allow-listed Google email (§3.3)
+    decided_at: 2026-07-12T14:32:15.123Z   # WHEN they decided (ISO-8601 UTC) — also the fold tiebreaker (§5)
+```
+
+Field by field, mapped to the user's requirements:
+
+| Requirement (user's words) | Field | Notes |
+| --- | --- | --- |
+| "Have we asked about these files?" | `asked` | `true` on every real record. Its presence = **Decided** (§2). |
+| "What was their decision?" | `ipfs`, `gitignore` | The two independent axes (§1). Both may be `false` (both-off). |
+| "Which user decided that?" | `decided_by` | The allow-listed email of the deciding user (§3.3). Never anonymous. |
+| "What time and date did they decide it?" | `decided_at` | ISO-8601 UTC. Also the last-writer-wins tiebreaker (§5). |
+| "Do they add them to IPFS or not?" | `ipfs` | Axis 1. |
+| "Do they add them to gitignore or not?" | `gitignore` | Axis 2. |
+| "We also want to have the SID…" | `sid` | The **Storage ID** binding the record to its storage (§3.1). |
+
+### 3.1 `sid` — the Storage ID, and why it must be STABLE ACROSS THE TEAM (LOCKED, corrected)
+
+The **SID is the Storage ID** — the identifier of the storage the decision belongs to. We stamp it on
+every record for the reason the user gave: **"the other user may not see those files."**
+
+* A teammate who pulls the repo may **not have the big file on disk** (it is git-ignored and pinned via
+  IPFS — the bytes arrive only when they fetch). Their view of "which files exist" differs from yours. The
+  decision must still be unambiguously attributable to **this storage's** logical file, independent of
+  whether any given machine has materialized it.
+* The SID keeps the record self-describing if it is ever **read outside its directory** (aggregated across
+  storages, quarantined during a merge conflict, or copied into a report).
+
+> **The SID must be identical for every teammate — it is NOT the local path (corrected defect).** An
+> early draft derived the SID from the storage's **machine-local** id (`shortHash(<local repo root>)`).
+> That is **wrong**: Alice's root (`/Users/alice/proj`) and Bob's (`/Users/bob/proj`) hash to **different**
+> SIDs, so had the fold keyed on `(sid, path)`, Alice's and Bob's events for the **same file** would fall
+> into **different buckets** and last-writer-wins would silently break — the exact team-merge the feature
+> exists for. Two independent corrections close this:
+> 1. **The fold key is `path` alone** (§5), never `(sid, path)`. The ledger file is physically
+>    one-per-storage, so `path` is already unique within it; `sid` is **provenance/portability metadata,
+>    not a fold key.** This makes fold correctness **independent** of how the SID is derived.
+> 2. **The recorded SID is derived from the SHARED git remote URL** (`sha1(repo.remote)`), which is
+>    identical for every teammate, not from the per-machine path. A repo with **no remote** (a purely local
+>    repo whose decisions don't travel anyway) falls back to the local storage id.
+
+Deriving the STABLE, team-shared SID from the git remote (falling back to the local storage id only when there is no remote) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `decisionSid(folder, repoRoot)` (prefers `repo.remote`, else `storageSid()`). The fold that keys on `path` alone is `foldLedger()` in the same file.
+
+### 3.2 `path` + `fingerprint` — identity that survives absence and change
+
+* **`path`** (repo-relative) is the **primary key within the storage** and the field a teammate who lacks
+  the bytes can still reason about — it is present in the committed manifest and the ledger regardless of
+  local presence.
+* **`fingerprint`** (the cheap content hash already kept in `.lfbridge/files.yaml`,
+  [storage_repo.mdx](./storage_repo.mdx)) is recorded when known so a decision can be **matched to the
+  same content across a rename or a compress/convert** ([the perceptual-fingerprint goal in the
+  charter](../CLAUDE.md)). It is advisory: **`path` is the fold key** (§5); the fingerprint is a secondary
+  signal for "is this still the same file the decision was about" and the hook the lifecycle rules (§12)
+  use to carry a decision across a rename or a compress/convert.
+
+### 3.3 `decided_by` — attributed, never anonymous
+
+The deciding user is the **allow-listed Google email** of the logged-in session
+([storage_local.mdx §4](./storage_local.mdx); there is **no** anonymous account — every session is a
+verified allow-listed email). The backend reads it from the request, not the client, so attribution
+cannot be spoofed.
+
+Recording the deciding user from the authenticated request is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files` reads `currentUser(req).email` (from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/current-user.ts`) and passes it to `recordDecision()`.
+
+---
+
+## 4. Where it lives — the SHARED, team-visible ledger (LOCKED)
+
+Decisions are **repo-level and shared**, not per-user and local. They live in the repo's committed SDL:
+
+```
+<repo>/.lfbridge/decisions.yaml      # committed to Git — travels to every teammate + every computer
+```
+
+This is the load-bearing change. Until now, per-file decisions were written **only** to the machine-local
+`~/T/_large_files_bridge/pin/r/<repo>/config.yaml → decisions:` map, which **never leaves the computer** —
+so a teammate never saw them and got re-asked about files someone already triaged
+([storage_local.mdx §6.2](./storage_local.mdx)). Putting the ledger in `.lfbridge/` — beside the manifest,
+the device registry, and the mapped-directory list, all of which already travel and union-merge across
+users ([git_backbone.mdx §4.2](./git_backbone.mdx)) — makes decisions **team-shared by construction**:
+
+* **One team, one set of decisions.** A ten-person team working the same repo shares `decisions.yaml`.
+  When Alice decides on 40 files and pushes, Bob pulls and those 40 files are **already Decided** for him
+  — his "N files need a decision" count drops without him lifting a finger.
+* **Not per user.** The record's `decided_by` says *who* decided, but the decision **applies to the
+  repo**, not to that user. There is no per-user decision state; everyone shares the same folded answer.
+  (This is exactly the user's instruction: *"they're not per user, so the other people using the repo are
+  also getting the same decisions there."*)
+* **The machine-local map becomes a cache.** `pin/r/<repo>/config.yaml → decisions:` (the frozen
+  `sync`/`ignore`/`undecided` map) is now the **reconciled projection** of the shared ledger's IPFS axis
+  onto this computer (§7) — a cache, not the source of truth. The ledger is authoritative.
+
+The ledger is a normal SDL file: it must **never be git-ignored** (the whole point is that it travels —
+[git_backbone.mdx §4.2.1](./git_backbone.mdx), the "never git-ignore the `.lfbridge/` SDL text" rule), and
+it is added to the **union-merge** attribute set so concurrent team edits fold instead of conflicting
+(§5).
+
+Reading and writing `<repo>/.lfbridge/decisions.yaml` (deterministic YAML, no volatile timestamp, so Git diffs stay clean) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `readLedger(repoRoot)` / `appendDecision(repoRoot, record)` (bypasses the `updated_at`-stamping `yaml-store`, like `manifest.service.ts`).
+
+Marking `.lfbridge/decisions.yaml` as a union-merge path so team edits never conflict is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `UNION_MERGE_PATHS` (add `".lfbridge/decisions.yaml"` alongside `".lfbridge/manifest.yaml"`), applied by `ensureMergeAttributes()`.
+
+---
+
+## 5. Team dynamics — the merge model (LOCKED, think team-of-ten)
+
+Ten people editing decisions on their own machines, pushing and pulling on every pin pass
+([git_backbone.mdx](./git_backbone.mdx)), must converge **without a human ever resolving a conflict**. The
+design that guarantees this:
+
+1. **Append-only events, folded on read.** `decisions.yaml` is an **append log** of events (§3), not a
+   keyed map that gets rewritten in place. A new decision **appends** an event; it never edits an existing
+   line. Two teammates deciding **different** files append different lines → a plain union-merge keeps both
+   (no conflict). Two teammates deciding the **same** file append two lines → union-merge **keeps both
+   lines**, and the reader **folds** them: for each **`path`** (the fold key — see the boxed note below and
+   §3.1), the event with the **latest `decided_at` wins** (last-writer-wins, deterministic on every machine
+   because the input set is identical after merge). This is the same conflict-avoidance shape the manifest
+   and device registry already rely on ([git_backbone.mdx §4.2](./git_backbone.mdx)).
+
+   > **Fold on `path`, NOT `(sid, path)` (LOCKED).** The ledger file is physically one-per-storage, so
+   > `path` is already unique within it. Keying the fold on the SID as well would be a latent
+   > team-breaking bug, because the SID is derived per-teammate (§3.1) — two teammates' events for the same
+   > file would land in different buckets and never last-writer-win. The SID rides along for provenance and
+   > portability; it plays **no** part in identity within a single ledger.
+
+2. **Union-merge, not manual merge.** `.lfbridge/decisions.yaml` is in `UNION_MERGE_PATHS` (§4), so
+   `git merge` concatenates both sides of a divergent history rather than raising conflict markers. If a
+   conflict marker ever *does* appear (a malformed hand-edit), the reader **quarantines** the file
+   (`decisions.conflicted.yaml`) and logs it, exactly as the manifest reader does — it never crashes and
+   never loses data.
+
+3. **Deterministic fold → identical state everywhere.** Because the fold is a pure function of the merged
+   event set (latest `decided_at` per `path`, ties broken by `decided_by` lexical order for total
+   determinism), every teammate computes the **same** current decisions from the **same** merged log. No
+   central server, no coordination.
+
+4. **Compaction (bounded growth).** An append log grows. On a full pin pass, the **owning device**
+   ([devices.mdx](./devices.mdx) — the same self-owned-file trust rule) may **compact**: fold to current
+   state and rewrite the log as one event per live `path`, dropping superseded events, preserving each
+   surviving record's original `decided_by`/`decided_at`. Compaction is a semantic no-op (the folded state
+   is unchanged) and is itself just another commit that union-merges. A short retention window (default
+   the last **10** superseded events per file, or 90 days, whichever is larger) keeps recent history for
+   the audit trail (§11) before it is dropped.
+
+5. **Provenance is preserved, not overwritten.** Last-writer-wins changes the *current* decision but the
+   log still shows the earlier events until compaction — so "who decided what, when" is auditable. If Bob
+   overrides Alice's decision on a file, the record now reads `decided_by: bob@…` with a newer
+   `decided_at`; Alice's earlier event remains in the log until compaction.
+
+Folding the merged event log to current per-file state (latest `decided_at` per `path`, `decided_by` tiebreak) and compacting on a full pass is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `foldLedger()` and `compactLedger(repoRoot)` (compaction called from the pin pass in `pin.service.ts`).
+
+---
+
+## 6. Consent — the ledger only exists when this computer keeps `.lfbridge/` (LOCKED)
+
+Writing to the repo's `.lfbridge/` is a machine-local **consent**: the per-storage setting *"Does this
+computer keep the hidden `.lfbridge/` tracking directory for this storage?"*
+([storage_settings.mdx §3](./storage_settings.mdx), `StorageUnitConfig.lfbridge.enabled`, **default on**).
+That toggle is the checkbox the user referred to — *"the hidden directory we're allowed to store in the
+root of the repo as long as that checkbox is turned on."*
+
+* **Consent ON (default).** LFB writes the shared `decisions.yaml` into `<repo>/.lfbridge/` and it travels
+  to the team. This is the normal, recommended path for a repo storage.
+* **Consent OFF (rare — a read-only or pristine-root machine).** LFB must **not** write into the repo
+  root. It still records the decision **machine-locally** (the `pin/r/<repo>/config.yaml → decisions:`
+  map, §7) so *this* computer never re-asks, but the decision is **not shared** with the team from this
+  machine. A small note in the popup/settings explains the decision won't be shared until `.lfbridge/` is
+  kept here (or relocated per [storage_settings.mdx §3](./storage_settings.mdx)).
+* **Relocated `.lfbridge/`.** If the user relocated the tracking directory, the ledger follows it — LFB
+  resolves the tracking path from the machine-local setting, not always `<root>/.lfbridge/`
+  ([storage_settings.mdx §3](./storage_settings.mdx)).
+
+Gating the shared-ledger write on the machine-local keep-`.lfbridge/` consent (and falling back to a local-only record when off) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `recordDecision()` checks `resolveTrackingDir()` / the storage `lfbridge.enabled` flag before appending to the shared ledger; always updates the local `config.yaml` cache.
+
+---
+
+## 7. Reconciliation — folding the shared ledger onto this computer (LOCKED)
+
+The shared ledger is authoritative; the machine-local frozen `decisions:` map is a **projection** of its
+IPFS axis, and the git-ignore axis is applied to the working tree. On every scan/pin pass, and right after
+a decision is recorded, LFB reconciles:
+
+* **IPFS axis → the frozen enum.** For each folded record, project onto
+  `pin/r/<repo>/config.yaml → decisions[path]` ([one_repo.mdx §1](./one_repo.mdx), the LOCKED wire value):
+  * `ipfs: true`  → `"sync"` (Add to IPFS / pin).
+  * `ipfs: false` (asked) → `"ignore"` (deliberately not pinned).
+  * no record → leave `undecided` (the file stays in the triage queue).
+  The frozen literal `sync` is **never renamed** — this spec only *feeds* that map from the richer ledger;
+  the pin engine still reads the enum ([storage_local.mdx §9](./storage_local.mdx), pin.service `sync`).
+* **git-ignore axis → the working tree.** For each folded record with `gitignore: true`, ensure the file
+  is git-ignored via the existing engine ([git_ignore.mdx](./git_ignore.mdx)) — anchored, idempotent,
+  skip-already-ignored. The record's `gitignore: true` is the durable "already decided to ignore" memory,
+  so the "N big files aren't git-ignored" offer ([warnings.mdx §10.2](./warnings.mdx)) does not re-nag on
+  files already decided.
+* **The reconciliation never fights the user.** It projects recorded decisions; it does not invent them.
+  A file with no record stays Undecided; a re-scan reconciles without clobbering a teammate's recorded
+  choice ([storage_local.mdx §7](./storage_local.mdx), "the scanner reconciles, it never clobbers").
+
+Projecting the folded ledger onto the machine-local `decisions:` enum map (IPFS axis) and ensuring the git-ignore axis via the gitignore engine, on every pass and after each write, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `reconcile(repoRoot)` (called from `scanner.service.ts` `scanAll` and `pin.service.ts`, and inline from `PATCH /:repoId/files`).
+
+---
+
+## 8. Every decision surface writes the ledger (LOCKED)
+
+The two-axis, ledger-backed decision is written **wherever the user decides** — the surfaces stay the
+ones in [one_repo.mdx](./one_repo.mdx) and [menus.mdx](./menus.mdx), only what they persist changes:
+
+* **The "N files need a decision" popup** ([warnings.mdx §10.2.7](./warnings.mdx)) — the two checkboxes
+  (§1), applied to the checked subjects. This is the primary surface and the canonical example.
+* **The per-row Decision control + bulk menu** ([one_repo.mdx §4.4/§4.5](./one_repo.mdx)) — the inline
+  three-state control remains for the **IPFS axis** (it maps to the ledger's `ipfs`), and the file/repo
+  **Git ignore** action ([menus.mdx §5](./menus.mdx)) writes the **git-ignore axis**. Each writes a
+  decision record so the two in-table paths and the popup all converge on the same ledger.
+* **The file kebab** ([menus.mdx §5.3](./menus.mdx)) — *Add to IPFS / Remove from IPFS*, *Set decision ▸*,
+  and *Git ignore* each append a record. The sticky **Never IPFS** flag
+  ([menus.mdx §6.6](./menus.mdx)) is a *stronger* statement than a decision (it forbids `ipfs: true`) and
+  is unchanged; a decision never overrides a Never-IPFS flag.
+
+All of these call the one write path so the record's `asked`/`decided_by`/`decided_at`/`sid` are stamped uniformly, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files` (accepts `{ paths, ipfs?, gitignore? }`, calls `recordDecision()` per path) — the single funnel `api.setDecision` and the bulk/menu actions all target.
+
+---
+
+## 9. Default decision policy — deciding NEW files for the team (LOCKED)
+
+A live repo is never "done being decided" — teammates add big files every week. Deciding one file at a
+time forever is the failure mode a good default prevents, and it is why the original popup carried a
+*"Also remember this choice for new files here"* checkbox. That intent is promoted here into a proper,
+**shared, per-repo default-decision policy** so a team sets the rule once.
+
+* **The policy.** For each **kind** of newly-discovered large file the repo can carry a default:
+  * **Videos / images (compressible media)** — default **IPFS on + git-ignore on** (the recommended
+    big-file outcome, §1). This is the sensible default for a media repo.
+  * **Other big files** (datasets, model weights, archives) — default **undecided** (surface, don't
+    auto-decide) unless the team opts them in.
+  * Each kind's default is one of: **auto-decide** (apply these two axes automatically on discovery and
+    record it, `decided_by: <policy>`, so the file is born Decided and never enters the triage queue) or
+    **ask** (leave Undecided and surface the warning).
+* **It is shared, not per-user.** The policy lives in the SDL alongside the ledger
+  (`<repo>/.lfbridge/decisions.yaml → policy:` block, or a sibling `decisions_policy.yaml`) so the whole
+  team inherits the same rule; changing it is itself an audited decision (`decided_by`, `decided_at`).
+* **Auto-decisions are honest records.** An auto-decided file gets a real ledger event with
+  `decided_by: "policy:<email who set the policy>"` and `asked: true`, so it is Decided (never re-asked)
+  and the audit trail shows it was the policy, not a person, that chose — distinguishable from a hand
+  decision.
+* **Never silently pins something surprising.** Auto-decide only ever applies the policy's **own** axes,
+  respects the sticky **Never IPFS** flag (§17), and is reported in the pass summary (`N new files
+  auto-decided by policy`) so it is never invisible ([pin_process.mdx §6](./pin_process.mdx)).
+* **Default of the default: OFF.** Out of the box, new files are **Undecided** (the warning surfaces
+  them). A team turns on auto-decide deliberately. This preserves the charter's "surface and offer, never
+  act on files on our own" posture — the *policy toggle itself* is the explicit, one-time consent.
+
+The per-repo default-decision policy (read on scan, applied to newly-discovered candidates, recorded as policy-authored events) is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `applyDefaultPolicy(folder, newPaths)` (called from `scanner.service.ts` `scanAll` for candidates with no folded record); policy read/written by `readDecisionPolicy()` / `setDecisionPolicy()`; the settings UI is [repo_settings.mdx §2](./repo_settings.mdx).
+
+---
+
+## 10. Decision provenance in the UI — surface WHO decided and WHEN (LOCKED)
+
+We record `decided_by` and `decided_at` precisely so a team can **see** them — a decision the team can't
+inspect is barely better than none. Every place a decision is shown, its provenance is one hover away:
+
+* **The files table Decision cell** ([one_repo.mdx §4.3/§4.5](./one_repo.mdx)) gains a
+  **non-intrusive tooltip** ([non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)): *"Add to IPFS +
+  git-ignored · decided by bob@acme.com · Jul 12, 2:32 PM"*. A tiny person/clock glyph marks a file whose
+  decision was made by **someone else on the team** (vs. you), so a reviewer can spot others' choices.
+* **A "Decision" column filter/sort** — filter to *decided by me* / *decided by a teammate* /
+  *policy-decided* / *undecided*; sort by `decided_at` to see the most recently triaged first.
+* **The View-one-file page** ([files.mdx](./files.mdx)) shows a small **Decision** block: the two axes as
+  labeled toggles reflecting the current folded state, plus *"Last decided by {who} on {when}"* and a
+  **History** disclosure listing the recent events (from the un-compacted tail — §11).
+* **The provenance is read from the folded ledger**, so it is always the team-wide truth, never this
+  machine's stale guess.
+
+Surfacing `decidedBy` / `decidedAt` on each `FileRow` (so the table tooltip, filter, and file page can show provenance) is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` joins the folded ledger (`foldLedger`) and adds `decidedBy`/`decidedAt` to each row; `FileRow` in `@lfb/shared` gains the two optional fields; frontend `OneRepoPage.tsx` renders the tooltip + filter.
+
+---
+
+## 11. Team divergence, override & the audit trail (LOCKED)
+
+In a team of ten, two people *will* eventually disagree about a file. The model resolves it
+deterministically (§5 last-writer-wins) but must never resolve it **silently**:
+
+* **Override is allowed and visible.** Any allow-listed participant may change any file's decision (§16);
+  the new event wins by `decided_at`. The UI's provenance (§10) immediately shows the new `decided_by`, so
+  an override is self-evident on the next refresh — not a mystery.
+* **The audit trail is the un-compacted tail.** Because the log is append-only, the recent history of a
+  file — *Alice set IPFS-on Jul 10; Bob set IPFS-off Jul 12* — is readable until compaction (§5.4) drops
+  it. The **History** disclosure (§10) renders it. This is the answer to "who changed this and why did my
+  file stop pinning?"
+* **Optional awareness, never nagging.** When a **git pull** delivers a teammate's decision that **flips
+  an axis** on a file **this** machine had already acted on (e.g. a file you were pinning is now
+  `ipfs:false`), LFB may surface a **quiet, dismissible** note in the Progress dock — *"3 decisions
+  changed by teammates"* — linking to the affected files. It is **informational**, never a modal, and
+  obeys the charter's non-intrusive posture ([non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)).
+* **No lost work.** An override changes intent, not bytes: flipping `ipfs:false` does **not** delete the
+  local file or a teammate's pinned copy; it stops *future* pinning and follows the normal unpin-retention
+  window ([storage_local.mdx §9.4](./storage_local.mdx)). Flipping back re-pins from IPFS if a peer still
+  has it.
+
+Detecting teammate-changed decisions on pull (diff the previous folded state against the freshly-merged one) and emitting the quiet dock note is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `reconcile()` returns the set of paths whose folded axes changed; `pin.service.ts` reports them to the progress dock.
+
+---
+
+## 12. Decision lifecycle — rename, compress/convert, delete, reappear (LOCKED)
+
+A decision is about a **file**, and files move, change, and vanish. The ledger must track that without
+losing the user's intent or leaving zombie records:
+
+* **Rename / move.** The fold key is `path` (§5), so a plain rename would look like "old path decided,
+  new path undecided." LFB uses the recorded **`fingerprint`** (§3.2) to **carry the decision across a
+  rename**: on scan, a new-path candidate whose fingerprint matches a decided old-path record inherits
+  that decision (a new event at the new path, `decided_by: "moved:<original decider>"`), and the old-path
+  record is tombstoned. Same content, same decision — no re-ask.
+* **Compress / convert.** Compressing a video or converting PNG→JPEG **changes the bytes and the exact
+  fingerprint**, but it is the **same logical asset** ([compression.mdx](./compression.mdx),
+  [the perceptual-fingerprint goal](../CLAUDE.md)). The decision **follows the asset**: the compress/convert
+  flow re-stamps the decision onto the output path (carried by the perceptual/content match), so a file the
+  team already chose to pin stays pinned after it is compressed — it does **not** fall back to Undecided.
+* **Delete.** When a decided file **disappears from disk**, its ledger record becomes **orphaned**. LFB
+  does **not** immediately drop it (a temporarily-unmounted drive or an un-fetched teammate must not lose
+  the decision — mirrors the scanner's "retain config for a vanished repo",
+  [storage_local.mdx §7](./storage_local.mdx)). The record is marked **stale** after a grace period and
+  compacted away only once the file is gone from the manifest across all peers.
+* **Reappear.** If a tombstoned/undecided file comes back (a revert, a re-fetch), it is Undecided again
+  unless a still-live decision record matches it by path or fingerprint — in which case the prior team
+  decision applies. No surprise re-pinning, no surprise re-asking.
+
+Carrying a decision across a rename (fingerprint match), re-stamping it across a compress/convert, and staling/compacting an orphaned record are to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `carryOnRename()` / `restampOnTransform()` / `staleOrphans()`, called from `scanner.service.ts` and the compress/convert flows ([compress_inside.mdx](./compress_inside.mdx), [codecs.mdx](./codecs.mdx)).
+
+---
+
+## 13. Migration — backfilling the legacy machine-local decisions (LOCKED)
+
+Existing repos already hold per-file decisions in the **machine-local** `pin/r/<repo>/config.yaml →
+decisions:` frozen enum map, made **before** the shared ledger existed. Upgrading must not lose them or
+suddenly re-ask about everything already triaged:
+
+* **One-time backfill per repo.** On first run after the upgrade, for each repo with a non-empty local
+  `decisions:` map and **no** (or a subset) ledger, LFB **seeds the shared ledger** from that map:
+  `"sync" → {ipfs:true}`, `"ignore" → {ipfs:false}` (git-ignore axis left `false`/unknown — it was never
+  separately tracked). Each seeded event is stamped `decided_by: "migrated"`, `decided_at:` the config
+  file's mtime (best-known time), `asked: true`.
+* **Idempotent & safe.** The backfill runs once (guarded by a `schema`/migration marker like
+  `migrate-sync-to-pin.ts`), never overwrites a **newer** ledger event for the same path (the fold's
+  last-writer-wins protects hand or teammate decisions made post-upgrade), and is a no-op on a repo that
+  already has a ledger.
+* **Consent-aware.** The seed only writes the shared ledger when this computer **keeps `.lfbridge/`**
+  (§6); otherwise the legacy local map simply remains the local cache and nothing is shared — same posture
+  as a fresh local-only decision.
+* **The frozen enum is untouched as an input** — migration **reads** it and **writes** the ledger; the
+  reconciliation (§7) then keeps that same enum map as the ledger's projection going forward.
+
+The one-time legacy-decisions backfill (seed the ledger from `config.yaml → decisions:`, `decided_by:"migrated"`, guarded and idempotent) is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/migrate-decisions-to-ledger.ts` — `migrateDecisionsToLedger()` (run at boot alongside `migrate-sync-to-pin.ts`).
+
+---
+
+## 14. Privacy — emails in a committed, possibly PUBLIC, ledger (LOCKED)
+
+`decisions.yaml` records `decided_by` **email addresses** and is **committed to the repo**. For a private
+team repo that is fine and desirable. But LFBridge also serves **open-source / public** repos
+([the open-source JFK repos in the charter](../CLAUDE.md)), where committing teammates' personal emails
+into public git history is a **privacy leak** we must not create by default:
+
+* **Per-repo attribution mode** (repo setting, shared): **`email`** (default for a **private** repo) vs.
+  **`handle`** vs. **`anonymous`**.
+  * **`email`** — record the raw allow-listed email (full attribution; private teams).
+  * **`handle`** — record a **stable opaque participant id** (e.g. a salted hash of the email, or a
+    self-chosen display handle) instead of the raw email; the email↔handle map stays **machine-local**,
+    never committed. Attribution is preserved for teammates who share the map, invisible to the public.
+  * **`anonymous`** — record `decided_by: null`; only *that* a decision was made, not by whom.
+* **Public-repo default is `handle`.** When LFB can tell the repo's remote is a **public** host/repo, it
+  defaults attribution to **`handle`** and warns before the first commit that raw emails would otherwise
+  be published — the same "warn before you leak" posture as the PNG-alpha and gateway checks.
+* **Never a new leak vector.** `decisions.yaml` carries **only** the decision fields (§3) — never a path
+  outside the repo, never a local absolute path, never any secret. It is small, auditable text.
+
+The per-repo attribution mode (email/handle/anonymous), the public-remote detection that defaults to `handle`, and the machine-local email↔handle map are to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `attributionFor(folder, email)` (returns the value to stamp per the mode); mode stored in the shared policy block (§9); public-remote heuristic reuses `classifyRemote()` in `git.service.ts`.
+
+---
+
+## 15. Transport dependency — decisions only reach the team WITH a git backbone (LOCKED)
+
+The ledger travels by exactly one mechanism: the **git backbone** carries `.lfbridge/decisions.yaml`
+between computers ([git_backbone.mdx](./git_backbone.mdx)). That has an honest precondition the UI must
+not hide:
+
+* **No remote ⇒ local team-of-one.** A repo with **no git remote** (or a backbone that is **off**) still
+  gets a committed `decisions.yaml`, but nothing **pushes** it — so it is shared with *this user's other
+  computers only once they clone*, and **not** with teammates at all. The decision is correctly recorded;
+  it just has nowhere to travel.
+* **Surface the truth, don't fake sharing.** When the user makes a decision in a repo with no
+  remote/backbone, the popup (and repo settings) show a quiet inline note: *"Saved for this repo. Connect a
+  git remote to share these decisions with your team."* — with a link to the backbone setting
+  ([storage_settings.mdx §4.1](./storage_settings.mdx)). We never imply team-sharing that cannot happen.
+* **Decisions ride the same pass as the manifest.** They pull/merge/push on the every-15-min pin pass
+  ([pin_process.mdx](./pin_process.mdx)) exactly like the manifest — no separate sync, no separate
+  schedule.
+
+Detecting "no remote / backbone off" for a repo and returning the share-status the UI note reads is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `shareStatus(folder)` (`shared` | `local_only_no_remote` | `local_only_consent_off`); consumed by the warning popup + [repo_settings.mdx §2.6](./repo_settings.mdx).
+
+---
+
+## 16. Authority — who may decide, and who may override (LOCKED)
+
+* **Any allow-listed participant of the repo may decide and may override.** There is no per-file owner and
+  no seniority gate today: the allow-list ([storage_local.mdx §4](./storage_local.mdx)) is the only
+  boundary, and within it decisions are **collaborative and flat** — last-writer-wins (§5) is the whole
+  arbitration rule. This matches the user's "not per user" instruction: the team converges on one answer,
+  whoever wrote it last.
+* **Attribution is the accountability.** Because every event is attributed and audited (§10, §11), a flat
+  authority model is safe: an override is never anonymous, and the history shows exactly who changed what.
+* **Future role-gating is a clean extension, not a schema change.** If a team later wants "only
+  maintainers may override a maintainer's decision," it is enforced at the **write path** (reject the
+  `PATCH` for an unauthorized role) — the ledger schema is unchanged. Noted here so the door is open; the
+  default remains flat.
+
+Enforcing the allow-list on every decision write (and the extension point for future role-gating) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter.use(requireAllowListed)` gates all decision writes; a future role check would sit in `PATCH /:repoId/files` before `recordDecision()`.
+
+---
+
+## 17. Interaction with the sticky flags — Never IPFS / Do not compress (LOCKED)
+
+The per-file sticky flags ([menus.mdx §6.6](./menus.mdx)) are **stronger, standing statements** than a
+single decision, and the decision model must respect them:
+
+* **Never IPFS forbids the IPFS axis.** A file flagged **Never IPFS** cannot be `ipfs:true`. In the popup
+  and per-row control the **Add to IPFS** checkbox is shown **disabled/forced-off** with a hint
+  (*"blocked by Never-IPFS"*); a decision write that would set `ipfs:true` on such a file is rejected at
+  the write path. The **git-ignore axis is unaffected** — a Never-IPFS file can still be git-ignored.
+* **Do not compress is orthogonal.** It gates the compress offers, not the decision; a decision never
+  toggles it and it never blocks either decision axis.
+* **Flags win over the default policy.** The auto-decide policy (§9) skips the IPFS axis on a Never-IPFS
+  file — the flag is the standing exception the policy must honor.
+
+Rejecting an `ipfs:true` decision on a Never-IPFS file (and disabling the checkbox in the UI) is handled/where added in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files` checks the entity's `neverIpfs` flag (via `entity.service.ts`) before recording `ipfs:true`; frontend disables the checkbox in `OneRepoPage.tsx` when the row's flag is set.
+
+---
+
+## 18. Counts, status & telemetry derive from the FOLDED ledger (LOCKED)
+
+The whole product's at-a-glance numbers must reflect the **team's** decisions, not this machine's stale
+guess:
+
+* **The per-repo counts** (`Pinned / Pending / Undecided / Ignored` — [repos.mdx §4.1](./repos.mdx),
+  [one_repo.mdx §4.1](./one_repo.mdx)) are computed from the **reconciled** decisions — i.e. from the
+  folded ledger projected onto the enum (§7). So the moment a teammate's decision arrives on pull, the
+  Undecided count drops here too.
+* **`needs_review` / the "N files need a decision" warning** fire on files with **no folded record** (§2).
+  A file another teammate decided is **not** Undecided for anyone — the warning is genuinely team-wide.
+* **No double counting across the two axes.** The counts are driven by the **IPFS axis projection** (the
+  frozen enum), exactly as today; the git-ignore axis does not create a separate count — it lights the
+  existing **`I` git-ignored badge** ([directories.mdx §3.4a](./directories.mdx)) and suppresses the "big
+  files aren't git-ignored" nudge (§7).
+
+Computing the repo/file counts from the folded ledger (via the reconciled enum) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `countDecisions()` reads the reconciled `cfg.decisions` (fed by `reconcile()`), so counts follow the shared ledger.
+
+---
+
+## 19. The write API — one endpoint, two accepted bodies (LOCKED)
+
+Every decision surface (§8) funnels through **one** endpoint so provenance is stamped uniformly:
+
+```
+PATCH /api/repos/:repoId/files
+  # TWO-AXIS (the checkbox popup, the primary form):
+  { "paths": ["render/a.mov", …], "ipfs": true, "gitignore": true }   # either axis may be omitted
+  # LEGACY single-axis (the per-row inline control + bulk menu):
+  { "paths": [...], "decision": "sync" | "ignore" | "undecided" }      # mapped onto the IPFS axis
+→ 200 { ok: true, data: RepoDetail }   # recomputed detail so the UI re-renders counts + rows
+```
+
+* **`paths` are repo-RELATIVE** — the ledger and the frozen enum are keyed by repo-relative path
+  ([warnings.mdx §5.3.1](./warnings.mdx) canonical bug); an absolute path lands under a key nobody reads.
+* **Both-off is valid** in the two-axis form (`{ipfs:false, gitignore:false}`) — a recorded "reviewed,
+  leave it" (§1); the endpoint does not require either axis to be true.
+* **`decided_by` comes from the session, not the body** — the client cannot spoof attribution (§3.3).
+* **Legacy `"undecided"`** appends a **tombstone** (`asked:false`) that returns the file to the triage
+  queue (§2).
+* **Idempotent by construction** — re-applying the same decision appends a new event that folds to the
+  same state; no error, no duplicate visible decision.
+
+The endpoint contract (both bodies, relative-path keys, session-derived `decided_by`, tombstone on legacy `undecided`) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files`; frontend callers `api.setFileDecisions` (two-axis) and `api.setDecision` (legacy) in `packages/frontend/src/api/client.ts`.
+
+---
+
+## 20. Edge cases & failure states (LOCKED)
+
+The situations the model must get right, each with the defined behavior:
+
+| Situation | Behavior |
+| --- | --- |
+| **Merge-conflict markers** land in `decisions.yaml` (a bad hand-edit despite union-merge) | Reader **quarantines** to `decisions.conflicted.yaml`, logs an error, and **refuses to load** — never parses a half-merged file as truth; the previous good state is retained (§5.2). |
+| **Consent off** on this computer (§6) | Decision recorded in the **machine-local enum only**; not shared from here; UI note says so (§15). |
+| **No git remote / backbone off** (§15) | `decisions.yaml` is committed but **not pushed**; UI note: "connect a remote to share with your team." |
+| **Teammate lacks the bytes** for a decided file | Decision still applies (it is keyed by path, not presence); when they fetch, the folded decision already governs it. |
+| **The same file decided by two teammates concurrently** | Union-merge keeps both events; fold picks the **latest `decided_at`**; provenance shows the winner; history keeps the loser until compaction (§5, §11). |
+| **A decision on a Never-IPFS file** that sets IPFS on | **Rejected** at the write path; the checkbox is disabled in the UI (§17). |
+| **The IPFS node is down** when a decision is made | The decision is **recorded** regardless (it is intent, not a transfer); the git-ignore axis still applies; pinning happens on the next pass when the node returns ([one_repo.mdx §5](./one_repo.mdx)). |
+| **A decided file is renamed / compressed** | The decision **follows** via fingerprint / content match; no re-ask, no fallback to Undecided (§12). |
+| **A decided file is deleted** | Record retained through a grace period, then staled/compacted; not lost on a transient unmount (§12). |
+| **Legacy local decisions** exist pre-upgrade | Backfilled once into the ledger, `decided_by:"migrated"`, never clobbering newer events (§13). |
+| **Empty/loading** | No ledger ⇒ every file Undecided (the normal fresh state); a slow read never blocks the UI — the table renders and decisions reconcile in the background. |
+
+---
+
+## 21. Acceptance criteria
+
+1. The decision is **two independent checkboxes** — **Add to IPFS (pin)** and **Add to git ignore** —
+   never a mutually-exclusive radio group. Any of the four combinations (§1) is valid, including
+   **both-off**, and Apply is enabled for all four.
+2. Applying a decision writes a **record** with `asked: true`, the two axes (`ipfs`, `gitignore`),
+   `decided_by` (the authenticated allow-listed email), `decided_at` (ISO-8601 UTC), and `sid` (the
+   Storage ID) — every field in §3.
+3. Records are written to the **repo-level, team-shared** `<repo>/.lfbridge/decisions.yaml`, which
+   **travels via the git backbone**, is **union-merged**, and is **never git-ignored**. A teammate who
+   pulls sees the decisions and is **not re-asked** about files already decided.
+4. Decisions are **not per-user**: `decided_by` records who decided, but the folded decision applies to
+   the **repo** and everyone shares it.
+5. The ledger is an **append log folded on read** — latest `decided_at` per **`path`** wins (the fold key
+   is `path` alone, never `(sid, path)`, §3.1/§5); concurrent team edits **never require manual conflict
+   resolution**; a stray conflict marker is quarantined, never fatal; the owning device **compacts** on a
+   full pass.
+6. A file with **no record is Undecided** (surfaced, in the triage queue); **any record makes it Decided**
+   (never re-asked), **including both-off** — which is exactly what makes the warning leave and stay gone.
+7. The shared write is **gated on the machine-local keep-`.lfbridge/` consent** (default on); with consent
+   off, the decision is recorded **machine-locally only** and not shared from that computer.
+8. The machine-local `pin/r/<repo>/config.yaml → decisions:` map is a **reconciled projection** of the
+   ledger's IPFS axis onto the **frozen** `sync`/`ignore`/`undecided` enum (never renamed); the git-ignore
+   axis is applied through the existing [git_ignore.mdx](./git_ignore.mdx) engine.
+9. All decision surfaces (popup, per-row control, bulk menu, file kebab, Git-ignore action) write the
+   **same** ledger through the one backend write path (§19).
+10. The **`sid` is stable across the whole team** (derived from the shared git remote, not the per-machine
+    path), so teammates' events for the same file fold together; a repo with no remote falls back to the
+    local id and the decision is recorded but not shared (§3.1, §15).
+11. A shared, per-repo **default-decision policy** (§9) can auto-decide newly-discovered files by kind
+    (default OFF = surface as Undecided); auto-decisions are honest, attributed (`decided_by:"policy:…"`),
+    reported in the pass summary, and respect the Never-IPFS flag.
+12. Decision **provenance is surfaced** (§10): the files table shows *who decided + when* on hover, marks
+    teammate-made decisions, filters/sorts by decider, and the file page shows a decision History.
+13. **Overrides are allowed, deterministic, and visible** (§11): last-writer-wins, provenance updates
+    immediately, the audit tail shows the change, teammate-changed decisions surface a quiet dock note, and
+    no bytes are lost.
+14. Decisions **follow the file across rename and compress/convert** (via fingerprint / content match) and
+    are **retained then compacted** when a file is deleted — never a surprise re-ask or re-pin (§12).
+15. Legacy machine-local decisions are **backfilled once** into the ledger (`decided_by:"migrated"`),
+    idempotently and without clobbering newer events (§13).
+16. **Privacy**: attribution mode is per-repo (`email`/`handle`/`anonymous`); a **public** remote defaults
+    to `handle` and warns before publishing raw emails; the ledger carries only decision fields, never
+    secrets or out-of-repo paths (§14).
+17. **Never-IPFS forbids the IPFS axis**: the checkbox is disabled and an `ipfs:true` write is rejected;
+    the git-ignore axis is unaffected (§17).
+18. Repo/file **counts and the "needs a decision" warning derive from the folded ledger** (via the
+    reconciled enum), so they reflect the **team's** decisions and drop the instant a teammate's decision
+    arrives (§18).
+19. All the documented **edge cases and failure states (§20)** behave as specified.
+
+<!--
+  Decisions = TWO INDEPENDENT AXES (Add-to-IPFS + Add-to-git-ignore), two CHECKBOXES not radios; both-off
+  is a valid sticky decision (fixes "the warning came back"). Written to the REPO-LEVEL SHARED ledger
+  <repo>/.lfbridge/decisions.yaml (committed, union-merged, team-visible) — not the machine-local
+  config.yaml, which becomes a reconciled cache of the IPFS axis (frozen sync/ignore/undecided enum — NEVER
+  rename `sync`). Record fields: sid (Storage ID), path (+fingerprint), asked, ipfs, gitignore, decided_by
+  (allow-listed email), decided_at (ISO UTC). FOLD KEY IS `path` ALONE (not (sid,path)) — the ledger is
+  one-per-storage; sid is per-team-STABLE provenance (remote-derived, NOT the per-machine path). Append-only
+  then folded (latest decided_at per path) so a team-of-ten union-merges with zero manual conflicts; owning
+  device compacts on a full pass. Shared write gated on the machine-local keep-.lfbridge consent
+  (storage_settings §3) AND needs a git remote/backbone to actually reach teammates (§15). Also specs:
+  default-decision policy (§9), UI provenance (§10), override/audit (§11), lifecycle rename/compress/delete
+  (§12), legacy backfill (§13), email privacy for public repos (§14), authority (§16), Never-IPFS
+  interaction (§17), counts from folded ledger (§18), the one write API (§19), edge cases (§20). Siblings:
+  one_repo (per-file UI + the LOCKED IPFS-axis enum), warnings §10.2.7 (the popup — now two checkboxes),
+  git_ignore (the gitignore axis engine), storage_repo/storage_local (on-disk), git_backbone (union-merge
+  transport), repo_settings/storage_settings (policy + consent). Keep the frozen `sync` wire value and the
+  three-state IPFS enum intact — this spec LAYERS a second axis and a shared ledger on top; it does not
+  replace them.
+-->
+

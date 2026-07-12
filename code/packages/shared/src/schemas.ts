@@ -317,6 +317,30 @@ export const RepoUnitConfigSchema = z.object({
 });
 export type RepoUnitConfig = z.infer<typeof RepoUnitConfigSchema>;
 
+// ── per-file decision ledger: <repo>/.lfbridge/decisions.yaml (decisions.mdx) ─
+// The SHARED, team-visible decision log — committed and union-merged by the git backbone so a whole
+// team shares ONE set of decisions. TWO INDEPENDENT AXES per file (ipfs = Add to IPFS/pin; gitignore =
+// Add to git ignore), plus who/when/the Storage ID. It is an APPEND LOG of events folded on read
+// (latest decided_at per (sid, path) wins — decisions.mdx §5). Distinct from the frozen
+// `decisions:` enum map above, which is the machine-local RECONCILED CACHE of this ledger's IPFS axis.
+export const DecisionEventSchema = z.object({
+  sid: z.string(), // Storage ID binding the decision to its storage (decisions.mdx §3.1)
+  path: z.string(), // repo-relative path — the stable key even when the file is ABSENT locally
+  fingerprint: z.string().nullable().default(null), // content fingerprint from files.yaml (advisory)
+  asked: z.boolean().default(true), // we surfaced the file and the user answered (presence ⇒ Decided)
+  ipfs: z.boolean().default(false), // AXIS 1 — Add to IPFS (pin)
+  gitignore: z.boolean().default(false), // AXIS 2 — Add to git ignore
+  decided_by: z.string().nullable().default(null), // allow-listed email of the deciding user
+  decided_at: iso, // ISO-8601 UTC — also the fold tiebreaker
+});
+export type DecisionEvent = z.infer<typeof DecisionEventSchema>;
+
+export const DecisionsLedgerSchema = z.object({
+  schema_version: z.number().default(1),
+  events: z.array(DecisionEventSchema).default([]),
+});
+export type DecisionsLedger = z.infer<typeof DecisionsLedgerSchema>;
+
 // ── computer-unit config.yaml (storage.mdx §8.1) ────────────────────────────
 export const ComputerUnitConfigSchema = z.object({
   schema_version: z.number().default(1),

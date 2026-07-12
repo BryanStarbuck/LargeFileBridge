@@ -236,9 +236,12 @@ progressive disclosure ([use_cases.mdx](./use_cases.mdx) §2).
 ### 4.3 Options — the apply/fix choices (zero or more)
 Between education and the footer, the popup renders the warning's **options** (from its registry entry,
 §8):
-* **Radios** for a mutually-exclusive decision (Pin all / Ignore all).
-* **Checkboxes** for independent toggles ("Also remember this choice", "Compress in place vs. keep
-  original", "Convert PNG → JPEG (loses transparency)").
+* **Radios** for a genuinely mutually-exclusive decision (e.g. one codec of several). Note: the
+  per-file **decision** popup (§10.2.7) is **NOT** one of these — its two choices (Add to IPFS / Add to
+  git ignore) are **independent axes**, so it uses **two checkboxes**, not a radio group
+  ([decisions.mdx §1](./decisions.mdx)).
+* **Checkboxes** for independent toggles ("Add them to IPFS", "Add to git ignore", "Compress in place
+  vs. keep original", "Convert PNG → JPEG (loses transparency)").
 * Each option has a **label** and an optional **one-line helper** (`text-xs text-black/50`).
 * Options may show a **count** and be **scoped** (all N / just the selected rows).
 * If a warning has **no options** (a pure one-click fix, e.g. "Start IPFS"), this region is empty and
@@ -272,6 +275,38 @@ Between education and the footer, the popup renders the warning's **options** (f
 
 **Component:** `WarningPopup` (new), in
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx`.
+
+#### 4.4.1 Composed action-verb labels — the button spells out the CHECKED axes (LOCKED)
+
+When a popup offers **more than one independent action axis** (two-or-more checkboxes that each toggle a
+*different* thing to do — e.g. **Add to IPFS (pin)** *and* **Compress**, or **Add to IPFS** *and* **Add
+to git ignore**), the button label is not a single fixed verb — it is **composed from exactly the axes
+that are currently checked**, and it **rewrites the instant an axis is toggled**, the same way the live
+count updates (§4.6).
+
+* **The grammar.** Order the checked axes by a fixed priority, join their verbs into one thoughtfully
+  spelled-out phrase, and keep the primary/continue verb last with the right chevron. Example — a
+  pull-them-down popup (§10.8.12) with **Add to IPFS (pin)** + **Compress**:
+
+  ```
+  ☑ Add to IPFS (pin)   ☑ Compress   →   [ Compress and Continue: IPFS Add › ]
+  ☑ Add to IPFS (pin)   ☐ Compress   →   [ Continue: IPFS Add › ]
+  ☐ Add to IPFS (pin)   ☑ Compress   →   [ Compress and Continue › ]
+  ```
+
+  As the user turns the **Compress** box off, "Compress and " drops out of the label and it becomes
+  **"Continue: IPFS Add ›"** — no other change. The label always reads as **exactly what Apply will do**.
+* **It composes with the live count (§4.6).** When the popup also has a subjects list, the composed verb
+  and the checked-subject count coexist: *"Compress and Continue: IPFS Add — 4 files ›"*. Uncheck a
+  subject → the count falls; uncheck an axis → the verb phrase shrinks; both are reactive.
+* **Never a bare "Apply."** For multi-axis popups the label is always the composed phrase, so a
+  non-expert reads the outcome off the button rather than having to remember which boxes they left on.
+* **Both-axes-off is still valid where the warning says so** (§5.2 / §10.2.7): the button stays enabled
+  and reads the "reviewed — leave it" verb (e.g. **"Save decision ›"**), because recording *no action* is
+  itself a sticky decision ([decisions.mdx §1](./decisions.mdx)).
+
+Composing the button label from the checked action axes (fixed priority order, reactive on toggle, count appended when there is a subjects list) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `composeActionLabel(checkedAxes, checkedCount)` (the `actionLabel` may be a function of the chosen options, §8).
 
 ### 4.5 The subjects list — the actual files/directories, with checkboxes (LOCKED for file-scoped warnings)
 
@@ -912,17 +947,17 @@ Every repo answers "am I OK?" through one **RepoVerdict** banner on the One-Repo
 
 **Notes / gaps.** Distinguish from **pending** (10.2.8): here the CID **exists**, only no peer has pulled it; pending may still lack a CID. **Gap:** the list-level equivalent (`peerCount === 0`) has **no banner** — the Repos list should roll this into a verdict (see 10.2.13).
 
-#### 10.2.7 N files need a decision (Pin or Ignore) — `warn` (id: repo-files-need-decision)
+#### 10.2.7 N files need a decision (Add to IPFS and/or Add to git ignore) — `warn` (id: repo-files-need-decision)
 
 *Where shown:* One-Repo page banner, **worst-first cause #4**; Repos list shows the undecided count in brand color per row. **This is the canonical example that drives §0–§4 of this spec.**
 
 **(A) Detect it & all conditions.** `detail.counts.undecided > 0` (and no worse cause). A file is "undecided" when there is **no entry in `cfg.decisions[path]`** (`Decision` defaults to `"undecided"`); `countDecisions()` increments `undecided` for every such file, and `rollupStatus()` maps `undecided > 0` (when not error/pinning/behind) to `"needs_review"`. *Computed in:* frontend `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `RepoVerdict` undecided branch (lines 386–389), summary strip (line 256, undecided highlighted); list `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` undecided column (lines 122–123, `text-[var(--lfb-primary)]`); backend `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` decision default undecided (line 208), `countDecisions()` (lines 230–241), `rollupStatus()` `needs_review` (line 260).
 
-**(B) The popup.** *What this is:* LFBridge found big files it doesn't yet have instructions for — **Pin** = pin and back up across your computers via IPFS; **Ignore** = leave it alone (still git-ignored, just not bridged). *Why it matters:* nothing moves for undecided files, so your backup is **incomplete** until every big file is decided. *Options:* radios — **◉ Pin all N undecided** (helper: "back them up over IPFS") / **○ Ignore all N undecided** (helper: "git-ignore, don't pin"); plus a checkbox **☐ Also remember this choice for new files here**. There is no correct auto-decision, so the popup presents the choice rather than picking. *Action button:* "Apply & pin" (or "Ignore these files" per the chosen radio).
+**(B) The popup.** *What this is:* LFBridge found big files it doesn't yet have instructions for. The user chooses, on **two independent axes**, what to do with them ([decisions.mdx §1](./decisions.mdx)): **Add to IPFS (pin)** = back them up across your computers via IPFS, and **Add to git ignore** = keep Git from committing these big bytes. *Why it matters:* nothing is remembered for undecided files, so your backup is **incomplete** and Git may try to commit big files, until each is decided. *Options — TWO CHECKBOXES, not radios* ([§4.3](#43-options--the-applyfix-choices-zero-or-more), [decisions.mdx §1](./decisions.mdx)): **☑ Add them to IPFS** (helper: "back them up across your computers over IPFS") and **☑ Add to git ignore** (helper: "keep Git from committing these big files"). Both default **checked** (the recommended git-ignore-**and**-pin outcome that a single Pin-XOR-Ignore radio could never express). The user may turn **either or both off**; **both-off is a valid, sticky "reviewed — leave it" decision** — so this popup is the one place the "a required radio must be picked" gate (§5.2) does **not** apply (`canApply` is always true). There is no correct auto-decision, so the popup presents the choice rather than picking. *Action button:* "Apply — {n} files".
 
-**(C) The fix.** Writes decisions in bulk: `PATCH /api/repos/:repoId/files {paths, decision}` (`updateRepoConfig` sets `decisions[p] = decision`, or deletes the entry to return a file to undecided). **`paths` must be repo-RELATIVE** — `cfg.decisions` is keyed by relative path and `composeFileRows()` reads it back by relative path, so the popup's `targets[].id` (what `apply` hands to `api.setDecision`) is `f.path`, not the absolute path. *(Bugfix per §5.3.1 case 1: ids were absolute, so decisions landed under a key the detector never reads — the file stayed `undecided` and this banner persisted verbatim after a "fixed" toast.)* **Async (§5.2/§5.3):** from the warning popup the fix runs as a background job — the popup's `progress` metadata uses `kind:"pin"` (or `"ignore"` when the chosen radio is Ignore), `target:` the repo name, `doneLabel:` "N files set to pin/ignore", and invalidates `["repo", repoId]`; on success `onWarningApplied` also runs `refetchUntilResolved` (§5.3.1 case 2) so the banner re-derives in a burst and leaves the page as soon as the decisions are written. *Fix in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files` (lines 122–150); frontend `OneRepoPage.tsx` `RepoVerdict` `repo-files-need-decision` popup + `api.setDecision` (relative-path `targets`), dispatched by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` `doApply()`.
+**(C) The fix.** Writes a decision **record** per checked file to the **repo-level, team-shared** ledger `<repo>/.lfbridge/decisions.yaml` ([decisions.mdx §3/§4](./decisions.mdx)) — stamping `asked: true`, the two axes (`ipfs`, `gitignore`), `decided_by` (the authenticated allow-listed email), `decided_at`, and `sid` (the Storage ID) — then **reconciles** ([decisions.mdx §7](./decisions.mdx)): the IPFS axis is projected onto the machine-local `cfg.decisions[p]` frozen enum (`ipfs:true → "sync"`, `ipfs:false → "ignore"`; the `sync` literal is never renamed) and the git-ignore axis is applied through the [git_ignore.mdx](./git_ignore.mdx) engine. `PATCH /api/repos/:repoId/files {paths, ipfs?, gitignore?}`. **`paths` must be repo-RELATIVE** — the ledger and `cfg.decisions` are keyed by relative path and `composeFileRows()` reads them back by relative path, so the popup's `targets[].id` (what `apply` hands the write) is `f.path`, not the absolute path. *(Bugfix per §5.3.1 case 1: ids were absolute, so decisions landed under a key the detector never reads — the file stayed `undecided` and this banner persisted verbatim after a "fixed" toast.)* **Async (§5.2/§5.3):** from the warning popup the fix runs as a background job — the popup's `progress` metadata uses a `kind` reflecting the chosen axes ("pin" when IPFS is on, else "ignore"/"configure"), `target:` the repo name, `doneLabel:` "N files decided", and invalidates `["repo", repoId]`; on success `onWarningApplied` also runs `refetchUntilResolved` (§5.3.1 case 2) so the banner re-derives in a burst and leaves the page — **for good**, because the shared record is now the durable "we asked" state (§10.2.7 note) — as soon as the decisions are written. *Fix in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files`; `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `recordDecision()` / `reconcile()`; frontend `OneRepoPage.tsx` `RepoVerdict` `repo-files-need-decision` popup (two `kind:"checkbox"` options) + the relative-path `targets`, dispatched by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` `doApply()`.
 
-**Notes / gaps.** Ties to the charter category-rollup ("big files git-ignored but not tracked → nudge to decide"). The blue-arrow bulk-decision popup is wired (per-row Decision dropdown / bulk menu remain as the in-table path). **Follow-on state:** choosing Pin moves these files to **"queued to transfer"** (§10.2.8), not the "not backed up" alarm (§10.2.6), thanks to that section's `cid != null` gate — so the "needs a decision" warning genuinely leaves the page instead of being swapped for a fresh yellow one (§5.3.1 case 3).
+**Notes / gaps.** Ties to the charter category-rollup ("big files git-ignored but not tracked → nudge to decide") and is specified end-to-end in [decisions.mdx](./decisions.mdx). The blue-arrow bulk-decision popup is wired (per-row Decision dropdown / bulk menu remain as the in-table path, each also writing the shared ledger — [decisions.mdx §8](./decisions.mdx)). **Why it stops coming back:** the previous single-axis model had no way to record "reviewed — leave it," and decisions were machine-local so a teammate (or a re-scan on another computer) re-raised the banner; the shared, timestamped, both-off-capable record ([decisions.mdx §2/§4](./decisions.mdx)) is the durable, team-visible "already asked" state, so the warning leaves the page and **stays** gone across re-scans and across the team. **Follow-on state:** turning IPFS on moves these files to **"queued to transfer"** (§10.2.8), not the "not backed up" alarm (§10.2.6), thanks to that section's `cid != null` gate — so the "needs a decision" warning genuinely leaves the page instead of being swapped for a fresh yellow one (§5.3.1 case 3).
 
 #### 10.2.8 N files are queued to transfer — `warn` (id: repo-files-pending-transfer)
 
@@ -1993,6 +2028,18 @@ The registry `scope` for these is `device` (or `computer` for the roster rollup,
 **(C) The fix.** No fix action needed — the safe next step is navigation. *Fix in:* frontend navigation only (`ViewOneDevicePage.tsx` back link, lines 100–104). **No backend action.**
 
 **Notes / gaps.** Correctly neutral. **Under-reporting risk:** a genuine backend **500** (non-404) also lands in this same error branch and is displayed identically to a benign stale link — a real server error should be distinguished (an amber/red "couldn't load this device" state) rather than shown as a calm "stale link."
+
+#### 10.8.12 A computer of yours pinned files this one doesn't have — pull them down — `warn` (id: peer-pinned-files-not-here-pull-down)
+
+*Where shown:* the [One repo](./one_repo.mdx) page (top `StatusBanner`) and the [IPFS Shared-files](./ipfs.mdx) page, whenever a repo you just enlisted (or re-opened) on **this** computer has manifest entries that another of your computers already pinned but **this** computer lacks. This is the **February** step of the two-computer tour ([use_case_two_computers.mdx §3](./use_case_two_computers.mdx)). **NEW — closes the gap that the "pull them down" flow previously existed only as a silent background reconcile ([pin_process.mdx §5](./pin_process.mdx), [scan.mdx §2.1](./scan.mdx)) with no user-facing prompt.**
+
+**(A) Detect it & all conditions.** For each repo, LFB compares the **committed manifest** (which arrived via the git backbone and lists each large file → CID) against the **local working tree** and the **running IPFS node's pinset**. A file qualifies when it is **`exists_status: missing`** locally **AND** its manifest CID is **not pinned** on this node — i.e. a peer pinned it, its identity travelled in the manifest, but its bytes are not here yet. The concrete reconcile report is a per-file `exists_status,ipfs_pinned` table (e.g. five `charlie-kirk` clips all `missing,false`); a manifest entry with no CID, or a stray media file not in the manifest, is **not** a pull candidate. Fires only when ≥1 file qualifies and this repo is enlisted here. *Computed in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers(repoRoot)` (joins the manifest against `fs.exists` + `ipfs pin ls`), surfaced by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` in the repo verdict payload.
+
+**(B) The popup.** Two-pane (§4.0), because it targets specific files. *What this is:* "Another of your computers (**{addedByDevice}**) pinned **{n}** files that aren't on this computer yet. LargeFileBridge can pull them down over IPFS." *Why it matters:* until you pull them, this computer is not a real second copy of those files — losing the other machine would lose them. *The subjects list (right pane, §4.5):* one **checked** row per qualifying file, and — because the bytes are **not here** — each row is described **from the committed manifest + the peer's per-file sidecar identity** ([repo_tracking_scheme.mdx §3.1](./repo_tracking_scheme.mdx)): **file name · target directory it will land in · file size · "added by {device}."** The user unchecks any they don't want (e.g. turns 1 of 5 off → pulls 4). *Options (left pane, §4.3):* two independent checkboxes, both default-checked — **Add to IPFS (pin)** and **Compress** — so the composed action-button label (§4.4.1) reads **"Compress and Continue: IPFS Add ›"** and collapses to **"Continue: IPFS Add ›"** when Compress is unchecked, always carrying the live checked-file count.
+
+**(C) The fix.** For each checked file, pin its manifest CID on this node — which **fetches the bytes down over IPFS** (the manifest/sidecar carry the CID / SID) — and, if the Compress axis is checked, queue a compress pass after the bytes arrive. Each pulled file gets a `pull` + `ipfs_pin` event `on_device:<this computer>` in its sidecar and a `PULL` line in this computer's `history/<device>.txt` ([repo_tracking_scheme.mdx §3.2/§4](./repo_tracking_scheme.mdx)); the warning then **leaves the page** (§5.3.1). *Fix in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pullMissing(repoRoot, checkedPaths, { compress })` (pins each CID, no re-add of bytes that fetch on pin), called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` `POST /:repoId/pull`. **Not destructive** (it only *adds* local copies) — no red confirm.
+
+**Notes / gaps.** Distinct from §10.8.7 (only-this-computer / zero peers) and §10.1.14 (untracked-pinned import backlog): here the files **are** tracked and pinned *elsewhere* — the action is to **replicate them here**, not to adopt or back up. This is the direct user-facing surface for the background reconcile in [pin_process.mdx §5](./pin_process.mdx); the two share `missingPinnedFromPeers`.
 
 ## 10.9 Background workers, schedule, Git backbone & pin resilience
 

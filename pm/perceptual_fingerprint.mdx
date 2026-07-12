@@ -1,0 +1,205 @@
+---
+title: LargeFileBridge — Perceptual Content Fingerprint (PhotoDNA-style, local-only)
+description: The spec for LargeFileBridge's transform-robust content fingerprint — a "perceptual hash" that recognizes when two media files are FUNDAMENTALLY THE SAME CONTENT even after the file was resized to a lower pixel resolution, re-compressed, re-encoded to a different codec, frame-rate changed, or format-converted (e.g. PNG→JPEG with heavy lossy compression). This is the capability PhotoDNA is famous for, but with a HARD non-negotiable constraint from the charter: it must run ENTIRELY LOCALLY with NO network access of any kind — it must never phone home, call an external service, or send file bytes or fingerprints anywhere, and LargeFileBridge is explicitly NOT a reporting service. Documents the web-researched evaluation of the options (Meta PDQ for images, vPDQ for video, blockhash-core / sharp-phash as a no-native-build fallback, and WHY Microsoft PhotoDNA itself is disqualified — proprietary, gated, network + CSAM-reporting model), the chosen algorithm, the 256-bit fingerprint stored per file, Hamming-distance matching with thresholds, how it is wired into the TypeScript/Node app with zero network, and how it complements (never replaces) the exact content hash. Sibling of compression.mdx (which captures a before/after fingerprint around every compress/convert), repo_tracking_scheme.mdx (the per-file <name>.yaml sidecar that stores the fingerprint), files.mdx (per-file identity), and the charter's "Perceptual / content-fingerprint matching (PhotoDNA-style) — local only" requirement.
+---
+
+# LargeFileBridge — Perceptual Content Fingerprint
+
+LargeFileBridge needs to know when two files are **fundamentally the same file** even after they have
+been **reduced in pixel resolution, compressed, re-encoded to a different codec, changed in frame rate,
+or converted between formats** (e.g. a PNG re-saved as a heavily-compressed JPEG). An exact content hash
+(SHA of the bytes) cannot do this — change one pixel and it changes completely. A **perceptual
+fingerprint** can: it hashes what the media *looks like*, not the exact bytes, so a shrunk-and-recompressed
+copy still matches its original.
+
+This is the capability **PhotoDNA** is known for. We want that capability under one **non-negotiable
+constraint from the [charter](../CLAUDE.md)**:
+
+> **Hard requirement: no external networking.** Whatever we choose must run **entirely locally**. It must
+> **NOT** phone home, call an external service, or otherwise send file data or fingerprints over the
+> network. LargeFileBridge is **not a reporting service** and must not behave like one.
+
+This spec builds on the siblings and does not repeat them:
+
+* [compression.mdx](./compression.mdx) — captures the fingerprint **before and after** every compress /
+  convert so the result is provably the same content (its `fingerprint_before` / `fingerprint_after`).
+* [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx) — the per-file `<name>.yaml` sidecar where the
+  fingerprint is stored (`file.fingerprint`), and the `compress`/`convert` events that carry the pair.
+* [files.mdx](./files.mdx) — per-file identity and the exact content hash this fingerprint **complements**.
+* [special_files.mdx](./special_files.mdx) — only **video/image/audio** (and other media) get a
+  perceptual fingerprint; ordinary large binaries get the exact hash only.
+
+---
+
+## 1. What "fundamentally the same content" must survive (LOCKED requirements)
+
+The fingerprint is judged against the transforms the product actually performs and encounters:
+
+| Transform | Must still match? | Why it happens in LFB |
+| --- | --- | --- |
+| **Resize / lower resolution** | ✅ yes | A 4K master and a 1080p export of the same clip/still. |
+| **Re-compression** (same format, lower quality) | ✅ yes | Our own compress pass ([compression.mdx](./compression.mdx)); re-exports. |
+| **Codec re-encode** (ProRes→H.264, etc.) | ✅ yes (video) | Our compress pass targets a smaller codec. |
+| **Frame-rate change** (video) | ✅ yes (video) | Re-timed exports. |
+| **Format conversion** (PNG→JPEG, HEIC→JPEG) | ✅ yes (image) | The PNG→compressible and HEIC→JPEG conversions ([compression.mdx](./compression.mdx), [charter](../CLAUDE.md)). |
+| **Heavy crop / large arbitrary rotation** | ⚠️ best-effort | Degrades for *every* global perceptual hash; we do not rely on it. |
+
+The fingerprint's job is to let LFB say *"the compressed `trees.mov` is the same content as the original
+`trees.mov`"* and *"this 1080p JPEG is the same image as that 4K PNG,"* so a compress/convert is verified,
+duplicates across variants are recognized, and a decision made about one variant can be **matched to the
+same content across a rename or a compress/convert** ([decisions.mdx §3.2](./decisions.mdx)).
+
+---
+
+## 2. The evaluation (web-researched) — and why PhotoDNA itself is disqualified
+
+We evaluated the field. The full comparison is in §2.1; the headline is: **Microsoft PhotoDNA gives us
+the wrong deployment model, so we adopt Meta's open PDQ family, which provides the same transform-robust
+capability locally.**
+
+**Why Microsoft PhotoDNA is disqualified (LOCKED):**
+
+* **Not open source.** The algorithm and hash database are deliberately withheld; there is no independent
+  local implementation to adopt. ([PhotoDNA — Wikipedia](https://en.wikipedia.org/wiki/PhotoDNA))
+* **Gated, vetted licensing.** Access to the PhotoDNA Cloud Service is at Microsoft's discretion, subject
+  to organizational vetting. ([PhotoDNA Terms of Use](https://www.microsoft.com/en-us/photodna/termsofuse))
+* **It is a network + reporting service** in the CSAM/NCMEC ecosystem. That directly conflicts with our
+  charter: LFB runs **entirely locally, never phones home, and is not a reporting service**.
+  ([PhotoDNA FAQ](https://www.microsoft.com/en-us/photodna/faq))
+
+We want PhotoDNA's *capability*, not its service. **Meta's PDQ is the open-source, self-hostable answer to
+exactly that.**
+
+### 2.1 Options compared
+
+| Algorithm | Media | Fingerprint size | Survives resize/recompress/convert/codec/fps | Match + threshold | Node/TS path (all local) | License |
+| --- | --- | --- | --- | --- | --- | --- |
+| **PDQ** (Meta) | image | **256 bit = 32 B** (64 hex) | ✅✅✅ (+ cheap flip / 90° variants); weak on heavy crop/large rotation | Hamming **< 32** / 256 (tighten to ≤ 24) + quality gate | Rust `pdqhash` crate (Apache-2.0) via **napi-rs** or **WASM**; decode pixels with `sharp` | BSD (ref) / Apache-2.0 (Rust) |
+| **vPDQ** (Meta) | video | N × 32 B (per sampled frame) | ✅ incl. codec/fps/resize | % shared matching frames | **bundled ffmpeg** → sample frames → PDQ each | BSD |
+| **TMK+PDQF** (Meta) | video | ~256 KB single sig | ✅ whole-clip | cosine/level-2 score | C++/Python; no Node binding | BSD |
+| **blockhash-core** | image | 256 bit (`bits:16`) | ✅ resize/recompress/convert | Hamming over 256 | **pure JS/WASM**, needs `sharp` to decode | **MIT** |
+| **sharp-phash** (DCT) | image | 64 bit = 8 B | ✅ resize/recompress/convert | Hamming ≤ ~10, helper included | **pure JS** on `sharp` | **MIT** |
+| **pHash** (phash.org) | img/aud/vid | 64 bit | ✅ | Hamming ≤ ~10 | stale native binding | **GPLv3 ⚠ (viral — avoid)** |
+| **PhotoDNA** | image | ~144 B (proprietary) | ✅ best-in-class | proprietary | **cloud service only** | Proprietary/gated **⛔** |
+
+Sources: [Meta ThreatExchange README](https://github.com/facebook/ThreatExchange/blob/main/README.md) ·
+[vPDQ](https://github.com/facebook/ThreatExchange/tree/main/vpdq) ·
+[Dalins et al. 2019 (arXiv 1912.07745)](https://arxiv.org/abs/1912.07745) ·
+[darwinium-com/pdqhash (Rust)](https://github.com/darwinium-com/pdqhash) ·
+[crates.io/pdqhash](https://crates.io/crates/pdqhash) ·
+[blockhash-core (MIT)](https://www.npmjs.com/package/blockhash-core) ·
+[sharp-phash (MIT)](https://www.npmjs.com/package/sharp-phash) ·
+[phash.org](https://www.phash.org/) ·
+[PhotoDNA Terms of Use](https://www.microsoft.com/en-us/photodna/termsofuse).
+
+---
+
+## 3. The choice (LOCKED)
+
+* **Images → PDQ (256-bit).** The open, permissively-licensed heir to PhotoDNA: transform-robust
+  (resize/recompress/format-convert, plus free flip/90°-rotate variants), ships a **quality score** to
+  skip flat/junk images, is a compact **32 bytes** for our per-file YAML, and matches on a single integer
+  **Hamming distance**. Run locally via the **Rust `pdqhash` crate** wrapped in a **napi-rs** native
+  addon, or compiled to **WASM** to avoid a native build in CI; decode pixels with **`sharp`** first.
+* **Video → vPDQ (per-frame PDQ).** Reuse the *same* PDQ primitive on **frames sampled by a bundled
+  `ffmpeg`** (start ~1 fps or scene-change keyframes). Two videos are "the same content" when a high
+  fraction of frames match within the image threshold. One hashing primitive covers both media types.
+* **Fallback with zero native build → blockhash-core + sharp-phash.** To ship before the napi/WASM PDQ
+  binding exists, use **blockhash-core at `bits:16`** (256-bit, MIT, pure JS/WASM) with `sharp` for
+  decoding, optionally cross-checked by **sharp-phash** (64-bit DCT, MIT, built-in Hamming helper). The
+  sidecar can hold **both** a `pdq` and a `blockhash` value during the transition; matching migrates to
+  PDQ once the binding lands.
+* **Audio.** Audio has no PDQ; a perceptual **audio** fingerprint is out of scope for v1 — audio files
+  carry only the exact content hash plus (optionally) a transcript ([Transcribe.mdx](./Transcribe.mdx)).
+  Reserve an `audio` fingerprint slot for later.
+
+The algorithm choice and matcher are isolated behind one module so the fallback→PDQ swap is a one-file change, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/perceptual.service.ts` — `fingerprintImage(buf)` / `fingerprintVideo(path)` (ffmpeg-sampled) / `hammingDistance(a, b)` / `sameContent(a, b, opts)`.
+
+---
+
+## 4. Matching — Hamming distance + thresholds (LOCKED)
+
+* **Compare by Hamming distance** over the 256-bit fingerprints (count of differing bits). Smaller =
+  more similar; identical content → 0.
+* **Image threshold:** treat Hamming **≤ 32 / 256** as "same content"; expose a stricter **≤ 24** for
+  high-precision de-dup. Always gate on the PDQ **quality** score — drop flat/low-quality images from
+  automatic matching to avoid false hits.
+* **Video threshold:** a video pair is "the same content" when the **fraction of frames** whose PDQ
+  matches within the image threshold exceeds a high bar (vPDQ's shared-frame logic), which naturally
+  survives codec/fps/resize changes.
+* **Never auto-act on a perceptual match.** Consistent with the charter, a fingerprint match is a
+  **signal** LFB surfaces (e.g. "this looks like the same content as X"); it never deletes, replaces, or
+  alters a file on its own.
+
+---
+
+## 5. Storage — per file, in the sidecar (LOCKED)
+
+The fingerprint is stored per file in the `<name>.yaml` sidecar
+([repo_tracking_scheme.mdx §3](./repo_tracking_scheme.mdx)) and referenced from `files.yaml`:
+
+```yaml
+file:
+  # …identity…
+  fingerprint:
+    algo: pdq                 # pdq (image) | vpdq (video) | blockhash (fallback)
+    value: a1b2c3…            # 64-hex (32 bytes) for pdq/blockhash
+    quality: 96               # PDQ quality score (image); low quality → excluded from auto-match
+  # video variant instead carries a frame list (kept in a sidecar file when large):
+  # fingerprint: { algo: vpdq, frames_ref: .lfbridge/files/videos/trees.mov.vpdq }
+```
+
+* **Complements, never replaces, the exact hash.** The exact content `hash` proves *byte identity*; the
+  perceptual `fingerprint` proves *content identity across transforms*. Both live on the file. The
+  before/after pair captured around a compress/convert ([compression.mdx](./compression.mdx)) uses this
+  same field: `fingerprint_before` should match `fingerprint_after` within threshold, which is how LFB
+  **verifies a compression preserved the content**.
+* **Size.** A PDQ/blockhash fingerprint is **32 bytes** — trivial inline in YAML. A per-frame vPDQ list
+  can be large; when it is, store it in a small **`.vpdq` sidecar file** beside the `<name>.yaml` and keep
+  only a reference inline.
+
+---
+
+## 6. Wiring it with zero network access (LOCKED)
+
+* **All hashing is pure local computation** on decoded pixel/frame buffers (Rust/WASM or JS). None of the
+  chosen candidates make network calls; PhotoDNA is excluded **precisely because it does** (§2).
+* **The only external process is a bundled `ffmpeg` binary** we shell out to for video frame extraction —
+  itself fully offline. No candidate, and no step, ever opens a socket.
+* This is enforceable and must be **verified**: the perceptual module has **no HTTP client, no fetch, no
+  socket** and is covered by a test that fails if it gains one — the same "nothing phones home" guarantee
+  the charter demands of the IPFS posture and the AI-provider boundary.
+
+Guaranteeing the perceptual path never performs network I/O (no client imported; ffmpeg invoked with local paths only) is asserted in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/perceptual.service.ts` — plus the guard test `perceptual.no-network.spec.ts`.
+
+---
+
+## 7. Acceptance criteria
+
+1. LFB computes a **transform-robust perceptual fingerprint** for **image and video** files that survives
+   resize, re-compression, codec re-encode, frame-rate change, and format conversion (§1).
+2. The chosen algorithm is **PDQ (256-bit) for images** and **vPDQ (per-frame PDQ) for video**, with a
+   **blockhash-core + sharp-phash** no-native-build fallback; **Microsoft PhotoDNA is explicitly not used**
+   for the reasons in §2.
+3. Everything runs **entirely locally with no network access** — no phone-home, no external service, no
+   sending bytes or fingerprints anywhere; the only external process is a **bundled ffmpeg** for frame
+   sampling (§6). A guard test enforces this.
+4. Matching is by **Hamming distance** with the **≤ 32 / 256** image threshold (stricter ≤ 24 available)
+   plus a **quality gate**, and a **shared-frame fraction** for video (§4). A match is a **signal only** —
+   LFB never auto-acts on it.
+5. The fingerprint is stored **per file** in the `<name>.yaml` sidecar (32 bytes for pdq/blockhash; a
+   `.vpdq` sidecar reference for large frame lists), **complements** the exact content hash, and is the
+   field the compress/convert **before/after** pair uses to verify content was preserved (§5).
+
+<!--
+  Perceptual/content fingerprint = PhotoDNA-style transform-robust hash, but LOCAL-ONLY (charter: no
+  network, no phone-home, NOT a reporting service). CHOICE: PDQ (256-bit, 32 B) for images via Rust
+  pdqhash crate (napi/WASM) + sharp; vPDQ (per-frame PDQ over bundled-ffmpeg frames) for video; fallback
+  blockhash-core + sharp-phash (MIT, pure JS) shipping a `pdq` field alongside for later swap. PhotoDNA
+  DISQUALIFIED (proprietary, gated, network+reporting). Match by Hamming ≤32/256 (strict ≤24) + quality
+  gate; video = shared-frame fraction. Signal only — never auto-acts (charter). Stored per file in the
+  <name>.yaml sidecar (repo_tracking_scheme §3); complements the exact hash; is the before/after check for
+  compression.mdx. Siblings: compression, repo_tracking_scheme, files, special_files.
+-->

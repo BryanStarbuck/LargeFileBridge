@@ -447,30 +447,34 @@ function RepoVerdict({
       headline,
       sub,
       popup: {
-        whatThisIs: `LFBridge found ${undecided} large file${undecided === 1 ? "" : "s"} in this repo that you haven't told it what to do with yet. Until you decide, ${
-          undecided === 1 ? "it is" : "they are"
-        } neither backed up over IPFS nor git-ignored. Review the list on the right — uncheck any file you want to leave out.`,
+        whatThisIs: `LFBridge found ${undecided} large file${undecided === 1 ? "" : "s"} in this repo that you haven't told it what to do with yet. Choose what to do on two independent axes below — a big file usually wants BOTH: git-ignored so Git never commits it, and pinned so it is backed up across your computers. Your choice is shared with everyone on this repo, so no teammate is asked again. Review the list on the right — uncheck any file you want to leave out.`,
         whyItMatters: (
           <ul className="list-disc space-y-0.5 pl-4">
-            <li>A file left undecided is not pinned to your other computers — if this machine dies, it's gone.</li>
-            <li>It also isn't git-ignored, so git may try to commit it.</li>
+            <li>A file not added to IPFS is not pinned to your other computers — if this machine dies, it's gone.</li>
+            <li>A file not git-ignored may be committed by Git, bloating the repo with big binaries.</li>
+            <li>Leaving both off is fine too — it records "reviewed, leave as-is" so this doesn't ask again.</li>
           </ul>
         ),
+        // TWO INDEPENDENT CHECKBOXES (decisions.mdx §1) — not a radio group. Both default checked (the
+        // recommended git-ignore-AND-pin outcome); the user may turn either or both off, and BOTH-OFF is a
+        // valid recorded decision (canApply below is always true — no required choice).
         options: [
           {
-            kind: "radio",
-            group: "decision",
-            value: "sync",
-            label: "Add the selected files to IPFS (pin) — back them up over IPFS",
-            defaultSelected: true,
+            kind: "checkbox",
+            name: "ipfs",
+            label: "Add them to IPFS",
+            helper: "back them up across your computers over IPFS",
+            defaultChecked: true,
           },
           {
-            kind: "radio",
-            group: "decision",
-            value: "ignore",
-            label: "Ignore the selected files (git-ignore, don't pin)",
+            kind: "checkbox",
+            name: "gitignore",
+            label: "Add to git ignore",
+            helper: "keep Git from committing these big files",
+            defaultChecked: true,
           },
         ],
+        canApply: () => true, // both-off is a valid decision (decisions.mdx §1); never block Apply
         // Right-pane subjects — id is the repo-RELATIVE path (what `apply` receives and hands to
         // api.setDecision). It MUST be relative: the backend keys `cfg.decisions` by repo-relative path
         // and composeFileRows reads it back by relative path, exactly like the table's per-row Decision
@@ -484,19 +488,23 @@ function RepoVerdict({
           sublabel: formatBytes(f.sizeBytes),
         })),
         targetNoun: "file",
-        actionLabel: (sel) => (sel.radios.decision === "ignore" ? "Ignore" : "Apply & pin"),
-        // §5.3 — async: hand off to the dock (verb tracks the Pin/Ignore choice), toast on done, and
-        // refetch this repo so the "N files need a decision" banner disappears once decisions are written.
+        actionLabel: "Apply",
+        // §5.3 — async: hand off to the dock (verb reflects the chosen axes), toast on done, and refetch
+        // this repo so the "N files need a decision" banner disappears — and STAYS gone, because the
+        // decision is now a shared, sticky record (decisions.mdx §2).
         progress: {
-          kind: (sel) => (sel.radios.decision === "ignore" ? "ignore" : "pin"),
+          kind: (sel) => (sel.checks.ipfs ? "pin" : sel.checks.gitignore ? "ignore" : "configure"),
           target: detail.name,
-          doneLabel: (sel, n) =>
-            `${n} file${n === 1 ? "" : "s"} set to ${sel.radios.decision === "ignore" ? "ignore" : "pin"}`,
+          doneLabel: (_sel, n) => `${n} file${n === 1 ? "" : "s"} decided`,
           invalidate: [["repo", repoId]],
         },
-        apply: async (_sel, checkedPaths) => {
-          const decision = (_sel.radios.decision as Decision) || "sync";
-          await api.setDecision(repoId, checkedPaths, decision);
+        apply: async (sel, checkedPaths) => {
+          // Record the full two-axis decision (either/both/neither) — the backend stamps who/when/SID into
+          // the team-shared ledger and reconciles the local pin state (decisions.mdx §3/§7).
+          await api.setFileDecisions(repoId, checkedPaths, {
+            ipfs: !!sel.checks.ipfs,
+            gitignore: !!sel.checks.gitignore,
+          });
         },
       },
     };

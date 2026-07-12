@@ -1,0 +1,365 @@
+---
+title: LargeFileBridge — Use-Case Tour — one repo across two computers (Mac tower ↔ Mac laptop, January → May)
+description: The end-to-end scenario tour that walks ONE repo (the "Charlie Kirk repo") as it is enlisted on a user's day-to-day Mac tower and later on their Mac laptop, month by month from January to May of the first year. It is the narrative that ties together every moving part of LargeFileBridge for a repo storage — the special-file classifier, the hidden .lfbridge/ tracking area (repo_storage.yaml, per-file <name>.yaml sidecars, and the per-computer history log), IPFS pinning decisions (including files pinned by hand on the command line OUTSIDE LFB), the "a peer pinned files this computer doesn't have — pull them down" warning and its guided popup, the two-checkbox decision with the DYNAMIC action-button label, compression with before/after hashing and the perceptual fingerprint, transcription, and the sticky "we already asked, do not re-ask on the other computer" rule. Each month states what the user does, what LargeFileBridge does automatically, exactly what it writes to disk and where, which warnings appear, and what we should DOUBLE-CHECK. Sibling of repo_tracking_scheme.mdx (the on-disk scheme every step writes), special_files.mdx (the classifier), decisions.mdx (the two-axis sticky decisions), warnings.mdx (the pull-down warning + dynamic button), compression.mdx (before/after hash), perceptual_fingerprint.mdx (the content fingerprint), devices.mdx (the two computers' unique names + the graft that maps the repo to a different local path), storage_repo.mdx (the repo-storage concept), and use_cases.mdx (the UC-format sibling this complements with a chronological tour).
+---
+
+# LargeFileBridge — Two-Computer Tour (Mac tower ↔ Mac laptop)
+
+This is a **chronological scenario tour**. Where [use_cases.mdx](./use_cases.mdx) answers *"which screen
+answers which question"* with UC-N flows, this document answers *"what actually happens, in order, as one
+repo lives on two of my computers over five months"* — and in doing so it exercises **every** on-disk
+write and **every** decision surface a repo storage has. It is the reference the team walks to confirm
+the whole system holds together.
+
+Two computers, one repo, five months:
+
+* **`studio-tower`** — the user's **day-to-day Mac tower** (a desktop, not a laptop). Their main machine.
+* **`bryan-macbook-pro`** — their **Mac laptop**, enlisted in the same repo a month later.
+
+(The unique per-computer names come from [devices.mdx §1/§8](./devices.mdx) — a stable minted device id
+plus a fingerprint-seeded nice name. Those nice names are the filenames of the per-computer history logs
+and the `on_device` stamp on every event.)
+
+This spec builds on the siblings and does not repeat them:
+
+* [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx) — the `.lfbridge/` files every step below writes
+  (`repo_storage.yaml`, the per-file `<name>.yaml` sidecars, the `history/<device>.txt` logs).
+* [special_files.mdx](./special_files.mdx) — the classifier that decides which files matter here.
+* [decisions.mdx](./decisions.mdx) — the two-axis, team-shared, **sticky** decision ledger the "don't
+  re-ask" behavior rides on.
+* [warnings.mdx](./warnings.mdx) — the **pull-them-down** warning (§10.8) and the **dynamic action-button
+  label** (§4.4) this tour drives.
+* [compression.mdx](./compression.mdx) / [perceptual_fingerprint.mdx](./perceptual_fingerprint.mdx) — the
+  before/after hash and the content fingerprint captured around a compress.
+* [devices.mdx](./devices.mdx) — the two device identities and the **graft** that maps the repo onto a
+  **different local path** on the laptop.
+* [storage_repo.mdx](./storage_repo.mdx) — the repo-storage concept the tour lives inside.
+
+---
+
+## 0. The setup — a repo storage, and what counts as "special"
+
+**A storage is a section of the file system LFB tracks.** The simplest kind is a **repo storage**: the
+**root directory where a repo is cloned locally, plus the directory hierarchy underneath it that stays
+within that repo** ([storage_repo.mdx](./storage_repo.mdx)). If a **sub-repo** is cloned inside — a rare
+corner case — that cloned sub-hierarchy is carved out as its own storage. (The rest of the file system —
+everything *outside* repos — is the **personal** file system, handled later; this tour is only about
+**repo storage**.)
+
+Inside a repo, LFB only busies itself with **special files** ([special_files.mdx](./special_files.mdx)).
+A file is special when it is **large** (payload rule), **already IPFS-pinned** (by us or observed pinned
+outside us), or a **video / image / audio** file. For media it also asks two questions:
+
+* **Compressible?** — does the video/image/audio look **uncompressed** vs. the learned baseline?
+* **Transcribable?** — a **video has an audio track** so it can be transcribed; **audio** can be, too
+  (optionally). Both may or may not end up transcribed.
+
+The repo in this tour is the **Charlie Kirk repo** — a folder full of video clips.
+
+---
+
+## 1. Timeline at a glance
+
+| Month | Computer | What happens | New LFB writes |
+| --- | --- | --- | --- |
+| **January** | `studio-tower` | Enlist the repo. 20 video files present (100 eventually). **5 pinned by hand on the CLI, outside LFB.** LFB recommends pinning 6; user says **yes to 3, no to 3**. | `.lfbridge/` created; `repo_storage.yaml`; `history/studio-tower.txt`; per-file sidecars for the 5 CLI-pinned (`observed`/`not-lfbridge`) + the 6 decided. |
+| **February** | `bryan-macbook-pro` | Enlist the **same** repo on the laptop (**different local path**). Warning: *peer pinned files you don't have — pull them down.* Checklist of 5; user turns 1 off → pulls 4. Two checkboxes (IPFS + compress); **dynamic button**. | `history/bryan-macbook-pro.txt`; `ipfs_pin`/`pull` events; the 4 pulled files' bytes arrive via IPFS. |
+| **March** | `bryan-macbook-pro` | 20 **new** video files land (checked into Git). Warning: *these can be compressed.* User does nothing at first, then walks the UI to decide. | sidecars for the 20 new (`compressible`, provenance = where they came from); `decision` events. |
+| **April** | `studio-tower` | The 20 files arrive via Git. Warning: *can be compressed.* User compresses **half**; declines the other half. | `compress` events with **before/after hash + size + perceptual fingerprint**; **both-off** `decision` events for the declined half. |
+| **May** | `bryan-macbook-pro` | More videos may have arrived separately. LFB **does not re-ask** about the files already decided in April (compressed, or declined). | (no re-prompt for decided files; a fresh notification only for genuinely new ones). |
+
+---
+
+## 2. JANUARY — `studio-tower` — enlist the Charlie Kirk repo
+
+**What the user does.** On their Mac tower they clone the Charlie Kirk repo and add it to LargeFileBridge
+(**+ Add repo** — [repos.mdx §6](./repos.mdx)). The repo has **20 video files** now; it will grow to
+**100**. Separately, **before or outside LFB, the user pinned 5 of the 20 by hand on the command line**
+(`ipfs add` / `ipfs pin add`).
+
+**What LFB does automatically.**
+
+* **Creates the hidden tracking area.** The web app **automatically** creates `.lfbridge/` at the repo
+  root and adds it to `.gitignore`, and **automatically** writes **`repo_storage.yaml`** — the repo-wide
+  settings-and-state file whose **only** level-one key is `repo_storage:`, everything else nested below
+  ([repo_tracking_scheme.mdx §2](./repo_tracking_scheme.mdx)). Enlist provenance (`at` / `by` /
+  `on_device: studio-tower`) is stamped.
+* **Creates the history directory** and this computer's log, **named by the unique computer name**:
+  `.lfbridge/history/studio-tower.txt` — the **history log for this computer for this repo**
+  ([repo_tracking_scheme.mdx §4](./repo_tracking_scheme.mdx)).
+* **Classifies the files.** All 20 are `video` (and `large` per the media-at-any-size payload rule); 19
+  are compressible, all 20 transcribable; **5 are `ipfs_pinned`** — but LFB did **not** pin them.
+* **Notices the outside pins (headless-safe).** When LFB scans — including in **headless** background
+  mode — it reads this computer's IPFS pinset and finds **5 files already pinned that LFB has no record
+  of pinning**. For each it writes a **sidecar** and appends an **`observed`** event with **`by:
+  not-lfbridge`**, the CID it is pinned under, and **`on_device: studio-tower`** — recording *the first
+  time we scanned and found our IPFS had pinned them, the time/date, and which computer observed it*
+  ([repo_tracking_scheme.mdx §3.3](./repo_tracking_scheme.mdx)).
+
+  ```
+  repo file:   ~/BGit/charlie-kirk/videos/trees.mov      (pinned on the CLI, outside LFB)
+  sidecar:     ~/BGit/charlie-kirk/.lfbridge/files/videos/trees.mov.yaml
+  ```
+
+  Each of the 5 sidecars carries the file **name, the repo-relative path, the exact hash, the file size,
+  a created/modified stamp**, and the `observed`/`not-lfbridge` first-seen event — **all captured on the
+  tower**. (Those identity fields are exactly what lets the *laptop*, in February, show the files before
+  it has the bytes — §3.)
+
+**The decision prompt.** LFB surfaces the triage: it **recommends IPFS-pinning 6 files**. The user
+**chooses yes on 3 and no on 3**. Each answer is:
+
+* written to the **team-shared** `.lfbridge/decisions.yaml` ledger (the source of truth — `asked: true`,
+  the two axes, `decided_by`, `decided_at`, `sid` — [decisions.mdx §3](./decisions.mdx));
+* mirrored as a **`decision` event** in each file's sidecar; and
+* appended to the **history log** with a **per-file breakdown** because the outcomes differ:
+
+  ```
+  # .lfbridge/history/studio-tower.txt
+  2026-01-08T15:20:44Z  DECISION  by=bryan@act3ai.com  recommended IPFS-pin for 6 files; user chose:
+                          pin=yes   videos/a.mov
+                          pin=yes   videos/b.mov
+                          pin=yes   videos/c.mov
+                          pin=no    videos/d.mov
+                          pin=no    videos/e.mov
+                          pin=no    videos/f.mov
+  ```
+
+  *(Every time a user makes decisions we log it, UTC-stamped, and when different files got different
+  answers we indent the per-file decision so it is unambiguous and parsable later.)*
+
+* LFB then **pins the 3 yes files**, appending an `ipfs_pin` event (with the resulting CID) to each and an
+  `IPFS-PIN` line to the history log. A file can later be turned **off then on again** — each transition
+  is its own event, so the sidecar keeps the full on/off/on history.
+
+**What we double-check (January):**
+* `repo_storage.yaml` has **exactly one** level-one key (`repo_storage:`) and correct `counts:` (20
+  special, 5 `ipfs_pinned`, 19 compressible, 20 transcribable).
+* The 5 CLI-pinned files each have a sidecar whose first event is `observed` / `by: not-lfbridge` /
+  `on_device: studio-tower` — LFB is **not** claiming it pinned them.
+* The history log's DECISION entry shows the 3-yes / 3-no split per file.
+
+---
+
+## 3. FEBRUARY — `bryan-macbook-pro` — enlist the same repo on the laptop
+
+**What the user does.** On the Mac laptop they clone the **same** Charlie Kirk repo — very likely to a
+**different location** on disk (the path *up to* the repo differs) — install LargeFileBridge, and open the
+web app. The **different local path is fine**: the shared, machine-independent settings live in
+`repo_storage.yaml`, and the **graft** ([devices.mdx §4](./devices.mdx)) maps the repo's shared hierarchy
+onto *this* computer's absolute path.
+
+**What LFB does automatically — the reconcile.** The committed `manifest.yaml` and `decisions.yaml`
+arrived with the Git clone; the per-file **sidecars did not** (they are git-ignored working artifacts of
+the tower). LFB checks the manifest's CIDs against **the local repo and the running IPFS node** and finds
+the pinned files are **absent locally and not yet pinned here** — the concrete reconcile report:
+
+```csv
+exists_status,ipfs_pinned,file_path
+missing,false,~/BGit/charlie-kirk/videos/2074257725697970542.mp4
+missing,false,~/BGit/charlie-kirk/videos/2075191642366054733.mp4
+missing,false,~/BGit/charlie-kirk/videos/2075290171105288315.mp4
+missing,false,~/BGit/charlie-kirk/videos/2075531573907071094.mp4
+missing,false,~/BGit/charlie-kirk/videos/2074257725697970542.mp3
+```
+*(All absent from the working tree; none of the manifest CIDs pinned on this laptop's node — `ipfs pin ls`
+returns "not pinned" for each. The `.mp3` has no manifest CID, so it is shown for completeness but is not
+a pull candidate.)*
+
+**The warning.** This becomes a **warning with a button** — *"A computer of yours pinned files this
+computer doesn't have yet — pull them down."* ([warnings.mdx §10.8](./warnings.mdx), the pull-them-down
+warning). Its blue arrow opens the **guided popup**.
+
+**The popup — a checklist even though the bytes aren't here.** The right pane is the **subjects list**: a
+**checkbox per file** the user can toggle to choose which to pull. LFB can **name and describe the files
+even though they are not on this computer**, because the tower's per-file sidecars recorded (and the
+committed manifest carries) the **file name, the directory path it belongs under, the hash, the file
+size, and which computer added them**. So the laptop shows, per row: **file size · target directory ·
+"added by studio-tower."**
+
+The user **starts with all 5 checked, turns 1 off, and pulls 4.**
+
+**The two checkboxes + the dynamic action button.** The popup's options pane has **two checkboxes**, both
+checked by default: **Add to IPFS (pin)** and **Compress**. The bottom-right blue button **spells out the
+checked axes** and updates live ([warnings.mdx §4.4](./warnings.mdx), the composed-label rule):
+
+```
+☑ Add to IPFS (pin)     ☑ Compress
+                                          [ Compress and Continue: IPFS Add › ]
+
+# user unchecks Compress →
+☑ Add to IPFS (pin)     ☐ Compress
+                                          [ Continue: IPFS Add › ]
+```
+
+The label is **composed from what is checked**, thoughtfully spelled out, and — as always — carries the
+live checked **count** of the subjects list; unchecking a subject or an axis rewrites the button text
+immediately.
+
+**Apply → the bytes arrive.** On Apply, LFB pins the 4 checked files locally. Because the manifest/sidecar
+carry the **CID (the SID)**, pinning **fetches the bytes down to the laptop over IPFS** — the files now
+exist locally and are pinned. Each gets an `ipfs_pin` (and a `pull`) event `on_device:
+bryan-macbook-pro`, and the laptop's own `history/bryan-macbook-pro.txt` records the pull with the
+per-file breakdown (4 pulled, 1 left).
+
+**What we double-check (February):**
+* The pull-down warning renders a **per-file checklist** with **size / directory / added-by** even though
+  the files are **absent locally**.
+* The button reads **"Compress and Continue: IPFS Add ›"** with both boxes checked and **"Continue: IPFS
+  Add ›"** with Compress unchecked, and the label tracks the checked count.
+* After Apply, the 4 chosen files are present and pinned on the laptop; the 5th is not; the laptop writes
+  only **its own** history file.
+
+---
+
+## 4. MARCH — `bryan-macbook-pro` — new videos land, "these can be compressed"
+
+**What the user does.** On the laptop, **20 new video files** are downloaded into the repo and get
+**checked into Git** (they are new and not yet git-ignored). At first the user **does nothing**.
+
+**What LFB does automatically.** A scan (the laptop may run the scanning phase) classifies the 20 as
+`video` + `compressible`. Because they look uncompressed, LFB raises the **"N videos here can be
+compressed"** offer ([warnings.mdx §10.5](./warnings.mdx)) — amber, an **offer, never automatic**. The
+scan may record `compressible: true` in each file's sidecar, **but the user has not been asked** — so
+there is **no decision event yet**; the files stay Undecided.
+
+**The user walks the UI to decide.** When ready, the user walks LargeFileBridge's UI to decide on the 20.
+Each decision is stamped with **which computer** (`on_device: bryan-macbook-pro`) and **where the videos
+came from** (provenance recorded in the sidecar). All of it lands in the **per-file sidecar properties**
+under `.lfbridge/` — plus the shared ledger and the history log.
+
+**What we double-check (March):**
+* The 20 new files are classified `compressible`; the offer appears; **nothing is compressed without a
+  click**.
+* A scan-written `compressible: true` does **not** count as a decision — the files are Undecided until the
+  user answers.
+* Each decision records `on_device` and the file's provenance.
+
+---
+
+## 5. APRIL — `studio-tower` — the files arrive via Git; compress half
+
+**What the user does.** On the tower, the 20 files **arrive via Git**. In the LargeFileBridge web app the
+user sees the **"can be compressed"** warning, opens it, and **checks half of them to compress**, then
+hits the button. LFB **compresses that half**.
+
+**What LFB does automatically — capture before, then after.** **Before compressing — and this is true for
+every file — LFB stores the file's hash and size *first*.** For **video and image** files it also computes
+the **perceptual content fingerprint** ([perceptual_fingerprint.mdx](./perceptual_fingerprint.mdx)) — the
+PhotoDNA-style, **local-only, never-phones-home** hash that recognizes the same content across
+resolution/compression/codec/format changes. After compression it stores the **post-compression hash and
+size** (and the post fingerprint, which should match the pre within threshold — proof the content
+survived). All of it appends a **`compress` event** to each sidecar:
+
+```yaml
+- kind: compress
+  at: 2026-04-03T09:14:02Z
+  on_device: studio-tower
+  by: bryan@act3ai.com
+  before: { hash: 9f2c8b…, size: 734003200 }   # captured BEFORE we touched the bytes
+  after:  { hash: 4d7e1a…, size: 118489088 }   # captured AFTER
+  fingerprint_before: a1b2c3…
+  fingerprint_after:  a1b2c4…                  # matches within threshold → same content
+  codec: { from: prores, to: h264 }
+```
+
+**The other half is a decision too.** By choosing **which half to compress**, the user is also deciding
+**"no, do not compress the other half."** That declined half gets a **both-relevant `decision` event
+recorded** ([decisions.mdx §1](./decisions.mdx)) — a **sticky "reviewed — leave it"** — so the compress
+offer stops nagging for those files. This recorded "no" is what makes **May** correct.
+
+**What we double-check (April):**
+* Every compressed file has a `compress` event with **both** a `before` and an `after` `{hash,size}`, and
+  media files carry `fingerprint_before` / `fingerprint_after`.
+* The declined half has a **recorded decision** (not the *absence* of one) so the offer is sticky-resolved.
+* The perceptual fingerprint step made **no network call** ([perceptual_fingerprint.mdx §6](./perceptual_fingerprint.mdx)).
+
+---
+
+## 6. MAY — `bryan-macbook-pro` — we do NOT re-ask about decided files
+
+**What the user does.** Back on the laptop, more videos **may** have arrived separately from the April
+batch.
+
+**What LFB does — and deliberately does not.** For the **April files**, LFB **does not re-raise the
+compress warning**:
+
+* The half that was **compressed** is already compressed (the `compress` event and the in-file
+  `LFBcompressed` marker say so — [compression.mdx §8.4](./compression.mdx)).
+* The half the user **declined** on the tower carries a **recorded "no" decision** — the sidecar and the
+  shared ledger both show **which computer, what time/date, and that the user chose no**. Because a
+  decision **exists**, the file is **Decided**, and **LFB never re-asks** ([decisions.mdx §2](./decisions.mdx)).
+* **It does not matter whether the recorded answer was yes or no** — a recorded decision is sticky and
+  shared, so the laptop does not re-prompt about these files.
+
+If **other, genuinely new** video files are present (never decided anywhere), LFB **may** surface a fresh
+notification about *those* — but it will **not** re-litigate the files already decided in April. This is
+the payoff of the team-shared, per-file decision memory: **ask once, on any computer; never re-ask on
+another.**
+
+**What we double-check (May):**
+* No compress warning re-appears for the April files (compressed or declined) on the laptop.
+* A recorded **no** is as sticky as a recorded **yes** — neither is re-asked.
+* Only truly-undecided new files can raise a fresh notification.
+
+---
+
+## 7. The cross-cutting invariants this tour proves
+
+1. **`.lfbridge/` is written the same way on both computers**, gated on the keep-`.lfbridge/` consent;
+   each computer owns **its own** `history/<device>.txt` and stamps `on_device` on every event.
+2. **Provenance is honest.** Anything done **outside** LFB (CLI pins, external compression) is recorded as
+   `observed` / `by: not-lfbridge`, with the computer that observed it — LFB never claims another actor's
+   work.
+3. **Identity travels without the bytes.** File name, path, hash, size, and CID in the committed manifest
+   (mirrored in sidecars) let a computer **show and choose** files it does not physically have yet.
+4. **Decisions are sticky and shared.** Ask once; a recorded yes **or** no stops the warning on **every**
+   computer — the fix for "I did this before but the warning came back."
+5. **Compression is reversible-by-record.** Before/after hashes + the perceptual fingerprint mean LFB can
+   always prove what a file was, that the content survived, and that nothing was compressed twice.
+6. **The action button always tells the truth** — its label is **composed from the checked axes** and the
+   live subject count, so the user reads exactly what Apply will do.
+
+---
+
+## 8. Acceptance criteria
+
+1. **January:** enlisting a repo on the tower auto-creates `.lfbridge/` + `repo_storage.yaml` (single
+   `repo_storage:` key) + `history/studio-tower.txt`; the 5 CLI-pinned files get sidecars whose first
+   event is `observed` / `not-lfbridge` / `on_device: studio-tower`; the 6-file recommendation records a
+   3-yes/3-no split in the ledger, the sidecars, and the history log's **per-file** breakdown.
+2. **February:** enlisting on the laptop (a **different local path**) raises the **pull-them-down**
+   warning with a **per-file checklist** showing **size / directory / added-by** for files **absent
+   locally**; the popup's **two checkboxes** drive a **dynamic button** that reads **"Compress and
+   Continue: IPFS Add ›"** and collapses to **"Continue: IPFS Add ›"** when Compress is unchecked; Apply
+   pins the 4 chosen files and **fetches their bytes** via the manifest CID; the laptop writes only its
+   own history file.
+3. **March:** 20 new git-committed videos are classified `compressible` and raise an **offer** (never
+   automatic); a scan may note `compressible: true` **without** creating a decision; deciding stamps
+   `on_device` + provenance into the sidecars.
+4. **April:** compressing half captures a **before** and an **after** `{hash,size}` per file plus the
+   **perceptual fingerprint before/after** (media), with **no network call**; the declined half gets a
+   **recorded sticky decision**, not an absence.
+5. **May:** the laptop **does not re-ask** about any April file — compressed or declined — because a
+   **recorded decision (yes or no)** is sticky and shared; only genuinely-new, never-decided files may
+   raise a fresh notification.
+6. Across all months the six invariants in §7 hold, and every write matches
+   [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx), [decisions.mdx](./decisions.mdx),
+   [compression.mdx](./compression.mdx), and [warnings.mdx](./warnings.mdx).
+
+<!--
+  Chronological tour: ONE repo (charlie-kirk) across studio-tower (Mac tower) + bryan-macbook-pro (laptop),
+  Jan→May. JAN(tower): enlist auto-writes .lfbridge/ + repo_storage.yaml + history/<device>.txt; 5 files
+  pinned on CLI outside LFB → observed/not-lfbridge sidecars w/ which-computer + time; recommend 6, user
+  3-yes/3-no, logged per-file. FEB(laptop, DIFFERENT PATH): committed manifest arrives but bytes absent +
+  unpinned (the exists/ipfs_pinned CSV) → PULL-THEM-DOWN warning (new, warnings §10.8) + guided popup with
+  per-file checklist showing size/dir/added-by though files ABSENT (identity from sidecars+manifest); two
+  checkboxes (IPFS+Compress) → DYNAMIC button "Compress and Continue: IPFS Add ›" ↔ "Continue: IPFS Add ›"
+  (warnings §4.4 composed label); Apply pins 4 → CID fetches bytes down. MAR(laptop): 20 new git-committed
+  videos = compressible OFFER; scan may note compressible but that's NOT a decision; user decides later,
+  stamped on_device+provenance. APR(tower): files arrive via git; compress HALF → store hash+size BEFORE,
+  perceptual fp before/after (local, no network), hash+size AFTER; declined half = sticky recorded "no".
+  MAY(laptop): do NOT re-ask decided files (yes OR no both sticky+shared); only brand-new files notify.
+  Reuses: repo_tracking_scheme, special_files, decisions, warnings, compression, perceptual_fingerprint,
+  devices (graft/different-path + unique names), storage_repo. 100% of the source scenario is captured.
+-->

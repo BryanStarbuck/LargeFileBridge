@@ -300,12 +300,16 @@ Reading/writing the per-media codec allow/deny + quality preferences is handled 
 brew tools transcode to a **new file**, so the flow per file is:
 
 1. Build the plan (§3) and run the **alpha check** (§6) — abort with a clear reason if unsafe.
-2. Transcode to a **temp file** (under the state dir's temp area).
-3. **Verify** output resolution == input and output < input (§5) — abort (delete temp) otherwise.
-4. Move the **original** to the **LFBridge trash** (recoverable), then move the **temp** into the final
+2. **Capture the BEFORE state first — always, for every file, before we touch a byte** (§8.0): the
+   original's **exact content hash + size**, and for **video/image** the **perceptual content
+   fingerprint** ([perceptual_fingerprint.mdx](./perceptual_fingerprint.mdx)).
+3. Transcode to a **temp file** (under the state dir's temp area).
+4. **Verify** output resolution == input and output < input (§5) — abort (delete temp) otherwise.
+5. Move the **original** to the **LFBridge trash** (recoverable), then move the **temp** into the final
    path. When the format changes (PNG → JPEG), the final path takes the new extension; when it stays the
    same format, the path is unchanged.
-5. Record the result in **two** places:
+6. **Capture the AFTER state** (exact hash + size, and the post perceptual fingerprint), then record the
+   result in **three** places:
    * the file's tracking entry — the **compressed** and **uncompressed** hashes + sizes
      ([charter per-file tracking](../CLAUDE.md); [storages.mdx §4.1](./storages.mdx));
    * a **compression record** in the storage's Syncable Data Location —
@@ -314,6 +318,33 @@ brew tools transcode to a **new file**, so the flow per file is:
      ([syncable_data_location.mdx §4.3](./syncable_data_location.mdx#43-compression-records--original-identity--beforeafter)).
      Because this record lives in the SDL, it **travels**: every other computer that carries the storage
      learns the file was compressed, from what, and by how much, and never re-compresses it.
+   * a **`compress` event** appended to the file's per-file sidecar
+     ([repo_tracking_scheme.mdx §3.2](./repo_tracking_scheme.mdx)) — `before{hash,size}` /
+     `after{hash,size}` / `fingerprint_before` / `fingerprint_after` / `codec` / `on_device` / `by` — the
+     human-legible per-file history of exactly what this compression did.
+
+### 8.0 Capture before, then after — the pre/post hash + perceptual fingerprint (LOCKED)
+
+**Before we compress a file — and this is true for ALL files — we store the hash of it first.** For
+**video and image** files we additionally compute the **perceptual content fingerprint**
+([perceptual_fingerprint.mdx](./perceptual_fingerprint.mdx)) — the PhotoDNA-style, **local-only,
+never-phones-home** hash that recognizes the same content across resolution / compression / codec /
+format changes. **After** the compress we capture the post-compression hash + size and the post
+fingerprint.
+
+* **Why the pre-capture must happen first.** Once step 5 replaces the bytes, the original is only in the
+  trash — the authoritative "what it was" must be recorded *before* the transcode, never reconstructed
+  after.
+* **The fingerprint pair is the proof of preservation.** `fingerprint_before` and `fingerprint_after`
+  should match **within the perceptual threshold** ([perceptual_fingerprint.mdx §4](./perceptual_fingerprint.mdx)) —
+  that is how LFB verifies the compression **kept the same content** rather than corrupting it. The exact
+  hashes prove byte-change; the fingerprints prove content-sameness.
+* This is the same before/after pair the [two-computer tour's April step](./use_case_two_computers.mdx#5-april--studio-tower--the-files-arrive-via-git-compress-half)
+  walks. It applies identically to a **format conversion** (§8.1, PNG→JPEG / HEIC→JPEG) via a `convert`
+  event.
+
+Capturing the pre-compression hash/size/fingerprint before the transcode and the post values after, and appending the sidecar `compress`/`convert` event, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile` (calls `perceptual.service.ts` `fingerprintImage`/`fingerprintVideo` before + after, and `file-sidecar.service.ts` `appendFileEvent`).
 
 Running the tool to a temp file, verifying, and doing the recoverable replace is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile` (single) / `compressBatch` (many); the travelling compression record is written via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/analysis.service.ts` — `writeCompressionRecord()` (new).
@@ -494,11 +525,16 @@ Surfacing the codec + compressed-state and the Compress action per file is handl
     thumbnail / depth-aux / Live-Photo motion frame — [images.mdx §4.1](./images.mdx)), keeps the **same
     pixel resolution**, and is **exempt from the size-gain guard** (§5). With `convert_types` off,
     compression is format-preserving.
-6. Tools run via a **temp file**; the original is moved to the **LFBridge trash** (recoverable); tracking
-   records the compressed + uncompressed hashes/sizes, **and** a travelling **compression record**
-   (`.lfbridge/analysis/<relpath>/compression.yaml`) captures the original name/extension + size
-   before/after. The authoritative **in-file marker** (§8.4, implemented) is what makes other computers never
-   re-compress; reading this record as a local cache to prune the batch up-front is a tracked follow-up
+6. Tools run via a **temp file**; the original is moved to the **LFBridge trash** (recoverable). **Before
+   the transcode, for every file, the BEFORE hash + size (and, for video/image, the perceptual content
+   fingerprint) are captured first** (§8.0); the AFTER values are captured after. Tracking records the
+   compressed + uncompressed hashes/sizes, **a travelling compression record**
+   (`.lfbridge/analysis/<relpath>/compression.yaml`, original name/extension + size before/after),
+   **and a per-file sidecar `compress` event** ([repo_tracking_scheme.mdx §3.2](./repo_tracking_scheme.mdx))
+   carrying `before`/`after` hash+size and `fingerprint_before`/`fingerprint_after` (which match within
+   the perceptual threshold as proof the content was preserved). The authoritative **in-file marker**
+   (§8.4, implemented) is what makes other computers never re-compress; reading these records as a local
+   cache to prune the batch up-front is a tracked follow-up
    ([syncable_data_location.mdx §4.3](./syncable_data_location.mdx)).
 7. The **View-one-file** page shows the file's **codec** and **compressed/uncompressed** state.
 8. **Parallelism (§8.3, LOCKED):** the engine compresses **one file at a time** and takes an optional

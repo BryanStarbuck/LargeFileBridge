@@ -22,6 +22,17 @@ Siblings this builds on and does not repeat:
   (stored as the `sync` decision value) per large file.
 * [storage_local.mdx](./storage_local.mdx) — the local index/manifest model and the IPFS pin model this
   reuses; **Local Storage stays settings/config**, the authoritative per-repo tracking is here.
+* [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx) — the **on-disk scheme** of three files this
+  spec's `.lfbridge/` now includes: **`repo_storage.yaml`** (repo-wide settings + special-file counts,
+  single `repo_storage:` key), the per-file **`files/<path>.yaml` sidecars** (identity + append-only event
+  history + perceptual fingerprint), and the per-computer **`history/<device>.txt`** audit log. §5 there
+  draws the ownership boundary between these (working, local) and `manifest.yaml`/`decisions.yaml` (committed,
+  travelling).
+* [special_files.mdx](./special_files.mdx) — the classifier (large · already-pinned · video/image/audio,
+  plus compressible/transcribable) that decides which files earn a sidecar and fill `repo_storage.yaml`'s
+  counts.
+* [use_case_two_computers.mdx](./use_case_two_computers.mdx) — the month-by-month tour that walks a repo
+  storage across two computers, exercising every write above.
 
 ---
 
@@ -33,8 +44,12 @@ Siblings this builds on and does not repeat:
 ├── .gitignore             ← lists .lfbridge/ AND the large files (they pin via IPFS, not Git)
 ├── .lfbridge/              ← hidden per-storage tracking area (storages.mdx §4) — git-ignored
 │   ├── storage.yaml        ← descriptor: name + type: repo + repo_root (storages.mdx §3)
+│   ├── repo_storage.yaml   ← repo-WIDE settings + special-file counts (single key: repo_storage) — repo_tracking_scheme.mdx §2
 │   ├── files.yaml          ← per-file fingerprint index (storages.mdx §4.1)
-│   ├── manifest.yaml       ← large-file → IPFS CID + pin state (storage_local.mdx §9)
+│   ├── files/<path>.yaml   ← per-file <name>.yaml sidecars: identity + append-only event history — repo_tracking_scheme.mdx §3
+│   ├── history/<device>.txt ← one UTC-timestamped audit log PER COMPUTER — repo_tracking_scheme.mdx §4
+│   ├── manifest.yaml       ← large-file → IPFS CID + pin state (storage_local.mdx §9) — committed, travels
+│   ├── decisions.yaml      ← the team-SHARED per-file decision ledger (decisions.mdx) — committed, travels
 │   └── analysis/           ← per-file media analysis (storages.mdx §6)
 └── …the repo's tracked + git-ignored files…
 ```
@@ -77,9 +92,13 @@ A repo storage is the on-disk backing for everything the [One repo](./one_repo.m
 
 * **Discovery** — the scanner finds every Git repo under the configured roots
   ([storage_local.mdx §7](./storage_local.mdx), [scan.mdx](./scan.mdx)); each becomes a repo storage.
-* **Per-file decision** — Add to IPFS (pin) / Ignore / Undecided (the `sync` decision value) per large
-  git-ignored file ([one_repo.mdx §1](./one_repo.mdx#1-the-decision-model-locked)); the decisions persist
-  in the repo storage's config/manifest.
+* **Per-file decision** — the **two-axis** decision (Add to IPFS *and/or* Add to git ignore) per large
+  file, recorded in the **team-shared** `.lfbridge/decisions.yaml` ledger with who/when/SID
+  ([decisions.mdx](./decisions.mdx)); its IPFS axis projects onto the frozen `sync`/`ignore`/`undecided`
+  enum ([one_repo.mdx §1](./one_repo.mdx#1-the-decision-model-locked)). Because the ledger is committed and
+  union-merged, the whole team shares one set of decisions and no teammate is re-asked about a file another
+  already triaged. The machine-local `pin/r/<repo>/config.yaml → decisions:` map is now a reconciled cache
+  of that ledger's IPFS axis, not the source of truth.
 * **Per-file fingerprints** — `.lfbridge/files.yaml` records hash + size + created + modified, and the
   compressed/uncompressed variant hashes for media ([storages.mdx §4.1](./storages.mdx)), so LFB knows what
   changed since last pin.

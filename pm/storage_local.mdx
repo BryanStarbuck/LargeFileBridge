@@ -598,6 +598,13 @@ pins them from IPFS. The state-root `pin/r/<repo_name>/manifest.yaml` is the **l
 committed file plus this computer's live pin state. (`publish_manifest` in §6.2 controls writing the
 committed copy.)
 
+The **per-file decision ledger** `<repo>/.lfbridge/decisions.yaml` travels the **same way** — committed,
+union-merged, carried by Git to the user's other computers **and their teammates**
+([decisions.mdx §4/§5](./decisions.mdx)). It is the **source of truth** for decisions; the machine-local
+`pin/r/<repo_name>/config.yaml → decisions:` frozen `sync`/`ignore`/`undecided` map is a **reconciled
+projection** of the ledger's IPFS axis onto this computer ([decisions.mdx §7](./decisions.mdx)), not an
+independent store. The pin engine still reads that enum; only its *feed* changed.
+
 ### 9.3 Computer manifests travel via IPNS
 
 The computer unit has no Git repo to carry its manifest, so LFB publishes

@@ -154,16 +154,19 @@ Git level, not just conceptually: self-ownership maps directly onto per-file, no
 
 ### 4.2 Append-mostly shared lists merge by union
 
-A few files are genuinely **shared** (the `LargeFilesBridge_SyncList.yaml`, the `manifest.yaml`). For
-these, LFB installs a **`.gitattributes`** in the SDL that marks them `merge=union`, so git **keeps both
-sides' lines** instead of conflicting when two computers append different entries. LFB then re-sorts /
-de-duplicates the merged list on the next read (the list is a set keyed by path/CID, so a union followed
-by a dedupe is always correct).
+A few files are genuinely **shared** (the `LargeFilesBridge_SyncList.yaml`, the `manifest.yaml`, and the
+per-file decision ledger `.lfbridge/decisions.yaml`). For these, LFB installs a **`.gitattributes`** in
+the SDL that marks them `merge=union`, so git **keeps both sides' lines** instead of conflicting when two
+computers — or two **teammates** — append different entries. LFB then folds the merged file on the next
+read (the manifest/SyncList are sets keyed by path/CID; the decision ledger is an **append log folded to
+latest-`decided_at`-per-`(sid,path)`** — [decisions.mdx §5](./decisions.mdx)), so a union followed by the
+fold is always correct and a **ten-person team never resolves a decision conflict by hand**.
 
 ```gitattributes
 # <SDL root>/.gitattributes  (written by LFB when it enables the Git backbone)
 LargeFilesBridge_SyncList.yaml   merge=union
 .lfbridge/manifest.yaml          merge=union
+.lfbridge/decisions.yaml         merge=union
 ```
 
 ### 4.2.1 The `.lfbridge/` SDL text must never be git-ignored (LOCKED, learned from a defect)

@@ -14,9 +14,11 @@ import {
 } from "../store-model/units.service.js";
 import { startScan, getScanJob } from "../scanner/scan-job.js";
 import { pinRepoFolder, pinAll } from "../pin/pin.service.js";
+import { recordDecision } from "../storage/decisions.service.js";
 import { track } from "../progress/progress.registry.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { requireAllowListed } from "../auth/identify.js";
+import { currentUser } from "../auth/current-user.js";
 import { log } from "../../shared/logging.js";
 
 export const reposRouter = Router();
@@ -119,28 +121,48 @@ reposRouter.get("/:repoId/files", async (req, res) => {
   }
 });
 
-// PATCH /api/repos/:repoId/files — set a decision on one or many files (bulk).
+// PATCH /api/repos/:repoId/files — record a decision on one or many files (bulk). Two accepted bodies,
+// both funneling through the shared decision ledger (decisions.mdx §8):
+//   • TWO-AXIS (the checkbox popup):  { paths, ipfs?, gitignore? }  — the full decision, both axes.
+//   • LEGACY single-axis (per-row / bulk IPFS control): { paths, decision: sync|ignore|undecided }
+//     — mapped onto the IPFS axis (sync→ipfs:true, ignore→ipfs:false, undecided→un-decide/tombstone).
 reposRouter.patch("/:repoId/files", async (req, res) => {
   const body = z
     .object({
       paths: z.array(z.string()).min(1),
-      decision: z.enum(["sync", "ignore", "undecided"]),
+      // Two-axis form (either box may be omitted; both-off is a valid decision — decisions.mdx §1).
+      ipfs: z.boolean().optional(),
+      gitignore: z.boolean().optional(),
+      // Legacy single-axis form.
+      decision: z.enum(["sync", "ignore", "undecided"]).optional(),
     })
     .safeParse(req.body);
-  if (!body.success) return res.status(400).json({ ok: false, error: "paths + decision required" });
+  if (!body.success || (body.data.decision === undefined && body.data.ipfs === undefined && body.data.gitignore === undefined)) {
+    return res.status(400).json({ ok: false, error: "paths + (ipfs/gitignore) or decision required" });
+  }
   const folder = folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
 
-  const decision = body.data.decision as Decision;
+  const decidedBy = currentUser(req).email; // who decided — from the authenticated session (decisions.mdx §3.3)
+  const paths = body.data.paths;
   try {
-    await updateRepoConfig(folder, (c) => {
-      for (const p of body.data.paths) {
-        if (decision === "undecided") delete c.decisions[p];
-        else c.decisions[p] = decision;
+    if (body.data.decision !== undefined) {
+      // Legacy single-axis → IPFS axis. "undecided" removes the record (returns to triage).
+      const decision = body.data.decision as Decision;
+      if (decision === "undecided") {
+        await recordDecision(folder, paths, {}, decidedBy, { asked: false });
+      } else {
+        await recordDecision(folder, paths, { ipfs: decision === "sync" }, decidedBy);
       }
-      return c;
-    });
-    log.info("repos", `${folder}: set ${body.data.paths.length} file(s) -> ${decision}`);
+      log.info("repos", `${folder}: set ${paths.length} file(s) -> ${decision} (ledger)`);
+    } else {
+      // Two-axis decision from the checkbox popup — both axes as chosen (either may be undefined).
+      await recordDecision(folder, paths, { ipfs: body.data.ipfs, gitignore: body.data.gitignore }, decidedBy);
+      log.info(
+        "repos",
+        `${folder}: decided ${paths.length} file(s) ipfs=${!!body.data.ipfs} gitignore=${!!body.data.gitignore} by ${decidedBy ?? "?"}`,
+      );
+    }
     const detail = computeRepoDetail(folder, await ipfs.health());
     res.json({ ok: true, data: detail });
   } catch (e) {

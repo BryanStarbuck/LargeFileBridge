@@ -117,6 +117,49 @@ Who participates in this repo (`config.yaml → access`,
 * **Shared** — `shared: true` + a list of allow-listed **participant** emails whose computers also pin
   this repo (e.g. a family member or teammate). Only those allow-listed emails' computers participate.
 
+### 2.6 Per-file decisions are team-shared (not configured here, but noted)
+
+The per-file **decisions** users make (Add to IPFS / Add to git ignore) are **not** stored in this
+machine-local repo config — they are written to the repo's **committed, team-shared**
+`.lfbridge/decisions.yaml` ledger so the whole team shares one set of decisions
+([decisions.mdx](./decisions.mdx)). The only setting that governs whether *this computer* writes that
+shared ledger is the machine-local **keep-`.lfbridge/`** consent
+([storage_settings.mdx §3](./storage_settings.mdx)); with it off, decisions are recorded locally only and
+not shared from this machine ([decisions.mdx §6](./decisions.mdx)). The machine-local
+`config.yaml → decisions:` map below is a **reconciled cache** of that ledger's IPFS axis, not an
+independently editable setting.
+
+### 2.7 Default-decision policy for new files (shared)
+
+This is where the team sets what happens to **newly-discovered** big files so nobody triages the same
+kind of file forever ([decisions.mdx §9](./decisions.mdx)). It is a **shared** policy (travels in the
+SDL), not a machine-local one:
+
+* Per file **kind** — **videos/images** and **other big files** — choose **Auto-decide** (apply a default
+  IPFS/git-ignore outcome on discovery and record it as a policy-authored decision) or **Ask** (leave
+  Undecided and surface the warning). **Default: Ask** for everything (the charter's "surface, don't act"
+  posture; auto-decide is a deliberate opt-in).
+* When Auto-decide is on, pick the two default axes for that kind (e.g. media → **IPFS on + git-ignore
+  on**). Auto-decisions respect the **Never IPFS** flag ([decisions.mdx §17](./decisions.mdx)) and are
+  reported in each pass summary.
+
+The shared default-decision policy is written to the SDL and applied on scan in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `readDecisionPolicy()` / `setDecisionPolicy()` / `applyDefaultPolicy()`.
+
+### 2.8 Decision attribution mode (privacy — shared)
+
+Because the decision ledger records **who decided** and is **committed** to the repo, this setting governs
+what identity is written ([decisions.mdx §14](./decisions.mdx)):
+
+* **`email`** (default for a **private** repo) — the raw allow-listed email (full attribution).
+* **`handle`** (default when the remote is a **public** host) — a stable opaque participant id; the
+  email↔handle map stays machine-local and is never committed, so a public repo does not leak emails.
+* **`anonymous`** — record only *that* a decision was made, not by whom.
+
+LFB **warns before the first commit** if raw emails would be published to a public remote. The mode is
+resolved in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `attributionFor(folder, email)` (public-remote heuristic via `classifyRemote()`).
+
 ---
 
 ## 3. Persistence — one repo config file
@@ -164,6 +207,23 @@ access:                        # §2.5 sharing
 
 Writing every field on this page to the repo's `config.yaml` (and mapping it back for the UI) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `PATCH /api/repos/:repoId/settings` (via `updateRepoConfig` / `toRepoSettings`)
+
+### 3.1 Two repo files, two scopes — `config.yaml` (this computer) vs. `repo_storage.yaml` (the repo)
+
+There are **two** per-repo files and they must not be confused:
+
+* **`pin/r/<repo_name>/config.yaml`** (this page, machine-local) holds **this computer's participation** in
+  the repo — its `pinned` master toggle, threshold override, pin/fetch policy, and sharing. It **never
+  travels**; each computer has its own.
+* **`.lfbridge/repo_storage.yaml`** ([repo_tracking_scheme.mdx §2](./repo_tracking_scheme.mdx)) holds the
+  repo-**wide** facts that belong *with the repo* — its LFB display name, enlist provenance, the rolled-up
+  **special-file counts** ([special_files.mdx](./special_files.mdx)), repo-wide recommendation policy, and
+  the last-scan stamp. Its **only** level-one key is `repo_storage:`. It is auto-written on enlist and is
+  **not** edited from this settings page.
+
+Rule of thumb: **`config.yaml` is about *this computer's* participation; `repo_storage.yaml` is about *the
+repo*.** They never duplicate a field. (Per-file **decisions** are a third thing again — the committed,
+team-shared `.lfbridge/decisions.yaml` ledger, §2.6.)
 
 ---
 

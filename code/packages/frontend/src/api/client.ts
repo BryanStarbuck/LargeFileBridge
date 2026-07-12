@@ -119,6 +119,10 @@ export const api = {
   repoFiles: (repoId: string) => unwrap<FileRow[]>(http.get(`/repos/${repoId}/files`)),
   setDecision: (repoId: string, paths: string[], decision: Decision) =>
     unwrap<RepoDetail>(http.patch(`/repos/${repoId}/files`, { paths, decision })),
+  // Two-axis decision (decisions.mdx §1): Add-to-IPFS and Add-to-git-ignore, each independent. Both-off
+  // is a valid, recorded decision. The backend stamps who/when/SID into the shared .lfbridge/decisions.yaml.
+  setFileDecisions: (repoId: string, paths: string[], axes: { ipfs?: boolean; gitignore?: boolean }) =>
+    unwrap<RepoDetail>(http.patch(`/repos/${repoId}/files`, { paths, ...axes })),
   pinNow: (repoId: string, paths?: string[]) =>
     unwrap<PinNowResult>(http.post(`/repos/${repoId}/pin`, paths ? { paths } : {})),
 

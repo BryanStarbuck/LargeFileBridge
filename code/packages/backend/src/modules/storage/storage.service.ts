@@ -55,6 +55,21 @@ function exists(p: string): boolean {
 function shortHash(s: string): string {
   return crypto.createHash("sha1").update(s).digest("hex").slice(0, 12);
 }
+
+/**
+ * The Storage ID (SID) for a storage rooted at `root` — mirrors buildRow()'s id derivation so a repo's
+ * SID matches its Storages-tab identity. Used to stamp the SID on every decision record (decisions.mdx
+ * §3.1), including for a `repo` storage (which buildRow filters out of the Storages list but still has a
+ * stable id).
+ */
+export function storageSid(root: string): string {
+  const resolved = path.resolve(root);
+  const desc = readDescriptor(resolved);
+  const type: StorageType = desc?.type ?? classifyByConvention(resolved) ?? "repo";
+  if (type === "personal") return "personal";
+  if (type === "community") return desc?.community?.id ?? shortHash(resolved);
+  return shortHash(resolved);
+}
 function prettyName(base: string): string {
   return base
     .replace(new RegExp(`${CONVENTION_SUFFIX}$`), "")

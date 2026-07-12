@@ -1,0 +1,160 @@
+---
+title: LargeFileBridge — Special Files (the classifier: large · already-pinned · video · image · audio, and the compressible / transcribable sub-flags)
+description: The single, unified definition of what makes a file SPECIAL to LargeFileBridge — the classification every other feature reads. A file is special when ANY of these holds: it is LARGE (meets the big-file threshold / payload rule), it is ALREADY IPFS-PINNED (by us or observed pinned outside us), or it is a VIDEO, IMAGE, or AUDIO file. Special files are the only files that earn a per-file <name>.yaml sidecar, roll up into repo_storage.yaml counts, and appear in the warning/rollup surfaces. On top of the category, the classifier computes two SUB-FLAGS that drive offers: COMPRESSIBLE (video/image/audio that look uncompressed vs. the learned duration×resolution baseline) and TRANSCRIBABLE (video — because it has an audio track — and audio; both may be transcribed, optionally). This spec CONSOLIDATES signals that already exist but are scattered (isMediaFile, VIDEO_EXT/IMAGE_UNCOMPRESSED_EXT, compressInfo/compressState, mediaKindForName, the Untracked-pinned pinset read, and the scan payload rule) into one enum + one function, explicitly reusing those classifiers so the vocabulary never drifts. Sibling of scan.mdx (the payload rule that decides "large"), compression.mdx (the compressible baseline), Transcribe.mdx (the transcribable rule), ipfs.mdx (already-pinned / Untracked-pinned), repo_tracking_scheme.mdx (the sidecar + repo_storage.yaml counts these categories fill), and use_case_two_computers.mdx (the tour that classifies the Charlie Kirk repo's files).
+---
+
+# LargeFileBridge — Special Files
+
+Not every file in a repo is LargeFileBridge's business. A `.ts` source file, a `README.md`, a 4 KB PNG
+icon — Git handles those fine. LFB cares about the **special** ones: the big, git-ignored, media, and
+already-pinned files it exists to move, back up, compress, and transcribe. **This spec is the one
+definition of "special"** that every other surface reads.
+
+The concept is not new — the *signals* already exist across the codebase — but they are **scattered**.
+This spec **consolidates them into one enum and one classifier**, explicitly **reusing** the existing
+functions so the vocabulary never drifts ([file_system.mdx](./file_system.mdx) — "reuse the existing
+classifiers so the vocabulary never drifts").
+
+This spec builds on the siblings and does not repeat them:
+
+* [scan.mdx §4.1](./scan.mdx) — the **payload rule** that decides a file is a candidate ("large"); this
+  spec's `large` category is that rule.
+* [compression.mdx](./compression.mdx) — the learned **duration × resolution baseline** that decides a
+  media file "looks uncompressed"; this spec's `compressible` sub-flag is that verdict.
+* [Transcribe.mdx](./Transcribe.mdx) — `mediaKindForName` + the "video has an audio track / audio is
+  optional" rule; this spec's `transcribable` sub-flag is that verdict.
+* [ipfs.mdx §1/§4](./ipfs.mdx) — **Untracked (pinned)**: files pinned before/outside LFB; this spec's
+  `ipfs_pinned` category folds those in.
+* [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx) — the per-file `<name>.yaml` **sidecar** (only
+  special files get one) and the **`repo_storage.yaml` `counts:`** rollup these categories fill.
+* [use_case_two_computers.mdx](./use_case_two_computers.mdx) — the month-by-month tour that classifies a
+  real repo (`charlie-kirk`) and walks each category through the flow.
+
+---
+
+## 1. What makes a file special (LOCKED)
+
+A file is **special** when **ANY** of the following categories applies. The categories are **not
+mutually exclusive** — a 4K `trees.mov` that is git-ignored and pinned is `large` **and** `video`
+**and** `ipfs_pinned` at once.
+
+| Category | A file is in it when… | Reuses |
+| --- | --- | --- |
+| **`large`** | It satisfies the scan **payload rule**: git-ignored media of **any** size, OR any file at/above the effective big-file threshold (default 100 MB), OR a forced `include_globs` match. | [scan.mdx §4.1](./scan.mdx) payload rule; `isMediaFile`, effective threshold. |
+| **`ipfs_pinned`** | It is **pinned on this computer's IPFS node** — whether LFB pinned it, or it was **pinned outside LFB** (by hand on the CLI or another tool) and a scan **observed** it ("Untracked (pinned)"). | [ipfs.mdx §1/§4](./ipfs.mdx); the 15-min pinset read ([scan.mdx §2.1](./scan.mdx)). |
+| **`video`** | Its type is a **video** ([Transcribe.mdx](./Transcribe.mdx) `mediaKindForName` = video; `VIDEO_EXT`). | `mediaKindForName`, `VIDEO_EXT`. |
+| **`image`** | Its type is an **image** (`IMAGE_UNCOMPRESSED_EXT` and the broader image set). | `isMediaFile` image branch. |
+| **`audio`** | Its type is an **audio** file (`mediaKindForName` = audio). | `mediaKindForName`. |
+
+* **Media is special regardless of size.** A 5 MB clip is still `video` and still earns a sidecar — this
+  matches the payload rule that deliberately does **not** gate media on the 100 MB threshold
+  ([scan.mdx §4.1](./scan.mdx); [repos.mdx §4.1](./repos.mdx) "counts include git-ignored media of *any*
+  size"). This is why `charlie-kirk` (dozens of 5–100 MB clips) is full of special files, not "nearly
+  empty."
+* **Already-pinned is special even if small.** A file someone pinned on the CLI is `ipfs_pinned` and
+  therefore special — LFB must track it, whether or not it is otherwise large or media. The **provenance**
+  (LFB pinned it vs. observed pinned outside us) is recorded in the sidecar as an `observed` /
+  `not-lfbridge` event ([repo_tracking_scheme.mdx §3.3](./repo_tracking_scheme.mdx)).
+
+```ts
+// The unified classification the whole app reads.
+export type SpecialCategory = "large" | "ipfs_pinned" | "video" | "image" | "audio";
+
+export interface SpecialClass {
+  isSpecial: boolean;
+  categories: SpecialCategory[];   // every category that applies (not exclusive)
+  compressible: boolean;           // §2 — a media file that looks uncompressed
+  transcribable: boolean;          // §3 — video (has audio) or audio
+}
+```
+
+The one classifier — reusing `isMediaFile`, `mediaKindForName`, the payload rule, `compressInfo`, and the pinset read rather than re-deriving them — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/special-file.service.ts` — `classifySpecial(file, ctx)` (returns `SpecialClass`; `ctx` carries the effective threshold, git-ignore state, and the IPFS pinset).
+
+---
+
+## 2. The `compressible` sub-flag — video/image/audio that look uncompressed
+
+For **media** categories (`video`, `image`, `audio`) LFB additionally asks: **is it compressed or not?**
+This is the offer-driving question the charter cares about ("many large files people sync are
+uncompressed when they don't need to be").
+
+* **Verdict source.** `compressible` is the [compression.mdx](./compression.mdx) verdict: the file's
+  **duration × pixel-resolution** puts its size **above** the learned "typical uncompressed" band of the
+  baseline (mean + 1σ/2σ), or it is a losslessly-stored format (PNG, etc.) that a safety-checked
+  conversion could shrink. A file already stamped with the in-file `LFBcompressed;v1;<codec>` marker, or
+  whose size sits in the "compressed" band, is **not** compressible.
+* **Scope.** Primarily **video**, secondarily **image**; **audio** may be compressible too. Nothing else
+  is offered for compression ([charter](../CLAUDE.md)).
+* **It is an offer, never an action.** `compressible: true` only lights the **C** indicator and feeds the
+  "N videos/images can be compressed" warnings ([warnings.mdx §10.5](./warnings.mdx)); LFB never
+  compresses without an explicit click ([compression.mdx §1](./compression.mdx)).
+
+---
+
+## 3. The `transcribable` sub-flag — video (has audio) and audio
+
+For **video** and **audio** LFB asks: **could this be turned into text?**
+
+* **Video is transcribable** because it carries an **audio track** — LFB demuxes the audio and runs it
+  through Whisper ([Transcribe.mdx §1](./Transcribe.mdx)). A video with **no** audio stream is still
+  classified transcribable, but transcription writes a short "no audio to transcribe" placeholder rather
+  than failing ([Transcribe.mdx §1](./Transcribe.mdx)).
+* **Audio is transcribable**, optionally — the user may or may not transcribe it.
+* **Images are not transcribable** (they get an AI *description* instead — [ai_description.mdx](./ai_description.mdx)).
+* **It is an offer, never automatic.** `transcribable: true` enables the **Create Transcriptions** action
+  and the viewer's Transcribe button; nothing is transcribed until the user asks. Whether a transcript
+  **exists yet** is tracked separately (the `transcribe` event in the sidecar, and the
+  `repo_storage.yaml → counts.transcribed`).
+
+---
+
+## 4. What "special" unlocks
+
+Being special is the gate for the rest of the product's per-file machinery:
+
+* **A per-file sidecar.** Only special files get a `.lfbridge/files/<path>/<name>.yaml` sidecar
+  ([repo_tracking_scheme.mdx §3](./repo_tracking_scheme.mdx)) with identity, the perceptual fingerprint
+  (media only — [perceptual_fingerprint.mdx](./perceptual_fingerprint.mdx)), and the event history.
+* **The repo rollup.** Every category and sub-flag increments the `repo_storage.yaml → counts:` block
+  ([repo_tracking_scheme.mdx §2.2](./repo_tracking_scheme.mdx)) and the [Repos](./repos.mdx) table's
+  per-repo counts, and drives the four category-rollup rows ([storage_repo.mdx](./storage_repo.mdx), the
+  charter category table).
+* **The warnings/offers.** `compressible` → the "can be compressed" offers; `large` + not-git-ignored →
+  the "big files aren't git-ignored" offer; `ipfs_pinned` but untracked → the Import offer;
+  `transcribable` → the transcription action ([warnings.mdx §10](./warnings.mdx)).
+
+Filling `repo_storage.yaml → counts:` and the Repos-table counts from `classifySpecial` over the repo's files is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` — `refreshCounts(repoRoot)` (folds `classifySpecial` results into the rollup).
+
+---
+
+## 5. Acceptance criteria
+
+1. A single classifier decides **special**: a file is special when it is **`large`** (payload rule),
+   **`ipfs_pinned`** (by us or observed pinned outside us), or a **`video` / `image` / `audio`** file.
+   Categories are **not exclusive** — a file may carry several.
+2. Media is special **regardless of size**; an already-pinned file is special **even if small**; the
+   classifier **reuses** the existing `isMediaFile` / `mediaKindForName` / payload-rule / pinset signals
+   rather than re-deriving them.
+3. The classifier also returns two sub-flags: **`compressible`** (media that looks uncompressed vs. the
+   [compression.mdx](./compression.mdx) baseline; primarily video, secondarily image, sometimes audio)
+   and **`transcribable`** (video — because it has an audio track — and audio).
+4. Both sub-flags are **offers, never actions** — they light indicators and feed warnings, but LFB never
+   compresses or transcribes without an explicit user click.
+5. Only special files earn a per-file **sidecar** and count into **`repo_storage.yaml → counts:`** and the
+   Repos-table counts; the categories/sub-flags drive the compression, git-ignore, import, and transcribe
+   surfaces.
+
+<!--
+  "Special" = the ONE definition every surface reads. Category (non-exclusive): large (scan payload rule)
+  | ipfs_pinned (ours OR observed-outside-us "Untracked (pinned)") | video | image | audio. Media is
+  special at ANY size; already-pinned is special even if small. Two sub-flags: compressible (media that
+  looks uncompressed vs compression.mdx duration×resolution baseline; video primary, image secondary,
+  audio sometimes) and transcribable (video has audio; audio optional; images NOT — they get AI
+  descriptions). CONSOLIDATES existing scattered signals (isMediaFile, mediaKindForName, VIDEO_EXT,
+  compressInfo, pinset read, payload rule) into one enum + classifySpecial() — reuse, don't re-derive.
+  Special ⇒ earns a sidecar, counts into repo_storage.yaml, drives the warnings/offers. Offers never act.
+  Siblings: scan (large), compression (compressible), Transcribe (transcribable), ipfs (already-pinned),
+  repo_tracking_scheme (sidecar+counts), use_case_two_computers (the tour).
+-->

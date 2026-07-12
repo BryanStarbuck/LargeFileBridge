@@ -22,7 +22,11 @@ import { isGitWorkingTree } from "../store-model/units.service.js";
 import { log } from "../../shared/logging.js";
 
 /** The shared, append-mostly SDL lists that must union-merge instead of conflicting (git_backbone.mdx §4.2). */
-const UNION_MERGE_PATHS = ["LargeFilesBridge_SyncList.yaml", ".lfbridge/manifest.yaml"];
+const UNION_MERGE_PATHS = [
+  "LargeFilesBridge_SyncList.yaml",
+  ".lfbridge/manifest.yaml",
+  ".lfbridge/decisions.yaml", // the shared per-file decision ledger (decisions.mdx §4/§5) — union-merged
+];
 
 export type RemoteKind = "local" | "url";
 

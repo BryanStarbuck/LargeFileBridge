@@ -17,6 +17,7 @@ import {
   registerRepo,
   isGitWorkingTree,
 } from "../store-model/units.service.js";
+import { reconcile as reconcileDecisions } from "../storage/decisions.service.js";
 import { readYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import { computerUnitDir, unitConfigPath, unitStatusPath } from "../../shared/store/scopes.js";
 import { HARD_SKIP, isMacPackageDir, isMediaFile } from "../../shared/scan-filters.js";
@@ -106,6 +107,14 @@ export async function scanAll(
       maskPaths: [],
     });
     writeStatus(folder, "repo", candidates, threshold, source);
+    // Project the SHARED decision ledger (any teammate/other-computer decisions a git pull delivered)
+    // onto this machine's frozen decisions: enum cache (decisions.mdx §7). Best-effort — a bad ledger
+    // must never abort the scan.
+    try {
+      await reconcileDecisions(folder);
+    } catch (e) {
+      log.debug("scan", `reconcileDecisions(${folder}) skipped: ${(e as Error).message}`);
+    }
     progress.unitDone(candidates.length);
   });
 

@@ -1,0 +1,428 @@
+---
+title: LargeFileBridge — Repo Tracking Scheme (repo_storage.yaml · per-file <name>.yaml · history logs)
+description: The authoritative on-disk scheme for what LargeFileBridge writes inside a repo's hidden .lfbridge/ tracking directory. Defines the THREE things that live there and are unique to this spec — (1) repo_storage.yaml, the single repo-wide settings-and-state file whose ONLY level-one key is `repo_storage:` (everything else is nested level two or deeper), written automatically when the repo is enlisted; (2) per-file <name>.yaml sidecars (e.g. trees.mov.yaml) stored under a mirrored directory hierarchy inside .lfbridge/, whose ONLY level-one key is `file:`, carrying the per-file identity (path, hash, size, created/modified) plus an append-only per-file EVENT history of everything that ever happened to that file — first-seen, IPFS pin on/off, compress before/after (with pre- and post-compression hashes and the perceptual fingerprint), transcribe, and crucially whether an action was done OUTSIDE LargeFileBridge (pinned or compressed by the user on the command line) and which computer first observed it; and (3) history/<device>.txt, one plain-text, UTC-timestamped audit log PER COMPUTER of every decision the user made and every automatic action, so a repo carries a legible paper trail of who did what, when, on which machine. All three are git-ignored working-tree artifacts of the .lfbridge/ area, distinct from the committed, team-shared decisions.yaml/manifest.yaml that TRAVEL. Sibling of storage_repo.mdx (the .lfbridge/ layout overview), decisions.mdx (the shared decision ledger these logs mirror in human-readable form), devices.mdx (the unique per-computer name used for the history filename and the who-did-it stamp), special_files.mdx (what makes a file worth a sidecar), compression.mdx (the before/after hash capture), perceptual_fingerprint.mdx (the content fingerprint stored per file), and use_case_two_computers.mdx (the month-by-month tour that walks every write in this spec).
+---
+
+# LargeFileBridge — Repo Tracking Scheme
+
+Every repo storage keeps its LargeFileBridge bookkeeping in a hidden **`.lfbridge/`** directory at the
+repo root ([storage_repo.mdx §1](./storage_repo.mdx)). That directory holds several files; **this spec
+owns the three the prior specs did not fully pin down** — the ones the product writes as the user works
+a repo across their computers:
+
+1. **`repo_storage.yaml`** — the single **repo-wide** settings-and-state file (§2).
+2. **Per-file `<name>.yaml` sidecars** — one small YAML **per special file**, mirroring the file's path
+   inside `.lfbridge/`, carrying that file's identity and its **append-only event history** (§3).
+3. **`history/<device>.txt`** — one plain-text, UTC-timestamped **audit log per computer** of every
+   decision and automatic action (§4).
+
+This spec builds on the siblings and does not repeat them:
+
+* [storage_repo.mdx](./storage_repo.mdx) — the `.lfbridge/` layout overview and the existing files
+  (`storage.yaml`, `files.yaml`, `manifest.yaml`, `decisions.yaml`, `analysis/`). This spec **slots into
+  that same directory** and reconciles with it in §5.
+* [decisions.mdx](./decisions.mdx) — the **committed, team-shared** `decisions.yaml` ledger. The per-file
+  sidecars and the history logs in this spec are the **human-readable, per-machine mirror** of that
+  ledger plus the automatic (non-decision) events the ledger does not carry.
+* [devices.mdx](./devices.mdx) — the **unique per-computer name** (the device *nice name*, e.g.
+  `studio-tower`, `bryan-macbook-pro`) used for the `history/<device>.txt` filename and stamped on every
+  event as "which computer did / observed this."
+* [special_files.mdx](./special_files.mdx) — the classifier that decides a file is **special** (large, or
+  already IPFS-pinned, or video/image/audio) and therefore earns a sidecar.
+* [compression.mdx](./compression.mdx) — the **before/after** hash capture whose two hashes land in a
+  sidecar's `compress` event.
+* [perceptual_fingerprint.mdx](./perceptual_fingerprint.mdx) — the local, network-free content
+  fingerprint stored per file so a compress/convert/resize is recognized as the **same content**.
+* [use_case_two_computers.mdx](./use_case_two_computers.mdx) — the month-by-month tower↔laptop tour that
+  exercises **every** write defined here.
+
+---
+
+## 1. The `.lfbridge/` directory, with this spec's additions (LOCKED shape)
+
+```
+~/BGit/charlie-kirk/                     ← the repo root = the repo storage root
+├── .git/
+├── .gitignore                           ← lists .lfbridge/ AND the large files
+├── .lfbridge/                           ← hidden per-repo tracking area — git-ignored
+│   ├── storage.yaml                     ← identity descriptor (storage_repo.mdx §2) — name/type/repo_root/clones
+│   ├── repo_storage.yaml                ← ★ THIS SPEC §2 — the repo-WIDE settings-and-state file (root key: repo_storage)
+│   ├── files.yaml                       ← fast per-file fingerprint index (storages.mdx §4.1)
+│   ├── manifest.yaml                    ← large-file → IPFS CID + pin state (committed, travels)
+│   ├── decisions.yaml                   ← team-shared decision ledger (decisions.mdx) (committed, travels)
+│   ├── devices/<device>.yaml            ← the travelling device registry (devices.mdx)
+│   ├── history/                         ← ★ THIS SPEC §4 — one plain-text audit log PER COMPUTER
+│   │   ├── studio-tower.txt
+│   │   └── bryan-macbook-pro.txt
+│   ├── files/                           ← ★ THIS SPEC §3 — per-file <name>.yaml sidecars, path-mirrored
+│   │   └── videos/
+│   │       ├── trees.mov.yaml
+│   │       └── 2075191642366054733.mp4.yaml
+│   └── analysis/                        ← per-file media analysis (transcripts, descriptions, visuals-by-time)
+└── videos/
+    ├── trees.mov
+    └── 2075191642366054733.mp4
+```
+
+**Three rules that hold for everything in `.lfbridge/`:**
+
+* **Git-ignored working artifacts vs. committed travellers.** `repo_storage.yaml`, the per-file
+  sidecars (`files/…`), and the history logs (`history/…`) are **local working artifacts** — they are
+  inside the git-ignored `.lfbridge/` area and are **not** the source of truth the team shares. The
+  **committed** travellers are `manifest.yaml`, `decisions.yaml`, and `devices/` ([git_backbone.mdx](./git_backbone.mdx)
+  "never git-ignore the `.lfbridge/` SDL text"). The sidecars and history are the **per-machine,
+  human-legible record**; the ledger is the shared truth. §5 maps who-owns-what.
+* **One level-one key, always.** Every YAML file this spec defines is **strictly hierarchical with a
+  single top-level property** — `repo_storage:` for the repo-wide file, `file:` for a per-file sidecar.
+  **Nothing else is a level-one key; everything is level two or deeper.** This is a hard schema rule so
+  the files are unambiguous to parse and diff.
+* **The keep-`.lfbridge/` consent gates all writes here.** Writing anything into `.lfbridge/` is the
+  machine-local consent ([storage_settings.mdx §3](./storage_settings.mdx), default **on**) — *"the
+  hidden directory we're allowed to store in the root of the repo as long as that checkbox is turned
+  on."* With consent off, LFB records to machine-local state only and writes nothing into the repo root
+  ([decisions.mdx §6](./decisions.mdx)).
+
+Creating `.lfbridge/` and its `repo_storage.yaml` (plus `history/`, `files/`) when a repo is enlisted, and adding `.lfbridge/` to the repo `.gitignore`, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureRepoStorage(repoRoot)` (extends the existing `.lfbridge/` bootstrap to seed `repo_storage.yaml` + the `history/` and `files/` subdirs).
+
+---
+
+## 2. `repo_storage.yaml` — the repo-wide settings-and-state file (LOCKED)
+
+When LFB **enlists** a repo (the user adds it, or the scanner discovers it and the user opts it in), the
+web app **automatically** creates `.lfbridge/repo_storage.yaml`. It is the **one file that stores
+settings and state across the entire repo** — everything that is true of the repo as a whole rather than
+of one file.
+
+### 2.1 The single level-one key rule
+
+```yaml
+# ~/BGit/charlie-kirk/.lfbridge/repo_storage.yaml
+repo_storage:                       # ← the ONLY level-one key. Everything else is nested below it.
+  schema_version: 1
+  name: charlie-kirk                # defaults to the repo folder name; user-editable (repo_settings.mdx)
+  enlisted:
+    at: 2026-01-08T15:04:22Z        # UTC — when this repo was first enlisted with LFB
+    by: bryan@act3ai.com            # the allow-listed Google email that enlisted it
+    on_device: studio-tower         # the unique device name (devices.mdx) that enlisted it
+  counts:                           # rolled-up special-file metrics for the repo (special_files.mdx)
+    special: 20                     # files that matched the special-file test
+    large: 20
+    ipfs_pinned: 5                  # pinned (by us OR observed already-pinned outside us)
+    videos: 19
+    images: 0
+    audio: 1
+    compressible: 15               # video/image/audio that look uncompressed (compression.mdx baseline)
+    transcribable: 20             # video + audio that could be transcribed (Transcribe.mdx)
+    transcribed: 0
+  policy:                           # repo-wide defaults (mirror repo_settings.mdx; per-file may override)
+    recommend_ipfs_pin: true
+    recommend_compress: true
+    recommend_transcribe: false
+  last_scan:
+    at: 2026-01-08T15:06:10Z
+    on_device: studio-tower
+    headless: false                 # true when the background scan wrote this, not a user in the web app
+```
+
+* **`repo_storage:` is the only level-one property.** A parser reads `doc.repo_storage.*` and never has
+  to guess. This is the same hard rule the per-file sidecar follows (§3).
+* **Written automatically on enlist**, then updated by every scan and every user action. It is **not**
+  hand-authored — the web app owns it.
+* **Settings vs. the machine-local `config.yaml`.** `repo_storage.yaml` carries the repo-wide facts that
+  belong *with the repo* (its LFB name, enlist provenance, rolled-up special-file counts, repo-wide
+  recommendation policy, last-scan stamp). The **machine-local** knobs that differ per computer (this
+  machine's `pinned` master toggle, threshold override, pin/fetch policy, sharing) stay in
+  `~/T/_large_files_bridge/pin/r/<repo>/config.yaml` ([repo_settings.mdx §3](./repo_settings.mdx)) — see
+  the boundary in §5. `repo_storage.yaml` is *about the repo*; `config.yaml` is *about this computer's
+  participation in the repo*.
+
+### 2.2 `counts:` is the repo's special-file rollup
+
+The `counts:` block is the repo-level answer to *"what special files are in here and what could we do
+with them?"* It is the same rollup the [Repos](./repos.mdx) table and the category rollup
+([storage_repo.mdx](./storage_repo.mdx), the charter's category table) read, cached here so a repo row
+renders without re-walking the tree. The classifier that fills it is [special_files.mdx](./special_files.mdx).
+
+Reading, seeding, and updating `repo_storage.yaml` (single `repo_storage` root key; deterministic YAML so git diffs of the git-ignored file stay legible) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` — `readRepoStorage(repoRoot)` / `writeRepoStorage(repoRoot, doc)` / `refreshCounts(repoRoot)` (called from the scanner and after each user action).
+
+---
+
+## 3. Per-file `<name>.yaml` sidecars — identity + the file's event history (LOCKED)
+
+Some settings and history are **per file**, not per repo. For every **special** file
+([special_files.mdx](./special_files.mdx)) LFB writes a **sidecar YAML** whose name is the media file's
+name **plus `.yaml`**, under a **mirror of the file's repo-relative path** inside `.lfbridge/files/`.
+
+```
+repo file:   ~/BGit/charlie-kirk/videos/trees.mov
+sidecar:     ~/BGit/charlie-kirk/.lfbridge/files/videos/trees.mov.yaml
+```
+
+* **We create the directory hierarchy under `.lfbridge/files/` to mirror the file's path**, then create
+  `<filename>.yaml` at the leaf. `videos/trees.mov` → `.lfbridge/files/videos/trees.mov.yaml`. The mirror
+  keeps two files with the same basename in different folders from colliding, and makes a sidecar
+  trivially findable from its media file.
+* A sidecar is created **the first time the file is seen as special** — including when a scan (even a
+  **headless** background scan) discovers it was already IPFS-pinned or compressed **outside** LFB (§3.3).
+
+### 3.1 The single level-one key rule + identity
+
+```yaml
+# ~/BGit/charlie-kirk/.lfbridge/files/videos/trees.mov.yaml
+file:                               # ← the ONLY level-one key. Everything else is nested below it.
+  path: videos/trees.mov            # repo-relative path (the stable key even when absent locally)
+  name: trees.mov
+  categories: [large, video, ipfs_pinned]   # from special_files.mdx (why this file is special)
+  size: 734003200                   # bytes, as last seen
+  created: 2026-01-02T10:12:00Z     # filesystem created (UTC)
+  modified: 2026-01-02T10:12:00Z    # filesystem modified (UTC)
+  hash: 9f2c8b…                     # exact content hash (files.yaml fingerprint)
+  fingerprint:                      # perceptual/content fingerprint (perceptual_fingerprint.mdx) — survives resize/recompress/convert
+    algo: pdq                       # e.g. pdq (image) / vpdq (video) — see perceptual_fingerprint.mdx
+    value: a1b2c3…
+  first_seen:
+    at: 2026-01-08T15:06:10Z
+    on_device: studio-tower
+  events:                           # ← append-only history of everything that happened to this file (§3.2)
+    - …
+```
+
+* **`file:` is the only level-one property**, matching §2.1's rule.
+* **`path`** (repo-relative) is the stable identity even on a computer that does **not** have the bytes
+  yet — a teammate or your other machine that has not pinned it can still reason about the sidecar
+  ([decisions.mdx §3.2](./decisions.mdx)). `hash` is the exact fingerprint; `fingerprint` is the
+  perceptual one that survives a compress/convert/resize.
+* Identity (`size`, `created`, `modified`, `hash`) matches the per-file metadata the charter requires
+  ([CLAUDE.md](../CLAUDE.md) "Per-file tracking metadata"). For compressible media the sidecar carries
+  **both** a compressed and an uncompressed variant hash — recorded in the `compress` event (§3.2) and
+  mirrored into `files.yaml`'s layered `hashes:` block.
+
+### 3.2 `events:` — the append-only per-file history (LOCKED)
+
+The heart of the sidecar. Every meaningful thing that happens to the file appends **one event**; events
+are **never edited in place** (same append-only discipline as the shared ledger, so the file reads as a
+paper trail). Every event carries **`at` (UTC), `on_device` (the unique computer name), and `by`** (the
+allow-listed email, or the sentinel `not-lfbridge` when something happened outside us — §3.3).
+
+```yaml
+  events:
+    # 1) First time we scanned it and found it ALREADY IPFS-pinned outside LFB (§3.3)
+    - kind: observed
+      at: 2026-01-08T15:06:10Z
+      on_device: studio-tower
+      by: not-lfbridge            # ← we did NOT do this; our scan merely OBSERVED it
+      ipfs:
+        pinned: true
+        cid: bafybe…              # the SID / CID we read from the running IPFS node
+      note: "found already pinned on this computer's IPFS node during scan"
+
+    # 2) A user decision, made in the web app (mirrors decisions.mdx; both axes)
+    - kind: decision
+      at: 2026-01-08T15:20:44Z
+      on_device: studio-tower
+      by: bryan@act3ai.com
+      asked: true
+      ipfs: true                  # AXIS 1 — Add to IPFS (pin)
+      gitignore: true             # AXIS 2 — Add to git ignore
+
+    # 3) IPFS pin turned ON by us (state transition)
+    - kind: ipfs_pin
+      at: 2026-01-08T15:20:45Z
+      on_device: studio-tower
+      by: bryan@act3ai.com
+      pinned: true
+      cid: bafybe…
+
+    # 4) Compression — pre/post hashes captured (compression.mdx §)
+    - kind: compress
+      at: 2026-04-03T09:14:02Z
+      on_device: studio-tower
+      by: bryan@act3ai.com
+      before: { hash: 9f2c8b…, size: 734003200 }   # captured BEFORE we touched the bytes
+      after:  { hash: 4d7e1a…, size: 118489088 }   # captured AFTER compression
+      fingerprint_before: a1b2c3…                  # perceptual fp of the original …
+      fingerprint_after:  a1b2c4…                  # … and of the result (should match within threshold)
+      codec: { from: prores, to: h264 }
+
+    # 5) Transcription produced (Transcribe.mdx)
+    - kind: transcribe
+      at: 2026-03-11T08:02:00Z
+      on_device: bryan-macbook-pro
+      by: bryan@act3ai.com
+      output: videos/trees.transcription
+```
+
+**Event `kind`s (extensible, but these are the load-bearing ones):**
+
+| `kind` | When it is appended | Key fields |
+| --- | --- | --- |
+| `observed` | A scan sees a state that LFB did **not** create — already-pinned or already-compressed outside us (§3.3). | `by: not-lfbridge`, the observed `ipfs`/`compress` facts. |
+| `decision` | The user answers the two-axis question ([decisions.mdx §1](./decisions.mdx)). Mirrors the shared ledger in human-readable per-file form. | `asked`, `ipfs`, `gitignore`. |
+| `ipfs_pin` | LFB turns pinning **on or off** for the file. | `pinned` (bool), `cid`. |
+| `compress` | LFB compresses the file — **the pre-compression hash and size are captured first, the post-compression hash and size after** (§3.2 event 4; [compression.mdx](./compression.mdx)). | `before{hash,size}`, `after{hash,size}`, `fingerprint_before/after`, `codec`. |
+| `convert` | A format conversion (e.g. PNG→JPEG, HEIC→JPEG) with the same before/after capture. | as `compress`, plus `format{from,to}`. |
+| `transcribe` | A transcript is produced for a video/audio file. | `output` sidecar path. |
+
+* **A file may be pinned then unpinned then re-pinned** — each transition is its own `ipfs_pin` event, so
+  the sidecar shows the full on/off/on history the user asked us to keep ("Maybe we will turn on IPFS
+  pin, then off IPFS pin, and then we put some properties under there: the time, date, who did that").
+* **Both-off decisions are recorded too** (a `decision` event with `ipfs: false, gitignore: false`) — the
+  sticky "reviewed, leave it" that stops the warning coming back ([decisions.mdx §2](./decisions.mdx)).
+  This is what makes the **May** step of the tour correct: a file the user already declined to compress is
+  **not re-asked** on another computer because its sidecar and the shared ledger both carry the recorded
+  answer ([use_case_two_computers.mdx §7](./use_case_two_computers.mdx)).
+
+Appending an event to a per-file sidecar (create-on-first-special, mirror the path, append-only, stamp at/on_device/by) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/file-sidecar.service.ts` — `sidecarPath(repoRoot, relPath)` / `appendFileEvent(repoRoot, relPath, event)` / `readSidecar(repoRoot, relPath)`.
+
+### 3.3 Provenance — actions taken OUTSIDE LargeFileBridge (LOCKED)
+
+A repo lives in the real world: the user pins or compresses files on the **command line**, outside our
+web app. LFB must **notice and record** that without pretending it did it.
+
+* When a scan (including a **headless** background scan) finds a file that is **already IPFS-pinned** on
+  this computer's node, or **already looks compressed**, and LFB has **no prior record** of doing it, LFB
+  appends an **`observed`** event with **`by: not-lfbridge`** and the facts it read (the CID it is pinned
+  under, or the compressed size/hash). This is exactly the user's requirement: *"our scanning saw that
+  somebody else's IPFS pinned them, and so we put this logging in there… the first time we scanned and
+  found that our IPFS has pinned, we're putting the tracking in there so we know the time and date… and
+  which computer found these files were IPFS pinned."*
+* The **`on_device`** on that `observed` event answers **which computer first observed** the external
+  state — the load-bearing fact when the same repo is on two machines (the tower pinned five files on the
+  CLI; the laptop, later, learns about them from the committed manifest + the sidecars, not from watching
+  the tower).
+* `not-lfbridge` is a **reserved sentinel** in the `by` field; every real user action carries an
+  allow-listed email instead ([decisions.mdx §3.3](./decisions.mdx)).
+
+Detecting already-pinned / already-compressed state during a scan and recording it as an `observed`/`not-lfbridge` event (idempotent — recorded once, not on every pass) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `reconcileExternalState(repoRoot, file)` (queries the IPFS node's pinset + the compression baseline, appends via `file-sidecar.service.ts`).
+
+---
+
+## 4. `history/<device>.txt` — the per-computer audit log (LOCKED)
+
+Beside the per-file sidecars is a **`history/`** directory holding **one plain-text log per computer**,
+named by that computer's **unique device name** ([devices.mdx](./devices.mdx)):
+
+```
+~/BGit/charlie-kirk/.lfbridge/history/studio-tower.txt
+~/BGit/charlie-kirk/.lfbridge/history/bryan-macbook-pro.txt
+```
+
+* **One file per computer, keyed by the unique device name.** The tower writes only
+  `studio-tower.txt`; the laptop writes only `bryan-macbook-pro.txt`. This is the same **self-owned-file**
+  trust model as the device registry and the Sync List ([devices.mdx](./devices.mdx),
+  [sync_list.mdx](./sync_list.mdx)) — a computer appends only to *its own* history file, and reads the
+  others as claims. Two computers therefore never contend on the same log file.
+* It is called the **history log for this computer for this repo**.
+
+### 4.1 What we log, and the format (LOCKED)
+
+**Every time the user makes a decision — and every automatic action — we append a line (or an indented
+block) with a UTC date-time stamp, then what happened.** When one action spans several files with
+**different** outcomes, the entry indents a **per-file** breakdown so it is unambiguous and parsable
+later.
+
+```
+# .lfbridge/history/studio-tower.txt
+# Large File Bridge — history log for computer "studio-tower" (device id 7c1f…-…-a90) · repo charlie-kirk
+# All timestamps UTC. Append-only. One line per event; indented block when files differ.
+
+2026-01-08T15:06:10Z  SCAN  headless=false  found 20 special files (20 large, 5 already-pinned outside LFB)
+2026-01-08T15:20:44Z  DECISION  by=bryan@act3ai.com  recommended IPFS-pin for 6 files; user chose:
+                        pin=yes   videos/a.mov
+                        pin=yes   videos/b.mov
+                        pin=yes   videos/c.mov
+                        pin=no    videos/d.mov
+                        pin=no    videos/e.mov
+                        pin=no    videos/f.mov
+2026-01-08T15:20:45Z  IPFS-PIN  by=bryan@act3ai.com  pinned 3 files (a.mov, b.mov, c.mov)
+2026-04-03T09:14:02Z  COMPRESS  by=bryan@act3ai.com  compressed 10 files; declined 10 (recorded as reviewed)
+```
+
+* **Schema of a line.** `` <UTC-timestamp>␠␠<VERB>␠␠<key=value …>␠␠<summary>``. The **`VERB`** is the
+  event kind (`SCAN`, `DECISION`, `IPFS-PIN`, `IPFS-UNPIN`, `COMPRESS`, `CONVERT`, `TRANSCRIBE`,
+  `PULL`, `OBSERVED`). When decisions differ per file, the following indented lines carry one
+  `` <axis>=<value>␠␠<repo-relative-path>`` per file — *"you can often decide to have the schema one be
+  the decision… indented some way to be very clear and parsable later what our decision was, and if we
+  made different decisions on different files, what it was on a per-file basis."*
+* **UTC always.** Every stamp is UTC ISO-8601, matching the sidecars and the shared ledger.
+* **This is a mirror, not the source of truth.** The **decision** source of truth is the committed,
+  team-shared `decisions.yaml` ([decisions.mdx](./decisions.mdx)); the **per-file** structured record is
+  the sidecar (§3). The history log is the **legible, per-machine paper trail** a human reads to see the
+  story of the repo on this computer. All three are written from the one action.
+
+Appending to the per-computer history log (own-file only, UTC stamp, per-file indent when outcomes differ) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/history-log.service.ts` — `historyPath(repoRoot, deviceName)` / `appendHistory(repoRoot, entry)` (resolves the device name from `devices.service.ts`).
+
+---
+
+## 5. Reconciliation — who owns what in `.lfbridge/` (LOCKED)
+
+Because this spec adds files beside the ones [storage_repo.mdx](./storage_repo.mdx) and
+[decisions.mdx](./decisions.mdx) already defined, the boundaries must be crisp:
+
+| File | Scope | Travels? | Source of truth for… |
+| --- | --- | --- | --- |
+| `storage.yaml` | repo | working (local) | storage **identity** (name, `type: repo`, `repo_root`, clones). |
+| **`repo_storage.yaml`** (§2) | repo | working (local) | repo-**wide** settings + rolled-up special-file **counts** + enlist/scan provenance. |
+| `files.yaml` | repo | working (local) | the **fast** per-file fingerprint index (hash/size/dates, layered variant hashes). |
+| **`files/<path>.yaml`** (§3) | file | working (local) | the **rich per-file history** (events, provenance, both variant hashes, perceptual fp). |
+| **`history/<device>.txt`** (§4) | computer | working (local) | the **human-readable audit trail** for this computer. |
+| `manifest.yaml` | repo | **committed, travels** | large-file → **IPFS CID + pin state** (what a fresh clone must fetch). |
+| `decisions.yaml` | repo | **committed, travels** | the **team-shared** two-axis decision ledger. |
+| `devices/<device>.yaml` | computer | **committed, travels** | the travelling **device registry** (id, name, graft, schedule). |
+
+* **`files.yaml` vs. `files/<path>.yaml`.** `files.yaml` stays the **compact index** the scanner reads
+  fast; the sidecar is the **detailed, append-only history** for one file. The sidecar's current identity
+  fields are kept consistent with `files.yaml`; the sidecar adds the event log `files.yaml` deliberately
+  does not carry.
+* **`repo_storage.yaml` vs. `config.yaml`.** `repo_storage.yaml` (in `.lfbridge/`) is *about the repo*;
+  the machine-local `pin/r/<repo>/config.yaml` ([storage_local.mdx §6.2](./storage_local.mdx)) is *about
+  this computer's participation* (its `pinned` toggle, threshold override, pin/fetch policy, sharing).
+  They never duplicate a field; §2.1 draws the line.
+* **Sidecars/history mirror the ledger, they do not replace it.** A `decision` event in a sidecar and a
+  `DECISION` line in a history log are **derived** from the same write that appends the authoritative
+  record to the committed `decisions.yaml`. If they ever disagree, the committed ledger wins
+  ([decisions.mdx §7](./decisions.mdx) reconciliation).
+
+---
+
+## 6. Acceptance criteria
+
+1. On enlist, LFB **automatically** creates `.lfbridge/repo_storage.yaml` with a **single** level-one key
+   `repo_storage:` and everything else nested at level two or deeper; it carries the repo LFB name,
+   enlist provenance (at/by/on_device), the rolled-up special-file `counts:`, repo-wide `policy:`, and the
+   `last_scan` stamp (including `headless`).
+2. For **every special file** ([special_files.mdx](./special_files.mdx)) LFB writes a sidecar at
+   `.lfbridge/files/<mirrored path>/<name>.yaml` with a **single** level-one key `file:`; it carries the
+   repo-relative path, name, categories, size, created, modified, exact hash, the perceptual fingerprint,
+   `first_seen`, and an **append-only `events:` history**.
+3. Each event carries **`at` (UTC), `on_device` (unique device name), and `by`** (allow-listed email, or
+   the sentinel **`not-lfbridge`**). Event kinds include `observed`, `decision`, `ipfs_pin`, `compress`
+   (with **before/after hash + size** and `fingerprint_before/after`), `convert`, and `transcribe`.
+   Pin/unpin transitions each append their own event so the on/off/on history is preserved.
+4. When a scan (including a **headless** one) finds a file **already IPFS-pinned or compressed outside
+   LFB**, LFB appends an **`observed`** event with `by: not-lfbridge`, the observed CID/size, and the
+   **`on_device` that first observed it** — recorded once, not re-appended every pass.
+5. `.lfbridge/history/<device>.txt` exists **one per computer**, named by the **unique device name**;
+   each computer appends only to **its own** file; every entry is **UTC-stamped**; multi-file actions with
+   differing outcomes indent a **per-file** breakdown.
+6. All three additions live in the **git-ignored** `.lfbridge/` area (working artifacts), are written only
+   when the **keep-`.lfbridge/` consent** is on, and **mirror** — never replace — the committed
+   `manifest.yaml` / `decisions.yaml` / `devices/` travellers. §5's ownership table holds.
+
+<!--
+  This spec owns three .lfbridge/ additions: (1) repo_storage.yaml — repo-WIDE settings+state, single
+  level-one key `repo_storage:`, auto-created on enlist, holds special-file counts + provenance. (2)
+  per-file <name>.yaml sidecars under .lfbridge/files/<mirrored-path>/, single level-one key `file:`,
+  identity + APPEND-ONLY events (observed/decision/ipfs_pin/compress/convert/transcribe) each stamped
+  at(UTC)/on_device/by, with by=not-lfbridge for actions done OUTSIDE us that a scan merely OBSERVED, and
+  which computer observed them. (3) history/<device>.txt — one plain-text UTC audit log PER COMPUTER
+  (self-owned file), per-file indented breakdown when outcomes differ. All three are git-ignored working
+  artifacts that MIRROR the committed team-shared decisions.yaml/manifest.yaml/devices/ (source of truth).
+  Reconciles with storage_repo.mdx + decisions.mdx (don't restate). Single-level-one-key is a HARD schema
+  rule. Siblings: special_files, compression, perceptual_fingerprint, devices, use_case_two_computers.
+-->
