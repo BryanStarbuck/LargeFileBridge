@@ -341,6 +341,48 @@ export const DecisionsLedgerSchema = z.object({
 });
 export type DecisionsLedger = z.infer<typeof DecisionsLedgerSchema>;
 
+// ── TO DO batch: ~/T/_large_files_bridge/_do_batches/<slug>_2_do.yaml (to_do_batches.mdx §3) ──
+// The MACHINE-LOCAL, disposable per-storage recommendation bundle the TO DO Batch Calc Engine writes
+// each scan recalc (recalculate-and-replace). NOT committed, NOT team-shared. The camelCase keys mirror
+// the @lfb/shared DTOs (TodoBatchSummary/Detail) so the store maps 1:1 with no rename layer.
+export const TodoCategoryEnum = z.enum([
+  "compress_video",
+  "compress_image",
+  "git_ignore",
+  "pin",
+  "pull_down",
+  "transcribe_video",
+  "transcribe_audio",
+]);
+export const TodoBatchItemSchema = z.object({
+  path: z.string(),
+  sizeBytes: z.number().default(0),
+  category: TodoCategoryEnum,
+  cid: z.string().nullable().optional(),
+  pinnedOn: z.array(z.string()).optional(),
+  estCompressedBytes: z.number().optional(),
+  recommend: z
+    .object({ ipfs: z.boolean().optional(), gitignore: z.boolean().optional(), compress: z.boolean().optional() })
+    .default({}),
+});
+export const TodoCategoryTotalSchema = z.object({ count: z.number(), reclaimableBytes: z.number().optional() });
+export const TodoBatchDocSchema = z.object({
+  schema_version: z.number().default(1),
+  id: z.string().default(""),
+  scope: z.enum(["personal", "dropbox", "gdrive", "repo", "company", "community"]).default("repo"),
+  storageName: z.string().default(""),
+  storageRoot: z.string().default(""),
+  kind: z.enum(["todo", "transcribe"]).default("todo"),
+  pattern: z.enum(["compress", "git_ignore", "pull_down", "pin", "transcribe", "mixed"]).default("mixed"),
+  repoId: z.string().optional(),
+  totals: z.record(TodoCategoryTotalSchema).default({}),
+  items: z.array(TodoBatchItemSchema).default([]),
+  dismissed: z.boolean().default(false),
+  dismissedAt: z.string().nullable().default(null),
+  computedAt: iso.default(""),
+});
+export type TodoBatchDoc = z.infer<typeof TodoBatchDocSchema>;
+
 // ── repo_storage.yaml: <repo>/.lfbridge/repo_storage.yaml (repo_tracking_scheme.mdx §2) ──
 // The single repo-WIDE settings-and-state file. HARD SCHEMA RULE: the ONLY level-one key is
 // `repo_storage:` — everything else is nested at level two or deeper. Written automatically on enlist,

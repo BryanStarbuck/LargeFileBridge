@@ -18,6 +18,15 @@ export function resolveLogDir(): string {
   return dir;
 }
 
+// The TO DO batches directory (to_do_batches.mdx §2): ~/T/_large_files_bridge/_do_batches/ — the
+// machine-local, disposable per-storage recommendation bundles the To Do page reads. Under the state
+// root so it honors LFB_STATE_DIR; created on demand.
+export function resolveTodoBatchesDir(): string {
+  const dir = path.join(resolveStateDir(), "_do_batches");
+  ensureDir(dir);
+  return dir;
+}
+
 function safeJoin(...parts: string[]): string | null {
   try {
     return path.join(...parts);

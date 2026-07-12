@@ -169,6 +169,38 @@ it finishes, its **final error list**. Each enqueued `compress` task carries the
 The batch registry is in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `createBatch()` / `recordBatchResult()` / `listBatches()` (the 30-min prune of finished batches). The producer that opens a batch is `compression.service.ts` — `enqueueCompressInside()` ([compress_inside.mdx §5](./compress_inside.mdx)); the surfaces that render batch progress + the error list are the [Processing page](./processing.mdx) (processing.mdx §4).
 
+## 4b. TO DO batch Apply is a queue producer (LOCKED)
+
+Alongside the page actions (§5) and "Compress inside" (§4a), **Applying a [TO DO Batch](./to_do_batches.mdx)**
+from the [To Do page](./to_do.mdx) is a producer that **reuses this same queue** — it enqueues and returns,
+never running the effects inline in the apply request. When the user hits **Apply** in a batch popup, the
+`apply` handler writes each row's decision(s) to the shared ledger and then **enqueues the effects** as
+ordinary `QueueTask`s, so they drain against the **same** core-budgeted, media-aware worker pool (§3) and
+surface as ordinary dock/Processing cards ([processing.mdx §4.2](./processing.mdx#42-applying-a-to-do-batch-is-a-processing-producer-locked)):
+
+* **`compress_video` / `compress_image` recommendations** → **`compress`** tasks — identical to the
+  Compress-inside producer's tasks, drawing the `compress:video` / `compress:image` admission buckets (§3),
+  so they honour the same anti-oversubscription caps and can share a batch (`batchId`, §4a) for their
+  progress bar + error list.
+* **A transcribe slug's Apply** ("Transcribe N files", [transcribe_calc_engine.mdx §4](./transcribe_calc_engine.mdx))
+  → **`transcribe`** tasks. Batch Apply is the **main volume producer** of `transcribe` work in the product
+  (the ~80% default-checked list becomes the `transcribe` backlog); each runs via `transcribeOne`, so it
+  gets a live dock card the moment it starts, exactly like a page action's transcriptions.
+* **`pull_down` recommendations** → **pin/fetch** work: the file is pinned so its bytes arrive over IPFS
+  ([to_do_batches.mdx §3](./to_do_batches.mdx#3-the-batch-yaml--every-field-locked-shape)). Like every other
+  effect it registers a progress-dock job (the `pin` op, [webapp.mdx §11](./webapp.mdx)) so it shows as a
+  Running-now card and counts into the pending backlog while queued.
+
+**Dedup and skip-already-done still hold.** The queue's `op + path` dedup (§2) means re-Applying a batch, or
+Applying its yellow-banner twin on a repo page, never double-queues an in-flight file; and because the
+[calc engine recalculates-and-replaces](./to_do_batches.mdx#5-recalculate-and-replace-locked) after work
+completes, an already-done file simply drops out of the next batch rather than being re-queued. A **mixed**
+batch fans out **compress + transcribe + pin/fetch** tasks in one Apply — all into this one queue, all
+watchable together on the Processing page.
+
+The To-Do batch Apply that fans decisions out into `enqueue()` is served in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/batches/:id/apply` (maps each checked recommendation to a `QueueTask` — `compress` / `transcribe` — or a pin/fetch, then calls `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()`), from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoBatchPopup` / `TranscribeBatchPopup`.
+
 ---
 
 ## 5. Persistence & crash posture (LOCKED)
@@ -211,6 +243,11 @@ The queue is **in-memory only**, exactly like the job registry ([webapp.mdx §12
    `compress` tasks carry its `batchId`; `recordBatchResult` counts `compressed`/`skipped` as OK and records
    `blocked`/`failed` in the batch's `errors[]`; `listBatches()` (30-min retention for finished batches) is
    folded into `GET /api/progress` for the [Processing page](./processing.mdx) progress bar + error list.
+9. **TO DO batch Apply (§4b):** Applying a [TO DO Batch](./to_do_batches.mdx) is a producer that **reuses
+   this queue** — it writes decisions then `enqueue()`s the effects and returns immediately;
+   `compress_video`/`compress_image` → `compress` tasks, a transcribe slug's Apply → `transcribe` tasks (the
+   main producer of transcribe work), and `pull_down` → pin/fetch work; dedup + skip-already-done hold, and a
+   **mixed** batch fans out all kinds into the one queue watchable on Processing.
 
 <!--
   The server-side background queue between "a page action fires" and "the registry shows a running card".
@@ -232,6 +269,13 @@ The queue is **in-memory only**, exactly like the job registry ([webapp.mdx §12
    - BATCHES (§4a): createBatch/recordBatchResult/listBatches group one bulk "Compress inside" run's compress
      tasks (batchId). compressed/skipped => OK (done++); blocked/failed => errors[] {path,reason}. Finished
      batches linger 30 min (retention) then prune; folded into GET /api/progress as `batches` (processing.mdx).
+   - TO DO BATCH APPLY (§4b): Applying a TO DO Batch (to_do.mdx) is a producer that REUSES this queue — writes
+     decisions then enqueue()s effects and returns. compress_video/image => compress tasks (same buckets as
+     Compress-inside); a transcribe slug's Apply => transcribe tasks (MAIN producer of transcribe work);
+     pull_down => pin/fetch work (pin op dock card). Dedup + skip-already-done hold; recalc-and-replace drops
+     done files from the next batch; a MIXED batch fans out compress+transcribe+pin into the one queue. Served
+     by todo.router POST /api/todo/batches/:id/apply → enqueue(). Keep in sync with to_do.mdx, to_do_batches.mdx,
+     transcribe_calc_engine.mdx, processing.mdx §4.2.
    - GET /api/progress gains `queued` (pending count); dock shows "+N queued" footer. No fake cards for
      pending items (webapp.mdx §13).
    - IN-MEMORY ONLY, no persistence (same rationale as the registry). Restart => empty queue; re-invoking a

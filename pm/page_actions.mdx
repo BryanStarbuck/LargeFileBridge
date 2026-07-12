@@ -275,9 +275,9 @@ page-level operations, now shown as inline links (they already run through the p
 | Page (spec) | Action-links (left → right) | Primary button (header, outside the row) |
 | --- | --- | --- |
 | **One repo** ([one_repo.mdx](./one_repo.mdx)) | Create Transcriptions · Create AI descriptions · Compress videos · Compress images · Git ignore · Rescan | **Pin now** |
-| **File System / a directory** ([file_system.mdx](./file_system.mdx), [directories.mdx](./directories.mdx)) | Create Transcriptions · Create AI descriptions · Compress videos · Compress images · Git ignore · Track / Pin this directory | — |
+| **File System / a directory** ([file_system.mdx](./file_system.mdx), [directories.mdx](./directories.mdx)) | Create Transcriptions · Create AI descriptions · Show what could be transcribed · Compress videos · Compress images · Git ignore · Track / Pin this directory | — |
 | **Full paths** (flat file table, [full_paths.mdx](./full_paths.mdx)) | Create Transcriptions · Create AI descriptions · Compress videos · Git ignore · IPFS pin · Unpin | — |
-| **Storage detail** ([storages.mdx](./storages.mdx)) | Create Transcriptions · Create AI descriptions · Compress videos · Re-index files | **Index files** |
+| **Storage detail** ([storages.mdx](./storages.mdx)) | Create Transcriptions · Create AI descriptions · Show what could be transcribed · Compress videos · Re-index files | **Index files** |
 | **View one directory** ([directories.mdx](./directories.mdx)) | Create Transcriptions · Create AI descriptions · Compress all… (its files, recursive) | — |
 | **Repos list** ([repos.mdx](./repos.mdx)) | Rescan all · Pin all | **+ Add repo** (whole-list actions; rows are repos, not files) |
 | **IPFS pins** ([ipfs.mdx](./ipfs.mdx)) | Publish IPFS list… · Re-verify pins | — |
@@ -312,6 +312,34 @@ bar ([media_viewer.mdx](./media_viewer.mdx)), not this page row. (View-one-file'
 
 The producing actions are wired to the enqueue endpoints and toast the returned count in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createTranscriptions()` / `createDescriptions()` (call `api.transcribeEnqueue` / `api.describeEnqueue`, toast `willProcess`).
+
+### 4.1 "Show what could be transcribed" — a calc-engine action (LOCKED)
+
+**Show what could be transcribed** is a page action on the **Storage detail** and **File System / directory**
+pages (§4) — but it is a **calc-engine action, not a producing action**: clicking it **runs the
+[What-Can-Be-Transcribed Calc Engine](./transcribe_calc_engine.mdx)** over the page's storage/directory,
+which **lists** the transcribable-but-untranscribed media (a read-only scan) and writes a **transcribe
+batch** ([to_do_batches.mdx §4](./to_do_batches.mdx#4-transcribe-batches--a-sibling-kind-locked)). It does
+**not** itself transcribe anything.
+
+* **Distinct from Create Transcriptions.** **Create Transcriptions** (§1) obeys Rules 1–3 and **queues the
+  work now**; **Show what could be transcribed** only **surfaces** what *could* be transcribed. It is
+  deliberately **opt-in and heavier** — opening every media file's sidecar to check for a transcript is more
+  expensive than the default rollup, so it runs **only on this explicit click**, never as part of a scan
+  ([transcribe_calc_engine.mdx §1](./transcribe_calc_engine.mdx#1-when-it-runs-locked)).
+* **Scope like any page action (Rule 1).** With nothing checked it scans the whole storage/directory
+  recursively; the link shows a brief **"Looking…"** state while the (cancelable) scan runs. It honours the
+  same `HARD_SKIP` walk (§1.1).
+* **What it produces.** One **transcribe batch** per storage with candidates → a **transcribe slug** on the
+  [To Do page](./to_do.mdx#7-show-what-could-be-transcribed-locked); its chevron opens the **~80%-screen**,
+  default-checked popup whose **"Transcribe N files"** Apply is the point where transcription is finally
+  **enqueued as background jobs** ([job_queue.mdx §4b](./job_queue.mdx), [processing.mdx §4.2](./processing.mdx#42-applying-a-to-do-batch-is-a-processing-producer-locked)).
+  So this link *finds* the work; the transcribe slug's Apply *does* it.
+* **No skip-already-done toast.** Because it queues nothing, it shows no `willProcess` toast; its result is
+  the transcribe slug(s) it produces (or a calm "nothing untranscribed here").
+
+The link triggers the on-demand engine rather than the enqueue path in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `showWhatCanBeTranscribed()` (calls `POST /api/todo/transcribe-scan?scope=<id>`, [transcribe_calc_engine.mdx §1](./transcribe_calc_engine.mdx#1-when-it-runs-locked)), served by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/transcribe-scan`.
 
 ---
 
@@ -382,6 +410,11 @@ The routes are mounted on the existing feature routers:
    git-ignores, or deletes without the user's explicit confirm in a small web modal.
 9. The visual matches the sister-app reference (`~/BGit/all/marketing/ai/code/ui/Q/page_processing_queue.js`
    `.q-actions`): blue links, leading icon, `·` separators, hover underline, red tint for destructive.
+10. **Show what could be transcribed (§4.1):** the **Storage detail** and **File System / directory** pages
+    carry a **Show what could be transcribed** action-link that is a **calc-engine action, not a producing
+    one** — it runs the [What-Can-Be-Transcribed Calc Engine](./transcribe_calc_engine.mdx) over the page's
+    scope (opt-in, read-only, `HARD_SKIP`-walked, cancelable, no `willProcess` toast), writing a **transcribe
+    batch** → a **transcribe slug**; transcription is enqueued only later, by that slug's Apply.
 
 <!--
   HUB spec for the THIRD action surface: the page action-links ROW rendered directly UNDER the page title
@@ -411,6 +444,13 @@ The routes are mounted on the existing feature routers:
        parallelization.mdx): mass-compute budget = round(cores × max_core_fraction), default 0.9 → bulk page
        actions use ≈90% of cores (image=wide/1thr, video+transcribe=narrow/capped, describe=network), NOT a
        fixed tiny cap.
+  §4.1 SHOW WHAT COULD BE TRANSCRIBED (LOCKED) — a CALC-ENGINE action (NOT a producing action) on the Storage
+  detail + File System/directory pages. Runs the What-Can-Be-Transcribed Calc Engine (transcribe_calc_engine.mdx)
+  over the page scope: opt-in/heavier (never a scan), read-only, HARD_SKIP-walked, cancelable, "Looking…" state,
+  NO willProcess toast. Writes a transcribe batch → a transcribe SLUG (to_do.mdx §7); transcription is enqueued
+  ONLY later by that slug's "Transcribe N files" Apply (job_queue.mdx §4b, processing.mdx §4.2). Wired via
+  pageActions.ts showWhatCanBeTranscribed() → POST /api/todo/transcribe-scan.
+
   Notification (LOCKED wording): "{N} files will have their Transcriptions created" / "… AI descriptions
   created", N = eligible remainder (willProcess). Nothing eligible => "All {M} files already have … —
   nothing to do". Enqueue endpoints POST /api/transcribe/enqueue + /api/describe/enqueue take

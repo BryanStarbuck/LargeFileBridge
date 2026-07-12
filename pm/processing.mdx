@@ -218,6 +218,35 @@ regress:
 The shared-state + polling merge (so another tab's / launchd's work surfaces here) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/progress/ProgressContext.tsx` — `ProgressProvider` (the `useQuery(["progress"], api.progress, { refetchInterval: dockBusy ? 1200 : 3000 })` poll, merged de-duped by job id with the tab's own optimistic `run()` set) against the process-global `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.registry.ts` and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` that every producer writes into.
 
+### 4.2 Applying a TO DO batch is a Processing producer (LOCKED)
+
+Besides "Compress inside" and the page-action producers (§1), **Applying a [TO DO Batch](./to_do_batches.mdx)**
+from the [To Do page](./to_do.mdx) is a first-class producer of the work these three surfaces show. When the
+user hits **Apply** in a [batch popup](./to_do.mdx#6-the-batch-popup-the-evolved-warnings-dialog-locked),
+LFBridge writes each row's decision(s) to the shared ledger and **enqueues the effects** as **background
+jobs** ([job_queue.mdx](./job_queue.mdx)) — the popup closes immediately and the work drains here:
+
+* **`pull_down` recommendations** → **pull-down fetch** jobs (pin the file so its bytes arrive over IPFS).
+  Each surfaces as a **Running now** card / dock card as it starts, and counts into **Waiting** while queued.
+* **`compress_video` / `compress_image` recommendations** → **compress** jobs — the same `compress:image` /
+  `compress:video` admission buckets the "Compress inside" batch uses ([job_queue.mdx §3](./job_queue.mdx)),
+  so they fill the Core Budget alongside any other compression and appear atop the **worker-utilization read**
+  (§3a).
+* **A [transcribe slug](./to_do.mdx#7-show-what-could-be-transcribed-locked)'s Apply** ("Transcribe N files")
+  → **transcribe** jobs. This is the **main producer of transcribe jobs** in the product — the ~80% popup's
+  default-checked list becomes the queue's `transcribe` backlog, shown in **Waiting** as *"N transcribing"*
+  and, per file, as a live card with the transcription's determinate %.
+
+Because a mixed batch's Apply can fan out **all three** kinds at once (pull-downs + compress + transcribe),
+the Processing page is where the user watches a single batch's effects drain together — the same three
+regions (Running now · Waiting · Batches), the same one `GET /api/progress` poll (§5), no new surface. A
+batch Apply started **in another tab** (or its yellow-banner twin on a repo page) lands in the same
+process-global queue, so an idle Processing page **starts moving on its own** (§4.1) just as it does for any
+other producer.
+
+The To-Do batch Apply that writes decisions then enqueues the effects is served in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/batches/:id/apply` (fans the checked recommendations out to `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()` as `pull_down` / `compress` / `transcribe` tasks), triggered from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoBatchPopup` / `TranscribeBatchPopup`.
+
 ---
 
 ## 5. The one polled source — `GET /api/progress` (extended)
@@ -281,6 +310,11 @@ The extended payload is assembled in code:
    is open when **another tab**, a server-side batch, or the **launchd** worker queues work **starts moving
    on its own** within one poll interval (**≤ ~1.2 s** while busy) — driven by the shared process-global
    queue/registry state + the `GET /api/progress` poll, with no second source of truth.
+8. **TO DO batch Apply (§4.2):** **Applying a [TO DO Batch](./to_do_batches.mdx)** enqueues its effects as
+   **background jobs** that surface across all three surfaces — **pull-down fetch**, **compress**, and
+   **transcribe** kinds appear as Running-now / dock cards and count into **Waiting** per op; a
+   **transcribe slug's** Apply is the **main producer of transcribe jobs**; a **mixed** batch fans out all
+   three kinds into the same queue and the same `GET /api/progress` poll, with no new surface.
 
 <!--
   The THREE surfaces for background work, all driven by GET /api/progress:
@@ -315,8 +349,15 @@ The extended payload is assembled in code:
       queueDepthByOp()+listBatches()+(in-flight slot count & coreBudget()); jobqueue.service owns the batch registry
       (createBatch/recordBatchResult/listBatches, 30-min prune) + the live in-flight slot count; concurrency.ts
       owns coreBudget(). Frontend ProgressContext exposes batches + workers.
+   §4.2 TO DO BATCH APPLY (LOCKED) — Applying a TO DO Batch (to_do.mdx batch popup) writes decisions + ENQUEUES
+      the effects as background jobs that show here: pull_down → pull-down fetch jobs, compress_video/image →
+      compress jobs (same buckets as Compress-inside), a transcribe slug's "Transcribe N files" → transcribe
+      jobs (the MAIN producer of transcribe jobs). A mixed batch fans out all three kinds into the one queue +
+      the one GET /api/progress poll; another tab's / repo-banner-twin's Apply lands in the same process-global
+      queue so an idle page wakes (§4.1). Served by todo.router POST /api/todo/batches/:id/apply → jobqueue enqueue().
   Keep in sync with webapp.mdx §10–§14 (dock/registry/poll), job_queue.mdx (queue+batches +§3 Core Budget),
   parallelization.mdx (the Core Budget the §3a utilization read reflects), left_bar.mdx + left_bar.yaml (the
-  conditional item), compress_inside.mdx (the batch producer + error list).
+  conditional item), compress_inside.mdx (the batch producer + error list), to_do.mdx + to_do_batches.mdx +
+  transcribe_calc_engine.mdx (the TO DO batch Apply producer, §4.2).
 -->
 </content>
