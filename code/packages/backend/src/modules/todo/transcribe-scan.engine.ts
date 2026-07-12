@@ -9,7 +9,7 @@ import { listRepoFolders, getRepoConfig, repoIdFromPath } from "../store-model/u
 import { listStorageIds, getStorageRow } from "../storage/storage.service.js";
 import { readStorageIndex } from "../storage/tracking.service.js";
 import { log } from "../../shared/logging.js";
-import { batchFileName, slugify, writeBatch } from "./todo-batches.store.js";
+import { batchFileName, slugify, writeBatch, removeStaleTranscribeBatches } from "./todo-batches.store.js";
 
 function resolveRoot(p: string | undefined | null): string | null {
   if (!p) return null;
@@ -71,9 +71,12 @@ function buildTranscribeDoc(
 export function scanAll(): { batches: number; candidates: number } {
   let batches = 0;
   let candidates = 0;
+  const written = new Set<string>(); // transcribe files re-written this run — everything else is stale
   const emit = (doc: TodoBatchDoc | null): void => {
     if (!doc) return;
-    writeBatch(doc, batchFileName(doc.scope, doc.storageName, "transcribe"));
+    const file = batchFileName(doc.scope, doc.storageName, "transcribe");
+    writeBatch(doc, file);
+    written.add(file);
     batches += 1;
     candidates += doc.items.length;
   };
@@ -95,6 +98,9 @@ export function scanAll(): { batches: number; candidates: number } {
   } catch (e) {
     log.warn("todo", `transcribe scan failed: ${(e as Error).message}`);
   }
+  // Recalculate-and-replace: drop any transcribe batch not re-written this run, so a storage that no
+  // longer has transcribable files stops surfacing a phantom transcribe slug (transcribe_calc_engine §5).
+  removeStaleTranscribeBatches(written);
   log.info("todo", `transcribe scan complete — ${batches} batch(es), ${candidates} candidate(s)`);
   return { batches, candidates };
 }

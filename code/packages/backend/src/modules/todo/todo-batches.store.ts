@@ -100,3 +100,20 @@ export function removeStaleTodoBatches(keep: Set<string>): void {
     }
   }
 }
+
+/** Delete stale TRANSCRIBE batch files (kind:transcribe only) not written by the latest transcribe scan —
+ *  the transcribe engine's own "recalculate-and-replace" cleanup. Without this, a storage that drops to
+ *  zero transcribable files keeps its old `_transcribe_2_do.yaml` on disk, so a phantom transcribe slug
+ *  surfaces forever (transcribe_calc_engine.mdx §4/§5 AC #5). Mirrors removeStaleTodoBatches, scoped to
+ *  transcribe files. */
+export function removeStaleTranscribeBatches(keep: Set<string>): void {
+  for (const file of listBatchFiles()) {
+    if (!isTranscribeFile(file)) continue; // only transcribe batches
+    if (keep.has(file)) continue;
+    try {
+      fs.unlinkSync(path.join(resolveTodoBatchesDir(), file));
+    } catch (e) {
+      log.warn("todo", `could not remove stale transcribe batch ${file}: ${(e as Error).message}`);
+    }
+  }
+}

@@ -141,7 +141,11 @@ export function DevicesPage() {
     },
   ];
 
-  const otherCount = rows.filter((d) => !d.isSelf).length;
+  const others = rows.filter((d) => !d.isSelf);
+  const otherCount = others.length;
+  // §10.8.1 — the green "backed up" reassurance must NOT fire when every peer is stale/offline. A peer
+  // counts as carrying live copies only if it's been seen recently (seenHealth !== "neutral" = within 7d).
+  const freshOthers = others.filter((d) => seenHealth(d.lastSeen) !== "neutral").length;
 
   return (
     // Full-page-height (repos.mdx §3.3.1): flex column so the devices table fills to the bottom.
@@ -158,13 +162,20 @@ export function DevicesPage() {
           sub="Your files live only on this machine. Add a second computer so they're backed up across devices."
         />
       ) : (
-        otherCount > 0 && (
+        otherCount > 0 &&
+        (freshOthers > 0 ? (
           <StatusBanner
             state="ok"
             headline={`${otherCount} other computer${otherCount === 1 ? "" : "s"} keep${otherCount === 1 ? "s" : ""} copies of your files`}
             sub="Your pinned files are backed up across these machines."
           />
-        )
+        ) : (
+          <StatusBanner
+            state="warn"
+            headline={`${otherCount} other computer${otherCount === 1 ? "" : "s"}, but none seen recently`}
+            sub="None of your other computers have checked in lately, so your files may not be backed up right now. Bring one online, or check its Large File Bridge background sync."
+          />
+        ))
       )}
 
       <DataTable
