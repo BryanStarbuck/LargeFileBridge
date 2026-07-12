@@ -146,8 +146,14 @@ todoRouter.post("/batches/:id/apply", async (req, res) => {
           if (g.gitignore) result.gitignored += g.paths.length;
         }
         if (pullDown.length) {
-          const r = await pullMissing(root, pullDown, { compress: false, by });
-          result.pins += r.pulled;
+          // Fire-and-forget: Apply must return immediately and never run the fetch inline in the request
+          // (job_queue.mdx §4b / processing.mdx §4.2) — a large-file pull can take minutes. The pull runs
+          // in the background; failures are logged. result.pins counts the QUEUED pulls (the async
+          // hand-off), not the settled count.
+          void pullMissing(root, pullDown, { compress: false, by }).catch((e) =>
+            log.error("todo", `pull-down for ${req.params.id} failed: ${(e as Error).message}`),
+          );
+          result.pins += pullDown.length;
           for (const p of pullDown) acted.add(p);
         }
       }
