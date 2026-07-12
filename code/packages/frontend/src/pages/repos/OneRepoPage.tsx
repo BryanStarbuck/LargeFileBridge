@@ -6,7 +6,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
-import { RefreshCw, Settings, ChevronLeft, Network, Users, Clock, Ban } from "lucide-react";
+import { RefreshCw, Settings, ChevronLeft, Network, Users, Clock, Ban, CircleSlash } from "lucide-react";
 import { toast } from "sonner";
 import type { FileRow, Decision, RepoDetail, PinCounts, PinNowResult } from "@lfb/shared";
 import { formatBytes, viewerRouteForName } from "@lfb/shared";
@@ -19,6 +19,7 @@ import { PageActions, producingActions } from "../../components/menu/PageActions
 import { compressAllVideos, compressAllImages, gitIgnoreBig } from "../../components/menu/domainActions.js";
 import type { ActionScope } from "../../lib/pageActions.js";
 import { PinToggle } from "../../components/PinToggle.js";
+import { DecisionToggle } from "../../components/decision/DecisionToggles.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { StatusBanner, FixButton } from "../../components/ui/StatusBanner.js";
 import { Tooltip } from "../../components/ui/Tooltip.js";
@@ -92,6 +93,18 @@ export function OneRepoPage() {
     onSuccess: (d: RepoDetail) => qc.setQueryData(["repo", repoId], d),
     onError: (e: Error) => {
       clientLog.error("OneRepoPage.setDecision", e);
+      toast.error(e.message);
+    },
+  });
+
+  // Two-axis write for the inline decision toggles (decision_toggles.mdx §2). Flipping ONE axis sends
+  // BOTH values so the other axis is preserved (a bare single-axis write would clobber it).
+  const setAxes = useMutation({
+    mutationFn: ({ paths, ipfs, gitignore }: { paths: string[]; ipfs: boolean; gitignore: boolean }) =>
+      api.setFileDecisions(repoId, paths, { ipfs, gitignore }),
+    onSuccess: (d: RepoDetail) => qc.setQueryData(["repo", repoId], d),
+    onError: (e: Error) => {
+      clientLog.error("OneRepoPage.setAxes", e);
       toast.error(e.message);
     },
   });
@@ -189,13 +202,36 @@ export function OneRepoPage() {
             <PinToggle
               pinned={pinned}
               disabled={ipfsDown || blockedByNeverIpfs}
+              // Two-axis write preserving the git-ignore axis (decision_toggles.mdx §2).
               onToggle={() =>
-                setDecision.mutate({ paths: [f.path], decision: pinned ? "ignore" : "sync" })
+                setAxes.mutate({ paths: [f.path], ipfs: !pinned, gitignore: !!f.gitignore })
               }
             />
           </span>
         );
       },
+    },
+    {
+      // The Add-to-git-ignore (⊘) decision toggle (decision_toggles.mdx / one_repo.mdx §4.5.1). Every row
+      // here is under this repo, so the ignore axis always applies (never N/A). Solid orange = git-ignored.
+      id: "gitignore",
+      header: "Ignore",
+      kind: "text",
+      sortable: false,
+      filterable: false,
+      accessor: () => "",
+      cell: (f) => (
+        <span onClick={(e) => e.stopPropagation()}>
+          <DecisionToggle
+            state={f.gitignore ? "on" : "off"}
+            title="Add to git ignore"
+            onToggle={() =>
+              setAxes.mutate({ paths: [f.path], ipfs: f.decision === "sync", gitignore: !f.gitignore })
+            }
+            glyph={<CircleSlash className="h-2.5 w-2.5" strokeWidth={2.5} />}
+          />
+        </span>
+      ),
     },
     {
       id: "path",

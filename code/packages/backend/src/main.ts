@@ -23,6 +23,7 @@ import { compressRouter } from "./modules/compress/compression.router.js";
 import { transcribeRouter } from "./modules/transcribe/transcribe.router.js";
 import { describeRouter } from "./modules/describe/describe.router.js";
 import { gitRouter } from "./modules/git/gitignore.router.js";
+import { todoRouter } from "./modules/todo/todo.router.js";
 import { healthRouter } from "./modules/health/health.router.js";
 import { progressRouter } from "./modules/progress/progress.router.js";
 import { securityRouter } from "./modules/security/security.router.js";
@@ -161,6 +162,7 @@ async function main(): Promise<void> {
   app.use("/api/transcribe", transcribeRouter); // transcription engine: tools/file/batch/tree/storage (Transcribe.mdx)
   app.use("/api/describe", describeRouter); // AI description: providers/file/prompt (ai_description.mdx)
   app.use("/api/git", gitRouter); // Git Ignore engine: /ignore/plan + /ignore/apply (git_ignore.mdx §6)
+  app.use("/api/todo", todoRouter); // To Do page: per-storage batches, dismiss, apply, transcribe-scan (to_do.mdx)
   app.use("/api/internal", internalRouter);
   app.use("/api/client-log", clientLogRouter); // browser fault trail -> shared logger -> error.err
 

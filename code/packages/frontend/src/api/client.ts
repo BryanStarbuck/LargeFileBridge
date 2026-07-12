@@ -82,6 +82,10 @@ import type {
   AiCredentialsInfo,
   EnqueuePlan,
   DecisionPolicyDoc,
+  TodoBatchSummary,
+  TodoBatchDetail,
+  TodoApplyResult,
+  TranscribeScanResult,
 } from "@lfb/shared";
 import { http, unwrap } from "./axios.js";
 
@@ -355,6 +359,17 @@ export const api = {
     unwrap<CommunityStorageMath>(http.put("/communities/budget", { bytes })),
   patchCommunity: (id: string, patch: CommunitySubscriptionPatch) =>
     unwrap<CommunitySubscription>(http.patch(`/communities/${id}`, patch)),
+
+  // To Do (to_do.mdx). The per-storage TO DO Batches with work (slug summaries), one batch's items (the
+  // popup), dismiss (red trash — never deletes files), apply the checked recommendations, and the
+  // on-demand "Show what could be transcribed" scan.
+  todoBatches: () => unwrap<TodoBatchSummary[]>(http.get("/todo/batches")),
+  todoBatch: (id: string) => unwrap<TodoBatchDetail>(http.get(`/todo/batches/${encodeURIComponent(id)}`)),
+  dismissTodoBatch: (id: string) =>
+    unwrap<{ dismissed: boolean }>(http.delete(`/todo/batches/${encodeURIComponent(id)}`)),
+  applyTodoBatch: (id: string, paths?: string[]) =>
+    unwrap<TodoApplyResult>(http.post(`/todo/batches/${encodeURIComponent(id)}/apply`, paths ? { paths } : {})),
+  transcribeScan: () => unwrap<TranscribeScanResult>(http.post("/todo/transcribe-scan", {})),
 
   // Media viewer (media_viewer.mdx §2). grant → a short-lived same-origin URL the <img>/<video>
   // element loads (Range-capable); probe → best-effort container/codec/dimensions.

@@ -62,6 +62,15 @@ export function Sidebar({ user }: { user: CurrentUser }) {
     if (pinningReposError) clientLog.error("Sidebar.pinningRepos", pinningReposError);
   }, [pinningReposError]);
 
+  // The To Do count badge (to_do.mdx §2): how many non-dismissed batches have work. Shares the page's
+  // ["todo","batches"] cache; a stale time keeps it from re-walking on every navigation.
+  const { data: todoBatches } = useQuery({
+    queryKey: ["todo", "batches"],
+    queryFn: api.todoBatches,
+    staleTime: 60_000,
+  });
+  const todoCount = todoBatches?.length ?? 0;
+
   return (
     <aside
       className="flex flex-col h-full border-r bg-white"
@@ -100,6 +109,14 @@ export function Sidebar({ user }: { user: CurrentUser }) {
               >
                 <NavIcon name={item.icon} className="h-4 w-4" />
                 <span className="flex-1">{item.label}</span>
+                {item.id === "todo" && todoCount > 0 && (
+                  <span
+                    className="rounded-full px-1.5 text-xs font-medium text-white"
+                    style={{ background: "var(--lfb-primary)" }}
+                  >
+                    {todoCount}
+                  </span>
+                )}
                 {isIpfs && onIpfs && pinningRepos.length > 0 && (
                   <NavIcon name="ChevronDown" className="h-3.5 w-3.5 text-black/40" />
                 )}

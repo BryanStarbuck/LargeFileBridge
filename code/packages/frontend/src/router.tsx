@@ -100,6 +100,12 @@ const scansRoute = createRoute({
   path: "/scans",
   component: lazyRouteComponent(() => import("./pages/scans/ScansPage.js"), "ScansPage"),
 });
+// The To Do page (to_do.mdx): the aggregated per-storage batch slugs. left_bar.yaml routes "To Do" here.
+const todoRoute = createRoute({
+  getParentRoute: () => appLayout,
+  path: "/todo",
+  component: lazyRouteComponent(() => import("./pages/todo/TodoPage.js"), "TodoPage"),
+});
 const allowListRoute = createRoute({
   getParentRoute: () => appLayout,
   path: "/settings/allow-list",
@@ -191,6 +197,7 @@ const routeTree = rootRoute.addChildren([
     ipfsOffRoute,
     ipfsPinsRoute,
     scansRoute,
+    todoRoute,
     allowListRoute,
     settingsRoute,
     toolsRoute,

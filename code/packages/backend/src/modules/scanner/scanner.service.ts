@@ -212,6 +212,16 @@ export async function scanAll(
   );
   progress.unitDone(computerCount);
 
+  // TO DO recalc stage (to_do_batch_calc_engine.mdx §1): with discovery + classification done, rebuild
+  // the per-storage recommendation batches that power the To Do page slugs and most warnings. Imported
+  // lazily to avoid any static import cycle; best-effort — it never blocks or fails the scan.
+  try {
+    const { recalcAll } = await import("../todo/todo-batch.engine.js");
+    await recalcAll();
+  } catch (e) {
+    log.warn("scan", `TO DO recalc stage failed: ${(e as Error).message}`);
+  }
+
   progress.setPhase("done");
   log.info("scan", `Scan (${source}) complete.`);
 }

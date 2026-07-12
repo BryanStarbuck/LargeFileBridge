@@ -238,6 +238,9 @@ function composeFileRows(
       decidedBy: prov?.decidedBy ?? null,
       decidedAt: prov?.decidedAt ?? null,
       neverIpfs,
+      // The git-ignore axis, folded from the shared ledger (decisions.mdx §1) — drives the inline
+      // Add-to-git-ignore (⊘) toggle independently of the IPFS-axis `decision`.
+      gitignore: prov?.gitignore ?? false,
     };
   });
 }

@@ -63,6 +63,10 @@ export interface FileRow {
   // Sticky "Never IPFS" flag (menus.mdx §6.6, decisions.mdx §17). When true the Add-to-IPFS decision axis
   // is forbidden — the UI disables/forces-off the IPFS checkbox and the write path rejects ipfs:true.
   neverIpfs?: boolean;
+  // Current git-ignore decision axis (decisions.mdx §1), folded from the shared ledger. True = the file
+  // is git-ignored; false = undecided or explicitly off. Drives the inline Add-to-git-ignore (⊘) toggle
+  // (decision_toggles.mdx). Independent of `decision` (which is the IPFS-axis projection).
+  gitignore?: boolean;
 }
 
 // One file a peer computer pinned that THIS computer is missing — the subject of the "pull them down"
