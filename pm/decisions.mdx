@@ -347,6 +347,12 @@ ones in [one_repo.mdx](./one_repo.mdx) and [menus.mdx](./menus.mdx), only what t
   and *Git ignore* each append a record. The sticky **Never IPFS** flag
   ([menus.mdx §6.6](./menus.mdx)) is a *stronger* statement than a decision (it forbids `ipfs: true`) and
   is unchanged; a decision never overrides a Never-IPFS flag.
+* **The two inline decision toggles** ([decision_toggles.mdx](./decision_toggles.mdx)) — the per-row
+  **Add-to-IPFS** and **Add-to-git-ignore (⊘)** toggle-checkboxes shown in the One-repo table, the File
+  System columns, and the warning / To-Do batch popups. A click writes **one axis** through the same funnel
+  below; a **RECOMMENDED** (dashed) toggle is a [To-Do Batch Calc Engine](./to_do_batch_calc_engine.mdx)
+  suggestion for an **Undecided** file — clicking it is the decision, so a suggestion never writes the
+  ledger until the user confirms.
 
 All of these call the one write path so the record's `asked`/`decided_by`/`decided_at`/`sid` are stamped uniformly, in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files` (accepts `{ paths, ipfs?, gitignore? }`, calls `recordDecision()` per path) — the single funnel `api.setDecision` and the bulk/menu actions all target.

@@ -203,7 +203,9 @@ Identical to the standard toolbar ([Repos §3.1](./repos.mdx)):
 | 0 | **☐ select** | — | — | — | Row checkbox; header checkbox selects the current page (for bulk decisions). |
 | 1 | **File** | text | ✓ | ✓ (contains) | Path relative to the repo root; directory prefix muted, filename bold. |
 | 2 | **Size** | int (bytes) | ✓ | ✓ | Human-readable (`8.2 GB`), right-aligned; sorts/filters on raw bytes. |
-| 3 | **Decision** | enum | ✓ | ✓ | A **`[Pin ▾]` inline select** — Add to IPFS (pin) / Ignore / Undecided (§4.5). `filterOptions` = the three decision values (`sync`/`ignore`/`undecided`). |
+| 3 | **Pin** | toggle | ✓ | ✓ | The **Add-to-IPFS decision toggle** ([decision_toggles.mdx](./decision_toggles.mdx)) — solid orange = pinned; dashed orange = the [To-Do calc engine](./to_do_batch_calc_engine.mdx) recommends pinning it; white/grey = off. Writes the `sync` axis on click (§4.5.1). |
+| 3b | **Ignore** | toggle | ✓ | ✓ | The **Add-to-git-ignore decision toggle** (⊘, [decision_toggles.mdx](./decision_toggles.mdx)) — solid orange = git-ignored; dashed = recommended; white/grey = off. Repo-scoped (always present here, since every row is under this repo). Writes the git-ignore axis on click (§4.5.1). |
+| 3c | **Decision** | enum | ✓ | ✓ | A **`[Pin ▾]` inline select** — Add to IPFS (pin) / Ignore / Undecided (§4.5) — the labelled equivalent of the Pin toggle, kept for users who prefer the list. `filterOptions` = the three decision values (`sync`/`ignore`/`undecided`). |
 | 4 | **Status** | enum | ✓ | ✓ | `transfer` status pill (§4.6); `—` for files not marked Add to IPFS (pin). |
 | 5 | **Peers** | int | ✓ | ✓ | How many of your computers hold this file. `0` on an **Add-to-IPFS (pin)** file renders red (not backed up yet). |
 | 6 | **CID** | text | ✓ | ✓ | IPFS content id (monospace, middle-truncated, click to copy); blank until the file is an Add-to-IPFS (pin) file with a CID. |
@@ -276,6 +278,26 @@ appears when a filter is active, to act on the entire filtered set, not just the
 
 Bulk-writing one decision across the selected rows is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` bulk menu (mutated via `setDecision`)
+
+### 4.5.1 The two decision-toggle columns — Pin + Ignore (LOCKED)
+
+Every row shows the **two-axis decision as two inline toggle-checkboxes** — a **Pin** toggle (Add to IPFS)
+and, to its right, an **Ignore** toggle (⊘, Add to git ignore). They are the always-visible, one-click way
+to set each axis; the full visual grammar (four render states — OFF white/grey-edge · ON solid-orange ·
+**RECOMMENDED** dashed-orange · N/A) and the single-axis write behavior are owned by
+**[decision_toggles.mdx](./decision_toggles.mdx)**. Here on the One-repo table:
+
+* Both toggles render on **every** row — the Ignore toggle is never N/A here, because every file in this
+  table is under **this** repo ([decision_toggles.mdx §4](./decision_toggles.mdx#4-the-git-ignore-toggle-is-repo-scoped-locked)).
+* A **RECOMMENDED** (dashed) toggle marks an **Undecided** file the [To-Do Batch Calc Engine](./to_do_batch_calc_engine.mdx)
+  thinks should be pinned / ignored — one click confirms it.
+* Clicking a toggle writes **that axis only** to the team-shared `.lfbridge/decisions.yaml`
+  ([decisions.mdx §3](./decisions.mdx)) via the same `setDecision` mutation the inline **Decision** select
+  uses (§4.5), and carries out that axis's effect (pin/unpin; `.gitignore` write via [git_ignore.mdx](./git_ignore.mdx)).
+  It never deletes local bytes and it stops click propagation (never navigates).
+
+The Pin/Ignore toggle columns are rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (the `pin` and `ignore` `LfbColumn`s mounting `DecisionToggle`; write via `setDecision`).
 
 ### 4.5 The Decision select (per row) — the core interaction
 
@@ -355,8 +377,11 @@ The per-row `decidedBy` / `decidedAt` (joined from the folded shared ledger) tha
    with the standard control row (search left; icon-only filter `⛛` and sort dropdowns right) and
    columns: select, File, Size, Decision, Status, Peers, CID, Changed, and a trailing **`⋮`** kebab.
 5. **Pagination defaults to 500**; the **file count** shows left of the pager.
-6. The **Decision** cell is a per-row inline select (Add to IPFS (pin) / Ignore / Undecided) that writes
-   immediately per §4.5; changing a decision never deletes the user's local file.
+6. Each row shows the **two decision-toggle columns** — **Pin** (Add to IPFS) and **Ignore** (⊘, Add to
+   git ignore) — per [decision_toggles.mdx](./decision_toggles.mdx) (four render states incl. **RECOMMENDED**
+   dashed-orange for calc-engine suggestions), alongside the labelled **Decision** select; both write
+   immediately per §4.5 / §4.5.1, write only their own axis to the team-shared ledger, and never delete the
+   user's local file.
 7. **Bulk actions** (`⋮`, enabled on selection) set Add to IPFS (pin) / Ignore / Undecided across
    selected rows and can Pin-now the selected `sync`-decision files; the header checkbox selects the
    page, with a "select all matching" affordance under an active filter.

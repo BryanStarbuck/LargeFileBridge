@@ -11,7 +11,7 @@
 // with atomic temp-then-rename (storage.mdx §15).
 import fs from "node:fs";
 import path from "node:path";
-import { ManifestSchema, UnitStatusSchema, type Manifest, type ManifestFile, type UnitStatus, type Decision, type PinCounts } from "@lfb/shared";
+import { ManifestSchema, UnitStatusSchema, mediaKindForName, type Manifest, type ManifestFile, type UnitStatus, type Decision, type PinCounts, type MissingPinnedFile } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import {
   listRepoFolders,
@@ -34,6 +34,9 @@ import { readStorageIndex } from "../storage/tracking.service.js";
 import { writeSelfDevice, resolveGraftedPath } from "../storage/devices.service.js";
 import { getStoragePinned, readMappedDirsForRoot, getGitBackboneRemote } from "../storage/storage-settings.service.js";
 import { GitBackbone, type GitCycleResult } from "../git/git.service.js";
+import { appendFileEvent, readSidecar } from "../storage/file-sidecar.service.js";
+import { appendHistory } from "../storage/history-log.service.js";
+import { enqueue } from "../jobqueue/jobqueue.service.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { responsiveBudget } from "../../shared/concurrency.js";
 import { log } from "../../shared/logging.js";
@@ -607,6 +610,172 @@ function setPinClaim(entry: ManifestFile, label: string, pinned: boolean): void 
 function markUnitError(t: UnitTarget, msg: string): void {
   t.writeStatus({ ...t.status, last_error: msg });
   log.warn("pin", `${t.name}: ${msg}`);
+}
+
+// ── "A computer of yours pinned files this one doesn't have — pull them down" (warnings.mdx §10.8.12) ──
+// The user-facing surface for the background reconcile (pin_process.mdx §5): a repo that arrived via the git
+// backbone carries a committed manifest listing every large file → CID, but the BYTES for some of those files
+// are pinned only on ANOTHER of the user's computers and are not here yet. These two functions detect that gap
+// and pull the bytes down over IPFS on demand.
+
+/** The local pinset as a CID set — best-effort. IPFS down / unreachable → EMPTY set (never throws), which
+ *  makes every manifest CID read as "not pinned here" so nothing is silently hidden from the pull prompt. */
+async function pinnedCidSet(): Promise<Set<string>> {
+  try {
+    return new Set((await ipfs.listPins()).map((p) => p.cid));
+  } catch (e) {
+    log.warn("pin", `listPins failed (treating pinset as empty): ${(e as Error).message}`);
+    return new Set();
+  }
+}
+
+/**
+ * Resolve the peer device that added/pinned a file we don't have yet — for the "added by {device}" row copy.
+ * The manifest's `pinned_by` records which devices claim the CID; since the bytes are absent HERE, this
+ * computer is (almost) never in that list, so the first entry that isn't us is the peer. Falls back to the
+ * peer's per-file sidecar `first_seen.on_device` when the manifest carries no claim, else null (§10.8.12 B).
+ */
+function resolveAddedBy(repoRoot: string, entry: ManifestFile, selfLabel: string): string | null {
+  const peer = entry.pinned_by.find((d) => d && d !== selfLabel);
+  if (peer) return peer;
+  try {
+    const sc = readSidecar(repoRoot, entry.path);
+    const dev = sc?.file.first_seen?.on_device;
+    if (dev && dev.trim() && dev !== selfLabel) return dev;
+  } catch {
+    /* sidecar absent/unreadable — fall through to null */
+  }
+  return null;
+}
+
+/**
+ * List the files a PEER computer of the user's pinned that THIS computer is missing (warnings.mdx §10.8.12 A).
+ * Joins the COMMITTED manifest (arrived via the git backbone) against the local working tree (`fs.existsSync`)
+ * and the running IPFS node's pinset. A file QUALIFIES when it is missing on disk here AND its manifest CID is
+ * NOT pinned on this node — i.e. a peer pinned it, its identity travelled in the manifest, but its bytes are
+ * not here yet. A manifest entry with NO cid is not a candidate (nothing to pull); a stray media file that is
+ * not in the manifest is likewise not one (it was never a shared large file). Best-effort and NON-throwing:
+ * a corrupt/half-merged manifest or a down IPFS node yields [] (or an empty pinset), never an exception.
+ */
+export async function missingPinnedFromPeers(repoRoot: string): Promise<MissingPinnedFile[]> {
+  let manifest: Manifest;
+  try {
+    manifest = readCommittedManifest(repoRoot); // throws on a merge-conflicted/corrupt committed list
+  } catch (e) {
+    log.warn("pin", `missingPinnedFromPeers: cannot read committed manifest for ${repoRoot}: ${(e as Error).message}`);
+    return [];
+  }
+  const pinset = await pinnedCidSet();
+  const selfLabel = computerLabel();
+  const out: MissingPinnedFile[] = [];
+  for (const entry of manifest.files) {
+    if (!entry.cid) continue; // no CID → nothing to pull
+    const abs = path.join(repoRoot, entry.path);
+    if (fs.existsSync(abs)) continue; // already on disk here → not missing
+    if (pinset.has(entry.cid)) continue; // already pinned on this node → bytes are here
+    out.push({
+      path: entry.path,
+      name: path.basename(entry.path),
+      sizeBytes: entry.size,
+      cid: entry.cid,
+      addedByDevice: resolveAddedBy(repoRoot, entry, selfLabel),
+    });
+  }
+  return out;
+}
+
+/**
+ * Pull the checked peer-pinned files down over IPFS (warnings.mdx §10.8.12 C). For each checked repo-relative
+ * path we look up its manifest CID and PIN it on this node — pinning FETCHES the bytes over IPFS; we never
+ * re-add the bytes (no new CID). We then materialize those already-pinned bytes to the repo working tree
+ * (`ipfs.catToFile`, the same byte placement the regular pin pass's fetch-missing does) so the file is a real
+ * on-disk copy here — which is also what lets the optional compress pass read it. When `opts.compress` is set,
+ * each pulled file is handed to the background compress queue (jobqueue) AFTER its bytes land. Every pulled
+ * file gets a `pull` + `ipfs_pin` event in its sidecar and a `PULL` line in this computer's history log
+ * (repo_tracking_scheme.mdx §3.2/§4), guarded so a tracking write never fails the pull. NOT destructive — it
+ * only ADDS local copies. Returns { pulled, failed } counts.
+ */
+export async function pullMissing(
+  repoRoot: string,
+  checkedPaths: string[],
+  opts: { compress?: boolean; by?: string | null } = {},
+): Promise<{ pulled: number; failed: number }> {
+  let manifest: Manifest;
+  try {
+    manifest = readCommittedManifest(repoRoot);
+  } catch (e) {
+    log.warn("pin", `pullMissing: cannot read committed manifest for ${repoRoot}: ${(e as Error).message}`);
+    return { pulled: 0, failed: checkedPaths.length };
+  }
+  const byPath = new Map(manifest.files.map((f) => [f.path, f]));
+  const pinset = await pinnedCidSet();
+  const by = opts.by ?? null;
+  let pulled = 0;
+  let failed = 0;
+
+  // Bounded fan-out through the same global IPFS limiter the pin pass uses, so many pulls don't stampede
+  // the daemon. Each file's failure is contained; one bad CID never fails the rest.
+  await Promise.all(
+    checkedPaths.map((rel) =>
+      ipfsLimiter.run(async () => {
+        const entry = byPath.get(rel);
+        if (!entry || !entry.cid) {
+          failed++;
+          log.warn("pin", `pullMissing: no manifest CID for ${rel} in ${repoRoot} — skipping`);
+          return;
+        }
+        const abs = path.join(repoRoot, entry.path);
+        try {
+          if (!pinset.has(entry.cid)) {
+            await ipfs.pinAdd(entry.cid); // fetch + hold the bytes locally (does NOT re-add / mint a new CID)
+            pinset.add(entry.cid);
+          }
+          if (!fs.existsSync(abs)) {
+            await ipfs.catToFile(entry.cid, abs); // write the pinned bytes to the working tree (a real copy)
+          }
+          pulled++;
+          log.info("pin", `Pulled ${rel} <- ${entry.cid} (added by ${entry.pinned_by.find((d) => d !== computerLabel()) ?? "a peer"})`);
+        } catch (e) {
+          failed++;
+          log.warn("pin", `pullMissing: pull failed for ${rel} (${entry.cid}): ${(e as Error).message}`);
+          return;
+        }
+
+        // Best-effort tracking writes (repo_tracking_scheme.mdx §3.2/§4) — never let a sidecar/history write
+        // fail an otherwise-successful pull. on_device defaults to this computer inside appendFileEvent.
+        try {
+          appendFileEvent(repoRoot, rel, { kind: "pull", by });
+          appendFileEvent(repoRoot, rel, { kind: "ipfs_pin", by, cid: entry.cid });
+          appendHistory(repoRoot, {
+            verb: "PULL",
+            by,
+            fields: { cid: entry.cid, size: entry.size },
+            summary: `Pulled ${path.basename(rel)} down over IPFS`,
+          });
+        } catch (e) {
+          log.warn("pin", `pullMissing: tracking write skipped for ${rel}: ${(e as Error).message}`);
+        }
+
+        // Optional compress axis (§10.8.12 B/C): now that the bytes are on disk, hand the file to the
+        // background compress queue. Only images/videos compress; anything else is left as-is. Recoverable
+        // "trash" disposition (compression.mdx §8 default) so an original is never hard-deleted here.
+        if (opts.compress) {
+          const kind = mediaKindForName(path.basename(rel));
+          const mediaKind = kind === "image" ? "image" : kind === "video" ? "video" : null;
+          if (mediaKind) {
+            try {
+              enqueue([{ op: "compress", path: abs, overwrite: false, compress: { deleteOriginal: "trash", mediaKind } }]);
+            } catch (e) {
+              log.warn("pin", `pullMissing: could not enqueue compress for ${rel}: ${(e as Error).message}`);
+            }
+          }
+        }
+      }),
+    ),
+  );
+
+  log.info("pin", `pullMissing ${path.basename(repoRoot)}: pulled ${pulled}, failed ${failed} (compress=${Boolean(opts.compress)}).`);
+  return { pulled, failed };
 }
 
 function expandHome(p: string): string {

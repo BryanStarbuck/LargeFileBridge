@@ -6,6 +6,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import type {
   CompressionSettings,
   CompressMediaPrefs,
@@ -16,6 +17,7 @@ import type {
   DeleteOriginalMode,
   CompressInsideRequest,
   CompressInsidePlan,
+  PerceptualFingerprint,
 } from "@lfb/shared";
 import { mediaKindForName } from "@lfb/shared";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
@@ -23,6 +25,11 @@ import { expandHome, compressInfo } from "../fs/badges.js";
 import { resolveStateDir, ensureDir } from "../../config/state-dir.js";
 import { findStorageRootForPath } from "../storage/storage.service.js";
 import { writeCompressionRecord } from "../storage/analysis.service.js";
+import { fingerprintImage, fingerprintVideo } from "../media/perceptual.service.js";
+import { appendFileEvent, type SidecarSeed, type FileEventInput } from "../storage/file-sidecar.service.js";
+import { appendHistory } from "../storage/history-log.service.js";
+import { restampOnTransform } from "../storage/decisions.service.js";
+import { repoIdFromPath, folderForRepoId } from "../store-model/units.service.js";
 import { HARD_SKIP, isMacPackageDir } from "../../shared/scan-filters.js";
 import { enqueue, createBatch } from "../jobqueue/jobqueue.service.js";
 import { log } from "../../shared/logging.js";
@@ -453,6 +460,70 @@ function fail(pathOut: string, reason: string, status: CompressResult["status"] 
   return { path: pathOut, status, reason, beforeBytes, afterBytes: null, codec: null };
 }
 
+// ── §8.0 before/after capture (LOCKED) ──────────────────────────────────────────
+// The EXACT content hash + size we record on the sidecar `before`/`after`. This mirrors the tracking
+// fingerprint scheme (storage/tracking.service.ts — files.yaml `hash`: sha256 of size + mtime + head/tail
+// 64 KiB, truncated to 32 hex) so a compress event's before/after hashes are directly comparable to what
+// the tracking index stores. We do NOT invent a new hash — reusing the tracking scheme keeps one identity.
+const FINGERPRINT_CHUNK = 64 * 1024;
+function exactHashAndSize(abs: string): { hash: string | null; size: number | null } {
+  try {
+    const st = fs.statSync(abs);
+    const h = crypto.createHash("sha256");
+    h.update(String(st.size));
+    h.update(String(Math.round(st.mtimeMs)));
+    const fd = fs.openSync(abs, "r");
+    try {
+      const headLen = Math.min(FINGERPRINT_CHUNK, st.size);
+      if (headLen > 0) {
+        const head = Buffer.alloc(headLen);
+        fs.readSync(fd, head, 0, headLen, 0);
+        h.update(head);
+      }
+      if (st.size > FINGERPRINT_CHUNK) {
+        const tailLen = Math.min(FINGERPRINT_CHUNK, st.size);
+        const tail = Buffer.alloc(tailLen);
+        fs.readSync(fd, tail, 0, tailLen, Math.max(0, st.size - tailLen));
+        h.update(tail);
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+    return { hash: h.digest("hex").slice(0, 32), size: st.size };
+  } catch {
+    return { hash: null, size: null };
+  }
+}
+
+// The perceptual content fingerprint of a media file (§8.0 — image on the decoded buffer, video on the
+// path). ALWAYS guarded: a fingerprint failure must NEVER abort a compress — we log and return null so the
+// event still records the exact-hash pair (the fp pair is the "content-preserved" proof, best-effort).
+async function perceptualFingerprint(abs: string, media: CompressMedia): Promise<PerceptualFingerprint | null> {
+  try {
+    if (media === "images") return await fingerprintImage(fs.readFileSync(abs));
+    if (media === "video") return await fingerprintVideo(abs);
+    return null;
+  } catch (e) {
+    log.warn("compress", `perceptual fingerprint skipped for ${abs}: ${(e as Error).message}`);
+    return null;
+  }
+}
+
+// Source codec label for the sidecar `codec.from` — probed BEFORE the transcode (the original is gone from
+// its path afterwards). For video we ask ffprobe for the stream codec_name; for images we fall back to the
+// source extension (jpeg/png/heic…). "unknown" when nothing resolves.
+function sourceCodecLabel(abs: string, media: CompressMedia, tools: CompressTools): string {
+  if (media === "video" && tools.ffprobe) {
+    const r = run("ffprobe", [
+      "-v", "error", "-select_streams", "v:0",
+      "-show_entries", "stream=codec_name", "-of", "default=noprint_wrappers=1:nokey=1", abs,
+    ]);
+    const c = r.out.trim();
+    if (c) return c;
+  }
+  return path.extname(abs).replace(/^\./, "").toLowerCase() || "unknown";
+}
+
 // Per-call options (compress_inside.mdx §4). `forceVideoCodec` pins the output codec (the viewer's
 // compatibility convert); `deleteOriginal` OVERRIDES the global recoverable-by-default disposition for
 // THIS file only ("hard" = unlink, "trash" = recoverable). Both optional; omitting keeps prior behavior.
@@ -465,6 +536,10 @@ export interface CompressFileOpts {
   // lone file uses the tool's own all-core default. Fed to ffmpeg -threads / oxipng --threads /
   // cwebp multi-thread on-off / magick -limit thread below.
   threads?: number;
+  // The acting user's allow-listed email (§8.0 / decisions.mdx §14) — stamped as the sidecar event's `by`
+  // and the history line's actor, and the decider on a format-change re-stamp. OMITTED for a background/
+  // system compress with no session (→ null): the writers auto-stamp `on_device` regardless.
+  by?: string | null;
 }
 
 export async function compressFile(input: string, opts?: CompressFileOpts | string): Promise<CompressResult> {
@@ -502,6 +577,13 @@ export async function compressFile(input: string, opts?: CompressFileOpts | stri
     : pickVideoTarget(prefs, tools, srcExt, forceVideoCodec);
   if ("toolMissing" in plan) return fail(abs, `needs ${plan.toolMissing}`, "failed", beforeBytes);
   if ("skip" in plan) return fail(abs, plan.skip, "skipped", beforeBytes);
+
+  // §8.0 — capture the BEFORE state FIRST, before we touch a byte: the original's exact content hash + size
+  // and (video/image) its perceptual fingerprint, plus its source codec. Once the replace (step 5) runs the
+  // original only exists in trash, so "what it was" must be recorded now. All best-effort (guarded).
+  const beforeCap = exactHashAndSize(abs);
+  const srcCodec = sourceCodecLabel(abs, media, tools);
+  const fingerprintBefore = await perceptualFingerprint(abs, media);
 
   const out = tmpOut(plan.ext);
   const inDims = media === "images" ? imageDims(abs, tools) : (videoInfo(abs, tools) && { w: videoInfo(abs, tools)!.w, h: videoInfo(abs, tools)!.h });
@@ -581,6 +663,65 @@ export async function compressFile(input: string, opts?: CompressFileOpts | stri
     }
   } catch (e) {
     log.warn("compress", `compression record skipped: ${(e as Error).message}`);
+  }
+
+  // §8.0 — capture the AFTER state on the RESULT file (exact hash + size, post perceptual fingerprint), then
+  // append ONE per-file sidecar event + a history line to the owning repo, and re-stamp any team decision
+  // across a format change. ALL best-effort (guarded): the bytes are already safely replaced by this point,
+  // so a tracking-write failure must NEVER surface as a compression failure or lose the file.
+  try {
+    const repoRoot = findStorageRootForPath(finalPath);
+    if (repoRoot) {
+      const relFinal = path.relative(repoRoot, finalPath);
+      // A format change (extension differs) is a CONVERT (PNG→JPEG / HEIC→JPEG) and moves the file to a new
+      // path; a same-extension re-encode is a COMPRESS in place. This split drives the event kind, the
+      // format:{from,to} field, and whether a decision re-stamp is needed (only when the path changes).
+      const oldExt = path.extname(abs).toLowerCase();
+      const isConvert = oldExt !== plan.ext.toLowerCase();
+
+      const afterCap = exactHashAndSize(finalPath);
+      const fingerprintAfter = await perceptualFingerprint(finalPath, media);
+
+      const seed: SidecarSeed = {
+        name: path.basename(finalPath),
+        categories: [media === "images" ? "image" : "video"],
+        size: afterCap.size ?? afterBytes,
+        hash: afterCap.hash,
+        fingerprint: fingerprintAfter,
+      };
+      const event: FileEventInput = {
+        kind: isConvert ? "convert" : "compress",
+        before: { hash: beforeCap.hash, size: beforeCap.size ?? beforeBytes },
+        after: { hash: afterCap.hash, size: afterCap.size ?? afterBytes },
+        fingerprint_before: fingerprintBefore,
+        fingerprint_after: fingerprintAfter,
+        codec: { from: srcCodec, to: plan.targetKey },
+        by: o.by ?? null,
+      };
+      if (isConvert) {
+        event.format = { from: oldExt.replace(/^\./, ""), to: plan.ext.replace(/^\./, "") };
+      }
+      appendFileEvent(repoRoot, relFinal, event, seed);
+
+      appendHistory(repoRoot, {
+        verb: isConvert ? "CONVERT" : "COMPRESS",
+        by: o.by ?? undefined,
+        summary: `${isConvert ? "Converted" : "Compressed"} ${relFinal} (${check.targetCodec}) ${srcCodec}→${plan.targetKey} ${beforeBytes}→${afterBytes} bytes`,
+      });
+
+      // §12 (decisions.mdx) — a format change moves the file to a new path, which the decision fold keys on;
+      // re-stamp the team's existing pin/ignore choice onto the new path so a decided file stays decided.
+      // Skipped for an in-place compress (same path → decision key unchanged).
+      if (isConvert) {
+        const folder = folderForRepoId(repoIdFromPath(repoRoot));
+        if (folder) {
+          const oldRel = path.relative(repoRoot, abs);
+          await restampOnTransform(folder, oldRel, relFinal, o.by ?? null);
+        }
+      }
+    }
+  } catch (e) {
+    log.warn("compress", `sidecar/history capture skipped: ${(e as Error).message}`);
   }
 
   return { path: finalPath, status: "compressed", reason: null, beforeBytes, afterBytes, codec: check.targetCodec };

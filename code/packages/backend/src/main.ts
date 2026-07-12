@@ -35,6 +35,7 @@ import { acquireSingleInstanceLock } from "./shared/single-instance.js";
 import { startWatcher, stopWatcher } from "./modules/watcher/watcher.service.js";
 import { resolveStateDir } from "./config/state-dir.js";
 import { migrateSyncToPin } from "./config/migrate-sync-to-pin.js";
+import { migrateDecisionsToLedger } from "./config/migrate-decisions-to-ledger.js";
 import { log } from "./shared/logging.js";
 
 async function bootstrapState(): Promise<void> {
@@ -112,6 +113,11 @@ async function main(): Promise<void> {
   // LaunchAgent) into the new `pin` shape BEFORE any config is read/written below. Best-effort; never
   // throws. Runs only in the instance that holds the single-instance lock.
   migrateSyncToPin(resolveStateDir());
+
+  // One-time, idempotent backfill of the SHARED per-file decision ledger from the legacy machine-local
+  // `decisions:` enum (decisions.mdx §13). Runs AFTER the sync→pin migration (it reads pin/r/<repo>/config.yaml)
+  // and is consent-aware + best-effort (never throws).
+  await migrateDecisionsToLedger();
 
   await bootstrapState();
   const cfg = getAppConfig();

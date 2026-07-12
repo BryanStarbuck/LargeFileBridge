@@ -1,0 +1,264 @@
+---
+title: LargeFileBridge — Decision Toggles (the two inline decision checkboxes)
+description: The shared inline UI for the two-axis decision — one small toggle-checkbox per axis rendered directly on a file (or directory) row wherever files are listed. The Add-to-IPFS (pin) checkbox and the Add-to-git-ignore checkbox (a circle-with-a-cross ⊘ glyph) share ONE visual grammar with FOUR render states: OFF (white fill, thin medium-grey edge), ON (medium-dark-orange fill, no edge), RECOMMENDED (white fill, dashed orange edge — a calc-engine suggestion not yet confirmed), and N/A (not rendered). Clicking a toggle writes that axis of the team-shared decision immediately. The git-ignore toggle only renders for files/dirs UNDER a repo. Used in the Repos file list, the File System columns, and the warning / To-Do batch popups. The visual companion to decisions.mdx (the two-axis ledger) and git_ignore.mdx (the .gitignore engine the ignore axis drives).
+---
+
+# LargeFileBridge — Decision Toggles
+
+Every large file the user can act on carries **two independent decisions** — **Add to IPFS (pin)** and
+**Add to git ignore** — each on/off separately ([decisions.mdx §1](./decisions.mdx#1-two-independent-axes--not-one-mutually-exclusive-choice-locked)).
+This spec defines the **one small inline control that renders each axis directly on the row**, so the
+user can flip either decision in place — in the Repos file list, in the File System columns, and inside
+the warning / To-Do batch popups — without opening a dialog.
+
+There are **two toggles**, one per axis, sitting **side by side** on the row:
+
+| # | Toggle | Axis it writes | Glyph | Shown when |
+| --- | --- | --- | --- | --- |
+| 1 | **Add-to-IPFS checkbox** (the *pin* toggle) | Add to IPFS — the `sync` decision value ([one_repo.mdx §1](./one_repo.mdx#1-the-decision-model-locked)) | the **pin** mark (the same pin used by the `P` badge, [directories.mdx §3.2](./directories.mdx#32-the-pin-badge-p--bright-pink-files-only)) | always (any large file) |
+| 2 | **Add-to-git-ignore checkbox** (the *ignore* toggle) | Add to git ignore ([git_ignore.mdx](./git_ignore.mdx)) | a **circle with a cross through it** — **⊘** | **only when the file/dir is under a Git repo** (§4) |
+
+> **Naming.** In dictation these were called "the IPFS checkbox" and "the git-ignore toggle." The
+> product truth is simpler: they are the **two axes of one decision**, drawn as two checkboxes. This
+> spec calls them the **Add-to-IPFS checkbox** and the **Add-to-git-ignore checkbox**; together they are
+> the **decision toggles**.
+
+They are **not** the same thing as the row's leading **☐ select** checkbox (which picks the row for a
+bulk action, [one_repo.mdx §4.3](./one_repo.mdx)) — the decision toggles **write a decision** the moment
+you click them.
+
+Siblings this builds on and does not repeat:
+
+* [decisions.mdx](./decisions.mdx) — the **two-axis, team-shared, attributed** ledger these toggles
+  write (who / when / SID). A click here is one **decision event** appended there.
+* [git_ignore.mdx](./git_ignore.mdx) — the `.gitignore`-writing engine the **ignore** axis drives, and
+  the pop-over the *bulk* / directory case still opens.
+* [one_repo.mdx](./one_repo.mdx) — the per-repo file table these toggles are added to (§5 here).
+* [directories.mdx](./directories.mdx) — the File System column browser + **code badges**; the toggles
+  are the *editable* counterpart of the read-only `P` (pin) and `I` (git-ignored) badges (§6 here).
+* [warnings.mdx](./warnings.mdx) / [to_do.mdx](./to_do.mdx) — the popups whose subject list renders
+  these toggles per row (§7 here).
+
+---
+
+## 1. One visual grammar, FOUR render states (LOCKED)
+
+Both toggles share **exactly one** look, so the user learns it once. A toggle is a small (16×16)
+rounded square holding its glyph, in one of **four** states:
+
+| State | Fill | Edge | Glyph | Means |
+| --- | --- | --- | --- | --- |
+| **OFF** | **white** | **thin (1px) medium-grey** line (`--lfb-toggle-off-edge` `#9ca3af`) | glyph in medium-grey | Decision is **off** — this axis is *not* applied (not pinned / not git-ignored). |
+| **ON** | **medium-dark orange** (`--lfb-decision-on` `#c2410c`), **no edge** | *none* | glyph in **white** | Decision is **on** — this axis **is** applied (pinned / git-ignored). |
+| **RECOMMENDED** | white | **dashed** orange (`--lfb-decision-on`, 1px dashed) | glyph in orange | A **calc engine suggests turning this on**, but the user has **not decided** yet ([to_do_batch_calc_engine.mdx](./to_do_batch_calc_engine.mdx)). This is the visual for **Undecided-but-recommended**. |
+| **N/A** | *(not rendered — no box at all)* | — | — | The axis does not apply here (e.g. the git-ignore toggle on a file that is **not** under a repo, §4). |
+
+The **RECOMMENDED** state is what makes the toggles teach: after a scan, a file the To-Do Batch Calc
+Engine thinks should be git-ignored shows a **dashed-orange** ⊘ before the user has touched it. One click
+fills it solid (ON) — confirming the suggestion. Clicking a solid (ON) toggle returns it to **OFF**
+(white/grey), an explicit *no*.
+
+> **Two axes → four combinations.** Because each toggle is independently OFF/ON, a single file shows one
+> of **four** combinations at a glance: pin-off/ignore-off · pin-on/ignore-off · pin-off/ignore-on ·
+> pin-on/ignore-on. The single most common LFBridge decision — *"pin it AND git-ignore it"* — is both
+> toggles solid orange.
+
+The token set and the `<DecisionToggle>` render states are defined in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/decision/DecisionToggles.tsx` —
+`DecisionToggle` (renders one axis) and `DecisionToggles` (renders the pair); tokens in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/index.css` (`--lfb-toggle-off-edge`, `--lfb-decision-on`).
+
+### 1.1 Sizing, hit-target, and pairing
+
+* Each toggle is **16×16** with an invisible **≥24×24** hit target so it is clickable on a dense table
+  row and on touch.
+* The pair renders **pin then ignore**, left to right, with a 6px gap, in a single non-wrapping cell.
+* When the ignore axis is **N/A** (§4) the pair still reserves the ignore slot's width so columns stay
+  aligned across rows (repo rows and non-repo rows line up); the slot is simply **blank**.
+
+### 1.2 It is a control cell — it never navigates (LOCKED)
+
+Wherever a row is also a deep link (the Repos file table, the File System columns), the toggle **stops
+click propagation**: clicking a toggle flips that decision and does **nothing else** — it never opens the
+file, never selects the row. This mirrors the existing rule for the inline **Decision** select and the
+**CID** copy cell ([one_repo.mdx §4.7](./one_repo.mdx#47-row--cell-navigation-per-file--locked)).
+
+---
+
+## 2. Clicking a toggle = one decision event (LOCKED)
+
+A click is **optimistic** and **immediate**:
+
+1. The toggle flips to the new state instantly (ON⇄OFF; a RECOMMENDED toggle flips straight to ON).
+2. LFBridge appends **one decision event** for **that axis only** to the repo's team-shared
+   `.lfbridge/decisions.yaml` ledger — with `decided_by` (the signed-in email), `decided_at`, the
+   Storage ID, the path, and the fingerprint ([decisions.mdx §3](./decisions.mdx#3-the-decision-record--every-field-and-why-locked)).
+   The other axis is untouched.
+3. The axis's **effect** is carried out by that axis's engine:
+   * **Add-to-IPFS ON** → the file is added to the manifest, its CID recorded, pinned, and queued to
+     peers ([one_repo.mdx §4.5](./one_repo.mdx), [pin_process.mdx](./pin_process.mdx)). OFF → removed
+     from the manifest; local bytes are **never** deleted.
+   * **Add-to-git-ignore ON** → the `.gitignore` engine writes an anchored, repo-root-relative rule
+     ([git_ignore.mdx §5](./git_ignore.mdx#5-the-gitignore-content-rules-locked-the-engine)); it is
+     idempotent and append-only. OFF → the corresponding rule is removed (only if LFBridge added it).
+4. On error the toggle **rolls back** to its prior state and a non-intrusive error note appears
+   ([warnings.mdx §5.5](./warnings.mdx)).
+
+A single click therefore **records intent** (the ledger) **and** performs the effect. Because the ledger
+is team-shared and union-merged, a teammate who already decided this file's axis means this toggle
+arrives **already ON/OFF**, not RECOMMENDED — nobody is re-asked ([decisions.mdx §5](./decisions.mdx#5-team-dynamics--the-merge-model-locked-think-team-of-ten)).
+
+Writing the single-axis decision event from a toggle click reuses the one decision write path in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `recordDecision(axis, …)`
+(exposed by `PATCH /api/repos/:repoId/files`, [decisions.mdx §19](./decisions.mdx#19-the-write-api--one-endpoint-two-accepted-bodies-locked)).
+
+### 2.1 Bulk clicks and directories still open the pop-over (LOCKED)
+
+A toggle writes **one file, one axis**. Two cases route to a confirm dialog instead of an instant write:
+
+* **A directory's ignore toggle** — turning ⊘ **on** for a *folder* under a repo can ignore many files at
+  once, so it opens the **Git-ignore pop-over** ([git_ignore.mdx §3](./git_ignore.mdx#3-the-dialog-anatomy--adaptive-to-the-selection-shape-locked)) with the Recursive choice, rather
+  than writing silently.
+* **Selected rows** — flipping a decision across a multi-row selection uses the table's **bulk menu**
+  ([one_repo.mdx §4.4](./one_repo.mdx#44-bulk-actions)), which confirms the count.
+
+This preserves the charter rule: **never git-ignore or move files without an explicit, scoped click**
+([menus.mdx §6.1](./menus.mdx)).
+
+---
+
+## 3. Where the toggles appear (LOCKED inventory)
+
+The pair renders in **every place a file is listed for a decision**:
+
+1. **The One-repo file table** — a **Pin** column and, to its right, a **Git-ignore** column, one toggle
+   each (§5).
+2. **Next to an existing pin** — anywhere a pinned file already shows its pin state, the ignore toggle
+   sits beside it so both axes read together.
+3. **The File System column browser** — the toggles are the editable form of the `P` / `I` badges on a
+   file row, and appear on directory rows under a repo (§6).
+4. **The File System flat Full-paths table** — same two columns as the repo table.
+5. **Warning popups** — the subjects list of a file-scoped warning renders the toggles per row
+   ([warnings.mdx §4.5](./warnings.mdx#45-the-subjects-list--the-actual-filesdirectories-with-checkboxes-locked)).
+6. **To-Do batch popups** — the batch's file list renders the toggles per row, pre-set to the calc
+   engine's **RECOMMENDED** target so the user confirms or overrides in place ([to_do.mdx §6](./to_do.mdx)).
+
+The **read-only** badges (`P`, `I`) still exist for dense, non-interactive contexts; the toggles are for
+**interactive rows** where the user is expected to decide.
+
+---
+
+## 4. The git-ignore toggle is REPO-SCOPED (LOCKED)
+
+Git-ignore only means something **inside a Git repo**. Therefore the **Add-to-git-ignore** toggle:
+
+* **Renders only when the file (or directory) is under a Git repo** — i.e. the row resolves to a repo
+  root with a `.gitignore` LFBridge can write ([git_ignore.mdx §5.3](./git_ignore.mdx#53-which-gitignore-and-multiple-repos-locked)).
+* Is **N/A (blank slot)** for files outside any repo — loose personal files, files inside a Dropbox or
+  Google Drive area that is not itself a repo, etc. Those files still show the **Add-to-IPFS** toggle
+  (pinning is not repo-scoped).
+
+The **Add-to-IPFS** toggle has **no** such restriction — any large file can be pinned. So a loose personal
+video shows **one** toggle (pin); a repo video shows **two** (pin + ignore).
+
+Deciding whether a given path is under a repo (and which repo's `.gitignore` an ignore-toggle would write) is computed in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `repoRootFor(path)`
+(null ⇒ the ignore toggle is N/A for that row).
+
+---
+
+## 5. In the One-repo file table (LOCKED)
+
+The [One-repo](./one_repo.mdx) file table gains an explicit **two-toggle decision area** on each row.
+Rather than only the single inline **Decision** select ([one_repo.mdx §4.5](./one_repo.mdx#45-the-decision-select-per-row--the-core-interaction)), the row now
+shows the **two axes directly** as toggles:
+
+```
+☐  File                     Size    Pin   Ignore   Status    Peers  Changed
+☐  render/final_4k.mov      8.2GB   ◉     ⊘●       Pinned    3      2h ago   ⋮
+☐  render/take_07.mov       6.1GB   ◌     ⊘◌       —         0      5m ago ⚠ ⋮
+☐  scratch/proxy.mp4        220MB   ◌     ⊘◌·      —         0      1d ago   ⋮   ← ⊘◌· = RECOMMENDED ignore
+```
+
+* **Pin** column = the **Add-to-IPFS** toggle (solid orange = pinned).
+* **Ignore** column = the **Add-to-git-ignore** toggle (⊘; solid orange = git-ignored; dashed = the calc
+  engine recommends ignoring it).
+* Both columns are **sortable and filterable** (they are decision state); the `filterOptions` are
+  on / off / recommended.
+* The existing **Decision** select and the **Status** transfer pill are unchanged — the toggles are the
+  fast, always-visible way to set each axis; the select remains for users who prefer the labelled list.
+
+The Pin/Ignore toggle columns, wired to the same `setDecision` mutation the inline select uses, are rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
+(the `pin` and `ignore` `LfbColumn`s mounting `DecisionToggle`).
+
+---
+
+## 6. In the File System (LOCKED)
+
+In the [File System](./directories.mdx) column browser and the Full-paths table:
+
+* On a **file row under a repo**, the toggles render both axes; on a **file row outside any repo**, only
+  the pin toggle renders (ignore is N/A, §4).
+* On a **directory row whose subtree is under a repo**, the **ignore** toggle renders and — because a
+  folder ignore is a many-file action — turning it on opens the Git-ignore pop-over (§2.1). A directory's
+  **pin** toggle pins the directory's eligible large files (the same "pin all under here" scope rule as
+  the page action, [directories.mdx §1.2](./directories.mdx#12-page-actions--the-action-links-row)).
+* The toggles are the **editable** counterpart of the read-only `P` (pin) and `I` (git-ignored) code
+  badges ([directories.mdx §3.2 / §3.4a](./directories.mdx#34a-the-git-ignored-badge-i--near-white-files-and-directories)); a badge shows *state*, a toggle *changes* it. When a
+  toggle flips, the corresponding badge updates on the next render.
+
+Adding the decision-toggle cell to File System file/directory rows (repo-scoped ignore, pop-over on directory ignore) is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/` — the column-browser and Full-paths row renderers (mount `DecisionToggles`, gate the ignore axis on `repoRootFor`).
+
+---
+
+## 7. In the warning & To-Do batch popups (LOCKED)
+
+The popup **subjects list** — the checklist of the actual files a warning or batch is about — renders the
+decision toggles per row so the user decides **inside the popup**:
+
+* Each subject row shows: the file, its size, and its **decision toggles** (pre-set to the calc engine's
+  **RECOMMENDED** target for a To-Do batch; to current state for a plain warning).
+* The popup's live **count** ([warnings.mdx §4.6](./warnings.mdx#46-the-live-count-the-6-that-updates)) reflects how many rows are still set to the recommended
+  action; unchecking a toggle drops that row out of the count.
+* The popup's **Apply** button spells out the checked axes across the list — its composed label follows
+  [warnings.mdx §4.4.1](./warnings.mdx#441-composed-action-verb-labels--the-button-spells-out-the-checked-axes-locked)
+  (e.g. *"Pin 5 + git-ignore 5"*). Apply then writes each row's decision(s) as in §2.
+
+This makes the popup and the row toggles **one model**: the same `DecisionToggle` component, the same
+single-axis write, whether the user flips it on a table row or inside the popup.
+
+---
+
+## 8. Acceptance criteria
+
+1. Two inline toggles render per actionable file row — an **Add-to-IPFS (pin)** toggle and an
+   **Add-to-git-ignore (⊘)** toggle — side by side, pin then ignore.
+2. Both share **one** visual grammar with **four** states: **OFF** (white fill, thin medium-grey edge),
+   **ON** (medium-dark-orange fill, no edge, white glyph), **RECOMMENDED** (white fill, **dashed** orange
+   edge), and **N/A** (not rendered).
+3. Clicking a toggle writes **one axis** of the **team-shared** decision immediately (optimistic, with
+   rollback on error), appending a `decided_by`/`decided_at`/SID event to `.lfbridge/decisions.yaml`, and
+   carries out that axis's effect (pin/unpin or `.gitignore` write) — never deleting local bytes.
+4. The **git-ignore** toggle renders **only** for files/dirs **under a repo**; it is a blank (aligned)
+   N/A slot otherwise. The **pin** toggle renders for any large file.
+5. A **directory** ignore toggle and a **multi-row** flip open the confirm surface (Git-ignore pop-over /
+   bulk menu) instead of writing silently.
+6. The toggles appear in the One-repo file table (Pin + Ignore columns), the File System columns and
+   Full-paths table, and the warning / To-Do batch popup subject lists — everywhere a file is listed for
+   a decision — and stop click propagation so they never navigate.
+7. A **RECOMMENDED** (dashed) toggle reflects a calc-engine suggestion for an **Undecided** file; a
+   teammate's prior decision arrives as **ON/OFF**, never RECOMMENDED (nobody is re-asked).
+
+<!--
+  These are the inline UI for the two-axis decision (decisions.mdx). TWO toggles per row: Add-to-IPFS
+  (pin) + Add-to-git-ignore (⊘). ONE visual grammar, FOUR states — OFF white/grey-edge · ON
+  solid-orange/no-edge · RECOMMENDED white/dashed-orange (calc-engine suggestion, still Undecided) · N/A
+  not-rendered. A click = one single-axis decision EVENT into the shared .lfbridge/decisions.yaml +
+  that axis's effect; never deletes local bytes; optimistic w/ rollback. Git-ignore toggle is
+  REPO-SCOPED (renders only under a repo); pin toggle is not. Directory ignore + multi-row flips open the
+  git-ignore pop-over / bulk menu (never silent). Component: DecisionToggles.tsx. Keep aligned with
+  decisions.mdx (ledger), git_ignore.mdx (engine), one_repo.mdx §4/§5 (table), directories.mdx §3 (badges),
+  warnings.mdx §4.5 + to_do.mdx §6 (popups), to_do_batch_calc_engine.mdx (the RECOMMENDED source).
+-->

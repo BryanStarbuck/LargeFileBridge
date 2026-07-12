@@ -17,7 +17,17 @@ import {
   registerRepo,
   isGitWorkingTree,
 } from "../store-model/units.service.js";
-import { reconcile as reconcileDecisions } from "../storage/decisions.service.js";
+import { reconcile as reconcileDecisions, applyDefaultPolicy } from "../storage/decisions.service.js";
+import { refreshCounts } from "../storage/repo-storage.service.js";
+import {
+  readSidecar,
+  appendFileEvent,
+  NOT_LFBRIDGE,
+  type FileEventInput,
+} from "../storage/file-sidecar.service.js";
+import { readCommittedManifest } from "../pin/manifest.service.js";
+import { listPins } from "../ipfs/ipfs.service.js";
+import { compressInfo } from "../fs/badges.js";
 import { readYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import { computerUnitDir, unitConfigPath, unitStatusPath } from "../../shared/store/scopes.js";
 import { HARD_SKIP, isMacPackageDir, isMediaFile } from "../../shared/scan-filters.js";
@@ -87,6 +97,18 @@ export async function scanAll(
   // written atomically (storage_local.mdx §15), so concurrent unit walks never collide.
   progress.setPhase("repos");
   progress.setReposTotal(repoFolders.length + 1);
+
+  // Fetch the IPFS pinset ONCE for the whole scan (the node is machine-wide — every repo's pins live in the
+  // same pinset), build a CID Set, and reuse it across every repo's count rollup + external-state pass so
+  // we never re-query the node per repo or per file (repo_tracking_scheme.mdx §3.3, PERFORMANCE). The daemon
+  // being off is routine — best-effort, an empty pinset just means "nothing observed as already pinned."
+  let pinset = new Set<string>();
+  try {
+    pinset = new Set((await listPins()).map((p) => p.cid));
+  } catch (e) {
+    log.debug("scan", `pinset fetch skipped (node unreachable?): ${(e as Error).message}`);
+  }
+
   await mapLimit(repoFolders, responsiveBudget(), async (folder) => {
     const rc = getRepoConfig(folder);
     progress.unitStart(rc.repo.name || folder);
@@ -106,7 +128,52 @@ export async function scanAll(
       excludeGlobs: rc.large_files.exclude_globs,
       maskPaths: [],
     });
-    writeStatus(folder, "repo", candidates, threshold, source);
+    const status = writeStatus(folder, "repo", candidates, threshold, source);
+
+    // Map each candidate's repo-relative path to the CID the committed manifest recorded for it, so we can
+    // tell — cheaply, reusing the ONE pinset fetched for this whole scan — which candidates are already
+    // pinned on THIS node (by us OR pinned on the CLI outside us). One manifest read per repo, no per-file
+    // node query (special_files.mdx §4 / repo_tracking_scheme.mdx §3.3).
+    let cidByPath = new Map<string, string | null>();
+    try {
+      cidByPath = new Map(readCommittedManifest(repoPath).files.map((f) => [f.path, f.cid]));
+    } catch (e) {
+      log.debug("scan", `manifest read skipped (${repoPath}): ${(e as Error).message}`);
+    }
+    const isPinnedPath = (rel: string): boolean => {
+      const cid = cidByPath.get(rel);
+      return cid != null && pinset.has(cid);
+    };
+
+    // (1) Roll the special-file counts + last_scan into .lfbridge/repo_storage.yaml (special_files.mdx §4).
+    // `headless` = a background/scheduled scan (vs. a manual web-app scan). Best-effort — a write failure
+    // must never abort the scan.
+    try {
+      refreshCounts(
+        repoPath,
+        candidates.map((c) => ({ path: c.path, size: c.size, pinned: isPinnedPath(c.path) })),
+        { thresholdBytes: threshold, headless: source === "scheduled" },
+      );
+    } catch (e) {
+      log.debug("scan", `refreshCounts(${repoPath}) skipped: ${(e as Error).message}`);
+    }
+
+    // (2) Record external state a scan OBSERVED but LFB did not create — files already IPFS-pinned or
+    // already-compressed OUTSIDE us — as a once-per-file `observed`/not-lfbridge sidecar event
+    // (repo_tracking_scheme.mdx §3.3). Reuses the single pinset + the manifest CID map; idempotent per file.
+    try {
+      const extCtx: ExternalStateCtx = { pinset, cidForPath: (rel) => cidByPath.get(rel) ?? null };
+      for (const c of candidates) {
+        await reconcileExternalState(
+          repoPath,
+          { path: c.path, size: c.size, modified: c.modified_at },
+          extCtx,
+        );
+      }
+    } catch (e) {
+      log.debug("scan", `reconcileExternalState(${repoPath}) skipped: ${(e as Error).message}`);
+    }
+
     // Project the SHARED decision ledger (any teammate/other-computer decisions a git pull delivered)
     // onto this machine's frozen decisions: enum cache (decisions.mdx §7). Best-effort — a bad ledger
     // must never abort the scan.
@@ -115,6 +182,22 @@ export async function scanAll(
     } catch (e) {
       log.debug("scan", `reconcileDecisions(${folder}) skipped: ${(e as Error).message}`);
     }
+
+    // (3) Apply the shared default-decision policy to BRAND-NEW candidates (this scan's `added` set) that
+    // have no folded decision yet (decisions.mdx §9). The shared policy defaults to OFF, so this is a no-op
+    // unless a team deliberately opted into auto-decide. Best-effort.
+    try {
+      const added = status.changes_since_last_scan.added;
+      if (added.length) {
+        const { autoDecided } = await applyDefaultPolicy(folder, added);
+        if (autoDecided > 0) {
+          log.info("scan", `${folder}: ${autoDecided} new file(s) auto-decided by policy.`);
+        }
+      }
+    } catch (e) {
+      log.debug("scan", `applyDefaultPolicy(${folder}) skipped: ${(e as Error).message}`);
+    }
+
     progress.unitDone(candidates.length);
   });
 
@@ -251,11 +334,61 @@ function writeStatus(
   candidates: Candidate[],
   threshold: number,
   source: "scheduled" | "manual",
-): void {
+): UnitStatus {
   const prev = getRepoStatus(folder);
   const next = diffStatus(prev, candidates, threshold, source, "repo");
   next.folder_name = folder;
   writeRepoStatus(folder, next);
+  return next; // the caller reads changes_since_last_scan.added to drive the default-decision policy pass
+}
+
+// ── external-state reconciliation (repo_tracking_scheme.mdx §3.3) ─────────────
+
+/** The cheap context `reconcileExternalState` reasons over — the ONE IPFS pinset fetched per scan, plus a
+ *  manifest-backed path→CID lookup — so it never re-queries the node or re-reads the manifest per file. */
+export interface ExternalStateCtx {
+  pinset: Set<string>; // CIDs pinned on THIS computer's node (fetched once per scan)
+  cidForPath: (relPath: string) => string | null; // repo-relative path → its committed-manifest CID (or null)
+}
+
+/**
+ * Record state a scan OBSERVED but LFB did not create (repo_tracking_scheme.mdx §3.3): a special file that
+ * is ALREADY IPFS-pinned on this node (its committed-manifest CID is in the pinset) OR already LOOKS
+ * compressed, with NO prior LFB record. Appends exactly ONE `observed` event stamped `by: not-lfbridge`
+ * (on_device defaults to this computer) carrying the cheap facts it read — the pin CID and/or the
+ * compressed size. IDEMPOTENT: an existing `observed`/`ipfs_pin` event means we captured this file's
+ * external/pin state already, so we return without re-appending on a later pass. Metadata-only — no decode,
+ * no per-file node query (it reuses `ctx.pinset`).
+ */
+export async function reconcileExternalState(
+  repoRoot: string,
+  file: { path: string; size: number; name?: string; modified?: string },
+  ctx: ExternalStateCtx,
+): Promise<void> {
+  const name = file.name ?? path.basename(file.path);
+  const cid = ctx.cidForPath(file.path);
+  const pinnedCid = cid != null && ctx.pinset.has(cid) ? cid : null;
+  const looksCompressed = compressInfo(name).compressState === "done";
+  if (!pinnedCid && !looksCompressed) return; // no external state to record for this file
+
+  // Idempotency guard (§3.3 "recorded once, not every pass"): an existing observed/ipfs_pin event means the
+  // external/pin state was already captured — never re-append it on a subsequent scan.
+  const existing = readSidecar(repoRoot, file.path);
+  if (existing?.file.events.some((e) => e.kind === "observed" || e.kind === "ipfs_pin")) return;
+
+  const event: FileEventInput = { kind: "observed", by: NOT_LFBRIDGE };
+  const notes: string[] = [];
+  if (pinnedCid) {
+    event.ipfs = { pinned: true, cid: pinnedCid };
+    notes.push("already pinned on this computer's IPFS node");
+  }
+  if (looksCompressed) {
+    event.compressed = { looks_compressed: true, size: file.size };
+    notes.push("already looks compressed");
+  }
+  event.note = `scan observed outside Large File Bridge: ${notes.join("; ")}`;
+  // Seed identity on create-on-first-special (name/size/modified); on_device is stamped by the sidecar writer.
+  appendFileEvent(repoRoot, file.path, event, { name, size: file.size, modified: file.modified });
 }
 
 // Compare against the previous scan; classify added/grew/shrank/moved/deleted (scan.mdx §6).

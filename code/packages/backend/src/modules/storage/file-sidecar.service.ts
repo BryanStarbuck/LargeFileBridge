@@ -104,6 +104,17 @@ function writeSidecar(repoRoot: string, relPath: string, doc: FileSidecar): void
   }
 }
 
+/**
+ * The shape a caller appends — `kind` is required; `at`/`on_device`/`by` are stamped when omitted; any
+ * kind-specific fields (ipfs / before / after / codec / format / output / note …) pass through the schema.
+ */
+export type FileEventInput = {
+  kind: FileEvent["kind"];
+  at?: string;
+  on_device?: string;
+  by?: string | null;
+} & Record<string, unknown>;
+
 /** Identity fields for seeding a sidecar the first time a file is seen as special (§3.1). */
 export interface SidecarSeed {
   name?: string;
@@ -159,7 +170,7 @@ export function ensureSidecar(repoRoot: string, relPath: string, seed?: SidecarS
 export function appendFileEvent(
   repoRoot: string,
   relPath: string,
-  event: FileEvent,
+  event: FileEventInput,
   seed?: SidecarSeed,
 ): void {
   if (!keepsLfbridge(repoRoot)) return; // consent off → never touch the repo root
@@ -168,8 +179,8 @@ export function appendFileEvent(
   // the kind-specific fields). on_device is filled from THIS computer's name only when the caller left it
   // blank; `by` stays exactly as the caller passed it (email or the not-lfbridge sentinel).
   const stamped = FileEventSchema.parse({
-    at: new Date().toISOString(),
     ...event,
+    at: event.at ?? new Date().toISOString(),
     on_device: event.on_device && event.on_device.trim() ? event.on_device : selfDeviceName(),
     by: event.by ?? null,
   });

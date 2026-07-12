@@ -32,6 +32,8 @@ import {
 } from "../../shared/store/scopes.js";
 import { ensureDir } from "../../config/state-dir.js";
 import { getPeers } from "./peers.service.js";
+import { readLedger, foldLedger, type FoldedDecision } from "../storage/decisions.service.js";
+import { effectiveFlags } from "./config.service.js";
 import { log } from "../../shared/logging.js";
 
 export function repoIdFromPath(absPath: string): string {
@@ -204,10 +206,26 @@ function composeFileRows(
   manifest: Manifest,
 ): FileRow[] {
   const manifestByPath = new Map(manifest.files.map((f) => [f.path, f]));
+  // Fold the shared decision ledger ONCE per repo for provenance (decisions.mdx §10; one_repo.mdx §4.8):
+  // who decided each file and when. Cheap read+fold, wrapped so a bad/locked/conflicted ledger never
+  // breaks row composition — rows still render with decidedBy/decidedAt null (→ Undecided in the UI).
+  const foldedByPath = foldLedgerForRepo(cfg);
+  const repoRootAbs = cfg.repo.path
+    ? path.resolve(cfg.repo.path.replace(/^~(?=\/|$)/, process.env.HOME || "~"))
+    : null;
   return status.candidates.map((cand) => {
     const decision: Decision = cfg.decisions[cand.path] ?? "undecided";
     const m = manifestByPath.get(cand.path);
     const peers = m?.pinned_by ?? [];
+    const prov = foldedByPath.get(cand.path);
+    // Sticky Never-IPFS flag (decisions.mdx §17) — surfaced so the UI can disable the Add-to-IPFS axis.
+    // Cheap per-row config read; never let a flag lookup break row composition.
+    let neverIpfs = false;
+    try {
+      if (repoRootAbs) neverIpfs = effectiveFlags(path.join(repoRootAbs, cand.path)).neverIpfs;
+    } catch {
+      /* flags unavailable → default false */
+    }
     return {
       fileId: `${repoIdFromPath(cfg.repo.path || "")}:${cand.path}`,
       path: cand.path,
@@ -217,8 +235,26 @@ function composeFileRows(
       transfer: transferFor(decision, m?.cid ?? null, peers),
       peers,
       changedAt: cand.modified_at ?? status.last_scan_at ?? new Date(0).toISOString(),
+      decidedBy: prov?.decidedBy ?? null,
+      decidedAt: prov?.decidedAt ?? null,
+      neverIpfs,
     };
   });
+}
+
+// Read + fold the repo's shared decision ledger ONCE, keyed by repo-relative path. The repo root is the
+// same value decisions.service.ts derives (getRepoConfig().repo.path resolved with `~` expansion). Any
+// failure (no repo path, missing/locked/merge-conflicted ledger) yields an empty map so provenance is null.
+function foldLedgerForRepo(cfg: RepoUnitConfig): Map<string, FoldedDecision> {
+  const p = cfg.repo.path;
+  if (!p) return new Map();
+  try {
+    const repoRoot = path.resolve(p.replace(/^~(?=\/|$)/, process.env.HOME || "~"));
+    return foldLedger(readLedger(repoRoot));
+  } catch (e) {
+    log.warn("units", `decision provenance unavailable (using null): ${(e as Error).message}`);
+    return new Map();
+  }
 }
 
 function transferFor(decision: Decision, cid: string | null, peers: string[]): TransferStatus {

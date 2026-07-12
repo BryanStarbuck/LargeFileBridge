@@ -60,6 +60,9 @@ export interface FileRow {
   // "policy:<email>" for a policy auto-decision, or null when attribution is anonymous.
   decidedBy?: string | null;
   decidedAt?: string | null; // ISO-8601 UTC of the winning decision event
+  // Sticky "Never IPFS" flag (menus.mdx §6.6, decisions.mdx §17). When true the Add-to-IPFS decision axis
+  // is forbidden — the UI disables/forces-off the IPFS checkbox and the write path rejects ipfs:true.
+  neverIpfs?: boolean;
 }
 
 // One file a peer computer pinned that THIS computer is missing — the subject of the "pull them down"

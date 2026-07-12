@@ -1,0 +1,212 @@
+---
+title: LargeFileBridge — TO DO Batch Calc Engine
+description: The engine that produces TO DO Batches. It runs as part of every scan / rescan (the "scan recalc") — after discovery classifies the files, the TO DO Batch Calc Engine walks each storage's files, decides the recommended target state for each file across the five categories (compress-video, compress-image, git-ignore, add-to-IPFS/pin, and pull-down from another computer), assigns each file to its owning storage's batch, and RECALCULATES AND REPLACES that storage's _2_do.yaml under _do_batches/. It reads the learned compression baseline, the special-file classifier, the shared decisions ledger (so already-decided files are not re-recommended), and the shared IPFS manifest (to find files pinned elsewhere but missing here). Its output powers the To Do page slugs and most warnings. Sibling of to_do_batches.mdx (the output schema), transcribe_calc_engine.mdx (the on-demand sibling engine), scan.mdx (the recalc host), and special_files.mdx / compression.mdx / decisions.mdx (its inputs).
+---
+
+# LargeFileBridge — TO DO Batch Calc Engine
+
+The **TO DO Batch Calc Engine** is the decision-maker that turns "the files on disk + what the team has
+already decided" into "here is what we recommend you do next, bundled per storage." It is the **producer**
+of [TO DO Batches](./to_do_batches.mdx); everything downstream (the [To Do page](./to_do.mdx) slugs, most
+[warnings](./warnings.mdx)) reads what this engine writes.
+
+It runs **inside the scan** — Bryan's "scan recalc." After [discovery](./scan.mdx) has found and
+classified the files, this engine does the *thinking* about them.
+
+> **Spelling note.** Also referred to as the **"TO DO Calc Engine"**; earlier voice drafts mis-transcribed
+> it as "2DU Calc Engine." Same engine.
+
+Siblings this builds on and does not repeat:
+
+* [to_do_batches.mdx](./to_do_batches.mdx) — the **output**: the batch YAML schema, the `_do_batches/`
+  directory, the five categories, `pattern`, `dismissed`, recalculate-and-replace.
+* [scan.mdx](./scan.mdx) — the **host**: the every-4h discovery scan and every-15-min pass this engine
+  hangs off of (§1 here), and the on-demand/watcher triggers.
+* [special_files.mdx](./special_files.mdx) — the **classifier** (large · already-pinned · video/image/audio ·
+  compressible · transcribable) whose flags this engine turns into recommendations.
+* [compression.mdx](./compression.mdx) — the **learned baseline** (mean ±1σ/±2σ by duration × resolution)
+  that decides "looks uncompressed."
+* [decisions.mdx](./decisions.mdx) — the **shared ledger** it reads so it never re-recommends a decided
+  file, and writes to only when the user Applies.
+* [storage_local.mdx §9](./storage_local.mdx#9-the-manifest--ipfs-pin-model) — the **manifest / pinset**
+  it reads to find **pull-down** candidates (pinned elsewhere, missing here).
+* [transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx) — the sibling, on-demand engine for the
+  transcribe category.
+
+---
+
+## 1. When it runs (LOCKED)
+
+The engine is a **stage of the scan**, never a thing the user triggers directly:
+
+| Trigger | What the engine does |
+| --- | --- |
+| **Every-4h discovery scan** ([scan.mdx §2](./scan.mdx#2-cadence--the-two-scheduletasks-4-hour-discovery--15-minute-pinset)) | Full recalc: rebuild every storage's batch from a fresh walk. |
+| **Every-15-min pinset pass** ([scan.mdx §2.1](./scan.mdx#21-the-15-minute-scheduletask-reads-the-ipfs-pinset-import-already-pinned)) | Light recalc: refresh the **pull_down** and **pin** categories (which depend on the pinset/manifest that just changed) without a full media re-walk. |
+| **Live watcher event** ([scan.mdx §2.2](./scan.mdx#22-the-live-filesystem-watcher--event-driven-while-the-web-app-runs-locked)) | Targeted recalc: recompute only the affected storage's batch. |
+| **On-demand "Rescan"** ([scan.mdx §10](./scan.mdx#10-on-demand-scan-execution--the-detached-background-job-locked)) | Full recalc for the rescanned scope. |
+
+Every run ends with an **atomic replace** of each touched storage's `_2_do.yaml`
+([to_do_batches.mdx §5](./to_do_batches.mdx#5-recalculate-and-replace-locked)).
+
+Hooking the engine as the recalc stage after discovery/classification is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — after classification, calls
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` — `TodoBatchCalcEngine.recalcAll()` / `recalcForStorage(storage)`.
+
+---
+
+## 2. The per-file decision — the five categories (LOCKED)
+
+For each candidate file the engine asks, in order, and emits **zero or more** category recommendations
+(a file can appear in more than one category — e.g. a big uncompressed video that is not git-ignored):
+
+1. **`pull_down`** — *is this file pinned on another of my computers but absent here?*
+   The shared manifest / decisions say it is an **Add-to-IPFS** file with a CID, some **peer device** holds
+   it ([devices.mdx](./devices.mdx)), and it is **not present on this machine's disk**. → recommend
+   pulling it down (fetch over IPFS). `recommend: { ipfs: true, git_ignore: true }` (git-ignore too, if
+   under a repo, so it lands ignored).
+   * This is the **cross-computer** case that motivates the whole product: your tower pinned a batch of
+     new images last month; on your laptop this month they're recommended for pull-down.
+
+2. **`git_ignore`** — *is this a big file that is NOT git-ignored, under a repo?*
+   Size ≥ the effective big threshold ([scan.mdx §4.2](./scan.mdx#42-the-effective-big-threshold)) and the
+   file is **tracked/untracked by Git but not ignored**. → recommend git-ignoring it (and, being big,
+   usually pinning it): `recommend: { ipfs: true, git_ignore: true }`. Charter: *"big files that aren't a
+   good idea to check in."*
+
+3. **`compress_video`** — *does this video look uncompressed?*
+   `special.compressible` is set for a video by the learned baseline
+   ([compression.mdx](./compression.mdx), [special_files.mdx §2](./special_files.mdx#2-the-compressible-sub-flag--videoimage-that-look-uncompressed)) —
+   its size sits above the compressed mean by ≥ the configured sigma. → recommend compressing;
+   record `est_compressed_bytes`. `recommend: { compress: true }`.
+
+4. **`compress_image`** — the same test for images (secondary priority per charter).
+
+5. **`pin`** — *is this an eligible big file with no decision yet that we'd back up?*
+   Big, under a pinnable storage, **Undecided** in the ledger, and none of the above. → recommend
+   Add-to-IPFS: `recommend: { ipfs: true }`.
+
+Files that are **already decided** in the shared ledger are **skipped** for the axis they were decided on
+(§3.1). Files carrying a **sticky flag** — **Never IPFS** / **Do not compress**
+([menus.mdx §6.6](./menus.mdx)) — are **excluded** from the corresponding category (§3.2).
+
+The per-file category evaluation is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` — `TodoBatchCalcEngine.categorize(file, ctx)`.
+
+### 2.1 The recommendation becomes a RECOMMENDED toggle
+
+Each `recommend:` axis renders in the popup as a **RECOMMENDED** (dashed-orange) [decision toggle](./decision_toggles.mdx#1-one-visual-grammar-four-render-states-locked)
+— the engine's *suggestion*, awaiting the user's confirm. The engine **never writes a decision** on its
+own; it only recommends. Decisions are written when the user Applies
+([to_do_batches.mdx §5](./to_do_batches.mdx#5-recalculate-and-replace-locked)). This preserves the charter
+rule: **never act on files without an explicit click**.
+
+---
+
+## 3. What it reads to decide (inputs, LOCKED)
+
+| Input | Source | Used for |
+| --- | --- | --- |
+| **Classification flags** | [special_files.mdx](./special_files.mdx) `.lfbridge/files/<path>.yaml` + `repo_storage.yaml` counts | which categories a file can enter |
+| **Compression baseline** | [compression.mdx](./compression.mdx) learned YAML/CSV | `compress_video` / `compress_image` "looks uncompressed" |
+| **Shared decisions ledger** | [decisions.mdx](./decisions.mdx) `.lfbridge/decisions.yaml` (folded) | skip already-decided axes (§3.1) |
+| **Shared manifest + IPFS pinset** | [storage_local.mdx §9](./storage_local.mdx#9-the-manifest--ipfs-pin-model) | `pull_down` (pinned elsewhere, missing here) + `pin` eligibility |
+| **Device registry** | [devices.mdx](./devices.mdx) | which peer holds a pull-down candidate |
+| **Sticky flags** | [menus.mdx §6.6](./menus.mdx) | exclude Never-IPFS / Do-not-compress files |
+| **`.gitignore` state** | [git_ignore.mdx](./git_ignore.mdx) | `git_ignore` (big but not ignored) |
+
+### 3.1 Never re-recommend a decided file (LOCKED)
+
+The engine folds the **team-shared** ledger first. If a file already has a decision on an axis — by **this
+user or any teammate** — that axis is **not** recommended again. This is the same "have we asked?"
+guarantee the [decisions](./decisions.mdx#2-a-decision-is-a-first-class-recorded-event--have-we-asked-locked)
+and [two-computer tour](./use_case_two_computers.mdx#6-may--bryan-macbook-pro--we-do-not-re-ask-about-decided-files)
+specs make — extended to the batch layer, so a To-Do slug never nags about files the team already triaged.
+
+A file can still appear for a **different** axis: a file the team decided to **pin** but never git-ignored
+still shows a `git_ignore` recommendation if it is big and unignored.
+
+### 3.2 Respect the sticky flags (LOCKED)
+
+* **Never IPFS** → the file is excluded from `pin`, `pull_down`, and `git_ignore`-with-pin (it may still be
+  recommended for git-ignore alone if that is meaningful).
+* **Do not compress** → excluded from `compress_video` / `compress_image`.
+
+---
+
+## 4. Assigning each file to a batch (LOCKED)
+
+After categorizing, the engine assigns each recommendation to the batch of the **storage the file lives
+under** ([to_do_batches.mdx §1](./to_do_batches.mdx#1-one-batch-per-storage-locked)):
+
+* Resolve the file's path to its owning storage — the deepest of: a **repo root**, the **Dropbox** root,
+  a **Google Drive account** root, else **Personal**.
+* Append the recommendation to that storage's in-memory batch under the right category.
+* After the walk, compute each batch's `totals:` and `pattern` (§5), then **atomically replace** the
+  storage's `_2_do.yaml`; storages that ended with **no** recommendations get an **empty/absent** file so
+  their slug does not show.
+
+Resolving a path to its owning storage (deepest repo → Dropbox → each Google Drive → Personal) is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` — `owningStorageFor(path)` (reuses `git.service.ts` `repoRootFor` + the storage roots from `storages`).
+
+---
+
+## 5. Choosing `pattern` (the slug template) (LOCKED)
+
+Once a batch's categories are known, the engine sets `pattern`
+([to_do_batches.mdx §3.2](./to_do_batches.mdx#32-pattern-selects-the-slug-template-locked)):
+
+* Exactly **one** category present → that category's pattern (`compress` / `git_ignore` / `pull_down` /
+  `pin`).
+* **Two or more** categories present → `mixed`.
+* Transcribe batches are always `transcribe` (produced by the [other engine](./transcribe_calc_engine.mdx)).
+
+The pattern is a **hint**, not a constraint — the To-Do page uses it to pick a layout; the popup always
+renders all categories present.
+
+---
+
+## 6. Cost & safety (CTO notes)
+
+* **Cheap by construction.** The heavy work (classification, fingerprints, compression baseline) is done
+  by the scan's discovery/classification stage and cached in `.lfbridge/`; this engine mostly **reads
+  cached flags** and folds the ledger + manifest. The every-15-min pass only touches `pull_down`/`pin`.
+* **Never blocks the UI.** It runs in the detached scan job ([scan.mdx §10](./scan.mdx#10-on-demand-scan-execution--the-detached-background-job-locked));
+  the To-Do page reads the last-written batches and shows a "recomputing…" hint while a scan is live.
+* **Idempotent.** Two runs over an unchanged tree produce byte-identical batches (modulo `computed_at`),
+  so the replace is a no-op the To-Do page can diff to avoid needless re-render.
+* **Network-mount aware.** It inherits the scan's hard-skip set and network-mount caution
+  ([scan.mdx §4.3](./scan.mdx#43-the-hard-skip-directory-set-never-descend), [file_system.mdx §4.7](./file_system.mdx#47-performance--the-network-mount-hazard-cto-note))
+  so a slow Google Drive mount cannot stall a recalc.
+
+---
+
+## 7. Acceptance criteria
+
+1. The engine runs as the **recalc stage of the scan** (4-hour full, 15-minute light for pull_down/pin,
+   watcher-targeted, and on-demand rescan) — never as a user-triggered action of its own.
+2. For each candidate file it emits zero or more of the five category recommendations — **pull_down**,
+   **git_ignore**, **compress_video**, **compress_image**, **pin** — each with a `recommend:` target per
+   axis; a file may appear in more than one category.
+3. It **skips any axis already decided** by this user or a teammate (folded shared ledger), and **excludes**
+   Never-IPFS / Do-not-compress files from the matching categories.
+4. **pull_down** is emitted only for files pinned on a **peer device** with a CID that are **absent on this
+   machine**; **pin** only for Undecided eligible big files.
+5. It assigns each recommendation to the batch of the **storage the file lives under** (deepest repo →
+   Dropbox → Google Drive account → Personal), computes `totals:` + `pattern`, and **atomically replaces**
+   each storage's `_2_do.yaml`; storages with no work produce no visible slug.
+6. It **recommends only** — it never writes a decision or moves bytes; decisions/effects happen when the
+   user Applies a batch.
+7. It is cheap (reads cached classification/fingerprints), non-blocking (detached scan job), idempotent,
+   and network-mount-safe.
+
+<!--
+  TO DO Batch Calc Engine (a.k.a. TO DO Calc Engine) = the scan-recalc stage that PRODUCES batches. Five
+  categories: pull_down (pinned on a peer, missing here) · git_ignore (big+unignored) · compress_video ·
+  compress_image · pin (undecided eligible big file). Reads: special-file flags, compression baseline,
+  FOLDED shared decisions ledger (skip decided axes — never re-ask), shared manifest/pinset (pull_down +
+  pin), device registry, sticky flags. RECOMMENDS ONLY (dashed RECOMMENDED toggles) — never writes a
+  decision or moves bytes. Assigns each file to its owning storage's batch; computes totals+pattern;
+  atomic-replaces _2_do.yaml. Runs in scanner.service.ts recalc; engine in todo-batch.engine.ts. Sibling
+  transcribe_calc_engine.mdx does the transcribe category on-demand. Output schema: to_do_batches.mdx.
+-->

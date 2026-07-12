@@ -1,7 +1,8 @@
 // REST for the Repos + One-repo + per-repo settings screens (repos.mdx, one_repo.mdx, repo_settings.mdx).
+import path from "node:path";
 import { Router } from "express";
 import { z } from "zod";
-import type { RepoRow, RepoSettings, Decision } from "@lfb/shared";
+import type { RepoRow, RepoSettings, Decision, RepoDetail, MissingPinnedFile } from "@lfb/shared";
 import {
   listRepoFolders,
   computeRepoRow,
@@ -13,13 +14,51 @@ import {
   updateRepoConfig,
 } from "../store-model/units.service.js";
 import { startScan, getScanJob } from "../scanner/scan-job.js";
-import { pinRepoFolder, pinAll } from "../pin/pin.service.js";
-import { recordDecision } from "../storage/decisions.service.js";
+import { pinRepoFolder, pinAll, missingPinnedFromPeers, pullMissing } from "../pin/pin.service.js";
+import {
+  recordDecision,
+  readDecisionPolicy,
+  setDecisionPolicy,
+  shareStatus,
+} from "../storage/decisions.service.js";
+import { effectiveFlags } from "../store-model/config.service.js";
 import { track } from "../progress/progress.registry.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { requireAllowListed } from "../auth/identify.js";
 import { currentUser } from "../auth/current-user.js";
 import { log } from "../../shared/logging.js";
+
+/**
+ * Absolute working-tree root for a state-root folder key — the same derivation the decisions service uses
+ * (decisions.service.ts `repoRootFor`): the config `repo.path` with a leading `~` home-expanded. Needed to
+ * drive the pin-service helpers (which take a repoRoot) and the Never-IPFS flag lookup (keyed by abs path).
+ */
+function repoRootFor(folder: string): string {
+  const p = getRepoConfig(folder).repo.path;
+  if (!p) throw new Error(`repo ${folder} has no path`);
+  return path.resolve(p.replace(/^~(?=\/|$)/, process.env.HOME || "~"));
+}
+
+/**
+ * Best-effort list of peer-pinned files this computer is missing (warnings.mdx §10.8.12). Wrapped so a slow
+ * or erroring IPFS node never blocks / fails the repo-detail page — a fault yields [] and the warning simply
+ * doesn't show. Augmented onto the RepoDetail at the router (computeRepoDetail stays sync + shared).
+ */
+async function missingPinnedSafe(repoRoot: string): Promise<MissingPinnedFile[]> {
+  try {
+    return await missingPinnedFromPeers(repoRoot);
+  } catch (e) {
+    log.warn("repos", `missingPinned lookup failed for ${repoRoot}: ${(e as Error).message}`);
+    return [];
+  }
+}
+
+/** Repo-relative paths that carry the sticky Never-IPFS flag (decisions.mdx §17) — the IPFS axis is rejected
+ *  for these at the write path. The flag is path-scoped (own entry OR any ancestor dir), read via the SAME
+ *  accessor the policy engine uses (config.service `effectiveFlags`). */
+function neverIpfsPaths(repoRoot: string, relPaths: string[]): string[] {
+  return relPaths.filter((rel) => effectiveFlags(path.join(repoRoot, rel)).neverIpfs);
+}
 
 export const reposRouter = Router();
 reposRouter.use(requireAllowListed);
@@ -100,7 +139,10 @@ reposRouter.get("/:repoId", async (req, res) => {
   const folder = folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   try {
-    const detail = computeRepoDetail(folder, await ipfs.health());
+    const detail: RepoDetail = computeRepoDetail(folder, await ipfs.health());
+    // Augment with the peer-pinned-but-missing set so the §10.8.12 "pull them down" warning has data.
+    // Best-effort at the router (computeRepoDetail is sync + shared): a down/slow IPFS never blocks the page.
+    detail.missingPinned = await missingPinnedSafe(repoRootFor(folder));
     res.json({ ok: true, data: detail });
   } catch (e) {
     log.error("repos", `${folder}: detail failed: ${(e as Error).message}`);
@@ -145,6 +187,30 @@ reposRouter.patch("/:repoId/files", async (req, res) => {
 
   const decidedBy = currentUser(req).email; // who decided — from the authenticated session (decisions.mdx §3.3)
   const paths = body.data.paths;
+
+  // NEVER-IPFS GUARD (decisions.mdx §17/§20): a decision that turns the IPFS axis ON is REJECTED at the write
+  // path for any target carrying the sticky Never-IPFS flag. This covers both the two-axis form (ipfs===true)
+  // and the legacy single-axis form (decision==="sync" → ipfs:true). The git-ignore axis is unaffected, so a
+  // both-off write, a gitignore-only write, or an ipfs:false/"ignore" write are all still allowed.
+  const settingIpfsOn = body.data.decision === "sync" || body.data.ipfs === true;
+  if (settingIpfsOn) {
+    let blocked: string[];
+    try {
+      blocked = neverIpfsPaths(repoRootFor(folder), paths);
+    } catch (e) {
+      log.error("repos", `${folder}: never-ipfs check failed: ${(e as Error).message}`);
+      return res.status(500).json({ ok: false, error: (e as Error).message });
+    }
+    if (blocked.length > 0) {
+      log.info("repos", `${folder}: rejected IPFS decision — ${blocked.length} Never-IPFS file(s)`);
+      return res.status(409).json({
+        ok: false,
+        error: `Cannot add to IPFS: ${blocked.length} file(s) are flagged Never IPFS: ${blocked.join(", ")}`,
+        data: { neverIpfs: blocked },
+      });
+    }
+  }
+
   try {
     if (body.data.decision !== undefined) {
       // Legacy single-axis → IPFS axis. "undecided" removes the record (returns to triage).
@@ -163,10 +229,41 @@ reposRouter.patch("/:repoId/files", async (req, res) => {
         `${folder}: decided ${paths.length} file(s) ipfs=${!!body.data.ipfs} gitignore=${!!body.data.gitignore} by ${decidedBy ?? "?"}`,
       );
     }
-    const detail = computeRepoDetail(folder, await ipfs.health());
+    const detail: RepoDetail = computeRepoDetail(folder, await ipfs.health());
+    detail.missingPinned = await missingPinnedSafe(repoRootFor(folder));
     res.json({ ok: true, data: detail });
   } catch (e) {
     log.error("repos", `${folder}: file decision update failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/repos/:repoId/pull — pull peer-pinned files this computer is missing DOWN over IPFS
+// (warnings.mdx §10.8.12 C). Body: { paths: string[] (repo-relative, >=1), compress?: boolean }. Pinning the
+// manifest CID fetches the bytes (no re-add / new CID) and materializes them into the working tree; with
+// compress set, each pulled media file is queued for background compression. NON-destructive (only ADDS local
+// copies) — no red confirm. Returns the recomputed repo detail (same shape as PATCH /files) so the UI
+// re-renders and the "pull them down" warning leaves the page once the bytes are here.
+reposRouter.post("/:repoId/pull", async (req, res) => {
+  const body = z
+    .object({ paths: z.array(z.string()).min(1), compress: z.boolean().optional() })
+    .safeParse(req.body);
+  if (!body.success) return res.status(400).json({ ok: false, error: "paths (>=1) required" });
+  const folder = folderForRepoId(req.params.repoId);
+  if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
+  const by = currentUser(req).email;
+  try {
+    const repoRoot = repoRootFor(folder);
+    const counts = await pullMissing(repoRoot, body.data.paths, { compress: !!body.data.compress, by });
+    log.info(
+      "repos",
+      `${folder}: pulled ${counts.pulled} file(s), ${counts.failed} failed (compress=${!!body.data.compress}) by ${by ?? "?"}`,
+    );
+    const detail: RepoDetail = computeRepoDetail(folder, await ipfs.health());
+    detail.missingPinned = await missingPinnedSafe(repoRoot);
+    res.json({ ok: true, data: detail });
+  } catch (e) {
+    log.error("repos", `${folder}: pull failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
 });
@@ -245,6 +342,55 @@ reposRouter.patch("/:repoId/settings", async (req, res) => {
     log.error("repos", `${folder}: update settings failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
+});
+
+// GET /api/repos/:repoId/decision-policy — the SHARED per-repo default-decision + attribution policy plus
+// whether decisions made here actually reach a team (decisions.mdx §9/§14/§15, repo_settings.mdx §2.7/§2.8).
+reposRouter.get("/:repoId/decision-policy", (req, res) => {
+  const folder = folderForRepoId(req.params.repoId);
+  if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
+  try {
+    res.json({
+      ok: true,
+      data: { policy: readDecisionPolicy(folder), shareStatus: shareStatus(folder) },
+    });
+  } catch (e) {
+    log.error("repos", `${folder}: read decision-policy failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// PATCH /api/repos/:repoId/decision-policy — merge a partial policy into the shared doc (decisions.mdx §9).
+// Changing the policy is itself an audited decision: stamp who set it (set_by) from the authenticated session
+// so a later auto-decide can attribute `policy:<set_by>`. Returns the updated policy.
+reposRouter.patch("/:repoId/decision-policy", (req, res) => {
+  const folder = folderForRepoId(req.params.repoId);
+  if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
+  const patch = DecisionPolicyPatch.safeParse(req.body);
+  if (!patch.success) return res.status(400).json({ ok: false, error: patch.error.message });
+  try {
+    const setBy = currentUser(req).email;
+    const updated = setDecisionPolicy(folder, { ...patch.data, set_by: patch.data.set_by ?? setBy });
+    log.info("repos", `${folder}: decision-policy updated by ${setBy ?? "?"}`);
+    res.json({ ok: true, data: updated });
+  } catch (e) {
+    log.error("repos", `${folder}: update decision-policy failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// A validated PARTIAL of the decision policy doc (decisions.mdx §9/§14). attribution accepts the three modes
+// or null (auto: resolve from the remote). media/other are the full kind-policy shape { mode, ipfs, gitignore }.
+const DecisionKindPolicyPatch = z.object({
+  mode: z.enum(["auto", "ask"]),
+  ipfs: z.boolean(),
+  gitignore: z.boolean(),
+});
+const DecisionPolicyPatch = z.object({
+  attribution: z.enum(["email", "handle", "anonymous"]).nullable().optional(),
+  media: DecisionKindPolicyPatch.optional(),
+  other: DecisionKindPolicyPatch.optional(),
+  set_by: z.string().nullable().optional(),
 });
 
 const RepoSettingsPatch = z.object({

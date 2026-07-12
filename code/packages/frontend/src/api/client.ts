@@ -81,8 +81,18 @@ import type {
   DescribeAiConfigPatch,
   AiCredentialsInfo,
   EnqueuePlan,
+  DecisionPolicyDoc,
 } from "@lfb/shared";
 import { http, unwrap } from "./axios.js";
+
+// The shared per-repo decision policy payload the repo router returns (decisions.mdx §9/§14): the policy
+// doc itself + THIS computer's share status (whether decisions travel to teammates — storage/decisions
+// .service.ts `shareStatus()`).
+export type DecisionShareStatus = "shared" | "local_only_no_remote" | "local_only_consent_off";
+export interface DecisionPolicyResult {
+  policy: DecisionPolicyDoc;
+  shareStatus: DecisionShareStatus;
+}
 
 export const api = {
   me: () => unwrap<CurrentUser>(http.get("/auth/me")),
@@ -125,6 +135,17 @@ export const api = {
     unwrap<RepoDetail>(http.patch(`/repos/${repoId}/files`, { paths, ...axes })),
   pinNow: (repoId: string, paths?: string[]) =>
     unwrap<PinNowResult>(http.post(`/repos/${repoId}/pin`, paths ? { paths } : {})),
+  // Pull-them-down (warnings.mdx §10.8.12): pin each checked file's manifest CID on THIS node — which
+  // fetches the bytes down over IPFS — and, when `compress` is set, queue a compress pass after arrival.
+  // Returns the refreshed repo detail so the "pull them down" banner re-derives and leaves the page.
+  pull: (repoId: string, paths: string[], opts?: { compress?: boolean }) =>
+    unwrap<RepoDetail>(http.post(`/repos/${repoId}/pull`, { paths, ...(opts ?? {}) })),
+  // Shared decision policy (decisions.mdx §9/§14): read / patch the per-repo default-decision + attribution
+  // policy. Both return { policy, shareStatus } (the doc + whether this computer shares decisions).
+  decisionPolicy: (repoId: string) =>
+    unwrap<DecisionPolicyResult>(http.get(`/repos/${repoId}/decision-policy`)),
+  setDecisionPolicy: (repoId: string, patch: Partial<DecisionPolicyDoc>) =>
+    unwrap<DecisionPolicyResult>(http.patch(`/repos/${repoId}/decision-policy`, patch)),
 
   repoSettings: (repoId: string) => unwrap<RepoSettings>(http.get(`/repos/${repoId}/settings`)),
   patchRepoSettings: (repoId: string, patch: Partial<Record<string, unknown>>) =>

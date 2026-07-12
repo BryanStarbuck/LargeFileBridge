@@ -1,0 +1,277 @@
+---
+title: LargeFileBridge — To Do (the left-bar page of batch slugs)
+description: The To Do page (left-bar item "To Do", route /todo) is the single place that shows the user everything LargeFileBridge recommends doing, bundled per storage as TO DO Batches. It renders each batch that has work as a SLUG — a compact ~5-row card laid out in up-to-three columns (left/center/right) with a horizontal divider between slugs, a right-side blue "open" chevron button that opens the full batch popup, and a small red trash button to dismiss/deprioritize the batch. Only batches with work show (30 repos, 3 with work → 3 slugs). Slug LAYOUT is chosen by the batch's pattern (compress / git-ignore / pull-down / pin / transcribe / mixed). A top-of-page "Show what could be transcribed" action link runs the What-Can-Be-Transcribed Calc Engine and adds transcribe slugs. The batch popup is the evolved warnings dialog: the file list with two-axis decision toggles + an Apply button. Sibling of to_do_batches.mdx (data), to_do_batch_calc_engine.mdx + transcribe_calc_engine.mdx (producers), warnings.mdx (the same popup, surfaced on pages), decision_toggles.mdx (the per-row toggles), left_bar.mdx (the nav item), and processing.mdx (where applied work runs).
+---
+
+# LargeFileBridge — To Do
+
+The **To Do** page is the product's "here is everything worth doing, in one list." It is the human face of
+the [TO DO Batches](./to_do_batches.mdx): each batch that has work becomes a **slug** (a compact card), and
+each slug opens a **batch popup** where the user confirms the recommendations and applies them.
+
+It reaches the user two ways — **here** (the dedicated page), and as **[warnings](./warnings.mdx)** on the
+individual pages (a repo's batch shows as that repo's yellow banner). Both open the **same** batch popup.
+
+Rendered in code: `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoPage`.
+
+Siblings this builds on and does not repeat:
+
+* [to_do_batches.mdx](./to_do_batches.mdx) — the **data model**: one batch per storage, `_do_batches/`,
+  the batch YAML, `totals:` / `pattern` / `dismissed`.
+* [to_do_batch_calc_engine.mdx](./to_do_batch_calc_engine.mdx) / [transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx)
+  — the **producers** (scan recalc + the on-demand transcribe scan).
+* [decision_toggles.mdx](./decision_toggles.mdx) — the **two-axis toggles** each popup row renders.
+* [warnings.mdx](./warnings.mdx) — the **same popup**, surfaced as page banners; the To-Do page is the
+  aggregated cross-page view of the file-scoped ones.
+* [left_bar.mdx](./left_bar.mdx) — the **nav item** (§2 here) that opens this page.
+* [processing.mdx](./processing.mdx) — where **Applied** work runs and is watched.
+* [tables.mdx](./tables.mdx) / [non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx) — shared UI style.
+
+---
+
+## 1. What the page is for (LOCKED)
+
+A user with 30 repos, a Personal store, a Dropbox, and two Google Drives does not want 34 places to check.
+The To-Do page collapses all of that into **one scannable list of slugs**, each answering: *which storage,
+what kind of work, how much, and how much do I save?* — with one click to act.
+
+Design tenets:
+
+* **Only work shows.** A storage with nothing to do has **no** slug (§4). 30 repos, 3 with work → **3**
+  slugs; the other 27 are silent.
+* **A slug is a summary, not a table.** ~5 rows of plain language; the detail lives in the popup.
+* **Two buttons per slug.** A blue **chevron** (do it) and a red **trash** (not now) — §5.2.
+* **The layout adapts to the work.** A compress-only batch reads differently from a pull-down batch; the
+  batch's `pattern` picks the template (§5.1).
+
+---
+
+## 2. The left-bar item (LOCKED)
+
+**To Do** is a nav item in the app bar ([left_bar.mdx §3](./left_bar.mdx#3-the-app-bar-main-navigation)):
+
+* Label **"To Do"**, icon lucide `ListTodo`, route **`/todo`**.
+* Placed **after Scans, before Settings** (it is action-oriented, grouped with the other "what's
+  happening" surfaces).
+* It carries a **count badge** = the number of **non-dismissed batches with work** (the number of slugs it
+  would show). The badge is accent-colored when > 0, hidden at 0. This is the app's at-a-glance "you have
+  N things to look at."
+* Like every nav item its content is defined in `pm/left_bar.yaml`; this file specifies its behavior.
+
+The nav item + its live count badge is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — the To-Do `<Link>` (count from `GET /api/todo/batches`).
+
+---
+
+## 3. Page layout
+
+```
+┌────────────┬───────────────────────────────────────────────────────────────────────────┐
+│  LEFT BAR  │  To Do                                          Show what could be transcribed ↴ │ ← header + action link
+│            ├───────────────────────────────────────────────────────────────────────────┤
+│ Repos      │  ┌─────────────────────────────────────────────────────────────────────┐  │
+│ …          │  │ charlie-kirk (repo)           41 on other computers      6.8 GB      │  │ ← SLUG (pull-down/mixed)
+│ Scans      │  │ 41 files are pinned on studio-tower but not here.        pull down   │  │
+│ To Do  ③   │  │ 3 big files aren't git-ignored · 12 videos can compress  [ 🗑 ]  [ › ]│  │
+│ Settings   │  └─────────────────────────────────────────────────────────────────────┘  │
+│            │  ────────────────────────────────────────────────────────────────────────  │ ← divider
+│            │  ┌─────────────────────────────────────────────────────────────────────┐  │
+│            │  │ Personal                       58 videos + 13 audio                  │  │ ← transcribe SLUG
+│            │  │ These have no transcription yet.                                     │  │
+│            │  │ Transcribe to make them searchable.                     [ 🗑 ]  [ › ]│  │
+│            │  └─────────────────────────────────────────────────────────────────────┘  │
+│ [account]  │  ────────────────────────────────────────────────────────────────────────  │
+└────────────┴───────────────────────────────────────────────────────────────────────────┘
+```
+
+* **Header** — the page title **"To Do"** and, right-aligned, the **"Show what could be transcribed"**
+  action link (§7).
+* **Body** — a vertical list of **slugs**, most important first (§4.1), a thin horizontal **divider**
+  between each.
+* This page is **not** a TanStack table — it is a **card list** (slugs are rich, multi-column cards, not
+  rows). It is one of the few non-table surfaces in the app; the popups it opens still follow the shared
+  patterns.
+
+---
+
+## 4. Which slugs show, and how many (LOCKED)
+
+* Show a slug for **every batch with work** — `totals:` non-empty — that is **not `dismissed`**
+  ([to_do_batches.mdx §3.3](./to_do_batches.mdx#33-dismissed--the-red-trash-flag-locked)).
+* **Hide** clean storages entirely (no empty rows for the 27 quiet repos).
+* The count matches the left-bar **badge** (§2).
+* Empty state — no batches with work — renders a calm card: *"Nothing to do. Large File Bridge will list
+  recommendations here after its next scan."* (Never an error; this is the good state.)
+
+The list is fetched from `GET /api/todo/batches` (slug-shaped: identity + `totals` + `pattern`), served in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `GET /api/todo/batches`.
+
+### 4.1 Ordering — bubble up what matters (LOCKED)
+
+Slugs sort by an **importance score**, most important first:
+
+1. **Not-backed-up risk** first — `pull_down` and unpinned big files (data that exists on only one
+   computer) rank above cleanup niceties.
+2. Then **git_ignore** (a big file wrongly in Git is a repo-hygiene problem).
+3. Then **compress** (reclaimable space) and **transcribe** (enrichment), by magnitude
+   (reclaimable bytes / file count).
+4. **Dismissed-then-resurfaced** batches (contents changed since dismissal, §to_do_batches §3.3) come back
+   in at their natural rank; a still-dismissed batch does not show at all.
+
+The score is computed server-side so the badge and list agree, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` — `importanceScore(batch)`.
+
+---
+
+## 5. The slug (the compact card) (LOCKED)
+
+A slug is **~5 rows tall** and uses **up to three columns** — **left / center / right** — so it reads like
+a tiny dashboard, not a paragraph. It is deliberately **not** a table: some rows span the full width
+(a sentence describing the work), others use the three columns as **value/label pairs**.
+
+Anatomy (rows top→bottom):
+
+1. **Title row** — left: **storage name** + a muted **scope** tag (`repo` / `Personal` / `Dropbox` /
+   `Google Drive`). Right: the **headline metric** for this pattern (e.g. `41 on other computers`,
+   `6.8 GB reclaimable`, `58 videos + 13 audio`).
+2. **Sentence row** (full width) — one plain-English line: *what this is* (e.g. "41 files are pinned on
+   studio-tower but not on this computer yet").
+3. **Detail row(s)** — up to two rows of **three value/label cells** for the other categories present
+   (e.g. `3 big files not ignored` · `12 videos can compress` · `220 MB images`). A single-category
+   (`pattern` ≠ `mixed`) slug may use one detail row; `mixed` uses up to two.
+4. **Action row** — right-aligned: the **red trash** button then the **blue chevron** button (§5.2). The
+   left of this row may show a subtle context line (e.g. the storage path, muted).
+
+The [non-intrusive tooltip](./non_intrusive_tooltip.mdx) explains any metric on hover (in the left bar's
+reserved panel), so the slug itself stays terse.
+
+Each slug is rendered by `TodoBatchSlug`, which picks its template from `batch.pattern`, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoBatchSlug`.
+
+### 5.1 Slug templates — one per `pattern` (LOCKED)
+
+The code selects a template from the batch's `pattern`
+([to_do_batches.mdx §3.2](./to_do_batches.mdx#32-pattern-selects-the-slug-template-locked)). Each has a
+headline metric and a tuned sentence:
+
+| `pattern` | Headline metric | Sentence + detail cells | Chevron opens |
+| --- | --- | --- | --- |
+| **compress** | `X GB reclaimable` | "N videos and M images look uncompressed." · cells: `N videos` `M images` `X GB` | Compress popup |
+| **git_ignore** | `N big files` | "N big files aren't a good idea to check into Git." · cells: `N files` `total size` | Git-ignore popup |
+| **pull_down** | `N on other computers` | "N files are pinned on <device> but not on this computer yet." · cells: `N files` `size` `from <device>` | Pull-down popup |
+| **pin** | `N could be backed up` | "N big files aren't backed up across your computers." · cells: `N files` `size` | Pin popup |
+| **transcribe** | `N videos + M audio` | "These have no transcription yet. Transcribe to make them searchable." | Transcribe popup (§7, ~80%) |
+| **mixed** | the top category's metric | a compact rollup of all categories, one detail cell each | Mixed batch popup (all sections) |
+
+New patterns are added here + in the engine's `pattern` set; the code falls back to the **mixed** template
+for an unknown pattern rather than failing.
+
+### 5.2 The two per-slug buttons (LOCKED)
+
+* **Blue chevron "open" button** (right, primary) — a right-pointing chevron `›`, **blue fill, white
+  text/icon** (`--lfb-primary`). Opens the batch **popup** (§6). This is the "let's do this" affordance.
+* **Red trash "dismiss" button** (left of the chevron, secondary) — a trash-can, **white icon on a red
+  fill with a red edge** (`--lfb-bad`). Sets the batch's `dismissed` flag
+  ([to_do_batches.mdx §3.3](./to_do_batches.mdx#33-dismissed--the-red-trash-flag-locked)) — the slug
+  slides out of the list. It **never** deletes files or touches bytes; it is a "not now." A dismissed
+  batch stays hidden until its contents materially change.
+
+Dismiss → `DELETE /api/todo/batches/:id`; both buttons wired in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoBatchSlug` (chevron `onOpen`, trash `onDismiss`).
+
+---
+
+## 6. The batch popup (the evolved warnings dialog) (LOCKED)
+
+Opening a slug's chevron opens the **batch popup** — the same educate-list-apply surface the
+[warnings popup](./warnings.mdx#4-the-warning-popup-educate--options--the-subjects-list--fix) is, reused
+here. It is **no longer titled "warnings"**; it is the batch's action dialog:
+
+* **Header** — the storage name + what this batch is (e.g. "Pull down · charlie-kirk").
+* **Educate** — one short paragraph on *why* (e.g. "These files live on your other computers via IPFS.
+  Pulling them down copies them here and keeps them backed up.").
+* **The subjects list** — the batch's **files**, one row each, showing size and the **two-axis
+  [decision toggles](./decision_toggles.mdx#7-in-the-warning--to-do-batch-popups-locked)** **pre-set to
+  the recommended target** (RECOMMENDED/dashed where undecided). The user confirms or overrides per file;
+  a header toggle sets all.
+* **Live count** — the count of rows still set to act updates as toggles change
+  ([warnings.mdx §4.6](./warnings.mdx#46-the-live-count-the-6-that-updates)).
+* **Footer** — **Cancel** (left link) + a right **Apply** button whose label **spells out the checked
+  axes** ([warnings.mdx §4.4.1](./warnings.mdx#441-composed-action-verb-labels--the-button-spells-out-the-checked-axes-locked))
+  — e.g. *"Pull down 41 · git-ignore 41"*, *"Compress 12 videos"*.
+
+**Apply** writes each row's decision(s) to the shared ledger and queues the effects (pin/fetch, git-ignore,
+compress, transcribe), then hands off **asynchronously** — the popup closes, a bottom notification appears,
+and progress shows on the [Processing](./processing.mdx) page ([warnings.mdx §5.3](./warnings.mdx#53-success--asynchronous-hand-off-bottom-notification-then-the-warning-disappears)).
+Applied files drop out of the **next** recompute, so the slug shrinks or disappears.
+
+The batch popup reuses the warning popup component, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoBatchPopup` (mounts the shared `WarningPopup` body; apply → `POST /api/todo/batches/:id/apply`).
+
+---
+
+## 7. "Show what could be transcribed" (LOCKED)
+
+The header action link **"Show what could be transcribed"** runs the
+[What-Can-Be-Transcribed Calc Engine](./transcribe_calc_engine.mdx) across the storages and **adds
+transcribe slugs** to the list:
+
+* Click → the engine walks each storage for **video/audio without a transcription sidecar**, writes one
+  **transcribe batch** per storage, and the page shows a **transcribe slug** per storage that has any
+  (e.g. Personal `58 videos + 13 audio`; 4 of 30 repos each get one).
+* The link shows a brief **"Looking…"** state while the (opt-in, heavier) scan runs; it is cancelable.
+* A transcribe slug's chevron opens the **transcribe popup** — **~80% of the screen** width and height,
+  a **default-checked** file list, and an **"Transcribe N files"** Apply that enqueues **background**
+  transcription jobs watchable on [Processing](./processing.mdx)
+  ([transcribe_calc_engine.mdx §4](./transcribe_calc_engine.mdx#4-the-transcribe-slug--popup-locked)).
+
+The link → `POST /api/todo/transcribe-scan`; rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `ShowTranscribableLink`.
+
+---
+
+## 8. Relationship to warnings (LOCKED)
+
+The To-Do page and [warnings](./warnings.mdx) are **two views of one model**:
+
+* A **repo's** batch appears as the **yellow banner** on that repo's page; its blue-arrow popup **is** the
+  batch popup. The To-Do page shows that same batch as a **slug**.
+* Applying from either surface writes the same decisions and clears the same work from both.
+* Warnings that are **not** file batches (IPFS engine down, config health — [warnings.mdx §10.1](./warnings.mdx#101-ipfs-engine-install-config-health--only-our-content-compliance))
+  stay page-local and do **not** appear as To-Do slugs; the To-Do page is for **file work bundles**.
+
+---
+
+## 9. Acceptance criteria
+
+1. A **To Do** nav item (icon `ListTodo`, route `/todo`, after Scans/before Settings) opens this page and
+   shows a **count badge** = non-dismissed batches with work.
+2. The page renders **one slug per batch with work**, most-important first (not-backed-up > git-ignore >
+   compress/transcribe), with a thin **divider** between slugs; **clean storages show no slug**; the empty
+   state is a calm "Nothing to do."
+3. A **slug** is a ~5-row, up-to-three-column card whose layout is chosen by the batch's **`pattern`**
+   (compress / git_ignore / pull_down / pin / transcribe / mixed), with a headline metric, a plain-English
+   sentence, value/label detail cells, and an action row.
+4. Each slug has a **blue chevron** "open" button (opens the batch popup) and a **red trash** "dismiss"
+   button (sets `dismissed`, hides the slug, **never** deletes files/bytes).
+5. The **batch popup** reuses the warning popup: educate paragraph, the files list with **two-axis decision
+   toggles pre-set to the recommended target**, a live count, and an **Apply** button whose label spells
+   out the checked axes; Apply writes decisions + queues effects asynchronously and the work drops from the
+   next recompute.
+6. **"Show what could be transcribed"** runs the transcribe engine and adds **transcribe slugs**; their
+   chevron opens an **~80%-screen** popup with a default-checked list and a **"Transcribe N files"** Apply
+   that enqueues background jobs on Processing.
+7. A repo's batch is the **same** model as its page warning; applying from either surface clears it from
+   both; non-file-batch warnings do not appear as slugs.
+
+<!--
+  To Do page (/todo, nav item "To Do" ListTodo, after Scans before Settings, count badge). Renders each
+  TO DO Batch WITH WORK as a SLUG (card, ~5 rows, up-to-3 columns) — layout chosen by batch.pattern
+  (compress/git_ignore/pull_down/pin/transcribe/mixed; unknown → mixed). Only work shows; clean storages
+  hidden; empty = "Nothing to do". Slug buttons: blue chevron (open popup) + red trash (dismiss = set
+  dismissed flag, NEVER delete files). Batch popup = the evolved warnings dialog (educate + files with
+  two-axis decision toggles pre-set to RECOMMENDED + live count + Apply spelling out checked axes → writes
+  decisions + queues effects async → Processing). Header link "Show what could be transcribed" runs
+  transcribe_calc_engine → transcribe slugs → ~80% popup, default-checked, "Transcribe N files" → bg jobs.
+  Same model as warnings.mdx (repo batch = repo page banner). Page: TodoPage.tsx. Data: to_do_batches.mdx.
+-->

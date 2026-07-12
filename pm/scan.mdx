@@ -443,6 +443,29 @@ big-file counts, and "N new big files found" badges — all without the scan eve
 Diffing against the previous scan and writing the added/grew/deleted change set to each unit's `status.yaml` happens in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `diffStatus()` (persisted via `writeStatus()`)
 
+### 6.1 The scan recalc runs the TO DO Batch Calc Engine (LOCKED)
+
+After discovery + classification, the scan runs a **recalc stage**: the
+[TO DO Batch Calc Engine](./to_do_batch_calc_engine.mdx) walks each storage's files, decides the
+recommended action per file across the five categories (**pull_down · git_ignore · compress_video ·
+compress_image · pin**), assigns each to its owning storage's batch, and **recalculates-and-replaces**
+that storage's `_2_do.yaml` under [`_do_batches/`](./storage_local.mdx#21-_do_batches--the-to-do-batch-cache-locked).
+This is what powers the [To Do page](./to_do.mdx) slugs and most [warnings](./warnings.mdx). Cadence
+follows the scan itself:
+
+* **Every-4h discovery** → full recalc of every storage's batch.
+* **Every-15-min pinset pass** → light recalc of the **pull_down** / **pin** categories (which depend on
+  the manifest/pinset that pass refreshes).
+* **Watcher event / on-demand Rescan** → targeted recalc of the affected storage.
+
+The engine only *recommends* (dashed **RECOMMENDED** toggles, [decision_toggles.mdx §1](./decision_toggles.mdx)) —
+the scan still **writes no decision and moves no bytes**. The separate **What-Can-Be-Transcribed Calc
+Engine** ([transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx)) is **not** part of the scheduled
+scan — it runs only on the explicit "Show what could be transcribed" request.
+
+Invoking the recalc stage after classification is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — calls `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` — `TodoBatchCalcEngine.recalcAll()` / `recalcForStorage(storage)`.
+
 ---
 
 ## 7. The transparency contract (installed vs. on/off)

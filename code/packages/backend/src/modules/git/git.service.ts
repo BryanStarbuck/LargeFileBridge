@@ -51,6 +51,28 @@ export function classifyRemote(remote: string): RemoteKind {
 }
 
 /**
+ * Classify a remote's likely VISIBILITY for the decision-ledger privacy default (decisions.mdx §14):
+ *   • "none"    — no remote at all (null/empty) → a purely local repo.
+ *   • "public"  — hosted on a well-known PUBLIC forge (github.com / gitlab.com / bitbucket.org /
+ *                 codeberg.org / sr.ht). BEST-EFFORT and deliberately CONSERVATIVE: we cannot tell a
+ *                 private-vs-public *repo* on those hosts without a network call, and the charter forbids
+ *                 networking here — so we err toward "public" for these hosts. That makes the caller
+ *                 default attribution to `handle` (opaque) and WARN before committing raw emails, the
+ *                 safe direction for a possibly-public history.
+ *   • "private" — anything else (self-hosted host, SSH to a private server, an on-disk path).
+ *
+ * NB: distinct from {@link classifyRemote}, which answers a different question (URL vs. local-path SHAPE,
+ * for how to resolve a working copy). This one answers "would committing an email here likely leak it?"
+ */
+export function classifyRemoteVisibility(remoteUrl: string | null): "public" | "private" | "none" {
+  const r = (remoteUrl ?? "").trim();
+  if (!r) return "none";
+  // Match the known public forge hosts across URL and scp-like SSH shapes (`git@github.com:…`).
+  if (/\b(github\.com|gitlab\.com|bitbucket\.org|codeberg\.org|git\.sr\.ht)\b/i.test(r)) return "public";
+  return "private";
+}
+
+/**
  * A `simple-git` handle on a working directory, configured NON-INTERACTIVE so a URL remote authenticates
  * through the OS git credential helper and NEVER hangs on a password prompt (git_backbone.mdx §5).
  */
@@ -185,6 +207,11 @@ export class GitBackbone {
    */
   async pull(result: GitCycleResult): Promise<void> {
     if (!(await this.hasOrigin())) return;
+    // Write the union-merge `.gitattributes` BEFORE the merge (not only in commitAndPush, which runs
+    // after): git reads `.gitattributes` from the working tree at merge time, so the shared SDL lists
+    // (SyncList, manifest, decisions ledger) only fold conflict-free once this file is present. On a fresh
+    // backbone the first merge would otherwise happen before any `.gitattributes` existed (git_backbone.mdx §4.2).
+    this.ensureMergeAttributes();
     const branch = await this.branch();
     try {
       await this.git.fetch("origin", branch);

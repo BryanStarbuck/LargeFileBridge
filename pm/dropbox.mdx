@@ -312,7 +312,51 @@ The Dropbox mount is discovered and classified for the File System browser (the 
 
 ---
 
-## 10. Acceptance criteria
+## 10. TO DO Batch for this storage (LOCKED)
+
+Dropbox participates in the product-wide **TO DO Batch** system
+([to_do_batches.mdx](./to_do_batches.mdx)) — but through its **second role** (the browseable File System
+root, §9), not its backbone role. A **TO DO Batch is a per-storage bundle of recommended file actions** —
+there is exactly **one** Dropbox batch, scoped to the big files **under the Dropbox root**, persisted as
+hierarchical YAML at **`~/T/_large_files_bridge/_do_batches/dropbox_2_do.yaml`**. Like every batch it is
+**local, disposable, and uncommitted** — machine-local state only, **never** written into any `.lfbridge/`
+and **never** team-shared. (This is entirely separate from the Sync List that rides the Dropbox backbone;
+the batch never enters Dropbox — only the YAML list does, per the LOCKED rule at the top of this file.)
+
+* **Which categories apply to Dropbox.** The Dropbox root is a plain filesystem tree, not a repo, so
+  **`git_ignore`** ("big-but-not-git-ignored") applies **only to a Dropbox subfolder that is itself a Git
+  repo** — otherwise the batch carries **`compress_video`**, **`compress_image`**, **`pin`**, and
+  **`pull_down`**, plus the transcription discovery below.
+* **Dropbox-specific hazard — network / placeholder files.** The calc engine
+  ([to_do_batch_calc_engine.mdx](./to_do_batch_calc_engine.mdx)) **inherits the scan's network-mount
+  caution** (§4, §9.3): it judges candidates from `stat` metadata and **will not stall on unmaterialized
+  online-only / Smart Sync placeholders** — it never forces a download just to score a file for a
+  `pin`/`compress`/`pull_down` recommendation. Placeholders are recommended-on-metadata, materialized only
+  if the user later Applies.
+* **Recalculate-and-replace each scan.** The batch is **recomputed from scratch and replaced** on every
+  scan pass; it **recommends only** — never writes a decision, never moves a byte — and **skips any
+  file/axis the team already decided**.
+* **It surfaces on the To Do page as a slug.** Any batch **with work** renders on the To Do page
+  ([to_do.mdx](./to_do.mdx)) as a **slug**; opening the slug's chevron shows the recommendations as
+  two-axis **decision toggles** pre-set to the recommended state ([decision_toggles.mdx](./decision_toggles.mdx)),
+  which the user confirms and **Applies**.
+* **Transcription discovery for Dropbox.** The on-demand **"Show what could be transcribed"** link runs
+  the **What Can Be Transcribed Calc Engine** ([transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx)),
+  which walks the Dropbox root for **video/audio that has no `.transcription` sidecar** (again from
+  metadata, no forced materialization) and emits a per-storage **transcribe batch** → a **transcribe
+  slug** (a ~80%-width, default-checked popup: *"Transcribe N files"* → background jobs on
+  [processing.mdx](./processing.mdx)).
+
+Producing the Dropbox batch during scan recalc, and naming/replacing its YAML, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` —
+`TodoBatchCalcEngine.recalcForStorage(storage)` writing via
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` —
+`batchFileName(storage)` (→ `dropbox_2_do.yaml`); the transcribe discovery walk is
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts`.
+
+---
+
+## 11. Acceptance criteria
 
 Dropbox as a backbone is correct when **all** of the following hold:
 
@@ -347,6 +391,13 @@ Dropbox as a backbone is correct when **all** of the following hold:
     **regardless of** `backbones.dropbox.enabled`, reusing the §3 discovery + the legacy-`~/Dropbox`-symlink
     de-dup. This browsing role is **read-only metadata** (placeholders are never materialized to draw a row)
     and **never** writes to Dropbox or enables the backbone.
+11. Dropbox owns exactly **one TO DO Batch** (§10), persisted local/disposable/uncommitted at
+    `~/T/_large_files_bridge/_do_batches/dropbox_2_do.yaml`, scoped to big files under the Dropbox root and
+    recalculated-and-replaced each scan; its applicable categories are **`compress_video`,
+    `compress_image`, `pin`, `pull_down`** — **`git_ignore` only** for a Dropbox subfolder that is itself a
+    Git repo — plus the on-demand transcribe batch; the calc engine inherits the network-mount caution and
+    **never materializes placeholders** to score a file; batches with work surface as slugs on the To Do
+    page.
 
 <!--
   This is the DROPBOX backbone spec — one of three siblings (google_drive.mdx, repo__list_syns.mdx)
@@ -365,5 +416,14 @@ Dropbox as a backbone is correct when **all** of the following hold:
   the browsing role is READ-ONLY metadata, gated by NOTHING (shows regardless of backbones.dropbox.enabled),
   never enables the backbone / writes a Sync List / moves bytes, never materializes a placeholder. Code:
   cloud-roots.ts detectCloudRoots() (Dropbox branch) surfaced by fs.service.ts listDirectory() isHomeDir block.
+  §10 TO DO Batch: Dropbox owns ONE local/disposable/uncommitted batch dropbox_2_do.yaml under
+  ~/T/_large_files_bridge/_do_batches/ (via its File-System-root role §9, NOT the backbone; batch never
+  enters Dropbox), scoped to big files under the Dropbox root, recalc-and-replace each scan
+  (to_do_batch_calc_engine.mdx, recommends-only, skips folded decisions). Categories = compress_video/
+  compress_image/pin/pull_down; git_ignore ONLY for a Dropbox subfolder that is itself a git repo. Hazard:
+  calc engine inherits network-mount caution — judges from metadata, NEVER materializes online-only/Smart
+  Sync placeholders to score a file. Surfaces on To Do page as a slug (to_do.mdx, decision_toggles.mdx);
+  transcribe discovery via transcribe_calc_engine.mdx → transcribe slug. Code: todo-batch.engine.ts
+  recalcForStorage, todo-batches.store.ts batchFileName, transcribe-scan.engine.ts.
 -->
 

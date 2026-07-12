@@ -85,7 +85,8 @@ A flat, ordered list under the wordmark; the account slot pinned to the bottom. 
 | 5 | **Communities** | `Users` | `/communities` | Publishers of large **public** files (videos first) you subscribe to — **Get** their videos to watch, or **Support** them by rebroadcasting to keep them secure. Per community: **Block / Recommended / Full backup** against a disk budget ([Communities](./communities.mdx)). Opting in materializes a [community storage](./storage_community.mdx). |
 | 6 | **IPFS** | `Boxes` | `/ipfs` | What the local IPFS node is actually pinning — tracked vs. **pinned-but-untracked** content (import already-pinned files) and the node's only-our-content security posture ([IPFS](./ipfs.mdx)). |
 | 7 | **Scans** | `RefreshCw` | `/scans` | The scheduled background **scan tasks** ("scheduleTasks"): each `launchd` job's installed / on-off state, the every-15-min and every-4h schedules, and recent activity ([scan.mdx](./scan.mdx)). |
-| 8 | **Settings** | `Settings` | `/settings` | Account, allow-list, and IPFS node configuration. |
+| 8 | **To Do** | `ListTodo` | `/todo` | The one aggregated list of everything LFBridge recommends doing, bundled **per storage** as [TO DO Batches](./to_do_batches.mdx): pull-downs from your other computers, big files to git-ignore, videos/images to compress, files to back up, and media to transcribe. Each batch **with work** renders as a **slug**; only storages with work show ([To Do](./to_do.mdx)). Carries a **count badge** of non-dismissed batches with work. |
+| 9 | **Settings** | `Settings` | `/settings` | Account, allow-list, and IPFS node configuration. |
 
 The **Storages** item is a grouping tab with **children** (`children:` in the yaml): Personal · one per
 Company (derived from each company storage's `storage.yaml` `company_name`) · Repos (→ the Repos tab) ·
@@ -182,7 +183,9 @@ Resolving a nav item's lucide icon by name (unknown name renders nothing) is han
 4. The bar renders its content **from `pm/left_bar.yaml`** — items, order, icons, routes, labels,
    and gates; no hard-coded copies in components.
 5. The app bar lists exactly: Repos, Storages, File System, **Devices / Peers**, Communities, IPFS,
-   Scans, Settings — in that order. (The **Devices / Peers** item is the renamed former **Peers** item
+   Scans, **To Do**, Settings — in that order. (The **To Do** item — [to_do.mdx](./to_do.mdx) — opens the
+   aggregated per-storage batch list and carries a count badge of non-dismissed batches with work. The
+   **Devices / Peers** item is the renamed former **Peers** item
    — its label reads literally *"Devices / Peers"* and it opens the device registry in
    [devices.mdx](./devices.mdx). The **Scans** item is the renamed former **Sync** item — the
    scheduleTasks surface; §naming note. **Communities** — [communities.mdx](./communities.mdx) — is the

@@ -465,6 +465,31 @@ Determining the deepest-column scope root (the tail of the open-column stack) is
 Enforcing downward-only containment of the recursive walk (descend into children only, skip hidden/tracking/heavy dirs, never ascend to a parent) is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `enqueueTranscribe()` → `resolveCandidates()` → `walkMedia()` (recurses into child directories of `root` only; the mirror walk for descriptions is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `enqueueDescribe()`).
 
+### 5.2 Decision toggles on file rows — act on a big file without opening a repo (LOCKED reference)
+
+The action-links row (§5) is a **batch** over the browser's scope. For acting on **one** big file, every
+file/dir row across the File System surfaces also carries the two inline **decision toggles** — the
+**editable** counterpart of the read-only `P` (pin) and `I` (git-ignored) code badges. This is how a
+user pins a big file, or (under a repo) git-ignores it, **directly from the browser** — no need to open
+the file's repo. The grammar, four render states, and click semantics are owned by
+[decision_toggles.mdx](./decision_toggles.mdx) and [directories.mdx §3.6](./directories.mdx); this file
+only notes that they ride on the rows it hubs.
+
+* **Add-to-IPFS (pin)** toggle renders for **any large file**; **Add-to-git-ignore (⊘)** toggle is
+  **repo-scoped** — it renders only for files/dirs **under a Git repo** (`repoRootFor()`), else **N/A**.
+* Each renders OFF / ON (`#c2410c`) / **RECOMMENDED** (dashed orange — a calc-engine suggestion from
+  [to_do_batch_calc_engine.mdx](./to_do_batch_calc_engine.mdx)) / N/A. A click writes **one** axis to
+  the team-shared `.lfbridge/decisions.yaml`, performs that axis's effect (pin/unpin or `.gitignore`
+  write), **never deletes local bytes**, and **stops propagation** so it never navigates.
+* On a **directory** under a repo, turning ⊘ **ON** opens the [git-ignore pop-over](./git_ignore.mdx)
+  rather than writing silently. The **cloud-root rows (§4)** are ordinary `dir` rows, so under a repo
+  they carry the ⊘ toggle like any other directory.
+* The **Full paths** tab ([full_paths.mdx](./full_paths.mdx), `/fs/paths`) lists file rows, so the same
+  two toggle columns appear there — the editable counterpart of its `P` / `I` badge columns.
+
+Rendering the two inline toggles is owned by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/decision/DecisionToggles.tsx` — `DecisionToggles`; the under-a-repo test that gates the ⊘ toggle is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitService.repoRootFor()`.
+
 ---
 
 ## 6. Acceptance criteria
@@ -517,6 +542,14 @@ Enforcing downward-only containment of the recursive walk (descend into children
    the directory scope; an unopened stack is a `400`, never a fall-back walk of home or `/`.
 12. **No overlap:** this file does not re-specify the column browser, badges, filters, or the Full-paths
     table — those stay owned by [directories.mdx](./directories.mdx) and [full_paths.mdx](./full_paths.mdx).
+13. **Decision toggles on file rows (§5.2):** every file/dir row across the File System surfaces (column
+    browser, cloud-root rows, and the Full-paths tab) carries the two inline **decision toggles** — the
+    editable form of the `P` (pin) and `I` (git-ignored) badges. The **pin** toggle renders for any large
+    file; the **⊘ git-ignore** toggle renders **only under a repo** (`repoRootFor()`), else N/A. A click
+    writes **one** axis to `.lfbridge/decisions.yaml`, performs its effect, **never deletes local bytes**,
+    and **stops propagation** (never navigates); turning ⊘ ON for a **directory** under a repo opens the
+    [git-ignore pop-over](./git_ignore.mdx). Grammar/states owned by
+    [decision_toggles.mdx](./decision_toggles.mdx) / [directories.mdx §3.6](./directories.mdx).
 
 <!--
   HUB spec for the "File System" left-bar item (/fs). OWNS three things not owned elsewhere:
@@ -570,6 +603,14 @@ Enforcing downward-only containment of the recursive walk (descend into children
        below the deepest col. Unopened stack => {} => server 400, NEVER a fallback walk of home or /. Backend
        walkMedia() in transcribe.service.ts enqueueTranscribe()->resolveCandidates() recurses into children
        of root only (describe.service.ts enqueueDescribe() mirrors it).
+   (bonus §5.2) DECISION TOGGLES on file rows: brief REFERENCE (not owned here) — every file/dir row
+       across the FS surfaces (column browser, cloud rows, Full-paths tab) carries the two inline editable
+       toggles = writable form of the P (pin) / I (git-ignored) badges. Pin toggle = any large file; ⊘
+       git-ignore toggle = repo-scoped (renders only under a repo via git.service.ts repoRootFor(), else
+       N/A). States OFF/ON(#c2410c)/RECOMMENDED(dashed, from to_do_batch_calc_engine.mdx)/N/A; click writes
+       ONE axis to .lfbridge/decisions.yaml, never deletes bytes, stops propagation (never navigates); a
+       directory ⊘-ON opens git_ignore.mdx pop-over. Grammar owned by decision_toggles.mdx / directories.mdx
+       §3.6; component DecisionToggles.tsx.
   Does NOT restate: the Miller column browser / badges R-r·P·C-c·i / size+media filters / persisted state
   (owned by directories.mdx Part A) or the flat Full-paths table /fs/paths (owned by full_paths.mdx).
   Code: interest computed in entity.service.ts buildDirRollup() (extend to emit `interest`) using

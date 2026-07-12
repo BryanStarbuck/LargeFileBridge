@@ -6,7 +6,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
-import { RefreshCw, Settings, ChevronLeft, Network } from "lucide-react";
+import { RefreshCw, Settings, ChevronLeft, Network, Users, Clock, Ban } from "lucide-react";
 import { toast } from "sonner";
 import type { FileRow, Decision, RepoDetail, PinCounts, PinNowResult } from "@lfb/shared";
 import { formatBytes, viewerRouteForName } from "@lfb/shared";
@@ -21,6 +21,7 @@ import type { ActionScope } from "../../lib/pageActions.js";
 import { PinToggle } from "../../components/PinToggle.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { StatusBanner, FixButton } from "../../components/ui/StatusBanner.js";
+import { Tooltip } from "../../components/ui/Tooltip.js";
 import { Disclosure } from "../../components/ui/Disclosure.js";
 import { type Health } from "../../components/ui/health.js";
 import type { WarningDef } from "../../components/ui/warnings/registry.js";
@@ -32,6 +33,30 @@ import { clientLog } from "../../lib/clientLog.js";
 const DECISIONS: Decision[] = ["sync", "ignore", "undecided"];
 const decisionLabel = (d: Decision): string =>
   d === "sync" ? "Add to IPFS (pin)" : d[0].toUpperCase() + d.slice(1);
+
+// Decision provenance buckets (one_repo.mdx §4.8 / decisions.mdx §10). These labels double as the exact
+// Decision-column filter VALUES — the DataTable enum filter matches `accessor(row) === value`, so the
+// bucket accessor must return one of these strings verbatim.
+const PROVENANCE_BUCKETS = ["decided by me", "by a teammate", "policy-decided", "undecided"] as const;
+
+// Which provenance bucket a file falls in, given the current user's email (null when unknown). A
+// "policy:<email>" sentinel decidedBy is a policy auto-decision; a bare email that equals the viewer is
+// "me"; any other set decider (or an anonymous decidedAt with no decidedBy) is a teammate.
+function decisionBucket(f: FileRow, selfEmail: string | null): (typeof PROVENANCE_BUCKETS)[number] {
+  if (!f.decidedBy && !f.decidedAt) return "undecided";
+  if (f.decidedBy?.startsWith("policy:")) return "policy-decided";
+  if (f.decidedBy && selfEmail && f.decidedBy === selfEmail) return "decided by me";
+  return "by a teammate";
+}
+
+// Human name for the decider used in the tooltip: "you" for self, "policy (email)" for a policy
+// auto-decision, "a teammate" for an anonymous (attribution-off) decision, else the raw email.
+function decidedByLabel(f: FileRow, selfEmail: string | null): string {
+  if (!f.decidedBy) return "a teammate";
+  if (f.decidedBy.startsWith("policy:")) return `policy (${f.decidedBy.slice("policy:".length)})`;
+  if (selfEmail && f.decidedBy === selfEmail) return "you";
+  return f.decidedBy;
+}
 
 /** Human summary of what a pin run actually did — the honest counts, never a fixed string (pin_process.mdx §6). */
 function pinSummary(c: PinCounts): string {
@@ -55,6 +80,11 @@ export function OneRepoPage() {
     queryKey: ["repo", repoId],
     queryFn: () => api.repo(repoId),
   });
+
+  // Current user — shares the AppShell's ["me"] cache (one_repo.mdx §4.8). Drives the "decided by me"
+  // vs. "by a teammate" provenance split; null-safe so the glyph/tooltip degrade gracefully if absent.
+  const { data: me } = useQuery({ queryKey: ["me"], queryFn: api.me });
+  const selfEmail = me?.email ?? null;
 
   const setDecision = useMutation({
     mutationFn: ({ paths, decision }: { paths: string[]; decision: Decision }) =>
@@ -147,12 +177,18 @@ export function OneRepoPage() {
       accessor: () => "",
       cell: (f) => {
         const pinned = f.decision === "sync";
+        // Never-IPFS (decisions.mdx §17): a flagged file may never be pinned, so the pin toggle is
+        // disabled — you can't flip it into the Add-to-IPFS "sync" decision.
+        const blockedByNeverIpfs = !!f.neverIpfs;
         // Control cell — stop the click bubbling to the row's navigate (one_repo.mdx §4.7).
         return (
-          <span onClick={(e) => e.stopPropagation()}>
+          <span
+            onClick={(e) => e.stopPropagation()}
+            title={blockedByNeverIpfs ? "blocked by Never-IPFS" : undefined}
+          >
             <PinToggle
               pinned={pinned}
-              disabled={ipfsDown}
+              disabled={ipfsDown || blockedByNeverIpfs}
               onToggle={() =>
                 setDecision.mutate({ paths: [f.path], decision: pinned ? "ignore" : "sync" })
               }
@@ -185,20 +221,101 @@ export function OneRepoPage() {
       kind: "enum",
       accessor: (f) => f.decision,
       filterOptions: DECISIONS,
-      cell: (f) => (
-        <select
-          value={f.decision}
-          onClick={(e) => e.stopPropagation()}
-          onChange={(e) => setDecision.mutate({ paths: [f.path], decision: e.target.value as Decision })}
-          className="rounded border border-[var(--lfb-border)] px-1 py-0.5 text-xs"
-        >
-          {DECISIONS.map((d) => (
-            <option key={d} value={d}>
-              {decisionLabel(d)}
-            </option>
-          ))}
-        </select>
-      ),
+      cell: (f) => {
+        const bucket = decisionBucket(f, selfEmail);
+        // A small glyph flags a file decided by SOMEONE ELSE (one_repo.mdx §4.8): a person for a
+        // teammate, a clock for a policy auto-decision. Nothing for "me" or an undecided file.
+        const glyph =
+          bucket === "policy-decided" ? (
+            <Clock className="h-3.5 w-3.5 shrink-0 text-black/40" aria-label="decided by policy" />
+          ) : bucket === "by a teammate" ? (
+            <Users className="h-3.5 w-3.5 shrink-0 text-black/40" aria-label="decided by a teammate" />
+          ) : null;
+        // Never-IPFS (decisions.mdx §17): the Add-to-IPFS ("sync") option is disabled so a flagged file
+        // can't be pushed into a pin decision; Ignore / Undecided stay selectable. A Ban glyph + title
+        // spell out why. Mirrors ViewOneFilePage's per-option `disabled` guard.
+        const blockedByNeverIpfs = !!f.neverIpfs;
+        const select = (
+          <select
+            value={f.decision}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => setDecision.mutate({ paths: [f.path], decision: e.target.value as Decision })}
+            title={blockedByNeverIpfs ? "Add to IPFS is blocked by Never-IPFS" : undefined}
+            className="rounded border border-[var(--lfb-border)] px-1 py-0.5 text-xs"
+          >
+            {DECISIONS.map((d) => (
+              <option key={d} value={d} disabled={d === "sync" && blockedByNeverIpfs}>
+                {decisionLabel(d)}
+              </option>
+            ))}
+          </select>
+        );
+        const neverHint = blockedByNeverIpfs ? (
+          <span title="blocked by Never-IPFS" className="inline-flex text-black/40">
+            <Ban className="h-3.5 w-3.5 shrink-0" aria-label="blocked by Never-IPFS" />
+          </span>
+        ) : null;
+        const body = (
+          <span className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+            {select}
+            {glyph}
+            {neverHint}
+          </span>
+        );
+        // Non-intrusive tooltip (§4.8) — only when the file actually has an attributed decision.
+        if (!f.decidedBy && !f.decidedAt) return body;
+        return (
+          <Tooltip
+            content={`${decisionLabel(f.decision)} · decided by ${decidedByLabel(f, selfEmail)} · ${absoluteTime(f.decidedAt ?? null)}`}
+          >
+            {body}
+          </Tooltip>
+        );
+      },
+    },
+    {
+      // Provenance WHO — the bucket filter (decided by me / by a teammate / policy-decided / undecided,
+      // one_repo.mdx §4.8). enum accessor → the DataTable's exact-match filter dropdown. Not sortable
+      // (bucket order is not meaningful); the WHEN column below carries the sort-by-decided-at.
+      id: "decidedBy",
+      header: "Decided by",
+      kind: "enum",
+      accessor: (f) => decisionBucket(f, selfEmail),
+      filterOptions: [...PROVENANCE_BUCKETS],
+      sortable: false,
+      priority: 5,
+      cell: (f) => {
+        const bucket = decisionBucket(f, selfEmail);
+        if (bucket === "undecided") return <span className="text-black/20">—</span>;
+        const glyph =
+          bucket === "policy-decided" ? (
+            <Clock className="h-3.5 w-3.5 shrink-0" />
+          ) : bucket === "by a teammate" ? (
+            <Users className="h-3.5 w-3.5 shrink-0" />
+          ) : null;
+        return (
+          <span className="inline-flex items-center gap-1 text-xs text-black/60">
+            {glyph}
+            {bucket === "decided by me" ? "me" : decidedByLabel(f, selfEmail)}
+          </span>
+        );
+      },
+    },
+    {
+      // Provenance WHEN — sort-by-decided-at (one_repo.mdx §4.8): most recently triaged first. ISO-8601
+      // UTC sorts chronologically as a plain string, so the timestamp accessor needs no transform.
+      id: "decidedAt",
+      header: "Decided",
+      kind: "timestamp",
+      accessor: (f) => f.decidedAt ?? null,
+      filterable: false,
+      priority: 6,
+      cell: (f) =>
+        f.decidedAt ? (
+          <span title={absoluteTime(f.decidedAt)}>{relativeTime(f.decidedAt)}</span>
+        ) : (
+          <span className="text-black/20">—</span>
+        ),
     },
     { id: "status", header: "Status", kind: "enum", accessor: (f) => f.transfer,
       cell: (f) => <TransferPill status={f.transfer} /> },
@@ -433,6 +550,75 @@ function RepoVerdict({
         <Network className="h-4 w-4" /> See devices
       </FixButton>
     );
+  } else if ((detail.missingPinned?.length ?? 0) > 0) {
+    // Pull-them-down (warnings.mdx §10.8.12) — another of your computers pinned files whose bytes aren't
+    // here yet. Slotted BELOW the no-peer alarm (those files are safe elsewhere, just not replicated
+    // here) but ABOVE undecided triage. Two-pane popup: pin (fetch) + optional compress over the checked
+    // subjects; the composed action label (§4.4.1) is left to compose itself (no explicit actionLabel).
+    const missing = detail.missingPinned!;
+    const n = missing.length;
+    const device = missing[0]?.addedByDevice ?? "another computer";
+    state = "warn";
+    headline = `${n} file${n === 1 ? " is" : "s are"} pinned on another of your computers but not here yet`;
+    sub = `${device} pinned ${n === 1 ? "it" : "them"} — pull ${n === 1 ? "it" : "them"} down so this computer is a real second copy.`;
+    warning = {
+      id: "peer-pinned-files-not-here-pull-down",
+      state: "warn",
+      scope: "file",
+      headline,
+      sub,
+      popup: {
+        whatThisIs: `Another of your computers (${device}) pinned ${n} file${n === 1 ? "" : "s"} that ${n === 1 ? "isn't" : "aren't"} on this computer yet. Large File Bridge can pull ${n === 1 ? "it" : "them"} down over IPFS.`,
+        whyItMatters: `Until you pull ${n === 1 ? "it" : "them"} down, this computer is not a real second copy of ${n === 1 ? "that file" : "those files"} — losing the other machine would lose ${n === 1 ? "it" : "them"}. Review the list on the right and uncheck any you don't want.`,
+        // TWO action axes, both default-checked (warnings.mdx §10.8.12(B)). NO explicit actionLabel, so
+        // WarningPopup's composeActionLabel spells the button from the checked axes: "Compress and
+        // Continue: IPFS Add ›" / "Continue: IPFS Add ›" — plus the live checked-file count.
+        options: [
+          {
+            kind: "checkbox",
+            name: "ipfs",
+            label: "Add to IPFS (pin)",
+            helper: "fetch and pin the bytes down onto this computer",
+            defaultChecked: true,
+          },
+          {
+            kind: "checkbox",
+            name: "compress",
+            label: "Compress",
+            helper: "queue a compress pass once the bytes arrive",
+            defaultChecked: true,
+          },
+        ],
+        // Empty string = "no explicit label" (WarningPopup treats "" and omitted the same, §4.4.1), so the
+        // ≥2-axis label composes itself. The type requires the field, so we can't truly omit it.
+        actionLabel: "",
+        canApply: () => true, // pinning IS the pull; never block on the axis state (still needs ≥1 subject)
+        // Right-pane subjects — bytes are NOT local, so each row is described from the committed manifest +
+        // the peer's sidecar identity (§4.5 / §10.8.12(B)): name · target directory · size · added-by.
+        // id is the repo-relative path, which POST /pull receives.
+        targets: missing.map((mf) => {
+          const dir = mf.path.includes("/") ? mf.path.slice(0, mf.path.lastIndexOf("/")) : "";
+          return {
+            id: mf.path,
+            label: mf.name,
+            sublabel: `${dir || "(repo root)"} · ${formatBytes(mf.sizeBytes)} · added by ${mf.addedByDevice ?? "another computer"}`,
+          };
+        }),
+        targetNoun: "file",
+        // §5.3 — async: hand to the dock as a "pin" job, toast the pulled count, and refetch so the
+        // "pull them down" banner leaves the page once the bytes have arrived (§5.3.1).
+        progress: {
+          kind: "pin",
+          target: detail.name,
+          doneLabel: (_sel, count) => `${count} file${count === 1 ? "" : "s"} pulled`,
+          invalidate: [["repo", repoId]],
+        },
+        apply: async (sel, checkedPaths) => {
+          // Pin each checked CID (fetches its bytes over IPFS); compress after arrival when that axis is on.
+          await api.pull(repoId, checkedPaths, { compress: !!sel.checks.compress });
+        },
+      },
+    };
   } else if (undecided > 0) {
     state = "warn";
     headline = `${undecided} file${undecided === 1 ? "" : "s"} need${undecided === 1 ? "s" : ""} a decision`;
@@ -440,6 +626,18 @@ function RepoVerdict({
     // The subjects list (warnings.mdx §4.5): the actual undecided files, each a checkable row with its
     // size, all checked at open. Apply runs the chosen decision over exactly the CHECKED rows.
     const undecidedFiles = detail.files.filter((f) => f.decision === "undecided");
+    // Never-IPFS enforcement (decisions.mdx §17): count how many of the undecided files are flagged. When
+    // EVERY one is, the Add-to-IPFS axis is blocked — force it off + a "blocked by Never-IPFS" helper (the
+    // git-ignore axis stays). When only SOME are, keep the box enabled (the backend rejects ipfs:true only
+    // for the flagged paths) but note how many will be skipped. (WarningOption has no `disabled` field, so
+    // "forced off" is defaultChecked:false + an apply-time override rather than a truly disabled control.)
+    const neverIpfsCount = undecidedFiles.filter((f) => f.neverIpfs).length;
+    const allNeverIpfs = undecidedFiles.length > 0 && neverIpfsCount === undecidedFiles.length;
+    const ipfsHelper = allNeverIpfs
+      ? "Blocked by Never-IPFS — these files can't be added to IPFS."
+      : neverIpfsCount > 0
+        ? `back them up across your computers over IPFS · ${neverIpfsCount} of these ${neverIpfsCount === 1 ? "is" : "are"} Never-IPFS and will be skipped`
+        : "back them up across your computers over IPFS";
     warning = {
       id: "repo-files-need-decision",
       state: "warn",
@@ -463,8 +661,9 @@ function RepoVerdict({
             kind: "checkbox",
             name: "ipfs",
             label: "Add them to IPFS",
-            helper: "back them up across your computers over IPFS",
-            defaultChecked: true,
+            helper: ipfsHelper,
+            // Forced off when every subject is Never-IPFS (§17); otherwise the recommended default.
+            defaultChecked: !allNeverIpfs,
           },
           {
             kind: "checkbox",
@@ -493,16 +692,21 @@ function RepoVerdict({
         // this repo so the "N files need a decision" banner disappears — and STAYS gone, because the
         // decision is now a shared, sticky record (decisions.mdx §2).
         progress: {
-          kind: (sel) => (sel.checks.ipfs ? "pin" : sel.checks.gitignore ? "ignore" : "configure"),
+          // When Never-IPFS blocks the whole set, the IPFS axis is forced off, so the dock verb reflects
+          // the git-ignore/none outcome rather than "pin".
+          kind: (sel) =>
+            !allNeverIpfs && sel.checks.ipfs ? "pin" : sel.checks.gitignore ? "ignore" : "configure",
           target: detail.name,
           doneLabel: (_sel, n) => `${n} file${n === 1 ? "" : "s"} decided`,
           invalidate: [["repo", repoId]],
         },
         apply: async (sel, checkedPaths) => {
           // Record the full two-axis decision (either/both/neither) — the backend stamps who/when/SID into
-          // the team-shared ledger and reconciles the local pin state (decisions.mdx §3/§7).
+          // the team-shared ledger and reconciles the local pin state (decisions.mdx §3/§7). §17: force the
+          // IPFS axis off when every subject is Never-IPFS; when only some are, send the user's choice and
+          // let the backend reject ipfs:true for just the flagged paths.
           await api.setFileDecisions(repoId, checkedPaths, {
-            ipfs: !!sel.checks.ipfs,
+            ipfs: allNeverIpfs ? false : !!sel.checks.ipfs,
             gitignore: !!sel.checks.gitignore,
           });
         },

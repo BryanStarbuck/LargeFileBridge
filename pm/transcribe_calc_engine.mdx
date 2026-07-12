@@ -1,0 +1,150 @@
+---
+title: LargeFileBridge — What Can Be Transcribed Calc Engine
+description: The on-demand engine behind the To Do page's "Show what could be transcribed" action link. Unlike the always-on TO DO Batch Calc Engine, this one runs only when the user asks — it walks each storage (Personal, Dropbox, each Google Drive, each repo) for VIDEO and AUDIO files that do NOT yet have a transcription sidecar, and writes one transcribe batch per storage (kind: transcribe) into _do_batches/. Each transcribe batch becomes a transcribe SLUG on the To Do page; opening it shows an 80%-of-screen popup listing the transcribable files with checkboxes (checked = transcribe), and Apply enqueues transcription as background jobs visible on the Processing page. Sibling of to_do_batch_calc_engine.mdx (the always-on engine), to_do_batches.mdx (the transcribe batch schema, §4 there), Transcribe.mdx (the transcription engine it enqueues), to_do.mdx (the Show link + transcribe slug), and processing.mdx (where the jobs run).
+---
+
+# LargeFileBridge — What Can Be Transcribed Calc Engine
+
+The **What Can Be Transcribed Calc Engine** answers one question, per storage: *"which of my video and
+audio files still have no transcription?"* It is the on-demand sibling of the always-on
+[TO DO Batch Calc Engine](./to_do_batch_calc_engine.mdx) — it produces **transcribe batches**, which the
+[To Do page](./to_do.mdx) renders as **transcribe slugs**.
+
+It exists as a **separate, opt-in** engine because opening every media file's sidecar to check for a
+transcript is heavier than the default batch rollup — so LFBridge does it **only when the user clicks
+"Show what could be transcribed"** ([to_do.mdx §7](./to_do.mdx)), not on every scan.
+
+Siblings this builds on and does not repeat:
+
+* [to_do.mdx §7](./to_do.mdx) — the **"Show what could be transcribed"** action link that triggers this
+  engine, and the transcribe **slug** + popup it produces.
+* [to_do_batches.mdx §4](./to_do_batches.mdx#4-transcribe-batches--a-sibling-kind-locked) — the **output
+  schema**: `kind: transcribe`, `pattern: transcribe`, `transcribe_video` / `transcribe_audio`.
+* [Transcribe.mdx](./Transcribe.mdx) — the **transcription engine** this enqueues, and the `.transcription`
+  **sidecar** whose absence makes a file a candidate.
+* [special_files.mdx §3](./special_files.mdx#3-the-transcribable-sub-flag--video-has-audio-and-audio) — the
+  **`transcribable`** flag (video-with-audio + audio) that scopes what counts.
+* [processing.mdx](./processing.mdx) — where the enqueued transcription jobs run and are watched.
+* [to_do_batch_calc_engine.mdx](./to_do_batch_calc_engine.mdx) — the always-on engine; this one mirrors its
+  per-storage batching and `_do_batches/` output, differing only in what it looks for and when it runs.
+
+---
+
+## 1. When it runs (LOCKED)
+
+**Only on explicit request.** Triggers:
+
+| Trigger | Scope |
+| --- | --- |
+| **"Show what could be transcribed"** link on the To-Do page ([to_do.mdx §7](./to_do.mdx)) | all storages (or the currently focused one) |
+| **`POST /api/todo/transcribe-scan?scope=<id>`** | one storage, or all |
+| A **storage detail** page's "Show what could be transcribed" action ([storages.mdx §7.1](./storages.mdx#71-page-actions--the-action-links-row)) | that one storage |
+
+It is **never** part of the every-4h / every-15-min scan. Once its batches exist, a subsequent normal scan
+leaves them alone (they are a distinct `kind`); the user re-runs the link to refresh them.
+
+Triggering the on-demand scan is served in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/transcribe-scan`, calling
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts` — `WhatCanBeTranscribedCalcEngine.scanStorage(storage)` / `scanAll()`.
+
+---
+
+## 2. What counts as "can be transcribed" (LOCKED)
+
+A file is a candidate when **all** hold:
+
+1. It is **video or audio** — and for video, it **has an audio track** (a silent screen recording is not
+   transcribable). This is exactly the [`transcribable`](./special_files.mdx#3-the-transcribable-sub-flag--video-has-audio-and-audio)
+   sub-flag.
+2. It has **no transcription yet** — there is no `.transcription` sidecar for it at the resolved sidecar
+   location ([Transcribe.mdx §3](./Transcribe.mdx#3-where-transcripts-are-stored--a-transcription-sidecar-beside-the-media-locked)).
+3. It is not flagged to skip (no relevant sticky flag).
+
+Absence of a transcript is the whole test — a file that already has a `.transcription` sidecar never
+appears (mirroring the [page-action skip-already-done rule](./page_actions.mdx#1-scope--skip-already-done--background-queue-locked)).
+
+Deciding "transcribable and not yet transcribed" (sidecar existence check via the ordered resolver) is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts` — `isUntranscribed(file)` (reuses `Transcribe` sidecar resolution).
+
+---
+
+## 3. Per-storage batching (LOCKED)
+
+Like the To-Do engine, it emits **one transcribe batch per storage** that has candidates:
+
+* `~/Movies`, loose voice memos, Dropbox media, Google Drive media → **Personal / Dropbox / each Google
+  Drive** transcribe batches.
+* Each **repo** with untranscribed media → its own `repo_<name>_transcribe_2_do.yaml`.
+
+Example: Personal has **58 videos + 13 audio** untranscribed → one `personal_transcribe_2_do.yaml`
+totalling 71. Of 30 repos, only **4** have transcribable media → **4** transcribe slugs, one each.
+
+Output goes to the same `_do_batches/` directory with the transcribe schema
+([to_do_batches.mdx §4](./to_do_batches.mdx#4-transcribe-batches--a-sibling-kind-locked)); storages with no
+candidates produce no slug.
+
+---
+
+## 4. The transcribe slug & popup (LOCKED)
+
+Each transcribe batch renders as a **transcribe slug** ([to_do.mdx §5.1](./to_do.mdx)) — e.g.
+*"Personal · 58 videos + 13 audio can be transcribed."* Its **chevron button** opens the transcribe popup,
+which is **larger than a normal batch popup** (~**80% of the screen's width and height**) because the file
+lists are long:
+
+* A checklist of every candidate — each row **checked by default** (the user can uncheck ones to skip, or
+  toggle all).
+* The right-side **Apply** button reads *"Transcribe N files"* and, on click, **enqueues transcription as
+  background jobs** ([Transcribe.mdx §2.5](./Transcribe.mdx#25-the-page-action--create-transcriptions-selected-or-all-background-queued)).
+* Work runs **in the background** and is watchable on the **[Processing](./processing.mdx)** page/dock; the
+  popup can be closed immediately after Apply.
+
+As each file's transcription completes, its `.transcription` sidecar appears, so it **drops out** of the
+next run of this engine — the slug shrinks and eventually disappears.
+
+The transcribe popup (80% modal, default-checked list, "Transcribe N files" apply → enqueue) is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TranscribeBatchPopup` (apply calls `POST /api/todo/batches/:id/apply`, which fans out to the transcription queue).
+
+---
+
+## 5. Cost & safety (CTO notes)
+
+* **Opt-in for a reason.** Checking sidecar existence for potentially thousands of media files (across
+  cloud mounts) is the expensive part — gating it behind the explicit link keeps the default To-Do
+  recompute cheap.
+* **Read-only until Apply.** The engine only *lists* candidates; it transcribes nothing until the user
+  Applies. No file is read/decoded beyond what the `transcribable` flag already established.
+* **Network-mount aware & cancelable.** It runs as a detached job with the scan's hard-skip/network-mount
+  caution ([scan.mdx §4.3](./scan.mdx#43-the-hard-skip-directory-set-never-descend)); a long Google-Drive
+  walk shows progress and can be canceled without leaving partial slugs.
+* **Reuses the transcription engine wholesale** — it does **not** re-implement transcription; Apply hands
+  each file to the in-process engine ([Transcribe.mdx §5](./Transcribe.mdx#5-the-engine--copied-in-called-in-process-locked)),
+  which is offline/local and needs no credentials.
+
+---
+
+## 6. Acceptance criteria
+
+1. The engine runs **only on explicit request** ("Show what could be transcribed" / the API / a storage
+   page action) — **never** as part of the scheduled scan.
+2. A file is a candidate iff it is **transcribable** (audio, or video **with** an audio track) **and** has
+   **no `.transcription` sidecar** yet.
+3. It writes **one transcribe batch per storage** (`kind: transcribe`, `pattern: transcribe`,
+   `transcribe_video` / `transcribe_audio` totals) into `_do_batches/`; storages with no candidates produce
+   no slug.
+4. Each transcribe batch renders as a **transcribe slug**; its chevron opens an **~80%-screen** popup with a
+   **default-checked** file list; **Apply** enqueues transcription as **background jobs** watchable on the
+   Processing page.
+5. It **transcribes nothing until Apply**; completed files gain a sidecar and drop out of the next run.
+6. It reuses the local, credential-free [transcription engine](./Transcribe.mdx) and is
+   network-mount-safe, cancelable, and non-blocking.
+
+<!--
+  What Can Be Transcribed Calc Engine = ON-DEMAND sibling of the TO DO Batch Calc Engine. Trigger: the
+  "Show what could be transcribed" link (never the scheduled scan). Candidate = transcribable (audio, or
+  video WITH audio) AND no .transcription sidecar yet. Emits ONE transcribe batch per storage
+  (kind:transcribe) into _do_batches/ → transcribe SLUG. Chevron opens ~80% popup, default-checked list,
+  "Transcribe N files" → enqueue background jobs (processing.mdx). Read-only until Apply; reuses
+  Transcribe.mdx engine (offline, no creds). Engine: transcribe-scan.engine.ts; route
+  POST /api/todo/transcribe-scan. Output schema: to_do_batches.mdx §4. Page: to_do.mdx §7.
+-->

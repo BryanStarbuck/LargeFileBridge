@@ -1,0 +1,290 @@
+---
+title: LargeFileBridge — TO DO Batches (the data model + _do_batches/ storage)
+description: The TO DO Batch is the unit that powers both the To Do page and (most of) the warnings. A batch is a per-storage bundle of recommended file actions the TO DO Batch Calc Engine produced during a scan recalc — exactly ONE batch per storage (Personal, Dropbox, each Google Drive account, each repo). Each batch lists the files it recommends acting on and the recommended action per file across five categories: compress-video, compress-image, git-ignore (big-but-not-ignored), add-to-IPFS (pin), and pull-down (pinned on another computer, not on this one yet); transcribe batches are a sibling produced by the What-Can-Be-Transcribed engine. Batches persist as hierarchical YAML files under ~/T/_large_files_bridge/_do_batches/ (personal_2_do.yaml, dropbox_2_do.yaml, gdrive_<account>_2_do.yaml, repo_<name>_2_do.yaml). The calc engine RECALCULATES AND REPLACES a storage's file each run. A batch carries a dismissed flag and a pattern hint that selects the To-Do slug template. Sibling of to_do.mdx (the page/UI), to_do_batch_calc_engine.mdx + transcribe_calc_engine.mdx (the producers), and storage_local.mdx (the state root that holds _do_batches/).
+---
+
+# LargeFileBridge — TO DO Batches
+
+A **TO DO Batch** is the product's unit of "here is a bundle of files, and here is what we recommend you
+do with them." It is the single concept that powers **two** surfaces:
+
+* **The [To Do page](./to_do.mdx)** renders each batch that has work as a **slug** (a compact card), and
+  opens each in a **batch popup** to decide and apply.
+* **Most [warnings](./warnings.mdx)** are **projections of a batch** — the yellow banner on a repo page
+  is that repo's batch surfacing itself; its blue-arrow popup is the batch popup.
+
+> **Spelling note (voice dictation).** The correct terms are **"TO DO Batch"**, **"TO DO Batch Calc
+> Engine"**, and **"TO DO Calc Engine"** (earlier drafts mis-transcribed these as "two-decaw" / "2DU").
+> The file that holds a batch is a **`_2_do.yaml`** under **`_do_batches/`**.
+
+Siblings this builds on and does not repeat:
+
+* [to_do_batch_calc_engine.mdx](./to_do_batch_calc_engine.mdx) — the **TO DO Batch Calc Engine** that
+  **produces and replaces** these files during a [scan](./scan.mdx) recalc.
+* [transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx) — the **What-Can-Be-Transcribed Calc
+  Engine** that produces the sibling **transcribe** batches (§4).
+* [to_do.mdx](./to_do.mdx) — the page that reads these files and renders slugs + popups.
+* [storage_local.mdx](./storage_local.mdx) — the **state root** (`~/T/_large_files_bridge/`) under which
+  `_do_batches/` lives (§2 there).
+* [storages.mdx](./storages.mdx) — the **storages** a batch is keyed to (Personal / Company / Community /
+  each repo), and Dropbox / Google Drive as browseable roots.
+* [decision_toggles.mdx](./decision_toggles.mdx) — the toggles a batch's recommendations pre-set to
+  **RECOMMENDED** in the popup.
+
+---
+
+## 1. One batch per storage (LOCKED)
+
+A batch is **scoped to exactly one storage unit**. The set of possible batches on a computer is:
+
+| Batch scope | Covers | File name in `_do_batches/` |
+| --- | --- | --- |
+| **Personal** | the user's loose big files **outside** any repo, Dropbox, and Google Drive ([storage_personal.mdx](./storage_personal.mdx)) | `personal_2_do.yaml` |
+| **Dropbox** | big files under the Dropbox root ([dropbox.mdx §9](./dropbox.mdx#9-the-other-role--dropbox-as-a-browseable-file-system-root)) | `dropbox_2_do.yaml` |
+| **Google Drive** (one per account) | big files under **one** Google Drive account's root ([google_drive.mdx §10](./google_drive.mdx#10-the-other-role--google-drive-as-a-browseable-file-system-root)) | `gdrive_<account-slug>_2_do.yaml` |
+| **Repo** (one per repo) | one Git repo's large git-ignored files ([storage_repo.mdx](./storage_repo.mdx)) | `repo_<repo-slug>_2_do.yaml` |
+
+So a computer with 30 repos plus Personal, Dropbox, and two Google Drives can have up to **34** batches.
+The scoping is deliberate: it lets the To-Do page say *"repo #2 has work"* independently of *"your
+Dropbox has work"*, and it maps one-to-one to where a warning appears (a repo page shows only that repo's
+batch).
+
+**A file belongs to exactly one batch** — the storage it physically lives under. The calc engine decides
+membership by resolving the file's path to its owning storage ([to_do_batch_calc_engine.mdx §3](./to_do_batch_calc_engine.mdx)):
+a file under `~/BGit/xyz/` (a repo) goes in `repo_xyz_2_do.yaml`; a loose `~/Movies/clip.mov` goes in
+`personal_2_do.yaml`.
+
+The `<account-slug>` / `<repo-slug>` are lowercased, filesystem-safe, and **collision-resolved** so two
+storages never share a file name (a `-2` suffix is appended on collision), computed in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` — `batchFileName(storage)`.
+
+---
+
+## 2. Where batches live — `_do_batches/` (LOCKED)
+
+Batches are **local state**, not per-storage tracking — they are *this computer's current recommendations*,
+regenerated every scan. They therefore live under the **local state root**, not in any `.lfbridge/`:
+
+```
+~/T/_large_files_bridge/            ← the state root (storage_local.mdx §1)
+└── _do_batches/                    ← ALL To-Do + transcribe batch YAMLs (this spec)
+    ├── personal_2_do.yaml
+    ├── dropbox_2_do.yaml
+    ├── gdrive_bryan_act3ai_2_do.yaml
+    ├── gdrive_bryanstarbuck_gmail_2_do.yaml
+    ├── repo_charlie-kirk_2_do.yaml
+    ├── repo_largefilebridge_2_do.yaml
+    ├── …one repo_<name>_2_do.yaml per repo with work…
+    ├── personal_transcribe_2_do.yaml       ← transcribe batch (transcribe_calc_engine.mdx)
+    └── repo_charlie-kirk_transcribe_2_do.yaml
+```
+
+* The directory is created on demand under the resolved state root, honoring `LFB_STATE_DIR`
+  ([storage_local.mdx §1](./storage_local.mdx#1-the-state-root)).
+* These files are **machine-local and disposable** — they are **not** committed, not travelled to peers,
+  and safe to delete (the next scan rebuilds them). Contrast the **decisions** ledger, which *is* shared
+  and committed ([decisions.mdx §4](./decisions.mdx#4-where-it-lives--the-shared-team-visible-ledger-locked)).
+* Only storages **with work** need a file; a clean storage's file may be absent or present-and-empty
+  (the To-Do page shows neither, [to_do.mdx §4](./to_do.mdx)).
+
+`resolveTodoBatchesDir()` (the `_do_batches/` path under the state root) is to be added in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — beside `resolveStateDir()` / `resolveLogDir()`.
+
+---
+
+## 3. The batch YAML — every field (LOCKED shape)
+
+One hierarchical YAML per batch. The calc engine **replaces the whole file** each run (§5); readers
+never merge partial files.
+
+```yaml
+# ~/T/_large_files_bridge/_do_batches/repo_charlie-kirk_2_do.yaml
+batch:
+  id: "repo:charlie-kirk"          # stable id = "<scope>:<slug>" (scope ∈ personal|dropbox|gdrive|repo)
+  scope: repo                      # personal | dropbox | gdrive | repo
+  storage_name: "charlie-kirk"     # human label shown on the slug
+  storage_root: "~/BGit/charlie-kirk"
+  kind: todo                       # todo (this engine) | transcribe (the transcribe engine, §4)
+  pattern: mixed                   # the SLUG TEMPLATE hint (§3.2) — compress | git_ignore | pull_down | pin | transcribe | mixed
+  computed_at: 2026-07-12T05:41:00Z
+  computed_by_scan: "scan-2026-07-12T05:40Z"
+  dismissed: false                 # user hit the red trash on the slug (§3.3) — deprioritize/hide
+  dismissed_at: null
+
+  # Roll-up counts the slug reads WITHOUT opening every file (§3.1). One entry per category present.
+  totals:
+    compress_video:   { count: 12, reclaimable_bytes: 6800000000 }   # videos that look uncompressed
+    compress_image:   { count: 4,  reclaimable_bytes:  220000000 }   # images that look uncompressed
+    git_ignore:       { count: 3 }                                    # big + not git-ignored
+    pin:              { count: 5 }                                    # eligible, not yet Added-to-IPFS
+    pull_down:        { count: 41 }                                   # pinned on ANOTHER computer, absent here
+
+  # The actual files, grouped by category. Each item is one recommendation the popup renders as a row
+  # with its decision toggles pre-set to RECOMMENDED (decision_toggles.mdx §7).
+  items:
+    pull_down:
+      - path: "videos/rally_4k.mov"          # relative to storage_root
+        size_bytes: 812000000
+        cid: "bafy…"                          # known from the shared manifest (storage_local.mdx §9)
+        pinned_on: ["studio-tower"]           # devices that already hold it (devices.mdx)
+        recommend: { ipfs: true, git_ignore: true }   # the RECOMMENDED target per axis
+      - path: "videos/press_conf.mov"
+        size_bytes: 640000000
+        cid: "bafy…"
+        pinned_on: ["studio-tower"]
+        recommend: { ipfs: true, git_ignore: true }
+    git_ignore:
+      - path: "raw/interview_master.mov"
+        size_bytes: 3100000000
+        recommend: { ipfs: true, git_ignore: true }   # big + not ignored → we recommend BOTH
+    compress_video:
+      - path: "exports/promo_uncompressed.mov"
+        size_bytes: 1900000000
+        est_compressed_bytes: 240000000
+        recommend: { compress: true }
+    pin:
+      - path: "assets/logo_pack.zip"
+        size_bytes: 180000000
+        recommend: { ipfs: true }
+```
+
+### 3.1 `totals:` is what the slug reads
+
+The **slug** ([to_do.mdx §5](./to_do.mdx)) renders from `totals:` alone — counts and reclaimable bytes
+per category — so the To-Do page paints fast without opening the (possibly large) `items:` block. The
+popup reads `items:` when the user opens it.
+
+### 3.2 `pattern:` selects the slug template (LOCKED)
+
+`pattern` is the engine's hint for **which slug layout to draw** ([to_do.mdx §5.1](./to_do.mdx)):
+
+| `pattern` | Meaning | Slug template |
+| --- | --- | --- |
+| `compress` | only compress categories present | Compress slug — "N videos / M images, X GB reclaimable" |
+| `git_ignore` | only big-but-not-ignored | Git-ignore slug — "N big files aren't a good idea to check in" |
+| `pull_down` | only files pinned elsewhere, missing here | Pull-down slug — "N files are on your other computers but not here" |
+| `pin` | only eligible-not-yet-pinned | Pin slug — "N files could be backed up across your computers" |
+| `transcribe` | a transcribe batch (§4) | Transcribe slug — "N videos / M audio can be transcribed" |
+| `mixed` | two or more categories present | Mixed slug — a compact multi-line rollup |
+
+The categories align **exactly** with the charter's category-rollup table
+([README / CLAUDE.md](../CLAUDE.md) — "Videos that can be compressed / Images that can be compressed /
+Big files that aren't a good idea to check in / Big files being git-ignored") plus **pull-down** (the
+cross-computer case this product adds).
+
+### 3.3 `dismissed:` — the red-trash flag (LOCKED)
+
+When the user clicks the **red trash** on a slug ([to_do.mdx §5.2](./to_do.mdx)), LFBridge sets
+`dismissed: true` + `dismissed_at` **in this file** — it does **not** delete the file or act on any bytes.
+Effect:
+
+* The slug **leaves the To-Do list** for now.
+* On the **next scan recalc**, the engine still recomputes the batch, but a dismissed batch whose contents
+  are **unchanged** stays **deprioritized** (it does not re-bubble to the top; [to_do.mdx §4.1](./to_do.mdx)).
+  If the batch's contents **change materially** (new files appear), the engine clears `dismissed` so the
+  new work surfaces.
+
+Dismiss is a *"not now"*, never a decision about the files themselves — the files keep whatever decisions
+they had in the shared ledger.
+
+Setting/clearing `dismissed` (and the materially-changed reset) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` — `dismissBatch(id)` and `TodoBatchCalcEngine.reconcileDismissed()`.
+
+---
+
+## 4. Transcribe batches — a sibling `kind` (LOCKED)
+
+The [What-Can-Be-Transcribed Calc Engine](./transcribe_calc_engine.mdx) writes batches into the **same**
+`_do_batches/` directory, with `kind: transcribe` and `pattern: transcribe`, one per storage, named
+`<scope>_<slug>_transcribe_2_do.yaml`. Their `items:` list video/audio files **without** a transcription
+sidecar ([Transcribe.mdx §3](./Transcribe.mdx#3-where-transcripts-are-stored--a-transcription-sidecar-beside-the-media-locked)):
+
+```yaml
+batch:
+  id: "personal:transcribe"
+  scope: personal
+  kind: transcribe
+  pattern: transcribe
+  totals:
+    transcribe_video: { count: 58 }
+    transcribe_audio: { count: 13 }
+  items:
+    transcribe_video:
+      - { path: "…/keynote.mp4", size_bytes: 900000000, has_transcription: false }
+    transcribe_audio:
+      - { path: "…/memo.wav", size_bytes: 40000000, has_transcription: false }
+```
+
+Transcribe batches are produced **on demand** — only when the user clicks **"Show what could be
+transcribed"** ([to_do.mdx §7](./to_do.mdx)) — not on every scan, because opening every media file's
+sidecar is more expensive than the default rollup. Once produced they render as **transcribe slugs**
+alongside the To-Do slugs.
+
+---
+
+## 5. Recalculate-and-replace (LOCKED)
+
+A batch file is **owned by its engine**, not hand-edited:
+
+* Each [scan recalc](./scan.mdx) runs the [TO DO Batch Calc Engine](./to_do_batch_calc_engine.mdx), which
+  **rebuilds each storage's batch from scratch and atomically replaces** the file — any prior
+  recommendations that no longer apply are **removed**, not merged.
+* The only fields that **survive** a replace are the user's `dismissed` / `dismissed_at`, and only while
+  the contents have not materially changed (§3.3).
+* Applying a batch (the popup's Apply) writes **decisions** (to the shared ledger) and performs the
+  **effects** (pin / ignore / compress / transcribe) — it does **not** edit the batch file; the applied
+  files simply drop out of the **next** recompute because they are no longer recommendable.
+
+This keeps the batch a **pure projection of current reality**: the source of truth is the files + the
+decisions ledger; the batch is a cache the To-Do page and warnings read.
+
+The whole-file atomic replace (temp file + rename) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` — `writeBatch(batch)`.
+
+---
+
+## 6. Reading batches — the API surface (LOCKED)
+
+| Route | Returns / does |
+| --- | --- |
+| `GET /api/todo/batches` | All batches **with work** (`totals` non-empty, not `dismissed`), each summarized to its slug shape (`totals` + `pattern` + identity). Powers the To-Do page (§[to_do.mdx §4](./to_do.mdx)). |
+| `GET /api/todo/batches/:id` | One batch's full `items:` — powers the batch popup. |
+| `POST /api/todo/batches/:id/apply` | Applies the checked recommendations (writes decisions + queues effects); returns the async hand-off ([warnings.mdx §5.3](./warnings.mdx)). |
+| `DELETE /api/todo/batches/:id` | Sets `dismissed` (§3.3) — not a file delete. |
+| `POST /api/todo/transcribe-scan?scope=<id>` | Runs the [transcribe engine](./transcribe_calc_engine.mdx) for a scope (or all) and writes its transcribe batches. |
+
+These routes are served in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `todoRouter`.
+
+---
+
+## 7. Acceptance criteria
+
+1. A **TO DO Batch** is scoped to **exactly one storage** (Personal · Dropbox · one per Google Drive
+   account · one per repo); a file belongs to the batch of the storage it lives under.
+2. Batches persist as hierarchical YAML under **`~/T/_large_files_bridge/_do_batches/`** with the names in
+   §1 (collision-resolved), honoring `LFB_STATE_DIR`; they are **machine-local, disposable, uncommitted**.
+3. Each batch YAML carries `scope` / `storage_name` / `kind` / `pattern` / `computed_at` / `dismissed`, a
+   `totals:` rollup per category, and an `items:` list whose entries carry the path, size, and a
+   `recommend:` target per axis (`ipfs` / `git_ignore` / `compress`).
+4. Categories are **compress_video · compress_image · git_ignore · pin · pull_down** (To-Do) and
+   **transcribe_video · transcribe_audio** (transcribe batches); `pull_down` = files pinned on another
+   computer but absent here.
+5. `pattern` selects the To-Do **slug template** (compress / git_ignore / pull_down / pin / transcribe /
+   mixed).
+6. The **red trash** sets `dismissed` in the file (never deletes files/bytes); a dismissed-but-unchanged
+   batch stays deprioritized, and materially-new contents clear the flag.
+7. The calc engine **recalculates and replaces** a storage's whole batch each scan; Apply writes decisions
+   + effects and never edits the batch file; applied files drop out of the next recompute.
+8. The API exposes list (slugs) / detail (items) / apply / dismiss / transcribe-scan.
+
+<!--
+  TO DO Batch = per-storage bundle of recommended file actions. ONE per storage: personal_2_do.yaml,
+  dropbox_2_do.yaml, gdrive_<acct>_2_do.yaml, repo_<name>_2_do.yaml — all under
+  ~/T/_large_files_bridge/_do_batches/ (LOCAL, disposable, uncommitted — NOT .lfbridge, NOT shared).
+  Categories: compress_video/compress_image/git_ignore/pin/pull_down (+ transcribe_video/audio for
+  kind:transcribe). pattern selects the slug template. RECALCULATE-AND-REPLACE each scan; only dismissed
+  survives (and only while unchanged). Apply writes decisions (shared ledger) + effects, never edits the
+  file. Produced by to_do_batch_calc_engine.mdx (scan) + transcribe_calc_engine.mdx (on-demand). Read by
+  to_do.mdx (slugs+popup) and projected as warnings.mdx. Frozen filename form: *_2_do.yaml.
+-->

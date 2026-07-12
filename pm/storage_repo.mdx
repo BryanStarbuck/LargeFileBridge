@@ -136,7 +136,51 @@ The repos list and per-repo UI over this storage are rendered in code:
 
 ---
 
-## 6. Acceptance criteria
+## 6. TO DO Batch for this storage (LOCKED)
+
+A repo storage participates in the product-wide **TO DO Batch** system
+([to_do_batches.mdx](./to_do_batches.mdx)). A **TO DO Batch is a per-storage bundle of recommended file
+actions** — there is exactly **one** batch per repo, persisted as hierarchical YAML at
+**`~/T/_large_files_bridge/_do_batches/repo_<repo-slug>_2_do.yaml`** (the `<repo-slug>` derived from the
+repo root). Like every batch it is **local, disposable, and uncommitted** — it lives only in the
+machine-local state root, is **never** written into the repo's `.lfbridge/`, and is **never** team-shared.
+(Contrast the **committed, travelling** `decisions.yaml` ledger of §1: the batch *reads* that ledger; it is
+not part of it.)
+
+* **This is the richest batch — all five categories apply.** A repo is the **only** storage where
+  **`git_ignore`** ("big files that aren't a good idea to check in") is meaningful, so a repo batch can
+  carry **`compress_video`**, **`compress_image`**, **`git_ignore`**, **`pin`**, and **`pull_down`** — the
+  full set — plus the transcription discovery below.
+* **Produced from the repo's classified files + the folded decisions ledger.** The calc engine
+  ([to_do_batch_calc_engine.mdx](./to_do_batch_calc_engine.mdx)) builds the batch from the repo's
+  **classified special files** ([special_files.mdx](./special_files.mdx)) and then **folds in the
+  team-shared decisions ledger** ([decisions.mdx](./decisions.mdx)): it **recommends only** — never writes a
+  decision, never moves a byte — and **skips any file/axis the team already decided**, so a teammate's
+  earlier triage is never re-asked.
+* **Recalculate-and-replace each scan.** The batch is **recomputed from scratch and replaced** on every
+  scan pass; it holds no durable state of its own.
+* **Same model, two surfaces (see [to_do.mdx §8](./to_do.mdx#8)).** This same batch is what the per-repo
+  screen surfaces as its **yellow warning banner** ([warnings.mdx](./warnings.mdx)) *and* what the To-Do
+  page renders as a **slug**. The repo page and the To-Do page are two views of one underlying batch, not
+  two computations. Opening the slug's chevron shows the recommendations as two-axis **decision toggles**
+  pre-set to the recommended state ([decision_toggles.mdx](./decision_toggles.mdx)), which the user confirms
+  and **Applies**.
+* **Transcription discovery for the repo.** The on-demand **"Show what could be transcribed"** link runs
+  the **What Can Be Transcribed Calc Engine** ([transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx)),
+  which walks this repo for **video/audio that has no `.transcription` sidecar** and emits a per-repo
+  **transcribe batch** → a **transcribe slug** (a ~80%-width, default-checked popup: *"Transcribe N
+  files"* → background jobs on [processing.mdx](./processing.mdx)).
+
+Producing the repo batch during scan recalc, and naming/replacing its YAML, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` —
+`TodoBatchCalcEngine.recalcForStorage(storage)` writing via
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` —
+`batchFileName(storage)` (→ `repo_<repo-slug>_2_do.yaml`); the transcribe discovery walk is
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts`.
+
+---
+
+## 7. Acceptance criteria
 
 1. Any Git repo LFB tracks is a **repo storage** whose **root is the repo root** (`~/BGit/xyz/`) and whose
    tracking lives in a hidden, **git-ignored** **`~/BGit/xyz/.lfbridge/`**.
@@ -148,10 +192,23 @@ The repos list and per-repo UI over this storage are rendered in code:
    **Git**; the repo may also mirror to **Google Drive / Dropbox** per its `clones` block.
 5. The repo storage is surfaced through the **Repos** tab (long list + per-repo screen) and the **Repos**
    child of the Storages tab; it is **not** individually listed inside the Storages tab.
+6. Each repo owns exactly **one TO DO Batch**, persisted local/disposable/uncommitted at
+   `~/T/_large_files_bridge/_do_batches/repo_<repo-slug>_2_do.yaml`, recalculated-and-replaced each scan
+   from the repo's classified files folded with the team-shared decisions ledger; it is the **richest
+   batch** — **all five** categories apply (**`compress_video`, `compress_image`, `git_ignore`, `pin`,
+   `pull_down`**) plus the on-demand transcribe batch; the **same** batch is the repo's yellow warning
+   banner and the To-Do page slug (§6).
 
 <!--
   Repo storage = any Git repo. Storage root = repo root (~/BGit/xyz/); tracking = ~/BGit/xyz/.lfbridge/
   (git-ignored): storage.yaml (name + type: repo + repo_root), files.yaml fingerprints, manifest.yaml,
   analysis/. Reuses the shared model from storages.mdx (don't restate it). UI = repos.mdx + one_repo.mdx.
   The Storages tab represents all repos with ONE "Repos" child that links to the Repos tab.
+  §6 TO DO Batch: each repo owns ONE local/disposable/uncommitted batch repo_<slug>_2_do.yaml under
+  ~/T/_large_files_bridge/_do_batches/, recalc-and-replace each scan from classified special files +
+  folded team decisions ledger (to_do_batch_calc_engine.mdx, recommends-only, skips folded decisions).
+  RICHEST batch — ALL FIVE categories apply incl. git_ignore. Same batch = the repo's yellow warning
+  banner (warnings.mdx) AND the To-Do page slug (to_do.mdx §8, decision_toggles.mdx). Transcribe discovery
+  via transcribe_calc_engine.mdx → transcribe slug. Code: todo-batch.engine.ts recalcForStorage,
+  todo-batches.store.ts batchFileName, transcribe-scan.engine.ts.
 -->

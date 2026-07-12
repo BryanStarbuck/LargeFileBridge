@@ -24,6 +24,62 @@ import {
   type WarningSelection,
 } from "./warnings/registry.js";
 
+// §4.4.1 — Composed action-verb labels. When a popup offers MORE THAN ONE independent "action axis"
+// (two-or-more checkboxes that each toggle a *different thing to DO* — e.g. Add-to-IPFS + Compress, or
+// Add-to-IPFS + git-ignore), the button label is not one fixed verb: it is spelled out from exactly the
+// axes currently CHECKED and rewrites the instant an axis is toggled, like the live count (§4.6).
+//
+// The axis→verb table. Each recognized DO-action maps to a spelled-out verb plus a fixed `priority`
+// (lowest first when joined). The axis carrying `carrierSuffix` is the "primary/continue" axis — its
+// noun rides the trailing "Continue: …" clause that stays LAST, right before the chevron.
+const ACTION_AXIS_META: Record<string, { priority: number; verb: string; carrierSuffix?: string }> = {
+  compress: { priority: 1, verb: "Compress" },
+  gitignore: { priority: 2, verb: "Git-ignore" },
+  ipfs: { priority: 3, verb: "IPFS Add", carrierSuffix: "IPFS Add" }, // pin — the continue carrier
+};
+
+// Fallback verb for an axis we recognize as a DO-action but haven't given bespoke wording.
+function fallbackAxisVerb(axis: string): string {
+  return axis.charAt(0).toUpperCase() + axis.slice(1);
+}
+
+// Normalize a checkbox `name` to a canonical action-axis id (or null when the checkbox is NOT a
+// DO-action). Options carry no explicit flag, so we key off the DO-action names callers use: "ipfs" /
+// "pin", "compress", "gitignore" / "git-ignore" / "ignore". Kept general — not hardcoded to one popup.
+export function toActionAxisKey(name: string): string | null {
+  const n = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (n.includes("compress")) return "compress";
+  if (n.includes("gitignore") || n.includes("ignore")) return "gitignore";
+  if (n.includes("ipfs") || n.includes("pin")) return "ipfs";
+  return null;
+}
+
+function appendCount(phrase: string, checkedCount?: number): string {
+  if (checkedCount == null) return phrase;
+  return `${phrase} — ${checkedCount} ${checkedCount === 1 ? "file" : "files"}`;
+}
+
+// Compose the multi-axis button verb from exactly the CHECKED axes, ordered by the fixed priority above,
+// with the primary/continue verb kept last (the chevron is rendered separately by the button, so it is
+// NOT part of this string). When a subjects list is present the caller may pass the live checked count,
+// which is appended as "— N files"; in the component we instead reuse the existing §4.6 count suffix so
+// the noun/pluralization logic is never duplicated. Both-axes-off is a valid recorded decision
+// (§10.2.7): the phrase becomes a "reviewed — leave it" verb and the button stays enabled.
+export function composeActionLabel(checkedAxes: string[], checkedCount?: number): string {
+  const ordered = Array.from(new Set(checkedAxes)).sort(
+    (a, b) => (ACTION_AXIS_META[a]?.priority ?? 0) - (ACTION_AXIS_META[b]?.priority ?? 0),
+  );
+  if (ordered.length === 0) return appendCount("Save decision", checkedCount);
+
+  // Highest-priority checked carrier axis (IPFS/pin) rides the trailing "Continue: …" clause.
+  const carrier = [...ordered].reverse().find((a) => ACTION_AXIS_META[a]?.carrierSuffix);
+  const continueClause = carrier ? `Continue: ${ACTION_AXIS_META[carrier]!.carrierSuffix}` : "Continue";
+  const leadVerbs = ordered
+    .filter((a) => a !== carrier)
+    .map((a) => ACTION_AXIS_META[a]?.verb ?? fallbackAxisVerb(a));
+  return appendCount([...leadVerbs, continueClause].join(" and "), checkedCount);
+}
+
 export function WarningPopup({
   warning,
   onClose,
@@ -143,8 +199,28 @@ export function WarningPopup({
     }
   };
 
-  // Live count (§4.6): the button carries "— {n} {noun}s" when the warning has subjects.
-  const base = resolveActionLabel(popup, sel);
+  // §4.4.1 — detect the popup's independent ACTION AXES (checkboxes whose `name` is a DO-action) and
+  // gather the ones currently CHECKED. When there are ≥2 axes and the caller did NOT supply an explicit
+  // actionLabel (empty string / omitted), the button verb is COMPOSED from the checked axes and rewrites
+  // reactively as they toggle. If the caller DID supply an actionLabel (string or function), respect it
+  // (back-compat); single-axis and radio-only popups are therefore unchanged.
+  let actionAxisCount = 0;
+  const checkedAxisKeys: string[] = [];
+  for (const o of popup.options ?? []) {
+    if (o.kind !== "checkbox") continue;
+    const key = toActionAxisKey(o.name);
+    if (!key) continue;
+    actionAxisCount++;
+    if (sel.checks[o.name]) checkedAxisKeys.push(key);
+  }
+  const explicitActionLabel =
+    typeof popup.actionLabel === "function" ||
+    (typeof popup.actionLabel === "string" && popup.actionLabel.trim() !== "");
+  const useComposedLabel = actionAxisCount >= 2 && !explicitActionLabel;
+
+  // Live count (§4.6): the button carries "— {n} {noun}s" when the warning has subjects. For a composed
+  // multi-axis label we reuse this SAME count suffix (do not pass checkedCount into composeActionLabel).
+  const base = useComposedLabel ? composeActionLabel(checkedAxisKeys) : resolveActionLabel(popup, sel);
   const countSuffix = hasTargets ? ` — ${checked.size} ${pluralizeNoun(noun, checked.size)}` : "";
   const label = confirming ? `Confirm — ${base}${countSuffix}` : `${base}${countSuffix}`;
   const actionBg = destructive ? "var(--lfb-bad)" : "var(--lfb-primary)";

@@ -353,7 +353,49 @@ left-bar tab (§4.3).
 
 ---
 
-## 12. Acceptance criteria
+## 12. TO DO Batch for this storage (LOCKED)
+
+Personal storage participates in the product-wide **TO DO Batch** system
+([to_do_batches.mdx](./to_do_batches.mdx)). A **TO DO Batch is a per-storage bundle of recommended file
+actions** — there is exactly **one** batch for the Personal storage, persisted as hierarchical YAML at
+**`~/T/_large_files_bridge/_do_batches/personal_2_do.yaml`**. Like every batch it is **local, disposable,
+and uncommitted** — it lives only in the machine-local state root, is **never** written into `.lfbridge/`,
+and is **never** team-shared (it is not a decision; the folded decisions ledger stays the source of truth).
+
+* **Which categories apply to Personal.** Because loose personal files live **outside any repo**, the
+  **`git_ignore`** category ("big-but-not-git-ignored") is **only meaningful under a repo**, so it **never**
+  appears in a Personal batch. Personal batches are therefore typically **`compress_video`**,
+  **`compress_image`**, **`pin`**, and **`pull_down`** — plus the transcription discovery below.
+* **Recalculate-and-replace each scan.** The batch is **recomputed from scratch and replaced** on every
+  scan pass by the calc engine ([to_do_batch_calc_engine.mdx](./to_do_batch_calc_engine.mdx)); it
+  **recommends only** — it never writes a decision or moves a byte, and it **skips any file/axis the team
+  already decided** so we never re-ask a folded question.
+* **The cross-computer `pull_down` story (§3).** This is where the two-computers use case (§3) becomes a
+  concrete recommendation. Last month the **tower** pinned a batch of new images; this month, on the
+  **laptop**, those same images have no local copy — they exist on the tower over IPFS but are **absent
+  here** — so they land in the laptop's Personal batch as **`pull_down`** recommendations ("pull it down").
+  The batch is the actionable form of *"my other computer has files this one is missing."*
+* **It surfaces on the To Do page as a slug.** Any batch **with work** renders on the To Do page
+  ([to_do.mdx](./to_do.mdx)) as a **slug**; opening the slug's chevron shows the recommendations as
+  two-axis **decision toggles** pre-set to the recommended state ([decision_toggles.mdx](./decision_toggles.mdx)),
+  which the user confirms and **Applies**.
+* **Transcription discovery for Personal.** The on-demand **"Show what could be transcribed"** link runs
+  the **What Can Be Transcribed Calc Engine** ([transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx)),
+  which walks the Personal storage's mapped home-tree directories for **video/audio that has no
+  `.transcription` sidecar** and emits a per-storage **transcribe batch** → a **transcribe slug** (a
+  ~80%-width, default-checked popup: *"Transcribe N files"* → background jobs on
+  [processing.mdx](./processing.mdx)).
+
+Producing the Personal batch during scan recalc, and naming/replacing its YAML, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` —
+`TodoBatchCalcEngine.recalcForStorage(storage)` writing via
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` —
+`batchFileName(storage)` (→ `personal_2_do.yaml`); the transcribe discovery walk is
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts`.
+
+---
+
+## 13. Acceptance criteria
 
 1. A user has **exactly one** personal storage, whose SDL is conventionally the Git repo
    `~/BGit/Bryan_git/personal_large_files_bridge/`, tracked via a hidden **`.lfbridge/`** at its root.
@@ -385,6 +427,11 @@ left-bar tab (§4.3).
 9. Personal remains the **default owner** of loose home-tree media; with its dedicated repo ON, derived
    artifacts are **committed under that repo** mirroring the file's `~`-relative path (§9), and it appears
    as the **Personal** child of the Storages tab (§11).
+10. Personal owns exactly **one TO DO Batch**, persisted local/disposable/uncommitted at
+    `~/T/_large_files_bridge/_do_batches/personal_2_do.yaml`, recalculated-and-replaced each scan; its
+    applicable categories are **`compress_video`, `compress_image`, `pin`, and `pull_down`** — **not
+    `git_ignore`** (loose files sit outside any repo) — plus the on-demand transcribe batch; batches with
+    work surface as slugs on the To Do page (§12).
 
 <!--
   Personal storage = the user's OWN private big files, and the CANONICAL Git-backbone use case: one user,
@@ -406,4 +453,11 @@ left-bar tab (§4.3).
   pin.service pinStorageUnit (git cycle around reconcile), DevicesPage. Keep aligned with git_backbone.mdx
   (the engine), storage_settings.mdx §4.1 (the toggle+remote), devices.mdx (identity/fingerprint/graft),
   syncable_data_location.mdx (the SDL text), storages.mdx (storage.yaml + .lfbridge + analysis).
+  §12 TO DO Batch: Personal owns ONE local/disposable/uncommitted batch personal_2_do.yaml under
+  ~/T/_large_files_bridge/_do_batches/, recalc-and-replace each scan (to_do_batch_calc_engine.mdx,
+  recommends-only, skips folded decisions); categories = compress_video/compress_image/pin/pull_down
+  (NO git_ignore — loose files aren't under a repo); the cross-computer pull_down story = tower-pinned
+  images absent on the laptop (§3); surfaces on To Do page as a slug (to_do.mdx, decision_toggles.mdx);
+  transcribe discovery via transcribe_calc_engine.mdx → transcribe slug. Code: todo-batch.engine.ts
+  recalcForStorage, todo-batches.store.ts batchFileName, transcribe-scan.engine.ts.
 -->

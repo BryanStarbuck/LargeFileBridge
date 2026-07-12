@@ -73,6 +73,44 @@ component `RepoStatusVerdict`, the `undecided > 0` branch. This spec generalizes
 
 ---
 
+## 1a. Warnings are powered by TO DO Batches (LOCKED)
+
+Most **file-scoped** warnings in this file are not standalone strings — they are the **projection of a
+per-storage TO DO Batch** onto a page. A **TO DO Batch** is a per-storage bundle of recommended file
+actions ([to_do_batches.mdx](./to_do_batches.mdx)), recalculated-and-replaced on every scan by the
+batch calc engine ([to_do_batch_calc_engine.mdx](./to_do_batch_calc_engine.mdx)) and persisted, local
+and uncommitted, under `~/T/_large_files_bridge/_do_batches/`.
+
+1. **A repo's file-work warning *is* that repo's TO DO Batch surfacing itself on the repo page**
+   (LOCKED). The existing "N files need a decision" warning (§10.2.7, id `repo-files-need-decision`) is
+   the `repo_<name>_2_do.yaml` batch rendered as a banner. The banner's **blue-arrow popup (§3–§4) IS
+   the batch popup** — the same educate-list-apply surface.
+2. **The same batch also appears as a SLUG on the To Do page** (`/todo`,
+   [to_do.mdx](./to_do.mdx) §8). Applying from **either** surface writes the same decisions to the
+   team-shared `.lfbridge/decisions.yaml` ([decisions.mdx](./decisions.mdx)) and **clears the work from
+   both** — one batch, two surfaces, one apply.
+   *Batch persistence & recalc handled in code:*
+   `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` and
+   `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts`.
+3. **The popup's subjects list renders the two-axis DECISION TOGGLES** per file
+   ([decision_toggles.mdx](./decision_toggles.mdx)) — Add-to-IPFS (pin) + Add-to-git-ignore (⊘) —
+   **pre-set to the batch's RECOMMENDED (dashed-orange) target**. The Apply button's composed label
+   (§4.4.1) spells out the checked axes.
+4. **Not everything is a batch** (LOCKED). Engine/config warnings — IPFS down, config health (§10.1) —
+   are **not** TO DO Batches and do **not** appear as To-Do slugs; they stay **page-local**, single-pane
+   (§4, §10 file-scoped rule). The To Do page is only for **file-work bundles**.
+5. **The five batch categories map to warnable conditions:** `pull_down` (files pinned on a peer device
+   but absent here — a "pull them down" offer), `git_ignore` (big-but-not-git-ignored, §10.3.7),
+   `compress_video` / `compress_image` (§10.3.9–§10.5.*), and `pin` (an undecided eligible big file,
+   §10.2.7). A `pull_down` batch may also carry a `transcribe` sub-action.
+   *Batch → warning wiring served in code:*
+   `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` —
+   `todoRouter`; the To Do page renders them in
+   `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx`, whose
+   `TodoBatchPopup` reuses the shared **WarningPopup** (§7).
+
+---
+
 ## 2. The warning banner (the yellow/red rounded rectangle)
 
 The banner is the first thing on the page body, directly under the `PageHeader` and the page action
@@ -610,6 +648,12 @@ undecided files). Rules:
   form of the same warnings: each row is a warning category with a count and a per-row action that
   opens the **same** WarningPopup. The banner is the "worst thing here"; the rollup table is "all the
   things here." They share the registry (§8) so a fix from either surface clears both.
+* **File-work warnings on a page are that page's storage's TO DO Batch** (§1a). Each such live warning
+  corresponds to one category of that storage's batch; the banner + rollup table are the *on-page* view
+  of it, while the **aggregated cross-page view of every storage's batches is the To Do page**
+  ([to_do.mdx](./to_do.mdx)) — each batch-with-work rendered there as a slug. Applying from the page or
+  from the To Do slug is the same apply and clears the work from both. Non-batch warnings (§10.1) never
+  appear on the To Do page.
 
 ---
 
@@ -2463,3 +2507,4 @@ This category owns every warnable condition on the **Settings**, **Tools**, and 
 **Notes / gaps.** Flagged for completeness — **not a candidate for the amber/red verdict banner**; it's a flood guard on the shared fault trail (charter: logs live in the state root, never `/tmp`). Its **firing is a proxy** for a frontend error loop worth developer attention, and it pairs with §10.10.14 (a re-login loop is a common cause).
 
 <!-- CATALOG-END -->
+<!-- Batch relationship (§1a): most file-scoped catalog warnings above are projections of a per-storage TO DO Batch (to_do_batches.mdx); the blue-arrow popup IS the batch popup, the same batch renders as a slug on the To Do page (to_do.mdx), and applying from either surface writes the same decisions to .lfbridge/decisions.yaml and clears both. Engine/config warnings (§10.1) are NOT batches and never appear on the To Do page. -->

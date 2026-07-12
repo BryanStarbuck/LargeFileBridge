@@ -164,6 +164,10 @@ compress-inside bus ([compress_inside.mdx §2](./compress_inside.mdx)) so no cal
 4. **Repo `⋮` / entity "more" → "Git ignore"** ([menus.mdx §5.1](./menus.mdx)) — the repo's whole working
    tree as the single directory (Recursive checkbox shown; default off ignores the immediate big files, on
    ignores the tree).
+5. **A directory's inline Add-to-git-ignore toggle** ([decision_toggles.mdx §2.1](./decision_toggles.mdx#21-bulk-clicks-and-directories-still-open-the-pop-over-locked))
+   — turning the ⊘ toggle **on** for a *folder* under a repo is a many-file action, so it opens this dialog
+   (with Recursive) rather than writing silently. A **single file's** ignore toggle, by contrast, writes the
+   one anchored rule directly through the engine (§5) — no dialog — because a lone file needs no scope choice.
 
 Opening the dialog from anywhere is a single bus call (the target set + which repo owns it), handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/gitIgnore.ts` — `openGitIgnore()` / `onGitIgnoreRequested()` (the single-slot bus), consumed by the once-mounted `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/gitignore/GitIgnoreProvider.tsx` — `GitIgnoreProvider` (mounted at the app root in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/main.tsx`).
