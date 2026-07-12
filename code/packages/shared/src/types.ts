@@ -55,6 +55,22 @@ export interface FileRow {
   transfer: TransferStatus;
   peers: string[];
   changedAt: string;
+  // Decision provenance from the folded, team-shared ledger (decisions.mdx §10). Both null when the file
+  // has no decision record yet (Undecided). `decidedBy` is the allow-listed email, the sentinel
+  // "policy:<email>" for a policy auto-decision, or null when attribution is anonymous.
+  decidedBy?: string | null;
+  decidedAt?: string | null; // ISO-8601 UTC of the winning decision event
+}
+
+// One file a peer computer pinned that THIS computer is missing — the subject of the "pull them down"
+// warning (warnings.mdx §10.8.12). Described from the committed manifest + the peer's sidecar identity,
+// because the bytes are not here yet.
+export interface MissingPinnedFile {
+  path: string; // repo-relative path (the row's stable id; what POST /pull receives)
+  name: string;
+  sizeBytes: number; // from the manifest/sidecar (bytes are absent locally)
+  cid: string; // the manifest CID to pin (fetches the bytes on pin)
+  addedByDevice: string | null; // the peer device that pinned it ("added by {device}")
 }
 
 // The One-repo detail payload: header/status strip + file rows.
@@ -70,6 +86,9 @@ export interface RepoDetail {
   ipfs: IpfsHealth;
   counts: RepoCounts;
   files: FileRow[];
+  // Files a peer computer of yours pinned that this computer lacks — drives the "pull them down" warning
+  // (warnings.mdx §10.8.12). Empty/absent when there is nothing to pull.
+  missingPinned?: MissingPinnedFile[];
 }
 
 export type IpfsHealth = "ok" | "unreachable";

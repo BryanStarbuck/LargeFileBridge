@@ -183,7 +183,31 @@ export function ensureStorage(root: string, type: StorageType, extras?: Partial<
  * repo is registered/discovered.
  */
 export function ensureRepoStorage(repoRoot: string): StorageDescriptor {
-  return ensureStorage(repoRoot, "repo", { repo: { repoRoot } });
+  const desc = ensureStorage(repoRoot, "repo", { repo: { repoRoot } });
+  // repo_tracking_scheme.mdx §1/§2: on enlist also seed the repo-WIDE `repo_storage.yaml` and create the
+  // `history/` + `files/` subdirs (`.lfbridge/` itself is created by ensureStorage and added to .gitignore
+  // by reconcileLfbridgeIgnore above). All gated on the keep-`.lfbridge/` consent, best-effort so a seeding
+  // failure never blocks enlisting the repo. Lazy require to avoid a module-eval cycle (repo-storage.service
+  // imports storageSid from here) — same pattern as the storage-settings / devices imports above.
+  try {
+    if (keepsLfbridgeFor(repoRoot)) {
+      fs.mkdirSync(path.join(repoRoot, LFBRIDGE_DIR, "history"), { recursive: true });
+      fs.mkdirSync(path.join(repoRoot, LFBRIDGE_DIR, "files"), { recursive: true });
+      ensureRepoStorageDoc(repoRoot);
+    }
+  } catch (e) {
+    log.warn("storage", `seed repo_storage artifacts at ${repoRoot} failed: ${(e as Error).message}`);
+  }
+  return desc;
+}
+
+/** Whether THIS computer keeps `.lfbridge/` for this repo (decisions.mdx §6 consent). Default ON. */
+function keepsLfbridgeFor(repoRoot: string): boolean {
+  try {
+    return readStorageSettings(storageSid(repoRoot)).lfbridge.enabled;
+  } catch {
+    return true;
+  }
 }
 
 // A REPO storage is the user's own *code* repo — keep the `.lfbridge/` tracking area OUT of their commits

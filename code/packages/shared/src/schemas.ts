@@ -341,6 +341,124 @@ export const DecisionsLedgerSchema = z.object({
 });
 export type DecisionsLedger = z.infer<typeof DecisionsLedgerSchema>;
 
+// ── repo_storage.yaml: <repo>/.lfbridge/repo_storage.yaml (repo_tracking_scheme.mdx §2) ──
+// The single repo-WIDE settings-and-state file. HARD SCHEMA RULE: the ONLY level-one key is
+// `repo_storage:` — everything else is nested at level two or deeper. Written automatically on enlist,
+// updated by every scan and user action. It is a git-ignored WORKING artifact (not a committed traveller).
+export const RepoStorageCountsSchema = z.object({
+  special: z.number().default(0), // files that matched the special-file test (special_files.mdx)
+  large: z.number().default(0),
+  ipfs_pinned: z.number().default(0), // pinned by us OR observed already-pinned outside us
+  videos: z.number().default(0),
+  images: z.number().default(0),
+  audio: z.number().default(0),
+  compressible: z.number().default(0), // media that looks uncompressed (compression.mdx baseline)
+  transcribable: z.number().default(0), // video + audio that could be transcribed (Transcribe.mdx)
+  transcribed: z.number().default(0),
+});
+export type RepoStorageCounts = z.infer<typeof RepoStorageCountsSchema>;
+
+export const RepoStorageDocSchema = z.object({
+  repo_storage: z.object({
+    schema_version: z.number().default(1),
+    name: z.string().default(""), // defaults to repo folder name; user-editable (repo_settings.mdx)
+    enlisted: z
+      .object({
+        at: iso.optional(),
+        by: z.string().nullable().default(null), // allow-listed Google email that enlisted it
+        on_device: z.string().default(""), // unique device name (devices.mdx) that enlisted it
+      })
+      .default({}),
+    counts: RepoStorageCountsSchema.default({}),
+    policy: z
+      .object({
+        recommend_ipfs_pin: z.boolean().default(true),
+        recommend_compress: z.boolean().default(true),
+        recommend_transcribe: z.boolean().default(false),
+      })
+      .default({}),
+    last_scan: z
+      .object({
+        at: iso.optional(),
+        on_device: z.string().default(""),
+        headless: z.boolean().default(false), // true when a background scan wrote this
+      })
+      .default({}),
+  }),
+});
+export type RepoStorageDoc = z.infer<typeof RepoStorageDocSchema>;
+
+// ── per-file sidecar: <repo>/.lfbridge/files/<mirrored-path>/<name>.yaml (repo_tracking_scheme.mdx §3) ──
+// One small YAML PER SPECIAL FILE. HARD SCHEMA RULE: the ONLY level-one key is `file:`. Carries the
+// file's identity + an APPEND-ONLY `events:` history. Every event is stamped at(UTC)/on_device/by (the
+// allow-listed email, or the sentinel `not-lfbridge` for actions done OUTSIDE us that a scan observed).
+export const PerceptualFingerprintSchema = z.object({
+  algo: z.string(), // pdq (image) | vpdq (video) | blockhash (fallback)
+  value: z.string(), // 64-hex (32 bytes) for pdq/blockhash
+  quality: z.number().nullable().default(null), // PDQ quality score (image); low → excluded from auto-match
+  frames_ref: z.string().optional(), // for large vPDQ frame lists: path to a `.vpdq` sidecar file
+});
+export type PerceptualFingerprint = z.infer<typeof PerceptualFingerprintSchema>;
+
+// One event in a sidecar's append-only history. Common fields are validated; kind-specific fields
+// (ipfs, before/after, codec, format, output, note, …) pass through so the kind list stays extensible.
+export const FileEventSchema = z
+  .object({
+    kind: z.enum([
+      "observed",
+      "decision",
+      "ipfs_pin",
+      "compress",
+      "convert",
+      "transcribe",
+      "pull",
+    ]),
+    at: iso, // ISO-8601 UTC
+    on_device: z.string().default(""), // unique device name (devices.mdx)
+    by: z.string().nullable().default(null), // allow-listed email, or the sentinel "not-lfbridge"
+  })
+  .passthrough();
+export type FileEvent = z.infer<typeof FileEventSchema>;
+
+export const FileSidecarSchema = z.object({
+  file: z.object({
+    path: z.string(), // repo-relative path (stable key even when absent locally)
+    name: z.string().default(""),
+    categories: z.array(z.string()).default([]), // special_files.mdx categories (why this file is special)
+    size: z.number().nullable().default(null),
+    created: iso.optional(),
+    modified: iso.optional(),
+    hash: z.string().nullable().default(null), // exact content hash (files.yaml fingerprint)
+    fingerprint: PerceptualFingerprintSchema.nullable().default(null), // perceptual fp (media only)
+    first_seen: z
+      .object({ at: iso.optional(), on_device: z.string().default("") })
+      .default({}),
+    events: z.array(FileEventSchema).default([]),
+  }),
+});
+export type FileSidecar = z.infer<typeof FileSidecarSchema>;
+
+// ── decision policy: <repo>/.lfbridge/decisions_policy.yaml (decisions.mdx §9/§14) ──
+// The SHARED, per-repo default-decision policy + attribution mode. Travels in the SDL alongside the
+// ledger so the whole team inherits one rule. Default of the default is OFF (new files stay Undecided).
+export const DecisionKindPolicySchema = z.object({
+  mode: z.enum(["auto", "ask"]).default("ask"), // auto-decide on discovery, or leave Undecided + warn
+  ipfs: z.boolean().default(true), // the default IPFS axis when mode=auto
+  gitignore: z.boolean().default(true), // the default git-ignore axis when mode=auto
+});
+export type DecisionKindPolicy = z.infer<typeof DecisionKindPolicySchema>;
+
+export const DecisionPolicyDocSchema = z.object({
+  schema_version: z.number().default(1),
+  // null ⇒ auto: resolve from the remote (public → handle, else email) — decisions.mdx §14.
+  attribution: z.enum(["email", "handle", "anonymous"]).nullable().default(null),
+  media: DecisionKindPolicySchema.default({ mode: "ask", ipfs: true, gitignore: true }),
+  other: DecisionKindPolicySchema.default({ mode: "ask", ipfs: false, gitignore: false }),
+  set_by: z.string().nullable().default(null),
+  set_at: iso.optional(),
+});
+export type DecisionPolicyDoc = z.infer<typeof DecisionPolicyDocSchema>;
+
 // ── computer-unit config.yaml (storage.mdx §8.1) ────────────────────────────
 export const ComputerUnitConfigSchema = z.object({
   schema_version: z.number().default(1),

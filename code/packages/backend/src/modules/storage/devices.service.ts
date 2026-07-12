@@ -43,6 +43,13 @@ function selfName(): string {
   return getAppConfig().computer.label || "this-computer";
 }
 
+/** THIS computer's unique device nice-name — the key for `history/<device>.txt` and the `on_device` stamp
+ *  on sidecar events / repo_storage provenance (repo_tracking_scheme.mdx §3–§4). Exported reuse of the
+ *  private `selfName()` so those writers never re-derive the name. */
+export function selfDeviceName(): string {
+  return selfName();
+}
+
 /** Map the on-disk (snake_case) hardware fingerprint to the camelCase UI mirror (devices.mdx §7). */
 function hwDocToCamel(h: DeviceHardwareDoc): DeviceHardware {
   return {
