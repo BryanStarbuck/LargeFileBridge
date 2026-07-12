@@ -1,0 +1,423 @@
+---
+title: LargeFileBridge — Use-Case Tour — TO DO Batches & decision toggles across two computers (studio-tower ↔ bryan-macbook-pro, June → September)
+description: The end-to-end scenario tour that walks the TO DO Batch system and the inline decision toggles across a user's day-to-day Mac tower and their Mac laptop, month by month from June to September of the first year. It is the narrative that ties together every moving part of the new TO DO surface — the per-storage _do_batches/ YAML files (personal_2_do.yaml, repo_<name>_2_do.yaml, …), the TO DO Batch Calc Engine that recalculates-and-replaces them each scan, the five recommendation categories (compress_video, compress_image, git_ignore, pin, pull_down) plus the on-demand transcribe engine, the To Do left-bar page of slugs, the batch popup (the evolved warnings dialog) with its two-axis decision toggles pre-set to RECOMMENDED, and the Apply path that writes decisions to the shared ledger and queues background effects. Each month states what the user does, what LargeFileBridge does automatically, exactly which YAML files it writes and where, which slugs/warnings appear, and what toggle states show at each step. Sibling of use_case_two_computers.mdx (the repo-storage chronological tour this complements with the TO DO angle), to_do_batches.mdx (the data model each step writes), to_do.mdx (the page + slugs + popup), to_do_batch_calc_engine.mdx + transcribe_calc_engine.mdx (the producers), decision_toggles.mdx (the RECOMMENDED/ON/OFF toggles each popup row renders), decisions.mdx (the shared ledger Apply writes), processing.mdx + job_queue.mdx (where Applied work runs), and storage_local.mdx (the state root that holds _do_batches/).
+---
+
+# LargeFileBridge — TO DO Batches Tour (studio-tower ↔ bryan-macbook-pro)
+
+This is a **chronological scenario tour**. Where [use_case_two_computers.mdx](./use_case_two_computers.mdx)
+walks one repo's **on-disk tracking scheme** across two computers, this document walks the **TO DO Batch
+system and the inline decision toggles** — the surfaces that tell the user *"here is a bundle of files, and
+here is what we recommend you do with them,"* and let them confirm it in place. It answers *"what actually
+happens, in order, as recommendations are computed on one computer and acted on across two"* — and in doing
+so it exercises **every** `_do_batches/` write, **every** slug template, and **every** toggle state a batch
+has. It is the reference the team walks to confirm the whole TO DO surface holds together.
+
+Two computers, four months:
+
+* **`studio-tower`** — the user's **day-to-day Mac tower** (a desktop). Their main machine, where a fresh
+  batch of large image files first lands.
+* **`bryan-macbook-pro`** — their **Mac laptop**, which does **not** have those files locally and must pull
+  them down.
+
+(The unique per-computer names come from [devices.mdx §1/§8](./devices.mdx) — the same identities the
+sibling tour uses. Here they matter because `pull_down` is defined by *"pinned on another computer, absent
+on this one."*)
+
+This spec builds on the siblings and does not repeat them:
+
+* [to_do_batches.mdx](./to_do_batches.mdx) — the **`_do_batches/` YAML** every step below writes
+  (`personal_2_do.yaml`, `repo_<name>_2_do.yaml`, the `totals:` / `items:` / `pattern` / `dismissed` shape).
+* [to_do.mdx](./to_do.mdx) — the **To Do page**: slugs, the blue chevron + red trash, the batch popup, the
+  "Show what could be transcribed" link.
+* [to_do_batch_calc_engine.mdx](./to_do_batch_calc_engine.mdx) / [transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx)
+  — the **producers** (scan recalc + the on-demand transcribe scan).
+* [decision_toggles.mdx](./decision_toggles.mdx) — the **two-axis toggles** (Add-to-IPFS pin + Add-to-git-ignore ⊘)
+  and their **four states** (OFF / ON / RECOMMENDED / N/A) each popup row renders.
+* [decisions.mdx](./decisions.mdx) — the **team-shared, attributed** ledger Apply writes one decision event
+  per axis into.
+* [processing.mdx](./processing.mdx) / [job_queue.mdx](./job_queue.mdx) — where **Applied** work runs
+  (pull-down fetches, compress jobs, transcribe jobs) as Processing cards.
+* [storage_local.mdx](./storage_local.mdx) — the **state root** (`~/T/_large_files_bridge/`) under which
+  `_do_batches/` lives.
+
+---
+
+## 0. The setup — what a TO DO Batch is, and how a toggle reads
+
+A **TO DO Batch** is a **per-storage bundle of recommended file actions** the calc engine produced during a
+scan recalc — **exactly one batch per storage** (Personal, Dropbox, each Google Drive account, each repo),
+persisted as a disposable YAML under `~/T/_large_files_bridge/_do_batches/`
+([to_do_batches.mdx §1–§2](./to_do_batches.mdx#1-one-batch-per-storage-locked)). The engine
+**recalculates-and-replaces** each storage's file every scan; only the user's `dismissed` flag survives.
+
+Each recommendation renders in a popup as one file row carrying the **two decision toggles**
+([decision_toggles.mdx](./decision_toggles.mdx)) — **Add-to-IPFS (pin)** and, only under a repo,
+**Add-to-git-ignore (⊘)** — each in one of four states:
+
+* **OFF** — white fill, thin grey edge. The axis is *not* applied.
+* **ON** — solid medium-dark orange (`#c2410c`), no edge, white glyph. The axis **is** applied.
+* **RECOMMENDED** — white fill, **dashed** orange edge. The calc engine **suggests turning it on**; the user
+  has **not** decided yet. This is the state a batch's recommendations pre-set.
+* **N/A** — not rendered (a blank, aligned slot). The git-ignore toggle for a file not under a repo.
+
+The through-line of this tour: **the engine recommends (dashed), the user confirms (solid), Apply writes
+the decision to the shared ledger and queues the effect, and the file drops out of the next recompute.**
+
+---
+
+## 1. Timeline at a glance
+
+| Month | Computer | What happens | New / changed `_do_batches/` writes |
+| --- | --- | --- | --- |
+| **June** | `studio-tower` | A fresh batch of large image files is **pinned + git-ignored** on the tower (via the inline toggles). Sidecars + shared ledger + manifest updated. No `pull_down` here — the files exist locally. | (this computer *has* the files, so they are **not** in its batch — the writes are to `.lfbridge/` + the manifest, not `_do_batches/`) |
+| **July** | `bryan-macbook-pro` | The laptop does **not** have those images → they qualify as **`pull_down`**. Scan recalc writes them into `personal_2_do.yaml` (or the repo batch). A **warning** appears **and** a **To-Do slug**. User opens the popup, toggles pre-set to **RECOMMENDED**, confirms, **Applies** → files pull down over IPFS, land git-ignored, ledger updated. | `personal_2_do.yaml` (pattern `pull_down`) written by the recalc; **removed** on the next recalc after Apply. |
+| **August** | `bryan-macbook-pro` | A repo with a **mix** — 12 uncompressed videos + 3 big-unignored files + 41 pull_downs → a **`mixed`** slug. The mixed batch popup shows three sections; user Applies. | `repo_charlie-kirk_2_do.yaml` (pattern `mixed`) — shrinks/clears as each section is acted on. |
+| **September** | either | **"Show what could be transcribed"** → 58 videos + 13 audio in Personal, 4 repos each with a transcribe slug. The ~80% popup opens ~default-checked; user unchecks a few, **"Transcribe N files"** → background jobs on Processing. | `personal_transcribe_2_do.yaml` + 4× `repo_<name>_transcribe_2_do.yaml` (kind `transcribe`) written on demand. |
+
+---
+
+## 2. JUNE — `studio-tower` — a fresh batch of images is pinned & git-ignored
+
+**What the user does.** On their Mac tower, a folder of **large image files** (a photo shoot — say **60
+`.png` / `.tiff` stills**, most well over the big-file threshold) lands inside the **charlie-kirk repo**.
+The user opens the repo's file table ([one_repo.mdx](./one_repo.mdx)), and — for this batch — flips **both**
+inline decision toggles on: the **Pin** column and the **Ignore** column
+([decision_toggles.mdx §5](./decision_toggles.mdx#5-in-the-one-repo-file-table-locked)).
+
+**What LFB does automatically — a toggle is one decision event per axis.** Each toggle click is
+**optimistic and immediate** ([decision_toggles.mdx §2](./decision_toggles.mdx#2-clicking-a-toggle--one-decision-event-locked)):
+
+* The **Add-to-IPFS** toggle flips to **ON** (solid orange). LFB appends **one decision event** for the
+  `sync` axis to the repo's team-shared `.lfbridge/decisions.yaml` (with `decided_by`, `decided_at`, the
+  Storage ID, the path, the fingerprint), adds the file to the **manifest**, records its **CID**, pins it,
+  and queues it to peers.
+* The **Add-to-git-ignore** toggle (⊘) flips to **ON**. Because a per-file ignore is a single file, it
+  writes an anchored, repo-root-relative rule into the repo's `.gitignore` via the git-ignore engine
+  ([git_ignore.mdx §5](./git_ignore.mdx)). (Had the user turned ⊘ on for the whole *folder*, it would open
+  the Git-ignore pop-over instead — [decision_toggles.mdx §2.1](./decision_toggles.mdx#21-bulk-clicks-and-directories-still-open-the-pop-over-locked).)
+
+So for these 60 images the tower now shows **both toggles solid orange** — the single most common LFBridge
+decision, *"pin it AND git-ignore it"* ([decision_toggles.mdx §1](./decision_toggles.mdx#1-one-visual-grammar-four-render-states-locked)).
+
+**Why there is no `pull_down` batch here.** A file is `pull_down` only when it is **pinned on another
+computer but absent on this one** ([to_do_batches.mdx §3.2](./to_do_batches.mdx#32-pattern-selects-the-slug-template-locked)).
+On the tower the images **exist locally**, so they are **not** in `repo_charlie-kirk_2_do.yaml` as pull_down.
+The tower's TO DO Batch for this repo may still recommend other things (compress the uncompressed stills →
+`compress_image`), but the pinned/ignored decisions the user just made mean those files are **decided** and
+drop out of the recompute. The important artifacts of June are the **manifest** (carrying each image's CID
+so another computer can fetch it) and the **shared ledger** (carrying each pin/ignore decision so nobody is
+re-asked).
+
+**What we double-check (June):**
+* Each image has **two** decision events in `.lfbridge/decisions.yaml` (one per axis), attributed to the
+  tower user, and the toggles render **ON/ON** (solid orange, no edge) on the tower's file table.
+* The **manifest** carries each image's **CID** (this is what lets the laptop, in July, name and pull them).
+* No `pull_down` entry exists in the tower's `repo_charlie-kirk_2_do.yaml` for these files — they are present
+  locally, so they are not pull candidates *here*.
+
+---
+
+## 3. JULY — `bryan-macbook-pro` — the images qualify as `pull_down`
+
+**What the user does.** On the Mac laptop they pull the repo's Git changes (the committed `manifest.yaml`
+and `decisions.yaml` arrive; the **large images do not** — they are git-ignored and travel over IPFS). The
+next **scan recalc** runs on the laptop.
+
+**What LFB does automatically — the recalc writes a `pull_down` batch.** The
+[TO DO Batch Calc Engine](./to_do_batch_calc_engine.mdx) resolves each manifest CID against the laptop's
+working tree and IPFS node and finds the 60 images are **absent locally and not pinned here** — the exact
+`pull_down` condition. It writes them into the owning storage's batch:
+
+* If the images are **under the repo**, they land in **`repo_charlie-kirk_2_do.yaml`** with `pattern:
+  pull_down`.
+* Loose images outside any repo would instead land in **`personal_2_do.yaml`** — a file belongs to the batch
+  of the storage it physically lives under ([to_do_batches.mdx §1](./to_do_batches.mdx#1-one-batch-per-storage-locked)).
+
+The batch's `totals.pull_down` reads `{ count: 60 }`, and each `items.pull_down[]` entry carries the
+**path, size, CID, `pinned_on: ["studio-tower"]`**, and a **`recommend: { ipfs: true, git_ignore: true }`**
+target ([to_do_batches.mdx §3](./to_do_batches.mdx#3-the-batch-yaml--every-field-locked-shape)):
+
+```yaml
+# ~/T/_large_files_bridge/_do_batches/repo_charlie-kirk_2_do.yaml  (on the laptop)
+batch:
+  id: "repo:charlie-kirk"
+  scope: repo
+  storage_name: "charlie-kirk"
+  kind: todo
+  pattern: pull_down
+  dismissed: false
+  totals:
+    pull_down: { count: 60 }
+  items:
+    pull_down:
+      - path: "stills/shoot_01.png"
+        size_bytes: 214000000
+        cid: "bafy…"
+        pinned_on: ["studio-tower"]
+        recommend: { ipfs: true, git_ignore: true }
+      # …59 more…
+```
+
+**Two surfaces, one model.** The same batch reaches the user two ways ([to_do.mdx §8](./to_do.mdx#8-relationship-to-warnings-locked)):
+
+* On the **charlie-kirk repo page**, a **yellow warning banner** — *"60 files are pinned on studio-tower but
+  not on this computer yet."* Its blue-arrow popup **is** the batch popup.
+* On the **To Do page** (`/todo`), a **pull-down slug**: headline `60 on other computers`, sentence *"60
+  files are pinned on studio-tower but not on this computer yet,"* with the blue **chevron** and red
+  **trash** ([to_do.mdx §5.1](./to_do.mdx#51-slug-templates--one-per-pattern-locked)). The left-bar **To Do**
+  badge counts this batch.
+
+**The batch popup — toggles pre-set to RECOMMENDED.** The user clicks the chevron (or the repo banner's blue
+arrow). The **batch popup** opens ([to_do.mdx §6](./to_do.mdx#6-the-batch-popup-the-evolved-warnings-dialog-locked)):
+
+* **Header** — *"Pull down · charlie-kirk."*
+* **Educate** — *"These files live on your other computers via IPFS. Pulling them down copies them here and
+  keeps them backed up."*
+* **The subjects list** — 60 rows, each showing the file, its size, *added by studio-tower*, and its **two
+  decision toggles pre-set to RECOMMENDED** — the **Pin** toggle **dashed orange** and, because these are
+  under a repo, the **Ignore** ⊘ toggle **dashed orange** too
+  ([decision_toggles.mdx §7](./decision_toggles.mdx#7-in-the-warning--to-do-batch-popups-locked)). Nothing is
+  decided yet — the dashes say *"we suggest this."*
+* **Live count** — *60* rows set to act; unchecking a row's toggle drops it from the count
+  ([warnings.mdx §4.6](./warnings.mdx#46-the-live-count-the-6-that-updates)).
+* **Footer** — **Apply** whose label spells out the checked axes: **"Pull down 60 · git-ignore 60"**.
+
+The user leaves all 60 checked and clicks **Apply**.
+
+**Apply → decisions written, bytes pulled, effects queued.** Apply
+([to_do_batches.mdx §6](./to_do_batches.mdx#6-reading-batches--the-api-surface-locked) — `POST
+/api/todo/batches/:id/apply`):
+
+1. Writes **each row's decisions** to the shared ledger — one `sync` event and one `git_ignore` event per
+   image, attributed to the laptop user, `on_device: bryan-macbook-pro`. The dashed **RECOMMENDED** toggles
+   become **solid ON**.
+2. **Queues the effects** as background work ([job_queue.mdx](./job_queue.mdx)): each image is **pinned on
+   the laptop**, and because the manifest carries the **CID**, pinning **fetches the bytes down over IPFS**;
+   each also gets its anchored `.gitignore` line. This drains on the [Processing](./processing.mdx) page —
+   the popup closes, a bottom notification appears, and the images arrive as `pull_down`/`pin` work completes.
+3. On the **next scan recalc**, the images now **exist locally and are pinned**, so they are **no longer
+   `pull_down`** — the engine **recalculates-and-replaces** `repo_charlie-kirk_2_do.yaml`, the pull_down
+   category empties, the slug **disappears**, and the repo warning banner leaves the page.
+
+**What we double-check (July):**
+* The recalc wrote a `pull_down` batch naming files **absent locally** — identity (name / size / CID /
+  `pinned_on`) comes from the committed manifest, not from local bytes.
+* The same batch shows as **both** a repo-page warning banner **and** a To-Do slug; the To-Do badge counts it.
+* The popup's toggles start **RECOMMENDED (dashed)** and the Apply label reads **"Pull down 60 · git-ignore
+  60"**; unchecking a row drops the live count and rewrites the label.
+* After Apply, the ledger has one `sync` + one `git_ignore` event per image `on_device:
+  bryan-macbook-pro`; the bytes arrive over IPFS; the **next** recalc drops the batch (slug + banner gone).
+
+---
+
+## 4. AUGUST — `bryan-macbook-pro` — a MIXED batch (compress + git-ignore + pull-down)
+
+**What the user does.** A different repo the laptop tracks has accumulated a **mix** of work. Its next scan
+recalc finds three categories at once:
+
+* **12 uncompressed videos** → `compress_video`.
+* **3 big files that aren't git-ignored** → `git_ignore`.
+* **41 files pinned on studio-tower but absent here** → `pull_down`.
+
+**What LFB does automatically — a `mixed` batch.** Because **two or more categories** are present, the calc
+engine stamps **`pattern: mixed`** ([to_do_batches.mdx §3.2](./to_do_batches.mdx#32-pattern-selects-the-slug-template-locked))
+into `repo_<name>_2_do.yaml`, with a `totals:` roll-up per category and an `items:` block grouped by
+category:
+
+```yaml
+batch:
+  id: "repo:<name>"
+  scope: repo
+  kind: todo
+  pattern: mixed
+  totals:
+    pull_down:      { count: 41 }
+    compress_video: { count: 12, reclaimable_bytes: 6800000000 }
+    git_ignore:     { count: 3 }
+  items:
+    pull_down:      [ … 41 … ]     # recommend: { ipfs: true, git_ignore: true }
+    compress_video: [ … 12 … ]     # recommend: { compress: true }
+    git_ignore:     [ … 3 … ]      # recommend: { ipfs: true, git_ignore: true }  (big + not ignored → both)
+```
+
+**The mixed slug.** On the To Do page the batch renders with the **mixed template**
+([to_do.mdx §5.1](./to_do.mdx#51-slug-templates--one-per-pattern-locked)): the **headline metric** is the
+**top category's** (`41 on other computers`, since not-backed-up risk ranks first —
+[to_do.mdx §4.1](./to_do.mdx#41-ordering--bubble-up-what-matters-locked)), a compact rollup sentence, and
+**detail cells** — *41 files not here · 12 videos can compress · 3 big files not ignored*.
+
+**The mixed batch popup — three sections, per-section toggles.** The chevron opens the batch popup showing
+**all sections** ([to_do.mdx §6](./to_do.mdx#6-the-batch-popup-the-evolved-warnings-dialog-locked)):
+
+* **Pull down (41)** — each row's **Pin** and **Ignore** ⊘ toggles pre-set **RECOMMENDED (dashed)**.
+* **Compress videos (12)** — each row offers **Compress** (its `recommend: { compress: true }`); compress is
+  an explicit-click offer, so these rows check to compress.
+* **Git-ignore (3)** — big-but-not-ignored files; both **Pin** and **Ignore** ⊘ pre-set **RECOMMENDED**
+  (the engine recommends **both** axes for a big unignored file — back it up *and* stop checking it in).
+
+The **live count** spans the whole popup; the **Apply** label **spells out the checked axes across all
+sections** — e.g. **"Pull down 41 · git-ignore 44 · compress 12"** (41 pull-downs git-ignored + the 3
+already-present big files git-ignored = 44 ignore writes; 12 compress jobs). The user can **override per
+row** — e.g. uncheck two videos they want left alone (their **Compress** drops out; the count and label
+update). They Apply.
+
+**Apply → decisions + a fan-out of effects.** Apply writes each row's decision(s) to the shared ledger and
+**queues the effects** ([job_queue.mdx](./job_queue.mdx)): 41 **pull_down/pin** fetches, 44 **git-ignore**
+writes, and 12 **compress** jobs. These appear on the [Processing](./processing.mdx) page — pull-down
+fetches and compress cards draining against the Core Budget, with the **"Waiting"** region labeled per op
+(e.g. *"12 compressing · … pulling"*). As each category's files are acted on, the **next recalc** removes
+them, so the mixed batch **shrinks** — first losing pull_down, then compress, then git_ignore — until the
+slug disappears.
+
+**What we double-check (August):**
+* Two-or-more categories present ⇒ `pattern: mixed`; the slug uses the **mixed template** with the
+  **top category** (pull_down) as the headline and one detail cell per category.
+* The popup renders **all three sections**; pull-down and git-ignore rows show **RECOMMENDED** decision
+  toggles; compress rows show the **Compress** offer; a big-unignored file recommends **both** axes.
+* The Apply label **composes across sections** (*"Pull down 41 · git-ignore 44 · compress 12"*) and tracks
+  per-row overrides.
+* Apply queues **pull_down/pin**, **git-ignore**, and **compress** effects; Processing shows them; the next
+  recalc **replaces** the batch, shrinking it as work completes.
+
+---
+
+## 5. SEPTEMBER — "Show what could be transcribed" → transcribe slugs & background jobs
+
+**What the user does.** On the To Do page the user clicks the header link **"Show what could be
+transcribed"** ([to_do.mdx §7](./to_do.mdx#7-show-what-could-be-transcribed-locked)). This is **opt-in** —
+it is **not** part of any scheduled scan, because opening every media file's sidecar to check for a
+transcript is heavier than the default rollup ([transcribe_calc_engine.mdx §1](./transcribe_calc_engine.mdx#1-when-it-runs-locked)).
+
+**What LFB does automatically — the on-demand transcribe scan.** The
+[What-Can-Be-Transcribed Calc Engine](./transcribe_calc_engine.mdx) walks each storage for files that are
+**transcribable** (audio, or video **with** an audio track) **and** have **no `.transcription` sidecar** yet.
+The link shows a brief **"Looking…"** state while it runs. It writes **one transcribe batch per storage**
+with candidates, into the **same** `_do_batches/` directory, with `kind: transcribe` / `pattern: transcribe`
+([to_do_batches.mdx §4](./to_do_batches.mdx#4-transcribe-batches--a-sibling-kind-locked)):
+
+```yaml
+# ~/T/_large_files_bridge/_do_batches/personal_transcribe_2_do.yaml
+batch:
+  id: "personal:transcribe"
+  scope: personal
+  kind: transcribe
+  pattern: transcribe
+  totals:
+    transcribe_video: { count: 58 }
+    transcribe_audio: { count: 13 }
+  items:
+    transcribe_video: [ … 58 … ]   # has_transcription: false
+    transcribe_audio: [ … 13 … ]
+```
+
+Result: **Personal** gets a transcribe slug reading *"58 videos + 13 audio can be transcribed"* (71 total),
+and of the laptop's repos, **4** have transcribable media → **4** transcribe slugs, one each. Storages with
+no candidates produce no slug.
+
+**The transcribe popup — ~80% of screen, default-checked.** The Personal transcribe slug's chevron opens the
+**transcribe popup**, which is **larger than a normal batch popup — ~80% of the screen's width and height**
+because the file list is long ([transcribe_calc_engine.mdx §4](./transcribe_calc_engine.mdx#4-the-transcribe-slug--popup-locked)):
+
+* A checklist of all **71** candidates, each row **checked by default**.
+* The user **unchecks a few** (three old screen recordings they don't care about), leaving **68** checked.
+* The right-side **Apply** button reads **"Transcribe 68 files"**.
+
+**Apply → background transcription jobs.** Clicking it **enqueues transcription as background jobs**
+([job_queue.mdx](./job_queue.mdx)) — the popup can be closed immediately. The jobs drain on the
+[Processing](./processing.mdx) page: the **"Waiting"** region reads *"68 transcribing"* and each job, as it
+starts, shows a **live card** (the transcription engine already registers a progress-dock job). As each
+file's transcription completes, its `.transcription` sidecar appears, so it **drops out** of the next run of
+this engine — re-running the link later shows the slug **shrunk** (or gone).
+
+**What we double-check (September):**
+* "Show what could be transcribed" runs the on-demand engine **only on click** (never the scheduled scan),
+  shows **"Looking…"**, and writes `*_transcribe_2_do.yaml` files with `kind: transcribe`.
+* Personal shows *"58 videos + 13 audio"* (71); exactly the **4** repos with transcribable media get a
+  transcribe slug; clean storages get none.
+* The transcribe popup is **~80% of screen**, **default-checked**; unchecking three leaves **68**; the Apply
+  reads **"Transcribe 68 files"**.
+* Apply **enqueues background jobs** watchable on Processing; completed files gain a `.transcription` sidecar
+  and drop out of the next run.
+
+---
+
+## 6. The cross-cutting invariants this tour proves
+
+1. **One batch per storage, disposable, recalculated-and-replaced.** Every recommendation lives in exactly
+   one `_do_batches/*_2_do.yaml`, keyed to the storage the file physically lives under; the engine rebuilds
+   the file from scratch each scan and only the user's `dismissed` flag survives
+   ([to_do_batches.mdx §5](./to_do_batches.mdx#5-recalculate-and-replace-locked)). Applied files drop out of
+   the next recompute, so slugs shrink and vanish on their own.
+2. **`pull_down` is a cross-computer fact.** A file is `pull_down` only where it is *absent* — the same files
+   that are pinned-and-present on studio-tower (June) become the laptop's pull_down batch (July). Identity
+   travels via the committed manifest's CID, so the laptop can **name, size, and pull** files it does not yet
+   have.
+3. **The engine recommends; the user decides.** A batch pre-sets its toggles to **RECOMMENDED (dashed)** —
+   never silently ON. One click confirms (solid ON); Apply writes the **team-shared** decision so **no other
+   computer re-asks** ([decisions.mdx](./decisions.mdx), [decision_toggles.mdx §2](./decision_toggles.mdx#2-clicking-a-toggle--one-decision-event-locked)).
+4. **`pattern` picks the surface.** A single category draws its named slug/popup; two-or-more draw the
+   **mixed** template with the top category as the headline and one detail cell per category — and the Apply
+   label **composes across whatever axes are checked**.
+5. **One model, two surfaces.** A repo's batch is the **same** object whether shown as a repo-page **warning
+   banner** or a To-Do **slug**; applying from either clears it from both ([to_do.mdx §8](./to_do.mdx#8-relationship-to-warnings-locked)).
+6. **Apply is a job producer, never inline.** Every Apply hands its effects to the background queue
+   (pull-down fetches, compress jobs, transcribe jobs) and returns immediately; the work is watchable on the
+   Processing page ([job_queue.mdx](./job_queue.mdx), [processing.mdx](./processing.mdx)).
+7. **Transcribe is opt-in.** Transcribe batches are produced **only** by the explicit "Show what could be
+   transcribed" link, never by the scheduled scan, and their Apply is the main producer of transcribe jobs.
+
+---
+
+## 7. Acceptance criteria
+
+1. **June:** flipping the inline **Pin** and **Ignore** toggles ON for a batch of repo images writes **two**
+   decision events per file (one per axis) to the shared `.lfbridge/decisions.yaml`, records each CID in the
+   manifest, pins, and writes anchored `.gitignore` lines; the toggles render **ON/ON** (solid orange); the
+   present-locally files are **not** a `pull_down` entry in that computer's batch.
+2. **July:** on a computer **missing** those files, the scan recalc writes a **`pull_down`** batch
+   (`repo_<name>_2_do.yaml` or `personal_2_do.yaml`) naming files **absent locally** (identity from the
+   manifest CID + `pinned_on`); the same batch surfaces as **both** a repo-page **warning** and a **To-Do
+   slug** with a badge; its popup shows toggles pre-set to **RECOMMENDED (dashed)** and an Apply label
+   **"Pull down N · git-ignore N"**; **Apply** writes the decisions, pulls the bytes over IPFS, git-ignores
+   them, and the **next recalc** drops the batch (slug + banner gone).
+3. **August:** a repo with **two-or-more categories** (12 `compress_video` + 3 `git_ignore` + 41
+   `pull_down`) is stamped **`pattern: mixed`**; the slug uses the **mixed template** (top category as
+   headline, one detail cell per category); the popup renders **all sections** with per-section toggles/offers
+   (RECOMMENDED for pull_down/git_ignore, Compress for videos, **both** axes for a big-unignored file); the
+   Apply label **composes across sections**; Apply queues **pull_down/pin**, **git-ignore**, and **compress**
+   effects, and the next recalc shrinks/replaces the batch.
+4. **September:** **"Show what could be transcribed"** runs the on-demand engine (never the scheduled scan),
+   writing **one transcribe batch per storage** (`kind: transcribe`) — Personal *"58 videos + 13 audio"*, 4
+   repos each with a slug; the chevron opens a **~80%-screen**, **default-checked** popup whose Apply reads
+   **"Transcribe N files"** and **enqueues background jobs** on Processing; completed files gain a
+   `.transcription` sidecar and drop out of the next run.
+5. Across all months the seven invariants in §6 hold, and every write matches
+   [to_do_batches.mdx](./to_do_batches.mdx), [to_do.mdx](./to_do.mdx),
+   [decision_toggles.mdx](./decision_toggles.mdx), [decisions.mdx](./decisions.mdx),
+   [job_queue.mdx](./job_queue.mdx), and [processing.mdx](./processing.mdx).
+
+<!--
+  Chronological tour: the TO DO Batch system + decision toggles across studio-tower (Mac tower) +
+  bryan-macbook-pro (laptop), June→September. JUN(tower): 60 large repo images pinned+git-ignored via the
+  inline decision toggles (Pin + Ignore ⊘ both → solid ON); TWO decision events/file into shared
+  .lfbridge/decisions.yaml; CIDs into manifest. NOT pull_down here (files present locally). JUL(laptop,
+  MISSING the files): scan recalc writes a pull_down batch (repo_charlie-kirk_2_do.yaml or
+  personal_2_do.yaml, pattern:pull_down) naming files ABSENT locally (identity from manifest CID +
+  pinned_on:[studio-tower]); same batch = repo-page WARNING BANNER + To-Do SLUG (+badge); batch popup shows
+  toggles pre-set RECOMMENDED (dashed orange), Apply label "Pull down 60 · git-ignore 60"; Apply writes
+  decisions + pulls bytes over IPFS + git-ignores → next recalc DROPS the batch (recalculate-and-replace).
+  AUG(laptop): repo with 12 compress_video + 3 git_ignore + 41 pull_down = pattern:mixed; mixed slug (top
+  category=pull_down headline + one detail cell/category); mixed popup = 3 sections (RECOMMENDED toggles for
+  pull_down/git_ignore, Compress offer for videos, BOTH axes for big-unignored); Apply label composes across
+  sections ("Pull down 41 · git-ignore 44 · compress 12"); Apply queues pull_down/pin + git-ignore +
+  compress → Processing; next recalc shrinks batch. SEP: "Show what could be transcribed" (opt-in, NOT
+  scheduled scan) → transcribe_calc_engine writes personal_transcribe_2_do.yaml (58 vid + 13 audio = 71) + 4
+  repo transcribe batches (kind:transcribe); ~80% popup, default-checked, uncheck 3 → "Transcribe 68 files"
+  → background jobs (job_queue) on Processing; completed files gain .transcription sidecar, drop out of next
+  run. Invariants (§6): one batch/storage disposable recalc-and-replace; pull_down = cross-computer absence;
+  engine RECOMMENDS (dashed) / user DECIDES (solid) writing shared ledger so no re-ask; pattern picks
+  surface; one model two surfaces (banner=slug); Apply is a job producer never inline; transcribe opt-in.
+  Reuses: to_do_batches, to_do, to_do_batch_calc_engine, transcribe_calc_engine, decision_toggles,
+  decisions, job_queue, processing, storage_local, use_case_two_computers (sibling tour).
+-->

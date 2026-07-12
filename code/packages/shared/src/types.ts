@@ -108,6 +108,91 @@ export interface PinCounts {
   failed: number; // files whose add/pin/fetch errored
 }
 
+// ── TO DO Batches (to_do_batches.mdx / to_do.mdx) ────────────────────────────────
+// A per-storage bundle of recommended file actions the TO DO Batch Calc Engine produced during a scan
+// recalc. These are the API DTOs the To Do page reads; the on-disk YAML shape is TodoBatchDocSchema
+// (schemas.ts). One batch per storage; only batches WITH work render as slugs.
+
+// The recommendable action categories (to_do_batches.mdx §3). `transcribe_*` belong to transcribe batches.
+export type TodoCategory =
+  | "compress_video"
+  | "compress_image"
+  | "git_ignore"
+  | "pin"
+  | "pull_down"
+  | "transcribe_video"
+  | "transcribe_audio";
+
+// Which storage a batch is scoped to (to_do_batches.mdx §1).
+export type TodoBatchScope = "personal" | "dropbox" | "gdrive" | "repo" | "company" | "community";
+
+// The slug-template hint (to_do_batches.mdx §3.2 / to_do.mdx §5.1). Unknown → "mixed".
+export type TodoBatchPattern =
+  | "compress"
+  | "git_ignore"
+  | "pull_down"
+  | "pin"
+  | "transcribe"
+  | "mixed";
+
+// One category's rollup, read by the slug WITHOUT opening every item (to_do_batches.mdx §3.1).
+export interface TodoCategoryTotal {
+  count: number;
+  reclaimableBytes?: number; // compress categories: bytes reclaimable if compressed
+}
+
+// The recommended target per axis for one file (the RECOMMENDED decision-toggle state, decision_toggles.mdx).
+export interface TodoRecommend {
+  ipfs?: boolean;
+  gitignore?: boolean;
+  compress?: boolean;
+}
+
+// One recommendation the batch popup renders as a row (to_do_batches.mdx §3).
+export interface TodoBatchItem {
+  path: string; // relative to storageRoot
+  sizeBytes: number;
+  category: TodoCategory;
+  cid?: string | null;
+  pinnedOn?: string[]; // devices that already hold it (pull_down)
+  estCompressedBytes?: number; // compress categories
+  recommend: TodoRecommend;
+}
+
+// The slug-shaped summary the To Do page list renders (GET /api/todo/batches).
+export interface TodoBatchSummary {
+  id: string; // "<scope>:<slug>"
+  scope: TodoBatchScope;
+  storageName: string;
+  storageRoot: string;
+  kind: "todo" | "transcribe";
+  pattern: TodoBatchPattern;
+  repoId?: string; // present for repo batches → the slug/popup can route to /repos/$repoId
+  totals: Partial<Record<TodoCategory, TodoCategoryTotal>>;
+  dismissed: boolean;
+  computedAt: string;
+}
+
+// The full batch with items (GET /api/todo/batches/:id) — powers the batch popup.
+export interface TodoBatchDetail extends TodoBatchSummary {
+  items: TodoBatchItem[];
+}
+
+// What Apply returned (POST /api/todo/batches/:id/apply) — the async hand-off count.
+export interface TodoApplyResult {
+  applied: number; // files acted on
+  pins: number; // files queued to pin/pull
+  gitignored: number;
+  compressed: number;
+  transcribed: number;
+}
+
+// The on-demand transcribe scan result (POST /api/todo/transcribe-scan).
+export interface TranscribeScanResult {
+  batches: number; // transcribe batches written
+  candidates: number; // total transcribable-not-yet-transcribed files found
+}
+
 // The POST /repos/:id/pin response: the refreshed repo detail plus what THIS run did (pin_process.mdx §6).
 export interface PinNowResult {
   detail: RepoDetail;

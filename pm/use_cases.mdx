@@ -452,6 +452,10 @@ The directory category rollup (the four charter category counts) is computed in 
 * **AC-7** The shared components (`StatusBanner`, `DiagnosticCard`, `Disclosure`, `StatTile`,
   `PageHeader`, `Section`) are used by IPFS, Scans, Settings, One-repo, Peers, and the entity pages,
   so the app feels like one product with the Home dashboard.
+* **AC-8** The **TO DO Batch** flows (§9) are reachable and consistent: every recommended file bundle
+  appears as a **To Do slug** (and, for a repo, its page **warning banner**), opens a **batch popup**
+  whose rows carry **two-axis decision toggles pre-set to RECOMMENDED**, and **Apply** writes the
+  team-shared decision and queues the effect — never an inline, un-confirmed mutation.
 
 ---
 
@@ -532,3 +536,62 @@ question, where the app answers it, and what they see.
   GEMINI_API_KEY / XAI_API_KEY / OPENAI_API_KEY), then reload."* **Settings → Tools** shows each provider
   as **● configured** or **✗ no key** with the exact env var / config key to add, and reminds them **only
   Gemini describes video**. Adding a key and reloading enables the button (ai_description.mdx §6, §8).
+
+---
+
+## 9. TO DO Batch & decision-toggle use-case flows (recommend → confirm → apply)
+
+These journeys live on the **[To Do page](./to_do.mdx)** (route `/todo`) and the **batch popups** it opens,
+and on the inline **[decision toggles](./decision_toggles.mdx)** rendered per file row. They are the "here's
+a bundle of files, and here's what we recommend" surface: LFBridge computes recommendations per storage as
+**[TO DO Batches](./to_do_batches.mdx)**, shows them as **slugs** (and repo **warning banners**), and lets
+the user confirm in place with two-axis toggles. Same UC format as §4/§8 — the user's question, where the
+app answers it, and what they see. For the full month-by-month, two-computer walk-through of all of these,
+see the dedicated tour **[use_case_todo_batches.mdx](./use_case_todo_batches.mdx)**.
+
+### UC-18 — "Just tell me everything worth doing, in one list."
+* **Enters:** the **To Do** left-bar item (badge = number of non-dismissed batches with work).
+* **Sees:** one **slug** per storage that has work — repos, Personal, Dropbox, each Google Drive — most
+  important first (not-backed-up risk > git-ignore > compress/transcribe). Clean storages show **no** slug;
+  an all-clear renders a calm *"Nothing to do."* Each slug has a blue **chevron** (open the batch popup) and
+  a red **trash** (dismiss = *not now*, never deletes files). See [to_do.mdx §4–§5](./to_do.mdx).
+
+### UC-19 — "Pin this file AND stop checking it into Git — without opening a dialog."
+* **Enters:** the One-repo file table (or the File System rows).
+* **Sees:** two inline **decision toggles** per row — **Add-to-IPFS (pin)** and, under a repo,
+  **Add-to-git-ignore (⊘)**. One click each flips them **solid orange (ON)**; each click writes **one axis**
+  of the **team-shared** decision immediately and performs that axis's effect (pin/manifest, `.gitignore`
+  line) — never deleting local bytes. Outside a repo the ignore toggle is a blank **N/A** slot
+  ([decision_toggles.mdx §1–§5](./decision_toggles.mdx)). The menu still offers the same actions as the slow
+  path ([menus.mdx §5.3](./menus.mdx#53-file)).
+
+### UC-20 — "These files are on my other computer but not here — bring them over."
+* **Enters:** the repo's **warning banner** or the To-Do **pull-down slug**.
+* **Sees:** the **batch popup** — an educate line, then the files (named/sized even though absent locally,
+  from the manifest CID), each with decision toggles pre-set to **RECOMMENDED (dashed)**. **Apply** reads
+  *"Pull down N · git-ignore N"*, writes the decisions, and **pulls the bytes down over IPFS** as background
+  work on [Processing](./processing.mdx). See [use_case_todo_batches.mdx §3](./use_case_todo_batches.mdx).
+
+### UC-21 — "This repo has a bit of everything — a mixed pile of work."
+* **Enters:** a repo whose batch has two-or-more categories (uncompressed videos + big-unignored files +
+  pull-downs).
+* **Sees:** a **mixed** slug (headline = the top category; one detail cell per category) whose popup shows
+  **all sections** — pull-down and git-ignore rows with RECOMMENDED toggles, videos with a Compress offer.
+  The **Apply** label **composes across sections** (e.g. *"Pull down 41 · git-ignore 44 · compress 12"*), and
+  the user can override per row before applying. See [to_do.mdx §5.1/§6](./to_do.mdx) and
+  [use_case_todo_batches.mdx §4](./use_case_todo_batches.mdx).
+
+### UC-22 — "Which of my videos and audio could be transcribed?"
+* **Enters:** the To-Do page header link **"Show what could be transcribed."**
+* **Sees:** a brief *"Looking…"*, then **transcribe slugs** — one per storage with untranscribed media
+  (e.g. Personal *"58 videos + 13 audio"*). The chevron opens an **~80%-of-screen**, **default-checked**
+  popup; **"Transcribe N files"** enqueues **background** transcription jobs watchable on
+  [Processing](./processing.mdx). This is **opt-in** — it never runs as part of a scheduled scan
+  ([transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx), [to_do.mdx §7](./to_do.mdx#7-show-what-could-be-transcribed-locked)).
+
+### UC-23 — "I don't want to deal with this batch right now."
+* **Enters:** any To-Do slug.
+* **Sees:** the red **trash** sets the batch's `dismissed` flag — the slug slides out of the list and stays
+  hidden until its contents **materially change**. It **never** deletes files or touches bytes; it is a *not
+  now*, and the files keep whatever decisions they already had
+  ([to_do_batches.mdx §3.3](./to_do_batches.mdx#33-dismissed--the-red-trash-flag-locked)).

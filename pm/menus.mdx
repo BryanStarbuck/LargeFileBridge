@@ -282,6 +282,50 @@ The pin catalog for pinned-CID rows with no local entity (Import into tracking, 
 Guardrail: unpinning is only ever "stop serving *our own* CID on *this* machine." It never turns the
 node into a public gateway (§6.5) and never deletes local bytes (§6.2).
 
+### 5.6 The decision toggles are the FAST PATH; the menu is the same actions (LOCKED)
+
+Two of the catalog's most-used mutations — **Add to IPFS / Remove from IPFS** ([§5.3](#53-file)) and
+**Git ignore** ([§5.1](#51-repo) / [§5.2](#52-directory-non-repo) / [§5.3](#53-file)) — also have an
+**inline, one-click** form: the two per-row **[decision toggles](./decision_toggles.mdx)** (the
+**Add-to-IPFS pin** toggle and the **Add-to-git-ignore ⊘** toggle) rendered directly on file/dir rows
+wherever files are listed. The relationship is deliberate and **additive**:
+
+* **The toggles are the fast path.** On a table row the user flips a decision **in place** — no menu to
+  open — and each click writes **one axis** of the team-shared decision immediately
+  ([decision_toggles.mdx §2](./decision_toggles.mdx#2-clicking-a-toggle--one-decision-event-locked)). The
+  toggle **stops click propagation** and never navigates, exactly like the `⋮` kebab column (§3).
+* **The menu is the complete, discoverable list.** The **`⋮` kebab / right-click / more-menu** still offer
+  the **same actions** in words — **Add to IPFS** / **Remove from IPFS**, the three-state **Set decision**
+  submenu, and **Git ignore** — for users who prefer the labelled catalog, for keyboard/a11y navigation, and
+  for the cases the toggle **defers to the menu's dialog**: a **directory** ignore and a **multi-row** flip
+  open the **[Git-ignore pop-over](./git_ignore.mdx)** / bulk menu rather than writing silently
+  ([decision_toggles.mdx §2.1](./decision_toggles.mdx#21-bulk-clicks-and-directories-still-open-the-pop-over-locked),
+  §6.1 here). The two surfaces write the **same** single-axis decision, so a decision set by a toggle shows
+  in the menu and vice-versa — they never diverge.
+* **The git-ignore toggle is repo-scoped, matching the menu.** The **Add-to-git-ignore ⊘** toggle renders
+  **only** for files/dirs under a repo (it is a blank **N/A** slot otherwise), mirroring the menu's
+  **Git ignore** item, which is likewise meaningful only inside a repo
+  ([decision_toggles.mdx §4](./decision_toggles.mdx#4-the-git-ignore-toggle-is-repo-scoped-locked)). The
+  **Add-to-IPFS pin** toggle has no such restriction — any large file can be pinned, just as the menu's
+  **Add to IPFS** appears for any eligible file.
+* **A To-Do batch's recommendations mirror these actions.** The **[batch popup](./to_do.mdx#6-the-batch-popup-the-evolved-warnings-dialog-locked)**
+  (the evolved warnings dialog) renders the **same** decision toggles per subject row, **pre-set to
+  RECOMMENDED** (dashed) from the [TO DO Batch Calc Engine](./to_do_batch_calc_engine.mdx); confirming a
+  recommendation there writes the identical single-axis decision the row toggle and the menu item write.
+  So a file's decision can be set from **four** consistent places — the inline toggle, the entity menu, the
+  bulk menu, or a To-Do batch — all routing to the one decision-write path.
+* **The two sticky flags stay menu-only.** **Never IPFS** and **Do not compress** (§6.6) are **not**
+  toggles-on-the-row — they are per-entity *policies* set from the menu. A file with **Never IPFS** on shows
+  **no** Add-to-IPFS toggle (the axis is forbidden, so it renders as OFF/absent per
+  [decision_toggles.mdx §4](./decision_toggles.mdx#4-the-git-ignore-toggle-is-repo-scoped-locked) / §6.6
+  here), keeping the fast path and the policy consistent.
+
+The inline toggles and their menu twins share the one decision-write path in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/decision/DecisionToggles.tsx` — `DecisionToggle`
+(the row/popup toggle) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()`
+(the menu's Add/Remove-IPFS + Git-ignore items) both call the same `setDecision` mutation
+([decisions.mdx §19](./decisions.mdx#19-the-write-api--one-endpoint-two-accepted-bodies-locked)).
+
 ---
 
 ## 6. Guardrails the menus inherit (LOCKED)
@@ -389,6 +433,11 @@ Whether a file earns the pin **`P`** badge (and Never IPFS suppressing it) is co
 7. Every **mutating** menu action runs through the progress dock as its taxonomy op
    ([webapp.mdx §11](./webapp.mdx#11-what-shows-up-in-the-dock--the-lfbridge-operation-taxonomy)), and
    every **navigate** action routes via TanStack Router; **copy** actions write the clipboard and toast.
+8. The inline **[decision toggles](./decision_toggles.mdx)** are the **fast path** for the catalog's
+   **Add to IPFS / Remove from IPFS** and **Git ignore** actions (§5.6): a row toggle, the entity menu, the
+   bulk menu, and a **To-Do batch's** recommendations all write the **same** single-axis decision; the
+   **Git-ignore ⊘** toggle is repo-scoped like the menu's Git-ignore item; a directory ignore or multi-row
+   flip defers to the **Git-ignore pop-over**; and **Never IPFS / Do not compress** stay menu-only policies.
 
 <!--
   HUB spec for three shared interactions: (1) cell navigation (data cells are deep links), (2) the row
@@ -401,4 +450,10 @@ Whether a file earns the pin **`P`** badge (and Never IPFS suppressing it) is co
   never deletes local bytes on remove/untrack; local-only fingerprinting; hidden (not disabled) gated
   items; only-our-content IPFS. When adding a table, give it a cell-link map (link back to §2) and the
   ⋮ kebab; when adding an entity, add a catalog to §5 and both surfaces get it for free.
+  §5.6 (LOCKED): the inline DECISION TOGGLES (decision_toggles.mdx — Add-to-IPFS pin + Add-to-git-ignore ⊘)
+  are the FAST PATH for the menu's Add/Remove-IPFS + Git-ignore actions; row toggle + entity menu + bulk menu
+  + a To-Do batch's RECOMMENDED toggles all write the SAME single-axis decision (setDecision). Git-ignore ⊘
+  toggle is repo-scoped (N/A otherwise) like the menu's Git-ignore item; directory-ignore + multi-row flips
+  defer to the git_ignore.mdx pop-over; Never IPFS / Do not compress (§6.6) stay MENU-ONLY policies, not row
+  toggles. Keep in sync with decision_toggles.mdx, to_do.mdx §6 (batch popup), to_do_batch_calc_engine.mdx.
 -->
