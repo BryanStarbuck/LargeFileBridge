@@ -121,6 +121,30 @@ The Media viewer scope is registered in
 
 ---
 
+## 5a. Action-popup shortcuts (the two-pane warning / To-Do popup)
+
+Registered by the [action popup](./warnings.mdx#45-the-subjects-list--the-actual-filesdirectories-with-checkboxes-locked)
+(the wide two-pane warning / To-Do batch dialog) while it is open, so the whole file list is reviewable
+**from the keyboard** and a previewed video plays with a tap of Space. These are **bare** keys (no
+modifier) because the popup is a focused modal — nothing else on the page competes.
+
+| Shortcut | Action | When |
+| --- | --- | --- |
+| **`↑` / `↓`** (bare) | Move the **preview cursor** up / down the file list — the left pane previews the cursor's file ([warnings.mdx §4.5.2](./warnings.mdx#452-the-left-pane-doubles-as-a-full-size-media-preview-locked)) | two-pane popup with a file list |
+| **`Space`** (bare) | **Play / pause** the previewed video or audio in the left pane | the previewed file is a video/audio **and** focus is on the row, not a toggle |
+| **`Enter`** (bare) | Toggle the focused per-row axis checkbox (pin / ignore / compress) | a row toggle holds focus |
+| **`Esc`** (bare) | Close the popup (= Cancel) | always |
+
+`Space` keeps its **native checkbox meaning** (toggle) when a per-row toggle holds focus — the
+play/pause binding only fires when the **row** (not a toggle) is focused and a video/audio is previewed,
+so the two never collide. The popup traps focus while open and restores it to the arrow button on close
+([warnings.mdx §6](./warnings.mdx#6-accessibility--keyboard)).
+
+The action-popup scope is registered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `WarningPopup` (`useHotkeys("action-popup", "Action popup", …)` + the previewed-media `<video>`/`<audio>` play/pause handler).
+
+---
+
 ## 6. Per-page shortcuts (the plan for every page)
 
 The system is built so **any page adds shortcuts by calling `useHotkeys`**. Global (§4) and Media viewer

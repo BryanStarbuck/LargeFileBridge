@@ -30,6 +30,13 @@ Siblings this builds on and does not repeat:
 * [webapp.mdx](./webapp.mdx) §10–§14 — the **progress dock** + in-process **job registry** every
   long-running job routes through. A transcription run registers here (kind `transcribe`) so a live,
   determinate card shows while Whisper runs (§5.1).
+* [special_files.mdx](./special_files.mdx) — the classifier that sets the **`transcribable`** sub-flag
+  (video — because it carries an audio track — and audio), i.e. *which* files this engine may run over.
+* [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx) — a completed transcription appends a
+  **`transcribe` event** to the file's per-file sidecar (`output:` → the `.transcription` path) and a
+  `TRANSCRIBE` line to the per-computer history log, and increments `repo_storage.yaml → counts.transcribed`.
+* [use_case_two_computers.mdx](./use_case_two_computers.mdx) — the tour where a video's transcript is
+  produced on one computer and its sidecar event travels with the repo.
 
 ---
 

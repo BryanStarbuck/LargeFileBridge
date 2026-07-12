@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — To Do (the left-bar page of batch slugs)
-description: The To Do page (left-bar item "To Do", route /todo) is the single place that shows the user everything LargeFileBridge recommends doing, bundled per storage as TO DO Batches. It renders each batch that has work as a SLUG — a compact ~5-row card laid out in up-to-three columns (left/center/right) with a horizontal divider between slugs, a right-side blue "open" chevron button that opens the full batch popup, and a small red trash button to dismiss/deprioritize the batch. Only batches with work show (30 repos, 3 with work → 3 slugs). Slug LAYOUT is chosen by the batch's pattern (compress / git-ignore / pull-down / pin / transcribe / mixed). A top-of-page "Show what could be transcribed" action link runs the What-Can-Be-Transcribed Calc Engine and adds transcribe slugs. The batch popup is the evolved warnings dialog: the file list with two-axis decision toggles + an Apply button. Sibling of to_do_batches.mdx (data), to_do_batch_calc_engine.mdx + transcribe_calc_engine.mdx (producers), warnings.mdx (the same popup, surfaced on pages), decision_toggles.mdx (the per-row toggles), left_bar.mdx (the nav item), and processing.mdx (where applied work runs).
+description: The To Do page (left-bar item "To Do", route /todo) is the single place that shows the user everything LargeFileBridge recommends doing, bundled per storage as TO DO Batches. It renders each batch that has work as a SLUG — a compact ~5-row card laid out in up-to-three columns (left/center/right) with a horizontal divider between slugs, a right-side blue "open" chevron button that opens the full batch popup, and a small red trash button to dismiss/deprioritize the batch. Only batches with work show (30 repos, 3 with work → 3 slugs). Slug LAYOUT is chosen by the batch's pattern (compress / git-ignore / pull-down / pin / transcribe / mixed). A top-of-page "Show what could be transcribed" action link runs the What-Can-Be-Transcribed Calc Engine and adds transcribe slugs. The batch popup is the evolved warnings dialog — a wide ~80% two-pane dialog whose left pane educates and flips to a full-size media preview on hover, and whose right pane is the file list with up-to-three per-row action toggles (pin / git-ignore / compress) + an Apply button. Sibling of to_do_batches.mdx (data), to_do_batch_calc_engine.mdx + transcribe_calc_engine.mdx (producers), warnings.mdx (the same popup, surfaced on pages), decision_toggles.mdx (the per-row toggles), left_bar.mdx (the nav item), and processing.mdx (where applied work runs).
 ---
 
 # LargeFileBridge — To Do
@@ -187,18 +187,27 @@ Opening a slug's chevron opens the **batch popup** — the same educate-list-app
 [warnings popup](./warnings.mdx#4-the-warning-popup-educate--options--the-subjects-list--fix) is, reused
 here. It is **no longer titled "warnings"**; it is the batch's action dialog:
 
+* **Wide two-pane, ~80% of the screen** ([warnings.mdx §4.0](./warnings.mdx#40-size--layout--one-pane-or-two-locked)) —
+  it overlays the left nav and takes the room: **right pane = the batch's file list**, **left pane =
+  educate that flips to a full-size media preview** the moment a media row is hovered/focused
+  ([warnings.mdx §4.5.2](./warnings.mdx#452-the-left-pane-doubles-as-a-full-size-media-preview-locked)).
 * **Header** — the storage name + what this batch is (e.g. "Pull down · charlie-kirk").
 * **Educate** — one short paragraph on *why* (e.g. "These files live on your other computers via IPFS.
-  Pulling them down copies them here and keeps them backed up.").
-* **The subjects list** — the batch's **files**, one row each, showing size and the **two-axis
-  [decision toggles](./decision_toggles.mdx#7-in-the-warning--to-do-batch-popups-locked)** **pre-set to
-  the recommended target** (RECOMMENDED/dashed where undecided). The user confirms or overrides per file;
-  a header toggle sets all.
-* **Live count** — the count of rows still set to act updates as toggles change
+  Pulling them down copies them here and keeps them backed up.") — shown until a media row is previewed.
+* **The file list** — the batch's **files**, one row each, showing size and, to the left of each row, the
+  **up-to-three per-row action toggles** — **pin / git-ignore / compress** —
+  ([decision_toggles.mdx §7](./decision_toggles.mdx#7-in-the-warning--to-do-batch-popups-locked),
+  [warnings.mdx §4.5.1](./warnings.mdx#451-the-per-row-action-toggles--up-to-three-checkboxes-per-file-locked))
+  **pre-checked where the calc engine recommends the action** (RECOMMENDED/dashed where it is less sure).
+  The user confirms or overrides **per file, per axis**; a column header sets a whole axis. Columns render
+  only when relevant (a pull-down batch of non-compressible files shows two columns, not three).
+* **Preview & keyboard** — hover or **↑/↓** to preview a file full-size in the left pane; **Space** plays
+  a previewed video ([warnings.mdx §4.5.3](./warnings.mdx#453-keyboard--space-plays-the-previewed-video-arrows-move-the-preview-locked)).
+* **Live count** — the count of rows with **≥1 axis still ON** updates as toggles change
   ([warnings.mdx §4.6](./warnings.mdx#46-the-live-count-the-6-that-updates)).
 * **Footer** — **Cancel** (left link) + a right **Apply** button whose label **spells out the checked
-  axes** ([warnings.mdx §4.4.1](./warnings.mdx#441-composed-action-verb-labels--the-button-spells-out-the-checked-axes-locked))
-  — e.g. *"Pull down 41 · git-ignore 41"*, *"Compress 12 videos"*.
+  axes with a per-axis count** ([warnings.mdx §4.4.1](./warnings.mdx#441-composed-action-verb-labels--the-button-spells-out-the-checked-axes-locked))
+  — e.g. *"Compress 12 · git-ignore 41 · Continue: IPFS Add — 41"*.
 
 **Apply** writes each row's decision(s) to the shared ledger and queues the effects (pin/fetch, git-ignore,
 compress, transcribe), then hands off **asynchronously** — the popup closes, a bottom notification appears,
@@ -220,10 +229,14 @@ transcribe slugs** to the list:
   **transcribe batch** per storage, and the page shows a **transcribe slug** per storage that has any
   (e.g. Personal `58 videos + 13 audio`; 4 of 30 repos each get one).
 * The link shows a brief **"Looking…"** state while the (opt-in, heavier) scan runs; it is cancelable.
-* A transcribe slug's chevron opens the **transcribe popup** — **~80% of the screen** width and height,
-  a **default-checked** file list, and an **"Transcribe N files"** Apply that enqueues **background**
-  transcription jobs watchable on [Processing](./processing.mdx)
+* A transcribe slug's chevron opens the **transcribe popup** — the same wide **~80% of the screen**
+  two-pane dialog: a **default-checked** file list on the right and, on the left, the educate copy that
+  flips to a **full-size preview** of the hovered video/audio (**Space** plays it, §4.5.2/§4.5.3) so the
+  user can spot-check *which* clip before transcribing — with an **"Transcribe N files"** Apply that
+  enqueues **background** transcription jobs watchable on [Processing](./processing.mdx)
   ([transcribe_calc_engine.mdx §4](./transcribe_calc_engine.mdx#4-the-transcribe-slug--popup-locked)).
+  (Transcribe is a single-action batch, so its rows use the **single include checkbox** model, not the
+  three axis toggles — [warnings.mdx §4.5](./warnings.mdx#45-the-subjects-list--the-actual-filesdirectories-with-checkboxes-locked).)
 
 The link → `POST /api/todo/transcribe-scan`; rendered in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `ShowTranscribableLink`.
@@ -254,10 +267,12 @@ The To-Do page and [warnings](./warnings.mdx) are **two views of one model**:
    sentence, value/label detail cells, and an action row.
 4. Each slug has a **blue chevron** "open" button (opens the batch popup) and a **red trash** "dismiss"
    button (sets `dismissed`, hides the slug, **never** deletes files/bytes).
-5. The **batch popup** reuses the warning popup: educate paragraph, the files list with **two-axis decision
-   toggles pre-set to the recommended target**, a live count, and an **Apply** button whose label spells
-   out the checked axes; Apply writes decisions + queues effects asynchronously and the work drops from the
-   next recompute.
+5. The **batch popup** reuses the improved warning popup: a **wide ~80% two-pane** dialog whose **left pane
+   educates and flips to a full-size media preview on hover/focus** (Space plays a previewed video), and
+   whose **right pane** is the files list with **up-to-three per-row action toggles** (pin / git-ignore /
+   compress) **pre-checked where recommended** (columns shown only when relevant), a live count, and an
+   **Apply** button whose label spells out the checked axes **with a per-axis count**; Apply writes
+   decisions + queues effects asynchronously and the work drops from the next recompute.
 6. **"Show what could be transcribed"** runs the transcribe engine and adds **transcribe slugs**; their
    chevron opens an **~80%-screen** popup with a default-checked list and a **"Transcribe N files"** Apply
    that enqueues background jobs on Processing.

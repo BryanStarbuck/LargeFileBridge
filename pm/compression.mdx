@@ -196,6 +196,13 @@ Compression is always user-initiated ([menus.mdx §6.1](./menus.mdx)):
 * **The whole current filter** — a **Compress all in filter** action compresses **every file currently
   shown by the table's search/filter**, not just the visible page. The UI states the count first
   ("Compress 27 files?") and confirms.
+* **From the action popup — the per-row Compress toggle.** In the wide two-pane warning / To-Do batch
+  popup, **Compress is the third per-row action axis** (glyph **K**): it renders on any row whose file
+  looks compressible & uncompressed, **pre-checked where LFBridge recommends it**, and Apply queues a
+  compress job per checked row ([warnings.mdx §4.5.1](./warnings.mdx#451-the-per-row-action-toggles--up-to-three-checkboxes-per-file-locked),
+  [decision_toggles.mdx §7](./decision_toggles.mdx#7-in-the-warning--to-do-batch-popups-locked)). This is
+  the same engine/alpha-check/verification below — the popup is just another trigger surface, and the
+  left-pane preview lets the user *see the video before compressing it*.
 
 Every path runs the same engine, the same alpha check, and the same resolution verification per file, and
 reports per-file results (compressed / skipped-no-gain / blocked-alpha / failed).

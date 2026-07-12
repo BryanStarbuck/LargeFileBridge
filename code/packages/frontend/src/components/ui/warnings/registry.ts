@@ -36,15 +36,52 @@ export type WarningSelection = {
   checks: Record<string, boolean>; // checkbox name -> checked
 };
 
+// The four open-states a per-row action toggle can start in (warnings.mdx §4.5.1). Mirrors the
+// decision-toggle grammar (decision_toggles.mdx §1): "on" solid/checked, "recommended" dashed but
+// pre-checked (LFBridge's suggestion the user can uncheck), "off" empty/unchecked. An axis KEY absent
+// from a target's `axes` ⇒ N/A for that row (no toggle; the slot stays blank so columns align).
+export type AxisOpenState = "on" | "recommended" | "off";
+
+// The three per-row action axes (warnings.mdx §4.5.1). A column renders in the pane only when at least
+// one target declares that axis (§4.5.1 "columns render only when relevant").
+export type WarningTargetAxes = {
+  ipfs?: AxisOpenState; // Add to IPFS (pin/get) — any large file
+  ignore?: AxisOpenState; // Add to git-ignore (add eventually) — only under a repo
+  compress?: AxisOpenState; // Compress — only when the file looks compressible & uncompressed
+};
+
+// The three axis ids, in render order (pin → ignore → compress).
+export const AXIS_ORDER = ["ipfs", "ignore", "compress"] as const;
+export type AxisId = (typeof AXIS_ORDER)[number];
+
+// Media the left pane previews when this row is hovered/keyboard-focused (warnings.mdx §4.5.2). Absent ⇒
+// a non-media row (hovering it just restores the educate copy).
+export type WarningTargetPreview = {
+  kind: "image" | "video" | "audio";
+  url: string; // media-serving URL (same /api/media endpoint the media viewer uses)
+  width?: number; // pixel dimensions for the caption ("3840×2160")
+  height?: number;
+};
+
 // One subject the warning is about — a file or directory (warnings.mdx §4.5). Rendered as a row in the
-// popup's right-pane subjects list, each with its own checkbox. Apply runs Task X over exactly the
-// CHECKED subjects; unchecked rows are left untouched.
+// popup's right-pane subjects list. Two row models (§4.5):
+//   1. PER-ROW TOGGLES (§4.5.1) — when `axes` is present, the row leads with up-to-3 action toggles
+//      (pin/ignore/compress) pre-set to those open states; the row is "included" when ≥1 axis is ON,
+//      and apply() receives each included row's ON axes via its `perRow` argument.
+//   2. SINGLE CHECKBOX (§4.5) — when `axes` is absent, the row leads with one include checkbox; apply()
+//      receives the checked ids and the left-pane options decide what to do.
 export type WarningTarget = {
   id: string; // stable key — usually the absolute path (also what apply() receives)
   label: string; // display name (repo-relative or middle-truncated absolute path)
   sublabel?: string; // size and/or fuller path, shown muted under the label
-  defaultChecked?: boolean; // default true; false opts the row OUT at open (rare)
+  defaultChecked?: boolean; // single-checkbox model: default true; false opts the row OUT at open (rare)
+  axes?: WarningTargetAxes; // per-row-toggles model (§4.5.1) — present ⇒ row shows up-to-3 axis toggles
+  preview?: WarningTargetPreview; // §4.5.2 — media the left pane previews on hover/focus
 };
+
+// Per-row map of the axes left ON for each still-included row — apply()'s 3rd argument in the per-row
+// model (§4.5.1). Only ON axes and only included rows appear.
+export type PerRowAxes = Record<string, { ipfs?: boolean; ignore?: boolean; compress?: boolean }>;
 
 export type WarningPopupSpec = {
   // §4.2 — the two mandatory education blocks.
@@ -85,11 +122,14 @@ export type WarningPopupSpec = {
     // react-query keys to refetch on SUCCESS (nothing runs on failure) → the warning disappears.
     invalidate?: unknown[][];
   };
-  // THE FIX (§5.2/§5.3). Receives the chosen options AND the ids of the CHECKED targets — runs Task X
-  // over exactly those ids (unchecked subjects untouched); `checkedTargetIds` is [] when there are no
-  // targets. With `progress` this IS the background job's task; without it, it is awaited in-popup
-  // (resolve = success → popup closes + page refetches; reject with an Error = stay open + show it).
-  apply: (sel: WarningSelection, checkedTargetIds: string[]) => Promise<void>;
+  // THE FIX (§5.2/§5.3). Receives the chosen options AND the CHECKED subjects — runs Task X over exactly
+  // those (unchecked subjects untouched). `checkedTargetIds` is [] when there are no targets.
+  //  • Single-checkbox model: `checkedTargetIds` = the ids whose include box is on.
+  //  • Per-row-toggles model (§4.5.1): `perRow` maps each still-included id → the axes left ON, so the fix
+  //    can pin/git-ignore/compress each file per its own toggles; `checkedTargetIds` = Object.keys(perRow).
+  // With `progress` this IS the background job's task; without it, it is awaited in-popup (resolve =
+  // success → popup closes + page refetches; reject with an Error = stay open + show it).
+  apply: (sel: WarningSelection, checkedTargetIds: string[], perRow?: PerRowAxes) => Promise<void>;
 };
 
 export type WarningScope =
@@ -153,4 +193,36 @@ export function pluralizeNoun(noun: string, n: number): string {
   if (n === 1) return noun;
   if (noun.endsWith("y")) return noun.slice(0, -1) + "ies"; // directory → directories
   return noun + "s";
+}
+
+// PER-ROW-TOGGLES model (warnings.mdx §4.5.1). True when any target declares `axes` — the popup then
+// renders up-to-3 per-row action toggles instead of the single include checkbox (§4.5 model 1).
+export function hasPerRowAxes(popup?: WarningPopupSpec): boolean {
+  return (popup?.targets ?? []).some((t) => t.axes != null);
+}
+
+// Which axis columns to render — an axis column shows only when at least ONE target declares it
+// (§4.5.1 "columns render only when relevant"), preserving the pin → ignore → compress order.
+export function axisColumns(popup?: WarningPopupSpec): AxisId[] {
+  const targets = popup?.targets ?? [];
+  return AXIS_ORDER.filter((axis) => targets.some((t) => t.axes?.[axis] !== undefined));
+}
+
+// The initial CHECKED state per row per axis when the popup opens. "on" and "recommended" open CHECKED
+// (recommended is pre-checked so the user only unchecks, §4.5.1); "off" opens unchecked; an absent axis
+// is undefined (N/A — no toggle on that row). Keyed by target id → axis → boolean.
+export type RowAxisChecks = Record<string, Partial<Record<AxisId, boolean>>>;
+export function initialRowAxisChecks(popup?: WarningPopupSpec): RowAxisChecks {
+  const out: RowAxisChecks = {};
+  for (const t of popup?.targets ?? []) {
+    if (!t.axes) continue;
+    const row: Partial<Record<AxisId, boolean>> = {};
+    for (const axis of AXIS_ORDER) {
+      const st = t.axes[axis];
+      if (st === undefined) continue; // N/A on this row
+      row[axis] = st !== "off"; // "on" | "recommended" → checked
+    }
+    out[t.id] = row;
+  }
+  return out;
 }

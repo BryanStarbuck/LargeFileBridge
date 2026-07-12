@@ -225,6 +225,13 @@ bounded media stage · analysis tabs) — is handled in code:
 
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `MediaViewer` component (with `PropertyGrid` and `ViewerSurface`)
 
+> **Reused by the action-popup preview.** The same `object-contain`, aspect-preserving, best-fit media
+> render (and the Space-to-play transport) is what the wide warning / To-Do batch popup shows in its
+> **left pane** when a file row is hovered/focused ([warnings.mdx §4.5.2](./warnings.mdx#452-the-left-pane-doubles-as-a-full-size-media-preview-locked)).
+> The popup preview is a lightweight embedding of this viewer's media surface — same `/api/media` stream
+> ([§2](#2-the-backend-contract-apimedia)), same fit rule — so a file previews identically whether opened
+> full-screen here or glanced at beside the decision toggles.
+
 ---
 
 ## 4. The action bar (band 3) — a full-width, priority-ordered overflow row

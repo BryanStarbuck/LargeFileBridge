@@ -213,21 +213,38 @@ Adding the decision-toggle cell to File System file/directory rows (repo-scoped 
 
 ---
 
-## 7. In the warning & To-Do batch popups (LOCKED)
+## 7. In the warning & To-Do batch popups — THREE axes per row (LOCKED)
 
 The popup **subjects list** — the checklist of the actual files a warning or batch is about — renders the
-decision toggles per row so the user decides **inside the popup**:
+decision toggles per row so the user decides **inside the popup**
+([warnings.mdx §4.5.1](./warnings.mdx#451-the-per-row-action-toggles--up-to-three-checkboxes-per-file-locked)):
 
-* Each subject row shows: the file, its size, and its **decision toggles** (pre-set to the calc engine's
-  **RECOMMENDED** target for a To-Do batch; to current state for a plain warning).
-* The popup's live **count** ([warnings.mdx §4.6](./warnings.mdx#46-the-live-count-the-6-that-updates)) reflects how many rows are still set to the recommended
-  action; unchecking a toggle drops that row out of the count.
-* The popup's **Apply** button spells out the checked axes across the list — its composed label follows
-  [warnings.mdx §4.4.1](./warnings.mdx#441-composed-action-verb-labels--the-button-spells-out-the-checked-axes-locked)
-  (e.g. *"Pin 5 + git-ignore 5"*). Apply then writes each row's decision(s) as in §2.
+* **Up to THREE toggles per row here — not two.** The popup is the one place the **Compress** axis joins
+  the pin + ignore pair, giving a row up to three action toggles left→right: **Add to IPFS (pin/get)**,
+  **Add to git-ignore (add eventually)**, and **Compress**. It is the **same** `DecisionToggle`
+  component and the same four-state grammar (§1) — the compress axis is a third axis id (`"compress"`,
+  glyph **K**), rendered only when the file looks compressible & uncompressed. This third toggle is
+  popup-only; the table rows (§5/§6) still show just the two decision axes (pin + ignore), because
+  Compress is an *action*, not a stored two-axis decision.
+* Each subject row shows: the file, its size, and its **action toggles** — **pre-checked (solid ON) where
+  LFBridge recommends the action**, so the popup opens with the right boxes already ticked and the user
+  only unchecks; a To-Do batch may instead open axes it is less sure of as **RECOMMENDED/dashed**.
+* **Columns render only when relevant** (§1.1 alignment rule extends here): a column shows only if some
+  row in the set has that axis applicable — a pull-down-only batch shows two columns, a compress-only
+  batch shows one ([warnings.mdx §4.5.1](./warnings.mdx#451-the-per-row-action-toggles--up-to-three-checkboxes-per-file-locked)).
+* The popup's live **count** ([warnings.mdx §4.6](./warnings.mdx#46-the-live-count-the-6-that-updates)) reflects how many rows still have **≥1 axis ON**;
+  unchecking a row's last axis drops it out of the count.
+* The popup's **Apply** button spells out the checked axes across the list with a **per-axis count** — its
+  composed label follows [warnings.mdx §4.4.1](./warnings.mdx#441-composed-action-verb-labels--the-button-spells-out-the-checked-axes-locked)
+  (e.g. *"Compress 12 · git-ignore 41 · Continue: IPFS Add — 41"*). Apply then writes each row's
+  decision(s) — and queues each row's compress job — exactly as a single-axis toggle click does (§2).
+* **Preview, not just a checklist.** Hovering or keyboard-focusing a media row previews that image/video
+  full-size in the popup's left pane ([warnings.mdx §4.5.2](./warnings.mdx#452-the-left-pane-doubles-as-a-full-size-media-preview-locked)),
+  so the user sees what they're deciding on before flipping a toggle.
 
 This makes the popup and the row toggles **one model**: the same `DecisionToggle` component, the same
-single-axis write, whether the user flips it on a table row or inside the popup.
+single-axis write, whether the user flips it on a table row or inside the popup — extended in the popup
+with the third **Compress** action axis.
 
 ---
 
@@ -250,6 +267,10 @@ single-axis write, whether the user flips it on a table row or inside the popup.
    a decision — and stop click propagation so they never navigate.
 7. A **RECOMMENDED** (dashed) toggle reflects a calc-engine suggestion for an **Undecided** file; a
    teammate's prior decision arrives as **ON/OFF**, never RECOMMENDED (nobody is re-asked).
+8. In the **warning / To-Do batch popups only**, a row shows **up to three** action toggles — pin,
+   git-ignore, **and Compress** (`"compress"`, glyph **K**) — using the same component and four-state
+   grammar; each column renders only when relevant to the set, axes are **pre-checked where recommended**,
+   and the Apply label carries a **per-axis count** (§7). Table rows keep just the two decision axes.
 
 <!--
   These are the inline UI for the two-axis decision (decisions.mdx). TWO toggles per row: Add-to-IPFS

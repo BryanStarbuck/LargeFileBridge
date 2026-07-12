@@ -206,36 +206,67 @@ The popup has **two layouts**, chosen automatically by whether the warning names
   header → educate body → options → footer. This is the shape shipped today.
 * **Two-pane** — for a warning that is **about a specific set of files or directories** (e.g. "6 files
   need a decision", "12 videos can be compressed", "9 big files aren't git-ignored"). The dialog grows
-  **wide** and splits into a **left column** (educate + options) and a **right column: the subjects
-  list** (§4.5) — the actual files/directories the warning is talking about, each with a **checkbox**.
+  **wide** and splits into a **left pane** and a **right pane: the subjects list** (§4.5) — the actual
+  files/directories the warning is talking about. The two panes each own **half** the width:
+  * **Right pane — the file list** (§4.5). One row per file/directory, and to the **left of each row**
+    the **per-row action toggles** (§4.5.1): up to **three** checkboxes — **Add to IPFS (pin/get)**,
+    **Add to git-ignore (add eventually)**, and **Compress** — each **pre-checked exactly where LFBridge
+    recommends it**, for the user to uncheck.
+  * **Left pane — dual purpose** (§4.5.2): by default it **educates** (What this is / Why it matters /
+    options). But the moment the user **hovers or keyboard-focuses a media row** on the right, the left
+    pane becomes a **large, full-size preview** of that image or video (aspect-ratio preserved), so the
+    user can *see what they're deciding on* before they act. Moving off the row restores the educate copy.
 
-**Width.** The two-pane popup may be **wide — up to 80% of the viewport width** (`width: 80vw`), capped
-at a sane maximum (`max-w-[80rem]`), and **min `44rem`** so the two columns never crush. It is a fixed
-overlay centered over the **whole screen**, so it **overlays the left nav bar** — it is not constrained
-to the content area. Height is capped at `85vh`; the header and footer are pinned and only the two
-column bodies scroll. On a **narrow viewport** (`< 44rem`, e.g. a phone) the two panes **stack**
-vertically (educate on top, subjects list below) instead of sitting side by side.
+**Width — use the room (LOCKED).** The two-pane popup is **big on purpose**: it takes **up to ~80% of the
+viewport width** (`width: 80vw`), capped at a sane maximum (`max-w-[80rem]`), with **min `44rem`** so the
+two panes never crush. It is a fixed overlay centered over the **whole screen**, so it **overlays the left
+nav bar** — it is deliberately **not** constrained to the content area; we want the space so the file list
+and the preview both breathe. Height takes up to `85vh`; the header and footer are pinned and only the two
+pane bodies scroll. On a **narrow viewport** (`< 44rem`, e.g. a phone) the two panes **stack** vertically
+(educate/preview on top, file list below) instead of sitting side by side.
 
-**Anatomy — two-pane (the common, file-specific case):**
+**Anatomy — two-pane (the common, file-specific case).** Left pane shown in its **educate** mode; see §4.5.2
+for the **preview** mode it flips to on hover. Right rows carry the three per-row axis toggles (§4.5.1):
 
 ```
-┌──────────────────────────────────────────────────────────────────────────────────────────┐
-│  ⚠  6 files need a decision                                                          (×)  │  ← header
-├──────────────────────────────────────────┬───────────────────────────────────────────────┤
-│  What this is                            │  Files this applies to        4 of 6 selected │  ← §4.5
-│  LFBridge found 6 large files in this    │  [Select all]  [Clear]                        │     subjects
-│  repo you haven't told it what to do     │  ┌─────────────────────────────────────────┐  │     pane
-│  with yet…                               │  │ ☑  renders/final_v3.mp4         1.4 GB   │  │     (right)
-│                                          │  │ ☑  b-roll/city_night.mov        820 MB   │  │
-│  Why it matters                          │  │ ☐  scratch/test_export.mp4      610 MB   │  │  ← unchecked
-│  • Undecided files aren't backed up…     │  │ ☑  photos/hero_raw.tiff         240 MB   │  │     → excluded
-│  • …and git may try to commit them.      │  │ ☐  scratch/old_take.mov         190 MB   │  │
-│                                          │  │ ☑  photos/cover_master.png       96 MB   │  │
-│  What do you want to do                  │  └─────────────────────────────────────────┘  │
-│  ◉ Pin  ○ Ignore                        │  Uncheck any file to leave it out.            │
-├──────────────────────────────────────────┴───────────────────────────────────────────────┤
-│  Cancel                                                          Apply & pin — 4 files [→]│  ← footer
-└──────────────────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  ⚠  charlie-kirk · 41 files could be pulled down & tidied up                                 (×)  │  ← header
+├──────────────────────────────────────────────┬───────────────────────────────────────────────────┤
+│  What this is                                │  Files this applies to              41 of 41       │  ← §4.5
+│  These 41 files are pinned on studio-tower   │  [All ▾]  [None]              🔎 filter…           │     file
+│  via IPFS but aren't on this computer yet.   │  ┌──────────────────────────────────────────────┐  │     list
+│  Pulling them down copies them here and      │  │      get  ⊘   K                               │  │     (right)
+│  keeps them backed up.                       │  │  ◉    ◉   ⊘●  ◉·  render/final_4k.mov  8.2GB   │  │
+│                                              │  │  ◉    ◉   ⊘●  ◌   b-roll/city_night.mov 820MB  │  │  ← Compress
+│  Why it matters                              │  │  ◌    ◌   ⊘◌  ◉·  scratch/proxy.mp4     220MB  │  │    off here
+│  • Files on only one computer aren't backed  │  │  ◉    ◉   ⊘●  —   photos/hero.tiff      240MB  │  │
+│    up — a lost laptop loses them.            │  │  …                                            │  │
+│  • Uncompressed video wastes space you can   │  └──────────────────────────────────────────────┘  │
+│    reclaim on every computer.                │   pin · ignore · compress — checked = we recommend │
+│  ┌ hover a row → preview shows here (§4.5.2)┐│   it; uncheck any to leave it out.                 │
+├──────────────────────────────────────────────┴───────────────────────────────────────────────────┤
+│  Cancel                                     Compress 12 · git-ignore 41 · Continue: IPFS Add — 41 ›│  ← footer
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Anatomy — two-pane, left pane in PREVIEW mode (hovering a video row, §4.5.2):**
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  ⚠  charlie-kirk · 41 files could be pulled down & tidied up                                 (×)  │
+├──────────────────────────────────────────────┬───────────────────────────────────────────────────┤
+│                                              │  Files this applies to              41 of 41       │
+│     ┌────────────────────────────────┐       │  ┌──────────────────────────────────────────────┐  │
+│     │                                │       │  │  ◉   ◉  ⊘●  ◉·  render/final_4k.mov  8.2GB ◀──│──│─ hovered
+│     │      ▶  (full-size preview,    │       │  │  ◉   ◉  ⊘●  ◌   b-roll/city_night.mov 820MB   │  │
+│     │       aspect ratio kept)       │       │  │  ◌   ◌  ⊘◌  ◉·  scratch/proxy.mp4     220MB   │  │
+│     │                                │       │  │  …                                            │  │
+│     └────────────────────────────────┘       │  └──────────────────────────────────────────────┘  │
+│     render/final_4k.mov · 3840×2160 · 8.2GB  │                                                    │
+│     Space to play ▸                          │                                                    │
+├──────────────────────────────────────────────┴───────────────────────────────────────────────────┤
+│  Cancel                                     Compress 12 · git-ignore 41 · Continue: IPFS Add — 41 ›│
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 **Anatomy — single-pane (no specific subjects):**
@@ -342,6 +373,12 @@ count updates (§4.6).
 * **Both-axes-off is still valid where the warning says so** (§5.2 / §10.2.7): the button stays enabled
   and reads the "reviewed — leave it" verb (e.g. **"Save decision ›"**), because recording *no action* is
   itself a sticky decision ([decisions.mdx §1](./decisions.mdx)).
+* **Per-row axes → a per-axis COUNT in the label (§4.5.1).** When the axes come from the **per-row
+  toggles** (each file toggled independently, not one global checkbox), the toggle counts differ per axis,
+  so the label carries **each axis's own count**, joined by "·", with the carrier axis last:
+  *"Compress 12 · git-ignore 41 · Continue: IPFS Add — 41 ›"* (12 rows have compress ON, 41 have ignore
+  ON, 41 have pin ON). Uncheck compress on a few rows → "Compress 9 · …" updates live. This is the
+  many-axis, many-count generalization of the single trailing "— N files" count.
 
 Composing the button label from the checked action axes (fixed priority order, reactive on toggle, count appended when there is a subjects list) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `composeActionLabel(checkedAxes, checkedCount)` (the `actionLabel` may be a function of the chosen options, §8).
@@ -350,13 +387,25 @@ Composing the button label from the checked action axes (fixed priority order, r
 
 The single most important addition to the popup: **when a warning is about specific files or
 directories, the popup MUST list them.** A non-expert cannot act on "6 files need a decision" without
-seeing *which* 6. The **right column** of the two-pane layout (§4.0) is that list — the warning's
+seeing *which* 6. The **right pane** of the two-pane layout (§4.0) is that list — the warning's
 **`targets`** (§8).
 
 * **What it is.** A scrollable list of the exact subjects the warning found — one row per file (or
-  directory). Each row shows a **checkbox**, the **name/path** (repo-relative or middle-truncated
-  absolute path), and a **sublabel** (size, and/or the fuller path). Media rows may show a small type
-  glyph. The list is the honest, itemized answer to "*which ones?*".
+  directory). To the **left of each row** sit the **per-row action toggles** (§4.5.1) — up to **three**
+  checkboxes (pin / git-ignore / compress); then the **name/path** (repo-relative or middle-truncated
+  absolute path) and a **sublabel** (size, and/or the fuller path). Media rows carry a small type glyph
+  and drive the left-pane **preview** on hover (§4.5.2). The list is the honest, itemized answer to
+  "*which ones, and what will we do to each?*".
+* **Two row control models (LOCKED).** A row leads with **either**:
+  1. **the up-to-three per-row action toggles** (§4.5.1) — the default for the To-Do batch popups and any
+     warning whose subjects carry per-axis recommendations; a row is **"included"** (counts toward the
+     live count, §4.6, and gets acted on) when **≥1 of its axis toggles is ON**; Apply runs, per row,
+     **exactly the axes left ON**; or
+  2. **a single leading "include" checkbox** — the simpler shape for a warning that does **one** thing to
+     the whole set (the left-pane radio/options decide *what*, §4.3). Checked = act on this row.
+
+  Both share the same pane, count, and Apply plumbing; a warning picks a model by whether its `targets`
+  carry per-axis state (§8 `WarningTarget.axes`).
 * **The list header.** A title naming the subject — **"Files this applies to"** / **"Directories this
   applies to"** / **"Videos this applies to"** — plus the **live count** "**{checked} of {total}
   selected**" (§4.6) and two quiet link affordances: **"Select all"** and **"Clear"** (select-none).
@@ -388,6 +437,105 @@ fix) renders **single-pane** (§4.0) with **no** right column — there is nothi
 
 **Component:** the subjects pane is part of `WarningPopup.tsx`; the row model is `WarningTarget` (§8).
 It reuses the app's checkbox + middle-truncate + `formatBytes` conventions.
+
+The right-pane file list, its per-row toggle columns, and the hover→preview wiring are rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `WarningPopup` (the `SubjectsPane` / `SubjectRow` region).
+
+### 4.5.1 The per-row action toggles — up to THREE checkboxes per file (LOCKED)
+
+The heart of the improved popup: rather than one "include this file?" checkbox, each file row can carry
+**up to three independent action toggles**, one per **axis** of work LFBridge can do to that file — and
+**each is pre-checked exactly where LFBridge recommends the action**, so the common case is *"these all
+look right — Apply,"* and the user's only job is to **uncheck** anything they want left alone.
+
+The three axes, left→right:
+
+| Col | Axis | In dictation | Glyph | On means | Rendered when |
+| --- | --- | --- | --- | --- | --- |
+| 1 | **Add to IPFS** (pin / **get**) | "IPFS / add to IPFS / pin / get" | the **pin** mark | pin this file & fetch/back-it-up across your computers | any large file |
+| 2 | **Add to git-ignore** (add eventually) | "ignore / add eventually" | **⊘** (circle-with-cross) | write an anchored `.gitignore` rule so Git stops tracking it | **only when the file is under a Git repo** ([decision_toggles.mdx §4](./decision_toggles.mdx#4-the-git-ignore-toggle-is-repo-scoped-locked)) |
+| 3 | **Compress** | "compress" | **K** | compress the file in place (video → smaller H.264/AV1; image → WebP/JPEG) after the charter's safety checks ([compression.mdx](./compression.mdx)) | **only when the file looks compressible & uncompressed** |
+
+* **Same visual grammar as everywhere else.** Each toggle uses the **exact** four-state
+  [decision-toggle](./decision_toggles.mdx#1-one-visual-grammar-four-render-states-locked) look — **OFF**
+  (white / grey edge), **ON** (solid orange), **RECOMMENDED** (white / **dashed** orange — a calc-engine
+  suggestion the user hasn't confirmed), **N/A** (not rendered, slot reserved so columns line up). The
+  compress axis is the **same** `DecisionToggle` component with a third axis id.
+* **Pre-checked = recommended (the key behavior the user asked for).** When the popup opens, every axis
+  the calc engine recommends for a row is **ON** (solid), not merely dashed — the user opens to *"all the
+  right boxes already ticked."* (A batch that opens from a fresh scan may show **RECOMMENDED/dashed** on
+  axes it suggests but is less sure of; §8 lets a target declare each axis's open state.) The user
+  **unchecks** to opt a file out of an axis; they rarely need to check anything.
+* **Columns render only when relevant (LOCKED).** A column appears **only if at least one row in the set
+  has that axis applicable** — so a **pull-down** batch of files that aren't compressible shows **two**
+  columns (pin + ignore), a **compress-only** batch shows **one** (compress), a loose-file batch outside
+  any repo hides the ignore column. "If we don't need to show all three columns," we don't — the pane
+  stays as narrow as the work requires. Column **headers** (tiny pin / ⊘ / K glyphs) label the columns
+  when more than one shows.
+* **A row is "included" when ≥1 axis is ON.** The live count (§4.6) counts rows with any ON axis; the
+  footer button's **composed label** (§4.4.1) sums each axis across the checked rows — e.g.
+  *"Compress 12 · git-ignore 41 · Continue: IPFS Add — 41."* Turn an axis off on a row and that row drops
+  out of that axis's tally; turn **all** its axes off and the row is fully excluded.
+* **Per-row, not global.** These toggles are **independent per file** — unlike the left-pane `options`
+  radio (which sets one choice for the whole set). This is what lets the user say *"pin all 41, but only
+  compress these 12, and git-ignore everything."* Apply writes each row's decision(s) to the shared
+  [decisions ledger](./decisions.mdx) and queues each axis's effect exactly as a row-level toggle click
+  does ([decision_toggles.mdx §2](./decision_toggles.mdx#2-clicking-a-toggle--one-decision-event-locked)).
+* **Header toggles set a whole column.** The column header's small **[All ▾] / [None]** affordance (or a
+  header toggle per axis) flips that axis ON/OFF across every currently-visible row — the fast path for
+  *"actually, don't compress any of these."*
+
+The per-row axes reuse the shared decision-toggle component (extended with the compress axis) in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/decision/DecisionToggles.tsx` — `DecisionToggle` (axis `"ipfs" | "ignore" | "compress"`); the popup composes them per row in `WarningPopup.tsx` — `SubjectRow`.
+
+### 4.5.2 The left pane doubles as a full-size media PREVIEW (LOCKED)
+
+The left pane is **dual-purpose**. At rest it shows the educate copy + options (§4.2/§4.3). The instant
+the user **hovers — or keyboard-focuses — a media row** (image / video / audio) in the right list, the
+**entire left pane** turns into a **large preview of that file** so they can *see exactly what they're
+about to pin, ignore, or compress*:
+
+* **Full-size, aspect-ratio preserved, best-fit (LOCKED).** The preview is scaled to be **as large as it
+  can be** inside the left pane **while keeping its aspect ratio** — `object-fit: contain`, `max-width:
+  100%`, `max-height: 100%`. It **must not** stretch or crop. It only fills the dimension the aspect ratio
+  demands; the **other** dimension is **not** forced to fill — the preview covers **no more space than it
+  needs**, centered, with calm empty space around it. A tall phone photo shows tall-and-narrow; a
+  16:9 video shows wide-and-short. (Same fit rule as the [media viewer](./media_viewer.mdx).)
+* **Below the image:** a one-line caption — the file name · **pixel dimensions** (e.g. `3840×2160`) ·
+  size — and, for a video, a **"Space to play ▸"** hint (§4.5.3).
+* **Images** render immediately from the same media-serving endpoint the [media viewer](./media_viewer.mdx)
+  uses. **Videos** render into a `<video>` element (poster/first-frame shown until played). **Audio**
+  files show a compact player + the file's waveform/type glyph (there is nothing visual to show).
+* **Debounced & lazy.** Hover uses a short (~120ms) debounce so skimming the list doesn't thrash; the
+  preview only loads bytes once a row is settled on. Leaving the list (or hovering a non-media row)
+  **restores** the educate copy. On touch / no-hover devices, **tapping** a row's preview glyph pins the
+  preview until another is tapped.
+* **It never changes a decision.** Hovering/focusing a row to preview it is **read-only** — it does not
+  check, uncheck, or select anything. Only the row's toggles (§4.5.1) change decisions.
+* **Why left, not a lightbox.** Keeping the preview in the pane the user is already looking at (beside the
+  list) means they can preview-and-decide in one glance without a second modal — the whole reason the
+  popup went wide (§4.0).
+
+The hover/focus→preview state and the aspect-fit preview element live in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `WarningPopup` (`previewTarget` state) + `PreviewPane` (reuses the media-viewer render + `mediaUrl` helper).
+
+### 4.5.3 Keyboard — Space plays the previewed video; arrows move the preview (LOCKED)
+
+While the file list is focused:
+
+* **↑ / ↓** move a **preview cursor** up/down the rows — the left pane previews whichever row the cursor
+  is on (same as hovering), so the whole list is reviewable **without the mouse**.
+* **Space** — when the previewed file is a **video** (or audio), **Space plays / pauses** it in the
+  preview, exactly like the native transport in the [media viewer](./media_viewer.mdx#5-media-viewer-shortcuts-image--video--audio)
+  (Space = play/pause). When the focus is on a **row toggle** (a checkbox) Space keeps its normal meaning
+  (toggle the box); the play binding applies when the row — not a toggle — holds focus, and when a video
+  is previewed.
+* **Enter / click** on a row toggle flips that axis; **Esc** closes the popup (= Cancel, §4.1).
+* These bindings are registered as the popup's own [hotkey scope](./hotkeys.mdx#2-the-registration-model-per-page-scopes)
+  while it is open, and appear in the **`?`** overlay ([hotkeys.mdx §5a](./hotkeys.mdx#5a-action-popup-shortcuts-the-two-pane-warning--to-do-popup)).
+
+The popup's Space-to-play + arrow-cursor scope is registered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `WarningPopup` (`useHotkeys("action-popup", …)` + the `<video>` ref play/pause handler).
 
 ### 4.6 The live count (the "6" that updates)
 
@@ -537,6 +685,12 @@ again" affordance.)
 * The overlay uses `role="dialog" aria-modal="true"`; the title is the accessible name.
 * Color is never the only signal — every state also carries an icon and text. Contrast meets AA on the
   amber/red tints (dark ink on light tint).
+* **File-list keyboard (two-pane popups, §4.5.3):** **↑ / ↓** move a preview cursor down the file list
+  (the left pane previews the cursor row); **Space** plays / pauses a previewed **video/audio**; the
+  per-row axis toggles are normal focusable checkboxes (Space toggles the focused box). Every axis toggle
+  carries an `aria-label` naming its axis and file ("Compress render/final_4k.mov"); the preview `<img>`/
+  `<video>` carries the file name as its accessible name. These bindings register as the popup's own
+  hotkey scope and show in the **`?`** overlay ([hotkeys.mdx §5a](./hotkeys.mdx#5a-action-popup-shortcuts-the-two-pane-warning--to-do-popup)).
 
 ---
 
@@ -570,12 +724,37 @@ shape is in
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/warnings/registry.ts`:
 
 ```ts
+// The four render states a per-row action toggle can open in (§4.5.1). Mirrors the decision-toggle
+// grammar (decision_toggles.mdx §1): "on" solid, "recommended" dashed, "off" empty, undefined = N/A.
+type AxisOpenState = "on" | "recommended" | "off";
+
+// The per-row action axes (§4.5.1). An axis KEY present ⇒ that column is applicable to this row and
+// renders in the given open state; ABSENT ⇒ N/A for this row (its slot stays blank so columns align).
+// A column renders in the pane only if at least ONE target declares that axis (§4.5.1 "columns render
+// only when relevant").
+type WarningTargetAxes = {
+  ipfs?: AxisOpenState;      // Add to IPFS (pin/get) — any large file
+  ignore?: AxisOpenState;    // Add to git-ignore (add eventually) — only under a repo (§4.5.1)
+  compress?: AxisOpenState;  // Compress — only when the file looks compressible & uncompressed
+};
+
+// Media the left pane previews when this row is hovered/focused (§4.5.2). Absent ⇒ non-media row (no
+// preview; hovering it just restores the educate copy).
+type WarningTargetPreview = {
+  kind: "image" | "video" | "audio";
+  url: string;               // the media-serving URL (same endpoint the media viewer uses)
+  width?: number; height?: number; // pixel dimensions for the caption ("3840×2160")
+};
+
 // One subject the warning is about — a file or directory (§4.5). The right-pane row model.
 type WarningTarget = {
   id: string;             // stable key — usually the absolute path
   label: string;          // display name (repo-relative or middle-truncated path)
   sublabel?: string;      // size and/or fuller path, shown muted under the label
-  defaultChecked?: boolean; // default true; false opts the row OUT at open (rare)
+  defaultChecked?: boolean; // SINGLE-checkbox model (§4.5 model 2): default true; false opts row OUT at open
+  axes?: WarningTargetAxes; // PER-ROW TOGGLES model (§4.5.1, model 1): present ⇒ row leads with up-to-3
+                            // axis toggles pre-set to these open states; row is "included" when ≥1 axis ON
+  preview?: WarningTargetPreview; // §4.5.2 — media the left pane previews on hover/focus
 };
 
 type WarningDef = {
@@ -610,10 +789,18 @@ type WarningDef = {
       doneLabel?: string | ((sel, n: number) => string);      // completion toast ("6 files set to pin"); default "N jobs complete"
       invalidate?: unknown[][];                        // react-query keys to refetch on success → warning disappears
     };
-    // THE FIX — receives the chosen options AND the ids of the CHECKED targets (§5.2). Runs Task X over
-    // exactly those ids; unchecked subjects are never touched. checkedTargetIds is [] when no targets.
+    // THE FIX — receives the chosen options AND the CHECKED subjects (§5.2). Runs Task X over exactly
+    // those subjects; unchecked ones are never touched.
+    //  • SINGLE-checkbox model (§4.5 model 2): `checkedTargetIds` is the ids whose include box is on.
+    //  • PER-ROW-TOGGLES model (§4.5.1, model 1): `perRow` maps each still-included id → the axes left ON
+    //    for it, so the fix can pin/git-ignore/compress each file according to its own toggles. Rows with
+    //    all axes off are absent. `checkedTargetIds` = Object.keys(perRow) for those fixes.
     // When `progress` is set this runs as the background job's task; otherwise it is awaited in-popup.
-    apply: (sel, checkedTargetIds: string[]) => Promise<void>;
+    apply: (
+      sel,
+      checkedTargetIds: string[],
+      perRow?: Record<string, { ipfs?: boolean; ignore?: boolean; compress?: boolean }>,
+    ) => Promise<void>;
   };
 };
 ```
