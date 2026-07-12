@@ -132,19 +132,32 @@ export async function recalcRepo(folder: string): Promise<TodoBatchDoc | null> {
     log.warn("todo", `${root}: pull_down scan failed: ${(e as Error).message}`);
   }
 
-  // pin — big, Undecided, not Never-IPFS (and not already a pull_down candidate).
+  // pin & git_ignore — big, Undecided, not Never-IPFS (and not already a pull_down candidate). A file that
+  // is NOT git-ignored yet is a `git_ignore` recommendation ("big + not a good idea to check in" — we
+  // recommend BOTH pin and git-ignore, to_do_batches.mdx §3); a file already git-ignored is a plain `pin`
+  // recommendation (ipfs only, §3 pin example). Splitting here is what actually PRODUCES the git_ignore
+  // category (the enum/pattern existed but nothing ever emitted it).
   try {
     const threshold = getAppConfig().big_file.threshold_bytes;
     const detail = computeRepoDetail(folder, await health());
     for (const f of detail.files) {
       if (seen.has(f.path)) continue;
       if (f.decision === "undecided" && f.sizeBytes >= threshold && !f.neverIpfs) {
-        items.push({ path: f.path, sizeBytes: f.sizeBytes, category: "pin", recommend: { ipfs: true, gitignore: true } });
+        if (f.gitignore) {
+          items.push({ path: f.path, sizeBytes: f.sizeBytes, category: "pin", recommend: { ipfs: true } });
+        } else {
+          items.push({
+            path: f.path,
+            sizeBytes: f.sizeBytes,
+            category: "git_ignore",
+            recommend: { ipfs: true, gitignore: true },
+          });
+        }
         seen.add(f.path);
       }
     }
   } catch (e) {
-    log.warn("todo", `${root}: pin scan failed: ${(e as Error).message}`);
+    log.warn("todo", `${root}: pin/git_ignore scan failed: ${(e as Error).message}`);
   }
 
   // compress — from the fingerprint index.
