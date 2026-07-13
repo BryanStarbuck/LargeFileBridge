@@ -15,6 +15,8 @@ export type MetricId =
   | "alreadyCompressed"
   | "transcribable"
   | "transcribed"
+  | "describable"
+  | "described"
   | "bigNotIgnored";
 
 export interface MetricDef {
@@ -70,6 +72,16 @@ export const METRIC_CATALOG: Record<MetricId, MetricDef> = {
     hint: "Audio and video files that already have a transcript. Nothing to do.",
     positive: "ok",
   },
+  describable: {
+    label: "Describable",
+    hint: "Images and videos with no AI description yet. Large File Bridge can describe them with your AI provider — nothing runs until you ask.",
+    positive: "warn",
+  },
+  described: {
+    label: "Described",
+    hint: "Images and videos that already have an AI description. Nothing to do.",
+    positive: "ok",
+  },
   bigNotIgnored: {
     label: "Big, not git-ignored",
     hint: "Large files that aren't git-ignored yet. Git-ignore them so Git never commits the big binaries (they sync over IPFS instead).",
@@ -99,6 +111,10 @@ export function metricCount(id: MetricId, detail: RepoDetail): number {
       return m.transcribable;
     case "transcribed":
       return m.transcribed;
+    case "describable":
+      return m.describable;
+    case "described":
+      return m.described;
     case "bigNotIgnored":
       return m.bigNotIgnored;
     default:

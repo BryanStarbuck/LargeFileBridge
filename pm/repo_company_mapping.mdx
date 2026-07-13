@@ -1,0 +1,386 @@
+---
+title: LargeFileBridge — Repo → Company / Personal mapping
+description: How every git repo LFB knows about is mapped to an OWNER — a company or the user's Personal storage — so repos group under their owner in the left bar and the Repos list. The mapping is DERIVED, offline, from the git remote origin URL: LFB parses host + owner + repo out of the URL shapes (git@github.com:ORG/repo.git, https://github.com/ORG/repo.git, plus gitlab.com, bitbucket.org, codeberg.org, git.sr.ht), then applies a heuristic — a known forge whose owner segment is NOT one of the user's configured personal accounts defaults to a COMPANY named after that org; no forge / no owner / an owner that IS a personal account defaults to PERSONAL (the existing catch-all Personal storage). Deriving a company auto-creates a company storage so it appears as its own child under Storages; because org slugs are cryptic, the user opens that company's settings to set a friendly DISPLAY NAME shown everywhere. The user can always REASSIGN a repo between company and personal (manual override wins over the heuristic) and can maintain a "my personal accounts" list so their own github user repos are never miscategorized. The limitation is documented honestly: a plain github.com/<owner>/<repo> cannot be perfectly told apart org-vs-personal from the URL alone, and LFB never calls a network API to resolve it (local-first) — it defaults per the heuristic and lets the user correct it. Covers the new repo `owner` field and its persistence, the settings controls, non-default cases (multiple remotes, no remote, local-path remote, SSH vs HTTPS forms, ambiguous owner, renamed org, repo moved between owners, monorepo submodules), and error cases. Sibling of storages.mdx, storage_company.mdx, storage_personal.mdx, repos.mdx, repo_settings.mdx, left_bar.mdx, devices.mdx.
+---
+
+# LargeFileBridge — Repo → Company / Personal mapping
+
+Every git repo LFB discovers on this computer ([repos.mdx](./repos.mdx)) belongs to **one owner** — either a
+**company** or the user's own **Personal** storage. This spec defines how that owner is **derived** — offline,
+from the repo's git remote — how a derived company becomes a real [Company storage](./storage_company.mdx) with a
+friendly name, how the user **overrides** the guess, and how the mapping makes repos **groupable under their
+owner** in the left bar ([left_bar.mdx](./left_bar.mdx)) and the Repos list.
+
+The one principle that governs everything here: **default is Personal.** A repo is only a company's when LFB can
+show a reason — a forge org in the remote that is not one of *your* accounts. Everything else falls to Personal,
+the existing catch-all ([storage_personal.mdx §9](./storage_personal.mdx#9-personal-is-the-default-owner-of-loose-files--and-where-their-artifacts-land)).
+
+Read the shared model first; this spec does not restate it:
+
+* [storages.mdx](./storages.mdx) — the storage family, the `storage.yaml` descriptor (§3), the `.lfbridge/`
+  tracking area (§4), and **the Storages left-bar tab and its derived children** (§2).
+* [storage_company.mdx](./storage_company.mdx) — the company storage this mapping **auto-creates**; owns the
+  friendly display-name rename and the company state-sync repo.
+* [storage_personal.mdx](./storage_personal.mdx) — the default owner; owns the **"my personal accounts"** list.
+* [repos.mdx](./repos.mdx) / [one_repo.mdx](./one_repo.mdx) — the Repos list (row → `RepoRow`) and per-repo screen.
+* [repo_settings.mdx](./repo_settings.mdx) — the per-repo settings page where the manual **Reassign owner** control lives.
+* [devices.mdx](./devices.mdx) — the device graft; unaffected by ownership (owner is a *grouping*, not a path).
+
+---
+
+## 1. What an "owner" is (LOCKED)
+
+An **owner** is the answer to *"whose repo is this?"* — a **company** or **Personal**. It is **grouping metadata**,
+not a location: assigning an owner **never moves a byte**, never re-roots the repo, and never touches the device
+graft. It changes only **where the repo appears** (which group in the left bar / Repos list) and **which state-sync
+repo** its noisy tracking may travel to ([§7](#7-how-ownership-drives-grouping-and-artifact-placement), and
+[artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
+
+Two owner kinds:
+
+* **Personal** — the repo belongs to the user themselves. There is exactly **one** Personal owner
+  ([storage_personal.mdx](./storage_personal.mdx)); it is the **default** and the catch-all.
+* **Company** — the repo belongs to a company, identified by a derived or assigned **company storage**
+  ([storage_company.mdx](./storage_company.mdx)). A user in three companies can have repos under any of the three.
+
+### 1.1 The repo `owner` field (LOCKED shape)
+
+Every `RepoRow` / `RepoDetail` / `RepoSettings` gains an **`owner`** block so the UI can group and label without
+re-deriving on every render:
+
+```ts
+// shared/src/types.ts — the owner of a repo (repo_company_mapping.mdx §1.1).
+export interface RepoOwner {
+  kind: "personal" | "company";
+  companyId?: string;        // when kind==="company": the company STORAGE id it maps to (storages.mdx §2)
+  displayName: string;       // the label shown everywhere: the company's friendly name, or "Personal"
+  source: "auto" | "manual"; // "auto" = derived by the heuristic (§3); "manual" = a user override (§5)
+  // Parsed provenance from the remote (§2) — retained so the UI can EXPLAIN the guess and re-derive on rescan:
+  host: string | null;       // e.g. "github.com" · null when there is no forge remote
+  ownerSlug: string | null;   // e.g. "ACT3ai" — the org/owner segment from the remote · null when none
+}
+```
+
+* **`displayName`** is what the left bar and Repos grouping show. For a company it is the company storage's
+  friendly name ([storage_company.mdx](./storage_company.mdx)); for Personal it is literally **"Personal"**.
+* **`source`** records whether the value is the heuristic's guess (`auto`) or the user's decision (`manual`).
+  A `manual` owner is **sticky** — a rescan never overwrites it (§5.2).
+* **`host` / `ownerSlug`** are the parse result kept for the explain-string (*"grouped under ACT3ai because the
+  remote is github.com/ACT3ai/…"*) and to let a rescan **re-derive** an `auto` owner when the remote changes.
+
+The `owner` block is composed onto each repo row/detail in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoRow()` / `computeRepoDetail()` (call `resolveRepoOwner(cfg)` after reading the unit config).
+
+---
+
+## 2. Parsing the remote — host · owner · repo (LOCKED)
+
+Ownership derivation starts by **parsing the git remote origin URL** captured at repo registration
+([units.service.ts](./repos.mdx) — `readGitRemote(dir)`, stored on the repo unit config as `repo.remote`). The parser
+handles the common forge URL shapes:
+
+| Remote form | Example | host | owner | repo |
+| --- | --- | --- | --- | --- |
+| **SCP-like SSH** | `git@github.com:ACT3ai/jfksocial_server.git` | `github.com` | `ACT3ai` | `jfksocial_server` |
+| **HTTPS** | `https://github.com/ACT3ai/jfksocial_server.git` | `github.com` | `ACT3ai` | `jfksocial_server` |
+| **SSH URL** | `ssh://git@gitlab.com/acme/tools.git` | `gitlab.com` | `acme` | `tools` |
+| **git://** | `git://codeberg.org/user/thing.git` | `codeberg.org` | `user` | `thing` |
+| **sr.ht** | `https://git.sr.ht/~sircmpwn/aerc` | `git.sr.ht` | `~sircmpwn` | `aerc` |
+
+The parser is host-agnostic on shape but only treats a **known forge** host as forge-derivable for the heuristic
+(§3): `github.com`, `gitlab.com`, `bitbucket.org`, `codeberg.org`, `git.sr.ht`. A `.git` suffix is stripped; a
+trailing slash is trimmed; the URL's `user@` / credentials portion is discarded; the **first** path segment after
+the host is the owner, the **second** is the repo.
+
+```ts
+// git.service.ts — parse a remote into its parts (repo_company_mapping.mdx §2). NO network — string work only.
+export interface RemoteOwnerParse {
+  host: string | null;   // "github.com" · null when unparseable / no remote
+  owner: string | null;  // "ACT3ai" · null when the URL has no owner segment
+  repo: string | null;   // "jfksocial_server" (".git" stripped)
+  knownForge: boolean;   // host ∈ {github.com, gitlab.com, bitbucket.org, codeberg.org, git.sr.ht}
+}
+export function parseRemoteOwner(remoteUrl: string | null): RemoteOwnerParse { /* … */ }
+```
+
+Parsing host/owner/repo out of the remote URL (all URL shapes, no networking) is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `parseRemoteOwner(remoteUrl)`, built beside the existing `classifyRemote()` / `classifyRemoteVisibility()` (which share the same forge-host regex).
+
+---
+
+## 3. The heuristic — which parse becomes a company (LOCKED)
+
+Given the parse (§2) and the user's **"my personal accounts"** list ([§4](#4-the-my-personal-accounts-list-locked),
+owned by [storage_personal.mdx](./storage_personal.mdx)), LFB derives the `auto` owner:
+
+1. **No remote, or an unparseable / local-path remote** (`knownForge === false` and no owner) → **Personal.**
+2. **A known forge, owner segment present, owner IS one of the user's personal accounts** → **Personal.**
+   (Your own `github.com/BryanStarbuck/…` repos stay yours.)
+3. **A known forge, owner segment present, owner is NOT a personal account** → **Company**, named after the
+   owner slug. LFB **derives a company** for that slug (§6) and maps the repo to it.
+4. **A known forge host but no clear owner segment** (rare — e.g. a bare host) → **Personal** (nothing to name a
+   company after).
+5. **An unknown / self-hosted host** (e.g. `git.acme-corp.internal`) → **Personal by default** — we cannot assume
+   a random host is a company forge, and the URL alone does not tell us. The user can **reassign** to a company
+   (§5) if it is in fact a work server.
+
+The heuristic is deliberately **conservative toward Personal**: a false "Personal" is harmless (the repo just
+sits under your own files); a false "Company" spawns a stray company in the left bar. Case 3 is the only one that
+creates a company, and only from a **known forge** with a **non-personal** owner.
+
+Deriving the `auto` owner from the parse + personal-accounts list is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `deriveOwnerForRemote(remote)` (calls `parseRemoteOwner`, checks the personal-accounts list, and on case 3 calls `ensureCompanyForOwner(slug)` — §6).
+
+### 3.1 The honest limitation (LOCKED)
+
+A plain **`github.com/<owner>/<repo>`** cannot be perfectly distinguished as **organization vs. personal user**
+from the URL alone — GitHub uses the same `github.com/<name>/…` shape for both an org and a person. LFB **does not
+resolve this over the network** (the charter is local-first / no-phone-home). So:
+
+* We **default per the heuristic** (§3): an owner that is not on your personal-accounts list is *assumed* a
+  company, because that is the more useful grouping for a work machine, and it is trivially correctable.
+* We **let the user correct it** — either by **reassigning** the repo (§5) or by **adding the owner to the
+  personal-accounts list** (§4), after which every repo under that owner re-derives to Personal on the next scan.
+* We **never guess silently and hide it**: the derived owner's `source: "auto"` and its `ownerSlug` are surfaced,
+  and the left-bar group carries a subtle *(auto-detected)* affordance so the user knows it is a guess, not a fact.
+
+This is a documented, accepted trade-off — **not** a defect. Do not "fix" it by adding a forge API call.
+
+---
+
+## 4. The "my personal accounts" list (LOCKED)
+
+To keep the user's **own** forge repos out of the company buckets, the user maintains a small list of **their own
+account handles** across forges. Any repo whose parsed owner matches an entry derives to **Personal** (§3 case 2),
+even on a known forge. This list is owned by [storage_personal.mdx](./storage_personal.mdx) (it is a property of
+*you*) but consumed here.
+
+```yaml
+# app config (storage_local.mdx) — the user's own forge accounts.
+personal_accounts:
+  - host: github.com      # match host + owner …
+    owner: BryanStarbuck
+  - host: gitlab.com
+    owner: bstarbuck
+  - owner: bryan-personal  # … or match owner on ANY host (host omitted = wildcard)
+```
+
+* **Match is case-insensitive** on `owner`; `host` is optional (omit it to treat the handle as personal on every
+  forge). An sr.ht `~handle` matches with or without the leading `~`.
+* **Editing the list re-derives.** Adding an owner marks every repo currently mapped **auto → company** under that
+  owner for re-derivation on the next scan; removing one lets those repos fall back to a company again. **Manual**
+  (`source: "manual"`) mappings are untouched (§5.2).
+* **Seeding.** On first run LFB may **suggest** the owner of the repo whose remote matches the machine's git
+  `user.email` domain, but never adds it silently — the list starts empty and is populated by the user (charter:
+  surface and offer, never act unasked).
+
+Persisting and matching the personal-accounts list is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig().personalAccounts` (read) / `setPersonalAccounts()` (write), matched by `isPersonalAccount(host, owner)` in `storage.service.ts`.
+
+---
+
+## 5. Manual reassignment — the user always wins (LOCKED)
+
+The heuristic is a starting point; the **user's decision overrides it**. From the repo's
+[settings page](./repo_settings.mdx#2-the-settings-on-this-page) (and the repo `⋮` menu) the user can **Reassign
+owner**:
+
+* **Set to Personal** — force this repo under Personal regardless of its remote.
+* **Set to a Company** — pick an existing company, or type a new company name (which creates one, §6). Force this
+  repo under that company.
+* **Reset to auto** — discard the override and let the heuristic decide again (§3).
+
+### 5.1 The Reassign control
+
+A single **"Owner"** row on the repo settings page shows the current owner as a labeled control:
+
+```
+Owner   ( ) Personal    (•) Company:  [ ACT3ai ▾ ]   (auto-detected)      [ Reset to auto ]
+                                        └─ picker: existing companies + "New company…"
+```
+
+* The two radios are **Personal** / **Company**; choosing **Company** enables the picker of existing companies
+  plus a **New company…** entry (opens a name field → creates the company storage, §6).
+* The **(auto-detected)** tag shows while `source === "auto"`; picking anything flips `source` to `"manual"` and
+  hides the tag. **Reset to auto** returns `source` to `"auto"` and re-runs §3.
+* A one-line **explain string** under the control states the basis: *"Auto-detected as ACT3ai from the remote
+  github.com/ACT3ai/jfksocial_server"* or *"Manually assigned to ACT3 AI."*
+
+### 5.2 Persistence — the override lives in the repo's `config.yaml` (LOCKED)
+
+Ownership is a **local, per-computer** grouping preference (like the bookmark, [repos.mdx §8.3](./repos.mdx#83-persistence--it-lives-in-the-repos-configyaml-locked)),
+so it persists in that repo's pin-unit **`config.yaml`** — **not** in the shared manifest and **not** replicated to
+peers. Only the **override** is stored; an `auto` owner is *derived*, never written, so it always re-reflects the
+current remote.
+
+```yaml
+# pin/r/<repo>/config.yaml  (excerpt)
+repo: { name: jfksocial_server, path: /Users/…/AI_Coding, remote: "git@github.com:ACT3ai/jfksocial_server.git" }
+bookmarked: false
+owner_override:                 # ABSENT unless the user reassigned (source becomes "manual" only when present)
+  kind: company                 # personal | company
+  company_id: "a1b2c3d4e5f6"    # when kind: company — the company storage id (storages.mdx §2)
+```
+
+* **Absent block = auto.** With no `owner_override`, `resolveRepoOwner()` returns the §3 derivation (`source:"auto"`).
+* **Present block = manual.** `resolveRepoOwner()` returns the override (`source:"manual"`) and the scan never
+  clobbers it — re-registering or rescanning the repo preserves `owner_override` exactly like `bookmarked`
+  ([repos.mdx §8.3](./repos.mdx#83-persistence--it-lives-in-the-repos-configyaml-locked)).
+* **API:** `POST /api/repos/:repoId/owner` with `{ kind, companyId? } | { reset: true }` writes/clears the
+  override and returns the updated `RepoRow`. Idempotent; unknown `repoId` → 404; a `company` kind with an unknown
+  `companyId` → 400.
+
+Resolving the effective owner (override else derivation) and persisting the override is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `resolveRepoOwner(cfg)` (override-or-derive) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `POST /api/repos/:repoId/owner`.
+
+---
+
+## 6. Auto-creating the company — and its friendly name
+
+When the heuristic (§3 case 3) or a manual "New company…" (§5) needs a company that does not exist yet, LFB
+**creates a company storage** so it appears as its own child under **Storages** ([storages.mdx §2](./storages.mdx#2-the-storages-left-bar-tab)):
+
+* The new company storage is seeded with `type: company` and `company_name` = the **owner slug** (e.g. `ACT3ai`),
+  so it is discoverable immediately. Its **id** is the stable company id `resolveRepoOwner` stamps on the repo.
+* Because org slugs are **cryptic** (`ACT3ai`, `acme-eng-2`, `~sircmpwn`), the company storage carries a
+  user-settable **friendly display name** — set from the company's settings — which the product then shows
+  **everywhere** (left bar, Repos grouping, the repo's Owner control). The rename flow and where the display name
+  is stored are owned by [storage_company.mdx §6](./storage_company.mdx#6-the-friendly-display-name).
+* Until the user renames it, the display name **falls back to the slug** — never blank, never the raw URL.
+
+An auto-derived company from an org (case 3) is a **lightweight** entry: it exists to group repos and to be
+renamed. It becomes a *full* company storage (mapped source directories, a state-sync repo, an allow-list) only if
+the user configures those in [storage_company.mdx](./storage_company.mdx) — a repo-group company and a
+media-pile company are the same storage kind at different levels of configuration.
+
+Ensuring (creating-if-absent) the company storage for a derived/assigned owner slug is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureCompanyForOwner(slug)` (returns the company id; creates the `storage.yaml` via `ensureStorage(root, "company", …)` when missing), surfaced by `listStoragesPage()` as a company row.
+
+---
+
+## 7. How ownership drives grouping and artifact placement
+
+### 7.1 Grouping in the left bar and Repos list (LOCKED)
+
+The mapping's main payoff: **repos become groupable under their owner.**
+
+* In the **Storages** disclosure ([left_bar.mdx §3](./left_bar.mdx#3-the-app-bar-main-navigation)), each company
+  child and the Personal child can **expand to show the repos owned by it** — the flat **Repos** child (the long
+  list) stays, but repos also nest under their owner ([left_bar.mdx §3.2](./left_bar.mdx), defined by this spec).
+* In the **Repos list** ([repos.mdx](./repos.mdx)), an optional **Group by owner** view clusters rows under an
+  owner header (Personal, then each company by display name), each header showing its repo count. This reuses the
+  table's grouping; the default flat sort is unchanged.
+* A repo with an `auto` company owner renders its group header with a subtle **(auto-detected)** hint (§3.1); a
+  `manual` owner shows no hint.
+
+### 7.2 Artifact placement follows the owner
+
+Ownership decides **which state-sync repo** a repo's noisy tracking data may travel to
+([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)):
+
+* By default a repo's per-repo tracking (`repo_storage.yaml` and the noisy per-file sidecars) stays in the
+  **state root** `~/T/_large_files_bridge/repos/<repoKey>/` until a transcript / AI-description exists
+  ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
+* If the repo's **owner** is a **company** that has configured a **state-sync repo**
+  ([storage_company.mdx §7](./storage_company.mdx#7-the-company-lfb-state-sync-repo)), that repo's tracking travels to
+  `<syncRepo>/repos/<repoKey>/` instead — so a teammate on the same company sees it. A **Personal**-owned repo can
+  likewise route to Personal's state-sync repo ([storage_personal.mdx §14](./storage_personal.mdx#14-personals-optional-state-sync-repo)).
+* Transcripts / descriptions themselves still obey the per-repo placement radios
+  ([repo_settings.mdx](./repo_settings.mdx)); ownership only decides the **company-vs-personal state-sync repo**
+  when the "company state-sync repo" radio is chosen.
+
+---
+
+## 8. Non-default & edge cases (LOCKED)
+
+| Case | Behavior |
+| --- | --- |
+| **No remote at all** | `owner.kind: personal`, `host/ownerSlug: null`. A purely local repo is yours (§3 case 1). |
+| **Local-path remote** (`/Users/…/mirror.git`, `../bare.git`) | `knownForge:false`, no owner → **Personal** (§3 case 1). |
+| **SSH vs HTTPS of the same repo** | Both parse to the **same** `host`+`owner` (§2), so they derive the **same** owner — switching remote protocol never re-buckets a repo. |
+| **Ambiguous `github.com/<owner>/<repo>`** | Cannot tell org vs. user from the URL (§3.1). Defaults to **company** unless `<owner>` is on the personal-accounts list; user corrects via reassign or the list. |
+| **Owner IS a personal account** | **Personal** (§3 case 2) even on a known forge. |
+| **Unknown / self-hosted host** | **Personal by default** (§3 case 5); reassign to a company if it's a work server. |
+| **Renamed org** (remote owner slug changed) | On rescan, an **auto** owner **re-derives** to the new slug and (if new) creates/attaches a new company; a **manual** owner is untouched. If the old auto-company now owns no repos it becomes an empty company (§9). The user can rename the new company to the same friendly name, or reassign. |
+| **Repo moved between owners** (transferred to another org) | Same as renamed org — the remote's owner segment changes, so an auto owner follows it on rescan. |
+| **Multiple remotes** (`origin` + `upstream` + a fork) | Ownership derives from **`origin` only** (the remote `readGitRemote` returns). Other remotes are ignored for grouping. If the user works off a non-origin remote, they reassign. |
+| **Monorepo with submodules from many owners** | The **top-level repo's `origin`** owns the whole tree; submodule remotes do **not** create per-submodule owners (a repo has exactly one owner). Submodule big files group under the parent repo's owner. |
+| **Two forges, same owner name** (`github.com/acme` and `gitlab.com/acme`) | By default both derive to a company named `acme` and, absent a display-name change, **merge into one** company group (name-keyed). If they are different companies, the user renames one or reassigns; a future `host` qualifier on the company key can split them (out of scope here). |
+| **Owner slug with odd characters** (`~sircmpwn`, `dept.team`) | Kept verbatim as the slug; the friendly display name is where the user makes it readable (§6). |
+
+---
+
+## 9. Error & empty cases
+
+* **Empty company group.** A company whose repos were all reassigned/removed shows **0 repos**. If it was
+  **auto-created** (§6) and never renamed or otherwise configured, LFB may **garbage-collect** it on scan (remove
+  the bare, repo-less, unnamed company storage) — a user-renamed or otherwise-configured company is **kept** even
+  at 0 repos. Never delete a company the user has touched.
+* **Unparseable remote.** `parseRemoteOwner` returning all-nulls falls to **Personal** (§3 case 1) — never an
+  error state; the repo simply groups under Personal.
+* **Reassign to an unknown company id** → `POST /api/repos/:repoId/owner` returns **400**; the UI keeps the prior
+  owner and toasts.
+* **Company creation fails** (e.g. cannot write `storage.yaml`) → the reassign is rejected, the repo keeps its
+  prior owner, and the failure is surfaced (not silently swallowed); the derivation retries next scan.
+* **Personal-accounts list malformed** → treated as empty (log a warning), so nothing is miscategorized *toward*
+  Personal by a bad entry; the user's repos may show as companies until fixed, which is visible and correctable.
+* **Stale display name.** Renaming a company updates the label everywhere on next read; a repo row cached with the
+  old `displayName` refreshes on rescan (the label is derived, not frozen on the repo).
+
+---
+
+## 10. Acceptance criteria
+
+1. Every repo carries an **`owner`** block (`kind: personal | company`, `companyId?`, `displayName`,
+   `source: auto | manual`, `host`, `ownerSlug`) on `RepoRow` / `RepoDetail` / `RepoSettings` (§1.1), composed in
+   `computeRepoRow` / `computeRepoDetail`.
+2. **`parseRemoteOwner(remoteUrl)`** parses `host` + `owner` + `repo` (and `knownForge`) from the SSH, HTTPS,
+   `ssh://`, `git://`, and sr.ht URL shapes across github.com / gitlab.com / bitbucket.org / codeberg.org /
+   git.sr.ht, with **no networking** (§2).
+3. The heuristic (§3): no/unknown/local remote → **Personal**; a **known forge** owner that **is** a personal
+   account → **Personal**; a known-forge owner that is **not** a personal account → **Company** named after the
+   owner slug (auto-creating the company, §6); default leans **Personal**.
+4. The **"my personal accounts"** list (§4) keeps the user's own forge repos under **Personal**; editing it
+   re-derives `auto` owners on the next scan and never disturbs `manual` ones.
+5. **Deriving a company auto-creates a company storage** (`ensureCompanyForOwner`) so it appears as its **own
+   child** under Storages ([storages.mdx §2](./storages.mdx#2-the-storages-left-bar-tab)); its cryptic slug is
+   overridable to a **friendly display name** shown everywhere (§6, [storage_company.mdx](./storage_company.mdx)).
+6. The user can **reassign** any repo to Personal or a Company (existing or new), or **reset to auto**, from repo
+   settings / the `⋮` menu (§5); the choice persists as **`owner_override`** in the repo's **`config.yaml`**
+   (`source: "manual"`, sticky across rescans), and an absent block means auto-derive.
+7. The **limitation is documented honestly** (§3.1): plain `github.com/<owner>/<repo>` cannot be perfectly
+   org-vs-personal from the URL; LFB **defaults per the heuristic, surfaces the guess as (auto-detected), and lets
+   the user correct it** — and **never** calls a forge network API to resolve it.
+8. Ownership makes repos **groupable under their owner** (§7.1) in the left-bar Storages disclosure and the Repos
+   list, and drives the **company-vs-personal state-sync repo** for a repo's noisy tracking (§7.2,
+   [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
+9. All **non-default / edge cases** (§8) resolve as tabled — SSH↔HTTPS stable, origin-only, one owner per repo
+   (submodules included), renamed/moved org re-derives auto owners — and the **error cases** (§9) fail safe toward
+   Personal, never delete a user-touched company, and surface (never swallow) creation failures.
+
+<!--
+  repo_company_mapping.mdx — maps every repo to an OWNER (company | Personal). DEFAULT = Personal (catch-all,
+  storage_personal §9). Owner is GROUPING metadata, not a location — never moves bytes / re-roots / touches the
+  graft. §1.1 new RepoOwner block on RepoRow/RepoDetail/RepoSettings {kind, companyId?, displayName, source
+  auto|manual, host, ownerSlug} composed in computeRepoRow/Detail (units.service). §2 parseRemoteOwner(remoteUrl)
+  in git.service (beside classifyRemote/classifyRemoteVisibility, same forge regex): host+owner+repo+knownForge
+  from git@ / https / ssh:// / git:// / sr.ht shapes, NO NETWORK. §3 heuristic: no/unknown/local→Personal; known
+  forge owner ON personal-accounts list→Personal; known forge owner NOT personal→Company named after slug
+  (ensureCompanyForOwner). Conservative toward Personal. §3.1 LOCKED honest limitation: github.com/<owner>/<repo>
+  can't be told org-vs-user from URL; default per heuristic + surface (auto-detected) + let user correct; NEVER a
+  forge API call (local-first). §4 "my personal accounts" list (owned by storage_personal, stored in app config
+  personalAccounts; host optional=wildcard; editing re-derives auto only). §5 manual reassign (Personal / Company
+  / Reset to auto) from repo_settings + ⋮ menu; persists as owner_override in pin/r/<repo>/config.yaml
+  (source:manual, sticky across rescans like bookmark); POST /api/repos/:repoId/owner; resolveRepoOwner(cfg)=
+  override-or-derive in storage.service. §6 auto-create company storage (ensureCompanyForOwner→ensureStorage
+  company) so it shows under Storages; cryptic slug → friendly display name (owned by storage_company); fallback =
+  slug, never blank. §7 grouping: repos nest under owner in left-bar Storages disclosure (left_bar §3.2, defined
+  by this spec) + optional Repos "Group by owner"; artifact placement → company vs personal state-sync repo
+  (artifact_placement_policy, storage_company, storage_personal). §8 edge cases (no/local remote, SSH=HTTPS,
+  ambiguous, personal-account, self-hosted, renamed/moved org re-derives auto, multiple remotes=origin only,
+  monorepo=one owner, two forges same name merge, odd slugs). §9 errors fail safe toward Personal; GC only bare
+  auto companies, never user-touched; surface creation failures. Keep aligned with storages.mdx §2/§3,
+  storage_company.mdx (rename + state-sync repo), storage_personal.mdx (default owner + personal-accounts +
+  state-sync repo), repos.mdx (RepoRow + config.yaml persistence pattern), repo_settings.mdx (Owner control),
+  left_bar.mdx/left_bar.yaml (repos nested under owner), artifact_placement_policy.mdx (state-sync repo routing).
+-->

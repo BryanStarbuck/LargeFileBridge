@@ -23,6 +23,8 @@ import { PinToggle } from "../../components/PinToggle.js";
 import { DecisionToggle } from "../../components/decision/DecisionToggles.js";
 import { TranscribeStatusIcon } from "../../components/TranscribeStatusIcon.js";
 import { CompressStatusIcon } from "../../components/CompressStatusIcon.js";
+import { DescribeStatusIcon } from "../../components/DescribeStatusIcon.js";
+import { runDescribeFile } from "../../lib/describe.js";
 import { TaskTabs } from "./TaskTabs.js";
 import { TASK_TABS, type TaskTabId } from "./taskTabs.config.js";
 import { MetricsStrip, type MetricView } from "./MetricsStrip.js";
@@ -77,6 +79,8 @@ function fileSummary(f: FileRow): string {
   else if (f.transcribe === "done") bits.push("transcript ready");
   if (f.compress === "could") bits.push("could be compressed");
   else if (f.compress === "done") bits.push("already compressed");
+  if (f.describe === "could") bits.push("no AI description yet — could be described");
+  else if (f.describe === "done") bits.push("AI description ready");
   return bits.join(" · ");
 }
 
@@ -213,6 +217,21 @@ export function OneRepoPage() {
     }
   };
 
+  // The AI-description status icon's click (ai_description.mdx §11), the mirror of onTranscribeActivate:
+  // "could" generates an AI description for this one file (provider-gated, background job); "done" opens the
+  // file's viewer to read it; "na" is inert.
+  const onDescribeActivate = (f: FileRow) => {
+    if (!detail?.path || f.describe === "na") return;
+    const abs = `${detail.path}/${f.path}`;
+    if (f.describe === "could") {
+      const name = f.path.slice(f.path.lastIndexOf("/") + 1);
+      runDescribeFile(abs, name, { onDone: () => qc.invalidateQueries({ queryKey: ["repo", repoId] }) });
+    } else {
+      const name = f.path.slice(f.path.lastIndexOf("/") + 1);
+      navigate({ to: viewerRouteForName(name), search: { path: abs } });
+    }
+  };
+
   // A metric panel with NO educate-and-fix popup (task_tabs.mdx §2.4): re-tune the view to the tab where
   // the user acts on it. Metrics that DO carry a popup (undecided, pullDown) open it instead — the metric
   // panels are this page's only warning surface; there is no separate warning banner (§2.6).
@@ -220,6 +239,7 @@ export function OneRepoPage() {
     if (id === "notBackedUp") { navigate({ to: "/devices" }); return; }
     if (id === "compressibleVideos" || id === "compressibleImages" || id === "alreadyCompressed") setActiveTab("compress");
     else if (id === "transcribable" || id === "transcribed") setActiveTab("transcribe");
+    else if (id === "describable" || id === "described") setActiveTab("ai-descriptions");
     else setActiveTab("ipfs");
   };
 
@@ -497,6 +517,23 @@ export function OneRepoPage() {
         />
       ),
     },
+    // `describe` — the three-state AI-description status icon (ai_description.mdx §11), the mirror of the
+    // transcribe column. Header-less leading control column; only appears on the AI descriptions tab.
+    {
+      id: "describe",
+      header: "",
+      kind: "enum",
+      accessor: (f) => f.describe ?? "na",
+      filterOptions: ["could", "done", "na"],
+      cell: (f) => (
+        <DescribeStatusIcon
+          state={f.describe ?? "na"}
+          onActivate={() => onDescribeActivate(f)}
+          onMouseEnter={() => setHoverInfo(fileSummary(f))}
+          onMouseLeave={() => setHoverInfo(null)}
+        />
+      ),
+    },
   ];
 
   // The active tab's projection (task_tabs.mdx §7): pick + order the columns it lists, and filter the rows
@@ -537,6 +574,17 @@ export function OneRepoPage() {
   // due, there is no header primary — the metric panels (all green zeros) already say "all clear".
   const scanDue = detail ? scanIsStale(detail) : false;
   const topRec = detail && !scanDue ? topRecommendation(detail, repoId) : null;
+  // The header primary's label is per-metric (one_repo.mdx §3.1): a content-work recommendation names its
+  // verb ("Transcribe ›" / "Describe ›" / "Compress ›") so the button says exactly what it will do; the
+  // triage recommendations (undecided / pull-down / ipfs-down) keep the generic "View recommendation ›".
+  const HEADER_PRIMARY_LABEL: Partial<Record<MetricId, string>> = {
+    transcribable: "Transcribe",
+    describable: "Describe",
+    compressibleVideos: "Compress",
+    compressibleImages: "Compress",
+  };
+  const headerPrimaryLabel =
+    (topRec?.metricId && HEADER_PRIMARY_LABEL[topRec.metricId]) || "View recommendation";
 
   return (
     <div>
@@ -580,7 +628,7 @@ export function OneRepoPage() {
                 className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm text-white"
                 style={{ background: topRec.warning.state === "bad" ? "var(--lfb-bad)" : "var(--lfb-primary)" }}
               >
-                View recommendation
+                {headerPrimaryLabel}
                 <ChevronRight className="h-4 w-4" strokeWidth={2.5} />
               </button>
             ) : null}

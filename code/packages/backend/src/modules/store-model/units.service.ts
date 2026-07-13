@@ -22,8 +22,9 @@ import {
   type TaskMetrics,
   mediaKindForName,
 } from "@lfb/shared";
-import type { ComputerUnitConfig } from "@lfb/shared";
+import type { ComputerUnitConfig, PlacementChoice } from "@lfb/shared";
 import { compressInfo } from "../fs/badges.js";
+import { deriveOwnerForRemote } from "../git/git.service.js";
 import { analysisOutputs } from "../storage/tracking.service.js";
 import { readYaml, updateYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import {
@@ -115,6 +116,21 @@ export function folderForRepoId(repoId: string): string | null {
   return null;
 }
 
+/** The per-repo placement choice for its transcripts / AI descriptions (repo_settings.mdx §4-5). Resolved
+ *  from the repo unit config keyed by the artifact's owning root; defaults to "lfbridge" when the root isn't
+ *  a registered repo or on any read failure. Consumed by transcribe.service / describe.service to decide
+ *  WHERE the artifact is written (via artifactPathForPlacement). */
+export function repoArtifactPlacement(root: string, which: "transcription" | "aiDescription"): PlacementChoice {
+  try {
+    const folder = folderForRepoId(repoIdFromPath(root));
+    if (!folder) return "lfbridge";
+    const a = getRepoConfig(folder).artifacts;
+    return which === "transcription" ? a.transcription_placement : a.ai_description_placement;
+  } catch {
+    return "lfbridge";
+  }
+}
+
 /** Register a new repo unit (repos.mdx §6). Validates it is a git working tree. */
 export async function registerRepo(absPath: string): Promise<{ folder: string; repoId: string }> {
   const resolved = path.resolve(absPath.replace(/^~(?=\/|$)/, process.env.HOME || "~"));
@@ -179,6 +195,9 @@ export function computeRepoRow(folder: string): RepoRow {
     lastPinAt: status.last_pin_at,
     status: rollupStatus(cfg.pinned, counts, status, files),
     pinned: cfg.pinned,
+    // Company/personal owner derived from the git remote (repo_company_mapping.mdx §3). No personal-accounts
+    // list is wired yet, so an unknown owner errs toward Personal per the conservative heuristic.
+    owner: deriveOwnerForRemote(cfg.repo.remote),
   };
 }
 
@@ -202,6 +221,7 @@ export function computeRepoDetail(folder: string, ipfs: IpfsHealth): RepoDetail 
     counts,
     files,
     taskMetrics: computeTaskMetrics(files),
+    owner: deriveOwnerForRemote(cfg.repo.remote),
   };
 }
 
@@ -252,6 +272,7 @@ function composeFileRows(
       // name-only for compress; transcribe needs one sidecar existence check per media file.
       compress: compressStatusFor(cand.path),
       transcribe: transcribeStatusFor(cand.path, repoRootAbs),
+      describe: describeStatusFor(cand.path, repoRootAbs),
     };
   });
 }
@@ -279,6 +300,21 @@ function transcribeStatusFor(relPath: string, repoRootAbs: string | null): TaskS
   return "could";
 }
 
+// AI-description task status (ai_description.mdx §11) — mirrors transcribeStatusFor but for the OTHER media
+// axis: "na" unless the file is IMAGE or VIDEO (audio is covered by transcription); then "done" iff a
+// `.ai_description` sidecar already exists (analysisOutputs — cheap fs stat), else "could". Any failure
+// degrades to "could" so a describable file is never hidden.
+function describeStatusFor(relPath: string, repoRootAbs: string | null): TaskStatus {
+  const kind = mediaKindForName(path.basename(relPath));
+  if (kind !== "image" && kind !== "video") return "na";
+  try {
+    if (repoRootAbs && analysisOutputs(repoRootAbs, relPath).includes("description")) return "done";
+  } catch {
+    /* sidecar check unavailable → treat as not-yet-described */
+  }
+  return "could";
+}
+
 // Roll up the per-tab "what could be done" metric counts (task_tabs.mdx §2.5) from the composed rows.
 // `pullDown` is intentionally omitted — it comes from RepoDetail.missingPinned.length (router-computed).
 const BIG_FILE_METRIC_THRESHOLD = 100 * 1024 * 1024; // 100 MB — the charter big-file threshold for the git-ignore nudge count.
@@ -292,6 +328,8 @@ function computeTaskMetrics(files: FileRow[]): TaskMetrics {
     alreadyCompressed: 0,
     transcribable: 0,
     transcribed: 0,
+    describable: 0,
+    described: 0,
     bigNotIgnored: 0,
   };
   for (const f of files) {
@@ -305,6 +343,8 @@ function computeTaskMetrics(files: FileRow[]): TaskMetrics {
     if (f.compress === "done") m.alreadyCompressed++;
     if (f.transcribe === "could") m.transcribable++;
     if (f.transcribe === "done") m.transcribed++;
+    if (f.describe === "could") m.describable++;
+    if (f.describe === "done") m.described++;
     if (!f.gitignore && f.sizeBytes >= BIG_FILE_METRIC_THRESHOLD) m.bigNotIgnored++;
   }
   return m;

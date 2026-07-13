@@ -120,6 +120,32 @@ of Git ([storages.mdx §4](./storages.mdx#4-lfbridge--the-hidden-per-storage-tra
 The `.lfbridge/` constant, the ensure-directory, and the git-ignore-on-init behavior this control drives live in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureStorage()` / `ensureGitignore()` (dir constant `LFBRIDGE_DIR` in `tracking.service.ts`). Honoring a **relocated** `.lfbridge/` path (resolve against the machine-local config, not always `<root>/.lfbridge/`) is a change to `descriptorPath()` / the tracking-path resolvers in the same module.
 
+### 3.1 The relocated-`.lfbridge/` control vs. the content-threshold churn policy
+
+The relocate control (§3) answers *where does this storage keep its own `.lfbridge/` on this computer*. It
+is **complemented — not replaced —** by the **content-threshold churn policy** that governs a **repo**'s
+tracking state, owned by [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) and reconciled in
+the storages family at [storages.mdx §8.1](./storages.mdx#81-the-churn-problem-and-the-three-homes-for-a-repos-tracking-state-locked).
+The two operate on different objects and must not be confused:
+
+* **§3 relocate** moves **this storage's own** `.lfbridge/` (a company/Personal SDL, or a repo's own
+  tracking area) to a chosen directory on **this machine**. It is a per-computer placement of the whole
+  tracking area.
+* **The churn policy** decides, per **repo**, whether that repo's noisy tracking state (`repo_storage.yaml`,
+  `files.yaml`, sidecars) belongs in the **machine-local state root** `~/T/_large_files_bridge/repos/<repoKey>/`
+  (default, **below** the content threshold — it does **not** travel), in the repo's **own committed
+  `.lfbridge/`** (once the repo has produced a **transcript** or **AI description** — the content
+  threshold), or in the owning storage's **state-sync repo** (§4b). Relocating a `.lfbridge/` here does
+  **not** override the threshold — a below-threshold repo still keeps its state in the state root; the
+  relocate control only changes where an **at-threshold** `.lfbridge/` physically sits.
+
+So a repo's tracking state has **three possible homes** ([storages.mdx §8.1](./storages.mdx#8-the-state-sync-repo--a-storages-optional-home-for-noisy-tracking-state)),
+and the state-sync repo configured on **this** page (§4b) is the third of them — the travelling home that
+keeps noisy state **out of** the working repo even before it crosses the content threshold. The state root
+`repos/<repoKey>/` location itself is owned by [storage_local.mdx](./storage_local.mdx) and
+[syncable_data_location.mdx §7](./syncable_data_location.mdx); this page only exposes the state-sync repo
+that state can graduate/route to.
+
 ---
 
 ## 4. Backing locations — dedicated repo · Google Drive · Dropbox
@@ -232,6 +258,58 @@ Reading/writing the shared mapped-directory list (add/remove rows → `.lfbridge
 
 ---
 
+## 4b. The state-sync repo — configuring where owned repos' tracking state travels
+
+For a **company** or **Personal** storage, this page also configures the storage's optional **state-sync
+repo** — the dedicated Git repo that carries the **noisy per-repo tracking state** of every repo this
+storage **owns** ([repo_company_mapping.mdx](./repo_company_mapping.mdx)) under
+`<syncRepo>/repos/<repoKey>/`, so that state travels **without** polluting each working repo's own history.
+The concept, the three-homes model, and the churn/content-threshold policy are defined once and only
+cross-linked here:
+[storages.mdx §8](./storages.mdx#8-the-state-sync-repo--a-storages-optional-home-for-noisy-tracking-state) ·
+[artifact_placement_policy.mdx](./artifact_placement_policy.mdx). This page is where the user **picks** or
+**clears** it.
+
+* **This section shows only for company / Personal storages.** A **repo** storage does not own other
+  repos, `local` is settings/config, and a **community** storage consumes rather than owns — so the
+  control is hidden (or read-only "not applicable") for those three types.
+* **Pick control.** A **remote field**, exactly the two shapes a backing location's dedicated repo accepts
+  ([git_backbone.mdx §3](./git_backbone.mdx#3-the-two-remote-shapes--a-local-path-vs-an-https-url-locked)):
+  * a **local file path** to a git checkout already on this computer — defaulting to the convention
+    **`~/BGit/Bryan_git/<slug>_state_sync/`** (e.g. `act3_state_sync/`), used **in place** as the working
+    copy; **or**
+  * an **HTTP(S) URL** to a git server — LFB **clones** it into a machine-local working-copy cache
+    (`pin/s/<storage_id>/state_sync/`) and manages Git there via the OS git credential helper
+    ([git_backbone.mdx §5](./git_backbone.mdx#5-credentials-for-a-url-remote--the-os-git-credential-helper-never-a-prompt-locked)).
+* **Clear control.** A **[ Clear ]** affordance unsets the state-sync repo. Clearing does **not** delete
+  the repo on disk (charter: surface and offer, never destroy); it stops routing new tracking state there.
+  Repos owned by this storage then fall back to the churn policy's other two homes — the machine-local
+  **state root** below the content threshold, or the repo's **own committed `.lfbridge/`** at/above it
+  ([storages.mdx §8.1](./storages.mdx#81-the-churn-problem-and-the-three-homes-for-a-repos-tracking-state-locked)).
+* **Validation before saving.** LFB checks that the pick is a **git working tree** (or a reachable URL
+  remote), is **writable**, and is **not one of this storage's mapped source directories** (§4a) nor a
+  tracked big-file location — the state-sync repo carries **small text only**, never the big bytes. An
+  invalid pick shows an inline error and the Save stays disabled, matching the backing-location hints
+  (§4.4). A storage may reuse its **dedicated repo** (§4.1) as its state-sync repo, or point at a
+  separate one; both are valid.
+* **What routes there.** When configured, for **every repo this storage owns** (owner mapping,
+  [repo_company_mapping.mdx](./repo_company_mapping.mdx)): the repo-wide `repo_storage.yaml`, the
+  `files.yaml` fingerprint index, the per-file sidecars, and — when a repo's **placement radio**
+  ([repo_settings.mdx](./repo_settings.mdx), [placement_radios.mdx](./placement_radios.mdx)) is set to
+  *state-sync repo* — its transcripts / AI descriptions, all path-mirrored under
+  `<syncRepo>/repos/<repoKey>/` ([storages.mdx §8.2](./storages.mdx#82-placement-radios-can-target-the-state-sync-repo)).
+  The set of owned repos and the **`ownedRepoCount`** surfaced on the Storages page
+  ([storages.mdx §10](./storages.mdx#10-storages-page-data-additions--the-per-storage-statesyncrepo-descriptor))
+  both derive from the same owner mapping.
+* **Machine-local, like the rest of this page (§2).** The chosen remote + its enable state persist to the
+  machine-local per-storage config (§5); the *fact that repos route here* is derived from the shared owner
+  mapping, not stored per-computer.
+
+Reading/writing the state-sync repo pick (validate git working tree / URL, reject mapped-dir & big-file overlaps, clone a URL remote into the machine-local cache) and resolving the effective route for an owned repo is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getStateSyncRepo()` / `setStateSyncRepo()` / `clearStateSyncRepo()` (new), feeding `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `resolveTrackingHome(repoKey)` (the three-homes chooser, [storages.mdx §8.1](./storages.mdx#81-the-churn-problem-and-the-three-homes-for-a-repos-tracking-state-locked)).
+
+---
+
 ## 5. Persistence — the machine-local per-storage config
 
 Everything on this page (except the canonical `clones` paths, which go to `storage.yaml`) writes to a
@@ -263,6 +341,10 @@ backing:                         # §4 backing locations — each ON/OFF + this 
   dropbox:
     enabled: false
     path: null
+
+state_sync_repo:                 # §4b company/Personal only — carries OWNED repos' tracking state
+  configured: true               # false / null = this storage has no state-sync repo
+  remote: ~/BGit/Bryan_git/act3_state_sync   # a local git working tree, OR an https:// URL (cloned to cache)
 ```
 
 * **`storage:`** identity is written by discovery and shown **read-only** here — the user configures
@@ -334,10 +416,21 @@ The page is a single scrollable settings form (no table beneath it, so it does n
  │       │ Apps/LFB/ACT3                                 │  (connect Dropbox)│
  │       └──────────────────────────────────────────────┘                   │
  │                                                                           │
+ │  State-sync repo   (company/Personal — carries owned repos' tracking)     │
+ │       ┌──────────────────────────────────────────────┐  [Browse…][Clear] │
+ │       │ ~/BGit/Bryan_git/act3_state_sync             │                   │
+ │       └──────────────────────────────────────────────┘                   │
+ │       ⓘ 12 owned repos route their tracking state here (§4b).             │
+ │                                                                           │
  │   ⓘ Directories are created and updated on the next pin pass.             │
  │                                                    [ Cancel ] [ Save ]     │
  └───────────────────────────────────────────────────────────────────────────┘
 ```
+
+* The **State-sync repo** row (§4b) shows only for **company / Personal** storages; it is omitted for
+  `repo`, `local`, and `community`. **Clear** unsets it without deleting the repo on disk. An invalid pick
+  (not a git tree, not writable, or overlapping a mapped source directory) shows an inline error and keeps
+  Save disabled.
 
 * A disabled toggle whose drive isn't connected greys its path field and shows the connect hint (§4.4).
 * Saving writes the machine-local config (§5) and the canonical `clones` paths; a toast confirms, and the
@@ -372,6 +465,19 @@ The page is a single scrollable settings form (no table beneath it, so it does n
    computer's graft** (`.lfbridge/devices/<device>.yaml`). Everything recursive under a mapped directory
    is in scope; files are tracked **in place** (never relocated). A **repo** storage's single mapped
    directory (its working tree) is shown read-only.
+8. For a **company/Personal** storage the page **configures the optional state-sync repo** (§4b): a
+   **pick** control (local git tree **or** URL remote, default `~/BGit/Bryan_git/<slug>_state_sync/`) and a
+   **Clear** control that unsets it **without deleting** the repo. The pick is **validated** (a writable
+   git working tree / reachable URL, not overlapping a mapped source directory or a big-file location) and
+   persists to the machine-local config (§5) as `state_sync_repo`. The section is **hidden** for `repo`,
+   `local`, and `community` storages. Concept + churn policy are cross-linked, not redefined
+   ([storages.mdx §8](./storages.mdx#8-the-state-sync-repo--a-storages-optional-home-for-noisy-tracking-state),
+   [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
+9. The relocated-`.lfbridge/` control (§3) is **complemented, not replaced,** by the content-threshold
+   churn policy (§3.1): §3 places **this storage's own** `.lfbridge/` on this computer, while the churn
+   policy decides a **repo's** tracking-state home among the **three homes** — state root (below
+   threshold), the repo's own committed `.lfbridge/` (at/above threshold), or this storage's **state-sync
+   repo** (§4b). Relocating never overrides the threshold.
 
 <!--
   Per-STORAGE settings page (the storage counterpart of repo_settings.mdx). Opened from ONE storage:
@@ -389,5 +495,19 @@ The page is a single scrollable settings form (no table beneath it, so it does n
   aligned with repo_settings.mdx (per-repo counterpart), storages.mdx (storage.yaml + .lfbridge + clones),
   google_drive.mdx / dropbox.mdx (the mirrors), pin_process.mdx §2/§4 (the pass), menus.mdx (add a
   storage entity catalog whose Config group carries "Storage settings…").
+  NEW §3.1 + §4b (storages-family glue for the state-sync + churn concepts): §3.1 clarifies the
+  relocated-.lfbridge/ control (§3, this STORAGE's own .lfbridge/ on this computer) is COMPLEMENTED, not
+  replaced, by the CONTENT-THRESHOLD churn policy (owned by artifact_placement_policy.mdx) that governs a
+  REPO's tracking-state home among THREE homes — state root ~/T/_large_files_bridge/repos/<repoKey>/ (below
+  threshold), the repo's own committed .lfbridge/ (at/above), or this storage's STATE-SYNC repo. §4b =
+  configuring the state-sync repo for a COMPANY/PERSONAL storage: pick (local git tree OR URL remote,
+  default ~/BGit/Bryan_git/<slug>_state_sync/) + Clear (doesn't delete on disk); VALIDATION (writable git
+  tree/reachable URL, not overlapping a mapped source dir or big-file location); routes OWNED repos'
+  (repo_company_mapping.mdx) repo_storage.yaml/files.yaml/sidecars + placement-radio'd transcripts to
+  <syncRepo>/repos/<repoKey>/. Persists to state_sync_repo in pin/s/<id>/config.yaml (§5). Code: new
+  getStateSyncRepo/setStateSyncRepo/clearStateSyncRepo in storage-settings.service.ts + resolveTrackingHome
+  in storage.service.ts. Hidden for repo/local/community. Cross-links storages.mdx §8–§10,
+  artifact_placement_policy.mdx, repo_company_mapping.mdx, placement_radios.mdx, repo_settings.mdx,
+  storage_local.mdx, syncable_data_location.mdx §7.
 -->
 

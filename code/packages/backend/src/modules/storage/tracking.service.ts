@@ -45,9 +45,13 @@ export function analysisOutputs(root: string, rel: string): string[] {
       return false;
     }
   };
-  const artifactBase = path.join(root, LFBRIDGE_DIR, rel); // full filename kept; ext appended below
-  if (isFileAt(artifactBase + TRANSCRIPTION_EXT)) out.push("transcript");
-  if (isFileAt(artifactBase + AI_DESCRIPTION_EXT)) out.push("description");
+  // Detect the artifact in EITHER placement (placement_radios.mdx): the hidden `.lfbridge/` (default) OR
+  // beside the media (the opt-in beside-media layout) — so a file's "done" status is correct whichever
+  // placement the repo chose. (The sync-repo placement is detected via its own path when that seam lands.)
+  const lfbridgeBase = path.join(root, LFBRIDGE_DIR, rel); // full filename kept; ext appended below
+  const besideBase = path.join(root, rel);
+  if (isFileAt(lfbridgeBase + TRANSCRIPTION_EXT) || isFileAt(besideBase + TRANSCRIPTION_EXT)) out.push("transcript");
+  if (isFileAt(lfbridgeBase + AI_DESCRIPTION_EXT) || isFileAt(besideBase + AI_DESCRIPTION_EXT)) out.push("description");
   const dir = path.join(root, LFBRIDGE_DIR, ANALYSIS_DIR, rel);
   for (const [key, file] of Object.entries(ANALYSIS_FILES)) {
     if (isFileAt(path.join(dir, file))) out.push(key);

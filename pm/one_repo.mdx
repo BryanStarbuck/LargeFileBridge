@@ -20,10 +20,11 @@ The One-repo screen is rendered in code:
 
 This spec builds on the siblings and does not repeat them:
 
-* [Task tabs](./task_tabs.mdx) — the **All / IPFS / Compress / Transcribe** tab strip this screen's header
-  now carries (§3.1 here). Selecting a tab re-tunes the metrics strip, the visible table columns, the
-  default sort, and the row filter; that whole system — including the metrics panels, the hover-info
-  region, and the three-state Transcribe/Compress status icons — is defined there and only summarized here.
+* [Task tabs](./task_tabs.mdx) — the **All / IPFS / Compress / Transcribe / AI descriptions** tab strip this
+  screen's header now carries (§3.1 here). Selecting a tab re-tunes the metrics strip, the visible table
+  columns, the default sort, and the row filter; that whole system — including the metrics panels, the
+  hover-info region, the per-metric popup + blue header-primary behavior, and the three-state
+  Transcribe / Compress / Describe status icons — is defined there and only summarized here.
 * [Repos](./repos.mdx) — the list this screen drills into; defines the LOCKED vocabulary
   **Repo → Large file → Decision** (§1 there), the `RepoStatus` enum, and the per-repo counts.
 * [pin_process.mdx](./pin_process.mdx) — the **pin process** the Pin-now button triggers:
@@ -115,7 +116,13 @@ Three regions stacked in the content column: the **header** (repo identity + the
   the header and the strip. Each condition a banner would have raised (undecided files, pull-down,
   not-backed-up, pending) reads off its own **narrow metric tile** — a small Title-Case label over a big
   number — and **clicking the tile opens that condition's educate-and-fix popup**
-  ([task_tabs.mdx §2.4](./task_tabs.mdx), [warnings.mdx §4](./warnings.mdx)). The hover-info region to the
+  ([task_tabs.mdx §2.4](./task_tabs.mdx), [warnings.mdx §4](./warnings.mdx)). **Every actionable tile opens a
+  popup now — not just Undecided and Pull-down.** The task tiles (`Transcribable`, `Describable`,
+  `Compressible Videos`, `Compressible Images`) each got a `WarningDef` builder, so clicking one opens the
+  scoped popup and **lets the user start that work** (transcribe / describe / compress) instead of the old
+  no-op that merely re-selected the current tab
+  ([task_tabs.mdx §2.4.1](./task_tabs.mdx#241-every-actionable-metric-tile-opens-a-popup--the-transcribe--compress--describe-builders-the-fix-locked)).
+  The hover-info region to the
   right keeps ≥25% width and the tiles wrap into balanced rows rather than squeeze it ([task_tabs.mdx §3.1](./task_tabs.mdx)).
   IPFS-down no longer raises a page banner here — it becomes the **top recommendation**, so the header
   primary shows a **red "View recommendation ›"** that opens the one-click *Start IPFS* popup (§3.1); it
@@ -131,12 +138,12 @@ Three regions stacked in the content column: the **header** (repo identity + the
 * **Breadcrumb** — `‹ Repos / <repo name>`; the repo name is the title, the absolute **path** shown
   muted beneath it.
 * **Task tabs** (a little **right of center**, between the breadcrumb and the right-hand buttons) — the
-  **All / IPFS / Compress / Transcribe** strip ([task_tabs.mdx §1](./task_tabs.mdx#1-the-tab-strip-locked)).
+  **All / IPFS / Compress / Transcribe / AI descriptions** strip ([task_tabs.mdx §1](./task_tabs.mdx#1-the-tab-strip-locked)).
   **All** is the default. Selecting a tab re-tunes the **metrics-panel strip**, the **visible table
   columns**, the **default sort**, and **which files the table shows** — all client-side, no refetch, no
   mutation. Everything below the header in §3.2 / §4 is presented *through* the active tab; the tab system,
-  its metrics panels, the hover-info region, and the three-state Transcribe/Compress status icons are
-  defined in [task_tabs.mdx](./task_tabs.mdx).
+  its metrics panels, the hover-info region, and the three-state Transcribe / Compress / **Describe** status
+  icons are defined in [task_tabs.mdx](./task_tabs.mdx).
 * **Header primary — "View recommendation" / "Scan now"** (top-right, the SAME button on all four tabs).
   This one smart button replaces the old always-`Pin now` primary. It surfaces the single next thing to
   do, so a non-expert never has to guess which panel to open:
@@ -146,11 +153,35 @@ Three regions stacked in the content column: the **header** (repo identity + the
     when the scan lands, `lastScanAt` refreshes and the button flips back to "View recommendation".
     When a repo's contents are known to have changed (the live watcher, scan.mdx §2.2), that also drives a
     fresh scan, after which the button returns to a recommendation.
-  * **"View recommendation ›"** (no leading icon; a trailing right chevron) — shown when a scan is **not**
-    due and there is a pending recommendation. It opens the **most important** pending metric's
-    educate-and-fix popup — the SAME popup its metric panel opens ([task_tabs.mdx §2.4](./task_tabs.mdx)) —
-    worst-first: **IPFS-down → pull-down → undecided**. The button tints **red** when that top
-    recommendation is a Broken (`bad`) state (e.g. IPFS-down), brand-blue otherwise.
+  * **A pending recommendation** (no leading icon; a trailing right chevron `›`) — shown when a scan is
+    **not** due and there is pending work. It opens the **most important** pending metric's educate-and-fix
+    popup — the SAME popup its metric panel opens ([task_tabs.mdx §2.4](./task_tabs.mdx)) — resolved
+    **worst-first across the full task set**:
+
+    ```
+    ipfs-down → pull-down → undecided → transcribe → describe → compress
+      (bad)      (bad)       (warn)      (warn)        (warn)     (warn)
+    ```
+
+    **The button's label names the recommendation** ([task_tabs.mdx §2.7](./task_tabs.mdx#27-the-per-metric-blue-header-primary--every-actionable-metric-can-be-the-recommendation-locked)):
+    the three **integrity** conditions keep the generic **"View recommendation ›"** ("here's what's wrong —
+    view it"), while the three **producing** tasks name the verb — **"Transcribe ›"**, **"Describe ›"**,
+    **"Compress ›"** — so a non-expert reads the one action to take. Every one opens the identical popup its
+    metric tile opens, and its Apply **starts the work** ([task_tabs.mdx §2.4.1](./task_tabs.mdx#241-every-actionable-metric-tile-opens-a-popup--the-transcribe--compress--describe-builders-the-fix-locked)).
+
+    | Top pending recommendation | Label | Fill |
+    | --- | --- | --- |
+    | IPFS engine down / peer-pinned files not here | **View recommendation ›** | **red** (`--lfb-bad`) |
+    | Files need a decision | **View recommendation ›** | **blue** (`--lfb-primary`) |
+    | Audio/video with no transcript | **Transcribe ›** | **blue** (`--lfb-primary`) |
+    | Image/video with no AI description | **Describe ›** | **blue** (`--lfb-primary`) |
+    | Video/image that could be compressed | **Compress ›** | **blue** (`--lfb-primary`) |
+
+    The button tints **red** (`--lfb-bad`) only when the top recommendation is a Broken (`bad`) state
+    (IPFS-down, pull-down), brand-**blue** (`--lfb-primary`) otherwise. A **"Transcribe ›"** / **"Describe ›"**
+    primary shows whenever that work is pending even if the heavyweight model or AI key isn't ready — the
+    **consent/provisioning gate fires when the popup's Apply runs**, then resumes (§3.1 gating mirrors the
+    per-row status-icon path, [task_tabs.mdx §2.7](./task_tabs.mdx)).
   * **Neither** — when no scan is due and nothing is pending, there is **no** header primary: the metric
     panels (all green zeros) already say "all clear".
 
@@ -445,11 +476,18 @@ The per-row `decidedBy` / `decidedAt` (joined from the folded shared ledger) tha
     right-click) opens the **file** catalog ([menus.mdx §5.3](./menus.mdx#53-file)) and never navigates,
     with compress/convert/ignore gated behind an explicit-click confirm.
 11. The header carries the **task tab strip** (right of center) — **All** (default) / **IPFS** / **Compress**
-    / **Transcribe** ([task_tabs.mdx](./task_tabs.mdx)); selecting a tab re-tunes the metrics-panel strip,
-    the visible columns, the default sort, and the row filter client-side. **All** is metrics-forward
-    (light-green big-`0` panels when nothing is to be done); the **Transcribe** tab shows the three-state
-    Transcribe status icon and the **Compress** tab the Compress status icon; the hover-info region right of
-    the panels shows contextual text for whatever is hovered.
+    / **Transcribe** / **AI descriptions** ([task_tabs.mdx](./task_tabs.mdx)); selecting a tab re-tunes the
+    metrics-panel strip, the visible columns, the default sort, and the row filter client-side. **All** is
+    metrics-forward (light-green big-`0` panels when nothing is to be done); the **Transcribe** tab shows the
+    three-state Transcribe status icon, the **Compress** tab the Compress status icon, and the **AI
+    descriptions** tab the three-state Describe status icon; the hover-info region right of the panels shows
+    contextual text for whatever is hovered.
+12. **The header primary is labeled per metric** and resolves worst-first **ipfs-down → pull-down →
+    undecided → transcribe → describe → compress** (§3.1): the integrity trio keeps **"View recommendation
+    ›"** (red for `bad`, blue otherwise), the task trio names the verb — **"Transcribe ›"**, **"Describe ›"**,
+    **"Compress ›"** (blue) — and each opens the same educate-and-fix popup its metric tile opens. **Every
+    actionable metric tile opens a popup** and lets the user start the work (not only Undecided / Pull-down);
+    the transcribe/describe applies are model/consent-gated, interposing then resuming.
 
 <!--
   Keep this page aligned with repos.mdx (the list it drills into) and left_bar.yaml (the nav).

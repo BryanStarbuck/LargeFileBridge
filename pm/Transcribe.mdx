@@ -34,7 +34,12 @@ Siblings this builds on and does not repeat:
   (video — because it carries an audio track — and audio), i.e. *which* files this engine may run over.
 * [Task tabs](./task_tabs.mdx) — the per-repo screen's **Transcribe tab**, where audio/video files are
   surfaced with a three-state **Transcribe status icon**; opening the tab filters the file table to
-  transcribable files and sorts the not-yet-transcribed ones to the top.
+  transcribable files and sorts the not-yet-transcribed ones to the top. The tab's **`Transcribable` metric
+  tile** opens the transcribe popup, and a blue **"Transcribe ›"** header primary appears when transcription
+  is the top recommendation (§9.1).
+* [placement_radios.mdx](./placement_radios.mdx) · [repo_settings.mdx](./repo_settings.mdx) — where the
+  **placement radio** that chooses the transcript's artifact root lives. This spec describes the resolved
+  path *shape* (§3); those specs own *choosing the root* (§9.2 — cross-link only, not re-specified here).
 * [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx) — a completed transcription appends a
   **`transcribe` event** to the file's per-file sidecar (`output:` → the `.transcription` path) and a
   `TRANSCRIBE` line to the per-computer history log, and increments `repo_storage.yaml → counts.transcribed`.
@@ -554,6 +559,16 @@ The transcription REST surface (tools / read-transcript / file / batch / tree / 
     **checked by default**, and **Apply** ("Transcribe N files") **enqueues background jobs** (this spec's
     §5 engine, unchanged) watchable on [processing.mdx](./processing.mdx). Completed files gain a sidecar
     and drop out of the next run.
+11. **Transcribe-tab metric tile + header primary (§9.1):** clicking the **`Transcribable`** metric tile
+    opens the transcribe popup (candidates checked by default → **"Transcribe N files"** confirm → model
+    gate may interpose → async parallel → Processing), instead of the old no-op that re-selected the tab.
+    When transcription is the repo's top pending recommendation, the header primary is a **blue**
+    (`--lfb-primary`) **"Transcribe ›"** button (trailing `›`) that opens the same popup; it sits at the
+    **transcribe** slot of the worst-first order **ipfs-down → pull-down → undecided → transcribe → describe
+    → compress**, is **model-gated on Apply not on display**, and disappears (green-`0` tile) once every
+    audio/video file has a complete transcript. **Where** the transcript lands is not decided here — it is
+    the placement radio owned by [placement_radios.mdx](./placement_radios.mdx) / [repo_settings.mdx](./repo_settings.mdx)
+    (§9.2, cross-link only).
 
 ## 8. Bulk discovery — "Show what could be transcribed" (the To-Do transcribe slugs) (LOCKED)
 
@@ -644,6 +659,56 @@ The icon is a control cell — it stops click propagation and never navigates th
 
 The Transcribe status icon is rendered in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/TranscribeStatusIcon.tsx` — `TranscribeStatusIcon` (state from the new `FileRow.transcribe` field composed in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows`).
+
+### 9.1 The `Transcribable` metric tile → popup, and the blue "Transcribe ›" header primary (LOCKED)
+
+On the Transcribe tab the **`Transcribable`** metric tile ([task_tabs.mdx §2](./task_tabs.mdx#2-the-metrics-panels--the-what-could-be-done-boxes-locked))
+counts the audio/video files with no complete transcript yet. **Clicking it opens the transcribe popup** —
+the same ~80%-of-screen confirm flow §5.1 walks (candidates checked by default → uncheck → solid-blue
+**"Transcribe N files"** → model gate may interpose → async parallel → Processing). This is part of the
+metric-tile fix ([task_tabs.mdx §2.4.1](./task_tabs.mdx#241-every-actionable-metric-tile-opens-a-popup--the-transcribe--compress--describe-builders-the-fix-locked)):
+before it, clicking `Transcribable` did nothing (it merely re-selected the Transcribe tab you were already
+on); now it opens the popup and lets the user **start the transcription**.
+
+* **The blue "Transcribe ›" header primary.** When transcription is the repo's **top pending
+  recommendation**, the header primary button ([one_repo.mdx §3.1](./one_repo.mdx#31-header)) is a **blue**
+  (`--lfb-primary`) **"Transcribe ›"** (white text, trailing right chevron) — the verb-named variant of the
+  smart header button. It opens the **same** transcribe popup the `Transcribable` tile opens. Its place in
+  the worst-first order is **ipfs-down → pull-down → undecided → transcribe → describe → compress**
+  ([task_tabs.mdx §2.7](./task_tabs.mdx#27-the-per-metric-blue-header-primary--every-actionable-metric-can-be-the-recommendation-locked)):
+  transcription outranks describe and compress, but a data-integrity condition (a paused IPFS engine,
+  peer-pinned files not here, or files still needing a decision) always shows first.
+* **Model-gated on Apply, not on display.** The **"Transcribe ›"** primary (and the tile's popup) shows
+  whenever transcription is pending even if the heavyweight model isn't installed; the permission +
+  provisioning gate (§5 / [transcribe_engine.mdx §3](./transcribe_engine.mdx)) fires only when the popup's
+  **"Transcribe N files"** Apply runs, and then **resumes** the batch — identical to the per-row "could"
+  status-icon path (§9, `withModelReady`).
+* **Green-zero.** When every audio/video file already has a complete transcript, the `Transcribable` tile is
+  a **light-green big `0`** and no **"Transcribe ›"** header primary shows — the Transcribe tab reads as done.
+
+The `Transcribable` tile's and the **"Transcribe ›"** header primary's shared `WarningDef` (the same
+transcribe popup, scoped to the counted candidates, gated by `withModelReady`) is built in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+`buildTranscribeWarning()`, wired into `buildMetricWarning()` (the `transcribable` case) and ranked in
+`topRecommendation()` (the transcribe slot of the worst-first order).
+
+### 9.2 Where the transcript lands is chosen elsewhere — cross-links only (LOCKED)
+
+Nothing on the Transcribe tab decides **where** a transcript file is written — that is owned by the
+**placement radios** and the **repo settings**, not this feature:
+
+* **Placement radios** — the repo/storage setting that picks the artifact home (inside the repo's committed
+  `.lfbridge/`, a dedicated Git repo, or beside-the-media as a last resort) is specified in
+  **[placement_radios.mdx](./placement_radios.mdx)** and surfaced per repo in
+  **[repo_settings.mdx](./repo_settings.mdx)**. §3 of this spec describes the resolved *path shape*
+  (`<root>/.lfbridge/<rel-dir>/<name.ext>.transcription`); the **radio that chooses the root** lives there.
+* **AI descriptions share the identical placement.** The `.ai_description` artifact
+  ([ai_description.mdx §2](./ai_description.mdx)) resolves through the **same** ordered rule (§3.4) and the
+  **same** placement radios — so the Transcribe and AI-descriptions tabs behave identically on *where the
+  output goes*, differing only in the artifact and the engine.
+
+This spec does **not** re-specify placement configuration — it only points at it, so the two surfaces stay
+in one place.
 
 <!--
   Transcribe = audio+video → plain-text transcript. LOCKED:

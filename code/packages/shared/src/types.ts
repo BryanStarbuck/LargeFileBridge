@@ -32,6 +32,19 @@ export interface RepoCounts {
   ignored: number;
 }
 
+// A repo's company/personal ownership (repo_company_mapping.mdx §1.1). `kind` is the split; `companyId` is
+// the owning company storage's id (null until that storage exists — auto-create is a later seam);
+// `displayName` is what the product shows ("Personal", or the friendly/derived company name); `source` is
+// auto-derived-from-git-remote vs. a user override; `host`/`ownerSlug` record the remote origin used.
+export interface RepoOwner {
+  kind: "personal" | "company";
+  companyId: string | null;
+  displayName: string;
+  source: "auto" | "manual";
+  host: string | null;
+  ownerSlug: string | null;
+}
+
 // One row of the Repos table (repos.mdx §1).
 export interface RepoRow {
   repoId: string; // stable hash of the absolute path
@@ -43,6 +56,7 @@ export interface RepoRow {
   lastPinAt: string | null;
   status: RepoStatus;
   pinned: boolean; // per-repo master toggle (one_repo.mdx §3.2)
+  owner?: RepoOwner; // company/personal mapping (repo_company_mapping.mdx §7) — drives left-bar grouping
 }
 
 // Per-file status for a task tab (task_tabs.mdx §4.4/§5/§6). "could" = an actionable candidate
@@ -67,6 +81,9 @@ export interface FileRow {
   // Transcribe task status (task_tabs.mdx §5) — "could" = audio/video with no .transcription sidecar yet,
   // "done" = a transcript exists, "na" = not audio/video.
   transcribe?: TaskStatus;
+  // AI-description task status (ai_description.mdx §11) — mirrors transcribe: "could" = image/video with no
+  // .ai_description sidecar yet, "done" = a description exists, "na" = not image/video (audio → transcription).
+  describe?: TaskStatus;
   // Decision provenance from the folded, team-shared ledger (decisions.mdx §10). Both null when the file
   // has no decision record yet (Undecided). `decidedBy` is the allow-listed email, the sentinel
   // "policy:<email>" for a policy auto-decision, or null when attribution is anonymous.
@@ -104,6 +121,8 @@ export interface TaskMetrics {
   alreadyCompressed: number; // media already compressed
   transcribable: number; // audio/video with no transcript yet ("could")
   transcribed: number; // audio/video that already have a transcript ("done")
+  describable: number; // image/video with no AI description yet ("could") — mirrors transcribable
+  described: number; // image/video that already have an AI description ("done")
   bigNotIgnored: number; // large files not yet git-ignored (the git-ignore nudge)
 }
 
@@ -128,6 +147,8 @@ export interface RepoDetail {
   missingPinned?: MissingPinnedFile[];
   // Per-tab "what could be done" metric counts for the task-tab MetricsStrip (task_tabs.mdx §2).
   taskMetrics?: TaskMetrics;
+  // Company/personal mapping (repo_company_mapping.mdx §7) — drives the Ownership section + grouping.
+  owner?: RepoOwner;
 }
 
 export type IpfsHealth = "ok" | "unreachable";
@@ -553,6 +574,13 @@ export interface SecuritySetupResult {
   restartRecommended: boolean;
 }
 
+// Where a repo's transcripts / AI descriptions are written (placement_radios.mdx). A FROZEN wire enum:
+//   • "lfbridge"  — the repo's hidden `.lfbridge/`, path-mirrored, ext appended (the default).
+//   • "beside"    — next to the media file (the beside-media layout, reintroduced as an opt-in).
+//   • "sync_repo" — the owning company/Personal LFB state-sync repo (only usable once one is configured;
+//                   falls back to "lfbridge" until then).
+export type PlacementChoice = "lfbridge" | "beside" | "sync_repo";
+
 // ── Per-repo settings (repo_settings.mdx) ───────────────────────────────────
 export interface RepoSettings {
   repoId: string;
@@ -579,6 +607,12 @@ export interface RepoSettings {
     shared: boolean;
     participants: string[];
   };
+  // Company/personal mapping shown in the Ownership section (repo_settings.mdx §6 / repo_company_mapping.mdx).
+  owner?: RepoOwner;
+  // Where transcripts land (repo_settings.mdx §4 / placement_radios.mdx). Default "lfbridge".
+  transcription: { placement: PlacementChoice };
+  // Where AI descriptions land (repo_settings.mdx §5) — the mirror of transcription. Default "lfbridge".
+  aiDescription: { placement: PlacementChoice };
 }
 
 // ── Scheduled workers — the transparency contract (scan.mdx §7, storage.mdx §13)

@@ -331,7 +331,98 @@ The pin pass that reconciles the incoming SDL against this computer's reality �
 
 ---
 
-## 6. Acceptance criteria
+## 6. Three homes for a repo's tracking state — reconciled with the mapped-directory model (LOCKED)
+
+Sections §1–§5 describe a **company/Personal** storage's SDL: its own root (`_large_files_bridge/`), its
+`.lfbridge/`, and the **mapped source directories** whose big files it tracks in place. This section
+reconciles that with a distinct, newer question the storages family raised: **where does an individual
+Git *repo*'s own tracking state live** — the `repo_storage.yaml`, the `files.yaml` fingerprint index, and
+the per-file sidecars — given that a working repo usually should **not** carry LFB's churny state in its
+committed history?
+
+A repo's tracking state has **three possible homes**. The umbrella and churn policy are authoritative
+elsewhere ([storages.mdx §8.1](./storages.mdx#81-the-churn-problem-and-the-three-homes-for-a-repos-tracking-state-locked),
+[artifact_placement_policy.mdx](./artifact_placement_policy.mdx)); this spec locks how each relates to the
+SDL model:
+
+| Home | Path | Is it an SDL? | Travels? | Chosen when |
+| --- | --- | --- | --- | --- |
+| **State root** (machine-local) | `~/T/_large_files_bridge/repos/<repoKey>/` | **No** — it is the non-syncing state root ([storage_local.mdx](./storage_local.mdx), the §1 table's right column) | **No** — rebuilt by rescan | Default, **below** the content threshold — the repo has produced no transcript/AI description yet |
+| **The repo's own `.lfbridge/`** | `<repoRoot>/.lfbridge/` | **Yes** — a repo storage **is** its own SDL (§1 consequence 1) | **Yes**, committed with the repo | **At/above** the content threshold — the repo produced a transcript or description worth carrying |
+| **The owning storage's state-sync repo** | `<syncRepo>/repos/<repoKey>/` | **Yes** — a *separate* SDL that carries **other repos'** state | **Yes**, via that repo's git backbone | The repo's **owner** (company/Personal) has **configured a state-sync repo** ([storage_settings.mdx §4b](./storage_settings.mdx#4b-the-state-sync-repo--configuring-where-owned-repos-tracking-state-travels)) |
+
+Two clarifications this locks against the rest of the spec:
+
+* **The state root's `repos/<repoKey>/` is NOT an SDL.** It is exactly the machine-local, non-syncing
+  bookkeeping the §1 table's right column names — it never travels, and a rescan rebuilds it. It is the
+  **default** landing place for a repo's tracking state precisely because, below the content threshold,
+  that state is not yet worth syncing.
+* **The state-sync repo IS an SDL — but a shared, cross-repo one.** Unlike a mapped-directory SDL (which
+  carries **its own** storage's metadata, §2) or a repo's own `.lfbridge/` (which carries **that repo's**
+  metadata), a state-sync repo carries the tracking state of **many other repos**, each namespaced under
+  `repos/<repoKey>/`. It is a first-class SDL by §1's definition — small text that travels over a git
+  backbone — just one whose contents are keyed by `repoKey` rather than by mapped-directory `key`.
+
+```
+# the state-sync repo is an SDL whose payload is other repos' tracking state, keyed by <repoKey>
+<syncRepo>/                                  ← e.g. ~/BGit/Bryan_git/act3_state_sync/  (an SDL, §1)
+├── .lfbridge/storage.yaml                    ← its own descriptor (type: company or personal)
+└── repos/
+    ├── act3-webapp/                           ← <repoKey> namespace — NOT this SDL's mapped dirs
+    │   ├── repo_storage.yaml                  ←   the owned repo's repo-wide facts (repo_tracking_scheme.mdx §2)
+    │   ├── files.yaml                         ←   the owned repo's fingerprint index (storages.mdx §4.1)
+    │   └── <rel-dir>/<name.ext>.transcription ←   artifacts routed here by the repo's placement radio (§7)
+    └── act3-ai-service/
+        └── repo_storage.yaml
+```
+
+Which of the three homes a given repo's tracking state uses — and thus which SDL (if any) it writes to — is resolved in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `resolveTrackingHome(repoKey)`, drawing the state root from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveStateDir()` and the owner's configured state-sync repo from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getStateSyncRepo()`.
+
+---
+
+## 7. Owner mapping routes tracking state to the owning storage's SDL
+
+The third home (§6) begs a question: **whose** state-sync repo? The answer is the repo's **owner** — the
+company or Personal storage every repo maps to. That mapping is owned end-to-end by
+[repo_company_mapping.mdx](./repo_company_mapping.mdx) (default **Personal**; a forge **ORG** in the git
+remote → auto **company**; renamable + reassignable) and is **not** redefined here. Its consequence for
+the syncable-data-location model **is**:
+
+* **The owner is which SDL a loose repo's state travels through.** A **Personal-owned** repo routes its
+  tracking state (when the third home applies) to the **[Personal storage](./storage_personal.mdx)**'s
+  state-sync repo; a **company-owned** repo routes to that **[company storage](./storage_company.mdx)**'s
+  state-sync repo, under the company allow-list.
+* **This is the same owner rule §4.2 already uses for loose artifacts.** [§4.2](#42-path-mirrored-under-lfbridge-extension-appended-for-transcript--description-locked)
+  routes a **loose media file's** transcript/description to the storage that **owns** it (most-specific
+  mapped directory, else Personal). The owner mapping generalizes that to a **whole repo's** tracking
+  state: the repo's owner storage is the SDL its state belongs to. The two rules are the same idea applied
+  at file-granularity vs. repo-granularity.
+* **Placement radios pick which class travels via the state-sync repo.** A repo's transcripts / AI
+  descriptions follow the per-repo **placement radio** ([repo_settings.mdx](./repo_settings.mdx),
+  [placement_radios.mdx](./placement_radios.mdx)): `.lfbridge/`, **beside the file**, or **the state-sync
+  repo**. When set to the state-sync repo, those artifacts travel with the **owner's** SDL
+  (`<syncRepo>/repos/<repoKey>/…`, extension appended) rather than with the working repo — the same
+  path-mirroring rule as §4.2, just rooted at the state-sync repo.
+
+Where each class of a repo's data lives and travels, once the owner and threshold are known:
+
+| Data class | Home | Travels via |
+| --- | --- | --- |
+| **Big-file bytes** | in place, under the repo working tree (git-ignored) | **IPFS** (never an SDL) |
+| **The repo's manifest / SyncList** | the repo's own committed area | the repo's git |
+| **Tracking state below the content threshold** | state root `~/T/_large_files_bridge/repos/<repoKey>/` | **does not travel** (machine-local) |
+| **Tracking state at/above the threshold** | the repo's own committed `.lfbridge/` | the repo's git |
+| **Tracking state when the owner configured a state-sync repo** | `<syncRepo>/repos/<repoKey>/` | the **owner storage's** git backbone |
+| **Transcripts / AI descriptions** | per the **placement radio** — `.lfbridge/`, beside the file, or `<syncRepo>/repos/<repoKey>/` | with whichever of those homes was chosen |
+| **A company/Personal storage's own metadata** (descriptor, mapped dirs, fingerprints of mapped files, bookmarks) | the storage's **own** SDL (`_large_files_bridge/.lfbridge/`, §2) | the storage's git backbone |
+
+Resolving the owner of a repo (to pick its state-sync repo) reuses the mapping the storages model already computes from the remote's forge org, defaulting to Personal, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `classifyByConvention()` / `buildRow()` (sets `companyName`); the authoritative repo→owner mapping it consumes is owned by [repo_company_mapping.mdx](./repo_company_mapping.mdx).
+
+---
+
+## 8. Acceptance criteria
 
 1. **SDL is a named, first-class concept:** the directory holding a storage's `.lfbridge/` + Sync List,
    which **travels** between the user's computers (and teammates for shared storages). It holds
@@ -352,6 +443,22 @@ The pin pass that reconciles the incoming SDL against this computer's reality �
    fetch/pin and where (via its graft), which were pinned/compressed/transcribed/described, and which
    are bookmarked — with **no** re-pinning to the wrong place and **no** regeneration of paid artifacts
    (§5).
+6. A **repo**'s tracking state lives in **one of three homes** (§6): the machine-local **state root**
+   `~/T/_large_files_bridge/repos/<repoKey>/` (**not** an SDL, does not travel — the default **below** the
+   content threshold), the repo's **own committed `.lfbridge/`** (an SDL — chosen **at/above** the content
+   threshold), or the owning storage's **state-sync repo** `<syncRepo>/repos/<repoKey>/` (a **shared,
+   cross-repo SDL** keyed by `repoKey` — chosen when the owner configured one). The churn policy + content
+   threshold are cross-linked, not redefined ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
+7. The state-sync repo **is** an SDL by §1's definition (small text over a git backbone) but a distinct
+   one: it carries **other repos'** tracking state under `repos/<repoKey>/`, not its own mapped-directory
+   metadata; the state root's `repos/<repoKey>/` is **not** an SDL (it is the machine-local, non-syncing
+   root of the §1 table's right column).
+8. Every repo's **owner** (company or Personal, default Personal; forge ORG → company —
+   [repo_company_mapping.mdx](./repo_company_mapping.mdx)) is **which** SDL its tracking state travels
+   through (§7) — the same owner rule §4.2 already uses to route a loose file's transcript/description,
+   applied at repo granularity. **Placement radios** ([repo_settings.mdx](./repo_settings.mdx),
+   [placement_radios.mdx](./placement_radios.mdx)) pick whether a repo's transcripts / AI descriptions
+   travel via the state-sync repo, `.lfbridge/`, or beside the file.
 
 <!--
   Introduces the LOCKED term "Syncable Data Location" (SDL) = the dir holding a storage's .lfbridge/ +
@@ -372,4 +479,18 @@ The pin pass that reconciles the incoming SDL against this computer's reality �
   ensureStorage/readDescriptor/writeDescriptor, tracking.service indexStorageFiles/LFBRIDGE_DIR,
   analysis.service analyzeFile (fingerprint-keyed), storage-settings.service getMappedDirs/setMappedDirs
   (new), pin.service pinAll. Keep in sync with devices.mdx and storage_company.mdx.
+  NEW §6–§7 (storages-family glue, reconciling the state-sync + owner-mapping concepts with the SDL model):
+  §6 = a REPO's tracking state has THREE homes (LOCKED) — state root ~/T/_large_files_bridge/repos/<repoKey>/
+  (NOT an SDL, doesn't travel, default below the CONTENT THRESHOLD) → the repo's own committed .lfbridge/
+  (an SDL, at/above threshold) → the owner's STATE-SYNC repo <syncRepo>/repos/<repoKey>/ (a SHARED cross-repo
+  SDL keyed by repoKey). Clarifies the state root repos/<repoKey>/ is NOT an SDL; the state-sync repo IS an
+  SDL but one carrying OTHER repos' state. §7 = the repo OWNER (company/Personal, repo_company_mapping.mdx —
+  cross-link, don't redefine) is WHICH SDL a repo's state travels through — same owner rule §4.2 already
+  uses for loose-file artifacts, applied at repo granularity; placement radios (repo_settings/
+  placement_radios) pick .lfbridge vs beside-file vs state-sync repo. Includes a where-each-data-class-
+  lives-and-travels table. Churn policy + content threshold OWNED by artifact_placement_policy.mdx.
+  New code: resolveTrackingHome(repoKey) in storage.service, getStateSyncRepo() in
+  storage-settings.service; classifyByConvention/buildRow supply the owner (companyName). Acceptance
+  §6–§8 added. Cross-links storages.mdx §8–§10, artifact_placement_policy.mdx, repo_company_mapping.mdx,
+  placement_radios.mdx, repo_settings.mdx, storage_local.mdx, storage_company.mdx, storage_personal.mdx.
 -->

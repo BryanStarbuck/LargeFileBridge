@@ -12,6 +12,7 @@
 // The engine never force-pushes and never touches a repo the user did not configure as a backbone
 // (git_backbone.mdx §7). An unresolvable merge or an auth failure is SURFACED (returned as a problem), never
 // clobbered — the caller keeps pinning over IPFS regardless. Node fs + simple-git only (charter).
+import type { RepoOwner } from "@lfb/shared";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -70,6 +71,65 @@ export function classifyRemoteVisibility(remoteUrl: string | null): "public" | "
   // Match the known public forge hosts across URL and scp-like SSH shapes (`git@github.com:…`).
   if (/\b(github\.com|gitlab\.com|bitbucket\.org|codeberg\.org|git\.sr\.ht)\b/i.test(r)) return "public";
   return "private";
+}
+
+// The public forge hosts we recognize for owner/organization parsing (repo_company_mapping.mdx §2). Same set
+// classifyRemoteVisibility trusts. On these, a repo URL carries `<host>/<owner>/<repo>`, and `<owner>` is the
+// GitHub org / GitLab group / user account.
+const KNOWN_FORGES = /(github\.com|gitlab\.com|bitbucket\.org|codeberg\.org|git\.sr\.ht)/i;
+
+/** The parsed pieces of a remote origin URL (repo_company_mapping.mdx §2), or null when it isn't a
+ *  host/owner/repo URL (a bare local path, or an unparseable shape). NO NETWORKING — pure string parsing per
+ *  the charter. Handles the scp-like (`git@host:owner/repo.git`), https, ssh://, and git:// shapes. */
+export function parseRemoteOwner(
+  remoteUrl: string | null,
+): { host: string; owner: string; repo: string; knownForge: boolean } | null {
+  const r = (remoteUrl ?? "").trim();
+  if (!r) return null;
+  // scp-like: git@github.com:Owner/Repo.git
+  let m = /^[\w.-]+@([\w.-]+):([^/]+)\/(.+?)(?:\.git)?\/?$/.exec(r);
+  // url forms: https://github.com/Owner/Repo.git · ssh://git@github.com/Owner/Repo · git://…
+  if (!m) m = /^(?:https?|ssh|git):\/\/(?:[^@/]+@)?([\w.-]+)(?::\d+)?\/([^/]+)\/(.+?)(?:\.git)?\/?$/.exec(r);
+  if (!m) return null;
+  const [, host, owner, repo] = m;
+  if (!host || !owner || !repo) return null;
+  return { host, owner, repo, knownForge: KNOWN_FORGES.test(host) };
+}
+
+/**
+ * Derive a repo's owner from its git remote (repo_company_mapping.mdx §3), conservatively toward Personal.
+ * A known-forge remote whose owner is NOT one of the user's personal accounts → a COMPANY named after the
+ * owner slug (the user can rename it later). No remote, an unparseable/self-hosted remote, or an owner that
+ * IS a personal account → Personal (the default catch-all owner). LIMITATION (§3.1): a plain
+ * `github.com/<owner>/<repo>` can't be told org-vs-user from the URL alone and we never call a forge API, so
+ * this errs toward Personal and lets the user promote to a company.
+ */
+export function deriveOwnerForRemote(
+  remote: string | null,
+  personalAccounts: string[] = [],
+): RepoOwner {
+  const parsed = parseRemoteOwner(remote);
+  const personalSet = new Set(personalAccounts.map((a) => a.toLowerCase()));
+  const isCompany =
+    !!parsed && parsed.knownForge && !personalSet.has(parsed.owner.toLowerCase());
+  if (isCompany && parsed) {
+    return {
+      kind: "company",
+      companyId: null,
+      displayName: parsed.owner,
+      source: "auto",
+      host: parsed.host,
+      ownerSlug: parsed.owner,
+    };
+  }
+  return {
+    kind: "personal",
+    companyId: null,
+    displayName: "Personal",
+    source: "auto",
+    host: parsed?.host ?? null,
+    ownerSlug: null,
+  };
 }
 
 /**

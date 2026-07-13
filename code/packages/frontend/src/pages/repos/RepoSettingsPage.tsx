@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "@tanstack/react-router";
 import { ChevronLeft } from "lucide-react";
 import { toast } from "sonner";
-import type { RepoSettings, SizeUnit } from "@lfb/shared";
+import type { RepoSettings, SizeUnit, PlacementChoice } from "@lfb/shared";
 import { SIZE_UNITS, toBytes } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { clientLog } from "../../lib/clientLog.js";
@@ -36,6 +36,36 @@ export function RepoSettingsPage() {
       </Link>
       <h1 className="mb-1 mt-2 text-2xl font-bold">Repo settings — {s.name}</h1>
       <div className="mb-6 text-sm text-black/50">{s.path}</div>
+
+      {s.owner && (
+        <Section title="Ownership">
+          <div className="text-sm text-black/70">
+            This repo maps to{" "}
+            {s.owner.kind === "company" ? (
+              <>
+                the <b>{s.owner.displayName}</b> company
+              </>
+            ) : (
+              <b>Personal</b>
+            )}
+            {s.owner.source === "auto" && s.owner.kind === "company" && s.owner.host && s.owner.ownerSlug && (
+              <span className="text-black/50">
+                {" "}
+                — auto-detected from {s.owner.host}/{s.owner.ownerSlug}
+              </span>
+            )}
+            {s.owner.source === "auto" && s.owner.kind === "personal" && (
+              <span className="text-black/50"> — no organization detected in the git remote</span>
+            )}
+            .
+          </div>
+          <p className="mt-2 text-xs text-black/45">
+            Company mapping is auto-derived from the git remote. Renaming a company and reassigning a repo
+            between a company and Personal arrive with the Storages left-bar company entries
+            (repo_company_mapping.mdx §5–§6).
+          </p>
+        </Section>
+      )}
 
       <Section title="Pin">
         <Toggle label="Pinned (bridge this repo's big files)" checked={s.pinned}
@@ -75,6 +105,24 @@ export function RepoSettingsPage() {
         <Toggle label="Publish committed manifest (git carries the list)" checked={s.pin.publishManifest} onChange={(v) => patch.mutate({ pin: { ...s.pin, publishManifest: v } })} />
       </Section>
 
+      {s.transcription && (
+        <PlacementSection
+          title="Transcription placement"
+          blurb="Where transcripts generated for this repo are written."
+          value={s.transcription.placement}
+          onChange={(v) => patch.mutate({ transcription: { placement: v } })}
+        />
+      )}
+
+      {s.aiDescription && (
+        <PlacementSection
+          title="AI description placement"
+          blurb="Where AI descriptions generated for this repo are written — the mirror of transcription."
+          value={s.aiDescription.placement}
+          onChange={(v) => patch.mutate({ aiDescription: { placement: v } })}
+        />
+      )}
+
       <Section title="Sharing">
         <Toggle label="Shared with other allow-listed participants" checked={s.access.shared}
           onChange={(v) => patch.mutate({ access: { ...s.access, shared: v } })} />
@@ -106,6 +154,54 @@ function GlobField({ label, value, placeholder, onSave }: {
         onChange={(e) => setDraft(e.target.value)}
         className="w-full rounded border border-[var(--lfb-border)] px-2 py-1 font-mono text-xs" />
     </label>
+  );
+}
+
+// The shared 3-way artifact-placement radio (placement_radios.mdx / repo_settings.mdx §4-5). Used by the
+// Transcription and AI-descriptions sections. "sync_repo" is disabled until a company state-sync repo is
+// configured (that settings surface is a later seam); switching only affects FUTURE artifacts.
+const PLACEMENT_OPTIONS: { value: PlacementChoice; label: string; helper: string; disabled?: boolean }[] = [
+  {
+    value: "lfbridge",
+    label: "In this repo's hidden .lfbridge/ folder",
+    helper: "Default — path-mirrored inside the repo, travels with it. Written only once the repo has produced its first transcript or AI description.",
+  },
+  {
+    value: "beside",
+    label: "Next to the file",
+    helper: "Written beside the media in the same folder (not a hidden directory).",
+  },
+  {
+    value: "sync_repo",
+    label: "In the company's Large File Bridge state-sync repo",
+    helper: "Available once a company state-sync repo is configured.",
+    disabled: true,
+  },
+];
+
+function PlacementSection({ title, blurb, value, onChange }: {
+  title: string; blurb: string; value: PlacementChoice; onChange: (v: PlacementChoice) => void;
+}) {
+  return (
+    <Section title={title}>
+      <p className="mb-2 text-sm text-black/60">{blurb}</p>
+      {PLACEMENT_OPTIONS.map((o) => (
+        <label key={o.value} className={`flex items-start gap-2 py-1 text-sm ${o.disabled ? "opacity-50" : "cursor-pointer"}`}>
+          <input
+            type="radio"
+            name={title}
+            checked={value === o.value}
+            disabled={o.disabled}
+            onChange={() => { if (!o.disabled) onChange(o.value); }}
+            className="mt-0.5"
+          />
+          <span>
+            <span className="text-black/80">{o.label}</span>
+            <span className="block text-xs text-black/50">{o.helper}</span>
+          </span>
+        </label>
+      ))}
+    </Section>
   );
 }
 

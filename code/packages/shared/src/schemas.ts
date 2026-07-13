@@ -325,6 +325,14 @@ export const RepoUnitConfigSchema = z.object({
       participants: z.array(z.string()).default([]),
     })
     .default({}),
+  // Where this repo's transcripts / AI descriptions are written (repo_settings.mdx §4/§5,
+  // placement_radios.mdx). Frozen wire enum lfbridge | beside | sync_repo; both default to lfbridge.
+  artifacts: z
+    .object({
+      transcription_placement: z.enum(["lfbridge", "beside", "sync_repo"]).default("lfbridge"),
+      ai_description_placement: z.enum(["lfbridge", "beside", "sync_repo"]).default("lfbridge"),
+    })
+    .default({}),
   // Per-file decisions (one_repo.mdx §1). Keyed by relative path. The "sync" value is a FROZEN wire
   // literal (= add-to-IPFS / pin) that travels between computers — do not rename it.
   decisions: z.record(z.enum(["sync", "ignore", "undecided"])).default({}),

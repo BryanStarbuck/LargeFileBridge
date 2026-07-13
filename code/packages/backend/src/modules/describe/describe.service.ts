@@ -16,7 +16,9 @@ import { expandHome } from "../fs/badges.js";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
 import { appConfigPath } from "../../shared/store/scopes.js";
 import { googleApiKeyFileInfo } from "../../config/google-apikey-file.js";
-import { resolveArtifactPlacement, lfbridgeArtifactPath, AI_DESCRIPTION_EXT } from "../storage/artifact-placement.service.js";
+import { resolveArtifactPlacement, artifactPathForPlacement, AI_DESCRIPTION_EXT } from "../storage/artifact-placement.service.js";
+import { markDurableArtifact } from "../storage/tracking-root.service.js";
+import { repoArtifactPlacement } from "../store-model/units.service.js";
 import { track } from "../progress/progress.registry.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
 import { getPrompt } from "./prompts.js";
@@ -49,7 +51,9 @@ export function resolveDescriptionPath(absFile: string): {
   needsSetup: boolean;
 } {
   const p = resolveArtifactPlacement(absFile);
-  const descriptionPath = lfbridgeArtifactPath(p.root, p.rel, AI_DESCRIPTION_EXT);
+  // Honor the repo's AI-description placement radio (repo_settings.mdx §5) — the mirror of transcription.
+  const placement = repoArtifactPlacement(p.root, "aiDescription");
+  const descriptionPath = artifactPathForPlacement(p.root, p.rel, AI_DESCRIPTION_EXT, placement);
   return { root: p.root, rel: p.rel, descriptionPath, needsSetup: p.needsSetup };
 }
 
@@ -212,6 +216,9 @@ export async function describeOne(
       }),
       "utf8",
     );
+    // Cross the content threshold (artifact_placement_policy.mdx §2): an AI description ALONE is a durable
+    // user artifact, so this repo's `.lfbridge/` tracking placement is justified from here on (one-way latch).
+    markDurableArtifact(root);
     log.info("describe", `${abs} → ${descriptionPath} (${adapter.id}/${model}, ${text.length} chars)`);
     return result(abs, "described", descriptionPath, model, null);
   } catch (e) {

@@ -3,11 +3,11 @@
 // first"), which files the table shows (rowFilter), which metric panels the strip shows, and the
 // hover-region default hint. OneRepoPage reads TASK_TABS[activeTab] and projects its table + strip.
 import type { SortingState } from "@tanstack/react-table";
-import { LayoutGrid, Pin, Archive, Captions, type LucideIcon } from "lucide-react";
+import { LayoutGrid, Pin, Archive, Captions, ScanText, type LucideIcon } from "lucide-react";
 import { mediaKindForName, type FileRow } from "@lfb/shared";
 import type { MetricId } from "./metricWarnings.js";
 
-export type TaskTabId = "all" | "ipfs" | "compress" | "transcribe";
+export type TaskTabId = "all" | "ipfs" | "compress" | "transcribe" | "ai-descriptions";
 
 export interface TaskTabDef {
   id: TaskTabId;
@@ -38,7 +38,7 @@ export const TASK_TABS: Record<TaskTabId, TaskTabDef> = {
     columnIds: ["pinned", "gitignore", "path", "size", "decision", "decidedBy", "decidedAt", "status", "peers", "cid", "changed"],
     defaultSort: [{ id: "changed", desc: true }],
     rowFilter: () => true,
-    metrics: ["undecided", "pullDown", "notBackedUp", "compressibleVideos", "compressibleImages", "transcribable", "bigNotIgnored"],
+    metrics: ["undecided", "pullDown", "notBackedUp", "compressibleVideos", "compressibleImages", "transcribable", "describable", "bigNotIgnored"],
     defaultHint: "All large files in this repo. Hover a file for details, or pick a task tab to focus.",
   },
   // IPFS — pinning across your computers. Large or media files; sort by fewest peers (not-backed-up on
@@ -89,6 +89,22 @@ export const TASK_TABS: Record<TaskTabId, TaskTabDef> = {
     metrics: ["transcribable", "transcribed"],
     defaultHint: "Transcribe: audio and video files. Files with no transcript yet are on top.",
   },
+  // AI descriptions — the mirror of Transcribe for the OTHER media axis (images + video). Its status icon is
+  // the LEADING, header-less control column (like Transcribe/Compress). "could" (no description) sorts first,
+  // then biggest. Audio never appears here (transcription covers it).
+  "ai-descriptions": {
+    id: "ai-descriptions",
+    label: "AI descriptions",
+    icon: ScanText,
+    columnIds: ["describe", "path", "size", "kind", "changed"],
+    defaultSort: [
+      { id: "describe", desc: false },
+      { id: "size", desc: true },
+    ],
+    rowFilter: (f) => f.describe === "could" || f.describe === "done",
+    metrics: ["describable", "described"],
+    defaultHint: "AI descriptions: images and videos. Files with no AI description yet are on top.",
+  },
 };
 
-export const TASK_TAB_ORDER: TaskTabId[] = ["all", "ipfs", "compress", "transcribe"];
+export const TASK_TAB_ORDER: TaskTabId[] = ["all", "ipfs", "compress", "transcribe", "ai-descriptions"];

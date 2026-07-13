@@ -12,7 +12,9 @@ import { transcribeWithEngine, canTranscribe as engineCanTranscribe } from "../.
 import { getAppConfig } from "../store-model/config.service.js";
 import { HARD_SKIP } from "../../shared/scan-filters.js";
 import { expandHome } from "../fs/badges.js";
-import { resolveArtifactPlacement, lfbridgeArtifactPath, TRANSCRIPTION_EXT } from "../storage/artifact-placement.service.js";
+import { resolveArtifactPlacement, artifactPathForPlacement, TRANSCRIPTION_EXT } from "../storage/artifact-placement.service.js";
+import { markDurableArtifact } from "../storage/tracking-root.service.js";
+import { repoArtifactPlacement } from "../store-model/units.service.js";
 import { getStorageDetail } from "../storage/storage.service.js";
 import { track } from "../progress/progress.registry.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
@@ -48,7 +50,10 @@ export function resolveTranscriptPath(absFile: string): {
   needsSetup: boolean;
 } {
   const p = resolveArtifactPlacement(absFile);
-  const transcriptPath = lfbridgeArtifactPath(p.root, p.rel, TRANSCRIPTION_EXT);
+  // Honor the repo's transcription placement radio (repo_settings.mdx §4): .lfbridge/ (default), beside the
+  // media, or the state-sync repo. Falls back to .lfbridge/ for an unregistered root or an unconfigured sync repo.
+  const placement = repoArtifactPlacement(p.root, "transcription");
+  const transcriptPath = artifactPathForPlacement(p.root, p.rel, TRANSCRIPTION_EXT, placement);
   return { root: p.root, rel: p.rel, transcriptPath, needsSetup: p.needsSetup };
 }
 
@@ -84,7 +89,7 @@ export async function transcribeOne(input: string, overwrite = false): Promise<T
     return result(abs, "skipped", null, null, "not an audio/video file");
   }
 
-  const { transcriptPath, needsSetup } = resolveTranscriptPath(abs);
+  const { root, transcriptPath, needsSetup } = resolveTranscriptPath(abs);
   // First-time gate (§3.5): no Personal storage exists and nothing owns this file — don't write somewhere
   // surprising; tell the UI to run the setup wizard. Never produces a file.
   if (needsSetup) {
@@ -108,7 +113,12 @@ export async function transcribeOne(input: string, overwrite = false): Promise<T
   );
   const status: TranscribeResult["status"] =
     r.status === "transcribed" ? "transcribed" : r.status === "no_audio" ? "no_audio" : r.status === "tool_missing" ? "tool_missing" : "failed";
-  if (status === "transcribed") log.info("transcribe", `${abs} → ${transcriptPath} (${r.words ?? 0} words, ${r.engineUsed})`);
+  if (status === "transcribed") {
+    // Cross the content threshold (artifact_placement_policy.mdx §2): this repo has now produced a durable
+    // user artifact, so its `.lfbridge/` tracking placement is justified from here on (a one-way latch).
+    markDurableArtifact(root);
+    log.info("transcribe", `${abs} → ${transcriptPath} (${r.words ?? 0} words, ${r.engineUsed})`);
+  }
   return result(abs, status, r.outputPath, r.words, r.reason);
 }
 

@@ -6,8 +6,8 @@
 // primary (the worst-first top one) resolve the identical popup. Previously these lived inline in
 // OneRepoPage's RepoVerdict banner; the banner is gone (metric panels replace it, task_tabs.mdx §2.6), so
 // the builders moved here where the tiles and the header button can share them.
-import type { RepoDetail } from "@lfb/shared";
-import { formatBytes } from "@lfb/shared";
+import type { RepoDetail, FileRow } from "@lfb/shared";
+import { formatBytes, mediaKindForName } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import type { WarningDef } from "../../components/ui/warnings/registry.js";
 import type { MetricId } from "./metricWarnings.js";
@@ -195,6 +195,137 @@ export function buildUndecidedWarning(detail: RepoDetail, repoId: string): Warni
   };
 }
 
+/** The file's absolute path — FileRow.path is repo-relative, so join it onto the repo root (the same join
+ *  OneRepoPage uses for every per-file action). This is what the batch endpoints expect. */
+function absPath(detail: RepoDetail, f: FileRow): string {
+  return `${detail.path}/${f.path}`;
+}
+
+/** Transcribable audio/video with no transcript yet — the "N ready to transcribe" tile's educate-and-fix
+ *  popup (Transcribe.mdx / task_tabs.mdx §5). Null when nothing is transcribable. Clicking the Transcribable
+ *  tile (or the blue "Transcribe ›" header primary) opens this; Apply hands the checked files to the local,
+ *  offline engine as a background job. */
+export function buildTranscribeWarning(detail: RepoDetail, repoId: string): WarningDef | null {
+  const files = detail.files.filter((f) => f.transcribe === "could");
+  if (files.length === 0) return null;
+  const n = files.length;
+  return {
+    id: "repo-files-transcribable",
+    state: "warn",
+    scope: "file",
+    headline: `${n} file${n === 1 ? " is" : "s are"} ready to transcribe`,
+    sub: "Large File Bridge can generate a text transcript for each locally — nothing runs until you apply.",
+    popup: {
+      whatThisIs: `Large File Bridge found ${n} audio/video file${n === 1 ? "" : "s"} in this repo with no transcript yet. It can transcribe ${n === 1 ? "it" : "them"} on this computer with a local, offline engine — no file ever leaves your machine.`,
+      whyItMatters:
+        "A transcript makes a recording searchable, quotable, and readable without scrubbing the timeline. It runs in the background and, when done, is saved per your repo's transcription placement setting. Review the list on the right and uncheck any you want to skip.",
+      targets: files.map((f) => ({
+        id: absPath(detail, f),
+        label: f.path,
+        sublabel: formatBytes(f.sizeBytes),
+      })),
+      targetNoun: "file",
+      actionLabel: "Transcribe",
+      canApply: () => true,
+      progress: {
+        kind: "transcribe",
+        target: detail.name,
+        doneLabel: (_sel, count) => `${count} file${count === 1 ? "" : "s"} queued to transcribe`,
+        invalidate: [["repo", repoId]],
+      },
+      apply: async (_sel, checkedPaths) => {
+        await api.transcribeBatch(checkedPaths);
+      },
+    },
+  };
+}
+
+/** Describable images/videos with no AI description yet — the "N describable" tile's educate-and-fix popup
+ *  (ai_description.mdx §12 / task_tabs.mdx §4.5). The mirror of buildTranscribeWarning. Null when nothing is
+ *  describable. Apply hands the checked files to the configured AI provider as a background `describe` job. */
+export function buildDescribeWarning(detail: RepoDetail, repoId: string): WarningDef | null {
+  const files = detail.files.filter((f) => f.describe === "could");
+  if (files.length === 0) return null;
+  const n = files.length;
+  return {
+    id: "repo-files-describable",
+    state: "warn",
+    scope: "file",
+    headline: `${n} file${n === 1 ? " is" : "s are"} ready for an AI description`,
+    sub: "Large File Bridge can generate an AI description for each image/video — nothing runs until you apply.",
+    popup: {
+      whatThisIs: `Large File Bridge found ${n} image/video file${n === 1 ? "" : "s"} in this repo with no AI description yet. It can generate one for each with your configured AI provider.`,
+      whyItMatters:
+        "An AI description makes an image or video searchable and captioned without opening it. Each file is sent to your configured AI provider; add a key in Settings → AI credentials first. Review the list on the right and uncheck any you want to skip.",
+      targets: files.map((f) => ({
+        id: absPath(detail, f),
+        label: f.path,
+        sublabel: formatBytes(f.sizeBytes),
+      })),
+      targetNoun: "file",
+      actionLabel: "Describe",
+      canApply: () => true,
+      progress: {
+        kind: "describe",
+        target: detail.name,
+        doneLabel: (_sel, count) => `${count} file${count === 1 ? "" : "s"} queued to describe`,
+        invalidate: [["repo", repoId]],
+      },
+      apply: async (_sel, checkedPaths) => {
+        await api.describeBatch(checkedPaths);
+      },
+    },
+  };
+}
+
+/** Compressible media (video and/or image) — the "N compressible" tile's educate-and-fix popup
+ *  (compression.mdx / task_tabs.mdx §6). `kind` narrows to just videos or just images so the videos-tile and
+ *  the images-tile each scope to their own files; undefined targets all compressible media (used by the
+ *  header primary). Null when nothing matches. Apply queues a background compress pass over the checked files. */
+export function buildCompressWarning(
+  detail: RepoDetail,
+  repoId: string,
+  kind?: "video" | "image",
+): WarningDef | null {
+  const files = detail.files.filter((f) => {
+    if (f.compress !== "could") return false;
+    if (!kind) return true;
+    return mediaKindForName(f.path.slice(f.path.lastIndexOf("/") + 1)) === kind;
+  });
+  if (files.length === 0) return null;
+  const n = files.length;
+  const noun = kind ?? "file";
+  return {
+    id: kind ? `repo-files-compressible-${kind}` : "repo-files-compressible",
+    state: "warn",
+    scope: "file",
+    headline: `${n} ${noun}${n === 1 ? "" : "s"} look${n === 1 ? "s" : ""} uncompressed`,
+    sub: "Large File Bridge can compress these to reclaim space — the originals move to LFBridge trash (recoverable).",
+    popup: {
+      whatThisIs: `Large File Bridge found ${n} ${noun}${n === 1 ? "" : "s"} that look uncompressed and could be made smaller with no meaningful quality loss. Compression runs on this computer; the original moves to the recoverable LFBridge trash.`,
+      whyItMatters:
+        "Uncompressed media wastes disk and slows every sync over IPFS. Compressing reclaims space while keeping the same resolution. Review the list on the right and uncheck any you want to leave as-is.",
+      targets: files.map((f) => ({
+        id: absPath(detail, f),
+        label: f.path,
+        sublabel: formatBytes(f.sizeBytes),
+      })),
+      targetNoun: noun,
+      actionLabel: "Compress",
+      canApply: () => true,
+      progress: {
+        kind: "compress",
+        target: detail.name,
+        doneLabel: (_sel, count) => `${count} file${count === 1 ? "" : "s"} queued to compress`,
+        invalidate: [["repo", repoId]],
+      },
+      apply: async (_sel, checkedPaths) => {
+        await api.compressBatch(checkedPaths);
+      },
+    },
+  };
+}
+
 // ── Resolvers used by the tiles + the header primary ────────────────────────────────────────────────
 
 /** The educate-and-fix popup for a specific metric tile, or null when that metric has no popup yet (those
@@ -205,6 +336,14 @@ export function buildMetricWarning(id: MetricId, detail: RepoDetail, repoId: str
       return buildUndecidedWarning(detail, repoId);
     case "pullDown":
       return buildPullDownWarning(detail, repoId);
+    case "transcribable":
+      return buildTranscribeWarning(detail, repoId);
+    case "describable":
+      return buildDescribeWarning(detail, repoId);
+    case "compressibleVideos":
+      return buildCompressWarning(detail, repoId, "video");
+    case "compressibleImages":
+      return buildCompressWarning(detail, repoId, "image");
     default:
       return null;
   }
@@ -221,5 +360,13 @@ export function topRecommendation(
   if (pull) return { metricId: "pullDown", warning: pull };
   const undecided = buildUndecidedWarning(detail, repoId);
   if (undecided) return { metricId: "undecided", warning: undecided };
+  // Then the content-work recommendations (task_tabs.mdx §2.4): transcribe → compress. These make the header
+  // primary a blue "Transcribe ›" / "Compress ›" when a fresh scan found work and nothing worse is pending.
+  const transcribe = buildTranscribeWarning(detail, repoId);
+  if (transcribe) return { metricId: "transcribable", warning: transcribe };
+  const describe = buildDescribeWarning(detail, repoId);
+  if (describe) return { metricId: "describable", warning: describe };
+  const compress = buildCompressWarning(detail, repoId);
+  if (compress) return { metricId: "compressibleVideos", warning: compress };
   return null;
 }

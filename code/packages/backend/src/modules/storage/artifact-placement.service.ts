@@ -22,9 +22,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { ArtifactPlacementView } from "@lfb/shared";
+import type { ArtifactPlacementView, PlacementChoice } from "@lfb/shared";
 import { expandHome } from "../fs/badges.js";
 import { LFBRIDGE_DIR } from "./tracking.service.js";
+import { resolveStateSyncRepo } from "./tracking-root.service.js";
 import { listStoragesPage } from "./storage.service.js";
 import { resolveBackingLocations } from "./storage-settings.service.js";
 import { readSelfGraft } from "./devices.service.js";
@@ -205,6 +206,31 @@ export const AI_DESCRIPTION_EXT = ".ai_description";
  */
 export function lfbridgeArtifactPath(root: string, rel: string, ext: string): string {
   return path.join(root, LFBRIDGE_DIR, rel) + ext;
+}
+
+/**
+ * The artifact path for a chosen PLACEMENT (placement_radios.mdx / repo_settings.mdx §4-5). The per-repo
+ * setting picks WHERE the transcript/description lands:
+ *   • "lfbridge"  → `<root>/.lfbridge/<rel><ext>` (the default; {@link lfbridgeArtifactPath}).
+ *   • "beside"    → `<root>/<rel><ext>` — literally next to the media (the opt-in beside-media layout).
+ *   • "sync_repo" → `<syncRepo>/<rel><ext>` when the owning storage has a state-sync repo configured, else
+ *                   falls back to "lfbridge" (the sync-repo settings surface is a later seam).
+ * Switching the radio only changes WHERE FUTURE artifacts are written; existing ones stay put until a
+ * "move existing" action relocates them (repo_settings.mdx §4.3).
+ */
+export function artifactPathForPlacement(
+  root: string,
+  rel: string,
+  ext: string,
+  placement: PlacementChoice,
+): string {
+  if (placement === "beside") return path.join(root, rel) + ext;
+  if (placement === "sync_repo") {
+    const sync = resolveStateSyncRepo(root);
+    if (sync) return path.join(sync, rel) + ext;
+    // No state-sync repo configured yet → fall back to the default hidden `.lfbridge/`.
+  }
+  return lfbridgeArtifactPath(root, rel, ext);
 }
 
 /**
