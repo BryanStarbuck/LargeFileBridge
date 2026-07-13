@@ -38,6 +38,8 @@ Siblings this builds on and does not repeat:
   are the *editable* counterpart of the read-only `P` (pin) and `I` (git-ignored) badges (§6 here).
 * [warnings.mdx](./warnings.mdx) / [to_do.mdx](./to_do.mdx) — the popups whose subject list renders
   these toggles per row (§7 here).
+* [Task tabs](./task_tabs.mdx) — the per-repo screen's Transcribe/Compress **status icons**, which reuse
+  this toggle's box grammar (§9 here) but are *status* indicators, not two-axis decisions.
 
 ---
 
@@ -271,6 +273,30 @@ with the third **Compress** action axis.
    git-ignore, **and Compress** (`"compress"`, glyph **K**) — using the same component and four-state
    grammar; each column renders only when relevant to the set, axes are **pre-checked where recommended**,
    and the Apply label carries a **per-axis count** (§7). Table rows keep just the two decision axes.
+
+## 9. Status icons reuse this grammar — Transcribe & Compress (LOCKED)
+
+The per-repo screen's **task tabs** ([task_tabs.mdx](./task_tabs.mdx)) add two per-row **status icons** — a
+**Transcribe** icon (on the Transcribe tab) and a **Compress** icon (on the Compress tab) — that **reuse this
+spec's 16×16 box grammar** (§1) so the user recognizes them instantly. They are **not** decision toggles,
+though: they show a *task's status*, not one axis of the two-axis decision, so they do **not** write to
+`.lfbridge/decisions.yaml`. Two differences from the decision toggles:
+
+* **The "done" fill is not orange.** A finished action reads in its own color — **blue** for a completed
+  transcript, **green** for a completed compression — reserving solid orange for a decision that is *on*.
+* **Three states, not four.** They render **Done** (blue/green fill), **Could** (medium-orange
+  normal-thickness edge, 99%-white/1%-orange fill — the actionable state, mirroring **RECOMMENDED**'s
+  orange), and **Not applicable** (white fill, very-thin very-light-grey edge — like **OFF** but hairline).
+  There is no separate "on decision" state because the action either is done or is not.
+
+Authoritative definitions: [task_tabs.mdx §5](./task_tabs.mdx#5-the-transcribe-status-icon--three-states-locked)
+(Transcribe) and [task_tabs.mdx §6](./task_tabs.mdx#6-the-compress-status-icon--same-grammar-locked) (Compress).
+Both are **control cells** — click stops propagation and never navigates; the **Could** state queues the
+action (background job), the **Done** state views the output.
+
+Rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/TranscribeStatusIcon.tsx` — `TranscribeStatusIcon`
+and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/CompressStatusIcon.tsx` — `CompressStatusIcon`.
 
 <!--
   These are the inline UI for the two-axis decision (decisions.mdx). TWO toggles per row: Add-to-IPFS

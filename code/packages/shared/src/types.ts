@@ -45,6 +45,12 @@ export interface RepoRow {
   pinned: boolean; // per-repo master toggle (one_repo.mdx §3.2)
 }
 
+// Per-file status for a task tab (task_tabs.mdx §4.4/§5/§6). "could" = an actionable candidate
+// (a compressible-but-uncompressed media file / a transcribable file with no transcript yet); "done" =
+// the task is already handled; "na" = the task does not apply to this file kind. Drives the three-state
+// Transcribe/Compress status icons and the per-tab row filters + default sort.
+export type TaskStatus = "could" | "done" | "na";
+
 // One row of the files table on the One-repo screen (one_repo.mdx §1).
 export interface FileRow {
   fileId: string; // repoId + relative path (stable)
@@ -55,6 +61,12 @@ export interface FileRow {
   transfer: TransferStatus;
   peers: string[];
   changedAt: string;
+  // Compress task status (task_tabs.mdx §6) — from the extension verdict compressInfo(name): "could" =
+  // a video/image that looks uncompressed, "done" = already compressed, "na" = not a compressible kind.
+  compress?: TaskStatus;
+  // Transcribe task status (task_tabs.mdx §5) — "could" = audio/video with no .transcription sidecar yet,
+  // "done" = a transcript exists, "na" = not audio/video.
+  transcribe?: TaskStatus;
   // Decision provenance from the folded, team-shared ledger (decisions.mdx §10). Both null when the file
   // has no decision record yet (Undecided). `decidedBy` is the allow-listed email, the sentinel
   // "policy:<email>" for a policy auto-decision, or null when attribution is anonymous.
@@ -80,6 +92,21 @@ export interface MissingPinnedFile {
   addedByDevice: string | null; // the peer device that pinned it ("added by {device}")
 }
 
+// Per-tab "what could be done" metric counts (task_tabs.mdx §2.5). Rolled up from the file rows; the
+// MetricsStrip renders one panel per count for the active tab (a light-green big-0 when a count is 0).
+// `pullDown` is NOT here — it comes from RepoDetail.missingPinned.length (computed in the router).
+export interface TaskMetrics {
+  undecided: number; // files with no decision yet
+  pending: number; // sync files queued to transfer
+  notBackedUp: number; // sync files with a CID but 0 peers (live only on this machine)
+  compressibleVideos: number; // videos that look uncompressed
+  compressibleImages: number; // images that look uncompressed / convertible
+  alreadyCompressed: number; // media already compressed
+  transcribable: number; // audio/video with no transcript yet ("could")
+  transcribed: number; // audio/video that already have a transcript ("done")
+  bigNotIgnored: number; // large files not yet git-ignored (the git-ignore nudge)
+}
+
 // The One-repo detail payload: header/status strip + file rows.
 export interface RepoDetail {
   repoId: string;
@@ -96,6 +123,8 @@ export interface RepoDetail {
   // Files a peer computer of yours pinned that this computer lacks — drives the "pull them down" warning
   // (warnings.mdx §10.8.12). Empty/absent when there is nothing to pull.
   missingPinned?: MissingPinnedFile[];
+  // Per-tab "what could be done" metric counts for the task-tab MetricsStrip (task_tabs.mdx §2).
+  taskMetrics?: TaskMetrics;
 }
 
 export type IpfsHealth = "ok" | "unreachable";

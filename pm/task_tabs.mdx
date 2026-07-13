@@ -1,0 +1,409 @@
+---
+title: LargeFileBridge — Task Tabs (the per-repo file screen's All / IPFS / Compress / Transcribe tabs)
+description: The tab strip that sits a little right of center in the One-repo header (the repo name + Pin now + gear stay in place), with four tabs — All, IPFS, Compress, Transcribe — one selected at a time. Selecting a tab re-tunes EVERYTHING below it: the metrics-panel strip, the visible table columns, the default sort, and which files the table shows. The All tab is the overview and is metrics-forward; each metric panel is a terse label + a number, a light-green rounded rectangle with a big 0 when nothing is to be done, and a right chevron that opens that metric's warning popup. The IPFS / Compress / Transcribe tabs narrow the file set and columns to that one task. The Transcribe tab adds a three-state Transcribe status icon (filled blue = done · orange-edge/99%-white = could be transcribed · thin-light-grey edge = not applicable). To the right of the metrics panels is a hover-info region that shows contextual text for whatever the user hovers (a panel, a row, a tooltip target, an action link) so the panels themselves stay terse. Companion to one_repo.mdx (the page that hosts the tabs), warnings.mdx (the metric popups), decision_toggles.mdx (the toggle grammar the status icons echo), Transcribe.mdx / compression.mdx / ipfs_ui.mdx (the per-tab tasks), special_files.mdx (the classifier that scopes each tab), and non_intrusive_tooltip.mdx (the hover-info surface).
+---
+
+# LargeFileBridge — Task Tabs
+
+The **One-repo** screen ([one_repo.mdx](./one_repo.mdx)) is where the user does the work on a repo's large
+files. It now carries a **task tab strip** in its header — **a little right of center**, with the repo
+name/breadcrumb still on the left and **Pin now** + the settings **gear** still on the right. There are
+**four tabs**:
+
+| Tab | The one question it answers |
+| --- | --- |
+| **All** *(default)* | *"Across every task, what could I do on this repo right now?"* — the overview. |
+| **IPFS** | *"Which large files are pinned across my computers, and which still need a decision or a peer?"* |
+| **Compress** | *"Which videos and images could be compressed, and how big are they?"* |
+| **Transcribe** | *"Which audio/video files have no transcript yet?"* |
+
+**One tab is selected at a time, and selecting it re-tunes the whole surface below it** — the
+**metrics-panel strip**, the **visible table columns**, the **default sort**, and **which files the table
+shows**. This spec owns that tab system end to end; the sibling specs own their own tasks and only point
+here for how the tab presents them.
+
+The tab strip and the per-tab tuning are rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
+(mounts `TaskTabs` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/TaskTabs.tsx` and
+selects the active tab's column set + sort + filter + metrics from
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — `TASK_TABS`).
+
+This spec builds on the siblings and does not repeat them:
+
+* [one_repo.mdx](./one_repo.mdx) — the per-repo screen whose header hosts the tabs and whose files table
+  the tabs re-tune. The decision model (Add to IPFS (pin) / Ignore / Undecided), the files table, and the
+  header (Pin now, gear) are defined there; this spec adds the tab layer over them.
+* [warnings.mdx](./warnings.mdx) — the **educate-and-fix popup** each metric panel's chevron opens (§2.4),
+  and the metric-panel presentation (label + number + green-zero + chevron) it now also documents.
+* [decision_toggles.mdx](./decision_toggles.mdx) — the four-state toggle grammar the **Transcribe** /
+  **Compress** status icons echo (§5, §6) — same box, different "done" color because these are *status*
+  icons, not two-axis decisions.
+* [Transcribe.mdx](./Transcribe.mdx) · [compression.mdx](./compression.mdx) · [ipfs_ui.mdx](./ipfs_ui.mdx)
+  — the three tasks the task tabs surface.
+* [special_files.mdx](./special_files.mdx) — the classifier (`large` · `video/image/audio` · `compressible`
+  · `transcribable`) that scopes which files each tab shows (§4).
+* [non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx) — the hover-info surface, here rendered as the
+  **persistent side region** to the right of the metrics panels (§3).
+
+---
+
+## 1. The tab strip (LOCKED)
+
+### 1.1 Position and look
+
+* **Where.** In the One-repo **header row**, **a little right of center**. The `‹ Repos / <repo name>`
+  breadcrumb and muted path stay **left**; the **Pin now** primary button and the **gear** (Repo settings)
+  stay **right** ([one_repo.mdx §3.1](./one_repo.mdx#31-header)). The tabs sit between them.
+* **Look.** The house tab style already used by the File System tabs
+  (`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FsTabs.tsx` — `FsTabs`): a
+  horizontal row of tab buttons, each a small **leading icon + label**, with a **2px underline** in
+  `--lfb-primary` under the **active** tab (transparent under the others), active label at font-weight 500.
+* **Icons.** All → `LayoutGrid`; IPFS → `Pin` (the pin used everywhere for the Add-to-IPFS axis);
+  Compress → `Archive`; Transcribe → `Captions`.
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────────────┐
+│  ‹ Repos / Our_Movies              ▦ All   ⌂ IPFS   ▤ Compress   ⌯ Transcribe    ⚙   ⟳ Pin now │
+│  ~/BGit/…/Our_Movies                 ▔▔▔▔▔  (All active: 2px primary underline)                │
+└────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 1.2 Selecting a tab re-tunes four things (LOCKED)
+
+Switching tabs is a **client-side view change** — it never refetches the repo and never mutates
+anything. The active tab drives, in one place ([taskTabs.config.ts](./one_repo.mdx) — `TASK_TABS`):
+
+1. **The metrics-panel strip** — which "what could be done" panels show (§2, §4).
+2. **The visible table columns** — a tab-scoped column set (§4, §7).
+3. **The default sort** — what is most interesting for that task floats to the top (§4).
+4. **The row filter** — which files are appropriate for that task (§4); files outside the tab's scope are
+   hidden (still reachable on **All**).
+
+### 1.3 Active-tab state (LOCKED)
+
+* **Default = All** on every fresh open of a repo.
+* The active tab is **ephemeral view state** (React state on `OneRepoPage`), **not** written to
+  `config.yaml`. It is *not* a decision and *not* a per-user table preference — the per-user **sort /
+  filter** persistence ([tables.mdx §4](./tables.mdx)) still applies *within* whatever tab is active.
+* Switching tabs is **instant** (no spinner) — the file set is already loaded; the tab only re-projects it.
+
+---
+
+## 2. The metrics panels — the "what could be done" boxes (LOCKED)
+
+Above the table sits a horizontal strip of **metric panels**. Each panel is a **terse label + a number**
+answering *"how many of this thing could I do here?"* — e.g. `Undecided 5`, `Compressible videos 12`,
+`Transcribable 71`. **This is the surface the warnings live on** for this screen: on the **All** tab the
+panels are the whole focus (an at-a-glance overview of everything actionable); on a task tab only that
+task's panels show.
+
+The metrics strip is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricsStrip`
+(one `MetricPanel` per active-tab metric; counts from `RepoDetail` per §2.5).
+
+### 2.1 Anatomy of one panel (LOCKED)
+
+A panel is a small **rounded rectangle** holding, left to right:
+
+* a **terse label** — *what it is*, no sentence, no description text (the explanation lives in the
+  hover-info region, §3). One or two words: `Undecided`, `Not backed up`, `Pull down`, `Compressible
+  videos`, `Transcribable`.
+* the **number** — big, `tabular-nums`.
+* a **right chevron (`›`)** — always present; clicking it **opens that metric's warning popup** (§2.4).
+
+```
+┌──────────────────────┐   ┌──────────────────────┐   ┌──────────────────────┐
+│ Undecided        5  ›│   │ Not backed up    3  ›│   │ Compressible     0  ›│  ← green + big 0
+└──────────────────────┘   └──────────────────────┘   └──────────────────────┘
+   amber (actionable)         red (nothing backs it)      light-green (all good)
+```
+
+### 2.2 The green-zero state (LOCKED)
+
+When a panel's count is **0** — there is **nothing to do** for that metric — the panel is a **light-green
+filled rounded rectangle** (a faint green fill, the health "good" tint) showing a **big `0`**. This is the
+reassurance state: a wall of green zeros means the repo is fully handled. The chevron still renders (the
+popup opens to an empty/all-clear state), but the panel reads as *done*.
+
+### 2.3 Non-zero panels are health-tinted (LOCKED)
+
+A count `> 0` tints the panel by how much it wants attention, reusing the app health tokens
+(`components/ui/health.ts`):
+
+| Metric shape | Tint when `> 0` |
+| --- | --- |
+| **Not backed up** (sync files with 0 peers), **Missing / pull-down** | **red** — data is at risk / owed. |
+| **Undecided** (a decision is needed) | **accent / amber** — action needed, not an emergency. |
+| **Compressible videos / images**, **Transcribable**, **Big not git-ignored** | **amber** — an offer, at the user's leisure. |
+
+No panel ever carries a paragraph of description — **terse label + number only**; §3 supplies the words.
+
+### 2.4 The chevron opens the metric's warning popup (LOCKED)
+
+Every panel's **right chevron** is the same affordance as the blue arrow button elsewhere
+([warnings.mdx §4](./warnings.mdx)): it opens the **educate-and-fix popup** for that metric, scoped to the
+exact files the number counts. Examples:
+
+* **Undecided ›** → the triage popup listing the undecided files with the two decision toggles
+  ([decision_toggles.mdx §7](./decision_toggles.mdx#7-in-the-warning--to-do-batch-popups--three-axes-per-row-locked)).
+* **Pull down ›** → the "pull them down" popup ([warnings.mdx §10.8.12](./warnings.mdx)) of peer-pinned
+  files missing locally.
+* **Not backed up ›** → the pin/peer popup for `sync` files with 0 peers.
+* **Compressible videos ›** / **Compressible images ›** → the compress popup with the compress axis
+  ([compression.mdx](./compression.mdx)).
+* **Transcribable ›** → the transcribe popup ([transcribe_calc_engine.mdx §4](./transcribe_calc_engine.mdx)).
+* **Big not git-ignored ›** → the git-ignore popup ([git_ignore.mdx](./git_ignore.mdx)).
+
+A panel with a **green 0** opens the same popup in its **all-clear** state ("Nothing to do here").
+
+The chevron → popup wiring reuses the existing warning-arrow mechanism in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningArrowButton.tsx` —
+`WarningArrowButton` (opening `WarningPopup`), driven per-metric by a `WarningDef` resolved in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts`.
+
+### 2.5 Where the numbers come from (LOCKED)
+
+Every metric count is derived from the **`RepoDetail`** the backend already returns for the screen
+([one_repo.mdx §3.2](./one_repo.mdx)) plus the **per-file task classification** (§4.4). The backend joins
+each `FileRow` against the special-files classifier and the storage index so the counts are exact:
+
+* `counts.undecided`, `counts.pending`, `counts.ignored`, `counts.pinned` — already on `RepoDetail.counts`.
+* `missingPinned.length` → **Pull down**.
+* `sync` files with `peers.length === 0` → **Not backed up**.
+* per-file `compress` / `transcribe` state (§4.4) rolled up → **Compressible videos / images**,
+  **Transcribable**.
+* large-but-not-git-ignored → **Big not git-ignored**.
+
+The per-tab metric counts are computed by the backend in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
+`computeRepoDetail` (which now attaches `detail.taskMetrics`, joining `composeFileRows` with
+`classifySpecial` from `modules/scanner/special-file.service.ts` and `readStorageIndex`).
+
+---
+
+## 3. The hover-info region — the space to the right of the panels (LOCKED)
+
+The metric panels are deliberately **terse** (§2.1). Their explanations, and every other on-screen
+description, live in **one persistent text region to the right of the metrics strip**. It shows
+**contextual text for whatever the user is currently hovering** — so the panels stay clean and the words
+appear on demand, in a fixed place the eye can rely on.
+
+* **What drives it.** Hovering (or keyboard-focusing) **any** of these updates the region:
+  * a **metric panel** → what that metric means and what the popup will do (*"5 files LFBridge found
+    that you haven't decided on yet. Open to Add to IPFS, Git-ignore, or leave them."*);
+  * a **table row** → a one-line summary of that file for the active task (*"take_07.mov · 6.1 GB · video,
+    no transcript yet — could be transcribed."*);
+  * a **tooltip target** (a pill, a badge, a status icon) → the same text a floating tooltip would show;
+  * an **action link** (the page-action row, [page_actions.mdx](./page_actions.mdx)) → what that action
+    does and its current scope.
+* **Default (nothing hovered).** A short hint for the **active tab** (*"Transcribe: audio and video files
+  with no transcript yet. Hover a file for details."*).
+* **It is the non-intrusive tooltip surface, docked.** Same content model as
+  [non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx); here it is rendered as a **persistent side
+  region** instead of a floating bubble, so it never covers the row the user is reading and the panels
+  need no inline prose.
+
+The hover-info region and the hover-context bus that feeds it are rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` —
+`HoverInfoRegion` (subscribes to a small `useHoverInfo()` context set by panels, rows, tooltips, and action
+links).
+
+---
+
+## 4. Per-tab tuning (LOCKED) — filter · columns · sort · metrics
+
+Each tab declares four things. **Deep-thought defaults below** — every choice is "what is most useful for
+this task, first."
+
+### 4.1 All — the overview
+
+* **Filter:** none — **every** large file in the repo (the full set, [one_repo.mdx §4](./one_repo.mdx)).
+* **Columns:** the full standard set — `Pin`, `Ignore`, `File`, `Size`, `Decision`, `Status`, `Peers`,
+  `CID`, `Changed` (the responsive-priority rules still drop the least-important as it narrows,
+  [repos.mdx §3.2.1](./repos.mdx#321-responsive-column-priority--drop-the-least-important-column-as-the-table-narrows-locked)).
+* **Default sort:** **most-actionable first** — Undecided rows on top, then most-recently-changed
+  (`Changed` desc). The user lands on the decisions they still owe.
+* **Metrics (all of them):** `Undecided` · `Pull down` · `Not backed up` · `Compressible videos` ·
+  `Compressible images` · `Transcribable` · `Big not git-ignored`. This is the "everything actionable"
+  wall — mostly green zeros on a healthy repo.
+
+### 4.2 IPFS — pinning across your computers
+
+* **Filter:** IPFS-relevant files — **large OR media** (video/image/audio), matching the classifier's
+  `large`/`video`/`image`/`audio` categories ([special_files.mdx](./special_files.mdx)). (Small non-media
+  files that were never candidates don't appear.)
+* **Columns:** `Pin`, `Ignore`, `File`, `Size`, `Status` (transfer pill), `Peers`, `CID`, `Changed`. The
+  Compress/Transcribe status columns are **hidden** here.
+* **Default sort:** **by transfer urgency**, worst first — `missing`/`error` → `pending` → `undecided`
+  (needs a decision) → `pinned`; secondary **Size desc** so the biggest at-risk bytes lead. A `sync` file
+  with **0 peers** sorts above a comfortably-pinned one.
+* **Metrics:** `Undecided` · `Pull down` · `Not backed up` · `Pending`.
+
+### 4.3 Compress — reclaim space
+
+* **Filter:** compressible-relevant files — **videos and images** (`compressible` true, i.e. the
+  extension-based `compressState === "should"`, plus already-`done` ones shown muted so the user sees the
+  whole picture). Audio and non-media never appear (audio is never compressible — charter).
+* **Columns:** `File`, `Size`, **`Compress`** (the compress status icon, §6), `Kind` (video/image),
+  `Changed`. IPFS decision columns are hidden except a compact `Pin` is kept so the user can still pin
+  what they compress. (An **est. savings** column is a later add, driven by the learned size baseline —
+  [compression.mdx](./compression.mdx) — and is out of scope until the baseline exists.)
+* **Default sort:** **could-compress first**, then **Size desc** — the biggest reclaimable file at the top,
+  because that is the biggest win.
+* **Metrics:** `Compressible videos` · `Compressible images` · `Already compressed`.
+
+### 4.4 Transcribe — get transcripts
+
+* **Filter:** transcribable files only — **audio and video** (`transcribable` true;
+  [special_files.mdx §3](./special_files.mdx#3-the-transcribable-sub-flag--video-has-audio-and-audio)).
+  Images and non-media never appear.
+* **Columns:** `File`, `Size`, **`Transcribe`** (the three-state icon, §5), `Kind` (video/audio),
+  `Changed`. (A **duration** column is a later add once probed durations are indexed.)
+* **Default sort:** **could-transcribe first** (the orange "not yet" rows), then **Size desc**.
+* **Metrics:** `Transcribable` (could) · `Transcribed` (done).
+
+> **The per-file task fields these tabs read are new on `FileRow`.** Today `FileRow` carries only the
+> IPFS/decision axes. This feature adds two per-file task-status fields — `transcribe` and `compress` —
+> composed by the backend by joining each row against the classifier and the storage index (§2.5). See §7.
+
+---
+
+## 5. The Transcribe status icon — three states (LOCKED)
+
+The Transcribe tab (and, on All, an optional badge) shows a **Transcribe status icon** per row. It uses the
+lucide **`Captions`** glyph (transcript/subtitles) in a 16×16 box, and has **three** states — echoing the
+[decision-toggle](./decision_toggles.mdx) box grammar but with a **blue** "done" fill, because this is a
+**status/action** indicator, not a stored two-axis decision:
+
+| State | When | Fill | Edge | Glyph |
+| --- | --- | --- | --- | --- |
+| **Done** | The file **has a transcript** (a `.transcription` sidecar exists). | **solid blue** (`--lfb-pin` / the pin blue) | none | **white** |
+| **Could be transcribed** | The file is **audio or video and has no transcript yet** — it *could* be transcribed. | **99% white / 1% orange** (a barely-there orange wash) | **medium-orange, normal thickness** (`--lfb-decision-on`) | orange |
+| **Not applicable** | The file is **not** audio/video (or otherwise not transcribable). | **white** | **very thin, very-light-grey** (`--lfb-toggle-off-edge` at hairline weight) | faint grey |
+
+* The **orange "could" state is the actionable one** — it marks exactly a file the
+  [What-Can-Be-Transcribed engine](./transcribe_calc_engine.mdx) would pick up (audio, or video **with**
+  audio, no sidecar).
+* **Click behavior** (a control cell — stops propagation, never navigates the row):
+  * **Could →** offers/queues a transcription for that one file (an explicit-click action, background job,
+    watchable on [Processing](./processing.mdx)) — the same enqueue the transcribe popup uses.
+  * **Done →** opens/views the transcript.
+  * **Not applicable →** inert (no hover affordance beyond the hover-info text).
+* On the **Transcribe tab** the icon is its own **column**; the tab's default sort puts the orange "could"
+  rows first.
+
+The Transcribe status icon (three states, click-to-transcribe / click-to-view) is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/TranscribeStatusIcon.tsx` —
+`TranscribeStatusIcon` (state from `FileRow.transcribe`; done-blue token `--lfb-pin` in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/styles.css`, via the shared `StatusActionIcon`).
+
+---
+
+## 6. The Compress status icon — same grammar (LOCKED)
+
+The Compress tab shows a parallel **Compress status icon** per row, lucide **`Archive`** glyph, same
+three-state box grammar as §5 with its own "done" color:
+
+| State | When | Fill | Edge | Glyph |
+| --- | --- | --- | --- | --- |
+| **Done** | Already compressed (extension is already-lossy, or the in-file "LFBcompressed" marker is present). | **solid green** (health "good") | none | white |
+| **Could be compressed** | A video/image whose `compressState === "should"`. | 99% white / 1% orange | medium-orange, normal thickness | orange |
+| **Not applicable** | Not a compressible media type. | white | very thin, very-light-grey | faint grey |
+
+Click: **Could →** offers compression (explicit-click confirm, background job, [compression.mdx](./compression.mdx));
+**Done →** shows the compression record; **Not applicable →** inert. The Compress tab's default sort puts
+the orange "could" rows first, then Size desc.
+
+The Compress status icon is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/CompressStatusIcon.tsx` —
+`CompressStatusIcon` (state from `FileRow.compress`).
+
+---
+
+## 7. How a tab re-tunes the table (mechanism) (LOCKED)
+
+The whole tab system is **data-driven** from one config, so a tab is defined once and the page reads it:
+
+```ts
+// pages/repos/taskTabs.config.ts
+export type TaskTabId = "all" | "ipfs" | "compress" | "transcribe";
+
+export interface TaskTabDef {
+  id: TaskTabId;
+  label: string;
+  icon: LucideIcon;
+  columnIds: string[];                 // which of OneRepoPage's LfbColumns to show, in order
+  defaultSort: SortingState;           // the tab's "most interesting first" sort
+  rowFilter: (f: FileRow) => boolean;  // which files belong to this task
+  metrics: MetricId[];                 // which MetricPanels the strip shows
+}
+```
+
+* **Columns** — `OneRepoPage` defines the union of all columns once (adding the two new status columns
+  `transcribe` and `compress`); the active tab's `columnIds` selects and orders the subset. The
+  responsive-priority drop rule ([repos.mdx §3.2.1](./repos.mdx#321-responsive-column-priority--drop-the-least-important-column-as-the-table-narrows-locked))
+  still runs on whatever subset is visible.
+* **Sort** — the tab's `defaultSort` becomes the table's `defaultSort`; the user can still re-sort (header
+  click / dropdown) within the tab, and that choice persists per user per page
+  ([tables.mdx §4](./tables.mdx)).
+* **Filter** — `rowFilter` is applied to `detail.files` before the table sees them; the table's own
+  search/filter still narrow further within the tab.
+* **Metrics** — `metrics` selects which `MetricPanel`s the strip renders; each maps to a count (§2.5) and a
+  `WarningDef` (§2.4).
+
+The active-tab column/sort/filter/metric selection is applied in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
+(reads `TASK_TABS[activeTab]`, passes the projected `columns` + `defaultSort` to `DataTable` and the
+filtered `data`, and the tab's `metrics` to `MetricsStrip`).
+
+---
+
+## 8. Acceptance criteria
+
+1. The One-repo header shows a **tab strip a little right of center** — **All** (default), **IPFS**,
+   **Compress**, **Transcribe** — with the breadcrumb/name on the left and **Pin now** + **gear** on the
+   right; the active tab shows a 2px `--lfb-primary` underline.
+2. Selecting a tab re-tunes, in one client-side change (no refetch, no mutation), the **metrics strip**,
+   the **visible columns**, the **default sort**, and the **row filter** per §4.
+3. **All** is metrics-forward: the strip shows every actionable metric; a metric with **0** renders a
+   **light-green rounded rectangle with a big `0`**; a metric `> 0` is health-tinted per §2.3.
+4. Every metric panel is a **terse label + number + right chevron**, no description prose; the **chevron
+   opens that metric's warning popup** ([warnings.mdx §4](./warnings.mdx)) scoped to the counted files (or
+   its all-clear state at 0).
+5. To the **right of the metrics panels** is a **hover-info region** that shows contextual text for
+   whatever the user hovers — a panel, a table row, a tooltip target, or an action link — and a per-tab
+   default hint when nothing is hovered (§3).
+6. The **IPFS** tab filters to large/media files, shows the IPFS columns, and sorts by transfer urgency
+   (worst first) then Size desc (§4.2).
+7. The **Compress** tab filters to compressible videos/images, shows a **Compress status icon** column
+   (§6), and sorts could-compress-first then Size desc (§4.3).
+8. The **Transcribe** tab filters to audio/video, shows the **three-state Transcribe status icon** (§5) —
+   **solid blue = done**, **orange-edge / 99%-white = could be transcribed** (audio/video, no transcript),
+   **thin very-light-grey edge = not applicable** — and sorts could-transcribe-first then Size desc.
+9. The Transcribe/Compress status icons are **control cells** (stop propagation, never navigate): the
+   orange "could" state click **queues** the action (background job); the done state **views** the output;
+   the N/A state is inert.
+10. The per-file `transcribe` and `compress` task-status fields are composed on `FileRow` by the backend
+    (§2.5, §7) by joining the classifier + storage index; the per-tab metric counts come from the same
+    `RepoDetail`.
+
+<!--
+  Task Tabs = the All / IPFS / Compress / Transcribe tab strip in the One-repo header (right of center;
+  Pin now + gear stay right, breadcrumb stays left). Selecting a tab re-tunes FOUR things: metrics strip,
+  visible columns, default sort, row filter (client-side; no refetch, no mutation). Default = All
+  (ephemeral state, NOT config.yaml). METRIC PANELS: terse label + number + right chevron; chevron opens
+  that metric's warning popup (warnings.mdx §4); count 0 => LIGHT-GREEN rounded rect w/ big 0; >0 =
+  health-tinted (red=at-risk, amber/accent=action). HOVER-INFO REGION to the right of the panels shows
+  text for whatever is hovered (panel/row/tooltip/action link) — the non_intrusive_tooltip surface docked.
+  PER TAB (§4): All=all files, full cols, undecided-first; IPFS=large|media, IPFS cols, transfer-urgency
+  sort; Compress=compressible video/image, Compress icon col, could-first+size-desc; Transcribe=audio/video,
+  Transcribe 3-state icon, could-first+size-desc. TRANSCRIBE ICON (§5, Captions glyph): Done=solid BLUE ·
+  Could(audio/video, no .transcription)=orange normal-edge + 99%-white/1%-orange fill · N/A=white +
+  very-thin very-light-grey edge. COMPRESS ICON (§6, Archive glyph) same grammar, GREEN done. New FileRow
+  fields: transcribe, compress (backend join classifySpecial + readStorageIndex). Code: TaskTabs.tsx,
+  taskTabs.config.ts, MetricsStrip.tsx/MetricPanel, HoverInfoRegion.tsx, TranscribeStatusIcon.tsx,
+  CompressStatusIcon.tsx; units.service.ts computeRepoDetail attaches taskMetrics + per-file task status.
+  Keep aligned with one_repo.mdx (host), warnings.mdx (popups + metric-panel presentation), decision_toggles.mdx
+  (toggle grammar the icons echo), Transcribe.mdx/compression.mdx/ipfs_ui.mdx (tasks), special_files.mdx
+  (classifier), non_intrusive_tooltip.mdx (hover surface), tables.mdx (per-tab column visibility + sort persistence).
+-->

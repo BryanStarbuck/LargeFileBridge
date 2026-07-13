@@ -32,6 +32,9 @@ Siblings this builds on and does not repeat:
   determinate card shows while Whisper runs (§5.1).
 * [special_files.mdx](./special_files.mdx) — the classifier that sets the **`transcribable`** sub-flag
   (video — because it carries an audio track — and audio), i.e. *which* files this engine may run over.
+* [Task tabs](./task_tabs.mdx) — the per-repo screen's **Transcribe tab**, where audio/video files are
+  surfaced with a three-state **Transcribe status icon**; opening the tab filters the file table to
+  transcribable files and sorts the not-yet-transcribed ones to the top.
 * [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx) — a completed transcription appends a
   **`transcribe` event** to the file's per-file sidecar (`output:` → the `.transcription` path) and a
   `TRANSCRIBE` line to the per-computer history log, and increments `repo_storage.yaml → counts.transcribed`.
@@ -518,6 +521,27 @@ transcribe slugs are self-clearing as the user works through them.
 The transcribe slug, its default-checked ~80% popup, and the "Transcribe N files" Apply that enqueues the
 background jobs are implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TranscribeBatchPopup` (the popup + Apply) and `ShowTranscribableLink` (the "Show what could be transcribed" trigger).
+
+## 9. The Transcribe status icon & the Transcribe tab (LOCKED)
+
+On the per-repo screen ([one_repo.mdx](./one_repo.mdx)) the **Transcribe tab**
+([task_tabs.mdx §4.4](./task_tabs.mdx#44-transcribe--get-transcripts)) narrows the files table to
+**transcribable** files (audio, or video with audio — [special_files.mdx §3](./special_files.mdx#3-the-transcribable-sub-flag--video-has-audio-and-audio))
+and adds a per-row **Transcribe status icon** (lucide `Captions`) with **three** states — the authoritative
+definition is [task_tabs.mdx §5](./task_tabs.mdx#5-the-transcribe-status-icon--three-states-locked):
+
+* **Done** — the file has a `.transcription` sidecar → **solid blue** icon.
+* **Could be transcribed** — audio/video with **no** sidecar yet (exactly this engine's candidate) →
+  **medium-orange normal-thickness edge, 99%-white / 1%-orange fill**. Clicking it **queues** a transcription
+  for that one file (a background job, [processing.mdx](./processing.mdx)) — the same enqueue the transcribe
+  popup uses.
+* **Not applicable** — not audio/video → **white fill, very-thin very-light-grey edge** (inert).
+
+The tab's default sort puts the orange "could" rows first (most work-to-do at the top), then Size desc. The
+icon is a control cell — it stops click propagation and never navigates the row.
+
+The Transcribe status icon is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/TranscribeStatusIcon.tsx` — `TranscribeStatusIcon` (state from the new `FileRow.transcribe` field composed in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows`).
 
 <!--
   Transcribe = audio+video → plain-text transcript. LOCKED:

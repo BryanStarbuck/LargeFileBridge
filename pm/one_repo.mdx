@@ -20,6 +20,10 @@ The One-repo screen is rendered in code:
 
 This spec builds on the siblings and does not repeat them:
 
+* [Task tabs](./task_tabs.mdx) — the **All / IPFS / Compress / Transcribe** tab strip this screen's header
+  now carries (§3.1 here). Selecting a tab re-tunes the metrics strip, the visible table columns, the
+  default sort, and the row filter; that whole system — including the metrics panels, the hover-info
+  region, and the three-state Transcribe/Compress status icons — is defined there and only summarized here.
 * [Repos](./repos.mdx) — the list this screen drills into; defines the LOCKED vocabulary
   **Repo → Large file → Decision** (§1 there), the `RepoStatus` enum, and the per-repo counts.
 * [pin_process.mdx](./pin_process.mdx) — the **pin process** the Pin-now button triggers:
@@ -85,14 +89,13 @@ Three regions stacked in the content column: the **header** (repo identity + Pin
 
 ```
 ┌────────────┬───────────────────────────────────────────────────────────────────────────┐
-│            │  ‹ Repos   /   Our_Movies                              ┌──────────────┐     │
-│  LEFT BAR  │  ~/BGit/…/Our_Movies                                   │ ⟳ Pin now    │     │
-│            │                                                        └──────────────┘     │
+│            │  ‹ Repos / Our_Movies    ▦All ⌂IPFS ▤Compress ⌯Transcribe   ⚙  ┌──────────┐ │ ← task tabs (right of center)
+│  LEFT BAR  │  ~/BGit/…/Our_Movies                                          │⟳ Pin now │ │
+│            │                                                               └──────────┘ │
 │ Repos      ├───────────────────────────────────────────────────────────────────────────┤
-│ Peers      │  Pin ◉ on    Status ● up to date    Peers 3    Last pin 09:14   IPFS ● ok   │ ← status strip
+│ Peers      │  ┌ Undecided 5 ›┐ ┌ Pull down 0 ›┐ ┌ Not backed up 3 ›┐   hover-info text… │ ← metrics strip + hover region (task_tabs.mdx)
 │ Scans      ├───────────────────────────────────────────────────────────────────────────┤
-│ Settings   │  128 Pin    ·   5 Undecided   ·   40 Ignore            (summary counts)     │
-│            │  search…                                                     ⇅   ⛛   ⋮bulk │ ← control row
+│ Settings   │  search…                                                     ⇅   ⛛   ⋮bulk │ ← control row (columns/sort tuned per active tab)
 │            ├───────────────────────────────────────────────────────────────────────────┤
 │            │  ☐  File                     Size   Decision   Status    Peers  Changed     │
 │            │  ☐  render/final_4k.mov      8.2GB  [Pin ▾]    Pinned    3      2h ago    ⋮ │
@@ -114,6 +117,13 @@ Three regions stacked in the content column: the **header** (repo identity + Pin
 
 * **Breadcrumb** — `‹ Repos / <repo name>`; the repo name is the title, the absolute **path** shown
   muted beneath it.
+* **Task tabs** (a little **right of center**, between the breadcrumb and the right-hand buttons) — the
+  **All / IPFS / Compress / Transcribe** strip ([task_tabs.mdx §1](./task_tabs.mdx#1-the-tab-strip-locked)).
+  **All** is the default. Selecting a tab re-tunes the **metrics-panel strip**, the **visible table
+  columns**, the **default sort**, and **which files the table shows** — all client-side, no refetch, no
+  mutation. Everything below the header in §3.2 / §4 is presented *through* the active tab; the tab system,
+  its metrics panels, the hover-info region, and the three-state Transcribe/Compress status icons are
+  defined in [task_tabs.mdx](./task_tabs.mdx).
 * **Pin now** button (top-right, `RefreshCw`) — the repo's one **primary** action. It **prioritizes
   this repo but still runs the full pin pass**: this repo is pinned first (push out every
   `sync`-decision file this machine has that peers lack, fetch every `sync`-decision file peers have
@@ -185,6 +195,12 @@ A one-line summary the user reads first: **`128 Pin · 5 Undecided · 40 Ignore`
 label for the **Add to IPFS (pin)** decision (stored value `sync`). Each segment is a **quick filter** —
 clicking `Undecided` filters the table to the undecided files (the triage queue), etc. `Undecided` is
 accent-highlighted whenever it is > 0.
+
+> **The richer, tab-scoped surface is the metrics-panel strip** ([task_tabs.mdx §2](./task_tabs.mdx#2-the-metrics-panels--the-what-could-be-done-boxes-locked)),
+> which sits above the control row and shows the **active tab's** "what could be done" panels (each a terse
+> label + number + right chevron → its warning popup; a light-green big-`0` when nothing is to be done),
+> with the **hover-info region** to its right ([task_tabs.mdx §3](./task_tabs.mdx#3-the-hover-info-region--the-space-to-the-right-of-the-panels-locked)).
+> This one-line summary is the compact IPFS-decision readout; the metrics strip is the per-task overview.
 
 ### 4.2 Control row — LOCKED
 
@@ -394,6 +410,12 @@ The per-row `decidedBy` / `decidedAt` (joined from the folded shared ledger) tha
     Changed → View one file; Peers → Peers filtered to the file; CID copies); the row **`⋮` kebab** (and
     right-click) opens the **file** catalog ([menus.mdx §5.3](./menus.mdx#53-file)) and never navigates,
     with compress/convert/ignore gated behind an explicit-click confirm.
+11. The header carries the **task tab strip** (right of center) — **All** (default) / **IPFS** / **Compress**
+    / **Transcribe** ([task_tabs.mdx](./task_tabs.mdx)); selecting a tab re-tunes the metrics-panel strip,
+    the visible columns, the default sort, and the row filter client-side. **All** is metrics-forward
+    (light-green big-`0` panels when nothing is to be done); the **Transcribe** tab shows the three-state
+    Transcribe status icon and the **Compress** tab the Compress status icon; the hover-info region right of
+    the panels shows contextual text for whatever is hovered.
 
 <!--
   Keep this page aligned with repos.mdx (the list it drills into) and left_bar.yaml (the nav).

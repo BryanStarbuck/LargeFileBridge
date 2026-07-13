@@ -34,6 +34,8 @@ Siblings this spec builds on and does not repeat:
   untracked, import. The *Shared files* tile is the door to it.
 * [pm/tools.mdx](./tools.mdx) — the **install-tools preflight**. The IPFS install here is the same
   package-manager install that preflight defines, surfaced on the node's own page.
+* [Task tabs](./task_tabs.mdx) — the per-repo screen's **IPFS tab**, one of the four task tabs; it filters
+  the file table to large/media files and sorts by transfer urgency (worst first).
 * [knowledge/ipfs.mdx](../knowledge/ipfs.mdx) — what a **node / daemon / gateway / pin / reprovide
   strategy** is, and the [only-our-content rule](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule).
 * [pm/settings.mdx](./settings.mdx) — where the reprovide strategy and public-gateway opt-out live.
@@ -928,6 +930,26 @@ The IPFS fault sites that must record to the trail (start-failure diagnosis, con
 23. **New data surface:** `GET /api/ipfs/config-health`, `POST /api/ipfs/config-repair {issueIds}`,
     `POST /api/ipfs/upgrade`, and a **`configHealth`** + **`upgrade`** block on `GET /api/ipfs/node`;
     job phases add **`migrating`/`repairing`** and **`upgrading`** (§14–§16).
+
+---
+
+## 21. The IPFS tab on the per-repo screen (LOCKED)
+
+The per-repo screen ([one_repo.mdx](./one_repo.mdx)) carries an **IPFS tab** among its task tabs
+([task_tabs.mdx §4.2](./task_tabs.mdx#42-ipfs--pinning-across-your-computers)). When selected it:
+
+* **Filters** the files table to **IPFS-relevant** files — **large OR media** (video/image/audio), per the
+  classifier categories ([special_files.mdx](./special_files.mdx)).
+* **Shows** the IPFS columns — `Pin`, `Ignore`, `File`, `Size`, `Status` (transfer pill), `Peers`, `CID`,
+  `Changed` — hiding the Compress/Transcribe status columns.
+* **Sorts** by **transfer urgency, worst first** — `missing`/`error` → `pending` → `undecided` → `pinned`,
+  then **Size desc**, so the biggest at-risk bytes lead and a `sync` file with **0 peers** floats above a
+  comfortably-pinned one.
+* **Metrics panels** for the tab: `Undecided`, `Pull down`, `Not backed up` (sync files with 0 peers),
+  `Pending` — each a terse label + number + chevron → its warning popup ([task_tabs.mdx §2](./task_tabs.mdx#2-the-metrics-panels--the-what-could-be-done-boxes-locked)).
+
+This is presentation only over the same `RepoDetail` the screen already loads — selecting the tab never
+refetches or mutates anything.
 
 <!--
   This is the IPFS DASHBOARD / node control-panel spec (the left-bar LANDING page at /ipfs), distinct

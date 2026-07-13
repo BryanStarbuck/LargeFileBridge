@@ -3,13 +3,13 @@
 // worst-first (IPFS down → pinned-but-no-peers → undecided → pending) and hands over the one fix,
 // so a non-expert never has to guess which of the four it was. The files table is unchanged; the old
 // status strip moves into a collapsed "Repo details" disclosure.
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
 import { RefreshCw, Settings, ChevronLeft, Network, Users, Clock, Ban, CircleSlash } from "lucide-react";
 import { toast } from "sonner";
 import type { FileRow, Decision, RepoDetail, PinCounts, PinNowResult } from "@lfb/shared";
-import { formatBytes, viewerRouteForName } from "@lfb/shared";
+import { formatBytes, viewerRouteForName, mediaKindForName } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
@@ -20,6 +20,13 @@ import { compressAllVideos, compressAllImages, gitIgnoreBig } from "../../compon
 import type { ActionScope } from "../../lib/pageActions.js";
 import { PinToggle } from "../../components/PinToggle.js";
 import { DecisionToggle } from "../../components/decision/DecisionToggles.js";
+import { TranscribeStatusIcon } from "../../components/TranscribeStatusIcon.js";
+import { CompressStatusIcon } from "../../components/CompressStatusIcon.js";
+import { TaskTabs } from "./TaskTabs.js";
+import { TASK_TABS, type TaskTabId } from "./taskTabs.config.js";
+import { MetricsStrip, type MetricView } from "./MetricsStrip.js";
+import { METRIC_CATALOG, metricCount, type MetricId } from "./metricWarnings.js";
+import { setHoverInfo } from "./HoverInfoRegion.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { StatusBanner, FixButton } from "../../components/ui/StatusBanner.js";
 import { Tooltip } from "../../components/ui/Tooltip.js";
@@ -59,6 +66,19 @@ function decidedByLabel(f: FileRow, selfEmail: string | null): string {
   return f.decidedBy;
 }
 
+/** One-line summary of a file for the hover-info region (task_tabs.mdx §3) — name · size · kind · task state. */
+function fileSummary(f: FileRow): string {
+  const name = f.path.slice(f.path.lastIndexOf("/") + 1);
+  const kind = mediaKindForName(name);
+  const bits: string[] = [name, formatBytes(f.sizeBytes)];
+  if (kind) bits.push(kind);
+  if (f.transcribe === "could") bits.push("no transcript yet — could be transcribed");
+  else if (f.transcribe === "done") bits.push("transcript ready");
+  if (f.compress === "could") bits.push("could be compressed");
+  else if (f.compress === "done") bits.push("already compressed");
+  return bits.join(" · ");
+}
+
 /** Human summary of what a pin run actually did — the honest counts, never a fixed string (pin_process.mdx §6). */
 function pinSummary(c: PinCounts): string {
   if (c.eligible === 0) return "Nothing to pin — no files marked Pin";
@@ -76,6 +96,8 @@ export function OneRepoPage() {
   const navigate = useNavigate();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
+  // The active task tab (task_tabs.mdx §1.3) — ephemeral view state, default "all", never persisted.
+  const [activeTab, setActiveTab] = useState<TaskTabId>("all");
 
   const { data: detail, isLoading } = useQuery({
     queryKey: ["repo", repoId],
@@ -144,6 +166,53 @@ export function OneRepoPage() {
     if (!paths.length) return;
     if (!window.confirm(`Compress ${paths.length} file${paths.length === 1 ? "" : "s"}? Medium quality, same resolution — originals move to LFBridge trash (recoverable).`)) return;
     compressBatch.mutate(paths);
+  };
+
+  // Transcribe ONE file — fired by the Transcribe status icon's actionable ("could") state (task_tabs.mdx
+  // §5). Local, offline engine; runs in the background. On success the file's `.transcription` sidecar
+  // appears, so a repo refetch flips its icon to "done".
+  const transcribeOne = useMutation({
+    mutationFn: (absPath: string) => api.transcribeFile(absPath),
+    onSuccess: () => {
+      toast.success("Transcription started");
+      qc.invalidateQueries({ queryKey: ["repo", repoId] });
+    },
+    onError: (e: Error) => { clientLog.error("OneRepoPage.transcribeOne", e); toast.error(e.message); },
+  });
+
+  // The Transcribe status icon's click (task_tabs.mdx §5): "could" queues a transcription; "done" opens
+  // the file's viewer to read the transcript; "na" is inert.
+  const onTranscribeActivate = (f: FileRow) => {
+    if (!detail?.path || f.transcribe === "na") return;
+    const abs = `${detail.path}/${f.path}`;
+    if (f.transcribe === "could") {
+      if (window.confirm(`Transcribe ${f.path}? Runs locally in the background.`)) transcribeOne.mutate(abs);
+    } else {
+      const name = f.path.slice(f.path.lastIndexOf("/") + 1);
+      navigate({ to: viewerRouteForName(name), search: { path: abs } });
+    }
+  };
+
+  // The Compress status icon's click (task_tabs.mdx §6): "could" offers compression (confirm → background
+  // job); "done" opens the file's viewer; "na" is inert.
+  const onCompressActivate = (f: FileRow) => {
+    if (!detail?.path || f.compress === "na") return;
+    const abs = `${detail.path}/${f.path}`;
+    if (f.compress === "could") {
+      if (window.confirm(`Compress ${f.path}? Medium quality, same resolution — the original moves to LFBridge trash (recoverable).`)) compressBatch.mutate([abs]);
+    } else {
+      const name = f.path.slice(f.path.lastIndexOf("/") + 1);
+      navigate({ to: viewerRouteForName(name), search: { path: abs } });
+    }
+  };
+
+  // A metric panel's chevron (task_tabs.mdx §2.4): re-tune the view to the tab where the user acts on it.
+  // (The RepoVerdict banner above surfaces the educate-and-fix popup for the current top issue.)
+  const openMetric = (id: MetricId) => {
+    if (id === "notBackedUp") { navigate({ to: "/devices" }); return; }
+    if (id === "compressibleVideos" || id === "compressibleImages" || id === "alreadyCompressed") setActiveTab("compress");
+    else if (id === "transcribable" || id === "transcribed") setActiveTab("transcribe");
+    else setActiveTab("ipfs");
   };
 
   const ipfsDown = detail?.ipfs === "unreachable";
@@ -242,7 +311,11 @@ export function OneRepoPage() {
         const dir = f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/") + 1) : "";
         const name = f.path.slice(dir.length);
         return (
-          <span title={f.path}>
+          <span
+            title={f.path}
+            onMouseEnter={() => setHoverInfo(fileSummary(f))}
+            onMouseLeave={() => setHoverInfo(null)}
+          >
             <span className="text-black/40">{middleTruncate(dir, 30)}</span>
             <span className="font-medium">{name}</span>
           </span>
@@ -361,7 +434,71 @@ export function OneRepoPage() {
       cell: (f) => f.cid ? <code className="text-xs text-black/60" title={f.cid} onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(f.cid!).catch((err) => clientLog.warn("OneRepoPage.copyCid", err)); toast.success("CID copied"); }}>{middleTruncate(f.cid, 16)}</code> : <span className="text-black/20">—</span> },
     { id: "changed", header: "Changed", kind: "timestamp", accessor: (f) => f.changedAt,
       cell: (f) => <span title={absoluteTime(f.changedAt)}>{relativeTime(f.changedAt)}</span> },
+    // ── Task-tab columns (task_tabs.mdx §4). Present in the union; shown only on the tabs that list them.
+    // `kind` — video/image/audio, for the Compress & Transcribe tabs.
+    {
+      id: "kind",
+      header: "Kind",
+      kind: "enum",
+      accessor: (f) => mediaKindForName(f.path.slice(f.path.lastIndexOf("/") + 1)) ?? "",
+      filterOptions: ["video", "image", "audio"],
+      cell: (f) => {
+        const k = mediaKindForName(f.path.slice(f.path.lastIndexOf("/") + 1));
+        return <span className="text-xs text-black/60">{k ?? "—"}</span>;
+      },
+    },
+    // `compress` — the three-state Compress status icon (task_tabs.mdx §6). Sort by status ("could" <
+    // "done" < "na" alphabetically) puts the actionable rows first; filter on the same three values.
+    {
+      id: "compress",
+      header: "Compress",
+      kind: "enum",
+      accessor: (f) => f.compress ?? "na",
+      filterOptions: ["could", "done", "na"],
+      cell: (f) => (
+        <CompressStatusIcon
+          state={f.compress ?? "na"}
+          onActivate={() => onCompressActivate(f)}
+          onMouseEnter={() => setHoverInfo(fileSummary(f))}
+          onMouseLeave={() => setHoverInfo(null)}
+        />
+      ),
+    },
+    // `transcribe` — the three-state Transcribe status icon (task_tabs.mdx §5).
+    {
+      id: "transcribe",
+      header: "Transcribe",
+      kind: "enum",
+      accessor: (f) => f.transcribe ?? "na",
+      filterOptions: ["could", "done", "na"],
+      cell: (f) => (
+        <TranscribeStatusIcon
+          state={f.transcribe ?? "na"}
+          onActivate={() => onTranscribeActivate(f)}
+          onMouseEnter={() => setHoverInfo(fileSummary(f))}
+          onMouseLeave={() => setHoverInfo(null)}
+        />
+      ),
+    },
   ];
+
+  // The active tab's projection (task_tabs.mdx §7): pick + order the columns it lists, and filter the rows
+  // to the files that belong to this task. The DataTable is keyed by tab so its default sort re-applies.
+  const tab = TASK_TABS[activeTab];
+  const byId = useMemo(() => new Map(columns.map((col) => [col.id, col])), [columns]);
+  const visibleColumns = tab.columnIds
+    .map((id) => byId.get(id))
+    .filter((col): col is LfbColumn<FileRow> => Boolean(col));
+  const tabRows = (detail?.files ?? []).filter(tab.rowFilter);
+
+  // The metric panels for this tab (task_tabs.mdx §2): count from the RepoDetail, tint by health, chevron
+  // re-tunes to the acting tab.
+  const metricViews: MetricView[] = detail
+    ? tab.metrics.map((id) => {
+        const def = METRIC_CATALOG[id];
+        return { id, label: def.label, count: metricCount(id, detail), hint: def.hint, positive: def.positive, onOpen: () => openMetric(id) };
+      })
+    : [];
 
   const c = detail?.counts;
 
@@ -378,6 +515,8 @@ export function OneRepoPage() {
         actionsRow={<PageActions actions={repoActions} selectedCount={selected.size} />}
         actions={
           <>
+            {/* Task tabs (task_tabs.mdx §1) — a little right of center, before the gear + Pin now. */}
+            <TaskTabs active={activeTab} onChange={setActiveTab} />
             <button
               onClick={() => navigate({ to: "/repos/$repoId/settings", params: { repoId } })}
               title="Repo settings"
@@ -411,7 +550,10 @@ export function OneRepoPage() {
         />
       )}
 
-      {/* Summary counts (quick filters would live here) */}
+      {/* The task-tab metrics strip (task_tabs.mdx §2) + the docked hover-info region to its right (§3). */}
+      {detail && <MetricsStrip metrics={metricViews} defaultHint={tab.defaultHint} />}
+
+      {/* Summary counts — the compact IPFS-decision readout (the richer per-task view is the strip above). */}
       {c && (
         <div className="mb-1 text-sm text-black/70">
           {c.pinned + c.pending} Pin ·{" "}
@@ -421,11 +563,15 @@ export function OneRepoPage() {
       )}
 
       <DataTable
+        // Keyed by tab so switching re-applies the tab's default sort (task_tabs.mdx §7).
+        key={activeTab}
         // Content below the table (the Repo details disclosure) → bounded height, not full-page
         // (one_repo.mdx §4 / repos.mdx §3.3.1).
         fillHeight={false}
-        data={detail?.files ?? []}
-        columns={columns}
+        // The active tab projects the columns + filters the rows + sets the default sort (task_tabs.mdx §4).
+        data={tabRows}
+        columns={visibleColumns}
+        defaultSort={tab.defaultSort}
         searchKeys={(f) => f.path}
         getRowId={(f) => f.fileId}
         // Row click → the file's "View one file" experience: media routes to its viewer

@@ -34,6 +34,10 @@ It builds on and does not repeat: [Use cases & health model](./use_cases.mdx),
 [Security](./security.mdx), [Settings](./settings.mdx), [Devices](./devices.mdx),
 [File system](./file_system.mdx).
 
+* [Task tabs](./task_tabs.mdx) — the per-repo screen's metrics-panel strip, where each warning is
+  presented as a terse **label + number + right chevron** panel (green big-`0` when clear); the chevron
+  opens the same educate-and-fix popup this spec defines.
+
 ---
 
 ## 1. The warning model (built on the LOCKED health model)
@@ -2692,6 +2696,31 @@ This category owns every warnable condition on the **Settings**, **Tools**, and 
 **(C) The fix.** **No user fix.** Developer next step: inspect `error.err` for the repeated `client:*` context to find the looping component/effect and fix the source of the flood. *Fix in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/clientlog/clientlog.router.ts` (guard only — no remediation endpoint). No auto-fix — routes to developer inspection of `~/T/_large_files_bridge/error.err`.
 
 **Notes / gaps.** Flagged for completeness — **not a candidate for the amber/red verdict banner**; it's a flood guard on the shared fault trail (charter: logs live in the state root, never `/tmp`). Its **firing is a proxy** for a frontend error loop worth developer attention, and it pairs with §10.10.14 (a re-login loop is a common cause).
+
+## 11. Warnings as metric panels — the per-repo task-tab strip (LOCKED)
+
+On the per-repo screen ([one_repo.mdx](./one_repo.mdx)), warnings are also presented as a strip of **metric
+panels** above the files table, scoped to the active **task tab**
+([task_tabs.mdx §2](./task_tabs.mdx#2-the-metrics-panels--the-what-could-be-done-boxes-locked)). This is a
+compact rendering of the same warning model this spec defines — not a new warning system.
+
+* **One panel = one warning/metric.** Each panel is a **terse label + a number + a right chevron (`›`)** —
+  e.g. `Undecided 5`, `Not backed up 3`, `Compressible videos 12`. **No description prose in the panel**;
+  the explanation appears in the **hover-info region** to the right of the strip
+  ([task_tabs.mdx §3](./task_tabs.mdx#3-the-hover-info-region--the-space-to-the-right-of-the-panels-locked),
+  [non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)).
+* **Green-zero = nothing to do.** When a panel's count is **0**, it renders as a **light-green filled
+  rounded rectangle with a big `0`** — the all-clear reassurance state. A count `> 0` is **health-tinted**
+  (red = data at risk / owed; amber/accent = action needed).
+* **The chevron opens this spec's popup.** Clicking a panel's chevron opens the **educate-and-fix popup**
+  (§4 of this spec) for that warning, scoped to exactly the files the number counts — the two/three
+  per-row action toggles, the media preview pane, the composed Apply label, all as already specified. A
+  green-`0` panel opens the popup in its **all-clear** state.
+* **Which panels show is per active tab** ([task_tabs.mdx §4](./task_tabs.mdx#4-per-tab-tuning-locked--filter--columns--sort--metrics)):
+  All shows every actionable metric; IPFS/Compress/Transcribe show only their task's metrics.
+
+The metric-panel strip and its chevron → popup wiring are rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricsStrip` / `MetricPanel` (each panel's chevron mounts the existing `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningArrowButton.tsx` — `WarningArrowButton`, resolved per metric in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts`).
 
 <!-- CATALOG-END -->
 <!-- Batch relationship (§1a): most file-scoped catalog warnings above are projections of a per-storage TO DO Batch (to_do_batches.mdx); the blue-arrow popup IS the batch popup, the same batch renders as a slug on the To Do page (to_do.mdx), and applying from either surface writes the same decisions to .lfbridge/decisions.yaml and clears both. Engine/config warnings (§10.1) are NOT batches and never appear on the To Do page. -->

@@ -25,6 +25,8 @@ Siblings this builds on and does not repeat:
 * [file_system.mdx §1–§3](./file_system.mdx) — the interesting-folder color key (brown/blue/outline). A
   hovered tinted glyph explains its color here.
 * [git_ignore.mdx](./git_ignore.mdx) — the new **`I` git-ignored** badge, one of the codes explained here.
+* [Task tabs](./task_tabs.mdx) — the per-repo screen renders this tooltip content as a **docked side
+  region** to the right of the metrics panels (§6 here), instead of a floating bubble.
 
 ---
 
@@ -157,6 +159,25 @@ The provider, the single-slot hover state, and the clear debounce are implemente
    height are **dropped** (no scrollbar, no growth); a busy entity may show only some of its codes.
 7. **Single source of truth:** the chips and names come from the **same** `BADGE_META` / folder-color tokens
    the list uses ([directories.mdx §3.5.1](./directories.mdx)), so the panel and the list can never drift.
+
+## 6. Docked variant — the hover-info region (LOCKED)
+
+The same non-intrusive tooltip **content model** can be rendered as a **persistent docked region** instead
+of a floating bubble. The per-repo screen ([one_repo.mdx](./one_repo.mdx)) does this: to the **right of the
+metrics-panel strip** ([task_tabs.mdx §3](./task_tabs.mdx#3-the-hover-info-region--the-space-to-the-right-of-the-panels-locked))
+sits a **hover-info region** that shows the tooltip text for **whatever the user is currently hovering** —
+a **metric panel**, a **table row**, a **tooltip target** (pill/badge/status icon), or an **action link**.
+
+* **Why docked.** The metric panels are deliberately terse (label + number only). Rather than crowd them
+  with prose or cover the row under a floating bubble, the explanation appears in **one fixed place** the
+  eye learns to glance at.
+* **Same content, same restraint.** It obeys the same rules this spec defines — plain, short, no
+  interaction-blocking — it is just *positioned* rather than *floated*.
+* **Default state.** When nothing is hovered it shows a short **hint for the active tab** (e.g.
+  *"Transcribe: audio and video files with no transcript yet. Hover a file for details."*).
+
+Rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `HoverInfoRegion` (subscribes to a small `useHoverInfo()` context that panels, rows, tooltips, and action links publish to on hover/focus).
 
 <!--
   The NON-INTRUSIVE hover-info panel pinned to the BOTTOM of the left bar, directly ABOVE the account slot

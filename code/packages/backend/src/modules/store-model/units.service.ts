@@ -18,8 +18,13 @@ import {
   type TransferStatus,
   type Decision,
   type IpfsHealth,
+  type TaskStatus,
+  type TaskMetrics,
+  mediaKindForName,
 } from "@lfb/shared";
 import type { ComputerUnitConfig } from "@lfb/shared";
+import { compressInfo } from "../fs/badges.js";
+import { analysisOutputs } from "../storage/tracking.service.js";
 import { readYaml, updateYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import {
   reposRoot,
@@ -195,6 +200,7 @@ export function computeRepoDetail(folder: string, ipfs: IpfsHealth): RepoDetail 
     ipfs,
     counts,
     files,
+    taskMetrics: computeTaskMetrics(files),
   };
 }
 
@@ -241,8 +247,66 @@ function composeFileRows(
       // The git-ignore axis, folded from the shared ledger (decisions.mdx §1) — drives the inline
       // Add-to-git-ignore (⊘) toggle independently of the IPFS-axis `decision`.
       gitignore: prov?.gitignore ?? false,
+      // The Compress / Transcribe task-tab status for this file (task_tabs.mdx §4.4/§5/§6). Cheap,
+      // name-only for compress; transcribe needs one sidecar existence check per media file.
+      compress: compressStatusFor(cand.path),
+      transcribe: transcribeStatusFor(cand.path, repoRootAbs),
     };
   });
+}
+
+// Compress task status (task_tabs.mdx §6). Reuses the single-source-of-truth extension verdict
+// compressInfo(name): "could" = a video/image that looks uncompressed; "done" = already compressed;
+// "na" = not a compressible media kind (audio is never compressible — charter).
+function compressStatusFor(relPath: string): TaskStatus {
+  const ci = compressInfo(path.basename(relPath));
+  if (ci.compressible === null) return "na";
+  return ci.compressState === "done" ? "done" : "could";
+}
+
+// Transcribe task status (task_tabs.mdx §5). "na" unless the file is audio/video; then "done" iff a
+// `.transcription` sidecar already exists (analysisOutputs — cheap fs stat), else "could". Any failure
+// (no repo root, unreadable sidecar) degrades to "could" so a transcribable file is never hidden.
+function transcribeStatusFor(relPath: string, repoRootAbs: string | null): TaskStatus {
+  const kind = mediaKindForName(path.basename(relPath));
+  if (kind !== "video" && kind !== "audio") return "na";
+  try {
+    if (repoRootAbs && analysisOutputs(repoRootAbs, relPath).includes("transcript")) return "done";
+  } catch {
+    /* sidecar check unavailable → treat as not-yet-transcribed */
+  }
+  return "could";
+}
+
+// Roll up the per-tab "what could be done" metric counts (task_tabs.mdx §2.5) from the composed rows.
+// `pullDown` is intentionally omitted — it comes from RepoDetail.missingPinned.length (router-computed).
+const BIG_FILE_METRIC_THRESHOLD = 100 * 1024 * 1024; // 100 MB — the charter big-file threshold for the git-ignore nudge count.
+function computeTaskMetrics(files: FileRow[]): TaskMetrics {
+  const m: TaskMetrics = {
+    undecided: 0,
+    pending: 0,
+    notBackedUp: 0,
+    compressibleVideos: 0,
+    compressibleImages: 0,
+    alreadyCompressed: 0,
+    transcribable: 0,
+    transcribed: 0,
+    bigNotIgnored: 0,
+  };
+  for (const f of files) {
+    if (f.decision === "undecided") m.undecided++;
+    if (f.decision === "sync" && f.transfer === "pending") m.pending++;
+    if (f.decision === "sync" && f.cid != null && f.peers.length === 0) m.notBackedUp++;
+    if (f.compress === "could") {
+      if (compressInfo(path.basename(f.path)).compressible === "image") m.compressibleImages++;
+      else m.compressibleVideos++;
+    }
+    if (f.compress === "done") m.alreadyCompressed++;
+    if (f.transcribe === "could") m.transcribable++;
+    if (f.transcribe === "done") m.transcribed++;
+    if (!f.gitignore && f.sizeBytes >= BIG_FILE_METRIC_THRESHOLD) m.bigNotIgnored++;
+  }
+  return m;
 }
 
 // Read + fold the repo's shared decision ledger ONCE, keyed by repo-relative path. The repo root is the
