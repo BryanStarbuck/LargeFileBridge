@@ -107,7 +107,16 @@ export class Transcriber {
     }
 
     try {
-      const words = await this.runWhisper(audioFile, outputPath, path.basename(inputFile), durationSec, onProgress);
+      const { words, coveredSec } = await this.runWhisper(audioFile, outputPath, path.basename(inputFile), durationSec, onProgress);
+      // CRITICAL (transcribe_engine.mdx §4): a 1–2h+ file must transcribe to the FULL duration. If the run
+      // covered materially less than the source duration, it TRUNCATED — that is a FAILURE, never a silent
+      // success. We remove the partial transcript so the file stays a re-transcribe candidate (no sidecar).
+      if (durationSec && coveredSec != null && !this.coversFullDuration(coveredSec, durationSec)) {
+        this.tryUnlink(outputPath);
+        const reason = `transcription truncated — covered ${this.hms(coveredSec)} of ${this.hms(durationSec)} (full duration required)`;
+        log.error("transcribe", `${inputFile}: ${reason}`);
+        return { status: "failed", outputPath: null, words: null, reason };
+      }
       onProgress?.({ fraction: 1, stage: "transcribe" });
       return { status: "transcribed", outputPath, words, reason: null };
     } catch (e) {
@@ -118,52 +127,84 @@ export class Transcriber {
     }
   }
 
+  /** True when a run's covered seconds reach the source duration within tolerance (transcribe_engine.mdx
+   *  §4.2): the greater of 15s or 2% of the duration, so a slightly-off ffprobe duration is not a false
+   *  truncation, but a run that stops at 20 minutes of a 2-hour file is caught. */
+  private coversFullDuration(coveredSec: number, durationSec: number): boolean {
+    const tolerance = Math.max(15, durationSec * 0.02);
+    return coveredSec >= durationSec - tolerance;
+  }
+
+  /** Seconds → HH:MM:SS for headers/reasons. */
+  private hms(sec: number): string {
+    const s = Math.max(0, Math.round(sec));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const ss = s % 60;
+    return [h, m, ss].map((n) => String(n).padStart(2, "0")).join(":");
+  }
+
   // ── whisper ───────────────────────────────────────────────────────────────────
-  /** Run Whisper (MPS on Apple Silicon with a CPU fallback), header the output, return word count. */
+  /**
+   * Run Whisper (MPS on Apple Silicon with a CPU fallback), header the output, return word count + the
+   * seconds of audio actually covered (the max segment end seen — transcribe_engine.mdx §4.2, the
+   * no-truncation check). NOTE (transcribe_engine.mdx §2/§3): the model is `base` today; the heavyweight
+   * `whisper-large` engine is selected by pickEngine() once the permission-gated model provisioning
+   * (§3) is wired — until then base keeps transcription working with no multi-GB auto-download. We pass NO
+   * duration-limiting flag, so Whisper slides its window over the WHOLE file (transcribe_engine.mdx §4.1).
+   */
   private async runWhisper(
     audioFile: string,
     outputPath: string,
     originalName: string,
     durationSec: number | null,
     onProgress?: ProgressSink,
-  ): Promise<number> {
+  ): Promise<{ words: number; coveredSec: number | null }> {
     const audioDir = path.dirname(audioFile);
     const audioBase = path.basename(audioFile, path.extname(audioFile));
     // Whisper writes <audioBase>.txt into --output_dir; we read that, header it, and move it to outputPath.
     const whisperOut = path.join(audioDir, `${audioBase}.txt`);
     this.tryUnlink(whisperOut); // clear any stale prior output so our success check is meaningful
 
-    const base = ["--model", "base", "--output_format", "txt", "--output_dir", audioDir, "--language", "en"];
-    // Turn Whisper's decoded segments into a determinate fraction: each stdout line carries the segment
-    // it just finished as `[start --> end]`; end ÷ duration is the share of audio processed.
-    const onLine = durationSec && durationSec > 0
-      ? (line: string) => {
-          const end = this.parseSegmentEndSec(line);
-          if (end != null) onProgress?.({ fraction: Math.min(0.99, end / durationSec), stage: "transcribe" });
-        }
-      : undefined;
+    const model = process.env.LFB_TRANSCRIBE_MODEL || "base";
+    const base = ["--model", model, "--output_format", "txt", "--output_dir", audioDir, "--language", "en"];
+    // Turn Whisper's decoded segments into a determinate fraction AND track how much audio was covered:
+    // each stdout line carries the segment it just finished as `[start --> end]`; end ÷ duration is the
+    // share of audio processed, and the MAX end seen is our coverage figure for the no-truncation check.
+    let coveredSec: number | null = null;
+    const makeOnLine = () => (line: string) => {
+      const end = this.parseSegmentEndSec(line);
+      if (end == null) return;
+      if (coveredSec == null || end > coveredSec) coveredSec = end;
+      if (durationSec && durationSec > 0) onProgress?.({ fraction: Math.min(0.99, end / durationSec), stage: "transcribe" });
+    };
 
     let ok = false;
     if (this.isMac && os.arch() === "arm64") {
-      // Prefer the Metal GPU, but MPS sometimes exits 0 emitting garbage (non-English fragments) —
-      // validate the output looks like English before trusting it, else fall back to CPU.
-      await this.spawnAsync("whisper", [audioFile, ...base, "--device", "mps"], { allowFail: true, onLine });
-      if (fs.existsSync(whisperOut) && this.looksLikeEnglish(whisperOut)) ok = true;
+      // Prefer the Metal GPU, but MPS sometimes exits 0 emitting garbage (non-English fragments) OR stops
+      // short on a long file — validate the output looks like English AND covers the full duration before
+      // trusting it, else fall back to CPU (which is slower but reliable for the whole 1–2h+ file).
+      coveredSec = null;
+      await this.spawnAsync("whisper", [audioFile, ...base, "--device", "mps"], { allowFail: true, onLine: makeOnLine() });
+      const englishOk = fs.existsSync(whisperOut) && this.looksLikeEnglish(whisperOut);
+      const coverageOk = !durationSec || coveredSec == null || this.coversFullDuration(coveredSec, durationSec);
+      if (englishOk && coverageOk) ok = true;
       else this.tryUnlink(whisperOut);
     }
     if (!ok) {
-      await this.spawnAsync("whisper", [audioFile, ...base, "--device", "cpu", "--fp16", "False"], { onLine });
+      coveredSec = null; // recount coverage from the authoritative CPU run
+      await this.spawnAsync("whisper", [audioFile, ...base, "--device", "cpu", "--fp16", "False"], { onLine: makeOnLine() });
     }
     if (!fs.existsSync(whisperOut)) {
       throw new Error(`whisper produced no output for ${originalName}`);
     }
 
     const body = fs.readFileSync(whisperOut, "utf8").trim();
-    fs.writeFileSync(outputPath, this.header(originalName) + body, "utf8");
+    fs.writeFileSync(outputPath, this.header(originalName, { model, durationSec, coveredSec }) + body, "utf8");
     // Remove whisper's scratch .txt if it is a different file from our final transcript.
     if (path.resolve(whisperOut) !== path.resolve(outputPath)) this.tryUnlink(whisperOut);
 
-    return body ? body.split(/\s+/).length : 0;
+    return { words: body ? body.split(/\s+/).length : 0, coveredSec };
   }
 
   /**
@@ -180,16 +221,25 @@ export class Transcriber {
     return h * 3600 + min * 60 + sec + ms / 1000;
   }
 
-  private header(originalName: string): string {
+  /** The transcript header (Transcribe.mdx §4). Records the engine/model actually used and — for the
+   *  no-truncation guarantee (transcribe_engine.mdx §4.2) — the source duration and how much was covered,
+   *  so a reader can confirm the transcript spans the whole file. */
+  private header(originalName: string, opts?: { model?: string; durationSec?: number | null; coveredSec?: number | null }): string {
     const ts = new Date().toISOString().replace("T", " ").substring(0, 19);
-    return [
+    const engine = `whisper-${opts?.model ?? "base"}`;
+    const device = this.isMac && os.arch() === "arm64" ? "mps/cpu" : "cpu";
+    const lines = [
       `Transcription of: ${originalName}`,
       `Generated on: ${ts}`,
-      `Model used: whisper-base (language: en)`,
-      "=".repeat(60),
-      "",
-      "",
-    ].join("\n");
+      `Engine: ${engine} (device: ${device}, language: en)`,
+    ];
+    if (opts?.durationSec) {
+      const covered = opts.coveredSec != null ? this.hms(opts.coveredSec) : "—";
+      const full = opts.coveredSec != null && this.coversFullDuration(opts.coveredSec, opts.durationSec) ? "  ✓ full" : "";
+      lines.push(`Source duration: ${this.hms(opts.durationSec)}   ·   Transcript covers: ${covered}${full}`);
+    }
+    lines.push("=".repeat(60), "", "");
+    return lines.join("\n");
   }
 
   private writePlaceholder(inputFile: string, outputPath: string): void {

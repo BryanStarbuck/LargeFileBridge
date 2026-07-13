@@ -286,12 +286,12 @@ slug disappears.
 
 **What the user does.** On the To Do page the user clicks the header link **"Show what could be
 transcribed"** ([to_do.mdx §7](./to_do.mdx#7-show-what-could-be-transcribed-locked)). This is **opt-in** —
-it is **not** part of any scheduled scan, because opening every media file's sidecar to check for a
-transcript is heavier than the default rollup ([transcribe_calc_engine.mdx §1](./transcribe_calc_engine.mdx#1-when-it-runs-locked)).
+it is **not** part of any scheduled scan, because checking every media file for a transcript under
+`.lfbridge/` is heavier than the default rollup ([transcribe_calc_engine.mdx §1](./transcribe_calc_engine.mdx#1-when-it-runs-locked)).
 
 **What LFB does automatically — the on-demand transcribe scan.** The
 [What-Can-Be-Transcribed Calc Engine](./transcribe_calc_engine.mdx) walks each storage for files that are
-**transcribable** (audio, or video **with** an audio track) **and** have **no `.transcription` sidecar** yet.
+**transcribable** (audio, or video **with** an audio track) **and** have **no `.transcription` artifact under `.lfbridge/`** yet.
 The link shows a brief **"Looking…"** state while it runs. It writes **one transcribe batch per storage**
 with candidates, into the **same** `_do_batches/` directory, with `kind: transcribe` / `pattern: transcribe`
 ([to_do_batches.mdx §4](./to_do_batches.mdx#4-transcribe-batches--a-sibling-kind-locked)):
@@ -327,8 +327,8 @@ because the file list is long ([transcribe_calc_engine.mdx §4](./transcribe_cal
 ([job_queue.mdx](./job_queue.mdx)) — the popup can be closed immediately. The jobs drain on the
 [Processing](./processing.mdx) page: the **"Waiting"** region reads *"68 transcribing"* and each job, as it
 starts, shows a **live card** (the transcription engine already registers a progress-dock job). As each
-file's transcription completes, its `.transcription` sidecar appears, so it **drops out** of the next run of
-this engine — re-running the link later shows the slug **shrunk** (or gone).
+file's transcription completes, its `.transcription` artifact appears under `.lfbridge/`, so it **drops
+out** of the next run of this engine — re-running the link later shows the slug **shrunk** (or gone).
 
 **What we double-check (September):**
 * "Show what could be transcribed" runs the on-demand engine **only on click** (never the scheduled scan),
@@ -337,8 +337,8 @@ this engine — re-running the link later shows the slug **shrunk** (or gone).
   transcribe slug; clean storages get none.
 * The transcribe popup is **~80% of screen**, **default-checked**; unchecking three leaves **68**; the Apply
   reads **"Transcribe 68 files"**.
-* Apply **enqueues background jobs** watchable on Processing; completed files gain a `.transcription` sidecar
-  and drop out of the next run.
+* Apply **enqueues background jobs** watchable on Processing; completed files gain a `.transcription`
+  artifact under `.lfbridge/` and drop out of the next run.
 
 ---
 
@@ -391,7 +391,7 @@ this engine — re-running the link later shows the slug **shrunk** (or gone).
    writing **one transcribe batch per storage** (`kind: transcribe`) — Personal *"58 videos + 13 audio"*, 4
    repos each with a slug; the chevron opens a **~80%-screen**, **default-checked** popup whose Apply reads
    **"Transcribe N files"** and **enqueues background jobs** on Processing; completed files gain a
-   `.transcription` sidecar and drop out of the next run.
+   `.transcription` artifact under `.lfbridge/` and drop out of the next run.
 5. Across all months the seven invariants in §6 hold, and every write matches
    [to_do_batches.mdx](./to_do_batches.mdx), [to_do.mdx](./to_do.mdx),
    [decision_toggles.mdx](./decision_toggles.mdx), [decisions.mdx](./decisions.mdx),
@@ -414,7 +414,7 @@ this engine — re-running the link later shows the slug **shrunk** (or gone).
   compress → Processing; next recalc shrinks batch. SEP: "Show what could be transcribed" (opt-in, NOT
   scheduled scan) → transcribe_calc_engine writes personal_transcribe_2_do.yaml (58 vid + 13 audio = 71) + 4
   repo transcribe batches (kind:transcribe); ~80% popup, default-checked, uncheck 3 → "Transcribe 68 files"
-  → background jobs (job_queue) on Processing; completed files gain .transcription sidecar, drop out of next
+  → background jobs (job_queue) on Processing; completed files gain .transcription artifact under .lfbridge/, drop out of next
   run. Invariants (§6): one batch/storage disposable recalc-and-replace; pull_down = cross-computer absence;
   engine RECOMMENDS (dashed) / user DECIDES (solid) writing shared ledger so no re-ask; pattern picks
   surface; one model two surfaces (banner=slug); Apply is a job producer never inline; transcribe opt-in.

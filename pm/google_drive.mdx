@@ -343,7 +343,7 @@ at the top of this file.)
   ([decision_toggles.mdx](./decision_toggles.mdx)), which the user confirms and **Applies**.
 * **Transcription discovery per account.** The on-demand **"Show what could be transcribed"** link runs
   the **What Can Be Transcribed Calc Engine** ([transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx)),
-  which walks that account's Drive for **video/audio that has no `.transcription` sidecar** (again from
+  which walks that account's Drive for **video/audio that has no `.transcription` artifact under `.lfbridge/`** (again from
   metadata, no forced materialization) and emits a per-account **transcribe batch** → a **transcribe
   slug** (a ~80%-width, default-checked popup: *"Transcribe N files"* → background jobs on
   [processing.mdx](./processing.mdx)).

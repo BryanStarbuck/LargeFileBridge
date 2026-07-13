@@ -156,14 +156,15 @@ the user can change it.
   meant to be a repo) and keeps it updated (§6); a **URL** remote is cloned on first use instead.
 * **It also becomes the home for this storage's derived artifacts (LOCKED).** Once the dedicated repo is
   ON, transcripts and AI descriptions for any file this storage **owns but that lives out in the wider
-  filesystem** (a mapped source directory, or — for Personal — anywhere under `~`) are written **under the
-  dedicated repo** as **sidecars**, mirroring the file's hierarchy with the media's extension replaced
-  (`<dedicatedRepo>/<rel-without-ext>.transcription`, `<dedicatedRepo>/<rel-without-ext>.ai_description`).
-  They are **not** git-ignored there — the dedicated repo exists to **hold and carry** these artifacts, so
-  we simply put them in. This is the authoritative placement rule B in
-  [Transcribe.mdx §3.4](./Transcribe.mdx); turning the dedicated repo ON is precisely what moves those
-  sidecars off the beside-the-media fallback and into the repo (mirrored). Turning it OFF returns them to
-  the storage root / beside-media fallback.
+  filesystem** (a mapped source directory, or — for Personal — anywhere under `~`) are written **inside the
+  dedicated repo's `.lfbridge/`**, path-mirrored, with the media's **full filename and the extension
+  APPENDED** (`<dedicatedRepo>/.lfbridge/<rel-dir>/<name.ext>.transcription`,
+  `<dedicatedRepo>/.lfbridge/<rel-dir>/<name.ext>.ai_description`). Because `.lfbridge/` is **committed and
+  travels with the repo**, they are committed and carried by git — the dedicated repo exists to **hold and
+  carry** these artifacts. This is the authoritative placement rule B in
+  [Transcribe.mdx §3.4](./Transcribe.mdx); turning the dedicated repo ON is precisely what routes those
+  artifacts into this repo's `.lfbridge/` (mirrored). Turning it OFF returns them to the owning storage
+  root's own `.lfbridge/` (the last-resort a `.lfbridge/` in the media's own directory).
 
 ### 4.2 Google Drive location
 

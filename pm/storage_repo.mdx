@@ -50,7 +50,9 @@ Siblings this builds on and does not repeat:
 │   ├── history/<device>.txt ← one UTC-timestamped audit log PER COMPUTER — repo_tracking_scheme.mdx §4
 │   ├── manifest.yaml       ← large-file → IPFS CID + pin state (storage_local.mdx §9) — committed, travels
 │   ├── decisions.yaml      ← the team-SHARED per-file decision ledger (decisions.mdx) — committed, travels
-│   └── analysis/           ← per-file media analysis (storages.mdx §6)
+│   ├── <rel-dir>/<name.ext>.transcription   ← transcript — path-mirrored, ext APPENDED (storages.mdx §6)
+│   ├── <rel-dir>/<name.ext>.ai_description  ← AI description — path-mirrored, ext APPENDED (storages.mdx §6)
+│   └── analysis/           ← visuals-by-time + compression record only (storages.mdx §6)
 └── …the repo's tracked + git-ignored files…
 ```
 
@@ -114,12 +116,14 @@ The repos list and per-repo UI over this storage are rendered in code:
 ## 4. Media analysis + cloud clones (per repo)
 
 * A repo storage can produce the [storages.mdx §6](./storages.mdx) **media-analysis** outputs for its
-  video/image files: the **transcript** (`<rel-without-ext>.transcription`) and **description**
-  (`<rel-without-ext>.ai_description`) are **sidecars beside the media**, while
+  video/image files: the **transcript** (`.lfbridge/<rel-dir>/<name.ext>.transcription`) and
+  **description** (`.lfbridge/<rel-dir>/<name.ext>.ai_description`) live **inside the repo's `.lfbridge/`,
+  path-mirrored, with the media's full filename and the extension APPENDED**, while
   **visuals-and-action-by-time** (`visuals_by_time.yaml`, time × visual × story) stays under
   `~/BGit/xyz/.lfbridge/analysis/<relpath>/`. They are artifacts that ride along with the storage —
-  git-ignored in a plain repo (`*.transcription` / `*.ai_description` / `.lfbridge/`), committed in a
-  dedicated repo.
+  because `.lfbridge/` is **committed and travels with the repo**, the transcript/description are committed
+  and synced by git (no `*.transcription` / `*.ai_description` git-ignore nudge — retired), while the
+  multi-GB media stays git-ignored and rides IPFS.
 * A repo storage **may also clone** to Google Drive / Dropbox ([storages.mdx §5](./storages.mdx)) — the
   same repo hierarchy mirrored to a cloud drive as a second, human-reachable copy — recorded in the
   `clones` block.
@@ -167,7 +171,7 @@ not part of it.)
   and **Applies**.
 * **Transcription discovery for the repo.** The on-demand **"Show what could be transcribed"** link runs
   the **What Can Be Transcribed Calc Engine** ([transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx)),
-  which walks this repo for **video/audio that has no `.transcription` sidecar** and emits a per-repo
+  which walks this repo for **video/audio that has no `.transcription` artifact under `.lfbridge/`** and emits a per-repo
   **transcribe batch** → a **transcribe slug** (a ~80%-width, default-checked popup: *"Transcribe N
   files"* → background jobs on [processing.mdx](./processing.mdx)).
 

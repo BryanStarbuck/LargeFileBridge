@@ -490,14 +490,24 @@ filtered `data`, and the tab's `metrics` to `MetricsStrip`).
    onto a **second, balanced (equal-count), left-aligned row** rather than squeeze it (§3.1).
 6. The **IPFS** tab filters to large/media files, shows the IPFS columns, and sorts by transfer urgency
    (worst first) then Size desc (§4.2).
-7. The **Compress** tab filters to compressible videos/images, shows a **Compress status icon** column
-   (§6), and sorts could-compress-first then Size desc (§4.3).
-8. The **Transcribe** tab filters to audio/video, shows the **three-state Transcribe status icon** (§5) —
-   **solid blue = done**, **orange-edge / 99%-white = could be transcribed** (audio/video, no transcript),
-   **thin very-light-grey edge = not applicable** — and sorts could-transcribe-first then Size desc.
+7. The **Compress** tab filters to compressible videos/images, shows the **Compress status icon** as a
+   **leading, header-less control column to the LEFT of `File`** (§4.3/§6), and sorts could-compress-first
+   then Size desc.
+8. The **Transcribe** tab filters to audio/video, shows the **three-state Transcribe status icon** (§5) **as
+   a leading, header-less control column to the LEFT of `File`** (like the Pin/IPFS icons) — **solid blue =
+   done (white glyph)**, **red/orange-edge / ~99%-white fill = could be transcribed** (audio/video, no
+   transcript; the shared `--lfb-decision-on` token the product owner calls "red"), **thin very-light-grey
+   edge = not applicable** — and sorts could-transcribe-first then Size desc. The icon **toggles could ⇄
+   done** as a file gains its transcript.
+8a. **Confirm flow (§5.1):** clicking the **`Transcribable`** metric opens the ~80% popup with all
+    candidates **checked by default** (58 in the worked case); **Continue** → the user may **uncheck** some;
+    the **solid-blue "Transcribe N files"** button **confirms**; the model-provisioning gate may interpose
+    ([transcribe_engine.mdx §3](./transcribe_engine.mdx)) and then **resume**; transcriptions run **async and
+    in parallel**, and the **Processing** surface appears so progress (running / pending / failed) is
+    watchable.
 9. The Transcribe/Compress status icons are **control cells** (stop propagation, never navigate): the
-   orange "could" state click **queues** the action (background job); the done state **views** the output;
-   the N/A state is inert.
+   red/orange "could" state click **queues** the action (background job); the done state **views** the
+   output; the N/A state is inert.
 10. The per-file `transcribe` and `compress` task-status fields are composed on `FileRow` by the backend
     (§2.5, §7) by joining the classifier + storage index; the per-tab metric counts come from the same
     `RepoDetail`.
@@ -517,9 +527,14 @@ filtered `data`, and the tab's `metrics` to `MetricsStrip`).
   (panel/row/tooltip/action link) — the non_intrusive_tooltip surface docked.
   PER TAB (§4): All=all files, full cols, undecided-first; IPFS=large|media, IPFS cols, transfer-urgency
   sort; Compress=compressible video/image, Compress icon col, could-first+size-desc; Transcribe=audio/video,
-  Transcribe 3-state icon, could-first+size-desc. TRANSCRIBE ICON (§5, Captions glyph): Done=solid BLUE ·
-  Could(audio/video, no .transcription)=orange normal-edge + 99%-white/1%-orange fill · N/A=white +
-  very-thin very-light-grey edge. COMPRESS ICON (§6, Archive glyph) same grammar, GREEN done. New FileRow
+  Transcribe 3-state icon, could-first+size-desc. TRANSCRIBE ICON is now a LEADING, HEADER-LESS control col
+  to the LEFT of File (like Pin/IPFS — owner: "move it left of the file icon, drop the title"). States:
+  Done=solid BLUE fill+white glyph · Could(audio/video, no transcript)=red/orange normal-edge
+  (--lfb-decision-on #c2410c = the "red" the owner means) + ~99%-white/~1%-tint fill · N/A=white + very-thin
+  very-light-grey edge. TOGGLES could<->done. §5.1 CONFIRM FLOW: Transcribable metric → ~80% popup all-checked
+  (58) → Continue → uncheck → solid-blue "Transcribe N files" Confirm → (model-provision gate transcribe_engine
+  §3 may interpose+resume) → async PARALLEL transcribe (transcribe_engine §5) → Processing surface appears.
+  COMPRESS ICON (§6, Archive glyph) same grammar + leading header-less col, GREEN done. New FileRow
   fields: transcribe, compress (backend join classifySpecial + readStorageIndex). Code: TaskTabs.tsx,
   taskTabs.config.ts, MetricsStrip.tsx/MetricPanel (opens WarningPopup directly), metricWarningDefs.tsx
   (buildMetricWarning + topRecommendation + scanIsStale), HoverInfoRegion.tsx, TranscribeStatusIcon.tsx,

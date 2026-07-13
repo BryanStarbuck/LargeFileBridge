@@ -151,13 +151,13 @@ commits, while the small committed manifest still travels with the code.
 ├── .lfbridge/
 │   ├── files.yaml               # per-file fingerprint index (§4.1)
 │   ├── manifest.yaml            # large-file → IPFS CID + pin state (storage_local.mdx §9)
-│   └── analysis/                # per-file media-analysis outputs (§6)
+│   ├── <rel-dir>/<name.ext>.transcription    # transcript — path-mirrored, ext APPENDED (§6)
+│   ├── <rel-dir>/<name.ext>.ai_description   # AI description — path-mirrored, ext APPENDED (§6)
+│   └── analysis/                # visuals-by-time + compression record only (§6)
 │       └── <relpath>/
 │           ├── visuals_by_time.yaml
 │           └── compression.yaml
-├── <relpath-without-ext>.transcription    # transcript SIDECAR beside the media (§6)
-├── <relpath-without-ext>.ai_description   # AI description SIDECAR beside the media (§6)
-└── …the storage's actual files (each with its two sidecars right beside it)…
+└── …the storage's actual files (media untouched; transcript/description live under .lfbridge/ above)…
 ```
 
 ### 4.1 Per-file tracking metadata (charter)
@@ -219,19 +219,20 @@ mirrored to Dropbox, or any combination. The clones are **mirrors, not the sourc
 For a file in a storage — **especially a video** — LFB can run analysis passes. Their outputs are
 **generated artifacts** that travel with the storage, so any of the user's computers (or a teammate on a
 company/community storage) gets them without re-running. Each pass is an explicit, opt-in operation (never
-automatic on bytes — charter §6.1 spirit). **Transcript and description are written as sidecars beside the
-media** ([Transcribe.mdx §3](./Transcribe.mdx), [ai_description.mdx §2](./ai_description.mdx) are
-authoritative — extension replaced, **no** `.lfbridge/analysis/` directory); **visuals-by-time and the
-compression record** remain **YAML under `.lfbridge/analysis/<relpath>/`**.
+automatic on bytes — charter §6.1 spirit). **Transcript and description are written INSIDE the storage's
+`.lfbridge/`, path-mirrored, with the media's full filename and the extension APPENDED**
+([Transcribe.mdx §3](./Transcribe.mdx), [ai_description.mdx §2](./ai_description.mdx) are
+authoritative — **no** extension replacement, **no** `.lfbridge/analysis/` directory for these two);
+**visuals-by-time and the compression record** remain **YAML under `.lfbridge/analysis/<relpath>/`**.
 
 The passes:
 
-* **Transcript** (**`<rel-without-ext>.transcription`** sidecar beside the media) — **speech-to-text** of
-  what people are *saying* in a video (or in an audio file). This is the "what was said" track.
-  Authoritative: [Transcribe.mdx §3](./Transcribe.mdx).
-* **Description** (**`<rel-without-ext>.ai_description`** sidecar beside the media) — a prose
-  **summary/description** of the file: for a **video**, what it is about; for an **image**, **what is in the
-  image**. The "what is it" track. Authoritative: [ai_description.mdx §2](./ai_description.mdx).
+* **Transcript** (**`.lfbridge/<rel-dir>/<name.ext>.transcription`** — path-mirrored, extension appended)
+  — **speech-to-text** of what people are *saying* in a video (or in an audio file). This is the "what was
+  said" track. Authoritative: [Transcribe.mdx §3](./Transcribe.mdx).
+* **Description** (**`.lfbridge/<rel-dir>/<name.ext>.ai_description`** — path-mirrored, extension appended)
+  — a prose **summary/description** of the file: for a **video**, what it is about; for an **image**,
+  **what is in the image**. The "what is it" track. Authoritative: [ai_description.mdx §2](./ai_description.mdx).
 * **Visuals & action by time** (`visuals_by_time.yaml`, under `.lfbridge/analysis/<relpath>/`) — primarily
   for **video**: a timeline of
   **time ranges** with, for each, **what is visually going on** and **what is going on story-wise** — so
@@ -257,7 +258,9 @@ segments:
 * The results are cached against the file's fingerprint (§4.1) — re-running is skipped when the hash is
   unchanged.
 
-Running the analysis passes and writing the per-file YAML outputs into `.lfbridge/analysis/` is to be implemented in code:
+Running the analysis passes and writing the per-file outputs — transcript/description as path-mirrored
+`<name.ext>.transcription` / `<name.ext>.ai_description` files directly under `.lfbridge/`, and
+visuals-by-time / compression records as YAML under `.lfbridge/analysis/` — is to be implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/analysis.service.ts` — `analyzeFile` (dispatches transcript / description / visuals-by-time by media kind).
 
 ---
@@ -334,10 +337,11 @@ implemented in code:
    child that routes to the Repos tab (not a long list), and the opted-in **Communities**.
 5. Storages are pinned between the user's computers over **IPFS** and **may also** clone to **Google Drive** and
    **Dropbox** (recorded in `storage.yaml` `clones`); the clones are mirrors, not the source of truth.
-6. **Media analysis** can produce, per file under `.lfbridge/analysis/`: a **transcript** (speech +
-   time), a **description** (video summary / image contents), and **visuals-and-action-by-time** (time
-   ranges × visual × story) — video gets all three, images get description only; results cache against the
-   file fingerprint.
+6. **Media analysis** can produce, per file: a **transcript** and a **description** written **directly
+   under `.lfbridge/`, path-mirrored, with the media's full filename and the extension APPENDED**
+   (`.lfbridge/<rel-dir>/<name.ext>.transcription` · `.ai_description` — Transcribe.mdx §3 / ai_description.mdx §2),
+   plus **visuals-and-action-by-time** (time ranges × visual × story) as YAML under `.lfbridge/analysis/` —
+   video gets all three, images get description only; results cache against the file fingerprint.
 7. **Building the fingerprint index parallelizes** the per-file fingerprint (head+tail read + sha256)
    **across files** under the **responsive budget** (`cores − 2`) via `mapLimit()`, and **across
    storages** when a re-index spans several — so a large storage indexes quickly without pinning the app,
@@ -351,6 +355,8 @@ implemented in code:
   the RESPONSIVE budget (cores−2) via mapLimit — responsive/wide-over-files (parallelization.mdx §3;
   tracking.service.ts indexStorageFiles). They pin over IPFS
   and may also mirror to Google Drive / Dropbox. The Storages left-bar tab groups Personal + Companies +
-  a Repos link + opted-in Communities. Media analysis writes transcript/description/visuals_by_time YAML.
+  a Repos link + opted-in Communities. Media analysis writes transcript/description as path-mirrored
+  <name.ext>.transcription / .ai_description directly under .lfbridge/ (ext APPENDED, committed & travels
+  with the repo — NOT under analysis/), and visuals_by_time/compression YAML under .lfbridge/analysis/.
   Sibling detail specs: storage_local, storage_repo, storage_personal, storage_company, storage_community.
 -->

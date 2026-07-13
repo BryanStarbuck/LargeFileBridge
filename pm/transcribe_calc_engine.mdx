@@ -93,10 +93,20 @@ which is **larger than a normal batch popup** (~**80% of the screen's width and 
 lists are long:
 
 * A checklist of every candidate — each row **checked by default** (the user can uncheck ones to skip, or
-  toggle all).
-* The right-side **Apply** button reads *"Transcribe N files"* and, on click, **enqueues transcription as
-  background jobs** ([Transcribe.mdx §2.5](./Transcribe.mdx#25-the-page-action--create-transcriptions-selected-or-all-background-queued)).
-* Work runs **in the background** and is watchable on the **[Processing](./processing.mdx)** page/dock; the
+  toggle all). The user hits **Continue** into the list, **unchecks** anything to exclude, and whatever
+  stays checked is the set.
+* The right-side **Apply / Confirm** button is a **solid-blue** button reading *"Transcribe N files"* (N =
+  the checked count) and, on click, **enqueues transcription as background jobs**
+  ([Transcribe.mdx §2.5](./Transcribe.mdx#25-the-page-action--create-transcriptions-selected-or-all-background-queued)).
+* **First-time model gate (may interpose).** If the heavyweight model isn't provisioned, the **permission
+  popup + download/install/configure** flow of [transcribe_engine.mdx §3](./transcribe_engine.mdx) runs
+  first; because the user **confirmed**, the flow **resumes into the transcription** once provisioning
+  finishes ([transcribe_engine.mdx §3.6](./transcribe_engine.mdx)). If the model is already present the gate
+  is skipped.
+* Work runs **in the background, asynchronously and in parallel** (calibrated per machine —
+  [transcribe_engine.mdx §5](./transcribe_engine.mdx)) and is watchable on the
+  **[Processing](./processing.mdx)** page/dock, where the per-item table shows **which files are running in
+  parallel, which are pending, and which failed** ([processing.mdx §4.3](./processing.mdx#43-the-per-item-processing-table--every-state-with-responsive-columns-locked)); the
   popup can be closed immediately after Apply.
 
 As each file's transcription completes, its `.transcription` sidecar appears, so it **drops out** of the
@@ -118,8 +128,13 @@ The transcribe popup (80% modal, default-checked list, "Transcribe N files" appl
   caution ([scan.mdx §4.3](./scan.mdx#43-the-hard-skip-directory-set-never-descend)); a long Google-Drive
   walk shows progress and can be canceled without leaving partial slugs.
 * **Reuses the transcription engine wholesale** — it does **not** re-implement transcription; Apply hands
-  each file to the in-process engine ([Transcribe.mdx §5](./Transcribe.mdx#5-the-engine--copied-in-called-in-process-locked)),
-  which is offline/local and needs no credentials.
+  each file to the in-process engine ([Transcribe.mdx §5](./Transcribe.mdx#5-the-engine--copied-in-called-in-process-locked) /
+  [transcribe_engine.mdx](./transcribe_engine.mdx)), which is offline/local at run time and needs no
+  credentials. The **first** Apply on a machine without the heavyweight model triggers the one-time,
+  permission-gated model provisioning ([transcribe_engine.mdx §3](./transcribe_engine.mdx)); thereafter it
+  is skipped. Each enqueued run honors the **full-duration / no-truncation** guarantee
+  ([transcribe_engine.mdx §4](./transcribe_engine.mdx)) — a 1–2h+ file is transcribed end-to-end or reported
+  failed, never silently truncated.
 
 ---
 

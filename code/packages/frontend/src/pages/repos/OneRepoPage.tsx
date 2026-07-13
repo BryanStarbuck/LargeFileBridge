@@ -460,7 +460,9 @@ export function OneRepoPage() {
     // "done" < "na" alphabetically) puts the actionable rows first; filter on the same three values.
     {
       id: "compress",
-      header: "Compress",
+      // Header-less: an icon-only leading control column, like Pin/IPFS (task_tabs.mdx §4.3/§6). It only
+      // appears on the Compress tab, so blanking the title here never affects other tabs.
+      header: "",
       kind: "enum",
       accessor: (f) => f.compress ?? "na",
       filterOptions: ["could", "done", "na"],
@@ -476,7 +478,9 @@ export function OneRepoPage() {
     // `transcribe` — the three-state Transcribe status icon (task_tabs.mdx §5).
     {
       id: "transcribe",
-      header: "Transcribe",
+      // Header-less: an icon-only leading control column, like Pin/IPFS (task_tabs.mdx §4.4/§5; the product
+      // owner asked to move it left of File and drop the title). It only appears on the Transcribe tab.
+      header: "",
       kind: "enum",
       accessor: (f) => f.transcribe ?? "na",
       filterOptions: ["could", "done", "na"],

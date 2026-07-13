@@ -16,7 +16,7 @@ import { expandHome } from "../fs/badges.js";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
 import { appConfigPath } from "../../shared/store/scopes.js";
 import { googleApiKeyFileInfo } from "../../config/google-apikey-file.js";
-import { resolveArtifactPlacement, siblingArtifactPath, AI_DESCRIPTION_EXT } from "../storage/artifact-placement.service.js";
+import { resolveArtifactPlacement, lfbridgeArtifactPath, AI_DESCRIPTION_EXT } from "../storage/artifact-placement.service.js";
 import { track } from "../progress/progress.registry.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
 import { getPrompt } from "./prompts.js";
@@ -40,38 +40,17 @@ function exists(p: string): boolean {
 
 /** <root>/<rel-without-ext>.ai_description — the description sidecar beside the media, resolved by the
  *  shared ordered placement rule (Transcribe.mdx §3.4) so it routes to the owning storage's dedicated repo
- *  exactly like a transcript. Carries the placement flags that gate the gitignore nudge and first-time setup. */
+ *  exactly like a transcript (Transcribe.mdx §3.1) — inside the committed `.lfbridge/`, path-mirrored, ext
+ *  APPENDED. Carries the first-time-setup flag. Committed, so no `*.ai_description` gitignore nudge. */
 export function resolveDescriptionPath(absFile: string): {
   root: string;
   rel: string;
   descriptionPath: string;
-  gitIgnore: boolean;
   needsSetup: boolean;
 } {
   const p = resolveArtifactPlacement(absFile);
-  const descriptionPath = siblingArtifactPath(p.root, p.rel, AI_DESCRIPTION_EXT);
-  return { root: p.root, rel: p.rel, descriptionPath, gitIgnore: p.gitIgnore, needsSetup: p.needsSetup };
-}
-
-/** Keep the description sidecars out of Git in a plain repo (a `*.ai_description` .gitignore nudge,
- *  mirroring the transcribe `*.transcription` nudge). */
-function ensureLfbridgeIgnored(root: string): void {
-  if (!exists(path.join(root, ".git"))) return;
-  const gi = path.join(root, ".gitignore");
-  const pattern = `*${AI_DESCRIPTION_EXT}`; // *.ai_description
-  let body = "";
-  try {
-    body = fs.readFileSync(gi, "utf8");
-  } catch {
-    /* none yet */
-  }
-  if (new RegExp(`^\\*\\${AI_DESCRIPTION_EXT}\\s*$`, "m").test(body)) return;
-  const prefix = body && !body.endsWith("\n") ? `${body}\n` : body;
-  try {
-    fs.writeFileSync(gi, `${prefix}${pattern}\n`, "utf8");
-  } catch (e) {
-    log.warn("describe", `could not update .gitignore in ${root}: ${(e as Error).message}`);
-  }
+  const descriptionPath = lfbridgeArtifactPath(p.root, p.rel, AI_DESCRIPTION_EXT);
+  return { root: p.root, rel: p.rel, descriptionPath, needsSetup: p.needsSetup };
 }
 
 /** Only image + video are describable here (audio → transcription covers it). */
@@ -182,7 +161,7 @@ export async function describeOne(
   const kind = describeKindFor(name);
   if (!kind) return result(abs, "unsupported", null, null, "only images and videos can be AI-described");
 
-  const { root, descriptionPath, gitIgnore, needsSetup } = resolveDescriptionPath(abs);
+  const { root, descriptionPath, needsSetup } = resolveDescriptionPath(abs);
   // First-time gate (Transcribe.mdx §3.5): no Personal storage owns this file — route to the setup wizard
   // rather than writing a description in a surprising place.
   if (needsSetup) {
@@ -217,8 +196,8 @@ export async function describeOne(
       }
     });
 
-    // Keep the sidecars out of Git only in a PLAIN repo; a dedicated repo (rule B) is meant to hold+pin it.
-    if (gitIgnore) ensureLfbridgeIgnored(root);
+    // The description lands in the COMMITTED .lfbridge/ area (Transcribe.mdx §3.1), so it travels with the
+    // repo — no `*.ai_description` gitignore nudge; the media itself stays git-ignored and rides IPFS.
     fs.mkdirSync(path.dirname(descriptionPath), { recursive: true });
     fs.writeFileSync(
       descriptionPath,

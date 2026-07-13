@@ -61,8 +61,10 @@ export const TASK_TABS: Record<TaskTabId, TaskTabDef> = {
   compress: {
     id: "compress",
     label: "Compress",
+    // The Compress status icon is the LEADING, header-less control column — to the LEFT of File, the same
+    // slot Pin/IPFS occupy (task_tabs.mdx §4.3/§6). A compact Pin is kept after it so the user can still pin.
     icon: Archive,
-    columnIds: ["pinned", "path", "size", "kind", "compress", "changed"],
+    columnIds: ["compress", "pinned", "path", "size", "kind", "changed"],
     defaultSort: [
       { id: "compress", desc: false },
       { id: "size", desc: true },
@@ -75,8 +77,10 @@ export const TASK_TABS: Record<TaskTabId, TaskTabDef> = {
   transcribe: {
     id: "transcribe",
     label: "Transcribe",
+    // The Transcribe status icon is the LEADING, header-less control column — to the LEFT of File, like the
+    // Pin/IPFS icons (task_tabs.mdx §4.4/§5; the product owner: "move it left of the file icon, drop the title").
     icon: Captions,
-    columnIds: ["path", "size", "kind", "transcribe", "changed"],
+    columnIds: ["transcribe", "path", "size", "kind", "changed"],
     defaultSort: [
       { id: "transcribe", desc: false },
       { id: "size", desc: true },

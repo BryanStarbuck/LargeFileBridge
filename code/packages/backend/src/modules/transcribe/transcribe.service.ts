@@ -10,7 +10,7 @@ import { mediaKindForName } from "@lfb/shared";
 import { Transcriber } from "../../tools/transcribe/Transcribe.js";
 import { HARD_SKIP } from "../../shared/scan-filters.js";
 import { expandHome } from "../fs/badges.js";
-import { resolveArtifactPlacement, siblingArtifactPath, TRANSCRIPTION_EXT } from "../storage/artifact-placement.service.js";
+import { resolveArtifactPlacement, lfbridgeArtifactPath, TRANSCRIPTION_EXT } from "../storage/artifact-placement.service.js";
 import { getStorageDetail } from "../storage/storage.service.js";
 import { track } from "../progress/progress.registry.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
@@ -26,48 +26,28 @@ const engine = new Transcriber();
 
 // ── transcript-path resolution (§3.4) — delegated to the shared, storage-aware placement resolver ──────
 // The ordered rule (walk-up containing root → owning storage's dedicated repo → first-time signal →
-// beside-media) lives in storage/artifact-placement.service.ts so transcription and AI description never
-// drift. Here we just apply the `<rel-without-ext>.transcription` sidecar shape onto whatever base it returns.
+// last-resort .lfbridge/) lives in storage/artifact-placement.service.ts so transcription and AI
+// description never drift. Here we apply the `.lfbridge/<rel-dir>/<name.ext>.transcription` shape (§3.1)
+// onto whatever root it returns.
 
-/** The placement root the transcript sidecar is mirrored under for a media file (§3.4). Kept for callers
- *  that only need the root; the full placement (incl. gitIgnore / needsSetup) comes from resolveTranscriptPath. */
+/** The placement root the transcript is mirrored under for a media file (§3.4). Kept for callers that only
+ *  need the root; the full placement (incl. needsSetup) comes from resolveTranscriptPath. */
 export function resolveStorageRoot(absFile: string): string {
   return resolveArtifactPlacement(absFile).root;
 }
 
-/** <root>/<rel-without-ext>.transcription — the transcript sidecar beside the media, plus the placement
- *  flags that drive the gitignore nudge (only in a plain repo, never a dedicated repo) and the first-time
- *  setup gate (§3.4–§3.5). */
+/** <root>/.lfbridge/<rel-dir>/<name.ext>.transcription — the transcript inside the committed `.lfbridge/`
+ *  tracking dir (§3.1), plus the first-time setup gate (§3.4–§3.5). The transcript is COMMITTED (travels
+ *  with the repo), so there is no `*.transcription` gitignore nudge anymore. */
 export function resolveTranscriptPath(absFile: string): {
   root: string;
   rel: string;
   transcriptPath: string;
-  gitIgnore: boolean;
   needsSetup: boolean;
 } {
   const p = resolveArtifactPlacement(absFile);
-  const transcriptPath = siblingArtifactPath(p.root, p.rel, TRANSCRIPTION_EXT);
-  return { root: p.root, rel: p.rel, transcriptPath, gitIgnore: p.gitIgnore, needsSetup: p.needsSetup };
-}
-
-/** Keep the transcript sidecars out of Git in a plain repo (a `*.transcription` .gitignore nudge). */
-function ensureTranscribeIgnored(root: string): void {
-  if (!exists(path.join(root, ".git"))) return;
-  const gi = path.join(root, ".gitignore");
-  const pattern = `*${TRANSCRIPTION_EXT}`; // *.transcription
-  let body = "";
-  try {
-    body = fs.readFileSync(gi, "utf8");
-  } catch {
-    /* no .gitignore yet */
-  }
-  if (new RegExp(`^\\*\\${TRANSCRIPTION_EXT}\\s*$`, "m").test(body)) return;
-  const prefix = body && !body.endsWith("\n") ? `${body}\n` : body;
-  try {
-    fs.writeFileSync(gi, `${prefix}${pattern}\n`, "utf8");
-  } catch (e) {
-    log.warn("transcribe", `could not update .gitignore in ${root}: ${(e as Error).message}`);
-  }
+  const transcriptPath = lfbridgeArtifactPath(p.root, p.rel, TRANSCRIPTION_EXT);
+  return { root: p.root, rel: p.rel, transcriptPath, needsSetup: p.needsSetup };
 }
 
 // ── public API ────────────────────────────────────────────────────────────────────
@@ -102,7 +82,7 @@ export async function transcribeOne(input: string, overwrite = false): Promise<T
     return result(abs, "skipped", null, null, "not an audio/video file");
   }
 
-  const { root, transcriptPath, gitIgnore, needsSetup } = resolveTranscriptPath(abs);
+  const { transcriptPath, needsSetup } = resolveTranscriptPath(abs);
   // First-time gate (§3.5): no Personal storage exists and nothing owns this file — don't write somewhere
   // surprising; tell the UI to run the setup wizard. Never produces a file.
   if (needsSetup) {
@@ -111,9 +91,8 @@ export async function transcribeOne(input: string, overwrite = false): Promise<T
   if (!overwrite && exists(transcriptPath)) {
     return result(abs, "skipped", transcriptPath, null, "already transcribed");
   }
-  // Only keep the sidecars out of Git for a PLAIN repo (rule A). A dedicated repo (rule B) exists to hold
-  // and pin these artifacts, so we deliberately do NOT gitignore there (Transcribe.mdx §3.4).
-  if (gitIgnore) ensureTranscribeIgnored(root);
+  // The transcript lands in the COMMITTED .lfbridge/ area (§3.1), so it travels with the repo and there is
+  // no `*.transcription` gitignore nudge — the multi-GB media stays git-ignored and rides IPFS.
 
   const r = await track("transcribe", name, (report) =>
     engine.transcribeToFile(abs, transcriptPath, ({ fraction }) =>

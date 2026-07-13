@@ -1,12 +1,13 @@
 // Storage-aware placement of derived artifacts — the transcript (.transcription) and AI description
-// (.ai_description) SIDECARS. Given ANY media file, decide WHICH root the artifact's mirrored path hangs
-// under, by the ordered rule locked in Transcribe.mdx §3.4. The sidecar itself is written BESIDE the media
-// (same folder), the media's own base name with its extension REPLACED — there is NO .transcribe/ or
-// .lfbridge/analysis/ directory for these two (see siblingArtifactPath below):
+// (.ai_description). Given ANY media file, decide WHICH root the artifact's mirrored path hangs under, by
+// the ordered rule locked in Transcribe.mdx §3.4. The artifact itself is written INSIDE that root's
+// committed `.lfbridge/` directory, path-mirrored, with the ext APPENDED to the media's full filename
+// (extension kept) — NOT beside the media and NOT with the extension replaced (see lfbridgeArtifactPath
+// below): `<root>/.lfbridge/<rel-dir>/<name.ext>.transcription`.
 //
 //   A. Containing storage/repo root — the NEAREST ancestor carrying storage.yaml / .lfbridge/ / .git/
-//      (the "walk up to the repo root" the product owner described). Git repos get the sidecars
-//      gitignored (*.transcription / *.ai_description).
+//      (the "walk up to the repo root" the product owner described). Artifacts live in the COMMITTED
+//      .lfbridge/ area so they travel with the repo — no *.transcription/*.ai_description gitignore nudge.
 //   B. Owning company/personal storage for a file living OUT in the wider filesystem: the most specific
 //      storage whose MAPPED source dir (via this device's graft) contains it, else PERSONAL as the default
 //      catch-all for anything under ~. Its artifact is written under the storage's DEDICATED GIT REPO when
@@ -189,21 +190,21 @@ export function resolveArtifactPlacement(input: string): ArtifactPlacement {
   return { root: path.dirname(abs), rel: path.basename(abs), gitIgnore: isGit, owner: "beside", needsSetup: false };
 }
 
-// The sidecar extensions (Transcribe.mdx §3, ai_description.mdx §2). Single source of truth — imported by
-// transcribe.service / describe.service so the two never drift. The transcript/description are written
-// BESIDE the media with the media's extension REPLACED by one of these (no .transcribe/ dot-directory).
+// The derived-artifact extensions (Transcribe.mdx §3, ai_description.mdx §2). Single source of truth —
+// imported by transcribe.service / describe.service so the two never drift. Both artifacts are written
+// INSIDE the owning root's committed `.lfbridge/` directory, path-mirrored, with the ext APPENDED to the
+// media's FULL filename (extension kept) — NOT beside the media and NOT with the extension replaced.
 export const TRANSCRIPTION_EXT = ".transcription";
 export const AI_DESCRIPTION_EXT = ".ai_description";
 
 /**
- * The sidecar path for a media file's derived artifact: the media's mirrored relative path under `root`
- * with its extension REPLACED by `ext` (Transcribe.mdx §3.1). Same folder as the (mirrored) media —
- * `render/talk.mp3` + `.transcription` → `<root>/render/talk.transcription`. Files with no extension just
- * get `ext` appended. `ext` includes the leading dot.
+ * The path for a media file's derived artifact (Transcribe.mdx §3.1). It lives under the owning root's
+ * `.lfbridge/` directory, mirroring the media's relative path, with `ext` APPENDED to the full filename
+ * (original extension kept): `a/b/talk.mp3` + `.transcription` → `<root>/.lfbridge/a/b/talk.mp3.transcription`.
+ * Appending (not replacing) means `talk.mp3` and `talk.wav` no longer collide. `ext` includes the leading dot.
  */
-export function siblingArtifactPath(root: string, rel: string, ext: string): string {
-  const relNoExt = rel.slice(0, rel.length - path.extname(rel).length);
-  return path.join(root, relNoExt + ext);
+export function lfbridgeArtifactPath(root: string, rel: string, ext: string): string {
+  return path.join(root, LFBRIDGE_DIR, rel) + ext;
 }
 
 /**
@@ -218,7 +219,7 @@ export function placementView(input: string): ArtifactPlacementView {
     mediaPath: abs,
     root: p.root,
     rel: p.rel,
-    transcriptPath: siblingArtifactPath(p.root, p.rel, TRANSCRIPTION_EXT),
+    transcriptPath: lfbridgeArtifactPath(p.root, p.rel, TRANSCRIPTION_EXT),
     gitIgnore: p.gitIgnore,
     owner: p.owner,
     needsSetup: p.needsSetup,

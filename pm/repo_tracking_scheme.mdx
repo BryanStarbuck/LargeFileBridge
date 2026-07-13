@@ -58,7 +58,9 @@ This spec builds on the siblings and does not repeat them:
 │   │   └── videos/
 │   │       ├── trees.mov.yaml
 │   │       └── 2075191642366054733.mp4.yaml
-│   └── analysis/                        ← per-file media analysis (transcripts, descriptions, visuals-by-time)
+│   ├── videos/                          ← transcripts/descriptions — path-mirrored, media filename + ext APPENDED
+│   │   └── trees.mov.transcription      ←   e.g. videos/trees.mov → .lfbridge/videos/trees.mov.transcription
+│   └── analysis/                        ← visuals-by-time + compression records only (YAML, keyed by relpath)
 └── videos/
     ├── trees.mov
     └── 2075191642366054733.mp4
@@ -251,7 +253,7 @@ allow-listed email, or the sentinel `not-lfbridge` when something happened outsi
       at: 2026-03-11T08:02:00Z
       on_device: bryan-macbook-pro
       by: bryan@act3ai.com
-      output: videos/trees.transcription
+      output: .lfbridge/videos/trees.mov.transcription   # path-mirrored under .lfbridge/, ext APPENDED
 ```
 
 **Event `kind`s (extensible, but these are the load-bearing ones):**
