@@ -303,9 +303,11 @@ this task, first."
 * **Filter:** compressible-relevant files — **videos and images** (`compressible` true, i.e. the
   extension-based `compressState === "should"`, plus already-`done` ones shown muted so the user sees the
   whole picture). Audio and non-media never appear (audio is never compressible — charter).
-* **Columns:** `File`, `Size`, **`Compress`** (the compress status icon, §6), `Kind` (video/image),
-  `Changed`. IPFS decision columns are hidden except a compact `Pin` is kept so the user can still pin
-  what they compress. (An **est. savings** column is a later add, driven by the learned size baseline —
+* **Columns:** **`Compress`** (the compress status icon, §6) **as the LEADING control column — to the LEFT
+  of `File`, header-less (icon only)** — then `File`, `Size`, `Kind` (video/image), `Changed`. IPFS decision
+  columns are hidden except a compact `Pin` is kept so the user can still pin what they compress. The status
+  icon sits in the same **leading, title-less** slot the `Pin`/IPFS icons occupy elsewhere (§4.4, mirrored
+  grammar). (An **est. savings** column is a later add, driven by the learned size baseline —
   [compression.mdx](./compression.mdx) — and is out of scope until the baseline exists.)
 * **Default sort:** **could-compress first**, then **Size desc** — the biggest reclaimable file at the top,
   because that is the biggest win.
@@ -316,8 +318,13 @@ this task, first."
 * **Filter:** transcribable files only — **audio and video** (`transcribable` true;
   [special_files.mdx §3](./special_files.mdx#3-the-transcribable-sub-flag--video-has-audio-and-audio)).
   Images and non-media never appear.
-* **Columns:** `File`, `Size`, **`Transcribe`** (the three-state icon, §5), `Kind` (video/audio),
-  `Changed`. (A **duration** column is a later add once probed durations are indexed.)
+* **Columns:** **`Transcribe`** (the three-state icon, §5) **as the LEADING control column — to the LEFT of
+  `File`, with NO header title (icon only)** — then `File`, `Size`, `Kind` (video/audio), `Changed`. The
+  product owner's instruction (LOCKED): *"move that transcribe icon over to the left of the file icon and
+  get rid of the title of it — do it like the pin icons for the other tabs and the IPFS icon."* So the
+  Transcribe icon occupies the **same leading, header-less control slot** the `Pin` / IPFS icons occupy on
+  their tabs, not a labeled column after `File`. (A **duration** column is a later add once probed durations
+  are indexed.)
 * **Default sort:** **could-transcribe first** (the orange "not yet" rows), then **Size desc**.
 * **Metrics:** `Transcribable` (could) · `Transcribed` (done).
 
@@ -329,16 +336,29 @@ this task, first."
 
 ## 5. The Transcribe status icon — three states (LOCKED)
 
-The Transcribe tab (and, on All, an optional badge) shows a **Transcribe status icon** per row. It uses the
-lucide **`Captions`** glyph (transcript/subtitles) in a 16×16 box, and has **three** states — echoing the
+The Transcribe tab shows a **Transcribe status icon** per row, in a **leading, header-less control column to
+the LEFT of `File`** (§4.4 — the same slot the `Pin` / IPFS icons occupy; the product owner: *"move it to
+the left of the file icon and get rid of the title, like the pin and IPFS icons"*). It uses the lucide
+**`Captions`** glyph (transcript/subtitles) in a 16×16 box, and has **three** states — echoing the
 [decision-toggle](./decision_toggles.mdx) box grammar but with a **blue** "done" fill, because this is a
-**status/action** indicator, not a stored two-axis decision:
+**status/action** indicator, not a stored two-axis decision. **It toggles between the two live states:**
+"could" (a warm red/orange edge — see the color note) ⇄ "done" (blue fill, white glyph) as a file gains its
+transcript.
 
 | State | When | Fill | Edge | Glyph |
 | --- | --- | --- | --- | --- |
-| **Done** | The file **has a transcript** (a `.transcription` sidecar exists). | **solid blue** (`--lfb-pin` / the pin blue) | none | **white** |
-| **Could be transcribed** | The file is **audio or video and has no transcript yet** — it *could* be transcribed. | **99% white / 1% orange** (a barely-there orange wash) | **medium-orange, normal thickness** (`--lfb-decision-on`) | orange |
+| **Done** | The file **has a transcript** ([Transcribe.mdx §3](./Transcribe.mdx) — a `.transcription` exists under `.lfbridge/`). | **solid blue** (`--lfb-pin` / the pin blue) | none — **white** glyph/caption lines | **white** |
+| **Could be transcribed** | The file is **audio or video and has no transcript yet** — it *could* be transcribed. | **~99% white / ~1% tint** (a barely-there wash) | **normal-thickness "actionable" edge** (`--lfb-decision-on`, the warm red/orange the product owner calls **red**) | red/orange |
 | **Not applicable** | The file is **not** audio/video (or otherwise not transcribable). | **white** | **very thin, very-light-grey** (`--lfb-toggle-off-edge` at hairline weight) | faint grey |
+
+> **Color note (reconciled).** The "could" edge uses the shared **`--lfb-decision-on`** token — a warm
+> burnt color (`#c2410c`) the code and earlier revisions called **orange**. The product owner describes the
+> same swatch as **red** (*"a red outline / red edge, no fill or a very very light red fill — that means it
+> can be transcribed; after transcribing make it blue fill with white edge lines"*). These are the **same
+> token and the same behavior** — a red/orange edge with a near-white fill for "could", toggling to solid
+> blue with a white glyph for "done". No color change is needed in code beyond keeping this token; the Done
+> state is already solid blue with a white glyph. The Compress icon (§6) uses the identical grammar with a
+> **green** done color.
 
 * The **orange "could" state is the actionable one** — it marks exactly a file the
   [What-Can-Be-Transcribed engine](./transcribe_calc_engine.mdx) would pick up (audio, or video **with**
@@ -348,13 +368,46 @@ lucide **`Captions`** glyph (transcript/subtitles) in a 16×16 box, and has **th
     watchable on [Processing](./processing.mdx)) — the same enqueue the transcribe popup uses.
   * **Done →** opens/views the transcript.
   * **Not applicable →** inert (no hover affordance beyond the hover-info text).
-* On the **Transcribe tab** the icon is its own **column**; the tab's default sort puts the orange "could"
-  rows first.
+* On the **Transcribe tab** the icon is the **leading, header-less control column** (§4.4); the tab's
+  default sort puts the red/orange "could" rows first.
 
 The Transcribe status icon (three states, click-to-transcribe / click-to-view) is rendered in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/TranscribeStatusIcon.tsx` —
 `TranscribeStatusIcon` (state from `FileRow.transcribe`; done-blue token `--lfb-pin` in
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/styles.css`, via the shared `StatusActionIcon`).
+
+### 5.1 The Transcribable metric → popup → Confirm → Processing flow (LOCKED)
+
+Clicking the **`Transcribable`** metric panel (§2.4) — or the tab's "how many could be transcribed" number —
+opens the **transcribe popup**, and from there the user drives a confirmed batch. The full path, exactly as
+the product owner walked it (they were in the **charlie_kirk** repo's Transcribe tab, which read **58 ready
+to transcribe**):
+
+1. **Open.** Clicking the Transcribable metric opens the **educate-and-fix / transcribe popup** — the
+   ~80%-of-screen list ([transcribe_calc_engine.mdx §4](./transcribe_calc_engine.mdx)) — listing all **58**
+   candidates **checked by default**.
+2. **Continue / adjust.** The user hits **Continue** into the checklist; they may **uncheck** any files to
+   exclude. Whatever stays checked is the set.
+3. **Confirm (the solid blue button).** They press the **solid-blue Confirm** button — labelled **"Transcribe
+   N files"** (N = the checked count, e.g. 58). This is the commit.
+4. **Model gate (may interpose).** If the heavyweight model is missing/partial, the permission popup +
+   provisioning of [transcribe_engine.mdx §3](./transcribe_engine.mdx) runs first; because the user
+   **confirmed**, the flow **resumes into the transcription** once provisioning finishes
+   ([transcribe_engine.mdx §3.6](./transcribe_engine.mdx)).
+5. **Async + the Processing tab appears.** The transcriptions run **asynchronously and in parallel**
+   ([transcribe_engine.mdx §5](./transcribe_engine.mdx) — calibrated to the machine's cores/RAM). The
+   conditional **Processing** surface appears ([processing.mdx](./processing.mdx)) so the user can **watch
+   progress live** — which files are running in parallel, which are pending in the queue, and which failed
+   (§processing.mdx). The popup can be closed immediately; the work keeps draining.
+6. **Self-clearing.** As each file completes it gains its `.transcription` (its row's icon toggles to solid
+   **blue** "done"), and it drops out of the next discovery run.
+
+This confirm flow (default-checked 58 → uncheck → solid-blue "Transcribe N files" → enqueue → Processing) is
+rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TranscribeBatchPopup`
+and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — the
+`transcribable` panel's `onOpen` (opens the same popup, gated by `withModelReady()` from
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/transcribe.ts`).
 
 ---
 
