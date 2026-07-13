@@ -9,17 +9,36 @@
 // Pure + dependency-light so it is easy to unit-test and reason about. The `budget` (mass-compute Core
 // Budget) is passed in — snapshotted once by the queue's admission pass — mirroring capFor()'s discipline.
 import os from "node:os";
+import { getAppConfig } from "../store-model/config.service.js";
 
-/** How much resident RAM one whisper instance needs, by model. Measured/estimated (transcribe_engine.mdx
- *  §3.1 stores a real measurement once the model is provisioned); until then these conservative defaults
- *  keep a small machine at 1 job. `large` is the heavyweight engine (~a few GB); `base` is the small model. */
+/** How much resident RAM one transcription job needs, by model/engine (transcribe_engine.mdx §5.1).
+ *  Conservative defaults until §3.1 stores a real measurement. `qwen` (Qwen3-ASR-1.7B via MLX) holds the
+ *  model in unified memory (several GB per instance); `base` is the small whisper model. */
 const MODEL_RAM_PER_JOB_BYTES: Record<string, number> = {
-  large: 5 * 1024 * 1024 * 1024, // ~5 GB resident for whisper-large-v3
+  qwen: 6 * 1024 * 1024 * 1024, // ~6 GB unified memory for Qwen3-ASR-1.7B (MLX)
+  large: 5 * 1024 * 1024 * 1024,
   medium: 3 * 1024 * 1024 * 1024,
   small: 2 * 1024 * 1024 * 1024,
-  base: 1 * 1024 * 1024 * 1024, // ~1 GB for the base model
+  base: 1 * 1024 * 1024 * 1024, // ~1 GB for whisper-base (the mac fallback)
   tiny: 1 * 1024 * 1024 * 1024,
 };
+
+// The active engine's RAM key, cached briefly so the queue's hot admission loop doesn't re-parse config.yaml
+// per task. `mac` → the light `base` whisper model; anything else → the heavyweight `qwen` footprint.
+let cachedModelKey = "qwen";
+let cachedAt = 0;
+export function activeTranscribeModelKey(): string {
+  const now = Date.now();
+  if (now - cachedAt > 5000) {
+    try {
+      cachedModelKey = getAppConfig().transcribe.engine === "mac" ? "base" : "qwen";
+    } catch {
+      /* keep the last value on a transient read failure */
+    }
+    cachedAt = now;
+  }
+  return process.env.LFB_TRANSCRIBE_MODEL || cachedModelKey;
+}
 
 /** Reserve some RAM for the OS + the web app + IPFS so we never drive the box into swap. */
 const RAM_HEADROOM_BYTES = 2 * 1024 * 1024 * 1024;

@@ -66,6 +66,8 @@ import type {
   GitIgnorePlan,
   GitIgnoreResult,
   TranscribeTools,
+  TranscribeEngineStatus,
+  TranscribeProvisionResult,
   TranscribeResult,
   TranscribeBatchResult,
   TranscriptView,
@@ -293,6 +295,13 @@ export const api = {
   // or the recursive `root`; returns the plan immediately (willProcess = the toast count).
   transcribeEnqueue: (body: { paths?: string[]; root?: string; overwrite?: boolean }) =>
     unwrap<EnqueuePlan>(http.post("/transcribe/enqueue", body)),
+  // Transcription ENGINE + heavyweight-model provisioning (transcribe_engine.mdx §3/§6).
+  transcribeEngine: () => unwrap<TranscribeEngineStatus>(http.get("/transcribe/engine")),
+  transcribeProvision: () => unwrap<TranscribeProvisionResult>(http.post("/transcribe/engine/provision", { approve: true })),
+  transcribeRepair: () => unwrap<TranscribeProvisionResult>(http.post("/transcribe/engine/repair", {})),
+  transcribeRemoveModel: () => unwrap<{ removed: boolean; freedBytes: number }>(http.post("/transcribe/engine/remove", {})),
+  transcribeConsent: (decision: "approved" | "declined" | "use_fallback") =>
+    unwrap<TranscribeEngineStatus>(http.post("/transcribe/engine/consent", { decision })),
   // AI description (ai_description.mdx). Provider status, read an existing description, generate one (the
   // external vision call), and read/customize/save/reset the per-kind prompt files.
   describeProviders: () => unwrap<DescribeProvidersStatus>(http.get("/describe/providers")),

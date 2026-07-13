@@ -18,6 +18,7 @@ import { EntityKebab, type Action } from "../../components/menu/EntityMenu.js";
 import { PageActions, producingActions } from "../../components/menu/PageActions.js";
 import { compressAllVideos, compressAllImages, gitIgnoreBig } from "../../components/menu/domainActions.js";
 import type { ActionScope } from "../../lib/pageActions.js";
+import { withModelReady } from "../../lib/transcribe.js";
 import { PinToggle } from "../../components/PinToggle.js";
 import { DecisionToggle } from "../../components/decision/DecisionToggles.js";
 import { TranscribeStatusIcon } from "../../components/TranscribeStatusIcon.js";
@@ -189,7 +190,10 @@ export function OneRepoPage() {
     if (!detail?.path || f.transcribe === "na") return;
     const abs = `${detail.path}/${f.path}`;
     if (f.transcribe === "could") {
-      if (window.confirm(`Transcribe ${f.path}? Runs locally in the background.`)) transcribeOne.mutate(abs);
+      // Gate behind the heavyweight-model provisioning flow (transcribe_engine.mdx §3), then run.
+      if (window.confirm(`Transcribe ${f.path}? Runs locally in the background.`)) {
+        void withModelReady({ label: `transcribe ${f.path}`, run: () => transcribeOne.mutate(abs) });
+      }
     } else {
       const name = f.path.slice(f.path.lastIndexOf("/") + 1);
       navigate({ to: viewerRouteForName(name), search: { path: abs } });

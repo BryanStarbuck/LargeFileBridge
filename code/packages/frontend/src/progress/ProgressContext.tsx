@@ -21,7 +21,13 @@ import {
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type { ProgressJob, ProgressKind, ProcessingBatch } from "@lfb/shared";
+import type {
+  ProgressJob,
+  ProgressKind,
+  ProcessingBatch,
+  QueuedItemView,
+  FailedItemView,
+} from "@lfb/shared";
 import { api } from "../api/client.js";
 import { mapLimit } from "../lib/concurrency.js";
 import { clientLog } from "../lib/clientLog.js";
@@ -41,6 +47,8 @@ interface ProgressCtx {
   queued: number; // background job-queue backlog (not-yet-started tasks) — the dock's "+ N queued" footer
   queuedByOp: Partial<Record<ProgressKind, number>>; // per-op backlog split (processing.mdx §5)
   batches: ProcessingBatch[]; // active + recently-finished bulk-run batches (processing.mdx §4)
+  queuedItems: QueuedItemView[]; // PENDING items as rows for the per-item table (processing.mdx §4.3)
+  recentFailures: FailedItemView[]; // FAILED items + reason for the per-item table (processing.mdx §4.3)
   workers: { busy: number; budget: number } | null; // core-budget utilization (processing.mdx §3a)
   processing: boolean; // any running job, pending backlog, OR active batch (processing.mdx §1)
   run: (specs: JobSpec[], opts?: { invalidate?: unknown[][]; batchLabel?: string }) => Promise<void>;
@@ -139,14 +147,18 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
   const queued = server?.queued ?? 0;
   const queuedByOp = server?.queuedByOp ?? {};
   const batches = useMemo<ProcessingBatch[]>(() => server?.batches ?? [], [server]);
+  // Per-item rows for the Processing table (processing.mdx §4.3): the head of the pending queue and the
+  // recently-failed items, both from the same poll. Absent-safe (default []).
+  const queuedItems = useMemo<QueuedItemView[]>(() => server?.queuedItems ?? [], [server]);
+  const recentFailures = useMemo<FailedItemView[]>(() => server?.recentFailures ?? [], [server]);
   const workers = server?.workers ?? null; // core-budget utilization (processing.mdx §3a)
   // "Processing" (processing.mdx §1): a running job, a pending backlog, OR a still-active batch. Drives
   // the conditional left-bar item + the dock's presence.
   const processing = jobs.length > 0 || queued > 0 || batches.some((b) => !b.finishedAt);
 
   const value = useMemo<ProgressCtx>(
-    () => ({ jobs, queued, queuedByOp, batches, workers, processing, run }),
-    [jobs, queued, queuedByOp, batches, workers, processing, run],
+    () => ({ jobs, queued, queuedByOp, batches, queuedItems, recentFailures, workers, processing, run }),
+    [jobs, queued, queuedByOp, batches, queuedItems, recentFailures, workers, processing, run],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
@@ -170,6 +182,7 @@ const VERBS: Record<ProgressKind, string> = {
   ignore: "Ignoring",
   import: "Importing",
   install: "Installing",
+  download: "Downloading",
   configure: "Configuring",
 };
 export function verb(kind: ProgressKind): string {

@@ -14,6 +14,7 @@ import {
   transcribeStorageById,
   enqueueTranscribe,
 } from "./transcribe.service.js";
+import { describeReadiness, provision, repair, removeModel, recordConsent } from "./model-provision.service.js";
 
 export const transcribeRouter = Router();
 transcribeRouter.use(requireAllowListed);
@@ -21,6 +22,60 @@ transcribeRouter.use(requireAllowListed);
 // GET /api/transcribe/tools — are whisper + ffmpeg installed (drives the disabled state + install hint).
 transcribeRouter.get("/tools", (_req, res) => {
   res.json({ ok: true, data: transcribeToolStatus() });
+});
+
+// GET /api/transcribe/engine — engine + heavyweight-model readiness (transcribe_engine.mdx §3.1). Drives
+// the consent popup and the Settings → Transcription panel.
+transcribeRouter.get("/engine", (_req, res) => {
+  try {
+    res.json({ ok: true, data: describeReadiness() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/transcribe/engine/provision — download → install → configure the qwen model (§3.2/§3.3), only
+// with explicit consent. Registers install + download progress jobs and returns immediately.
+transcribeRouter.post("/engine/provision", (req, res) => {
+  const body = z.object({ approve: z.boolean() }).safeParse(req.body ?? {});
+  if (!body.success || !body.data.approve) return res.status(400).json({ ok: false, error: "approve:true required (explicit consent)" });
+  try {
+    void recordConsent("approved");
+    res.json({ ok: true, data: provision() });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/transcribe/engine/repair — re-do whatever is missing/broken in a partial install (§3.4).
+transcribeRouter.post("/engine/repair", (_req, res) => {
+  try {
+    res.json({ ok: true, data: repair() });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/transcribe/engine/remove — delete the downloaded weights to free disk (Settings §6).
+transcribeRouter.post("/engine/remove", (_req, res) => {
+  try {
+    res.json({ ok: true, data: removeModel() });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/transcribe/engine/consent — persist the popup's decision (approved/declined/use_fallback) so it
+// does not nag again (§3.2). `declined`/`use_fallback` make `auto` selection resolve to the mac engine.
+transcribeRouter.post("/engine/consent", async (req, res) => {
+  const body = z.object({ decision: z.enum(["approved", "declined", "use_fallback"]) }).safeParse(req.body ?? {});
+  if (!body.success) return res.status(400).json({ ok: false, error: "decision required" });
+  try {
+    await recordConsent(body.data.decision);
+    res.json({ ok: true, data: describeReadiness() });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
 });
 
 // GET /api/transcribe/file?path=<abs> — the existing transcript for a media file, or null.

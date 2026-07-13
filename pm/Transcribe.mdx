@@ -348,14 +348,14 @@ path. Home-expansion of every inbound path is handled in code:
 
 A transcript is plain UTF-8 text: a short metadata header, a divider, then the transcript body. The header
 records the **actual engine + model** used ([transcribe_engine.mdx](./transcribe_engine.mdx)) — the
-heavyweight local LLM (e.g. `whisper-large-v3`) or the Mac built-in fallback (`apple-speech`) — and the
+heavyweight `qwen` engine (`qwen3-asr-1.7b-mlx`) or the Whisper-on-Mac fallback (`whisper-base`) — and the
 **source duration**, so a reader can confirm the transcript covers the whole file (§critical: the full
 1–2h+ duration, [transcribe_engine.mdx §4](./transcribe_engine.mdx)):
 
 ```
 Transcription of: talk.mp3
 Generated on: 2026-07-05 09:41:00
-Engine: whisper-large-v3 (device: mps, language: en)
+Engine: qwen3-asr-1.7b-mlx (device: mlx, language: en)
 Source duration: 01:47:12   ·   Transcript covers: 01:47:12  ✓ full
 ============================================================
 
@@ -375,7 +375,7 @@ candidate to re-transcribe, never a silent success ([transcribe_engine.mdx §4](
 
 > **Deep engine spec: [transcribe_engine.mdx](./transcribe_engine.mdx).** This section defines the
 > *in-process, non-blocking* discipline (the load-bearing §5.1 rule). The **two engines** (the heavyweight
-> local **whisper-large** LLM and the **Mac built-in** fallback), the **on-demand model
+> local **Qwen3-ASR** LLM and the **Whisper-on-Mac** fallback), the **on-demand model
 > download/install/configure with the user's permission** (disk estimate, health-check/repair, the two
 > progress UIs, and the flow-resume after install), the **critical full-duration / no-truncation
 > requirement for 1–2h+ media**, and the **per-machine parallel calibration** all live in
@@ -400,7 +400,7 @@ The transcription engine is our existing **`Transcribe.js`** tool (canonically
 * **Entirely local at run time — no phone-home.** Transcription runs **on-machine**; nothing about the
   **media or the transcript** ever leaves the computer (charter alignment: only-our-content, no phone-home).
   The **one** networked step is the **one-time provisioning download of open-source model weights** (the
-  heavyweight whisper-large weights) — this is analogous to `brew install` fetching a formula, sends **none
+  heavyweight Qwen3-ASR weights) — this is analogous to `brew install` fetching a formula, sends **none
   of the user's content**, happens **only with explicit permission**, and never recurs once installed. See
   [transcribe_engine.mdx §3](./transcribe_engine.mdx).
 * **Binaries vs. model weights are two different "missing" cases.**
@@ -479,7 +479,7 @@ Allow-list-gated like every data route, mirroring `compression.router.ts`:
 | Method + path | Body / query | What |
 | --- | --- | --- |
 | `GET /api/transcribe/tools` | — | Are `whisper` + `ffmpeg` installed (drives the disabled state + install hint). |
-| `GET /api/transcribe/engine` | — | **Engine + model readiness** ([transcribe_engine.mdx §3](./transcribe_engine.mdx)): which engine is active (`whisper-large` / `apple-speech`), whether the heavyweight model is `installed` / `partial` / `missing` / `outdated`, its on-disk size, and the disk-space estimate for a fresh install. Drives the permission popup. |
+| `GET /api/transcribe/engine` | — | **Engine + model readiness** ([transcribe_engine.mdx §3](./transcribe_engine.mdx)): which engine is active (`qwen` / `mac`), whether the heavyweight model is `installed` / `partial` / `missing` / `outdated`, its on-disk size, and the disk-space estimate for a fresh install. Drives the permission popup. |
 | `POST /api/transcribe/engine/provision` | `{ approve: true }` | **Download → install → configure** the heavyweight model (explicit consent). Registers a `download` then an `install` progress job ([transcribe_engine.mdx §3.3](./transcribe_engine.mdx)); returns immediately, watchable on [Processing](./processing.mdx). |
 | `GET /api/transcribe/file?path=<abs>` | — | The existing transcript for a media file (text + transcript path), or `null`. |
 | `POST /api/transcribe/file` | `{ path, overwrite? }` | Transcribe ONE file → the `.lfbridge/<rel-dir>/<name.ext>.transcription` transcript under the owning root (§3). |
@@ -541,7 +541,7 @@ The transcription REST surface (tools / read-transcript / file / batch / tree / 
    **model** is missing/partial/outdated, the permission popup + provisioning flow of
    [transcribe_engine.mdx](./transcribe_engine.mdx) handles it and then **resumes the original action**.
 9a. **Two engines + long-media robustness** ([transcribe_engine.mdx](./transcribe_engine.mdx)): a primary
-    **heavyweight whisper-large** engine and a **Mac built-in** fallback; whichever runs, the settings are
+    **heavyweight Qwen3-ASR** engine and a **Whisper-on-Mac** fallback; whichever runs, the settings are
     **triple-checked to transcribe the FULL duration of 1–2h+ media without truncating** — the run is
     verified to cover the source duration end-to-end (a short/truncated result is a failure, never a silent
     success), and the machine's **parallel-job count is calibrated** to its cores/RAM/model (low-power

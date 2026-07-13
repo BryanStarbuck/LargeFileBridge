@@ -8,6 +8,8 @@ import path from "node:path";
 import type { TranscribeResult, TranscribeBatchResult, TranscribeTools, TranscriptView, EnqueuePlan } from "@lfb/shared";
 import { mediaKindForName } from "@lfb/shared";
 import { Transcriber } from "../../tools/transcribe/Transcribe.js";
+import { transcribeWithEngine, canTranscribe as engineCanTranscribe } from "../../tools/transcribe/engine.js";
+import { getAppConfig } from "../store-model/config.service.js";
 import { HARD_SKIP } from "../../shared/scan-filters.js";
 import { expandHome } from "../fs/badges.js";
 import { resolveArtifactPlacement, lfbridgeArtifactPath, TRANSCRIPTION_EXT } from "../storage/artifact-placement.service.js";
@@ -78,7 +80,7 @@ export async function transcribeOne(input: string, overwrite = false): Promise<T
   const name = path.basename(abs);
 
   if (!exists(abs)) return result(abs, "failed", null, null, "file not found");
-  if (!mediaKindForName(name) || !engine.canTranscribe(name)) {
+  if (!mediaKindForName(name) || !engineCanTranscribe(name)) {
     return result(abs, "skipped", null, null, "not an audio/video file");
   }
 
@@ -94,14 +96,19 @@ export async function transcribeOne(input: string, overwrite = false): Promise<T
   // The transcript lands in the COMMITTED .lfbridge/ area (§3.1), so it travels with the repo and there is
   // no `*.transcription` gitignore nudge — the multi-GB media stays git-ignored and rides IPFS.
 
+  // Pick the engine (qwen heavyweight → whisper fallback, transcribe_engine.mdx §2) from the app config,
+  // with the qwen→mac auto-fallback (§2.1). The transcript header records whichever engine actually ran.
+  const cfg = getAppConfig().transcribe;
   const r = await track("transcribe", name, (report) =>
-    engine.transcribeToFile(abs, transcriptPath, ({ fraction }) =>
-      report({ done: Math.round(fraction * 100), total: 100, unit: "%" }),
-    ),
+    transcribeWithEngine(abs, transcriptPath, {
+      engine: cfg.engine,
+      consent: cfg.model_consent,
+      onProgress: ({ fraction }) => report({ done: Math.round(fraction * 100), total: 100, unit: "%" }),
+    }),
   );
   const status: TranscribeResult["status"] =
     r.status === "transcribed" ? "transcribed" : r.status === "no_audio" ? "no_audio" : r.status === "tool_missing" ? "tool_missing" : "failed";
-  if (status === "transcribed") log.info("transcribe", `${abs} → ${transcriptPath} (${r.words ?? 0} words)`);
+  if (status === "transcribed") log.info("transcribe", `${abs} → ${transcriptPath} (${r.words ?? 0} words, ${r.engineUsed})`);
   return result(abs, status, r.outputPath, r.words, r.reason);
 }
 

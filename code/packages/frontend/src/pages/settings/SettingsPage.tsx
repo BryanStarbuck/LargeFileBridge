@@ -10,6 +10,7 @@ import type { GlobalSettings, SizeUnit, CompressMediaPrefs, CompressQuality, Des
 import { SIZE_UNITS, toBytes } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { CredentialsSetupCard } from "../../components/CredentialsSetupCard.js";
+import { TranscriptionSettingsSection } from "./TranscriptionSettingsSection.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { Section } from "../../components/ui/Section.js";
 import { Disclosure } from "../../components/ui/Disclosure.js";
@@ -180,6 +181,8 @@ export function SettingsPage() {
       </Section>
 
       <CompressionSettingsSection />
+
+      <TranscriptionSettingsSection />
 
       <AiProvidersSection />
     </div>

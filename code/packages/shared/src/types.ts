@@ -663,6 +663,7 @@ export type ProgressKind =
   | "ignore"
   | "import"
   | "install"
+  | "download" // large model-weights download (transcribe_engine.mdx §3.3 — the qwen provisioning download)
   | "configure"; // engine start / config-repair fixes (e.g. Start IPFS from a warning popup)
 
 // One in-flight job as reported by GET /api/progress (server-side) or held optimistically in the
@@ -695,6 +696,32 @@ export interface ProgressListResult {
   // Budget's core-slots are BUSY right now (`busy`) vs the live budget total (`budget`, ≈ 90% of cores).
   // Lets the Processing page show "12 / 14 workers busy (~90% of cores)". Absent when nothing is running.
   workers?: { busy: number; budget: number };
+  // PENDING items as rows for the per-item Processing table (processing.mdx §4.3) — the head of the queue
+  // (capped, e.g. 500), so the user sees exactly what is waiting-but-not-started. Absent when idle.
+  queuedItems?: QueuedItemView[];
+  // Recently-FAILED items + reason (processing.mdx §4.3), kept through the retention window so failures stay
+  // visible after the run — including a transcription that came back short of the full duration. Absent when
+  // nothing failed.
+  recentFailures?: FailedItemView[];
+}
+
+// One PENDING item (queued, not started) shown as a row on the Processing page's per-item table
+// (processing.mdx §4.3.1). `kind` is audio/video/image where meaningful (transcribe/compress).
+export interface QueuedItemView {
+  op: ProgressKind;
+  path: string;
+  kind?: string | null;
+  sizeBytes?: number;
+}
+// One recently-FAILED item (processing.mdx §4.3.1). For a truncated transcript the covered-vs-total seconds
+// are carried so the table can show "covered 00:20:00 of 01:47:12" (transcribe_engine.mdx §4).
+export interface FailedItemView {
+  op: ProgressKind;
+  path: string;
+  reason: string;
+  coveredSec?: number;
+  durationSec?: number;
+  at: string; // ISO
 }
 
 // The plan a producing PAGE ACTION returns (page_actions.mdx §5): after resolving scope (checked set or
@@ -1071,6 +1098,39 @@ export interface TranscribeTools {
   whisper: boolean;
   ffmpeg: boolean;
   ffprobe: boolean;
+}
+
+// ── Transcription engine + heavyweight-model provisioning (transcribe_engine.mdx) ────────────────────
+// The engine identity: `qwen` = Qwen3-ASR via Apple MLX (the `mlx-qwen3-asr` CLI at Qwen/Qwen3-ASR-1.7B —
+// the heavyweight, multi-GB-download engine, Apple-Silicon only); `mac` = OpenAI Whisper at `base`
+// (MPS→CPU, the cross-platform fallback). A `qwen` run auto-falls-back to `mac` on error (§2.1).
+export type TranscribeEngineId = "qwen" | "mac";
+// Readiness of the heavyweight (`qwen`) model on this machine (transcribe_engine.mdx §3.1). `unsupported` =
+// not an Apple-Silicon Mac, so `qwen` can never run here and selection falls to `mac`.
+export type TranscribeModelReadiness = "installed" | "missing" | "partial" | "outdated" | "unsupported";
+// GET /api/transcribe/engine — engine + heavyweight-model readiness. Drives the consent popup (§3.2) and
+// the Settings → Transcription panel (§6).
+export interface TranscribeEngineStatus {
+  active: TranscribeEngineId; // which engine pickEngine() would use right now
+  configured: "auto" | TranscribeEngineId; // the transcribe.engine setting
+  consent: "approved" | "declined" | "use_fallback" | null; // remembered popup decision (§3.2); null = never asked
+  appleSilicon: boolean; // qwen is only available on Apple Silicon
+  qwen: {
+    cliInstalled: boolean; // mlx-qwen3-asr on PATH
+    readiness: TranscribeModelReadiness;
+    installedBytes: number | null; // measured on-disk size of the weights once present
+    estimateBytes: number; // ballpark→stored disk estimate for a fresh install
+    freeDiskBytes: number; // free space where the model would live
+    model: string; // "Qwen/Qwen3-ASR-1.7B"
+  };
+  whisper: { installed: boolean }; // the fallback CLI (openai-whisper)
+  ffmpeg: boolean; // required for video demux
+}
+// POST /api/transcribe/engine/provision — the two-phase provisioning outcome (transcribe_engine.mdx §3.3):
+// a `download`/`install` job pair is registered; this is what the request returns immediately.
+export interface TranscribeProvisionResult {
+  started: boolean; // false when nothing to do (already installed) or unsupported hardware
+  reason: string | null; // why not started (already-installed / unsupported / declined)
 }
 // The result of transcribing one media file (Transcribe.mdx §1). transcriptPath = the sidecar written
 // beside the media at <root>/<relpath-without-ext>.transcription (§3).
