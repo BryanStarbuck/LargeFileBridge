@@ -57,7 +57,7 @@ A file is a candidate when **all** hold:
    transcribable). This is exactly the [`transcribable`](./special_files.mdx#3-the-transcribable-sub-flag--video-has-audio-and-audio)
    sub-flag.
 2. It has **no transcription yet** — there is no `.transcription` sidecar for it at the resolved sidecar
-   location ([Transcribe.mdx §3](./Transcribe.mdx#3-where-transcripts-are-stored--a-transcription-sidecar-beside-the-media-locked)).
+   location ([Transcribe.mdx §3](./Transcribe.mdx#3-where-transcripts-are-stored--inside-the-repostorage-lfbridge-path-mirrored-extension-appended-locked-supersedes-the-earlier-beside-media-layout)).
 3. It is not flagged to skip (no relevant sticky flag).
 
 Absence of a transcript is the whole test — a file that already has a `.transcription` sidecar never

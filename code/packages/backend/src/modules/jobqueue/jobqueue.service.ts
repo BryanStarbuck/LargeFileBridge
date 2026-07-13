@@ -17,6 +17,7 @@ import { track } from "../progress/progress.registry.js";
 import type { ProviderId } from "../describe/adapters.js";
 import type { DeleteOriginalMode, ProcessingBatch, ProgressKind } from "@lfb/shared";
 import { coreBudget } from "../../shared/concurrency.js";
+import { transcribeConcurrency } from "../transcribe/transcribe-concurrency.js";
 import { log } from "../../shared/logging.js";
 
 export type JobOp = "transcribe" | "describe" | "compress";
@@ -66,7 +67,13 @@ function capFor(bucket: Bucket, budget: number): number {
     case "compress:video":
       return Math.max(1, Math.floor(budget / VIDEO_THREADS)); // NARROW — thread-capped jobs fill the budget
     case "transcribe":
-      return Math.max(1, Math.floor(budget / WHISPER_THREADS)); // NARROW — Whisper is heavy + multi-threaded
+      // NARROW + RAM/GPU-clamped (transcribe_engine.mdx §5.1): Whisper is heavy + multi-threaded AND multi-GB
+      // per instance, so beyond the CPU term we clamp by RAM — a low-power box runs 1, a big box runs several.
+      return transcribeConcurrency({
+        budget,
+        whisperThreads: WHISPER_THREADS,
+        model: process.env.LFB_TRANSCRIBE_MODEL || "base",
+      });
     case "describe":
       return DESCRIBE_CONCURRENCY; // network-parallel, not core-bound
   }

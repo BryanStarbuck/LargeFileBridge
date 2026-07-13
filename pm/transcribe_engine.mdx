@@ -49,36 +49,51 @@ The engine abstraction (a common interface both concrete engines implement — `
 
 ## 2. Two engines — heavyweight whisper-large (primary) + Mac built-in (fallback) (LOCKED)
 
-There are **two** transcription engines, tried in a fixed order. Both produce the **same**
-`.transcription` output ([Transcribe.mdx §3–§4](./Transcribe.mdx)); they differ only in how the speech-to-text
-is computed.
+There are **two** transcription engines, tried in a fixed order (learned from the canonical tool at
+`~/BGit/all/tools/Transcription/Transcribe.js`, which LFBridge's copied engine mirrors). Both produce the
+**same** `.transcription` output ([Transcribe.mdx §3–§4](./Transcribe.mdx)); they differ only in how the
+speech-to-text is computed.
 
-| # | Engine | What it is | When it's used |
+| # | Engine id | What it is | When it's used |
 | --- | --- | --- | --- |
-| **1** | **whisper-large** (primary, heavyweight LLM) | OpenAI Whisper at the **large** model (`whisper-large-v3`) — the accurate, resource-heavy, **multi-GB download** engine. Runs the local `whisper` CLI, preferring the Apple-Silicon **MPS** GPU with a **CPU fallback**. | The default whenever the model is **provisioned** (§3) and the machine can run it (§5). |
-| **2** | **apple-speech** (Mac built-in fallback) | Apple's **on-device Speech** framework — the newer **`SpeechAnalyzer` / `SpeechTranscriber`** long-form API (with the legacy `SFSpeechRecognizer` only as a last resort). No download, ships with macOS, no Python. | When the heavyweight model is **absent and the user declines** to provision it, or on a machine too small to run whisper-large (§5), or when whisper fails — so the user is **never left with no way to transcribe**. |
+| **2** | **`qwen`** (primary, heavyweight LLM — DEFAULT) | **Qwen3-ASR via Apple MLX** — the `mlx-qwen3-asr` CLI at model **`Qwen/Qwen3-ASR-1.7B`** (label `qwen3-asr-1.7b-mlx`). Apple-Silicon-native, faster than real time, higher quality. The **multi-GB download** engine: the CLI installs via `pipx install mlx-qwen3-asr` and the **weights download from Hugging Face on first run** (~3.4 GB) into `~/.cache/huggingface/hub/`. **Apple Silicon (M1+) only.** | The default whenever the model is **provisioned** (§3) and the machine qualifies (Apple Silicon, §5). |
+| **1** | **`mac`** (fallback — Whisper on Mac) | **OpenAI Whisper** CLI at model **`base`** (`whisper-base`), preferring the Apple-Silicon **MPS** GPU with an automatic **CPU fallback** and an English sanity-check. Reliable, cross-platform, English-tuned; small (~140 MB), installs via `pipx install openai-whisper`. | When `qwen` is **absent and the user declines** to provision it, on a **non-Apple-Silicon** machine, or **automatically when a `qwen` run errors** (§2.1) — so the user is **never left with no way to transcribe**. |
 
-* **Selection order.** `pickEngine()` returns **whisper-large** if its model is ready (§3) and the machine
-  clears the minimum bar (§5.2); otherwise **apple-speech** on macOS; otherwise the **base** whisper model
-  (the small ~140 MB one) as a final degraded option on non-Mac machines without the large model.
-* **Quality note (honest).** whisper-large is materially more accurate than the Mac built-in, which is more
-  accurate than whisper-base. The transcript **header records which engine actually ran**
-  ([Transcribe.mdx §4](./Transcribe.mdx#4-what-a-transcript-file-contains)) so the user always knows.
+* **Selection order.** `pickEngine()` returns **`qwen`** if the machine is Apple Silicon, the `mlx-qwen3-asr`
+  CLI + model are ready (§3), and the machine clears the RAM bar (§5.2); otherwise **`mac`** (Whisper).
+  The `transcribe.engine` setting (`auto` / `qwen` / `mac`) overrides the default (§5.4).
+* **Auto-fallback (§2.1).** A `qwen` run that errors (missing weights, an MLX hiccup, an unexpected CLI
+  failure) **transparently retries on `mac`** so a file is never lost — it just costs a retry. An explicit
+  `-c mac` / `transcribe.engine: mac` runs Whisper directly with no fallback layer.
+* **Quality note (honest).** Qwen3-ASR-1.7B is materially more accurate than whisper-base. The transcript
+  **header records which engine actually ran** ([Transcribe.mdx §4](./Transcribe.mdx#4-what-a-transcript-file-contains))
+  so the user always knows — including when the fallback produced it.
 * **Both must satisfy §4** (full-duration, no truncation). The fallback is a **fallback in accuracy, not in
   completeness** — it still transcribes the whole 2-hour file.
 
-The two concrete engines are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — class `Transcriber` (whisper: base + large, MPS→CPU) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/AppleSpeech.ts` — class `AppleSpeechTranscriber` (the `SpeechAnalyzer` long-form path, invoked via a small bundled Swift helper).
+The two concrete engines + the selector are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/qwen-asr.ts` — class `Qwen3AsrTranscriber` (drives `mlx-qwen3-asr`) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — class `Transcriber` (Whisper, MPS→CPU) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/engine.ts` — `pickEngine()` + the `qwen→mac` auto-fallback wrapper.
+
+### 2.1 Auto-fallback `qwen → mac` (LOCKED)
+
+The default `qwen` engine **transparently falls back** to `mac` (Whisper) on any error, exactly as the
+reference tool does: a missing model download, an MLX numerical hiccup, or an unexpected CLI non-zero exit
+never loses the file — it retries on Whisper (installing Whisper first if only the Qwen engine was set up),
+and the header reflects **whichever engine actually produced the text**. A user who explicitly pins `mac`
+gets Whisper with no fallback layer.
 
 ---
 
 ## 3. Provisioning the heavyweight model — download → install → configure, with permission (LOCKED)
 
-The whisper-large model is a **multi-GB download** (the `large-v3` weights are ≈ **3 GB**, and a fresh
-`openai-whisper` + PyTorch install adds a few GB more — §3.1). **Most users will not have it, and that is
+The heavyweight `qwen` engine is a **multi-GB download**: the `mlx-qwen3-asr` CLI installs via
+`pipx install mlx-qwen3-asr` (an isolated venv with `mlx`, `numpy`, `huggingface-hub`, …), and the
+**`Qwen/Qwen3-ASR-1.7B` weights download from Hugging Face on first run** (~**3.4 GB**) into
+`~/.cache/huggingface/hub/models--Qwen--Qwen3-ASR-1.7B/`. **Most users will not have it, and that is
 normal** — many people install LargeFileBridge and never use transcription at all. So we do **not** ship it
 and we do **not** download it eagerly. We provision it **the first time the user actually tries to
-transcribe** and it is absent — **only with their explicit permission**.
+transcribe** and it is absent — **only with their explicit permission**. (Apple Silicon only; a non-Apple
+machine simply uses the `mac`/Whisper engine, which needs no big download.)
 
 ### 3.1 Detecting readiness + estimating disk (LOCKED)
 
@@ -86,7 +101,7 @@ Before any transcribe runs, the engine reports a **readiness** for the heavyweig
 
 | Readiness | Meaning | What happens |
 | --- | --- | --- |
-| **`installed`** | The model weights + the `whisper` runtime are present and pass the health check (§3.4). | Transcribe proceeds — **no popup** (§3.5). |
+| **`installed`** | The `mlx-qwen3-asr` CLI **and** the `Qwen/Qwen3-ASR-1.7B` weights are present and pass the health check (§3.4). | Transcribe proceeds — **no popup** (§3.5). |
 | **`missing`** | Not downloaded at all. | First-time **permission popup** (§3.2) with the disk estimate. |
 | **`partial`** | Half-installed — weights present but runtime broken, or an interrupted prior download. | **Health-check/repair** (§3.4): finish/redo only what's missing, then proceed. |
 | **`outdated`** | Installed but an older model/runtime than we now target. | Offer to **update** (same download/configure flow, framed as an upgrade). |
@@ -143,11 +158,12 @@ The two-phase provisioning job (download then install/configure, each a registry
 An install can be interrupted (a killed download, a machine sleep, a partial pip). So provisioning is
 **idempotent and self-healing** — we never assume "the folder exists ⇒ it works":
 
-* **Verify, don't trust.** The health check confirms: the weight file exists **and** matches its expected
-  **size/checksum**; the `whisper` runtime imports and reports the model; a **tiny smoke transcription** of
-  a bundled 2-second clip returns sane text. Only all-pass ⇒ `installed`.
-* **Repair only what's broken.** A `partial` state re-does **just** the failed step (re-download the weight,
-  re-ensure the runtime) rather than wiping and restarting — fast, and safe to run repeatedly.
+* **Verify, don't trust.** The health check confirms: the `mlx-qwen3-asr` CLI is on `PATH`; the
+  `Qwen/Qwen3-ASR-1.7B` snapshot exists in the Hugging Face cache with a **non-trivial size**; and a **tiny
+  smoke transcription** of a bundled ~2-second clip returns sane text. Only all-pass ⇒ `installed`.
+* **Repair only what's broken.** A `partial` state re-does **just** the failed step (re-`pipx install` the
+  CLI, or re-trigger the weights download) rather than wiping and restarting — fast, and safe to run
+  repeatedly. On non-Apple-Silicon, "repair" is a no-op and selection falls to `mac`.
 * **Outdated ⇒ update.** When the target model/runtime version moves ahead of what's installed, readiness is
   `outdated` and the same flow runs as an **upgrade** (with the user's ok).
 
@@ -263,15 +279,15 @@ transcribeConcurrency = clamp(
 )
 ```
 
-* **`whisperThreadsPerJob`** — whisper-large uses multiple threads per file; default ~**4** so
+* **`whisperThreadsPerJob`** — a heavy ASR job uses multiple threads/GPU per file; default ~**4** so
   `jobs × threads ≈ budget`, never `cores²` ([parallelization.mdx §2](./parallelization.mdx)).
-* **`modelRamPerJob`** — the measured resident footprint of one whisper-large instance (several GB; the
-  large model is ~10 GB-class on GPU, a few GB on CPU/quantized). This is the clamp that keeps a **16 GB
-  laptop at 1** while a **64 GB / 24-core workstation runs several**.
-* **The Mac fallback** (`apple-speech`) is lighter; it uses its own, higher concurrency (the OS manages the
-  Neural Engine), still bounded by the Core Budget.
+* **`modelRamPerJob`** — the measured resident footprint of one job: **`qwen` (Qwen3-ASR-1.7B via MLX)**
+  holds the model in **unified memory** (several GB per instance); **`mac` (whisper-base)** is much lighter
+  (~1 GB). This is the clamp that keeps a **16 GB laptop at 1** `qwen` job while a **64 GB / 24-core
+  workstation runs several**.
+* **The `mac` fallback** is lighter, so it resolves to a **higher** concurrency than `qwen` on the same box.
 * **Result:** low-power boxes converge on **1 at a time** (correct — one heavy run is all they can hold);
-  the product owner's ~24-core machine runs **several** whisper-large jobs concurrently, filling the budget
+  the product owner's ~24-core / large-RAM machine runs **several** jobs concurrently, filling the budget
   without thrashing.
 
 ### 5.2 The minimum bar to run whisper-large (LOCKED)

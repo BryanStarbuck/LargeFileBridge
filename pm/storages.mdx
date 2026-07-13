@@ -142,8 +142,14 @@ Reading and writing `storage.yaml` (atomic, YAML, per-storage) is handled in cod
 
 Alongside `storage.yaml`, each directory-based storage keeps a hidden **`.lfbridge/`** folder at its root
 (for a **repo**, that is `~/BGit/xyz/.lfbridge/`). It holds everything LFB knows about the files in *this*
-storage — kept **out of Git** (add `.lfbridge/` to the repo's `.gitignore`) so tracking never bloats
-commits, while the small committed manifest still travels with the code.
+storage. **`.lfbridge/` is COMMITTED and travels with the repo** ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx),
+[syncable_data_location.mdx](./syncable_data_location.mdx); the working tree's own `git status` shows
+`.lfbridge/repo_storage.yaml` tracked). It is small text — the storage descriptor, the per-file fingerprint
+index, the IPFS manifest/CID list, the device registry, and the derived **transcript / AI-description**
+artifacts (Transcribe.mdx §3) — all of which are cheap to commit and *should* travel so every computer and
+teammate reuses them. **Only the multi-GB media files themselves are git-ignored** (they ride IPFS); the
+tracking area is **not**. (This supersedes any earlier "add `.lfbridge/` to `.gitignore`" wording — that
+would have prevented the manifest and transcripts from traveling, which is the opposite of what we want.)
 
 ```
 <storage root>/
@@ -331,7 +337,9 @@ implemented in code:
    `community` (+ child props), each with type-scoped properties.
 3. Every directory-based storage has a hidden **`.lfbridge/`** at its root (for a repo, `~/BGit/xyz/.lfbridge/`)
    holding the per-file fingerprint index (hash + size + dates; compressed/uncompressed variant hashes for
-   media), the IPFS manifest, and the `analysis/` outputs — all git-ignored.
+   media), the IPFS manifest, the `analysis/` outputs, and the path-mirrored transcript / AI-description
+   artifacts — **`.lfbridge/` is committed and travels with the repo** (§4); only the multi-GB media files
+   themselves are git-ignored.
 4. A user can belong to **many** storages at once (multiple communities + companies + personal + every
    repo). The **Storages** left-bar tab shows them: **Personal**, one child **per company**, a **Repos**
    child that routes to the Repos tab (not a long list), and the opted-in **Communities**.
