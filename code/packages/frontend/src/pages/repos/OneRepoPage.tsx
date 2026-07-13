@@ -1,12 +1,12 @@
-// The per-repo screen (one_repo.mdx + use_cases.mdx §5.4). The StatusBanner here is the UC-2
-// diagnosis engine: "a file didn't show up on my other computer" — it names the FIRST real cause
-// worst-first (IPFS down → pinned-but-no-peers → undecided → pending) and hands over the one fix,
-// so a non-expert never has to guess which of the four it was. The files table is unchanged; the old
-// status strip moves into a collapsed "Repo details" disclosure.
+// The per-repo screen (one_repo.mdx + use_cases.mdx §5.4). There is NO warning banner on this page: the
+// metrics-panel strip (task_tabs.mdx §2, §2.6) is the ONLY warning surface — each panel is a terse
+// Title-Case label over a big number, and clicking a panel whose count is > 0 opens that metric's
+// educate-and-fix popup (undecided → decision triage, pull-down → pull peer-pinned files). The files
+// table is unchanged; the old status strip lives in a collapsed "Repo details" disclosure below it.
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
-import { RefreshCw, Settings, ChevronLeft, Network, Users, Clock, Ban, CircleSlash } from "lucide-react";
+import { RefreshCw, Settings, ChevronLeft, Users, Clock, Ban, CircleSlash, ChevronRight, Search } from "lucide-react";
 import { toast } from "sonner";
 import type { FileRow, Decision, RepoDetail, PinCounts, PinNowResult } from "@lfb/shared";
 import { formatBytes, viewerRouteForName, mediaKindForName } from "@lfb/shared";
@@ -26,13 +26,13 @@ import { TaskTabs } from "./TaskTabs.js";
 import { TASK_TABS, type TaskTabId } from "./taskTabs.config.js";
 import { MetricsStrip, type MetricView } from "./MetricsStrip.js";
 import { METRIC_CATALOG, metricCount, type MetricId } from "./metricWarnings.js";
+import { buildMetricWarning, topRecommendation, scanIsStale } from "./metricWarningDefs.js";
 import { setHoverInfo } from "./HoverInfoRegion.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
-import { StatusBanner, FixButton } from "../../components/ui/StatusBanner.js";
+import { WarningPopup } from "../../components/ui/WarningPopup.js";
+import type { WarningDef } from "../../components/ui/warnings/registry.js";
 import { Tooltip } from "../../components/ui/Tooltip.js";
 import { Disclosure } from "../../components/ui/Disclosure.js";
-import { type Health } from "../../components/ui/health.js";
-import type { WarningDef } from "../../components/ui/warnings/registry.js";
 import { refetchUntilResolved } from "../../components/ui/warnings/resolveRefetch.js";
 import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
 import { clientLog } from "../../lib/clientLog.js";
@@ -98,6 +98,9 @@ export function OneRepoPage() {
   const [bulkOpen, setBulkOpen] = useState(false);
   // The active task tab (task_tabs.mdx §1.3) — ephemeral view state, default "all", never persisted.
   const [activeTab, setActiveTab] = useState<TaskTabId>("all");
+  // The educate-and-fix popup the header "View recommendation" primary opens (one_repo.mdx §3.1). The
+  // metric tiles host their own popup inside MetricsStrip; this is the header button's separate host.
+  const [headerWarning, setHeaderWarning] = useState<WarningDef | null>(null);
 
   const { data: detail, isLoading } = useQuery({
     queryKey: ["repo", repoId],
@@ -206,8 +209,9 @@ export function OneRepoPage() {
     }
   };
 
-  // A metric panel's chevron (task_tabs.mdx §2.4): re-tune the view to the tab where the user acts on it.
-  // (The RepoVerdict banner above surfaces the educate-and-fix popup for the current top issue.)
+  // A metric panel with NO educate-and-fix popup (task_tabs.mdx §2.4): re-tune the view to the tab where
+  // the user acts on it. Metrics that DO carry a popup (undecided, pullDown) open it instead — the metric
+  // panels are this page's only warning surface; there is no separate warning banner (§2.6).
   const openMetric = (id: MetricId) => {
     if (id === "notBackedUp") { navigate({ to: "/devices" }); return; }
     if (id === "compressibleVideos" || id === "compressibleImages" || id === "alreadyCompressed") setActiveTab("compress");
@@ -228,12 +232,16 @@ export function OneRepoPage() {
   };
 
   // The action-links row (page_actions.mdx §4 — One repo): producing pair · Compress all videos… ·
-  // Compress all images… · Git-ignore big files… · Rescan. Pin now stays the header primary.
+  // Compress all images… · Git-ignore big files… · Pin now · Rescan. Pin now moved here from the header —
+  // the header primary is now the smart "View recommendation" / "Scan now" button (one_repo.mdx §3.1).
   const rescanRepo = async () => {
     try {
       const r = await api.rescan();
       if (r.started) toast.success("Rescan started");
       else toast.info("A scan is already running");
+      // Refresh so lastScanAt updates once the scan lands — flips the header "Scan now" back to
+      // "View recommendation" on its own (warnings.mdx §5.3.1).
+      refetchUntilResolved(qc, [["repo", repoId]]);
     } catch (e) {
       clientLog.error("OneRepoPage.rescan", e);
       toast.error((e as Error).message);
@@ -244,6 +252,7 @@ export function OneRepoPage() {
     compressAllVideos(detail?.path),
     compressAllImages(detail?.path),
     gitIgnoreBig(pageScope()),
+    { id: "pin-now", label: "Pin now", icon: <RefreshCw className="h-3.5 w-3.5" />, group: "Work", onSelect: () => pinNow.mutate(undefined) },
     { id: "rescan", label: "Rescan", icon: <RefreshCw className="h-3.5 w-3.5" />, group: "Work", onSelect: rescanRepo },
   ];
 
@@ -491,16 +500,35 @@ export function OneRepoPage() {
     .filter((col): col is LfbColumn<FileRow> => Boolean(col));
   const tabRows = (detail?.files ?? []).filter(tab.rowFilter);
 
-  // The metric panels for this tab (task_tabs.mdx §2): count from the RepoDetail, tint by health, chevron
-  // re-tunes to the acting tab.
+  // The metric panels for this tab (task_tabs.mdx §2): count from the RepoDetail, tint by health. When the
+  // count is > 0 and the metric has an educate-and-fix popup, clicking the panel opens it (§2.4); otherwise
+  // the panel re-tunes the view to the acting tab.
   const metricViews: MetricView[] = detail
     ? tab.metrics.map((id) => {
         const def = METRIC_CATALOG[id];
-        return { id, label: def.label, count: metricCount(id, detail), hint: def.hint, positive: def.positive, onOpen: () => openMetric(id) };
+        const count = metricCount(id, detail);
+        const warning = count > 0 ? buildMetricWarning(id, detail, repoId) : null;
+        return {
+          id,
+          label: def.label,
+          count,
+          hint: def.hint,
+          positive: def.positive,
+          warning: warning ?? undefined,
+          onOpen: () => openMetric(id),
+        };
       })
     : [];
 
   const c = detail?.counts;
+
+  // The header primary (one_repo.mdx §3.1). A scan that's overdue (or never run) takes precedence — you
+  // can't trust the metrics until the repo is re-scanned, so the button becomes "Scan now". Otherwise it
+  // is "View recommendation ›", opening the single most important pending metric's educate-and-fix popup
+  // (worst-first: IPFS-down → pull-down → undecided). When there's nothing to recommend and no scan is
+  // due, there is no header primary — the metric panels (all green zeros) already say "all clear".
+  const scanDue = detail ? scanIsStale(detail) : false;
+  const topRec = detail && !scanDue ? topRecommendation(detail, repoId) : null;
 
   return (
     <div>
@@ -515,7 +543,7 @@ export function OneRepoPage() {
         actionsRow={<PageActions actions={repoActions} selectedCount={selected.size} />}
         actions={
           <>
-            {/* Task tabs (task_tabs.mdx §1) — a little right of center, before the gear + Pin now. */}
+            {/* Task tabs (task_tabs.mdx §1) — a little right of center, before the gear + header primary. */}
             <TaskTabs active={activeTab} onChange={setActiveTab} />
             <button
               onClick={() => navigate({ to: "/repos/$repoId/settings", params: { repoId } })}
@@ -524,34 +552,45 @@ export function OneRepoPage() {
             >
               <Settings className="h-4 w-4" />
             </button>
-            <button
-              onClick={() => pinNow.mutate(undefined)}
-              disabled={pinNow.isPending || ipfsDown}
-              title={ipfsDown ? "IPFS node unreachable" : "Pin this repo now"}
-              className="flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:opacity-50"
-            >
-              <RefreshCw className={`h-4 w-4 ${pinNow.isPending ? "animate-spin" : ""}`} />
-              {pinNow.isPending ? "Pinning…" : "Pin now"}
-            </button>
+            {/* Header primary (one_repo.mdx §3.1) — the SAME button on all four tabs. "Scan now" when a scan
+                is overdue (highest priority), otherwise "View recommendation ›" which opens the most
+                important pending metric's popup. No leading circle icon; a trailing right chevron. Nothing
+                renders when there's no scan due and nothing to recommend. */}
+            {scanDue ? (
+              <button
+                onClick={rescanRepo}
+                title="This repo hasn't been scanned recently — scan it for large files"
+                className="flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white"
+              >
+                <Search className="h-4 w-4" />
+                Scan now
+              </button>
+            ) : topRec ? (
+              <button
+                onClick={() => setHeaderWarning(topRec.warning)}
+                title="Open the most important recommendation for this repo"
+                className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm text-white"
+                style={{ background: topRec.warning.state === "bad" ? "var(--lfb-bad)" : "var(--lfb-primary)" }}
+              >
+                View recommendation
+                <ChevronRight className="h-4 w-4" strokeWidth={2.5} />
+              </button>
+            ) : null}
           </>
         }
       />
 
+      {/* The task-tab metrics strip (task_tabs.mdx §2) + the docked hover-info region to its right (§3).
+          These panels are this page's ONLY warning surface — no separate warning banner (§2.6). Clicking a
+          panel opens that metric's educate-and-fix popup; on apply we re-derive from fresh data in a short
+          burst so the panel's count updates as soon as the fix lands (warnings.mdx §5.3.1). */}
       {detail && (
-        <RepoVerdict
-          detail={detail}
-          repoId={repoId}
-          onPinNow={() => pinNow.mutate(undefined)}
-          pinning={pinNow.isPending}
-          navigate={navigate}
-          // Re-derive from fresh data in a short burst so the banner leaves the page as soon as the fix
-          // lands — even for eventually-consistent fixes (warnings.mdx §5.3.1).
-          onWarningApplied={() => refetchUntilResolved(qc, [["repo", repoId]])}
+        <MetricsStrip
+          metrics={metricViews}
+          defaultHint={tab.defaultHint}
+          onApplied={() => refetchUntilResolved(qc, [["repo", repoId]])}
         />
       )}
-
-      {/* The task-tab metrics strip (task_tabs.mdx §2) + the docked hover-info region to its right (§3). */}
-      {detail && <MetricsStrip metrics={metricViews} defaultHint={tab.defaultHint} />}
 
       {/* Summary counts — the compact IPFS-decision readout (the richer per-task view is the strip above). */}
       {c && (
@@ -636,287 +675,17 @@ export function OneRepoPage() {
           </Disclosure>
         </div>
       )}
+
+      {/* The header "View recommendation" primary's popup host (one_repo.mdx §3.1). Same WarningPopup the
+          metric tiles open; on apply we re-derive from fresh data so the button/metrics update as the fix
+          lands (warnings.mdx §5.3.1). */}
+      {headerWarning && (
+        <WarningPopup
+          warning={headerWarning}
+          onClose={() => setHeaderWarning(null)}
+          onApplied={() => refetchUntilResolved(qc, [["repo", repoId]])}
+        />
+      )}
     </div>
-  );
-}
-
-// ── UC-2 diagnosis: name the first real cause, worst-first, and hand over the one fix. ──────────
-function RepoVerdict({
-  detail,
-  repoId,
-  onPinNow,
-  pinning,
-  navigate,
-  onWarningApplied,
-}: {
-  detail: RepoDetail;
-  repoId: string;
-  onPinNow: () => void;
-  pinning: boolean;
-  navigate: ReturnType<typeof useNavigate>;
-  onWarningApplied?: () => void;
-}) {
-  const ipfsDown = detail.ipfs === "unreachable";
-  const { pinned, pending, undecided } = detail.counts;
-  // Files set to pin that ALREADY pinned (have a CID) but aren't on ANY other computer yet — pinned
-  // locally, not backed up. Gate on `cid != null`: a Pin file with NO CID hasn't finished its first
-  // pin, so it's "queued to transfer" (the pending branch below), NOT a "not backed up" alarm. Without
-  // this gate, the instant you resolve "N files need a decision" by choosing Pin, those freshly-decided
-  // (still CID-less) files re-raised this yellow banner — so the warning you just fixed never looked like
-  // it left the page. This matches the documented no-peer vs. pending split (warnings.mdx §10.2.6 / §10.2.8).
-  const noPeerCount = detail.files.filter((f) => f.decision === "sync" && f.cid != null && f.peers.length === 0).length;
-
-  let state: Health = "ok";
-  let headline = "Everything here is pinned and backed up";
-  let sub: string | undefined = detail.lastPinAt
-    ? `Last pin ${relativeTime(detail.lastPinAt)} · ${detail.peerCount} peer${detail.peerCount === 1 ? "" : "s"}.`
-    : undefined;
-  let action: React.ReactNode = undefined;
-  // The educate-and-fix warning (warnings.mdx §8) that backs the blue arrow → popup on this banner.
-  // Wired for the two flagship causes (IPFS-down §10.1.2 / files-need-decision §10.2.7); the other
-  // branches keep their inline FixButton until they get their own registry defs.
-  let warning: WarningDef | undefined = undefined;
-
-  if (ipfsDown) {
-    state = "bad";
-    headline = "Pinning is paused — the IPFS engine on this computer isn't running";
-    sub = "Decisions still save, but no files can move until IPFS starts.";
-    warning = {
-      id: "repo-ipfs-down",
-      state: "bad",
-      headline,
-      sub,
-      popup: {
-        whatThisIs:
-          "IPFS is the local peer-to-peer engine LFBridge uses to move big files between your own computers. It's set up on this machine but isn't running right now, so no bytes can transfer.",
-        whyItMatters:
-          "Your Add-to-IPFS (pin) / Ignore decisions still save, but a file that lives only on another computer can't arrive here, and a file only here can't reach the others. Nothing is lost — this is a paused pipe, not a broken file.",
-        options: [
-          {
-            kind: "checkbox",
-            name: "autostart",
-            label: "Also keep IPFS on after I reboot",
-            helper: "Installs the reboot auto-start so pinning survives a restart.",
-            defaultChecked: true,
-          },
-        ],
-        actionLabel: "Start IPFS",
-        // §5.3 — async: close the popup, show a dock card while the daemon boots, toast on done, and
-        // refetch this repo so the "pinning paused" banner clears once IPFS is actually up.
-        progress: {
-          kind: "configure",
-          target: "IPFS engine",
-          doneLabel: "IPFS started",
-          invalidate: [["repo", repoId]],
-        },
-        apply: async (sel) => {
-          await api.ipfsDaemon({ action: "start", autostart: !!sel.checks.autostart });
-        },
-      },
-    };
-  } else if (detail.status === "error") {
-    state = "bad";
-    headline = "This repo hit an error on its last pin";
-    sub = "Open the details below, or try Pin now.";
-    action = (
-      <FixButton state="bad" onClick={onPinNow} disabled={pinning}>
-        <RefreshCw className="h-4 w-4" /> Pin now
-      </FixButton>
-    );
-  } else if (noPeerCount > 0) {
-    state = "warn";
-    headline = `${noPeerCount} pinned file${noPeerCount === 1 ? " isn't" : "s aren't"} on any other computer yet`;
-    sub = "They live only on this machine — not backed up. Open LFBridge on your other computer so it can pull them.";
-    action = (
-      <FixButton state="warn" onClick={() => navigate({ to: "/devices" })}>
-        <Network className="h-4 w-4" /> See devices
-      </FixButton>
-    );
-  } else if ((detail.missingPinned?.length ?? 0) > 0) {
-    // Pull-them-down (warnings.mdx §10.8.12) — another of your computers pinned files whose bytes aren't
-    // here yet. Slotted BELOW the no-peer alarm (those files are safe elsewhere, just not replicated
-    // here) but ABOVE undecided triage. Two-pane popup: pin (fetch) + optional compress over the checked
-    // subjects; the composed action label (§4.4.1) is left to compose itself (no explicit actionLabel).
-    const missing = detail.missingPinned!;
-    const n = missing.length;
-    const device = missing[0]?.addedByDevice ?? "another computer";
-    state = "warn";
-    headline = `${n} file${n === 1 ? " is" : "s are"} pinned on another of your computers but not here yet`;
-    sub = `${device} pinned ${n === 1 ? "it" : "them"} — pull ${n === 1 ? "it" : "them"} down so this computer is a real second copy.`;
-    warning = {
-      id: "peer-pinned-files-not-here-pull-down",
-      state: "warn",
-      scope: "file",
-      headline,
-      sub,
-      popup: {
-        whatThisIs: `Another of your computers (${device}) pinned ${n} file${n === 1 ? "" : "s"} that ${n === 1 ? "isn't" : "aren't"} on this computer yet. Large File Bridge can pull ${n === 1 ? "it" : "them"} down over IPFS.`,
-        whyItMatters: `Until you pull ${n === 1 ? "it" : "them"} down, this computer is not a real second copy of ${n === 1 ? "that file" : "those files"} — losing the other machine would lose ${n === 1 ? "it" : "them"}. Review the list on the right and uncheck any you don't want.`,
-        // TWO action axes, both default-checked (warnings.mdx §10.8.12(B)). NO explicit actionLabel, so
-        // WarningPopup's composeActionLabel spells the button from the checked axes: "Compress and
-        // Continue: IPFS Add ›" / "Continue: IPFS Add ›" — plus the live checked-file count.
-        options: [
-          {
-            kind: "checkbox",
-            name: "ipfs",
-            label: "Add to IPFS (pin)",
-            helper: "fetch and pin the bytes down onto this computer",
-            defaultChecked: true,
-          },
-          {
-            kind: "checkbox",
-            name: "compress",
-            label: "Compress",
-            helper: "queue a compress pass once the bytes arrive",
-            defaultChecked: true,
-          },
-        ],
-        // Empty string = "no explicit label" (WarningPopup treats "" and omitted the same, §4.4.1), so the
-        // ≥2-axis label composes itself. The type requires the field, so we can't truly omit it.
-        actionLabel: "",
-        canApply: () => true, // pinning IS the pull; never block on the axis state (still needs ≥1 subject)
-        // Right-pane subjects — bytes are NOT local, so each row is described from the committed manifest +
-        // the peer's sidecar identity (§4.5 / §10.8.12(B)): name · target directory · size · added-by.
-        // id is the repo-relative path, which POST /pull receives.
-        targets: missing.map((mf) => {
-          const dir = mf.path.includes("/") ? mf.path.slice(0, mf.path.lastIndexOf("/")) : "";
-          return {
-            id: mf.path,
-            label: mf.name,
-            sublabel: `${dir || "(repo root)"} · ${formatBytes(mf.sizeBytes)} · added by ${mf.addedByDevice ?? "another computer"}`,
-          };
-        }),
-        targetNoun: "file",
-        // §5.3 — async: hand to the dock as a "pin" job, toast the pulled count, and refetch so the
-        // "pull them down" banner leaves the page once the bytes have arrived (§5.3.1).
-        progress: {
-          kind: "pin",
-          target: detail.name,
-          doneLabel: (_sel, count) => `${count} file${count === 1 ? "" : "s"} pulled`,
-          invalidate: [["repo", repoId]],
-        },
-        apply: async (sel, checkedPaths) => {
-          // Pin each checked CID (fetches its bytes over IPFS); compress after arrival when that axis is on.
-          await api.pull(repoId, checkedPaths, { compress: !!sel.checks.compress });
-        },
-      },
-    };
-  } else if (undecided > 0) {
-    state = "warn";
-    headline = `${undecided} file${undecided === 1 ? "" : "s"} need${undecided === 1 ? "s" : ""} a decision`;
-    sub = "Choose Add to IPFS (pin) or Ignore for them in the table below so LFBridge knows what to move.";
-    // The subjects list (warnings.mdx §4.5): the actual undecided files, each a checkable row with its
-    // size, all checked at open. Apply runs the chosen decision over exactly the CHECKED rows.
-    const undecidedFiles = detail.files.filter((f) => f.decision === "undecided");
-    // Never-IPFS enforcement (decisions.mdx §17): count how many of the undecided files are flagged. When
-    // EVERY one is, the Add-to-IPFS axis is blocked — force it off + a "blocked by Never-IPFS" helper (the
-    // git-ignore axis stays). When only SOME are, keep the box enabled (the backend rejects ipfs:true only
-    // for the flagged paths) but note how many will be skipped. (WarningOption has no `disabled` field, so
-    // "forced off" is defaultChecked:false + an apply-time override rather than a truly disabled control.)
-    const neverIpfsCount = undecidedFiles.filter((f) => f.neverIpfs).length;
-    const allNeverIpfs = undecidedFiles.length > 0 && neverIpfsCount === undecidedFiles.length;
-    const ipfsHelper = allNeverIpfs
-      ? "Blocked by Never-IPFS — these files can't be added to IPFS."
-      : neverIpfsCount > 0
-        ? `back them up across your computers over IPFS · ${neverIpfsCount} of these ${neverIpfsCount === 1 ? "is" : "are"} Never-IPFS and will be skipped`
-        : "back them up across your computers over IPFS";
-    warning = {
-      id: "repo-files-need-decision",
-      state: "warn",
-      scope: "file",
-      headline,
-      sub,
-      popup: {
-        whatThisIs: `LFBridge found ${undecided} large file${undecided === 1 ? "" : "s"} in this repo that you haven't told it what to do with yet. Choose what to do on two independent axes below — a big file usually wants BOTH: git-ignored so Git never commits it, and pinned so it is backed up across your computers. Your choice is shared with everyone on this repo, so no teammate is asked again. Review the list on the right — uncheck any file you want to leave out.`,
-        whyItMatters: (
-          <ul className="list-disc space-y-0.5 pl-4">
-            <li>A file not added to IPFS is not pinned to your other computers — if this machine dies, it's gone.</li>
-            <li>A file not git-ignored may be committed by Git, bloating the repo with big binaries.</li>
-            <li>Leaving both off is fine too — it records "reviewed, leave as-is" so this doesn't ask again.</li>
-          </ul>
-        ),
-        // TWO INDEPENDENT CHECKBOXES (decisions.mdx §1) — not a radio group. Both default checked (the
-        // recommended git-ignore-AND-pin outcome); the user may turn either or both off, and BOTH-OFF is a
-        // valid recorded decision (canApply below is always true — no required choice).
-        options: [
-          {
-            kind: "checkbox",
-            name: "ipfs",
-            label: "Add them to IPFS",
-            helper: ipfsHelper,
-            // Forced off when every subject is Never-IPFS (§17); otherwise the recommended default.
-            defaultChecked: !allNeverIpfs,
-          },
-          {
-            kind: "checkbox",
-            name: "gitignore",
-            label: "Add to git ignore",
-            helper: "keep Git from committing these big files",
-            defaultChecked: true,
-          },
-        ],
-        canApply: () => true, // both-off is a valid decision (decisions.mdx §1); never block Apply
-        // Right-pane subjects — id is the repo-RELATIVE path (what `apply` receives and hands to
-        // api.setDecision). It MUST be relative: the backend keys `cfg.decisions` by repo-relative path
-        // and composeFileRows reads it back by relative path, exactly like the table's per-row Decision
-        // control (setDecision.mutate({ paths: [f.path] })). Bugfix: ids were previously ABSOLUTE
-        // (`${detail.path}/${f.path}`), so the fix wrote decisions under a key nobody reads — the HTTP
-        // call (and success toast) succeeded, but the file stayed "undecided" and this banner never left
-        // the page. See warnings.mdx §5.3.1 and §10.2.7.
-        targets: undecidedFiles.map((f) => ({
-          id: f.path,
-          label: f.path,
-          sublabel: formatBytes(f.sizeBytes),
-        })),
-        targetNoun: "file",
-        actionLabel: "Apply",
-        // §5.3 — async: hand off to the dock (verb reflects the chosen axes), toast on done, and refetch
-        // this repo so the "N files need a decision" banner disappears — and STAYS gone, because the
-        // decision is now a shared, sticky record (decisions.mdx §2).
-        progress: {
-          // When Never-IPFS blocks the whole set, the IPFS axis is forced off, so the dock verb reflects
-          // the git-ignore/none outcome rather than "pin".
-          kind: (sel) =>
-            !allNeverIpfs && sel.checks.ipfs ? "pin" : sel.checks.gitignore ? "ignore" : "configure",
-          target: detail.name,
-          doneLabel: (_sel, n) => `${n} file${n === 1 ? "" : "s"} decided`,
-          invalidate: [["repo", repoId]],
-        },
-        apply: async (sel, checkedPaths) => {
-          // Record the full two-axis decision (either/both/neither) — the backend stamps who/when/SID into
-          // the team-shared ledger and reconciles the local pin state (decisions.mdx §3/§7). §17: force the
-          // IPFS axis off when every subject is Never-IPFS; when only some are, send the user's choice and
-          // let the backend reject ipfs:true for just the flagged paths.
-          await api.setFileDecisions(repoId, checkedPaths, {
-            ipfs: allNeverIpfs ? false : !!sel.checks.ipfs,
-            gitignore: !!sel.checks.gitignore,
-          });
-        },
-      },
-    };
-  } else if (pending > 0) {
-    state = "warn";
-    headline = `${pending} file${pending === 1 ? " is" : "s are"} queued to transfer`;
-    sub = "They'll move on the next scheduled pin, or pin them now.";
-    action = (
-      <FixButton state="warn" onClick={onPinNow} disabled={pinning}>
-        <RefreshCw className="h-4 w-4" /> Pin now
-      </FixButton>
-    );
-  } else if (pinned === 0) {
-    state = "neutral";
-    headline = "Nothing set to pin in this repo yet";
-    sub = "Add files to IPFS (pin) below, or from the File System, to start bridging them.";
-  }
-
-  return (
-    <StatusBanner
-      state={state}
-      headline={headline}
-      sub={sub}
-      action={action}
-      warning={warning}
-      onWarningApplied={onWarningApplied}
-    />
   );
 }

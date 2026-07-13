@@ -35,8 +35,9 @@ It builds on and does not repeat: [Use cases & health model](./use_cases.mdx),
 [File system](./file_system.mdx).
 
 * [Task tabs](./task_tabs.mdx) — the per-repo screen's metrics-panel strip, where each warning is
-  presented as a terse **label + number + right chevron** panel (green big-`0` when clear); the chevron
-  opens the same educate-and-fix popup this spec defines.
+  presented as a **narrow tile** (Title-Case label over a big number; green big-`0` when clear). On that
+  page the tiles **replace the warning banner** (§2.6): **clicking a tile** opens the same educate-and-fix
+  popup this spec defines.
 
 ---
 
@@ -63,11 +64,14 @@ not decided to Pin or Ignore, a yellow banner reads:
 > **6 files need a decision**
 > Choose Pin or Ignore for them in the table below so LFBridge knows what to move.
 
-That banner is produced in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` —
-component `RepoStatusVerdict`, the `undecided > 0` branch. This spec generalizes that banner into a
-**reusable warning surface with an arrow button and an educate-and-fix popup**, and then requires the
-**same** surface for every other warnable condition (§10+).
+This spec generalizes that message into a **reusable warning surface with an educate-and-fix popup**,
+and then requires the **same** surface for every other warnable condition (§10+). **On the One-repo page
+the launcher is the metric panel** (clicking it opens the popup, [task_tabs.mdx §2.6](./task_tabs.mdx)) —
+the old `RepoVerdict` `StatusBanner` there has been removed; other pages still launch the popup from the
+banner's blue **arrow button** (§3). The popup itself is identical either way; only what you press to open
+it differs. The undecided popup is built in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+`buildMetricWarning` (the `undecided` case).
 
 > **Rule — every warning is a first-class, specified thing.** No warning ships as an ad-hoc string in
 > a page. Every warning is declared in the **warning registry** (§8), rendered by the shared
@@ -87,8 +91,11 @@ and uncommitted, under `~/T/_large_files_bridge/_do_batches/`.
 
 1. **A repo's file-work warning *is* that repo's TO DO Batch surfacing itself on the repo page**
    (LOCKED). The existing "N files need a decision" warning (§10.2.7, id `repo-files-need-decision`) is
-   the `repo_<name>_2_do.yaml` batch rendered as a banner. The banner's **blue-arrow popup (§3–§4) IS
-   the batch popup** — the same educate-list-apply surface.
+   the `repo_<name>_2_do.yaml` batch. **On the One-repo page it is surfaced through the repo's metric
+   panels, not a banner** ([task_tabs.mdx §2.6](./task_tabs.mdx)): the panel's count is the headline and
+   **clicking the panel opens the batch popup**. That **popup (§3–§4) IS the batch popup** — the same
+   educate-list-apply surface a banner's blue-arrow button would have opened; only the launcher differs
+   (the metric tile instead of a banner arrow). The One-repo page shows **no separate warning banner**.
 2. **The same batch also appears as a SLUG on the To Do page** (`/todo`,
    [to_do.mdx](./to_do.mdx) §8). Applying from **either** surface writes the same decisions to the
    team-shared `.lfbridge/decisions.yaml` ([decisions.mdx](./decisions.mdx)) and **clears the work from

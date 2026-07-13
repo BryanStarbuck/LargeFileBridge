@@ -13,8 +13,8 @@ repo_storage:
     by: null
     on_device: ""
   last_scan:
-    at: 2026-07-13T11:05:51.502Z
-    headless: true
+    at: 2026-07-13T18:13:58.303Z
+    headless: false
     on_device: bryan-mac-pro
   name: ""
   policy:

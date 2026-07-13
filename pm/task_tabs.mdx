@@ -1,14 +1,14 @@
 ---
 title: LargeFileBridge — Task Tabs (the per-repo file screen's All / IPFS / Compress / Transcribe tabs)
-description: The tab strip that sits a little right of center in the One-repo header (the repo name + Pin now + gear stay in place), with four tabs — All, IPFS, Compress, Transcribe — one selected at a time. Selecting a tab re-tunes EVERYTHING below it: the metrics-panel strip, the visible table columns, the default sort, and which files the table shows. The All tab is the overview and is metrics-forward; each metric panel is a terse label + a number, a light-green rounded rectangle with a big 0 when nothing is to be done, and a right chevron that opens that metric's warning popup. The IPFS / Compress / Transcribe tabs narrow the file set and columns to that one task. The Transcribe tab adds a three-state Transcribe status icon (filled blue = done · orange-edge/99%-white = could be transcribed · thin-light-grey edge = not applicable). To the right of the metrics panels is a hover-info region that shows contextual text for whatever the user hovers (a panel, a row, a tooltip target, an action link) so the panels themselves stay terse. Companion to one_repo.mdx (the page that hosts the tabs), warnings.mdx (the metric popups), decision_toggles.mdx (the toggle grammar the status icons echo), Transcribe.mdx / compression.mdx / ipfs_ui.mdx (the per-tab tasks), special_files.mdx (the classifier that scopes each tab), and non_intrusive_tooltip.mdx (the hover-info surface).
+description: The tab strip that sits a little right of center in the One-repo header (the repo name on the left; the gear + the smart "View recommendation" / "Scan now" primary on the right), with four tabs — All, IPFS, Compress, Transcribe — one selected at a time. Selecting a tab re-tunes EVERYTHING below it: the metrics-panel strip, the visible table columns, the default sort, and which files the table shows. The All tab is the overview and is metrics-forward. Each metric panel is deliberately NARROW — as wide as its widest word — a small Title-Case label (not all-caps; it wraps onto as many lines as it needs) stacked over a big centered number; a light-green rounded rectangle with a big 0 when nothing is to be done. THE METRIC PANELS ARE THIS PAGE'S ONLY WARNING SURFACE — there is no separate warning banner: clicking a panel opens that metric's educate-and-fix popup. The panels occupy at most ~75% of the row so the hover-info region to their right always keeps ≥25%; when they don't fit on one row they flow onto a second, balanced row (equal counts top and bottom, left-aligned). The IPFS / Compress / Transcribe tabs narrow the file set and columns to that one task. The Transcribe tab adds a three-state Transcribe status icon (filled blue = done · orange-edge/99%-white = could be transcribed · thin-light-grey edge = not applicable). The hover-info region shows contextual text for whatever the user hovers (a panel, a row, a tooltip target, an action link) so the panels themselves stay terse. Companion to one_repo.mdx (the page that hosts the tabs), warnings.mdx (the metric popups), decision_toggles.mdx (the toggle grammar the status icons echo), Transcribe.mdx / compression.mdx / ipfs_ui.mdx (the per-tab tasks), special_files.mdx (the classifier that scopes each tab), and non_intrusive_tooltip.mdx (the hover-info surface).
 ---
 
 # LargeFileBridge — Task Tabs
 
 The **One-repo** screen ([one_repo.mdx](./one_repo.mdx)) is where the user does the work on a repo's large
 files. It now carries a **task tab strip** in its header — **a little right of center**, with the repo
-name/breadcrumb still on the left and **Pin now** + the settings **gear** still on the right. There are
-**four tabs**:
+name/breadcrumb still on the left and the settings **gear** + the smart **"View recommendation" / "Scan
+now"** header primary (§1.1) still on the right. There are **four tabs**:
 
 | Tab | The one question it answers |
 | --- | --- |
@@ -32,9 +32,11 @@ This spec builds on the siblings and does not repeat them:
 
 * [one_repo.mdx](./one_repo.mdx) — the per-repo screen whose header hosts the tabs and whose files table
   the tabs re-tune. The decision model (Add to IPFS (pin) / Ignore / Undecided), the files table, and the
-  header (Pin now, gear) are defined there; this spec adds the tab layer over them.
-* [warnings.mdx](./warnings.mdx) — the **educate-and-fix popup** each metric panel's chevron opens (§2.4),
-  and the metric-panel presentation (label + number + green-zero + chevron) it now also documents.
+  header (the "View recommendation" / "Scan now" primary, gear) are defined there; this spec adds the tab
+  layer over them.
+* [warnings.mdx](./warnings.mdx) — the **educate-and-fix popup** clicking a metric panel opens (§2.4).
+  On the One-repo page these panels **replace the warning banner** (§2.6) — the popup is the same
+  educate-and-fix surface, just launched from the panel instead of a banner arrow button.
 * [decision_toggles.mdx](./decision_toggles.mdx) — the four-state toggle grammar the **Transcribe** /
   **Compress** status icons echo (§5, §6) — same box, different "done" color because these are *status*
   icons, not two-axis decisions.
@@ -52,8 +54,10 @@ This spec builds on the siblings and does not repeat them:
 ### 1.1 Position and look
 
 * **Where.** In the One-repo **header row**, **a little right of center**. The `‹ Repos / <repo name>`
-  breadcrumb and muted path stay **left**; the **Pin now** primary button and the **gear** (Repo settings)
-  stay **right** ([one_repo.mdx §3.1](./one_repo.mdx#31-header)). The tabs sit between them.
+  breadcrumb and muted path stay **left**; the **gear** (Repo settings) and the smart header primary —
+  **"View recommendation ›"** (or **"Scan now"** when a scan is overdue), the SAME button on every tab —
+  stay **right** ([one_repo.mdx §3.1](./one_repo.mdx#31-header)). The tabs sit between them. (Pin now is no
+  longer a header button; it moved into the `Actions ▾` page menu.)
 * **Look.** The house tab style already used by the File System tabs
   (`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FsTabs.tsx` — `FsTabs`): a
   horizontal row of tab buttons, each a small **leading icon + label**, with a **2px underline** in
@@ -63,7 +67,7 @@ This spec builds on the siblings and does not repeat them:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────────┐
-│  ‹ Repos / Our_Movies              ▦ All   ⌂ IPFS   ▤ Compress   ⌯ Transcribe    ⚙   ⟳ Pin now │
+│  ‹ Repos / Our_Movies          ▦ All   ⌂ IPFS   ▤ Compress   ⌯ Transcribe    ⚙   View rec ›  │
 │  ~/BGit/…/Our_Movies                 ▔▔▔▔▔  (All active: 2px primary underline)                │
 └────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -103,27 +107,38 @@ The metrics strip is rendered in code:
 
 ### 2.1 Anatomy of one panel (LOCKED)
 
-A panel is a small **rounded rectangle** holding, left to right:
+A panel is a small **rounded rectangle**, kept **as narrow as possible** — **only as wide as its widest
+word** (CSS `width: min-content`) — holding a vertical stack, top to bottom:
 
-* a **terse label** — *what it is*, no sentence, no description text (the explanation lives in the
-  hover-info region, §3). One or two words: `Undecided`, `Not backed up`, `Pull down`, `Compressible
-  videos`, `Transcribable`.
-* the **number** — big, `tabular-nums`.
-* a **right chevron (`›`)** — always present; clicking it **opens that metric's warning popup** (§2.4).
+* a **terse Title-Case label** — *what it is*, no sentence, no description text (the explanation lives in
+  the hover-info region, §3). One or two words: `Undecided`, `Not Backed Up`, `Pull Down`, `Compressible
+  Videos`, `Transcribable`. **Title Case, NOT all-caps** (first letter of each word capitalized). The
+  label is **small** and **wraps** onto as many lines as the narrow box needs.
+* the **number** — **big and centered**, `tabular-nums`, sitting under the wrapped label. The number is
+  the visual center of the panel; the label words sit above it.
+
+The panel is a **whole-panel button** — clicking anywhere on it opens that metric's warning popup (§2.4);
+there is **no chevron** (the narrow box has no room for one and needs none — the whole tile is the
+affordance).
 
 ```
-┌──────────────────────┐   ┌──────────────────────┐   ┌──────────────────────┐
-│ Undecided        5  ›│   │ Not backed up    3  ›│   │ Compressible     0  ›│  ← green + big 0
-└──────────────────────┘   └──────────────────────┘   └──────────────────────┘
-   amber (actionable)         red (nothing backs it)      light-green (all good)
+┌────────────┐   ┌────────────┐   ┌────────────┐   ┌────────────┐
+│ Undecided  │   │    Not     │   │Compressible│   │Compressible│
+│     5      │   │  Backed Up │   │  Videos    │   │  Videos    │
+└────────────┘   │     3      │   │    12      │   │     0      │  ← green + big 0
+  amber          └────────────┘   └────────────┘   └────────────┘
+ (actionable)     red (at risk)    amber (offer)    light-green (all good)
 ```
+
+(Each box is only as wide as its widest word — `Undecided`, `Backed`, `Compressible` — with the rest of
+the label wrapping under it and the number centered below.)
 
 ### 2.2 The green-zero state (LOCKED)
 
 When a panel's count is **0** — there is **nothing to do** for that metric — the panel is a **light-green
 filled rounded rectangle** (a faint green fill, the health "good" tint) showing a **big `0`**. This is the
-reassurance state: a wall of green zeros means the repo is fully handled. The chevron still renders (the
-popup opens to an empty/all-clear state), but the panel reads as *done*.
+reassurance state: a wall of green zeros means the repo is fully handled. Clicking it still opens the
+metric's popup in its **all-clear** state, but the panel reads as *done*.
 
 ### 2.3 Non-zero panels are health-tinted (LOCKED)
 
@@ -138,28 +153,55 @@ A count `> 0` tints the panel by how much it wants attention, reusing the app he
 
 No panel ever carries a paragraph of description — **terse label + number only**; §3 supplies the words.
 
-### 2.4 The chevron opens the metric's warning popup (LOCKED)
+### 2.4 Clicking a panel opens the metric's warning popup (LOCKED)
 
-Every panel's **right chevron** is the same affordance as the blue arrow button elsewhere
+**Clicking a metric panel** is the same affordance as the blue arrow button elsewhere
 ([warnings.mdx §4](./warnings.mdx)): it opens the **educate-and-fix popup** for that metric, scoped to the
-exact files the number counts. Examples:
+exact files the number counts. The panels are this page's warning surface; there is **no banner** to carry
+an arrow button (§2.6), so the tile itself is what the user presses. Examples:
 
-* **Undecided ›** → the triage popup listing the undecided files with the two decision toggles
+* **Undecided** → the triage popup listing the undecided files with the two decision toggles
   ([decision_toggles.mdx §7](./decision_toggles.mdx#7-in-the-warning--to-do-batch-popups--three-axes-per-row-locked)).
-* **Pull down ›** → the "pull them down" popup ([warnings.mdx §10.8.12](./warnings.mdx)) of peer-pinned
+* **Pull Down** → the "pull them down" popup ([warnings.mdx §10.8.12](./warnings.mdx)) of peer-pinned
   files missing locally.
-* **Not backed up ›** → the pin/peer popup for `sync` files with 0 peers.
-* **Compressible videos ›** / **Compressible images ›** → the compress popup with the compress axis
+* **Not Backed Up** → the pin/peer popup for `sync` files with 0 peers.
+* **Compressible Videos** / **Compressible Images** → the compress popup with the compress axis
   ([compression.mdx](./compression.mdx)).
-* **Transcribable ›** → the transcribe popup ([transcribe_calc_engine.mdx §4](./transcribe_calc_engine.mdx)).
-* **Big not git-ignored ›** → the git-ignore popup ([git_ignore.mdx](./git_ignore.mdx)).
+* **Transcribable** → the transcribe popup ([transcribe_calc_engine.mdx §4](./transcribe_calc_engine.mdx)).
+* **Big Not Git-ignored** → the git-ignore popup ([git_ignore.mdx](./git_ignore.mdx)).
 
-A panel with a **green 0** opens the same popup in its **all-clear** state ("Nothing to do here").
+A panel with a **green 0** opens the same popup in its **all-clear** state ("Nothing to do here"), or —
+for a metric that has no dedicated popup yet — simply re-tunes the view to the tab where the user acts on
+it (the spec backlog: only a few of the catalogued warnings are wired as popups today).
 
-The chevron → popup wiring reuses the existing warning-arrow mechanism in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningArrowButton.tsx` —
-`WarningArrowButton` (opening `WarningPopup`), driven per-metric by a `WarningDef` resolved in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts`.
+The panel → popup wiring opens `WarningPopup` directly (the same popup the banner arrow button opens),
+driven per-metric by a `WarningDef` built from the live `RepoDetail`, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricsStrip`
+(opens `WarningPopup` on click) and
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+`buildMetricWarning` (maps a `MetricId` + `RepoDetail` to the popup's `WarningDef`; returns null ⇒ the
+panel falls back to its tab-switch `onOpen`). The same module's `topRecommendation` resolves the
+worst-first popup the header **"View recommendation ›"** primary opens ([one_repo.mdx §3.1](./one_repo.mdx)).
+
+### 2.6 The metric panels replace the warning banner on this page (LOCKED)
+
+On the One-repo page there is **no warning banner** ([warnings.mdx §2](./warnings.mdx)) and **no
+worst-first verdict banner** — the metric panels **are** the warning surface. Everything a banner would
+have said is expressed by the panels: the count is the headline, the health tint (§2.3) is the severity,
+the hover-info region (§3) is the one-sentence explanation, and clicking the panel opens the same
+educate-and-fix popup a banner's arrow button would have opened (§2.4). This keeps the top of the page
+quiet — a wall of narrow tiles, mostly green zeros — instead of a stack of banners.
+
+* **No StatusBanner / RepoVerdict on this page.** The old worst-first diagnosis banner (IPFS down →
+  pinned-but-no-peers → undecided → pending) is **removed**; each file-work condition now reads off its
+  own panel (`Pending`, `Not Backed Up`, `Undecided`, `Pull Down`) and opens its own popup.
+* **IPFS-down has no metric tile, so it rides the header primary.** The one condition that isn't a
+  per-file count — the local IPFS engine being down — is surfaced by the header **"View recommendation ›"**
+  primary ([one_repo.mdx §3.1](./one_repo.mdx)), which opens the worst-first recommendation
+  (`metricWarningDefs.topRecommendation`: IPFS-down → pull-down → undecided). It is still also reflected in the
+  disabled per-row pin toggles; it no longer raises a page banner here.
+* This is **specific to the One-repo page.** Other pages (IPFS, Devices, File/Directory) still use the
+  banner surface ([warnings.mdx §2](./warnings.mdx)); only this page swaps it for the metric panels.
 
 ### 2.5 Where the numbers come from (LOCKED)
 
@@ -202,6 +244,23 @@ appear on demand, in a fixed place the eye can rely on.
   [non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx); here it is rendered as a **persistent side
   region** instead of a floating bubble, so it never covers the row the user is reading and the panels
   need no inline prose.
+
+### 3.1 Width budget and balanced wrapping (LOCKED)
+
+The hover-info region needs **room to read**, and the metric panels are narrow (§2.1), so:
+
+* **The region always keeps ≥ 25% of the row width.** The metric panels occupy **at most ~75%** of the
+  row; the hover-info region takes the remaining space and is **never** squeezed below **25%**.
+* **Panels flow to a second row to protect that 25%.** When the panels would need more than ~75% to sit on
+  one row, they **wrap onto a second row** rather than eat into the hover-info region.
+* **Wrapped rows are balanced and left-aligned.** When there are more than three panels and they must wrap,
+  the panels are split into **equal counts** across the rows (e.g. 8 → 4 + 4, 7 → 4 + 3), **left-aligned**,
+  so the extra room opens up on the **right** for the hover-info text. (More panels on the top row than the
+  bottom is avoided; balancing keeps the block compact and the right side free.)
+
+The width budget is measured from the panels' intrinsic (widest-word) widths against the ≤75% area, in
+code: `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` —
+`MetricsStrip` (a `ResizeObserver` pass computes how many panels fit, then rebalances into equal rows).
 
 The hover-info region and the hover-context bus that feeds it are rendered in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` —
@@ -367,12 +426,15 @@ filtered `data`, and the tab's `metrics` to `MetricsStrip`).
    the **visible columns**, the **default sort**, and the **row filter** per §4.
 3. **All** is metrics-forward: the strip shows every actionable metric; a metric with **0** renders a
    **light-green rounded rectangle with a big `0`**; a metric `> 0` is health-tinted per §2.3.
-4. Every metric panel is a **terse label + number + right chevron**, no description prose; the **chevron
-   opens that metric's warning popup** ([warnings.mdx §4](./warnings.mdx)) scoped to the counted files (or
-   its all-clear state at 0).
+4. Every metric panel is **narrow (as wide as its widest word)** with a **small Title-Case label** (not
+   all-caps, wrapping) stacked over a **big centered number**, **no chevron** and no description prose;
+   **clicking the panel opens that metric's warning popup** ([warnings.mdx §4](./warnings.mdx)) scoped to
+   the counted files (or its all-clear state at 0). **There is no warning banner on this page** — the
+   panels are the only warning surface (§2.6).
 5. To the **right of the metrics panels** is a **hover-info region** that shows contextual text for
    whatever the user hovers — a panel, a table row, a tooltip target, or an action link — and a per-tab
-   default hint when nothing is hovered (§3).
+   default hint when nothing is hovered (§3). The region **keeps ≥25% of the row width**; the panels flow
+   onto a **second, balanced (equal-count), left-aligned row** rather than squeeze it (§3.1).
 6. The **IPFS** tab filters to large/media files, shows the IPFS columns, and sorts by transfer urgency
    (worst first) then Size desc (§4.2).
 7. The **Compress** tab filters to compressible videos/images, shows a **Compress status icon** column
@@ -391,17 +453,23 @@ filtered `data`, and the tab's `metrics` to `MetricsStrip`).
   Task Tabs = the All / IPFS / Compress / Transcribe tab strip in the One-repo header (right of center;
   Pin now + gear stay right, breadcrumb stays left). Selecting a tab re-tunes FOUR things: metrics strip,
   visible columns, default sort, row filter (client-side; no refetch, no mutation). Default = All
-  (ephemeral state, NOT config.yaml). METRIC PANELS: terse label + number + right chevron; chevron opens
-  that metric's warning popup (warnings.mdx §4); count 0 => LIGHT-GREEN rounded rect w/ big 0; >0 =
-  health-tinted (red=at-risk, amber/accent=action). HOVER-INFO REGION to the right of the panels shows
-  text for whatever is hovered (panel/row/tooltip/action link) — the non_intrusive_tooltip surface docked.
+  (ephemeral state, NOT config.yaml). METRIC PANELS: NARROW (w-min, as wide as widest word), small
+  Title-Case wrapping label (NOT all-caps) over a BIG centered number, NO chevron; clicking the whole
+  panel opens that metric's warning popup (warnings.mdx §4); count 0 => LIGHT-GREEN rounded rect w/ big 0;
+  >0 = health-tinted (red=at-risk, amber/accent=action). THE PANELS REPLACE THE WARNING BANNER on this
+  page (§2.6) — no StatusBanner/RepoVerdict. IPFS-down has no tile, so it rides the header "View
+  recommendation ›" primary (metricWarningDefs.topRecommendation, one_repo §3.1); Pin now moved to Actions menu.
+  HOVER-INFO REGION to the right keeps >=25% width; panels flow to a 2nd balanced (equal-count),
+  left-aligned row rather than squeeze it (§3.1). Shows text for whatever is hovered
+  (panel/row/tooltip/action link) — the non_intrusive_tooltip surface docked.
   PER TAB (§4): All=all files, full cols, undecided-first; IPFS=large|media, IPFS cols, transfer-urgency
   sort; Compress=compressible video/image, Compress icon col, could-first+size-desc; Transcribe=audio/video,
   Transcribe 3-state icon, could-first+size-desc. TRANSCRIBE ICON (§5, Captions glyph): Done=solid BLUE ·
   Could(audio/video, no .transcription)=orange normal-edge + 99%-white/1%-orange fill · N/A=white +
   very-thin very-light-grey edge. COMPRESS ICON (§6, Archive glyph) same grammar, GREEN done. New FileRow
   fields: transcribe, compress (backend join classifySpecial + readStorageIndex). Code: TaskTabs.tsx,
-  taskTabs.config.ts, MetricsStrip.tsx/MetricPanel, HoverInfoRegion.tsx, TranscribeStatusIcon.tsx,
+  taskTabs.config.ts, MetricsStrip.tsx/MetricPanel (opens WarningPopup directly), metricWarningDefs.tsx
+  (buildMetricWarning + topRecommendation + scanIsStale), HoverInfoRegion.tsx, TranscribeStatusIcon.tsx,
   CompressStatusIcon.tsx; units.service.ts computeRepoDetail attaches taskMetrics + per-file task status.
   Keep aligned with one_repo.mdx (host), warnings.mdx (popups + metric-panel presentation), decision_toggles.mdx
   (toggle grammar the icons echo), Transcribe.mdx/compression.mdx/ipfs_ui.mdx (tasks), special_files.mdx

@@ -197,6 +197,7 @@ export function computeRepoDetail(folder: string, ipfs: IpfsHealth): RepoDetail 
     status: rollupStatus(cfg.pinned, counts, status, files),
     peerCount: peerCountForFiles(files),
     lastPinAt: status.last_pin_at,
+    lastScanAt: status.last_scan_at,
     ipfs,
     counts,
     files,

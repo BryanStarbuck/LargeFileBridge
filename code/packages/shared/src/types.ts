@@ -117,6 +117,9 @@ export interface RepoDetail {
   status: RepoStatus;
   peerCount: number;
   lastPinAt: string | null;
+  // When this repo was last scanned for big files (ISO), or null if never. Drives the "Scan now"
+  // header primary when the repo is scan-stale (one_repo.mdx §3.1 / scan.mdx §2.3).
+  lastScanAt: string | null;
   ipfs: IpfsHealth;
   counts: RepoCounts;
   files: FileRow[];
