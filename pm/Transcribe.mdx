@@ -5,6 +5,11 @@ description: The transcription feature. LFBridge transcribes AUDIO files (MP3, W
 
 # LargeFileBridge — Transcribe (audio & video → text)
 
+> **AUTHORITY NOTE (dominant).** The transcription engine **preference order** is **Apple SpeechAnalyzer →
+> Whisper Small → Qwen3-ASR**, and the legacy **`SFSpeechRecognizer` is never used**. See
+> [transcribe_engine.mdx §2](./transcribe_engine.mdx) for the full engine spec. This decision **takes
+> precedence** over any earlier wording here that framed Qwen3-ASR as primary or Whisper at `base`.
+
 LFBridge can **transcribe** the speech in a media file to a **plain-text transcript**. It works on
 **audio** (MP3, WAV, FLAC, M4A, AAC, OGG, …) and on **video** (MP4, MOV, MKV, WEBM, … — the audio
 track is demuxed to MP3 first), so any file whose "what was said" matters becomes searchable, quotable
@@ -58,10 +63,12 @@ For one media file, transcription is:
 2. **Demux if video** — a video/container is not directly digestible by Whisper, so its audio track is
    extracted to a temporary MP3 with **ffmpeg** (`-vn -acodec libmp3lame`). A video with **no audio
    stream** writes a short "no audio to transcribe" placeholder instead of failing.
-3. **Transcribe** the audio with **Whisper** (`whisper --model base --language en`), preferring the
-   Apple-Silicon **MPS** GPU with an automatic **CPU fallback** when MPS emits garbage (the sanity check
-   the copied engine already carries). Whisper is spawned **asynchronously** and its stdout is streamed
-   to derive a **determinate percentage** (segment end-timestamp ÷ media duration) — see §5.1.
+3. **Transcribe** the audio with the **preferred engine for this machine** — Apple **SpeechAnalyzer** on
+   macOS 26+, otherwise **Whisper Small** (`whisper --model small --language en`, Apple-Silicon **MPS** with
+   an automatic **CPU fallback** on garbage), otherwise the **Qwen3-ASR** third choice — following the fixed
+   order and auto-fallback of [transcribe_engine.mdx §2](./transcribe_engine.mdx). The legacy
+   `SFSpeechRecognizer` is never used. The engine is spawned **asynchronously** and (for Whisper) its stdout
+   is streamed to derive a **determinate percentage** (segment end-timestamp ÷ media duration) — see §5.1.
 4. **Write the transcript** — a plain-text file with a small metadata header (source name, timestamp,
    engine/model, source duration) — **inside the owning root's `.lfbridge/`**, path-mirrored, under the
    media's full filename with `.transcription` **appended** (§3): `<repo>/a/b/talk.mp3` →
@@ -357,15 +364,16 @@ path. Home-expansion of every inbound path is handled in code:
 ## 4. What a transcript file contains
 
 A transcript is plain UTF-8 text: a short metadata header, a divider, then the transcript body. The header
-records the **actual engine + model** used ([transcribe_engine.mdx](./transcribe_engine.mdx)) — the
-heavyweight `qwen` engine (`qwen3-asr-1.7b-mlx`) or the Whisper-on-Mac fallback (`whisper-base`) — and the
-**source duration**, so a reader can confirm the transcript covers the whole file (§critical: the full
-1–2h+ duration, [transcribe_engine.mdx §4](./transcribe_engine.mdx)):
+records the **actual engine + model** used ([transcribe_engine.mdx](./transcribe_engine.mdx)) — the preferred
+Apple **SpeechAnalyzer** (`apple-speechanalyzer`), the **Whisper Small** second choice (`whisper-small`), or
+the heavyweight **Qwen3-ASR** third choice (`qwen3-asr-1.7b-mlx`) — and the **source duration**, so a reader
+can confirm the transcript covers the whole file (§critical: the full 1–2h+ duration,
+[transcribe_engine.mdx §4](./transcribe_engine.mdx)):
 
 ```
 Transcription of: talk.mp3
 Generated on: 2026-07-05 09:41:00
-Engine: qwen3-asr-1.7b-mlx (device: mlx, language: en)
+Engine: apple-speechanalyzer (device: on-device, language: en)
 Source duration: 01:47:12   ·   Transcript covers: 01:47:12  ✓ full
 ============================================================
 
@@ -384,12 +392,14 @@ candidate to re-transcribe, never a silent success ([transcribe_engine.mdx §4](
 ## 5. The engine — copied in, called in-process (LOCKED)
 
 > **Deep engine spec: [transcribe_engine.mdx](./transcribe_engine.mdx).** This section defines the
-> *in-process, non-blocking* discipline (the load-bearing §5.1 rule). The **two engines** (the heavyweight
-> local **Qwen3-ASR** LLM and the **Whisper-on-Mac** fallback), the **on-demand model
-> download/install/configure with the user's permission** (disk estimate, health-check/repair, the two
-> progress UIs, and the flow-resume after install), the **critical full-duration / no-truncation
-> requirement for 1–2h+ media**, and the **per-machine parallel calibration** all live in
-> [transcribe_engine.mdx](./transcribe_engine.mdx). This file references it and does not restate it.
+> *in-process, non-blocking* discipline (the load-bearing §5.1 rule). The **three engines** in their
+> preference order (Apple **SpeechAnalyzer** preferred → **Whisper Small** → heavyweight **Qwen3-ASR**; never
+> the legacy `SFSpeechRecognizer`), the **macOS-update warning** when the hardware supports SpeechAnalyzer but
+> the OS is too old, the **on-demand model download/install/configure with the user's permission** for the
+> Qwen third choice (disk estimate, health-check/repair, the two progress UIs, and the flow-resume after
+> install), the **critical full-duration / no-truncation requirement for 1–2h+ media**, and the **per-machine
+> parallel calibration** all live in [transcribe_engine.mdx](./transcribe_engine.mdx). This file references it
+> and does not restate it.
 
 The transcription engine is our existing **`Transcribe.js`** tool (canonically
 `~/BGit/all/tools/Transcription/Transcribe.js`, and a copy in the ACT3-internal web app). LFBridge does
@@ -546,8 +556,8 @@ Allow-list-gated like every data route, mirroring `compression.router.ts`:
 
 | Method + path | Body / query | What |
 | --- | --- | --- |
-| `GET /api/transcribe/tools` | — | Are `whisper` + `ffmpeg` installed (drives the disabled state + install hint). |
-| `GET /api/transcribe/engine` | — | **Engine + model readiness** ([transcribe_engine.mdx §3](./transcribe_engine.mdx)): which engine is active (`qwen` / `mac`), whether the heavyweight model is `installed` / `partial` / `missing` / `outdated`, its on-disk size, and the disk-space estimate for a fresh install. Drives the permission popup. |
+| `GET /api/transcribe/tools` | — | Which binaries are present: `swiftc` (for the preferred `speech` engine), `whisper` + `ffmpeg` (Whisper Small), `mlx-qwen3-asr` (Qwen). Drives the disabled state + install hints. |
+| `GET /api/transcribe/engine` | — | **Engine + model readiness** ([transcribe_engine.mdx §2/§3](./transcribe_engine.mdx)): which engine is **active** (`speech` / `mac` / `qwen`); the **`speech`** readiness block (`available`, `osMajor`, **`needsOsUpdate`** — hardware supports SpeechAnalyzer but OS < 26, §2.2 — and `hardwarePossible`); and, for the heavyweight **`qwen`** third engine, whether its model is `installed` / `partial` / `missing` / `outdated`, its on-disk size, and the disk estimate for a fresh install. Drives the macOS-update notice and the Qwen permission popup. |
 | `POST /api/transcribe/engine/provision` | `{ approve: true }` | **Download → install → configure** the heavyweight model (explicit consent). Registers a `download` then an `install` progress job ([transcribe_engine.mdx §3.3](./transcribe_engine.mdx)); returns immediately, watchable on [Processing](./processing.mdx). |
 | `GET /api/transcribe/file?path=<abs>` | — | The existing transcript for a media file (text + transcript path), or `null`. |
 | `POST /api/transcribe/file` | `{ path, overwrite? }` | Transcribe ONE file → the `.lfbridge/<rel-dir>/<name.ext>.transcription` transcript under the owning root (§3). |
@@ -608,8 +618,11 @@ The transcription REST surface (tools / read-transcript / file / batch / tree / 
    and a **Re-check** button that re-enables the run once fixed, **without a page reload**; when the
    **model** is missing/partial/outdated, the permission popup + provisioning flow of
    [transcribe_engine.mdx](./transcribe_engine.mdx) handles it and then **resumes the original action**.
-9a. **Two engines + long-media robustness** ([transcribe_engine.mdx](./transcribe_engine.mdx)): a primary
-    **heavyweight Qwen3-ASR** engine and a **Whisper-on-Mac** fallback; whichever runs, the settings are
+9a. **Three engines (preference order) + long-media robustness** ([transcribe_engine.mdx](./transcribe_engine.mdx)):
+    Apple **SpeechAnalyzer** (preferred, macOS 26+, on-device — Apple's NEW engine, never the legacy
+    `SFSpeechRecognizer`) → **Whisper Small** (second) → heavyweight **Qwen3-ASR** (third); a Mac whose
+    hardware supports SpeechAnalyzer but runs an OS **older than macOS 26** gets a **macOS-update warning that
+    names the Whisper-Small fallback** and still transcribes (§2.2). Whichever runs, the settings are
     **triple-checked to transcribe the FULL duration of 1–2h+ media without truncating** — the run is
     verified to cover the source duration end-to-end (a short/truncated result is a failure, never a silent
     success), and the machine's **parallel-job count is calibrated** to its cores/RAM/model (low-power
@@ -784,9 +797,13 @@ in one place.
        git-ignore line is injected (gitIgnore flag retired). Appending (not replacing) the ext means
        talk.mp3 & talk.wav no longer collide (old caveat RETIRED). SUPERSEDES the earlier beside-media/
        replace-ext LOCKED layout AND storages.mdx §6's transcript.yaml sketch.
-  (§5) engine = our Transcribe.js COPIED into code/packages/backend/src/tools/transcribe/Transcribe.ts as
-       a TS class, called IN-PROCESS (no `node Transcribe.js`, no reuse of ACT3-internal copy). Still
-       spawns local whisper+ffmpeg; entirely on-machine, no network. Missing tools → clear tool_missing.
+  (§5) engine = our Transcribe.js COPIED into code/packages/backend/src/tools/transcribe/ as TS classes,
+       called IN-PROCESS (no `node Transcribe.js`, no reuse of ACT3-internal copy). PREFERENCE ORDER
+       (DOMINANT): Apple SpeechAnalyzer (macOS 26+, on-device, Swift helper speech/SpeechAnalyzerCLI.swift —
+       NEVER legacy SFSpeechRecognizer) → Whisper Small (whisper-small, not base) → Qwen3-ASR (third). §2.2:
+       Mac hardware supports SpeechAnalyzer but OS<26 → warn + name Whisper-Small fallback, still transcribe.
+       Spawns local swiftc/whisper/mlx-qwen3-asr + ffmpeg; entirely on-machine, no network (SpeechAnalyzer
+       model ships in OS). Missing tools → clear tool_missing.
   (§5.1) ASYNC/non-blocking is LOCKED: use child_process.spawn (awaited), NOT spawnSync — spawnSync froze
        the whole server for the whole Whisper run (the "Generate transcript didn't work" bug). Stream
        whisper stdout `[start --> end]` ÷ ffprobe duration → determinate % on a track("transcribe",…) job.

@@ -1,15 +1,22 @@
-// Engine selection + the qwen→mac auto-fallback (transcribe_engine.mdx §2/§2.1). The caller (transcribe.
-// service) asks this module to transcribe a file; it picks the engine (Qwen3-ASR when available + preferred,
-// else Whisper) and, for a `qwen` run that errors, transparently retries on Whisper so a file is never lost.
-// Kept free of config I/O — the caller passes the resolved preference + consent so tools/ stays pure.
+// Engine selection + the speech → mac → qwen runtime fallback chain (transcribe_engine.mdx §2/§2.1). The
+// caller (transcribe.service) asks this module to transcribe a file; it picks the engine per the preference
+// order (Apple SpeechAnalyzer when available, else Whisper Small; qwen only when explicitly pinned) and, for
+// a run that errors, transparently retries down the order so a file is never lost. Kept free of config I/O —
+// the caller passes the resolved preference + consent so tools/ stays pure. Mirrors Transcribe.js's
+// transcribe()/chooseAutoEngine() (the verified reference).
 import os from "node:os";
 import type { TranscribeEngineId } from "@lfb/shared";
 import { log } from "../../shared/logging.js";
 import { Transcriber, type TranscribeEngineResult, type ProgressSink } from "./Transcribe.js";
 import { Qwen3AsrTranscriber } from "./qwen-asr.js";
+import { SpeechAnalyzerTranscriber } from "./speech-analyzer.js";
 
 const whisper = new Transcriber();
 const qwen = new Qwen3AsrTranscriber();
+const speech = new SpeechAnalyzerTranscriber();
+
+// The auto-selection / runtime-fallback order (best first — NEVER the legacy Apple SFSpeechRecognizer).
+const ENGINE_PREFERENCE: TranscribeEngineId[] = ["speech", "mac", "qwen"];
 
 export type EnginePreference = "auto" | TranscribeEngineId;
 
@@ -23,62 +30,83 @@ export function qwenAvailable(): boolean {
   return qwen.available();
 }
 
+/** Is Apple SpeechAnalyzer runnable right now (macOS 26+ + swiftc)? */
+export function speechAvailable(): boolean {
+  return speech.available();
+}
+
 /**
- * Which engine to use (transcribe_engine.mdx §2 selection order). `mac` when pinned or when qwen can't run
- * here; `qwen` when preferred/auto and available and the user hasn't opted for the fallback.
+ * Which engine to use (transcribe_engine.mdx §2 selection order — best first, NEVER legacy SFSpeechRecognizer):
+ *   `speech` pref → speech if available, else mac (Whisper Small).
+ *   `mac`    pref → mac.
+ *   `qwen`   pref → qwen if available, else mac.
+ *   `auto`        → speech if available, else mac. qwen is NOT auto-selected — it is the third choice, chosen
+ *                   only by an explicit `qwen` pin (the heavyweight "another LLM").
  */
-export function pickEngine(pref: EnginePreference, consent?: string | null): TranscribeEngineId {
+export function pickEngine(pref: EnginePreference, _consent?: string | null): TranscribeEngineId {
+  if (pref === "speech") return speech.available() ? "speech" : "mac";
   if (pref === "mac") return "mac";
   if (pref === "qwen") return qwen.available() ? "qwen" : "mac";
-  // auto — qwen when available, unless the user declined provisioning or chose the fallback.
-  if (qwen.available() && consent !== "declined" && consent !== "use_fallback") return "qwen";
-  return "mac";
+  // auto — Apple SpeechAnalyzer when available, else the Whisper Small fallback (qwen is never auto-picked).
+  return speech.available() ? "speech" : "mac";
 }
 
 export interface TranscribeEngineRunResult extends TranscribeEngineResult {
   engineUsed: TranscribeEngineId;
 }
 
+/** Run exactly one engine by id (no fallback). Returns its structured result. */
+function runOne(id: TranscribeEngineId, inputFile: string, outputPath: string, onProgress?: ProgressSink): Promise<TranscribeEngineResult> {
+  if (id === "speech") return speech.transcribeToFile(inputFile, outputPath, onProgress);
+  if (id === "qwen") return qwen.transcribeToFile(inputFile, outputPath, onProgress);
+  return whisper.transcribeToFile(inputFile, outputPath, onProgress);
+}
+
 /**
- * Transcribe one file with the selected engine, applying the qwen→mac auto-fallback (§2.1). Returns the
- * result plus which engine actually produced it (the transcript header already records this). `allowFallback:
- * false` (an explicit `mac` pin, or a caller that wants no retry) disables the fallback layer.
+ * Transcribe one file, applying the runtime fallback chain that follows the preference order speech → mac →
+ * qwen STARTING at the picked engine (§2.1, mirrors Transcribe.js transcribe()). A `transcribed`/`no_audio`
+ * result is authoritative; a `tool_missing`/`failed` result or a thrown error advances to the next engine in
+ * the chain, logging (never silently) on each fallback. `engineUsed` reflects whichever engine actually
+ * produced the text. `allowFallback: false` (a pinned engine that wants no retry) runs only the picked engine.
  */
 export async function transcribeWithEngine(
   inputFile: string,
   outputPath: string,
   opts: { engine: EnginePreference; consent?: string | null; allowFallback?: boolean; onProgress?: ProgressSink },
 ): Promise<TranscribeEngineRunResult> {
-  const id = pickEngine(opts.engine, opts.consent);
+  const picked = pickEngine(opts.engine, opts.consent);
   const allowFallback = opts.allowFallback !== false;
 
-  if (id === "qwen") {
+  // The chain = the picked engine, then the engines AFTER it in the preference order (so speech falls back to
+  // mac then qwen; mac to qwen; qwen to nothing). With fallback disabled we run only the picked engine.
+  const startIdx = Math.max(0, ENGINE_PREFERENCE.indexOf(picked));
+  const chain = allowFallback ? ENGINE_PREFERENCE.slice(startIdx) : [picked];
+
+  let lastReason: string | null = null;
+  for (let i = 0; i < chain.length; i++) {
+    const id = chain[i]!;
+    if (i > 0) log.warn("transcribe", `${ENGINE_PREFERENCE[startIdx + i - 1]} failed (${lastReason ?? ""}) — falling back to ${id} for ${inputFile}`);
     try {
-      const r = await qwen.transcribeToFile(inputFile, outputPath, opts.onProgress);
-      // A clean result (or a genuine no-audio) is authoritative.
-      if (r.status === "transcribed" || r.status === "no_audio") {
-        return { ...r, engineUsed: "qwen" };
+      const r = await runOne(id, inputFile, outputPath, opts.onProgress);
+      // A clean transcript (or a genuine no-audio) is authoritative — stop here.
+      if (r.status === "transcribed" || r.status === "no_audio") return { ...r, engineUsed: id };
+      // tool_missing / failed → try the next engine when allowed; otherwise this IS the final outcome.
+      lastReason = r.reason ?? r.status;
+      if (i === chain.length - 1) {
+        if (!allowFallback) log.error("transcribe", `${id} ${r.status} for ${inputFile} (${r.reason ?? "no reason given"}) — fallback disabled (engine pinned to ${picked})`);
+        return { ...r, engineUsed: id };
       }
-      // tool_missing / failed: fall through to Whisper when allowed; otherwise this IS the final outcome —
-      // log it here so a pinned-`qwen`, no-fallback failure is never silent (transcribe_engine.mdx §2.1).
-      if (!allowFallback) {
-        log.error("transcribe", `qwen ${r.status} for ${inputFile} (${r.reason ?? "no reason given"}) — fallback disabled (engine pinned to qwen)`);
-        return { ...r, engineUsed: "qwen" };
-      }
-      log.warn("transcribe", `qwen returned ${r.status} (${r.reason ?? ""}) — falling back to whisper for ${inputFile}`);
     } catch (e) {
-      if (!allowFallback) {
-        log.error("transcribe", `qwen threw for ${inputFile} (${(e as Error).message}) — fallback disabled (engine pinned to qwen)`);
+      lastReason = (e as Error).message;
+      if (i === chain.length - 1) {
+        log.error("transcribe", `${id} threw for ${inputFile} (${lastReason}) — no engines left`);
         throw e;
       }
-      log.warn("transcribe", `qwen threw (${(e as Error).message}) — falling back to whisper for ${inputFile}`);
     }
-    const r2 = await whisper.transcribeToFile(inputFile, outputPath, opts.onProgress);
-    return { ...r2, engineUsed: "mac" };
   }
 
-  const r = await whisper.transcribeToFile(inputFile, outputPath, opts.onProgress);
-  return { ...r, engineUsed: "mac" };
+  // Unreachable (chain is always non-empty), but keeps the type checker honest.
+  throw new Error(`all transcription engines failed for ${inputFile}: ${lastReason ?? "unknown"}`);
 }
 
 /** Whether a name is a transcribable audio/video by extension (either engine handles it). */

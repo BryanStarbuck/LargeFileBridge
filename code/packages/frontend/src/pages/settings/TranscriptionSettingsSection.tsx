@@ -14,8 +14,9 @@ import { healthColor } from "../../components/ui/health.js";
 import { clientLog } from "../../lib/clientLog.js";
 
 const ENGINE_LABEL = {
+  speech: "Apple SpeechAnalyzer — on-device (macOS 26+), preferred",
   qwen: "Qwen3-ASR (MLX) — heavyweight, higher quality",
-  mac: "Whisper (Mac) — fallback",
+  mac: "Whisper Small (Mac) — fallback",
 } as const;
 
 // Plain-English wording for each readiness state (§3.1). `unsupported` is the non-Apple-Silicon case where
@@ -108,11 +109,22 @@ export function TranscriptionSettingsSection() {
           <div className="text-black/60">{READINESS_TEXT.unsupported}</div>
         )}
         <div className="text-black/50">
-          Whisper (Mac) fallback: {s.whisper.installed ? "installed ✓" : "not installed"}
+          Whisper Small (Mac) fallback: {s.whisper.installed ? "installed ✓" : "not installed"}
           {" · "}
           ffmpeg (video demux): {s.ffmpeg ? "installed ✓" : "not installed"}
         </div>
       </dl>
+
+      {/* macOS-update nudge (transcribe_engine.mdx §1): this Mac's hardware supports Apple SpeechAnalyzer —
+          the higher-quality on-device primary — but the OS is older than macOS 26, so we fell back to
+          Whisper Small. Recommend the update; nothing is broken, transcription still works on the fallback. */}
+      {s.speech.needsOsUpdate && (
+        <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          This Mac supports Apple’s on-device <b>SpeechAnalyzer</b>, which gives higher-quality transcription,
+          but it needs <b>macOS {26}+</b>{s.speech.osMajor != null ? ` (you’re on macOS ${s.speech.osMajor})` : ""}.
+          Install the latest macOS update to enable it. For now, transcription falls back to <b>Whisper Small</b>.
+        </div>
+      )}
 
       {/* Provisioning actions — shown by readiness. All qwen actions are hidden on non-Apple-Silicon (§3, §6). */}
       <div className="mt-3 flex flex-wrap gap-2">

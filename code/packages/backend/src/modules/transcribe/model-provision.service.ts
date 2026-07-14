@@ -7,7 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { track } from "../progress/progress.registry.js";
-import { commandExists, spawnAsync } from "../../tools/transcribe/audio-prep.js";
+import { commandExists, spawnAsync, macOSMajorVersion, speechAnalyzerSupported, speechAnalyzerNeedsOsUpdate } from "../../tools/transcribe/audio-prep.js";
 import { QWEN_CLI, QWEN_MODEL } from "../../tools/transcribe/qwen-asr.js";
 import { isAppleSilicon, pickEngine } from "../../tools/transcribe/engine.js";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
@@ -95,6 +95,14 @@ export function describeReadiness(): TranscribeEngineStatus {
     configured: cfg.transcribe.engine,
     consent: cfg.transcribe.model_consent,
     appleSilicon: apple,
+    // Apple SpeechAnalyzer (the NEW primary) needs no multi-GB download — its model ships in macOS 26+ and
+    // per-locale assets auto-download in the Swift helper; only readiness/OS-update state is surfaced here.
+    speech: {
+      available: speechAnalyzerSupported(),
+      osMajor: macOSMajorVersion(),
+      needsOsUpdate: speechAnalyzerNeedsOsUpdate(),
+      hardwarePossible: apple, // Apple-Silicon hardware can run SpeechAnalyzer once the OS is macOS 26+
+    },
     qwen: {
       cliInstalled,
       readiness,

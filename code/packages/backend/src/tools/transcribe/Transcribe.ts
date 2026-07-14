@@ -153,10 +153,10 @@ export class Transcriber {
   /**
    * Run Whisper (MPS on Apple Silicon with a CPU fallback), header the output, return word count + the
    * seconds of audio actually covered (the max segment end seen — transcribe_engine.mdx §4.2, the
-   * no-truncation check). NOTE (transcribe_engine.mdx §2/§3): the model is `base` today; the heavyweight
-   * `whisper-large` engine is selected by pickEngine() once the permission-gated model provisioning
-   * (§3) is wired — until then base keeps transcription working with no multi-GB auto-download. We pass NO
-   * duration-limiting flag, so Whisper slides its window over the WHOLE file (transcribe_engine.mdx §4.1).
+   * no-truncation check). NOTE (transcribe_engine.mdx §2/§3): the model is `small` — the SECOND-choice engine
+   * below Apple SpeechAnalyzer (materially more accurate than base/tiny, no multi-GB auto-download). Override
+   * with LFB_TRANSCRIBE_MODEL. We pass NO duration-limiting flag, so Whisper slides its window over the WHOLE
+   * file (transcribe_engine.mdx §4.1).
    */
   private async runWhisper(
     audioFile: string,
@@ -171,7 +171,7 @@ export class Transcriber {
     const whisperOut = path.join(audioDir, `${audioBase}.txt`);
     this.tryUnlink(whisperOut); // clear any stale prior output so our success check is meaningful
 
-    const model = process.env.LFB_TRANSCRIBE_MODEL || "base";
+    const model = process.env.LFB_TRANSCRIBE_MODEL || "small";
     const base = ["--model", model, "--output_format", "txt", "--output_dir", audioDir, "--language", "en"];
     // Turn Whisper's decoded segments into a determinate fraction AND track how much audio was covered:
     // each stdout line carries the segment it just finished as `[start --> end]`; end ÷ duration is the
@@ -231,7 +231,7 @@ export class Transcriber {
    *  so a reader can confirm the transcript spans the whole file. */
   private header(originalName: string, opts?: { model?: string; durationSec?: number | null; coveredSec?: number | null }): string {
     const ts = new Date().toISOString().replace("T", " ").substring(0, 19);
-    const engine = `whisper-${opts?.model ?? "base"}`;
+    const engine = `whisper-${opts?.model ?? "small"}`;
     const device = this.isMac && os.arch() === "arm64" ? "mps/cpu" : "cpu";
     const lines = [
       `Transcription of: ${originalName}`,
