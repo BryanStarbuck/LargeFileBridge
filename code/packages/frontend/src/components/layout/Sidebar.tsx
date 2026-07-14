@@ -3,17 +3,19 @@
 // The IPFS item is the one DISCLOSURE parent (ipfs.mdx §2.1): while active it expands into a child
 // list of the repos that hold pinned content; a child filters /ipfs to that repo, the parent clears it.
 import { useEffect, useState } from "react";
-import { Link, useRouterState } from "@tanstack/react-router";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import type { CurrentUser } from "@lfb/shared";
+import type { CurrentUser, PendingCompanyMapping } from "@lfb/shared";
 import { leftBar } from "../../config/left_bar.js";
 import { api } from "../../api/client.js";
+import { http, unwrap } from "../../api/axios.js";
 import { clientLog } from "../../lib/clientLog.js";
 import { useProgress } from "../../progress/ProgressContext.js";
 import { NavIcon } from "./NavIcon.js";
 import { HoverInfoPanel } from "../hoverinfo/HoverInfoPanel.js";
 
 export function Sidebar({ user }: { user: CurrentUser }) {
+  const navigate = useNavigate();
   const path = useRouterState({ select: (s) => s.location.pathname });
   // Background-work state for the conditional "Processing" item (processing.mdx §2).
   const { processing, jobs, queued } = useProgress();
@@ -71,6 +73,17 @@ export function Sidebar({ user }: { user: CurrentUser }) {
   });
   const todoCount = todoBatches?.length ?? 0;
 
+  // Pending company repo→ownership mappings awaiting this member's consent (repo_owner_propagation.mdx §4):
+  // a badge on the Storages entry links to the review page when a teammate has asserted repos this member
+  // hasn't resolved. Shares the ["company-mappings","pending"] cache with the review page; a stale time keeps
+  // it from re-walking on every navigation. Subscribe to only the COUNT so the sidebar re-renders minimally.
+  const { data: pendingMappingCount = 0 } = useQuery({
+    queryKey: ["company-mappings", "pending"],
+    queryFn: () => unwrap<PendingCompanyMapping[]>(http.get("/company-mappings/pending")),
+    staleTime: 60_000,
+    select: (rows) => rows.length,
+  });
+
   return (
     <aside
       className="flex flex-col h-full border-r bg-white"
@@ -115,6 +128,23 @@ export function Sidebar({ user }: { user: CurrentUser }) {
                     style={{ background: "var(--lfb-primary)" }}
                   >
                     {todoCount}
+                  </span>
+                )}
+                {isStorages && pendingMappingCount > 0 && (
+                  <span
+                    role="button"
+                    title="Review company repo mappings — a teammate asserted repos belong to a company"
+                    onClick={(e) => {
+                      // The row itself links to /storages; the badge routes to the review page instead
+                      // (repo_owner_propagation.mdx §4) without nesting an anchor inside the row's Link.
+                      e.preventDefault();
+                      e.stopPropagation();
+                      navigate({ to: "/company-mappings/review" });
+                    }}
+                    className="rounded-full px-1.5 text-xs font-medium text-white"
+                    style={{ background: "var(--lfb-primary)" }}
+                  >
+                    {pendingMappingCount}
                   </span>
                 )}
                 {isIpfs && onIpfs && pinningRepos.length > 0 && (

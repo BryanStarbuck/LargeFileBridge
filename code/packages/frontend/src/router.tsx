@@ -106,6 +106,16 @@ const todoRoute = createRoute({
   path: "/todo",
   component: lazyRouteComponent(() => import("./pages/todo/TodoPage.js"), "TodoPage"),
 });
+// Review company repo mappings (repo_owner_propagation.mdx §4): the cross-member consent gate where a teammate's
+// repo→company ownership assertion is reviewed and applied on THIS computer, never silently.
+const companyMappingReviewRoute = createRoute({
+  getParentRoute: () => appLayout,
+  path: "/company-mappings/review",
+  component: lazyRouteComponent(
+    () => import("./pages/company/CompanyMappingReviewPage.js"),
+    "CompanyMappingReviewPage",
+  ),
+});
 const allowListRoute = createRoute({
   getParentRoute: () => appLayout,
   path: "/settings/allow-list",
@@ -198,6 +208,7 @@ const routeTree = rootRoute.addChildren([
     ipfsPinsRoute,
     scansRoute,
     todoRoute,
+    companyMappingReviewRoute,
     allowListRoute,
     settingsRoute,
     toolsRoute,

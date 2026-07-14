@@ -339,11 +339,61 @@ export const RepoUnitConfigSchema = z.object({
   // (artifact_placement_policy.mdx §4). Default OFF — Local-Storage-only. Enabled only when the owner has a
   // sync repo configured; toggled from the per-repo settings page (repo_settings.mdx §2.9).
   sync_repo: z.object({ enabled: z.boolean().default(false) }).prefault({}),
+  // The LOCAL grouping override (repo_company_mapping.mdx §5.2). ABSENT (null) => auto-derive the owner from
+  // the git remote (source:"auto"). PRESENT => the user reassigned this repo (source:"manual"), sticky across
+  // rescans and NEVER overwritten by a teammate. `company_id` is set only when kind==="company". Machine-local
+  // (like `bookmarked`); the travelling company-ownership ASSERTION lives in the company sync repo's
+  // owner_map.yaml instead (repo_owner_propagation.mdx §2).
+  owner_override: z
+    .object({
+      kind: z.enum(["personal", "company"]),
+      company_id: z.string().nullable().default(null),
+    })
+    .nullable()
+    .default(null),
   // Per-file decisions (one_repo.mdx §1). Keyed by relative path. The "sync" value is a FROZEN wire
   // literal (= add-to-IPFS / pin) that travels between computers — do not rename it.
   decisions: z.record(z.string(), z.enum(["sync", "ignore", "undecided"])).default({}),
 });
 export type RepoUnitConfig = z.infer<typeof RepoUnitConfigSchema>;
+
+// ── company ownership assertions: <syncRepo>/owner_map.yaml (repo_owner_propagation.mdx §2) ──
+// Committed at the company sync-repo ROOT and travels the company git backbone; union-merges on pull (each
+// key is self-contained, keyed by the repo's NORMALIZED git remote — the only identity portable across
+// members' machines). `withdrawn: true` is a TOMBSTONE (never a hard delete) so an un-assign also travels.
+export const OwnerMapAssertionSchema = z.object({
+  remote: z.string().default(""), // the canonical remote URL as captured (for display)
+  asserted_by: z.string().nullable().default(null), // the asserting member's email (from the auth session)
+  asserted_at: iso.optional(),
+  withdrawn: z.boolean().default(false),
+});
+export type OwnerMapAssertion = z.infer<typeof OwnerMapAssertionSchema>;
+
+export const OwnerMapSchema = z.object({
+  schema_version: z.number().default(1),
+  updated_at: iso.optional(),
+  company_id: z.string().default(""),
+  assertions: z.record(z.string(), OwnerMapAssertionSchema).default({}), // keyed "host/owner/repo"
+});
+export type OwnerMap = z.infer<typeof OwnerMapSchema>;
+
+// ── remembered declines: ~/T/_large_files_bridge/company_mapping_declines.yaml (repo_owner_propagation.mdx §4.4) ──
+// MACHINE-LOCAL (never travels). A declined assertion is keyed by remote + company so a DIFFERENT company
+// later asserting the same repo still surfaces, and a newer assertion (fresher asserted_at) supersedes it.
+export const CompanyMappingDeclinesSchema = z.object({
+  schema_version: z.number().default(1),
+  updated_at: iso.optional(),
+  declined: z
+    .array(
+      z.object({
+        remote_key: z.string(),
+        company_id: z.string(),
+        declined_at: iso.optional(),
+      }),
+    )
+    .default([]),
+});
+export type CompanyMappingDeclines = z.infer<typeof CompanyMappingDeclinesSchema>;
 
 // ── per-file decision ledger: <repo>/.lfbridge/decisions.yaml (decisions.mdx) ─
 // The SHARED, team-visible decision log — committed and union-merged by the git backbone so a whole

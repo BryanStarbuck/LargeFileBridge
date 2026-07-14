@@ -45,6 +45,35 @@ export interface RepoOwner {
   ownerSlug: string | null;
 }
 
+// One pending repo→company ownership mapping awaiting this member's consent (repo_owner_propagation.mdx §3).
+// A company member asserted (on their computer) that a repo belongs to the company; the assertion travelled in
+// `<syncRepo>/owner_map.yaml`. On THIS computer it becomes a pending row — a repo whose git remote matches the
+// assertion but which is not yet owned by that company locally and was not previously declined. It turns into
+// this member's local `owner_override` only after they consent through the review page (§4).
+export interface PendingCompanyMapping {
+  repoId: string; // the local repo this resolves to (matched by remote)
+  repoName: string; // display name for the row
+  remoteKey: string; // "github.com/ACT3ai/jfksocial_server" — the matched normalized-remote key
+  companyId: string; // the asserting company (its company storage id)
+  companyName: string; // its friendly display name (storage_company.mdx §6)
+  assertedBy: string; // who asserted it — shown so the member knows the source
+  assertedAt: string; // when (ISO)
+}
+
+// One row's decision in the review page's batch apply (repo_owner_propagation.mdx §4.1). "company" = accepted
+// (write a local owner_override to the company); "personal" = declined (stay Personal, remember the decline).
+export interface CompanyMappingSelection {
+  repoId: string;
+  decision: "company" | "personal";
+}
+
+// What POST /api/company-mappings/apply returned — the batch outcome (repo_owner_propagation.mdx §4.3).
+export interface CompanyMappingApplyResult {
+  accepted: number; // rows written to a company owner_override
+  declined: number; // rows recorded as a remembered decline
+  skipped: number; // selections that no longer matched a pending mapping (repo gone / already resolved)
+}
+
 // One row of the Repos table (repos.mdx §1).
 export interface RepoRow {
   repoId: string; // stable hash of the absolute path
@@ -1633,6 +1662,25 @@ export interface StorageSettingsPatch {
     googleDrive?: StorageBackingPatch;
     dropbox?: StorageBackingPatch;
   };
+}
+
+// ── Owned repos (storage_settings.mdx §4c) ───────────────────────────────────
+// One row of the Owned-repos list on a company/Personal storage's settings page: a repo whose resolved
+// owner maps to this storage, carried with its full RepoOwner so the row can show the (auto-detected) hint
+// and set the reassign dropdown's current selection. Reassign reuses POST /api/repos/:repoId/owner.
+export interface OwnedRepoRow {
+  repoId: string;
+  name: string;
+  path: string;      // absolute repo path ("" when unknown)
+  owner: RepoOwner;  // the resolved owner (auto derivation or manual override — repo_company_mapping.mdx §5)
+}
+
+// GET /api/storages/:id/owned-repos — the repos whose owner maps to this storage plus the companies the
+// reassign dropdown can target (storage_settings.mdx §4c). Empty for repo/local/community storages.
+export interface OwnedReposView {
+  storageId: string;
+  ownedRepos: OwnedRepoRow[];
+  companies: Array<{ id: string; name: string }>; // reassign targets, by friendly display name
 }
 
 // ── Generic API envelope for mutations ──────────────────────────────────────

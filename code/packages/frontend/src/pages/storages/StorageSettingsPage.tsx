@@ -8,8 +8,11 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "@tanstack/react-router";
 import { ChevronLeft, Info, Plus, X } from "lucide-react";
 import { toast } from "sonner";
-import type { StorageSettings, StorageSettingsPatch, StorageBackingLocation, MappedDirsView, MappedDir } from "@lfb/shared";
+import type { StorageSettings, StorageSettingsPatch, StorageBackingLocation, MappedDirsView, MappedDir, OwnedReposView, RepoRow } from "@lfb/shared";
 import { api } from "../../api/client.js";
+// The Owned-repos reassign reuses POST /api/repos/:repoId/owner and reads GET /api/storages/:id/owned-repos.
+// Neither has a typed method on `api` (client.ts), so call them through the shared http/unwrap directly.
+import { http, unwrap } from "../../api/axios.js";
 import { clientLog } from "../../lib/clientLog.js";
 
 export function StorageSettingsPage() {
@@ -98,7 +101,79 @@ export function StorageSettingsPage() {
       {/* §4a mapped source directories — the hierarchies this company/personal storage covers. Shown
           read-only for a repo storage (its single implicit mapped dir is the working tree). */}
       {(s.type === "company" || s.type === "personal" || s.type === "repo") && <MappedDirsSection storageId={storageId} />}
+
+      {/* §4c owned repos — the repos mapped to this storage, each with a reassign dropdown. Company/Personal
+          only (hidden for repo/local/community, which own no other repos). */}
+      {(s.type === "company" || s.type === "personal") && <OwnedReposSection storageId={storageId} />}
     </div>
+  );
+}
+
+// §4c The repos currently mapped to this storage, each with a reassign dropdown (Personal | each company |
+// + New company…). Selecting a target reuses POST /api/repos/:repoId/owner — the same endpoint as the
+// per-repo Owner control — then refreshes the list; a repo reassigned OFF this storage drops out on refresh.
+function OwnedReposSection({ storageId }: { storageId: string }) {
+  const qc = useQueryClient();
+  const { data: v } = useQuery({
+    queryKey: ["storageOwnedRepos", storageId],
+    queryFn: () => unwrap<OwnedReposView>(http.get(`/storages/${storageId}/owned-repos`)),
+  });
+  const reassign = useMutation({
+    // target: "personal" | a company storage id. Reuses the per-repo Owner endpoint (no new reassign route).
+    mutationFn: ({ repoId, target }: { repoId: string; target: string }) => {
+      const body = target === "personal" ? { kind: "personal" } : { kind: "company", companyId: target };
+      return unwrap<RepoRow>(http.post(`/repos/${repoId}/owner`, body));
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["storageOwnedRepos", storageId] });
+      qc.invalidateQueries({ queryKey: ["repos"] });
+      toast.success("Reassigned");
+    },
+    onError: (e: Error) => { clientLog.error("StorageSettingsPage.reassignOwner", e); toast.error(e.message); },
+  });
+
+  if (!v) return null;
+
+  return (
+    <Section
+      title="Owned repos"
+      subtitle="The repos mapped to this storage. Use a repo's dropdown to reassign it to Personal or another company. Reassigning moves NO bytes — it only re-targets where that repo's tracking state syncs; moving it to a company that has a sync repo records a travelling assertion so your teammates are notified in Large File Bridge."
+    >
+      {v.ownedRepos.length === 0 && <p className="text-xs text-black/40">No repos are mapped to this storage yet.</p>}
+      {v.ownedRepos.map((r) => (
+        <div key={r.repoId} className="mb-3 flex items-center gap-2 border-b border-[var(--lfb-border)] pb-3 last:mb-0 last:border-0 last:pb-0">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 text-sm font-medium">
+              <span className="truncate">{r.name}</span>
+              {r.owner.source === "auto" && <span className="shrink-0 text-xs text-black/40">(auto-detected)</span>}
+            </div>
+            {r.path && <div className="truncate font-mono text-xs text-black/40">{r.path}</div>}
+          </div>
+          <select
+            className="shrink-0 rounded border border-[var(--lfb-border)] px-2 py-1 text-xs"
+            value={r.owner.kind === "personal" ? "personal" : r.owner.companyId ?? storageId}
+            disabled={reassign.isPending}
+            onChange={(e) => {
+              const target = e.target.value;
+              // TODO(repo_company_mapping.mdx §6): "+ New company…" should open a name field that creates
+              // the company storage, then reassign to it. Until that inline flow exists, do it from the
+              // repo's own settings Owner control. Here we support Personal + existing companies only.
+              if (target === "__new__") {
+                toast.info("Create a new company from the repo's own settings page, then reassign it here.");
+                return;
+              }
+              reassign.mutate({ repoId: r.repoId, target });
+            }}
+          >
+            <option value="personal">Personal</option>
+            {v.companies.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+            <option value="__new__">+ New company…</option>
+          </select>
+        </div>
+      ))}
+    </Section>
   );
 }
 

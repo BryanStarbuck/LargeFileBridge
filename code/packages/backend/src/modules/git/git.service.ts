@@ -27,6 +27,7 @@ const UNION_MERGE_PATHS = [
   "LargeFilesBridge_SyncList.yaml",
   ".lfbridge/manifest.yaml",
   ".lfbridge/decisions.yaml", // the shared per-file decision ledger (decisions.mdx §4/§5) — union-merged
+  "owner_map.yaml", // company ownership assertions at the sync-repo root (repo_owner_propagation.mdx §2) — union-merged
 ];
 
 /** True for any `repo_storage.yaml` path a Git-backed working tree might carry — the top-level legacy shape
@@ -138,6 +139,64 @@ export function deriveOwnerForRemote(
     source: "auto",
     host: parsed?.host ?? null,
     ownerSlug: null,
+  };
+}
+
+/**
+ * The NORMALIZED remote key `host/owner/repo` (repo_owner_propagation.mdx §2) — the identity that lets one
+ * member's clone of a repo be matched to another member's clone (a repoKey is a per-machine path hash and can
+ * never travel). SSH and HTTPS forms of the same remote collapse to one key because both parse to the same
+ * host/owner/repo (repo_company_mapping.mdx §2). Returns null when the remote has no host/owner/repo (a bare
+ * local path or an unparseable/absent remote — such a repo can't be company-asserted). Case is PRESERVED for
+ * display; callers compare case-insensitively (see {@link sameRemoteKey}).
+ */
+export function normalizeRemoteKey(remote: string | null): string | null {
+  const p = parseRemoteOwner(remote);
+  if (!p) return null;
+  return `${p.host}/${p.owner}/${p.repo}`;
+}
+
+/** Case-insensitive equality of two normalized remote keys (SSH/HTTPS already collapsed by normalizeRemoteKey). */
+export function sameRemoteKey(a: string | null, b: string | null): boolean {
+  return !!a && !!b && a.toLowerCase() === b.toLowerCase();
+}
+
+/**
+ * The EFFECTIVE owner of a repo (repo_company_mapping.mdx §5.2): the local `owner_override` when present
+ * (source:"manual" — the user reassigned it, sticky across rescans), else the heuristic derivation from the
+ * git remote (source:"auto", {@link deriveOwnerForRemote}). Absent override = auto. For a company override the
+ * `displayName` here is a best-effort fallback (the parsed owner slug, else the company id); a higher layer
+ * enriches it with the company storage's friendly name (units.service `ownerForRepoConfig`, storage_company.mdx
+ * §6). Structural `cfg` so this stays a low-level, storage-service-free resolver.
+ */
+export function resolveRepoOwner(
+  cfg: {
+    repo?: { remote?: string | null } | null;
+    owner_override?: { kind: "personal" | "company"; company_id: string | null } | null;
+  },
+  personalAccounts: string[] = [],
+): RepoOwner {
+  const remote = cfg.repo?.remote ?? null;
+  const override = cfg.owner_override ?? null;
+  if (!override) return deriveOwnerForRemote(remote, personalAccounts);
+  const parsed = parseRemoteOwner(remote);
+  if (override.kind === "company") {
+    return {
+      kind: "company",
+      companyId: override.company_id,
+      displayName: parsed?.owner ?? override.company_id ?? "Company",
+      source: "manual",
+      host: parsed?.host ?? null,
+      ownerSlug: parsed?.owner ?? null,
+    };
+  }
+  return {
+    kind: "personal",
+    companyId: null,
+    displayName: "Personal",
+    source: "manual",
+    host: parsed?.host ?? null,
+    ownerSlug: parsed?.owner ?? null,
   };
 }
 

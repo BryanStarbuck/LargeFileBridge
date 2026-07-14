@@ -8,6 +8,7 @@ import { buildAuthFrontend, allowedRedirectOrigins } from "./modules/auth/auth-f
 import { identify } from "./modules/auth/identify.js";
 import { authRouter } from "./modules/auth/auth.router.js";
 import { reposRouter } from "./modules/repos/repos.router.js";
+import { companyRouter } from "./modules/repos/company.router.js";
 import { fsRouter } from "./modules/fs/fs.router.js";
 import { entityRouter } from "./modules/entity/entity.router.js";
 import { mediaRouter } from "./modules/media/media.router.js";
@@ -147,6 +148,7 @@ async function main(): Promise<void> {
   app.use("/api/progress", progressRouter); // the progress dock's server-side job set (webapp.mdx §12)
   app.use("/api/security", securityRouter); // first-run allow-list (unauthenticated; loopback-guarded)
   app.use("/api/repos", reposRouter);
+  app.use("/api/company-mappings", companyRouter); // cross-member repo→company review & consent (repo_owner_propagation.mdx)
   app.use("/api/fs", fsRouter);
   app.use("/api/entity", entityRouter);
   app.use("/api/media", mediaRouter);

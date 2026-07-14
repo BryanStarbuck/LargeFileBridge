@@ -14,7 +14,7 @@ import {
   readBookmarks,
   setBookmark,
 } from "./storage.service.js";
-import { readStorageSettings, writeStorageSettings, getMappedDirsView, patchMappedDirs } from "./storage-settings.service.js";
+import { readStorageSettings, writeStorageSettings, getMappedDirsView, patchMappedDirs, getOwnedRepos } from "./storage-settings.service.js";
 import { placementView, clearPlacementCache } from "./artifact-placement.service.js";
 
 export const storagesRouter = Router();
@@ -159,6 +159,19 @@ storagesRouter.patch("/:id/mapped-dirs", async (req, res) => {
   } catch (e) {
     log.warn("storage", `mapped-dirs ${req.params.id} failed: ${(e as Error).message}`);
     res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// GET /api/storages/:id/owned-repos — the repos whose owner maps to this storage, plus the companies the
+// reassign dropdown can target (storage_settings.mdx §4c). Company/Personal only (empty for repo/local/
+// community). The per-row reassign reuses POST /api/repos/:repoId/owner — no new reassign endpoint here.
+storagesRouter.get("/:id/owned-repos", (req, res) => {
+  try {
+    const ownedRepos = getOwnedRepos(req.params.id);
+    const companies = listStoragesPage().companies.map((c) => ({ id: c.id, name: c.companyName || c.name }));
+    res.json({ ok: true, data: { storageId: req.params.id, ownedRepos, companies } });
+  } catch (e) {
+    res.status(404).json({ ok: false, error: (e as Error).message });
   }
 });
 

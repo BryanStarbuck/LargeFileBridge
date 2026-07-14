@@ -23,8 +23,13 @@ import {
   mediaKindForName,
 } from "@lfb/shared";
 import type { ComputerUnitConfig, PlacementChoice } from "@lfb/shared";
+import type { RepoOwner } from "@lfb/shared";
 import { compressInfo } from "../fs/badges.js";
-import { deriveOwnerForRemote } from "../git/git.service.js";
+import { resolveRepoOwner } from "../git/git.service.js";
+// storage.service <-> units.service form a static import cycle used ONLY inside functions (getStorageRow is
+// called from ownerForRepoConfig, never at module-eval), which is safe under NodeNext ESM — same pattern the
+// storage.service <-> storage-settings.service pair documents.
+import { getStorageRow } from "../storage/storage.service.js";
 import { analysisOutputs } from "../storage/tracking.service.js";
 import { readYaml, updateYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import {
@@ -177,6 +182,39 @@ export function unregisterRepo(folder: string): void {
   log.info("units", `Unregistered repo unit pin/r/${folder} (local files untouched)`);
 }
 
+/**
+ * The effective owner for a repo unit config: honor the local `owner_override` (manual) else derive from the
+ * git remote (auto) — {@link resolveRepoOwner} — then, for a MANUAL company override, enrich the displayName
+ * with the company storage's friendly name (repo_company_mapping.mdx §5/§6; storage_company.mdx §6). The
+ * enrichment is best-effort: an unknown/failed company lookup keeps the resolver's slug fallback. This is the
+ * single owner-composition seam used by computeRepoRow/computeRepoDetail and the repo-settings row.
+ */
+export function ownerForRepoConfig(cfg: RepoUnitConfig): RepoOwner {
+  const owner = resolveRepoOwner(cfg);
+  if (owner.kind === "company" && owner.source === "manual" && owner.companyId) {
+    try {
+      const row = getStorageRow(owner.companyId);
+      if (row) owner.displayName = row.companyName || row.name || owner.displayName;
+    } catch {
+      /* best-effort: keep the slug/id fallback from resolveRepoOwner */
+    }
+  }
+  return owner;
+}
+
+/**
+ * Persist (or clear) a repo's local grouping override in its `config.yaml` (repo_company_mapping.mdx §5.2).
+ * `null` clears it → the owner auto-derives again (source:"auto"). Machine-local, sticky across rescans, and
+ * never overwritten by a teammate — exactly like `bookmarked`. The travelling company-ownership assertion is
+ * written separately by owner-propagation.service (repo_owner_propagation.mdx §2).
+ */
+export async function setRepoOwnerOverride(
+  folder: string,
+  override: { kind: "personal" | "company"; company_id: string | null } | null,
+): Promise<RepoUnitConfig> {
+  return updateRepoConfig(folder, (c) => ({ ...c, owner_override: override }));
+}
+
 // ── Row / detail composition ────────────────────────────────────────────────
 export function computeRepoRow(folder: string): RepoRow {
   const cfg = getRepoConfig(folder);
@@ -195,9 +233,10 @@ export function computeRepoRow(folder: string): RepoRow {
     lastPinAt: status.last_pin_at,
     status: rollupStatus(cfg.pinned, counts, status, files),
     pinned: cfg.pinned,
-    // Company/personal owner derived from the git remote (repo_company_mapping.mdx §3). No personal-accounts
-    // list is wired yet, so an unknown owner errs toward Personal per the conservative heuristic.
-    owner: deriveOwnerForRemote(cfg.repo.remote),
+    // Company/personal owner: honor the local owner_override (manual) else derive from the git remote (auto)
+    // (repo_company_mapping.mdx §5.2). No personal-accounts list is wired yet, so an unknown auto owner errs
+    // toward Personal per the conservative heuristic.
+    owner: ownerForRepoConfig(cfg),
   };
 }
 
@@ -221,7 +260,7 @@ export function computeRepoDetail(folder: string, ipfs: IpfsHealth): RepoDetail 
     counts,
     files,
     taskMetrics: computeTaskMetrics(files),
-    owner: deriveOwnerForRemote(cfg.repo.remote),
+    owner: ownerForRepoConfig(cfg),
   };
 }
 

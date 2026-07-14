@@ -12,6 +12,8 @@ import {
   folderForRepoId,
   getRepoConfig,
   updateRepoConfig,
+  ownerForRepoConfig,
+  setRepoOwnerOverride,
 } from "../store-model/units.service.js";
 import { startScan, getScanJob } from "../scanner/scan-job.js";
 import { pinRepoFolder, pinAll, missingPinnedFromPeers, pullMissing } from "../pin/pin.service.js";
@@ -24,7 +26,8 @@ import {
 import { effectiveFlags } from "../store-model/config.service.js";
 import { setSyncRepoMarker } from "../storage/tracking-sync.service.js";
 import { resolveOwnerDedicatedRepo } from "../storage/artifact-placement.service.js";
-import { deriveOwnerForRemote } from "../git/git.service.js";
+import { getStorageRow } from "../storage/storage.service.js";
+import { assertCompanyOwnership, withdrawCompanyOwnership } from "../storage/owner-propagation.service.js";
 import { track } from "../progress/progress.registry.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { requireAllowListed } from "../auth/identify.js";
@@ -119,6 +122,63 @@ reposRouter.post("/:repoId/bookmark", async (req, res) => {
     res.json({ ok: true, data: computeRepoRow(folder) });
   } catch (e) {
     log.error("repos", `${folder}: bookmark update failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/repos/:repoId/owner — reassign a repo's owner (repo_company_mapping.mdx §5). Writes/clears the
+// local `owner_override` in the repo's config.yaml (source becomes "manual"; a reset returns it to auto). When
+// the NEW owner is a company that has a sync repo configured, ALSO records the travelling ownership assertion
+// into that company's owner_map.yaml (repo_owner_propagation.mdx §2); when reassigning AWAY from a company that
+// had it, tombstones that assertion. Idempotent. Unknown repoId → 404; company kind with an unknown companyId
+// → 400 (repo_company_mapping.mdx §9).
+const OwnerReassignBody = z.union([
+  z.object({ reset: z.literal(true) }),
+  z.object({ kind: z.enum(["personal", "company"]), companyId: z.string().optional() }),
+]);
+reposRouter.post("/:repoId/owner", async (req, res) => {
+  const body = OwnerReassignBody.safeParse(req.body);
+  if (!body.success) return res.status(400).json({ ok: false, error: "reset:true or { kind, companyId? } required" });
+  const folder = folderForRepoId(req.params.repoId);
+  if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
+
+  // The NEW override to persist (null clears → auto). A company kind requires a KNOWN company storage id.
+  let next: { kind: "personal" | "company"; company_id: string | null } | null;
+  if ("reset" in body.data) {
+    next = null;
+  } else if (body.data.kind === "personal") {
+    next = { kind: "personal", company_id: null };
+  } else {
+    const companyId = body.data.companyId;
+    if (!companyId) return res.status(400).json({ ok: false, error: "companyId required for a company owner" });
+    const company = getStorageRow(companyId);
+    if (!company || company.type !== "company") {
+      return res.status(400).json({ ok: false, error: `unknown company: ${companyId}` });
+    }
+    next = { kind: "company", company_id: companyId };
+  }
+
+  try {
+    // Capture the PRIOR company (if any) so a move away can tombstone its assertion (§6).
+    const prev = getRepoConfig(folder).owner_override;
+    const prevCompanyId = prev?.kind === "company" ? prev.company_id : null;
+    const remote = getRepoConfig(folder).repo.remote;
+
+    await setRepoOwnerOverride(folder, next);
+
+    // Assertion side effects (repo_owner_propagation.mdx §2/§6) — best-effort; never fail the reassign on git.
+    const nextCompanyId = next?.kind === "company" ? next.company_id : null;
+    if (prevCompanyId && prevCompanyId !== nextCompanyId) {
+      await withdrawCompanyOwnership(remote, prevCompanyId);
+    }
+    if (nextCompanyId) {
+      await assertCompanyOwnership(remote, nextCompanyId, currentUser(req).email);
+    }
+
+    log.info("repos", `${folder}: owner reassigned -> ${next ? next.kind + (nextCompanyId ? `:${nextCompanyId}` : "") : "auto"}`);
+    res.json({ ok: true, data: computeRepoRow(folder) });
+  } catch (e) {
+    log.error("repos", `${folder}: owner reassign failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
 });
@@ -461,8 +521,9 @@ function toRepoSettings(repoId: string, folder: string): RepoSettings {
       publishManifest: c.pin.publish_manifest,
     },
     access: { shared: c.access.shared, participants: c.access.participants },
-    // Company/personal owner derived from the git remote (repo_settings.mdx §6 / repo_company_mapping.mdx §3).
-    owner: deriveOwnerForRemote(c.repo.remote),
+    // Company/personal owner: local owner_override (manual) else derived from the git remote (auto)
+    // (repo_settings.mdx §6 / repo_company_mapping.mdx §5.2).
+    owner: ownerForRepoConfig(c),
     // Transcription / AI-description placement (repo_settings.mdx §4-5, placement_radios.mdx).
     transcription: { placement: c.artifacts.transcription_placement },
     aiDescription: { placement: c.artifacts.ai_description_placement },

@@ -8,7 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { StorageUnitConfigSchema, MappedDirsSchema, type StorageUnitConfig } from "@lfb/shared";
-import type { StorageSettings, StorageBackingLocation, StorageSettingsPatch, StorageRow, MappedDir, MappedDirList, MappedDirsView, MappedDirRow } from "@lfb/shared";
+import type { StorageSettings, StorageBackingLocation, StorageSettingsPatch, StorageRow, MappedDir, MappedDirList, MappedDirsView, MappedDirRow, OwnedRepoRow, RepoOwner } from "@lfb/shared";
 import { readYaml, writeYaml, updateYaml } from "../../shared/store/yaml-store.js";
 import { storageUnitDir, unitConfigPath } from "../../shared/store/scopes.js";
 import { expandHome } from "../fs/badges.js";
@@ -16,6 +16,10 @@ import { LFBRIDGE_DIR } from "./tracking.service.js";
 // storage.service <-> storage-settings.service form a lazy import cycle (used only inside functions,
 // never at module-eval time), which is safe under NodeNext ESM.
 import { getStorageRow, readDescriptor, writeDescriptor } from "./storage.service.js";
+// units.service is imported the same way (called only inside getOwnedRepos, never at module-eval) — the
+// storage.service ↔ units.service ↔ storage-settings.service cycle is already established (owner-propagation
+// .service imports both). Reuses ownerForRepoConfig so a manual company owner carries its friendly name.
+import { listRepoFolders, getRepoConfig, ownerForRepoConfig, repoIdFromPath } from "../store-model/units.service.js";
 import { log } from "../../shared/logging.js";
 
 const CONVENTION_SUFFIX = "_large_files_bridge";
@@ -387,4 +391,63 @@ export async function patchMappedDirs(
     }
   }
   return getMappedDirsView(storageId);
+}
+
+// ── owned repos (storage_settings.mdx §4c) ────────────────────────────────────
+// The repos whose resolved owner (repo_company_mapping.mdx §5 — the local owner_override else the git-remote
+// heuristic) maps to a company/Personal storage. This is the read side of the settings-page Owned-repos list;
+// the reassign itself reuses POST /api/repos/:repoId/owner (never a new endpoint).
+
+/** Normalized name for pragmatic company matching: lowercased with every non-alphanumeric char stripped. */
+function normalizeCompanyName(s: string | null | undefined): string {
+  return (s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+/**
+ * Does a company owner map to THIS company storage row? A MANUAL override matches exactly by the company
+ * storage id it points at. An AUTO-derived owner has `companyId: null` (no company-storage link is wired yet —
+ * deriveOwnerForRemote, git.service), so we match it best-effort by a normalized comparison of its owner slug /
+ * displayName against the company's friendly name, row name, and root-derived slug (repo_company_mapping.mdx
+ * §3/§6). This mirrors how computePendingMappings treats companyId (manual) while still surfacing the auto
+ * no-org repos §4c asks for.
+ */
+function ownerMatchesCompany(owner: RepoOwner, row: StorageRow): boolean {
+  if (owner.kind !== "company") return false;
+  if (owner.companyId) return owner.companyId === row.id;
+  const targets = new Set(
+    [normalizeCompanyName(row.companyName), normalizeCompanyName(row.name), normalizeCompanyName(slugForStorage(row))].filter(
+      Boolean,
+    ),
+  );
+  return [normalizeCompanyName(owner.ownerSlug), normalizeCompanyName(owner.displayName)].some((c) => c && targets.has(c));
+}
+
+/**
+ * The repos currently mapped to this storage (storage_settings.mdx §4c). For a COMPANY storage: repos whose
+ * owner is that company (by the manual override's companyId, or a best-effort slug/name match for an auto
+ * owner). For the PERSONAL storage: every repo whose owner is Personal — including the auto-defaulted no-org
+ * repos. Empty for repo/local/community storages (they own no other repos). Never throws — a bad repo unit is
+ * skipped so one corrupt config never blanks the whole list.
+ */
+export function getOwnedRepos(storageId: string): OwnedRepoRow[] {
+  const row = requireRow(storageId);
+  if (row.type !== "company" && row.type !== "personal") return [];
+  const out: OwnedRepoRow[] = [];
+  for (const folder of listRepoFolders()) {
+    try {
+      const cfg = getRepoConfig(folder);
+      const owner = ownerForRepoConfig(cfg);
+      const belongs = row.type === "personal" ? owner.kind === "personal" : ownerMatchesCompany(owner, row);
+      if (!belongs) continue;
+      out.push({
+        repoId: repoIdFromPath(cfg.repo.path || folder),
+        name: cfg.repo.name || folder,
+        path: cfg.repo.path || "",
+        owner,
+      });
+    } catch (e) {
+      log.warn("storage-settings", `owned-repos ${storageId}: skipping repo ${folder}: ${(e as Error).message}`);
+    }
+  }
+  return out;
 }
