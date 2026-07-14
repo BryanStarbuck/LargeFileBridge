@@ -454,7 +454,7 @@ The Transcription settings panel is rendered in code:
    on Processing); an **offer that was only opened** re-opens **on the original page/window** showing the
    continue-to-transcribe option — nothing the user was doing is lost.
 7. **CRITICAL full-duration, no truncation (§4):** a 1–2-hour-plus file transcribes to the **full duration**
-   under either engine; **no** duration cap/timeout is ever applied; coverage is **verified** (last segment
+   under **any** of the three engines; **no** duration cap/timeout is ever applied; coverage is **verified** (last segment
    end vs source duration); a **short/truncated** result is a **failure** (retried, chunked if needed, and
    reported honestly) — **never** stored as a success. Chunk-and-stitch bounds memory and makes long runs
    recoverable per chunk while yielding one full-coverage transcript.
