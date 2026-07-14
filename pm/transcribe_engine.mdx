@@ -470,12 +470,18 @@ The Transcription settings panel is rendered in code:
 <!--
   TRANSCRIBE ENGINE deep-spec (under Transcribe.mdx). FOUR things:
   Learned from ~/BGit/all/tools/Transcription/Transcribe.js (the canonical two-engine tool).
-  §2 TWO ENGINES: (2, DEFAULT) qwen = Qwen3-ASR via Apple MLX — `mlx-qwen3-asr` CLI @ Qwen/Qwen3-ASR-1.7B;
-     Apple-Silicon-only; `pipx install mlx-qwen3-asr`; weights ~3.4GB download from HF on first run.
-     (1) mac = OpenAI Whisper @ base, MPS→CPU + English sanity check; `pipx install openai-whisper`; small.
-     pickEngine(): qwen if Apple-Silicon + CLI/weights ready + RAM ok, else mac. AUTO-FALLBACK qwen→mac on any
-     qwen error (never lose a file). Both produce the SAME .transcription and BOTH satisfy §4. Header records
-     which engine ran. Code: tools/transcribe/engine.ts pickEngine+fallback, qwen-asr.ts, Transcribe.ts.
+  §2 THREE ENGINES, PREFERENCE ORDER (DOMINANT — overrides old "qwen primary"). NEVER SFSpeechRecognizer.
+     (1 PREFERRED) speech = Apple SpeechAnalyzer+SpeechTranscriber, macOS 26+, model ships in OS (per-locale
+       asset auto-installs), driven by compiled Swift helper speech/SpeechAnalyzerCLI.swift. Label
+       apple-speechanalyzer.
+     (2) mac = OpenAI Whisper @ SMALL (whisper-small, ~460MB), MPS→CPU + English sanity check; second choice.
+     (3) qwen = Qwen3-ASR via Apple MLX @ Qwen/Qwen3-ASR-1.7B; Apple-Silicon-only; ~3.4GB HF download; THIRD
+       choice ("another LLM"), only if pinned or as last runtime fallback — never auto-selected.
+     pickEngine(): speech if Mac+macOS26+ +swiftc, else mac. AUTO-FALLBACK speech→mac→qwen on error (never
+     lose a file). §2.2: Mac hardware supports SpeechAnalyzer but OS<26 → speech.needsOsUpdate=true, WARN +
+     name fallback (Whisper Small), still transcribe. All three produce SAME .transcription and satisfy §4.
+     Header records which engine ran. Code: tools/transcribe/engine.ts pickEngine+chain, speech-analyzer.ts,
+     Transcribe.ts (small), qwen-asr.ts, audio-prep.ts macOSMajorVersion/speechAnalyzerSupported.
   §3 MODEL PROVISIONING (permission-gated): readiness = installed|missing|partial|outdated. missing + user
      tries to transcribe → ONE-TIME permission popup w/ DISK ESTIMATE (ballpark→STORED measured size) + free
      disk check; approve → DOWNLOAD (byte-determinate op) then INSTALL/CONFIGURE (op) — TWO progress UIs
