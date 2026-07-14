@@ -1168,10 +1168,14 @@ export interface TranscribeTools {
 }
 
 // ── Transcription engine + heavyweight-model provisioning (transcribe_engine.mdx) ────────────────────
-// The engine identity: `qwen` = Qwen3-ASR via Apple MLX (the `mlx-qwen3-asr` CLI at Qwen/Qwen3-ASR-1.7B —
-// the heavyweight, multi-GB-download engine, Apple-Silicon only); `mac` = OpenAI Whisper at `base`
-// (MPS→CPU, the cross-platform fallback). A `qwen` run auto-falls-back to `mac` on error (§2.1).
-export type TranscribeEngineId = "qwen" | "mac";
+// The engine identity, in preference order (best first — NEVER the legacy Apple SFSpeechRecognizer):
+//   `speech` = Apple SpeechAnalyzer / SpeechTranscriber (macOS 26+, on-device — the NEW primary; its model
+//              ships in the OS, no multi-GB download); `mac` = OpenAI Whisper at the `small` model (MPS→CPU,
+//              the cross-platform SECOND choice); `qwen` = Qwen3-ASR via Apple MLX (the `mlx-qwen3-asr` CLI
+//              at Qwen/Qwen3-ASR-1.7B — the heavyweight, multi-GB-download engine, Apple-Silicon only), now
+//              the THIRD choice / "another LLM" and NOT auto-selected. Auto picks speech when available, else
+//              mac. A run auto-falls-back down the order speech → mac → qwen on error (§2.1).
+export type TranscribeEngineId = "qwen" | "mac" | "speech";
 // Readiness of the heavyweight (`qwen`) model on this machine (transcribe_engine.mdx §3.1). `unsupported` =
 // not an Apple-Silicon Mac, so `qwen` can never run here and selection falls to `mac`.
 export type TranscribeModelReadiness = "installed" | "missing" | "partial" | "outdated" | "unsupported";
@@ -1182,6 +1186,15 @@ export interface TranscribeEngineStatus {
   configured: "auto" | TranscribeEngineId; // the transcribe.engine setting
   consent: "approved" | "declined" | "use_fallback" | null; // remembered popup decision (§3.2); null = never asked
   appleSilicon: boolean; // qwen is only available on Apple Silicon
+  // Apple SpeechAnalyzer readiness (the NEW primary — macOS 26+, on-device, no download). `needsOsUpdate`
+  // = Mac hardware that COULD run SpeechAnalyzer but the OS is older than macOS 26, so we fell back to
+  // Whisper Small and the UI nudges a macOS update (transcribe_engine.mdx §1).
+  speech: {
+    available: boolean; // SpeechAnalyzer usable right now (darwin + macOS ≥ 26 + swiftc to build the helper)
+    osMajor: number | null; // macOS product major (26 = Tahoe), or null off-Mac / unreadable
+    needsOsUpdate: boolean; // Apple-Silicon hardware, but OS < 26 → update recommended, fell back to Whisper Small
+    hardwarePossible: boolean; // Mac hardware that could run SpeechAnalyzer once the OS is new enough
+  };
   qwen: {
     cliInstalled: boolean; // mlx-qwen3-asr on PATH
     readiness: TranscribeModelReadiness;

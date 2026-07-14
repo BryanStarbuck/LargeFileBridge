@@ -89,6 +89,41 @@ export function spawnAsync(
   });
 }
 
+// ── Apple SpeechAnalyzer capability gates (transcribe_engine.mdx §1) ──────────────────────────────────
+// SpeechAnalyzer/SpeechTranscriber (the NEW on-device Apple engine — never the legacy SFSpeechRecognizer)
+// ships starting in macOS 26 ("Tahoe"). Mirrors Transcribe.js's macOSMajorVersion()/chooseAutoEngine().
+
+/** Minimum macOS *product* major version that ships SpeechAnalyzer/SpeechTranscriber. */
+export const SPEECH_MIN_MACOS_MAJOR = 26;
+
+/**
+ * The macOS *product* version major integer (e.g. 26 for Tahoe), or null off-Mac / when it can't be read.
+ * Uses `sw_vers -productVersion` (26.x on Tahoe) — NOT os.release()/the Darwin kernel version, which is
+ * 25.x on macOS 26 and would misgate the feature.
+ */
+export function macOSMajorVersion(): number | null {
+  if (os.platform() !== "darwin") return null;
+  try {
+    const r = spawnSync("sw_vers", ["-productVersion"], { encoding: "utf8", env: toolEnv() });
+    if (r.status !== 0) return null;
+    const major = Number.parseInt(String(r.stdout ?? "").trim().split(".")[0], 10);
+    return Number.isFinite(major) ? major : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Can Apple SpeechAnalyzer run right now? darwin + macOS ≥ 26 + swiftc (to build the tiny helper). */
+export function speechAnalyzerSupported(): boolean {
+  return os.platform() === "darwin" && (macOSMajorVersion() ?? 0) >= SPEECH_MIN_MACOS_MAJOR && commandExists("swiftc");
+}
+
+/** True when this Mac's HARDWARE could run SpeechAnalyzer but the OS is older than macOS 26 — i.e. an OS
+ *  update would unlock the higher-quality on-device engine (drives the Settings update nudge). */
+export function speechAnalyzerNeedsOsUpdate(): boolean {
+  return os.platform() === "darwin" && os.arch() === "arm64" && (macOSMajorVersion() ?? 0) < SPEECH_MIN_MACOS_MAJOR;
+}
+
 /** Media duration in seconds via ffprobe, or null when unreadable (progress/coverage stays best-effort). */
 export async function probeDurationSec(inputFile: string): Promise<number | null> {
   if (!commandExists("ffprobe")) return null;

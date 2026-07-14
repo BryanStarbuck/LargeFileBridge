@@ -1,22 +1,31 @@
 ---
-title: LargeFileBridge — The Transcription Engine (two engines · on-demand model provisioning · full-duration robustness · per-machine parallelism)
-description: The deep spec behind Transcribe.mdx, learned from the canonical tool at ~/BGit/all/tools/Transcription/Transcribe.js. LargeFileBridge transcribes with a PRIMARY heavyweight local LLM engine (Qwen3-ASR via Apple MLX — the `mlx-qwen3-asr` CLI at Qwen/Qwen3-ASR-1.7B, the "very large download" one, Apple Silicon only) and a WHISPER-ON-MAC fallback engine (OpenAI Whisper at the base model, MPS→CPU, cross-platform); a Qwen run that errors auto-falls-back to Whisper. The heavyweight model is a multi-GB download most users will NOT have; the FIRST time a user tries to transcribe and it is absent, LargeFileBridge shows a one-time PERMISSION popup that warns how much disk it needs (a ballparked, then stored, estimate), and — only on approval — DOWNLOADS, INSTALLS, and CONFIGURES it, each with its own progress UI; if it is already present the popup is SKIPPED; if it is half-installed or outdated a HEALTH CHECK finishes/repairs it. After provisioning, the flow RESUMES where the user left off (proceed with a confirmed transcribe, or re-open the offer window). A CRITICAL requirement: whichever engine runs, the settings are triple-checked so a 1–2-hour-plus file transcribes to the FULL duration and NEVER truncates (e.g. stops at 20 minutes) — coverage is verified end-to-end. Parallelism is CALIBRATED per machine from cores + RAM + the model's footprint (low-power boxes = 1 at a time; a ~24-core box runs several), drawing the shared Core Budget of parallelization.mdx. Sibling of Transcribe.mdx (the feature that calls this engine), parallelization.mdx (the Core Budget), tools.mdx (the CLI-binary preflight), processing.mdx (where provisioning + transcription jobs are watched), settings.mdx (the engine + parallelism knobs), and security.mdx (the local-only, permissioned-download posture).
+title: LargeFileBridge — The Transcription Engine (three engines · Apple SpeechAnalyzer preferred · on-demand model provisioning · full-duration robustness · per-machine parallelism)
+description: The deep spec behind Transcribe.mdx, learned from the canonical tool at ~/BGit/all/tools/Transcription/Transcribe.js. LargeFileBridge transcribes with a PREFERENCE ORDER of THREE on-device engines, best first — (1) Apple SpeechAnalyzer + SpeechTranscriber (macOS 26+, on-device, the model ships in the OS; driven by a tiny compiled Swift helper) which is Apple's NEW speech engine and is PREFERRED on a Mac when the hardware+OS support it; (2) OpenAI Whisper at the SMALL model (MPS→CPU, cross-platform) as the second choice; (3) Qwen3-ASR via Apple MLX (the `mlx-qwen3-asr` CLI at Qwen/Qwen3-ASR-1.7B, the heavyweight multi-GB-download LLM, Apple Silicon only) as the THIRD choice ("another LLM"). We NEVER use Apple's legacy SFSpeechRecognizer. A run that fails on one engine auto-falls-back down the order (speech → mac → qwen) so a file is never lost. IMPORTANT UX: if a Mac's HARDWARE could run SpeechAnalyzer but the OS is older than macOS 26, the engine emits a WARNING recommending a macOS update for the highest-quality transcription and NAMES the lower engine it fell back to (Whisper Small). The heavyweight Qwen model (third choice only) keeps its on-demand, permission-gated download → install → configure provisioning with a disk-space warning, health-check/repair, two progress UIs, and flow-resume; SpeechAnalyzer needs NO such download (it is built into macOS 26+, and its per-locale asset auto-installs on first use). A CRITICAL requirement: whichever engine runs, a 1–2-hour-plus file transcribes to the FULL duration and NEVER truncates — coverage is verified end-to-end. Parallelism is CALIBRATED per machine. Sibling of Transcribe.mdx (the feature that calls this engine), parallelization.mdx (the Core Budget), tools.mdx (the CLI-binary preflight), processing.mdx (where provisioning + transcription jobs are watched), settings.mdx (the engine + parallelism knobs), and security.mdx (the local-only, permissioned-download posture).
 ---
 
 # LargeFileBridge — The Transcription Engine
 
+> **AUTHORITY NOTE (dominant).** The engine **preference order** below — **Apple SpeechAnalyzer → Whisper
+> Small → Qwen3-ASR**, and the explicit rule that **the legacy `SFSpeechRecognizer` is never used** — is the
+> current product decision and **takes precedence** over any earlier wording in this file (or its siblings)
+> that framed Qwen3-ASR as the primary engine or Whisper at `base`. Where an older passage still reads
+> "primary heavyweight Qwen," treat it as superseded by this order.
+
 [Transcribe.mdx](./Transcribe.mdx) defines the transcription **feature** — the entry points, where the
 `.transcription` output lands (inside `.lfbridge/`, §3 there), the async/non-blocking discipline, and the
-truthful reporting. **This file is the ENGINE spec underneath it.** It answers four questions the feature
+truthful reporting. **This file is the ENGINE spec underneath it.** It answers five questions the feature
 spec deliberately defers:
 
-1. **Which engine runs** — the primary heavyweight **Qwen3-ASR** LLM, or the **Whisper-on-Mac** fallback (§2).
-2. **How the heavyweight model gets onto the machine** — the on-demand, permission-gated
+1. **Which engine runs** — Apple **SpeechAnalyzer** (preferred on macOS 26+), the **Whisper-Small** second
+   choice, or the heavyweight **Qwen3-ASR** third choice (§2).
+2. **What happens when the Mac hardware supports SpeechAnalyzer but the OS is too old** — the macOS-update
+   warning + graceful fall-back to Whisper Small (§2.2).
+3. **How the heavyweight Qwen model gets onto the machine** — the on-demand, permission-gated
    **download → install → configure** flow, with a disk-space warning, health-check/repair, two progress
    UIs, and flow-resume (§3).
-3. **How we guarantee a 1–2-hour-plus file transcribes in FULL and never truncates** — the critical
+4. **How we guarantee a 1–2-hour-plus file transcribes in FULL and never truncates** — the critical
    no-truncation requirement and its end-to-end verification (§4).
-4. **How many files transcribe in parallel on this machine** — the per-machine calibration (§5).
+5. **How many files transcribe in parallel on this machine** — the per-machine calibration (§5).
 
 Siblings this builds on and does not repeat:
 
@@ -36,55 +45,91 @@ Siblings this builds on and does not repeat:
 
 ## 1. What "the engine" is (LOCKED)
 
-The engine is the copied-in `Transcriber` class ([Transcribe.mdx §5](./Transcribe.mdx#5-the-engine--copied-in-called-in-process-locked))
-— in-process, async, non-blocking. This spec extends it with **engine selection**, **model provisioning**,
-**full-duration guarantees**, and **parallel calibration**. Nothing here changes where the transcript is
-written (that is [Transcribe.mdx §3](./Transcribe.mdx#3-where-transcripts-are-stored--inside-the-repostorage-lfbridge-path-mirrored-extension-appended-locked-supersedes-the-earlier-beside-media-layout)) or that transcription is always an explicit user action.
+The engine is the copied-in transcription layer ([Transcribe.mdx §5](./Transcribe.mdx#5-the-engine--copied-in-called-in-process-locked))
+— in-process, async, non-blocking. This spec extends it with **engine selection** (three engines in a fixed
+preference order), **model provisioning** (for the heavyweight Qwen third choice), **full-duration
+guarantees**, and **parallel calibration**. Nothing here changes where the transcript is written (that is
+[Transcribe.mdx §3](./Transcribe.mdx#3-where-transcripts-are-stored--inside-the-repostorage-lfbridge-path-mirrored-extension-appended-locked-supersedes-the-earlier-beside-media-layout)) or that transcription is always an explicit user action.
 
-The engine abstraction (a common interface both concrete engines implement — `describeReadiness()` /
-`transcribeToFile(onProgress)` — so the caller is engine-agnostic) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/engine.ts` — interface `TranscribeEngine`, resolver `pickEngine()`.
+The engine abstraction (a common interface each concrete engine implements — `available()` /
+`transcribeToFile(onProgress)` — so the caller is engine-agnostic) and the ordered selector are implemented
+in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/engine.ts` — `pickEngine()` (returns the best engine for this machine) + `transcribeWithEngine()` (the speech → mac → qwen runtime fallback chain).
 
 ---
 
-## 2. Two engines — heavyweight Qwen3-ASR (primary) + Whisper-on-Mac (fallback) (LOCKED)
+## 2. Three engines — Apple SpeechAnalyzer (preferred) → Whisper Small → Qwen3-ASR (LOCKED)
 
-There are **two** transcription engines, tried in a fixed order (learned from the canonical tool at
-`~/BGit/all/tools/Transcription/Transcribe.js`, which LFBridge's copied engine mirrors). Both produce the
-**same** `.transcription` output ([Transcribe.mdx §3–§4](./Transcribe.mdx)); they differ only in how the
-speech-to-text is computed.
+There are **three** transcription engines, tried in a fixed **preference order** (learned from the canonical
+tool at `~/BGit/all/tools/Transcription/Transcribe.js`, which LFBridge's copied engine mirrors). All three
+produce the **same** `.transcription` output ([Transcribe.mdx §3–§4](./Transcribe.mdx)); they differ only in
+how the speech-to-text is computed. **We never use Apple's legacy `SFSpeechRecognizer`** — only the new
+SpeechAnalyzer.
 
-| # | Engine id | What it is | When it's used |
+| Pref | Engine id | What it is | When it's used |
 | --- | --- | --- | --- |
-| **2** | **`qwen`** (primary, heavyweight LLM — DEFAULT) | **Qwen3-ASR via Apple MLX** — the `mlx-qwen3-asr` CLI at model **`Qwen/Qwen3-ASR-1.7B`** (label `qwen3-asr-1.7b-mlx`). Apple-Silicon-native, faster than real time, higher quality. The **multi-GB download** engine: the CLI installs via `pipx install mlx-qwen3-asr` and the **weights download from Hugging Face on first run** (~3.4 GB) into `~/.cache/huggingface/hub/`. **Apple Silicon (M1+) only.** | The default whenever the model is **provisioned** (§3) and the machine qualifies (Apple Silicon, §5). |
-| **1** | **`mac`** (fallback — Whisper on Mac) | **OpenAI Whisper** CLI at model **`base`** (`whisper-base`), preferring the Apple-Silicon **MPS** GPU with an automatic **CPU fallback** and an English sanity-check. Reliable, cross-platform, English-tuned; small (~140 MB), installs via `pipx install openai-whisper`. | When `qwen` is **absent and the user declines** to provision it, on a **non-Apple-Silicon** machine, or **automatically when a `qwen` run errors** (§2.1) — so the user is **never left with no way to transcribe**. |
+| **1 — PREFERRED** | **`speech`** (Apple SpeechAnalyzer) | **Apple SpeechAnalyzer + SpeechTranscriber** (label `apple-speechanalyzer`), Apple's **NEW** on-device speech engine (macOS 26+ / "Tahoe"). The model **ships inside the OS** — no multi-GB download; the per-locale asset auto-installs on first use via `AssetInventory`. Driven by a tiny **Swift helper** (`speech/SpeechAnalyzerCLI.swift`) compiled once with `swiftc` and cached. On the first published benchmark it beat every Whisper model (including Small) on English, at ~3× Whisper Small's speed, fully on-device. | **Auto-preferred on a Mac** running **macOS 26+** with the Xcode command-line tools (`swiftc`) present. |
+| **2** | **`mac`** (Whisper Small) | **OpenAI Whisper** CLI at model **`small`** (`whisper-small`, ~460 MB), preferring the Apple-Silicon **MPS** GPU with an automatic **CPU fallback** and an English sanity-check. Reliable, cross-platform, English-tuned; installs via `pipx install openai-whisper`. | When SpeechAnalyzer is unavailable (non-Mac, macOS < 26, or no `swiftc`), or **automatically when a `speech` run errors** (§2.1). This is the **second choice** across all hardware. |
+| **3** | **`qwen`** (heavyweight LLM — "another LLM") | **Qwen3-ASR via Apple MLX** — the `mlx-qwen3-asr` CLI at **`Qwen/Qwen3-ASR-1.7B`** (label `qwen3-asr-1.7b-mlx`). Apple-Silicon-native. The **multi-GB download** engine: `pipx install mlx-qwen3-asr` + **~3.4 GB weights** from Hugging Face on first run into `~/.cache/huggingface/hub/`. **Apple Silicon (M1+) only.** | The **third choice** — used only when **explicitly selected** (`transcribe.engine: qwen`) or reached as the **last runtime fallback** after both `speech` and `mac`. It is **not** auto-selected. |
 
-* **Selection order.** `pickEngine()` returns **`qwen`** if the machine is Apple Silicon, the `mlx-qwen3-asr`
-  CLI + model are ready (§3), and the machine clears the RAM bar (§5.2); otherwise **`mac`** (Whisper).
-  The `transcribe.engine` setting (`auto` / `qwen` / `mac`) overrides the default (§5.4).
-* **Auto-fallback (§2.1).** A `qwen` run that errors (missing weights, an MLX hiccup, an unexpected CLI
-  failure) **transparently retries on `mac`** so a file is never lost — it just costs a retry. An explicit
-  `-c mac` / `transcribe.engine: mac` runs Whisper directly with no fallback layer.
-* **Quality note (honest).** Qwen3-ASR-1.7B is materially more accurate than whisper-base. The transcript
-  **header records which engine actually ran** ([Transcribe.mdx §4](./Transcribe.mdx#4-what-a-transcript-file-contains))
-  so the user always knows — including when the fallback produced it.
-* **Both must satisfy §4** (full-duration, no truncation). The fallback is a **fallback in accuracy, not in
-  completeness** — it still transcribes the whole 2-hour file.
+* **Selection order.** `pickEngine()` returns **`speech`** when the machine is a Mac on macOS 26+ with
+  `swiftc` present; otherwise **`mac`** (Whisper Small). `qwen` is returned only when the
+  `transcribe.engine` setting pins it (and it is available), else that pin degrades to `mac`. The
+  `transcribe.engine` setting (`auto` / `speech` / `mac` / `qwen`) overrides the default (§5.4).
+* **Auto-fallback (§2.1).** A run that errors retries **down the order** (speech → mac → qwen) so a file is
+  never lost — it just costs a retry.
+* **Quality + honesty.** SpeechAnalyzer ≥ Whisper Small ≥ whisper-base on English; Qwen3-ASR-1.7B is a strong
+  LLM alternative. The transcript **header records which engine actually ran**
+  ([Transcribe.mdx §4](./Transcribe.mdx#4-what-a-transcript-file-contains)) so the user always knows —
+  including when a fallback produced it.
+* **All three must satisfy §4** (full-duration, no truncation). SpeechAnalyzer reads the whole `AVAudioFile`
+  to end-of-input (`analyzeSequence(from:)` → `finalizeAndFinishThroughEndOfInput()`), so a successful run
+  inherently covers the full duration; Whisper and Qwen are verified per §4.2.
 
-The two concrete engines + the selector are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/qwen-asr.ts` — class `Qwen3AsrTranscriber` (drives `mlx-qwen3-asr`) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — class `Transcriber` (Whisper, MPS→CPU) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/engine.ts` — `pickEngine()` + the `qwen→mac` auto-fallback wrapper.
+The three concrete engines + the selector are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/speech-analyzer.ts` — class `SpeechAnalyzerTranscriber` (compiles/drives the Swift helper) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — class `Transcriber` (Whisper **Small**, MPS→CPU) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/qwen-asr.ts` — class `Qwen3AsrTranscriber` (drives `mlx-qwen3-asr`) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/engine.ts` — `pickEngine()` + the speech → mac → qwen fallback wrapper. The Swift helper is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/speech/SpeechAnalyzerCLI.swift`.
 
-### 2.1 Auto-fallback `qwen → mac` (LOCKED)
+### 2.1 Auto-fallback `speech → mac → qwen` (LOCKED)
 
-The default `qwen` engine **transparently falls back** to `mac` (Whisper) on any error, exactly as the
-reference tool does: a missing model download, an MLX numerical hiccup, or an unexpected CLI non-zero exit
-never loses the file — it retries on Whisper (installing Whisper first if only the Qwen engine was set up),
-and the header reflects **whichever engine actually produced the text**. A user who explicitly pins `mac`
-gets Whisper with no fallback layer.
+The selected engine **transparently falls back** to the next engine in the preference order on any error,
+exactly as the reference tool does: a `swiftc` build failure or a macOS-too-old exit from `speech`, an MPS
+hiccup from `mac`, a missing-weights error from `qwen` — none loses the file; it retries on the next engine
+(installing that engine's tool first if needed), and the header reflects **whichever engine actually produced
+the text**. A user who explicitly pins one engine (`transcribe.engine: mac`, say) gets that engine with no
+fallback layer, so a pinned failure is reported honestly rather than silently switched.
+
+### 2.2 Hardware supports SpeechAnalyzer but the OS is too old — warn + fall back (LOCKED)
+
+A common real case: an **Apple-Silicon Mac whose hardware could run SpeechAnalyzer, but the OS is older than
+macOS 26**, so the SpeechAnalyzer/SpeechTranscriber APIs are not present. LFBridge must **not** fail silently
+and must **not** pretend it used the best engine. Instead it:
+
+* **Detects** the situation — a Mac (`darwin`) whose `sw_vers -productVersion` **major < 26** (note: macOS 26
+  is Darwin kernel 25, so we read the **product** version, never the kernel version).
+* **Warns** — the engine-status payload sets `speech.needsOsUpdate = true`, and the UI shows a notice:
+  *"This Mac supports Apple's new on-device SpeechAnalyzer, but it needs a macOS update (macOS 26+). Install
+  the latest macOS update for the highest-quality transcription. Falling back to Whisper Small for now."*
+  The message **names the engine it fell back to** (`whisper-small`), so the user knows exactly what produced
+  their transcripts and what upgrading would buy them.
+* **Falls back** — transcription proceeds on **Whisper Small** (`mac`), never blocked. Updating macOS to 26+
+  (and having `swiftc`) is all it takes to flip the machine to the preferred `speech` engine automatically on
+  the next run — no other configuration.
+
+Detection of the macOS product-version gate + the `needsOsUpdate` warning are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/audio-prep.ts` — `macOSMajorVersion()` / `speechAnalyzerSupported()` / `speechAnalyzerNeedsOsUpdate()`, surfaced on `GET /api/transcribe/engine` (`speech.needsOsUpdate`) and rendered by the Settings Transcription panel (§6).
 
 ---
 
 ## 3. Provisioning the heavyweight model — download → install → configure, with permission (LOCKED)
+
+> **Scope — this section is about the `qwen` THIRD-choice engine only.** The **preferred** engine, Apple
+> **SpeechAnalyzer**, needs **no** heavyweight provisioning: its model **ships inside macOS 26+**, and the
+> per-locale asset auto-installs on first use via `AssetInventory` inside the Swift helper. SpeechAnalyzer's
+> only "readiness" is the OS/toolchain gate of §2.2 (macOS 26+ and `swiftc`) — there is no multi-GB download,
+> no disk-space popup, and no consent flow for it. The **Whisper Small** second choice likewise just
+> downloads its ~460 MB model on first `whisper` run (no popup). The permission-gated
+> download → install → configure flow below exists **only** for the heavyweight Qwen3-ASR weights, which a
+> user opts into **only** if they deliberately choose the `qwen` third engine.
 
 The heavyweight `qwen` engine is a **multi-GB download**: the `mlx-qwen3-asr` CLI installs via
 `pipx install mlx-qwen3-asr` (an isolated venv with `mlx`, `numpy`, `huggingface-hub`, …), and the
@@ -347,7 +392,14 @@ transcription workers busy."*
   ([parallelization.mdx §4](./parallelization.mdx)); tunes the CPU term above.
 * **`transcribe.max_parallel`** (optional override) — a hard cap the user can set in **Settings →
   Transcription** for machines where the auto-calibration is too aggressive/conservative; blank = auto (§5.1).
-* **`transcribe.engine`** — `auto` (default; §2 selection order) · `qwen` · `mac`.
+* **`transcribe.engine`** — `auto` (default; §2 selection order — `speech` when the Mac qualifies, else `mac`)
+  · `speech` · `mac` · `qwen`.
+
+> **Concurrency note.** The `speech` engine is **light** (the model lives in the OS; the Swift helper streams
+> the file) and clamps like Whisper Small rather than the heavyweight Qwen3-ASR — so on the preferred path a
+> machine runs **more** files in parallel than it would on the `qwen` third engine, whose `modelRamPerJob`
+> (§5.1) is several GB. `pickEngine()` still routes a machine that cannot hold one `qwen` instance away from
+> it (§5.2); that clamp never applies to `speech`/`mac`.
 
 The transcribe concurrency calibration (the clamp, the RAM/GPU terms, the min-bar routing) is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe-concurrency.ts` — `transcribeConcurrency()` (draws `coreBudget()`/`logicalCores()` from `shared/concurrency.ts`, clamps by measured `modelRamPerJob` + `usableRAM` + `gpuStreams`), read by the queue's `transcribe` admission bucket in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts`.
@@ -358,10 +410,13 @@ The transcribe concurrency calibration (the clamp, the RAM/GPU terms, the min-ba
 
 **Settings → Transcription** ([settings.mdx](./settings.mdx)) surfaces the engine state and the knobs:
 
-* **Engine + model status** — which engine is active, the model readiness (§3.1), its **on-disk size**, and
-  actions: **Download / Update the heavyweight model**, **Repair**, **Remove** (frees the disk), and
-  **Re-check**.
-* **Engine choice** — `Auto` / `qwen` / `Whisper-on-Mac` (`transcribe.engine`).
+* **Engine status** — which engine is **active** (`speech` / `mac` / `qwen`). For **`speech`** it shows the
+  macOS/`swiftc` readiness and, when the hardware could run SpeechAnalyzer but the OS is too old (§2.2), the
+  **"update macOS for higher-quality transcription — falling back to Whisper Small"** notice. For the
+  heavyweight **`qwen`** third engine it shows the model readiness (§3.1), its **on-disk size**, and actions:
+  **Download / Update the heavyweight model**, **Repair**, **Remove** (frees the disk), and **Re-check**.
+* **Engine choice** — `Auto` (recommended) / `Apple SpeechAnalyzer` / `Whisper Small` / `Qwen3-ASR`
+  (`transcribe.engine`).
 * **Parallelism** — the resolved auto number (§5.1) with the optional `transcribe.max_parallel` override,
   next to the shared **Parallelism** slider ([parallelization.mdx §4](./parallelization.mdx)).
 
@@ -372,10 +427,18 @@ The Transcription settings panel is rendered in code:
 
 ## 7. Acceptance criteria
 
-1. **Two engines (§2):** a primary **heavyweight Qwen3-ASR** engine and a **Whisper-on-Mac** (`mac`)
-   fallback; `pickEngine()` selects Qwen3-ASR when its model is ready and the machine qualifies, else the
-   Whisper-on-Mac, else whisper-base; the transcript header records which engine ran.
-2. **Detect + estimate (§3.1):** before transcribing, readiness is one of `installed` / `missing` / `partial`
+1. **Three engines in a fixed preference order (§2):** **Apple SpeechAnalyzer** (`speech`, preferred) →
+   **Whisper Small** (`mac`, second) → **Qwen3-ASR** (`qwen`, third). `pickEngine()` selects `speech` on a Mac
+   running macOS 26+ with `swiftc`, else `mac` (Whisper **Small**, not base); `qwen` is used only when pinned
+   or as the last runtime fallback, never auto-selected. The legacy **`SFSpeechRecognizer` is never used**.
+   The transcript header records which engine actually ran.
+1a. **Apple SpeechAnalyzer path (§2, §2.2):** the `speech` engine drives Apple's new on-device
+    SpeechAnalyzer + SpeechTranscriber via the compiled Swift helper, needs **no** multi-GB download (the
+    model ships in macOS 26+; the per-locale asset auto-installs), and covers the full source duration by
+    reading to end-of-input. When the Mac hardware could run SpeechAnalyzer but the **OS is older than macOS
+    26**, the engine sets `speech.needsOsUpdate` and the UI shows a **macOS-update recommendation** that
+    **names the fallback** (Whisper Small); transcription still proceeds on Whisper Small — never blocked.
+2. **Detect + estimate (§3.1):** before transcribing on the **`qwen` third engine**, readiness is one of `installed` / `missing` / `partial`
    / `outdated`; a **disk estimate** (ballparked, then replaced by a **stored measured size**) and a
    **free-disk** check are computed; the number is shown before any download.
 3. **Permission-gated first-time provisioning (§3.2–§3.3):** when the model is `missing` and the user tries
