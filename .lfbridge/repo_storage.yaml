@@ -13,9 +13,9 @@ repo_storage:
     by: null
     on_device: ""
   last_scan:
-    at: 2026-07-12T15:38:22.982Z
-    headless: true
-    on_device: bryan-mac-pro
+    at: 2026-07-14T01:08:35.517Z
+    headless: false
+    on_device: bryanstarbuck-macbook-pro
   name: ""
   policy:
     recommend_compress: true
