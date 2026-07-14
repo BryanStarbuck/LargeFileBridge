@@ -27,6 +27,9 @@ Siblings this builds on and does not repeat:
   are shown and the **Compress** button lives (§4).
 * [One repo](./one_repo.mdx) — the files table where the user **checks several** files or **compresses the
   whole current filter** (§4.4 bulk actions).
+* [Task tabs](./task_tabs.mdx) — the per-repo screen's **Compress tab**, where compressible videos/images
+  are surfaced with a three-state **Compress status icon**; opening the tab filters the file table to
+  compressible media and sorts the biggest could-compress files to the top.
 * [Settings](./settings.mdx) — where the **codec allow/deny per media type** preferences live.
 
 ---
@@ -561,6 +564,29 @@ Surfacing the codec + compressed-state and the Compress action per file is handl
    the version tag (`v1`) lets a re-tuned engine invalidate old marks. Verified end-to-end: compress →
    111,360→28,253 bytes; a second pass on the output → `skipped (marker)`, no re-encode. (Reading the local
    `.lfbridge` record to prune the batch up-front is a tracked speed follow-up, not required for this.)
+
+## 11. The Compress status icon & the Compress tab (LOCKED)
+
+On the per-repo screen ([one_repo.mdx](./one_repo.mdx)) the **Compress tab**
+([task_tabs.mdx §4.3](./task_tabs.mdx#43-compress--reclaim-space)) narrows the files table to **compressible**
+videos and images (the extension verdict `compressState === "should"`, plus already-compressed shown muted)
+and adds a per-row **Compress status icon** (lucide `Archive`) with **three** states — authoritative
+definition in [task_tabs.mdx §6](./task_tabs.mdx#6-the-compress-status-icon--same-grammar-locked):
+
+* **Done** — already compressed (already-lossy extension, or the in-file `LFBcompressed` marker) →
+  **solid green** icon.
+* **Could be compressed** — a video/image whose `compressState === "should"` → **medium-orange
+  normal-thickness edge, 99%-white / 1%-orange fill**. Clicking it **offers** compression (explicit-click
+  confirm, then a background job).
+* **Not applicable** — not a compressible media type (audio is never compressible — charter) → **white fill,
+  very-thin very-light-grey edge** (inert).
+
+The tab's default sort puts the orange "could" rows first, then **Size desc** so the biggest reclaimable
+file leads. The icon is a control cell (stops propagation, never navigates). The verdict per file reuses the
+single source of truth `compressInfo(name)` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts`.
+
+The Compress status icon is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/CompressStatusIcon.tsx` — `CompressStatusIcon` (state from the new `FileRow.compress` field composed in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows`).
 
 <!--
   Compression engine for IMAGE + VIDEO (audio later). Explicit user action only (one / checked / whole

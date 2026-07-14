@@ -51,7 +51,9 @@ computer:
     ├── devices/            ← the DEVICE REGISTRY — one file per computer (§4)
     │   ├── bryan-macbook-pro.yaml
     │   └── bryan-mac-studio.yaml
-    └── analysis/           ← per-file media analysis (storages.mdx §6)
+    ├── <rel-dir>/<name.ext>.transcription   ← transcript — path-mirrored, ext APPENDED (storages.mdx §6)
+    ├── <rel-dir>/<name.ext>.ai_description  ← AI description — path-mirrored, ext APPENDED (storages.mdx §6)
+    └── analysis/           ← visuals-by-time + compression record only (storages.mdx §6)
 
 …the user's personal big files stay in their natural home-tree directories (git-ignored, moved over IPFS)…
 ```
@@ -300,7 +302,8 @@ Driving the per-pass Git cycle for the Personal storage (fetch+merge before the 
 ## 8. Media analysis + cloud clones
 
 Personal storage produces the same [storages.mdx §6](./storages.mdx) **media-analysis** outputs into
-`.lfbridge/analysis/` (transcript / description / visuals-by-time for video; description for images) and
+`.lfbridge/` (transcript / description as path-mirrored `<name.ext>.transcription` / `.ai_description`
+files with the extension appended; visuals-by-time + compression records under `.lfbridge/analysis/`) and
 may **clone** to Google Drive / Dropbox ([storages.mdx §5](./storages.mdx)) — recorded in the `clones`
 block. These artifacts ride the same Git backbone (§7) to the user's other computers, so they are
 **generated once and reused everywhere** ([syncable_data_location.mdx §4](./syncable_data_location.mdx#4-derived-artifacts--generate-once-reuse-everywhere-locked-value)).
@@ -319,13 +322,15 @@ go** (transcripts, AI descriptions):
   the **dedicated Git repo** is the preferred one, and (per this spec) the vehicle that carries the SDL
   between the user's computers over the git backbone. Its convention default is **`~/BGit/Bryan_git/personal_large_files_bridge/`**.
 * **When the dedicated repo is ON**, a transcript / description for a loose personal file (e.g.
-  `~/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4`) is written **under that repo** as a
-  **sidecar**, mirroring the file's path **relative to `~`** with the extension replaced:
-  `~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.transcription`
-  (and `…/FINAL_CIA_Drones.ai_description`) — **committed, not git-ignored**, and with **no** `.transcribe/`
-  directory. This is placement rule B of [Transcribe.mdx §3.4](./Transcribe.mdx).
-* **When it is OFF**, the same sidecars fall back to the Personal storage root / literally beside the media
-  (the legacy fallback, rule D).
+  `~/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4`) is written **inside that repo's
+  `.lfbridge/`**, path-mirrored (the file's path **relative to `~`**) with the media's **full filename and
+  the extension APPENDED**:
+  `~/BGit/Bryan_git/personal_large_files_bridge/.lfbridge/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4.transcription`
+  (and `…/FINAL_CIA_Drones.mp4.ai_description`) — **committed** (it lives in `.lfbridge/`), and with **no**
+  `.transcribe/` directory. This is placement rule B of [Transcribe.mdx §3.4](./Transcribe.mdx).
+* **When it is OFF**, the same artifacts fall back to the Personal storage root's own `.lfbridge/`, or — as
+  the last resort — a `.lfbridge/` created in the media's own directory (rule D); they are **never** written
+  loose beside the media.
 
 ## 10. First-action setup — configuring Personal on the first click
 
@@ -382,7 +387,7 @@ and is **never** team-shared (it is not a decision; the folded decisions ledger 
 * **Transcription discovery for Personal.** The on-demand **"Show what could be transcribed"** link runs
   the **What Can Be Transcribed Calc Engine** ([transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx)),
   which walks the Personal storage's mapped home-tree directories for **video/audio that has no
-  `.transcription` sidecar** and emits a per-storage **transcribe batch** → a **transcribe slug** (a
+  `.transcription` artifact under `.lfbridge/`** and emits a per-storage **transcribe batch** → a **transcribe slug** (a
   ~80%-width, default-checked popup: *"Transcribe N files"* → background jobs on
   [processing.mdx](./processing.mdx)).
 
@@ -395,7 +400,72 @@ Producing the Personal batch during scan recalc, and naming/replacing its YAML, 
 
 ---
 
-## 13. Acceptance criteria
+## 13. Repo ownership — Personal is the default, and your personal-accounts list
+
+Beyond being the default owner of **loose home-tree files** (§9), Personal is also the **default owner of repos**
+([repo_company_mapping.mdx](./repo_company_mapping.mdx)). Every git repo LFB knows about maps to an owner — a
+company or Personal — and **Personal is the catch-all**:
+
+* **A repo with no forge org falls to Personal.** No remote, a local-path remote, an unknown/self-hosted host, or a
+  known forge whose owner is **you** → the repo groups under **Personal**
+  ([repo_company_mapping.mdx §3](./repo_company_mapping.mdx#3-the-heuristic--which-parse-becomes-a-company-locked)).
+  Only a forge **org** that is **not yours** derives a company.
+* **The "my personal accounts" list (LOCKED) — owned here.** So your **own** forge repos never miscategorize as a
+  company, you maintain a small list of your account handles across forges. Any repo whose remote owner matches an
+  entry derives to **Personal** even on a known forge.
+
+  ```yaml
+  # app config (storage_local.mdx) — YOUR own forge accounts, consumed by repo_company_mapping.mdx §4.
+  personal_accounts:
+    - { host: github.com, owner: BryanStarbuck }   # host + owner …
+    - { host: gitlab.com, owner: bstarbuck }
+    - { owner: bryan-personal }                     # … or owner on ANY host (host omitted = wildcard)
+  ```
+
+  * Match is **case-insensitive** on `owner`; `host` is **optional** (omit = personal on every forge). An sr.ht
+    `~handle` matches with or without the leading `~`.
+  * **Editing the list re-derives.** Adding an owner re-maps its repos **company → Personal** on the next scan;
+    removing one lets them fall back to a company. **Manual** owner overrides
+    ([repo_company_mapping.mdx §5](./repo_company_mapping.mdx#5-manual-reassignment--the-user-always-wins-locked)) are untouched.
+  * The list **starts empty** and is populated by the user — LFB may *suggest* your handle (from the machine's git
+    `user.email` domain) but never adds it silently (charter: surface and offer).
+* **You can always reassign.** A repo the heuristic put under a company can be forced to Personal from repo
+  settings / the `⋮` menu ([repo_company_mapping.mdx §5](./repo_company_mapping.mdx#5-manual-reassignment--the-user-always-wins-locked)),
+  persisted as `owner_override` in the repo's `config.yaml`.
+
+Persisting and matching the personal-accounts list is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig().personalAccounts` / `setPersonalAccounts()`, matched by `isPersonalAccount(host, owner)` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts`.
+
+---
+
+## 14. Personal's optional state-sync repo
+
+Just like a company ([storage_company.mdx §7](./storage_company.mdx#7-the-company-lfb-state-sync-repo)), **Personal
+can also have a state-sync repo** — indeed it is the **canonical** one: the Personal Git backbone described in §5
+**is** Personal's state-sync repo (conventionally `~/BGit/Bryan_git/personal_large_files_bridge/`).
+
+* **What routes there.** Per the churn policy ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)), a
+  **Personal-owned repo's** noisy per-repo tracking (`repo_storage.yaml` + noisy sidecars) normally stays in the
+  machine-local state root `~/T/_large_files_bridge/repos/<repoKey>/` until a transcript / AI-description exists.
+  **When Personal has a state-sync repo configured, that override routes the tracking to
+  `<syncRepo>/repos/<repoKey>/`** — so it commits + pushes over the §5 backbone to your **other computers**,
+  path-mirrored by `<repoKey>`.
+* **Same mechanism as §5.** There is nothing new to install: the Personal dedicated Git repo (§5, turned on from
+  [storage settings](./storage_settings.mdx#41-dedicated-git-repo-preferred-when-available)) is the state-sync
+  repo, and the same fetch → auto-merge → commit → push cycle (§7) carries the routed repo tracking alongside the
+  Personal SDL.
+* **Default: the state root.** With no Personal dedicated repo configured, a Personal-owned repo keeps its tracking
+  in the state root per the default policy — nothing changes until you turn the Personal backbone on.
+* **Ownership decides.** A repo routes to **Personal's** state-sync repo only while its owner is **Personal**
+  (default or a manual reassignment, [repo_company_mapping.mdx §7.2](./repo_company_mapping.mdx#72-artifact-placement-follows-the-owner));
+  reassign it to a company and its tracking follows that company's state-sync repo instead.
+
+Routing a Personal-owned repo's tracking to `<syncRepo>/repos/<repoKey>/` when Personal has a dedicated repo is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` — `resolveTrackingRoot(repoKey, owner)` (Personal branch resolves the Personal dedicated repo from `storage-settings.service.ts`).
+
+---
+
+## 15. Acceptance criteria
 
 1. A user has **exactly one** personal storage, whose SDL is conventionally the Git repo
    `~/BGit/Bryan_git/personal_large_files_bridge/`, tracked via a hidden **`.lfbridge/`** at its root.
@@ -432,6 +502,15 @@ Producing the Personal batch during scan recalc, and naming/replacing its YAML, 
     applicable categories are **`compress_video`, `compress_image`, `pin`, and `pull_down`** — **not
     `git_ignore`** (loose files sit outside any repo) — plus the on-demand transcribe batch; batches with
     work surface as slugs on the To Do page (§12).
+11. Personal is the **default owner of repos** too (§13): a repo with no forge org — no/local/unknown remote, or a
+    known-forge owner that is **on your personal-accounts list** — groups under **Personal**
+    ([repo_company_mapping.mdx §3](./repo_company_mapping.mdx#3-the-heuristic--which-parse-becomes-a-company-locked)).
+    The **"my personal accounts"** list is owned here, stored in app config (`personal_accounts`; `host` optional =
+    wildcard), re-derives `auto` owners on edit, leaves `manual` overrides alone, and starts empty (§13).
+12. Personal **can also have a state-sync repo** — the §5 Personal Git backbone **is** it (§14): when configured, a
+    **Personal-owned** repo's noisy per-repo tracking routes to **`<syncRepo>/repos/<repoKey>/`** instead of the
+    machine-local state root ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)), carried to the
+    user's other computers over the same backbone; default is the state root, and **ownership** decides.
 
 <!--
   Personal storage = the user's OWN private big files, and the CANONICAL Git-backbone use case: one user,
@@ -453,6 +532,15 @@ Producing the Personal batch during scan recalc, and naming/replacing its YAML, 
   pin.service pinStorageUnit (git cycle around reconcile), DevicesPage. Keep aligned with git_backbone.mdx
   (the engine), storage_settings.mdx §4.1 (the toggle+remote), devices.mdx (identity/fingerprint/graft),
   syncable_data_location.mdx (the SDL text), storages.mdx (storage.yaml + .lfbridge + analysis).
+  §12 TO DO Batch: Personal owns ONE local/disposable/uncommitted batch personal_2_do.yaml under
+  §13 Personal = DEFAULT OWNER OF REPOS too (repo_company_mapping.mdx): no/local/unknown remote or a known-forge
+  owner on the "my personal accounts" list → Personal. The personal-accounts list is OWNED HERE (app config
+  personal_accounts, host optional=wildcard, re-derives auto owners on edit, leaves manual alone, starts empty;
+  config.service getAppConfig().personalAccounts / isPersonalAccount). §14 Personal's optional STATE-SYNC REPO = the
+  §5 Personal Git backbone itself: when configured, a Personal-owned repo's noisy tracking routes to
+  <syncRepo>/repos/<repoKey>/ (overrides state-root default in artifact_placement_policy.mdx); default = state root;
+  ownership decides; repo-storage.service resolveTrackingRoot. Keep aligned with repo_company_mapping.mdx (mapping),
+  storage_company.mdx (company state-sync + rename), artifact_placement_policy.mdx (churn policy).
   §12 TO DO Batch: Personal owns ONE local/disposable/uncommitted batch personal_2_do.yaml under
   ~/T/_large_files_bridge/_do_batches/, recalc-and-replace each scan (to_do_batch_calc_engine.mdx,
   recommends-only, skips folded decisions); categories = compress_video/compress_image/pin/pull_down

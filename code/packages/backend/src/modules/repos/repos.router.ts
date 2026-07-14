@@ -22,6 +22,7 @@ import {
   shareStatus,
 } from "../storage/decisions.service.js";
 import { effectiveFlags } from "../store-model/config.service.js";
+import { deriveOwnerForRemote } from "../git/git.service.js";
 import { track } from "../progress/progress.registry.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { requireAllowListed } from "../auth/identify.js";
@@ -335,6 +336,8 @@ reposRouter.patch("/:repoId/settings", async (req, res) => {
         shared: p.access.shared ?? c.access.shared,
         participants: p.access.participants ?? c.access.participants,
       };
+    if (p.transcription?.placement) c.artifacts = { ...c.artifacts, transcription_placement: p.transcription.placement };
+    if (p.aiDescription?.placement) c.artifacts = { ...c.artifacts, ai_description_placement: p.aiDescription.placement };
     return c;
   });
     res.json({ ok: true, data: toRepoSettings(req.params.repoId, folder) });
@@ -415,6 +418,9 @@ const RepoSettingsPatch = z.object({
     .object({ shared: z.boolean(), participants: z.array(z.string()) })
     .partial()
     .optional(),
+  // Transcription / AI-description placement radios (repo_settings.mdx §4-5, placement_radios.mdx).
+  transcription: z.object({ placement: z.enum(["lfbridge", "beside", "sync_repo"]) }).partial().optional(),
+  aiDescription: z.object({ placement: z.enum(["lfbridge", "beside", "sync_repo"]) }).partial().optional(),
 });
 
 function toRepoSettings(repoId: string, folder: string): RepoSettings {
@@ -441,5 +447,10 @@ function toRepoSettings(repoId: string, folder: string): RepoSettings {
       publishManifest: c.pin.publish_manifest,
     },
     access: { shared: c.access.shared, participants: c.access.participants },
+    // Company/personal owner derived from the git remote (repo_settings.mdx §6 / repo_company_mapping.mdx §3).
+    owner: deriveOwnerForRemote(c.repo.remote),
+    // Transcription / AI-description placement (repo_settings.mdx §4-5, placement_radios.mdx).
+    transcription: { placement: c.artifacts.transcription_placement },
+    aiDescription: { placement: c.artifacts.ai_description_placement },
   };
 }

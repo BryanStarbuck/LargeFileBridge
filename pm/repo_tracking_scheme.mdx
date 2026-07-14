@@ -58,7 +58,9 @@ This spec builds on the siblings and does not repeat them:
 │   │   └── videos/
 │   │       ├── trees.mov.yaml
 │   │       └── 2075191642366054733.mp4.yaml
-│   └── analysis/                        ← per-file media analysis (transcripts, descriptions, visuals-by-time)
+│   ├── videos/                          ← transcripts/descriptions — path-mirrored, media filename + ext APPENDED
+│   │   └── trees.mov.transcription      ←   e.g. videos/trees.mov → .lfbridge/videos/trees.mov.transcription
+│   └── analysis/                        ← visuals-by-time + compression records only (YAML, keyed by relpath)
 └── videos/
     ├── trees.mov
     └── 2075191642366054733.mp4
@@ -72,6 +74,13 @@ This spec builds on the siblings and does not repeat them:
   **committed** travellers are `manifest.yaml`, `decisions.yaml`, and `devices/` ([git_backbone.mdx](./git_backbone.mdx)
   "never git-ignore the `.lfbridge/` SDL text"). The sidecars and history are the **per-machine,
   human-legible record**; the ledger is the shared truth. §5 maps who-owns-what.
+  * **Reconciliation note (see §6).** The tree above shows these files at `<repoRoot>/.lfbridge/`, which
+    is now the **post-threshold** home, not the unconditional one. Per
+    [artifact_placement_policy.mdx](./artifact_placement_policy.mdx), LFB writes **nothing** into a
+    repo's `.lfbridge/` until the repo has produced a **durable user artifact** (a transcript or an AI
+    description); before that, and whenever an owning storage configures a state-sync repo, these same
+    files live elsewhere. The **shapes** in this spec are unchanged; the **location** question is
+    resolved by §6.
 * **One level-one key, always.** Every YAML file this spec defines is **strictly hierarchical with a
   single top-level property** — `repo_storage:` for the repo-wide file, `file:` for a per-file sidecar.
   **Nothing else is a level-one key; everything is level two or deeper.** This is a hard schema rule so
@@ -251,7 +260,7 @@ allow-listed email, or the sentinel `not-lfbridge` when something happened outsi
       at: 2026-03-11T08:02:00Z
       on_device: bryan-macbook-pro
       by: bryan@act3ai.com
-      output: videos/trees.transcription
+      output: .lfbridge/videos/trees.mov.transcription   # path-mirrored under .lfbridge/, ext APPENDED
 ```
 
 **Event `kind`s (extensible, but these are the load-bearing ones):**
@@ -390,12 +399,52 @@ Because this spec adds files beside the ones [storage_repo.mdx](./storage_repo.m
 
 ---
 
-## 6. Acceptance criteria
+## 6. Placement — these files follow the content-threshold policy (LOCKED)
 
-1. On enlist, LFB **automatically** creates `.lfbridge/repo_storage.yaml` with a **single** level-one key
+The three additions this spec defines (`repo_storage.yaml`, the `files/…` sidecars, the `history/…`
+logs) — plus the fast `files.yaml` index and the rolled-up `counts:` — are the **noisy tracking files**
+whose *location* is governed by [artifact_placement_policy.mdx](./artifact_placement_policy.mdx). This
+spec owns their **shape**; that spec owns **where they are written**. The two must be read together.
+
+* **Why the location moved out of this spec.** `repo_storage.yaml` re-stamps `last_scan.at` (and
+  recomputes `counts:`) on **every** scan (§2.2). Written unconditionally into `<repoRoot>/.lfbridge/`,
+  that is per-scan churn — and, in a storage repo whose `.lfbridge/` is a committed traveller, a per-scan
+  **commit** — on a repo the user may never have asked LFB to work. The placement policy contains that.
+* **The content threshold.** LFB writes these files into a repo's `.lfbridge/` **only after** the repo
+  has produced a **durable user artifact** — a `.transcription` ([Transcribe.mdx §3](./Transcribe.mdx#3-where-transcripts-are-stored--inside-the-repostorage-lfbridge-path-mirrored-extension-appended-locked))
+  or a `.ai_description` ([ai_description.mdx §2](./ai_description.mdx#2-where-the-description-is-stored--inside-the-repostorage-lfbridge-path-mirrored-extension-appended-locked)).
+  Before that, the same files (with the **same** locked shapes) live under the state-root per-repo
+  directory `~/T/_large_files_bridge/repos/<repoKey>/`
+  ([storage_local.mdx §2.2b](./storage_local.mdx), `repoKey = shortHash(resolve(repoPath))`), which never
+  touches git.
+* **Three-tier order** ([artifact_placement_policy.mdx §3](./artifact_placement_policy.mdx#3-the-three-tier-decision-order-locked)):
+  (1) the owning company/personal **state-sync repo** → `<syncRepo>/repos/<repoKey>/` (highest priority,
+  ignores the threshold); (2) else, **threshold crossed AND** the per-repo settings/consent permit
+  `.lfbridge/` → `<repoRoot>/.lfbridge/`; (3) else → the state-root `repos/<repoKey>/`.
+* **The `.lfbridge/`-is-git-ignored-working-artifact language in §1 still holds after the threshold.**
+  The threshold does not change *whether* these files are working artifacts vs. committed travellers (§5)
+  — only *whether the repo's `.lfbridge/` is used at all yet*. The committed travellers
+  `decisions.yaml` / `manifest.yaml` keep their committed nature; they are merely **held in the state
+  root before the threshold** when no state-sync repo exists, then promoted into their committed home
+  ([artifact_placement_policy.mdx §7–§8](./artifact_placement_policy.mdx#7-committed-travellers-vs-the-threshold--decisionsyaml--manifestyaml-locked)).
+* **No automatic move on crossing.** The threshold governs **future** writes only; existing state-root
+  files stay put and are reconciled forward, unless the user runs the explicit **Promote** action
+  ([artifact_placement_policy.mdx §8](./artifact_placement_policy.mdx#8-migration--no-automatic-move-the-threshold-governs-future-writes-only-locked)).
+
+The location this spec's files resolve to is decided by `resolveTrackingRoot(repoRoot)` in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `resolveTrackingRoot()` (the three-tier resolver), consumed by `repo-storage.service.ts` (`writeRepoStorage` / `refreshCounts`), `file-sidecar.service.ts` (`sidecarPath` / `appendFileEvent`), and `history-log.service.ts` (`historyPath`) in place of the old unconditional `trackingDir()`.
+
+---
+
+## 7. Acceptance criteria
+
+1. On enlist, LFB **automatically** creates `repo_storage.yaml` with a **single** level-one key
    `repo_storage:` and everything else nested at level two or deeper; it carries the repo LFB name,
    enlist provenance (at/by/on_device), the rolled-up special-file `counts:`, repo-wide `policy:`, and the
-   `last_scan` stamp (including `headless`).
+   `last_scan` stamp (including `headless`). **Its location** — the repo's `.lfbridge/`, the state-root
+   `repos/<repoKey>/`, or a state-sync repo — is resolved by
+   [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) per §6, **not** unconditionally the
+   repo root.
 2. For **every special file** ([special_files.mdx](./special_files.mdx)) LFB writes a sidecar at
    `.lfbridge/files/<mirrored path>/<name>.yaml` with a **single** level-one key `file:`; it carries the
    repo-relative path, name, categories, size, created, modified, exact hash, the perceptual fingerprint,
@@ -413,6 +462,12 @@ Because this spec adds files beside the ones [storage_repo.mdx](./storage_repo.m
 6. All three additions live in the **git-ignored** `.lfbridge/` area (working artifacts), are written only
    when the **keep-`.lfbridge/` consent** is on, and **mirror** — never replace — the committed
    `manifest.yaml` / `decisions.yaml` / `devices/` travellers. §5's ownership table holds.
+7. **Placement (§6) is honored:** none of these files is written into a repo's `.lfbridge/` until the repo
+   crosses the **content threshold** (a `.transcription` or `.ai_description` exists) or an owning
+   state-sync repo is configured; before then they live under the state-root `repos/<repoKey>/`
+   (`repoKey = shortHash(resolve(repoPath))`), so a never-transcribed repo sees no `.lfbridge/` churn.
+   The resolver is `resolveTrackingRoot()`; crossing the threshold triggers no automatic move
+   ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
 
 <!--
   This spec owns three .lfbridge/ additions: (1) repo_storage.yaml — repo-WIDE settings+state, single
@@ -425,4 +480,8 @@ Because this spec adds files beside the ones [storage_repo.mdx](./storage_repo.m
   artifacts that MIRROR the committed team-shared decisions.yaml/manifest.yaml/devices/ (source of truth).
   Reconciles with storage_repo.mdx + decisions.mdx (don't restate). Single-level-one-key is a HARD schema
   rule. Siblings: special_files, compression, perceptual_fingerprint, devices, use_case_two_computers.
+  §6 (added) defers the LOCATION of all these files to artifact_placement_policy.mdx: the content
+  threshold (write into .lfbridge/ only after a durable transcript/description exists) + three-tier order
+  (state-sync repo → post-threshold .lfbridge/ → state-root repos/<repoKey>/). Shapes here unchanged;
+  resolveTrackingRoot() picks the root. storage_local §2.2b owns the state-root repos/<repoKey>/ dir.
 -->

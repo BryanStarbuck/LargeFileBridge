@@ -1,0 +1,394 @@
+---
+title: LargeFileBridge — Use-Case Tour — switching the Transcription & AI-description placement radios (hidden .lfbridge/ → next to the file → company state-sync repo)
+description: The end-to-end scenario tour that proves the PLACEMENT RADIOS (placement_radios.mdx / repo_settings.mdx). A per-repo Settings page carries two independent sections — Transcription and AI descriptions — each a 3-way radio choosing WHERE that kind of artifact is written: hidden inside the repo's committed .lfbridge/ (the default, path-mirrored, extension appended), NEXT TO THE FILE (loose beside the media), or the COMPANY STATE-SYNC REPO (mirrored under that dedicated repo's .lfbridge/). The tour walks a repo with several media files: with the default, one transcript lands in .lfbridge/; the user switches the Transcription radio to "next to the file" and a NEW transcript lands beside its clip while the FIRST transcript stays put in .lfbridge/ — proving the switch affects only FUTURE artifacts; the user then runs the "Move existing" action and the prior transcript relocates to match; then switches again to the company state-sync repo and repeats. It mirrors the identical three states for AI descriptions on a folder of images, proving the two radios are independent. It covers the awkward branches: the "company state-sync repo" option is DISABLED (greyed with a hint) when no company sync repo is configured; an UNWRITABLE target (missing/read-only sync repo, permission-denied directory) fails the generation cleanly with an actionable error to error.err and leaves any prior artifact untouched; and how a durable artifact crosses the content threshold regardless of placement. Each step shows the on-disk tree, states what LargeFileBridge writes and where, and what we DOUBLE-CHECK. Sibling of placement_radios.mdx (the 3-way radio this tour drives), repo_settings.mdx (the per-repo Settings page that hosts the two sections), Transcribe.mdx + ai_description.mdx (the artifacts being placed and their shared ordered placement rule), artifact_placement_policy.mdx (the churn policy the placement interacts with), storage_company.mdx (the company state-sync repo target), and repo_tracking_scheme.mdx (the .lfbridge/ mirror the default writes into).
+---
+
+# LargeFileBridge — Placement-Radio Switching Tour (where transcripts & AI descriptions get written)
+
+This is a **scenario walkthrough**. It answers *"what happens, step by step, when I change where my
+transcripts and AI descriptions are stored — do new ones move, do old ones move, and what happens when the
+target I picked isn't available."* In doing so it exercises **every** state of the
+[placement radios](./placement_radios.mdx): all three targets, the "affects future only" rule, the "move
+existing" action, the disabled sync-repo option, and the unwritable-target error path — for **both** the
+Transcription and the AI-descriptions section, proving they are **independent**.
+
+The through-line: **switching a placement radio changes where the NEXT artifact lands; a separate "Move
+existing" action relocates the ones already written.**
+
+One computer, one repo, several media files:
+
+* **`studio-tower`** — the user's Mac tower.
+* **`shoot-2026`** — a repo the user maps to the **Acme Marketing** company (from
+  [use_case_company_autodetect.mdx](./use_case_company_autodetect.mdx)), with a `clips/` folder of videos
+  and a `stills/` folder of images.
+
+This spec builds on the siblings and does not repeat them:
+
+* [placement_radios.mdx](./placement_radios.mdx) — **the two 3-way radios this tour drives** (hidden
+  `.lfbridge/` · next to the file · company state-sync repo), the future-only rule, and "Move existing."
+* [repo_settings.mdx](./repo_settings.mdx) — the per-repo **Settings** page (reached by the repo's gear)
+  that hosts the **Transcription** and **AI descriptions** sections.
+* [Transcribe.mdx §3](./Transcribe.mdx) / [ai_description.mdx §2](./ai_description.mdx) — the **artifacts**
+  being placed and the **shared ordered placement rule** the radios select among.
+* [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) — the **churn policy**: producing an
+  artifact (in any placement) crosses the content threshold; the default `.lfbridge/` placement is the same
+  committed area the policy governs.
+* [storage_company.mdx §1](./storage_company.mdx) — the **company state-sync repo** the third radio targets.
+* [repo_tracking_scheme.mdx §1](./repo_tracking_scheme.mdx) — the path-mirrored `.lfbridge/` layout the
+  default placement writes into.
+
+---
+
+## 0. The setup — two independent radios, three targets, and one rule
+
+The repo's [Settings](./repo_settings.mdx) page carries **two placement sections**, each an identical 3-way
+radio. They are **independent** — a repo can keep transcripts in `.lfbridge/` while writing AI descriptions
+beside the file, or any other combination.
+
+**The three targets** (for a file at `clips/interview.mp4`, description shown; transcript is the same shape
+with `.transcription`):
+
+| Radio option | Where the artifact is written | Committed? |
+| --- | --- | --- |
+| **Hidden `.lfbridge/`** *(default)* | `<repoRoot>/.lfbridge/clips/interview.mp4.ai_description` — path-mirrored under the repo's committed `.lfbridge/`, filename + ext appended ([ai_description.mdx §2](./ai_description.mdx)). | Committed, travels with the **repo**. |
+| **Next to the file** | `<repoRoot>/clips/interview.mp4.ai_description` — loose, in the same directory as the media. | In the working tree beside the media (visible in Finder). |
+| **Company state-sync repo** | `<syncRepo>/.lfbridge/clips/interview.mp4.ai_description` — mirrored under the **dedicated company repo's** `.lfbridge/` ([storage_company.mdx](./storage_company.mdx)). | Committed, travels with the **company sync repo**. |
+
+**The one rule:** a radio change is a **forward-looking default** — it governs **only artifacts generated
+after the switch**. Artifacts already on disk **stay where they are** until the user clicks the section's
+**Move existing to here** action, which relocates every prior artifact of that kind to the current target.
+
+Reading and writing the two per-repo placement settings, resolving the target directory for a kind, and
+the "move existing" relocation are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `placementFor(repoKey, kind)` / `artifactTargetPath(repoRoot, relPath, kind)` / `moveExistingArtifacts(repoKey, kind, target)`; the two radio sections render in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/RepoSettingsPage.tsx`.
+
+---
+
+## 1. Timeline at a glance
+
+| Step | What the user does | Where the NEW artifact lands | What happens to PRIOR artifacts |
+| --- | --- | --- | --- |
+| **1** | Default. Transcribes `clips/a.mp4`. | Hidden `.lfbridge/clips/a.mp4.transcription`. | — (first one) |
+| **2** | Switches Transcription radio → **next to the file**. Transcribes `clips/b.mp4`. | Loose `clips/b.mp4.transcription`. | `a.mp4`'s transcript **stays** in `.lfbridge/`. |
+| **3** | Clicks **Move existing to here** (Transcription). | — | `a.mp4`'s transcript **relocates** from `.lfbridge/` to loose beside the clip. |
+| **4** | Switches Transcription radio → **company state-sync repo**. Transcribes `clips/c.mp4`, then **Move existing**. | `<syncRepo>/.lfbridge/clips/c.mp4.transcription`. | `a` + `b` relocate into the sync repo on Move existing. |
+| **5** | AI descriptions section: default → describes a still; switches → **next to the file**; describes another; **Move existing**. | Mirrors Steps 1–3 for `.ai_description`. | Independent of the Transcription radio. |
+| **6** | (Branch) Selects **company state-sync repo** with **none configured**. | — | Option is **disabled/greyed** with a hint; nothing changes. |
+| **7** | (Branch) Sync repo path is **unwritable**. | Generation **fails** cleanly. | Prior artifacts untouched; error to `error.err`. |
+
+---
+
+## 2. STEP 1 — the default: a transcript lands in hidden `.lfbridge/`
+
+**What the user does.** With both radios at their **default (hidden `.lfbridge/`)**, they open `clips/a.mp4`
+and **Generate transcription** ([Transcribe.mdx](./Transcribe.mdx)).
+
+**What LFB does automatically.** The transcript is written path-mirrored under the repo's committed
+`.lfbridge/`, filename + `.transcription` appended:
+
+```
+~/BGit/act3/shoot-2026/
+├── .lfbridge/
+│   └── clips/
+│       └── a.mp4.transcription        ← the transcript — hidden, committed, travels with the repo
+├── clips/{a.mp4, b.mp4, c.mp4}
+└── stills/{s1.png, s2.png}
+```
+
+Producing this durable artifact also **crosses the content threshold** for the repo
+([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)) — but that is the churn tour's concern;
+here the point is purely **where** the transcript sits: inside `.lfbridge/`, invisible in a normal file
+listing, riding git to the user's other computers.
+
+**What we double-check (Step 1):**
+* With the default radio, `clips/a.mp4`'s transcript is at `.lfbridge/clips/a.mp4.transcription` (mirrored,
+  ext appended), and **not** loose beside the clip.
+
+---
+
+## 3. STEP 2 — switch to "next to the file" → only the NEXT transcript moves
+
+**What the user does.** They want transcripts visible in Finder next to each clip, so on the repo
+**Settings** page they set the **Transcription** radio to **Next to the file**. Then they transcribe
+`clips/b.mp4`.
+
+**What LFB does automatically — future-only.** The new transcript for `b.mp4` lands **loose beside the
+clip**; `a.mp4`'s existing transcript **does not move** — the switch is a forward-looking default:
+
+```
+~/BGit/act3/shoot-2026/
+├── .lfbridge/
+│   └── clips/
+│       └── a.mp4.transcription        ← UNCHANGED — Step 1's transcript stays in .lfbridge/
+├── clips/
+│   ├── a.mp4
+│   ├── b.mp4
+│   └── b.mp4.transcription            ← NEW — lands NEXT TO THE FILE per the switched radio
+│   └── c.mp4
+└── stills/…
+```
+
+This is the whole point of the future-only rule: **switching the radio never silently rewrites your disk**;
+it only changes where the next artifact is placed. The Settings section shows a hint under the radio —
+*"New transcripts will be written next to the file. 1 existing transcript is still in `.lfbridge/` —
+[Move existing to here]."*
+
+Resolving the target directory from the current radio at generate time (so only new artifacts follow the
+switch) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `resolveTranscriptPath()` (delegates to `artifact-placement.service.ts` `artifactTargetPath()` with the repo's current `placementFor(repoKey, "transcription")`).
+
+**What we double-check (Step 2):**
+* `b.mp4`'s transcript is **loose** at `clips/b.mp4.transcription`; `a.mp4`'s is **still** in `.lfbridge/`.
+* The Settings hint reports the count of prior artifacts not yet at the new target and offers **Move
+  existing**.
+
+---
+
+## 4. STEP 3 — "Move existing to here" → prior transcripts relocate
+
+**What the user does.** They want consistency, so they click **Move existing to here** in the Transcription
+section.
+
+**What LFB does automatically — relocate the prior artifacts.** LFB finds every existing transcript for the
+repo (regardless of where it currently sits) and **moves** it to the current target (next to the file),
+mirroring the media's directory as needed. `a.mp4`'s transcript leaves `.lfbridge/`:
+
+```
+~/BGit/act3/shoot-2026/
+├── .lfbridge/
+│   └── clips/                          ← a.mp4.transcription is GONE from here (moved out)
+├── clips/
+│   ├── a.mp4
+│   ├── a.mp4.transcription            ← MOVED here by "Move existing"
+│   ├── b.mp4
+│   └── b.mp4.transcription
+└── stills/…
+```
+
+The move is a **relocation, not a regenerate** — no re-transcription, no provider call; the bytes are the
+same transcript file, moved. If a target already holds a transcript for that media (e.g. a stale one), the
+move **reconciles** rather than duplicating (the newest wins; the older is replaced), so there is never a
+moment with two transcripts for one clip. The Settings hint now reads *"All transcripts are next to the
+file."*
+
+Relocating all existing artifacts of a kind to the current target (move, mirror the dir, reconcile
+duplicates, never regenerate) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `moveExistingArtifacts(repoKey, "transcription", target)`.
+
+**What we double-check (Step 3):**
+* `a.mp4`'s transcript is now beside the clip and **gone** from `.lfbridge/`; `b.mp4`'s is unchanged.
+* The move **did not** re-run transcription (no provider/engine call) and **did not** duplicate any
+  transcript.
+
+---
+
+## 5. STEP 4 — switch to the company state-sync repo → new lands there, Move existing follows
+
+**What the user does.** `shoot-2026` is an **Acme Marketing** repo with a configured state-sync repo
+(`~/BGit/Bryan_git/acme_large_files_bridge/`, from
+[use_case_company_autodetect.mdx §6](./use_case_company_autodetect.mdx)). The user sets the **Transcription**
+radio to **Company state-sync repo (Acme Marketing)**, transcribes `clips/c.mp4`, then clicks **Move
+existing to here**.
+
+**What LFB does automatically.** The new transcript for `c.mp4` is written **mirrored under the company sync
+repo's `.lfbridge/`**; then **Move existing** relocates `a` and `b` there too:
+
+```
+~/BGit/Bryan_git/acme_large_files_bridge/          ← the company state-sync repo (committed, travels to members)
+└── .lfbridge/
+    └── clips/
+        ├── a.mp4.transcription        ← moved here by "Move existing"
+        ├── b.mp4.transcription        ← moved here
+        └── c.mp4.transcription        ← NEW — landed here per the switched radio
+
+~/BGit/act3/shoot-2026/
+├── .lfbridge/clips/                    ← empty of transcripts
+├── clips/{a.mp4, b.mp4, c.mp4}         ← no loose transcripts beside them anymore
+└── stills/…
+```
+
+Now the media repo's working tree carries **no** transcripts at all — they live entirely in the company
+sync repo and travel to teammates who pull that repo. This is the placement teams use when transcripts
+should be a **company** asset rather than a per-repo one.
+
+**What we double-check (Step 4):**
+* `c.mp4`'s transcript is at `<syncRepo>/.lfbridge/clips/c.mp4.transcription`; after Move existing, `a` and
+  `b` are there too and gone from the media repo.
+* The media repo working tree holds **no** transcript files (neither `.lfbridge/` nor loose).
+
+---
+
+## 6. STEP 5 — the AI descriptions radio is independent (mirror of Steps 1–3)
+
+**What the user does.** The AI-descriptions placement should differ: the user wants descriptions **beside
+the stills** (for a Finder-based review) even though transcripts now live in the company repo. On Settings
+they leave the **AI descriptions** radio at **hidden `.lfbridge/`**, describe `stills/s1.png`
+([ai_description.mdx](./ai_description.mdx)) — it lands in `.lfbridge/` — then switch the **AI descriptions**
+radio to **Next to the file**, describe `stills/s2.png` (lands beside), and click **Move existing to here**
+in the **AI descriptions** section:
+
+```
+# after the AI-descriptions section's own switch + Move existing:
+~/BGit/act3/shoot-2026/
+├── .lfbridge/
+│   └── stills/                          ← s1.png.ai_description GONE from here (moved out)
+├── stills/
+│   ├── s1.png
+│   ├── s1.png.ai_description            ← moved beside the still
+│   ├── s2.png
+│   └── s2.png.ai_description            ← landed beside the still (post-switch)
+└── clips/…                              ← transcripts are STILL in the company sync repo (Step 4)
+```
+
+The crucial proof: **the two radios and their two Move-existing actions are fully independent** — moving AI
+descriptions did **nothing** to the transcripts (still in the company sync repo), and the two sections
+report their own separate hints and counts. Everything the AI-descriptions section does mirrors the
+Transcription section point-for-point ([ai_description.mdx §1](./ai_description.mdx), the sibling-parity
+principle) — same three targets, same future-only rule, same Move existing — just for `.ai_description`
+artifacts. (The full parity walkthrough is [use_case_ai_description_parity.mdx](./use_case_ai_description_parity.mdx).)
+
+Resolving the AI-description target from its **own** radio (independent of transcription) is handled in
+code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `resolveDescriptionPath()` (uses `artifact-placement.service.ts` `artifactTargetPath()` with `placementFor(repoKey, "ai_description")`).
+
+**What we double-check (Step 5):**
+* The AI-descriptions radio moves `.ai_description` artifacts with **no** effect on `.transcription`
+  artifacts (and vice-versa).
+* Each section shows its own hint/count and its own **Move existing** button.
+
+---
+
+## 7. STEP 6 — branch: the "company state-sync repo" option is DISABLED when none is configured
+
+**What the user does.** On a **different** repo — `home-videos`, which is a **Personal** repo with **no**
+company and therefore **no** state-sync repo — the user opens Settings and looks at the placement radios.
+
+**What LFB does automatically — disable, don't offer a dead target.** The **Company state-sync repo** radio
+option is rendered **disabled / greyed out**, with an inline hint explaining why and how to enable it:
+
+> ◯ **Company state-sync repo** — *disabled* · *"This repo isn't mapped to a company with a state-sync
+> repo. Assign it to a company and configure a state-sync repo to enable this."* → link to
+> [company settings](./use_case_company_autodetect.mdx).
+
+The user **cannot** select an option that has no valid target — there is no way to pick "company sync repo"
+and have artifacts vanish into nowhere. The two live options (hidden `.lfbridge/`, next to the file) remain
+selectable. The moment the repo is mapped to a company **with** a configured sync repo, the option enables
+without any further action.
+
+Disabling the sync-repo radio option when the repo has no company sync repo (and enabling it reactively) is
+handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/RepoSettingsPage.tsx` — the placement `<RadioOption disabled>` gate reads `GET /api/repos/:repoId/placement-targets` (backed by `artifact-placement.service.ts` `availableTargets(repoKey)`).
+
+**What we double-check (Step 6):**
+* On a repo with no company sync repo, the **Company state-sync repo** option is **disabled** with an
+  explanatory hint and a path to enable it; it cannot be selected.
+* The two other options remain selectable; the option enables once a company sync repo exists.
+
+---
+
+## 8. STEP 7 — branch: an UNWRITABLE target fails cleanly and leaves prior artifacts untouched
+
+**What the user does.** Back on `shoot-2026`, the company sync repo's disk is on an external volume that is
+**currently unmounted** (or the directory is read-only). With the Transcription radio still on **Company
+state-sync repo**, the user transcribes a new clip `clips/d.mp4`.
+
+**What LFB does automatically — fail cleanly, never corrupt.** LFB resolves the target under the sync repo's
+`.lfbridge/` and finds it **unwritable** (path missing / permission denied). It does **not** silently fall
+back to a different placement (that would scatter artifacts unpredictably) and it does **not** lose the
+generated text. Instead:
+
+* The generation is reported **`failed`** with an **actionable** reason — *"Can't write the transcript: the
+  Acme Marketing state-sync repo `~/BGit/Bryan_git/acme_large_files_bridge` is not writable (is the volume
+  mounted?). Fix the target or change the Transcription placement in repo Settings."*
+* **Every prior artifact is untouched** — `a`, `b`, `c`'s transcripts already in the sync repo stay; nothing
+  is half-moved.
+* The failure is written to **`error.err`** (the app's fault trail, WARN/ERROR/FATAL) tagged `[transcribe]`
+  / `[placement]` with the repo, the resolved target, and the OS error — so the user (or a maintainer) can
+  diagnose it.
+
+The same guard protects **Move existing**: if the target is unwritable when the user clicks it, the move is
+**refused as a whole** (transactional — no partial relocation) with the same actionable error, leaving every
+artifact in its original place.
+
+Detecting an unwritable placement target, failing the generate/move with an actionable reason, and logging
+to `error.err` (never a silent fallback, never a partial move) are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `assertTargetWritable(target)` (called before write in `artifactTargetPath()` and at the top of `moveExistingArtifacts()`); faults logged via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` `logError()`.
+
+**What we double-check (Step 7):**
+* An unwritable target makes generation **`failed`** with an actionable message and **no silent fallback**
+  to another placement.
+* Prior artifacts are **untouched**; **Move existing** to an unwritable target is refused **whole**
+  (no partial relocation).
+* The failure is recorded in `error.err` with the repo, target, and OS error.
+
+---
+
+## 9. The cross-cutting invariants this tour proves
+
+1. **A radio change is future-only.** Switching a placement radio changes where the **next** artifact of
+   that kind lands; nothing already on disk moves until the user asks.
+2. **"Move existing" is an explicit, transactional relocation.** It moves prior artifacts to the current
+   target, reconciles duplicates (no double-writes), never regenerates, and never partially relocates.
+3. **The two radios are independent.** Transcription placement and AI-description placement are set and
+   moved separately; changing one never touches the other's artifacts.
+4. **You can't pick a dead target.** The company-sync-repo option is disabled until a company sync repo
+   exists; there is no way to route artifacts to nowhere.
+5. **Unwritable targets fail cleanly.** A missing/read-only target makes the generate or move **fail** with
+   an actionable error to `error.err`, with prior artifacts untouched — never a silent fallback, never a
+   half-move.
+6. **Placement is orthogonal to the threshold.** Producing a durable artifact crosses the content threshold
+   ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)) regardless of which of the three
+   targets it is placed into.
+
+---
+
+## 10. Acceptance criteria
+
+1. The per-repo **Settings** page shows **two independent** placement sections — **Transcription** and **AI
+   descriptions** — each a 3-way radio: **hidden `.lfbridge/`** (default) · **next to the file** · **company
+   state-sync repo**.
+2. **Future-only switching.** After switching a radio, the **next** artifact of that kind lands at the new
+   target while every **prior** artifact **stays put**; the section shows a hint with the count of
+   not-yet-moved artifacts and a **Move existing to here** action.
+3. **Move existing.** Clicking it **relocates** all prior artifacts of that kind to the current target
+   (mirroring the media's dir), **reconciles** duplicates instead of doubling, **never regenerates**, and
+   is **transactional** (all-or-nothing).
+4. **Independence.** The Transcription and AI-description radios (and their Move-existing actions) operate
+   **independently** — changing one has **zero** effect on the other's artifacts; verified across all three
+   targets for `.transcription` and `.ai_description`.
+5. **Disabled sync-repo option.** When the repo has no company state-sync repo, the **Company state-sync
+   repo** option is **disabled/greyed** with an explanatory hint and a path to enable it; it cannot be
+   selected; it enables reactively once a company sync repo exists.
+6. **Unwritable target.** A missing/read-only target makes generation **`failed`** (or Move existing
+   refused **whole**) with an **actionable** reason, **no silent fallback**, prior artifacts **untouched**,
+   and the fault written to **`error.err`**.
+7. Every write matches [placement_radios.mdx](./placement_radios.mdx), [repo_settings.mdx](./repo_settings.mdx),
+   [Transcribe.mdx](./Transcribe.mdx), [ai_description.mdx](./ai_description.mdx),
+   [storage_company.mdx](./storage_company.mdx), and [artifact_placement_policy.mdx](./artifact_placement_policy.mdx).
+
+<!--
+  Scenario tour proving the PLACEMENT RADIOS (placement_radios.mdx / repo_settings.mdx). Per-repo Settings
+  has TWO INDEPENDENT sections (Transcription + AI descriptions), each a 3-way radio: HIDDEN .lfbridge/
+  (default, path-mirrored + ext appended, committed to repo) · NEXT TO THE FILE (loose beside media) ·
+  COMPANY STATE-SYNC REPO (mirrored under <syncRepo>/.lfbridge/, committed to that dedicated repo). ONE
+  computer, repo shoot-2026 (Acme Marketing, has a sync repo), clips/ + stills/. RULE: a radio change is
+  FUTURE-ONLY; prior artifacts stay until "Move existing to here" (explicit, transactional relocation, mirror
+  dir, reconcile dupes, NEVER regenerate). S1 default -> a.mp4 transcript in .lfbridge/clips/. S2 switch
+  Transcription -> next-to-file: b.mp4 transcript loose beside clip, a.mp4 STAYS in .lfbridge/ (future-only).
+  S3 Move existing -> a.mp4 transcript relocates beside clip (no re-transcribe). S4 switch -> company sync
+  repo: c.mp4 -> <syncRepo>/.lfbridge/clips/c.mp4.transcription; Move existing -> a+b move there too; media
+  repo working tree now has NO transcripts. S5 AI descriptions radio INDEPENDENT: describe s1(.lfbridge/) ->
+  switch next-to-file -> describe s2(beside) -> Move existing (moves .ai_description ONLY, transcripts in sync
+  repo untouched) — mirrors Transcription point-for-point (ai_description.mdx §1 parity). S6 BRANCH: on a
+  Personal repo with NO company sync repo, the "Company state-sync repo" option is DISABLED/greyed w/ hint +
+  enable path; can't pick a dead target; enables reactively. S7 BRANCH: UNWRITABLE target (unmounted/read-only
+  sync repo) -> generation FAILED w/ actionable reason, NO silent fallback, NO lost text, prior artifacts
+  untouched, logged to error.err; Move existing to unwritable target refused WHOLE (transactional). Invariants
+  (§9): future-only; Move existing explicit+transactional; two radios independent; can't pick dead target;
+  unwritable fails clean; placement orthogonal to content threshold (artifact_placement_policy). Code:
+  artifact-placement.service.ts placementFor/artifactTargetPath/moveExistingArtifacts/availableTargets/
+  assertTargetWritable; transcribe.service.ts resolveTranscriptPath; describe.service.ts resolveDescriptionPath;
+  RepoSettingsPage.tsx radios; logging.ts logError. Reuses placement_radios, repo_settings, Transcribe,
+  ai_description, artifact_placement_policy, storage_company, repo_tracking_scheme,
+  use_case_ai_description_parity, use_case_company_autodetect.
+-->

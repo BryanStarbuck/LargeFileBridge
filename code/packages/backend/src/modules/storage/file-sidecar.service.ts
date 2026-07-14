@@ -16,7 +16,7 @@ import {
   type FileEvent,
   type PerceptualFingerprint,
 } from "@lfb/shared";
-import { LFBRIDGE_DIR } from "./tracking.service.js";
+import { resolveTrackingRoot } from "./tracking-root.service.js";
 import { storageSid } from "./storage.service.js";
 import { readStorageSettings } from "./storage-settings.service.js";
 import { selfDeviceName } from "./devices.service.js";
@@ -27,14 +27,19 @@ export const NOT_LFBRIDGE = "not-lfbridge";
 
 // ── paths + consent (same pattern as decisions.service.ts) ─────────────────────
 
+/** WHERE this repo's sidecars live — the content-threshold placement (artifact_placement_policy.mdx §3):
+ *  the machine-local state root pre-threshold, `<repo>/.lfbridge/` once transcribed/described. */
 function trackingDir(repoRoot: string): string {
+  let relocated: string | null | undefined;
+  let keeps = true;
   try {
-    const relocated = readStorageSettings(storageSid(repoRoot)).lfbridge.path;
-    if (relocated && relocated.trim()) return path.resolve(relocated);
+    const lf = readStorageSettings(storageSid(repoRoot)).lfbridge;
+    relocated = lf.path;
+    keeps = lf.enabled;
   } catch {
-    /* no per-storage settings yet → default location */
+    /* no per-storage settings yet → defaults */
   }
-  return path.join(repoRoot, LFBRIDGE_DIR);
+  return resolveTrackingRoot(repoRoot, { relocated, keepsLfbridge: keeps });
 }
 
 function keepsLfbridge(repoRoot: string): boolean {

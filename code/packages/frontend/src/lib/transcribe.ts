@@ -8,6 +8,73 @@ import { api } from "@/api/client";
 import { clientLog } from "./clientLog.js";
 import { requestStorageSetup } from "./setupWizard.js";
 
+// ── Heavyweight-model consent bus (transcribe_engine.mdx §3.2/§3.6) ───────────────────────────────────
+// The FIRST time a user runs a transcription on an Apple-Silicon Mac where the Qwen3-ASR model isn't yet
+// provisioned, we offer the one-time download. This bus lets any transcribe launcher request that popup
+// WITHOUT threading a callback through every call site; the TranscribeModelConsentProvider mounted once at
+// the app root subscribes and shows the dialog. Mirrors setupWizard.ts's single-slot pattern.
+export interface ModelConsentRequest {
+  /** A short verb phrase for the copy, e.g. "transcribe 58 files". */
+  label: string;
+  estimateBytes: number;
+  freeDiskBytes: number;
+  /** Download & install the heavyweight model (background) AND proceed now on the Whisper fallback. */
+  onApproveDownload: () => void;
+  /** Skip the download; remember the fallback choice; proceed on the Whisper (Mac) engine now. */
+  onUseFallback: () => void;
+}
+type ModelConsentListener = (req: ModelConsentRequest) => void;
+let modelConsentListener: ModelConsentListener | null = null;
+export function onModelConsentRequested(cb: ModelConsentListener): () => void {
+  modelConsentListener = cb;
+  return () => {
+    if (modelConsentListener === cb) modelConsentListener = null;
+  };
+}
+export function requestModelConsent(req: ModelConsentRequest): void {
+  modelConsentListener?.(req);
+}
+
+/**
+ * Gate a transcription action behind the heavyweight-model provisioning flow (transcribe_engine.mdx §3).
+ * Opens the one-time consent popup only when it's genuinely first-time (Apple Silicon, engine=auto, model
+ * missing/partial, and the user hasn't decided yet); otherwise runs immediately. The Whisper (Mac) fallback
+ * always works, so a decline/cancel never leaves the user unable to transcribe. `run` is the confirmed
+ * action (e.g. enqueue the checked files), resumed after the choice (§3.6).
+ */
+export async function withModelReady(opts: { label: string; run: () => void }): Promise<void> {
+  let status;
+  try {
+    status = await api.transcribeEngine();
+  } catch {
+    opts.run(); // status unknown → just run; the mac engine always works
+    return;
+  }
+  const q = status.qwen;
+  const needsPopup =
+    status.appleSilicon && status.configured === "auto" && status.consent == null && (q.readiness === "missing" || q.readiness === "partial");
+  if (!needsPopup) {
+    // Ready, pinned, unsupported hardware, already-decided, or already-downloading → proceed now.
+    opts.run();
+    return;
+  }
+  requestModelConsent({
+    label: opts.label,
+    estimateBytes: q.estimateBytes,
+    freeDiskBytes: q.freeDiskBytes,
+    // Kick provisioning in the background AND proceed now on the fallback so the user isn't blocked for the
+    // multi-GB download; future runs use the higher-quality Qwen model once it's ready.
+    onApproveDownload: () => {
+      void api.transcribeProvision().catch((e) => clientLog.error("transcribe.provision", e));
+      opts.run();
+    },
+    onUseFallback: () => {
+      void api.transcribeConsent("use_fallback").catch((e) => clientLog.error("transcribe.consent", e));
+      opts.run();
+    },
+  });
+}
+
 /** One-file outcome → a human line (Transcribe.mdx §1/§4). Exported so the useTranscribeFile hook and
  *  the Media Viewer report the SAME honest per-status text. */
 export function transcribeMsgOne(r: TranscribeResult): string {
@@ -49,17 +116,23 @@ export function runTranscribeFile(
   name: string,
   opts?: { overwrite?: boolean; onDone?: () => void; onNeedsSetup?: (reason: string) => void },
 ): void {
-  toast.promise(api.transcribeFile(path, opts?.overwrite ?? false), {
-    loading: `Transcribing ${name}…`,
-    success: (r) => {
-      if (r.status === "needs_setup") {
-        // Open the first-time wizard; on completion re-run this exact transcription (Transcribe.mdx §3.5).
-        requestStorageSetup({ mediaPath: path, actionLabel: "transcribe", retry: () => runTranscribeFile(path, name, opts) });
-        opts?.onNeedsSetup?.(r.reason ?? "");
-      } else opts?.onDone?.();
-      return transcribeMsgOne(r);
-    },
-    error: errMsg("transcribe.file"),
+  // Gate behind the heavyweight-model provisioning flow first (transcribe_engine.mdx §3): a first-time run
+  // offers the download, then proceeds. Ready/decided/unsupported → runs immediately.
+  void withModelReady({
+    label: `transcribe ${name}`,
+    run: () =>
+      toast.promise(api.transcribeFile(path, opts?.overwrite ?? false), {
+        loading: `Transcribing ${name}…`,
+        success: (r) => {
+          if (r.status === "needs_setup") {
+            // Open the first-time wizard; on completion re-run this exact transcription (Transcribe.mdx §3.5).
+            requestStorageSetup({ mediaPath: path, actionLabel: "transcribe", retry: () => runTranscribeFile(path, name, opts) });
+            opts?.onNeedsSetup?.(r.reason ?? "");
+          } else opts?.onDone?.();
+          return transcribeMsgOne(r);
+        },
+        error: errMsg("transcribe.file"),
+      }),
   });
 }
 

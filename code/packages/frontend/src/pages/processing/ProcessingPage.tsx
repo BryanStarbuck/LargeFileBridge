@@ -3,41 +3,14 @@
 // pending backlog), and Batches (one card per "Compress inside" run, with a progress bar and — on finish
 // — the ERROR LIST from compress_inside.mdx §4). Reads the single polled source via useProgress().
 import { CheckCircle2, Loader2, AlertTriangle } from "lucide-react";
-import type { ProgressJob, ProcessingBatch, ProgressKind } from "@lfb/shared";
+import type { ProcessingBatch, ProgressKind } from "@lfb/shared";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { useProgress, verb } from "../../progress/ProgressContext.js";
-
-function jobDetail(job: ProgressJob): string | null {
-  if (job.total === undefined || job.done === undefined) return null;
-  const unit = job.unit ?? "";
-  if (unit === "%") return `${Math.round(job.done)}%`;
-  return `${job.done.toLocaleString()} / ${job.total.toLocaleString()} ${unit}`.trim();
-}
+import { ProcessingItemsTable } from "./ProcessingItemsTable.js";
 
 // "compress" → "compressing", etc. — a lowercase gerund for the Waiting backlog line.
 function backlogLabel(op: ProgressKind): string {
   return verb(op).toLowerCase();
-}
-
-function RunningRow({ job }: { job: ProgressJob }) {
-  const determinate = job.total !== undefined && job.done !== undefined && job.total > 0;
-  const pct = determinate ? Math.min(100, Math.round((job.done! / job.total!) * 100)) : 0;
-  const line = jobDetail(job);
-  return (
-    <div className="rounded-lg border px-3 py-2" style={{ borderColor: "var(--lfb-border)" }}>
-      <div className="flex items-center gap-2 text-sm">
-        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[var(--lfb-primary)]" aria-hidden />
-        <span className="text-black/60">{verb(job.kind)}</span>
-        <span className="min-w-0 flex-1 truncate font-medium text-black">{job.target}</span>
-        {line && <span className="shrink-0 text-xs text-black/50">{line}</span>}
-      </div>
-      {determinate && (
-        <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-slate-100">
-          <div className="h-full rounded-full bg-[var(--lfb-primary)]" style={{ width: `${pct}%` }} />
-        </div>
-      )}
-    </div>
-  );
 }
 
 function BatchCard({ b }: { b: ProcessingBatch }) {
@@ -94,9 +67,12 @@ function BatchCard({ b }: { b: ProcessingBatch }) {
 }
 
 export function ProcessingPage() {
-  const { jobs, queuedByOp, batches, workers } = useProgress();
+  const { jobs, queuedByOp, batches, queuedItems, recentFailures, workers } = useProgress();
   const waiting = Object.entries(queuedByOp).filter(([, n]) => (n ?? 0) > 0) as [ProgressKind, number][];
-  const nothing = jobs.length === 0 && waiting.length === 0 && batches.length === 0;
+  // The per-item table (processing.mdx §4.3) shows Running (jobs) + Pending (queuedItems) + Failed
+  // (recentFailures) rows; it renders whenever any of those exist.
+  const hasItems = jobs.length > 0 || queuedItems.length > 0 || recentFailures.length > 0;
+  const nothing = !hasItems && waiting.length === 0 && batches.length === 0;
   // Worker utilization — the parallelism read (processing.mdx §3a): how many core-slots of the mass-compute
   // budget are busy right now. Shown atop "Running now" so the user can SEE the mass parallelization working.
   const utilPct = workers && workers.budget > 0 ? Math.round((workers.busy / workers.budget) * 100) : 0;
@@ -111,7 +87,7 @@ export function ProcessingPage() {
         </div>
       )}
 
-      {jobs.length > 0 && (
+      {hasItems && (
         <section>
           <div className="mb-2 flex items-baseline justify-between">
             <h2 className="text-sm font-semibold text-black/60">Running now</h2>
@@ -121,11 +97,9 @@ export function ProcessingPage() {
               </span>
             )}
           </div>
-          <div className="flex flex-col gap-1.5">
-            {jobs.map((j) => (
-              <RunningRow key={j.id} job={j} />
-            ))}
-          </div>
+          {/* The per-item table (processing.mdx §4.3): Running / Pending / Failed rows with responsive
+              priority-drop columns (reuses the house DataTable machinery). */}
+          <ProcessingItemsTable jobs={jobs} queuedItems={queuedItems} recentFailures={recentFailures} />
         </section>
       )}
 

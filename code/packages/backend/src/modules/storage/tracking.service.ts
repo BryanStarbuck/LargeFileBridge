@@ -15,8 +15,9 @@ export const LFBRIDGE_DIR = ".lfbridge";
 const FILES_YAML = "files.yaml";
 const ANALYSIS_DIR = "analysis";
 // Analysis outputs that still live as YAML under .lfbridge/analysis/<rel>/ (visuals-by-time; the
-// compression record is tracked separately). Transcript + description are now SIDECARS beside the media —
-// detected below by their extensions rather than a YAML here (Transcribe.mdx §3, ai_description.mdx §2).
+// compression record is tracked separately). Transcript + description now live INSIDE the committed
+// `.lfbridge/`, path-mirrored, with the ext APPENDED (Transcribe.mdx §3, ai_description.mdx §2) — detected
+// below by that path rather than a YAML here.
 const ANALYSIS_FILES: Record<string, string> = {
   visuals_by_time: "visuals_by_time.yaml",
 };
@@ -31,12 +32,12 @@ function filesYamlPath(root: string): string {
   return path.join(root, LFBRIDGE_DIR, FILES_YAML);
 }
 
-/** Which §6 analysis outputs already exist for a file. Transcript + description are detected by their
- *  SIDECAR beside the media (<root>/<rel-without-ext>.transcription / .ai_description); visuals-by-time is
- *  still a YAML under .lfbridge/analysis/<rel>/. */
+/** Which §6 analysis outputs already exist for a file. Transcript + description are detected inside the
+ *  committed `.lfbridge/`, path-mirrored, with the ext APPENDED to the full filename (Transcribe.mdx §3.1):
+ *  <root>/.lfbridge/<rel-dir>/<name.ext>.transcription / .ai_description; visuals-by-time is still a YAML
+ *  under .lfbridge/analysis/<rel>/. */
 export function analysisOutputs(root: string, rel: string): string[] {
   const out: string[] = [];
-  const relNoExt = rel.slice(0, rel.length - path.extname(rel).length);
   const isFileAt = (p: string): boolean => {
     try {
       return fs.statSync(p).isFile();
@@ -44,8 +45,13 @@ export function analysisOutputs(root: string, rel: string): string[] {
       return false;
     }
   };
-  if (isFileAt(path.join(root, relNoExt + TRANSCRIPTION_EXT))) out.push("transcript");
-  if (isFileAt(path.join(root, relNoExt + AI_DESCRIPTION_EXT))) out.push("description");
+  // Detect the artifact in EITHER placement (placement_radios.mdx): the hidden `.lfbridge/` (default) OR
+  // beside the media (the opt-in beside-media layout) — so a file's "done" status is correct whichever
+  // placement the repo chose. (The sync-repo placement is detected via its own path when that seam lands.)
+  const lfbridgeBase = path.join(root, LFBRIDGE_DIR, rel); // full filename kept; ext appended below
+  const besideBase = path.join(root, rel);
+  if (isFileAt(lfbridgeBase + TRANSCRIPTION_EXT) || isFileAt(besideBase + TRANSCRIPTION_EXT)) out.push("transcript");
+  if (isFileAt(lfbridgeBase + AI_DESCRIPTION_EXT) || isFileAt(besideBase + AI_DESCRIPTION_EXT)) out.push("description");
   const dir = path.join(root, LFBRIDGE_DIR, ANALYSIS_DIR, rel);
   for (const [key, file] of Object.entries(ANALYSIS_FILES)) {
     if (isFileAt(path.join(dir, file))) out.push(key);

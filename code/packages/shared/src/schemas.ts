@@ -74,6 +74,20 @@ export const AppConfigSchema = z.object({
       max_core_fraction: z.number().min(0.01).max(1).default(0.9),
     })
     .default({}),
+  // Transcription engine + parallelism (transcribe_engine.mdx §5.4/§6). `engine`: auto (qwen if the machine
+  // is Apple-Silicon and the mlx-qwen3-asr model is ready, else the mac/Whisper fallback) / qwen / mac.
+  // `max_parallel`: optional hard cap overriding the auto per-machine calibration (§5.1); null = auto.
+  // `model_installed_bytes`: the MEASURED on-disk weight size stored after a real provision (§3.1), so the
+  // disk estimate becomes exact. `model_consent`: the remembered first-time consent decision (§3.2), so the
+  // popup does not nag on every file (approved / declined / use_fallback; null = never asked).
+  transcribe: z
+    .object({
+      engine: z.enum(["auto", "qwen", "mac"]).default("auto"),
+      max_parallel: z.number().int().min(1).nullable().default(null),
+      model_installed_bytes: z.number().nullable().default(null),
+      model_consent: z.enum(["approved", "declined", "use_fallback"]).nullable().default(null),
+    })
+    .default({}),
   big_file: z
     .object({
       threshold_bytes: z.number().default(104857600),
@@ -309,6 +323,14 @@ export const RepoUnitConfigSchema = z.object({
     .object({
       shared: z.boolean().default(false),
       participants: z.array(z.string()).default([]),
+    })
+    .default({}),
+  // Where this repo's transcripts / AI descriptions are written (repo_settings.mdx §4/§5,
+  // placement_radios.mdx). Frozen wire enum lfbridge | beside | sync_repo; both default to lfbridge.
+  artifacts: z
+    .object({
+      transcription_placement: z.enum(["lfbridge", "beside", "sync_repo"]).default("lfbridge"),
+      ai_description_placement: z.enum(["lfbridge", "beside", "sync_repo"]).default("lfbridge"),
     })
     .default({}),
   // Per-file decisions (one_repo.mdx §1). Keyed by relative path. The "sync" value is a FROZEN wire

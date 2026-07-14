@@ -8,7 +8,8 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { RepoStorageDocSchema, type RepoStorageDoc } from "@lfb/shared";
-import { LFBRIDGE_DIR, readStorageIndex, analysisOutputs } from "./tracking.service.js";
+import { readStorageIndex, analysisOutputs } from "./tracking.service.js";
+import { resolveTrackingRoot } from "./tracking-root.service.js";
 import { storageSid } from "./storage.service.js";
 import { readStorageSettings } from "./storage-settings.service.js";
 import { selfDeviceName } from "./devices.service.js";
@@ -22,15 +23,21 @@ import { log } from "../../shared/logging.js";
 
 // ── paths + consent (same pattern as decisions.service.ts) ─────────────────────
 
-/** The `.lfbridge/` tracking dir, honoring a relocated `.lfbridge/` (storage_settings.mdx §3). */
+/** WHERE this repo's tracking files live (artifact_placement_policy.mdx §3). Pre-threshold (the repo has
+ *  never been transcribed/described) this is the machine-local state root — NOT `<repo>/.lfbridge/` — so
+ *  `repo_storage.yaml` never churns a git working tree the user didn't opt into. Honors a relocated
+ *  `.lfbridge/` and the keep-`.lfbridge/` consent (both read from the owning storage's settings). */
 function trackingDir(repoRoot: string): string {
+  let relocated: string | null | undefined;
+  let keeps = true;
   try {
-    const relocated = readStorageSettings(storageSid(repoRoot)).lfbridge.path;
-    if (relocated && relocated.trim()) return path.resolve(relocated);
+    const lf = readStorageSettings(storageSid(repoRoot)).lfbridge;
+    relocated = lf.path;
+    keeps = lf.enabled;
   } catch {
-    /* no per-storage settings yet → default location */
+    /* no per-storage settings yet → defaults (keep .lfbridge/, no relocation) */
   }
-  return path.join(repoRoot, LFBRIDGE_DIR);
+  return resolveTrackingRoot(repoRoot, { relocated, keepsLfbridge: keeps });
 }
 
 function repoStoragePath(repoRoot: string): string {

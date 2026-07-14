@@ -201,6 +201,27 @@ Registering the recursive OS watcher over the scanner roots, filtering to qualif
 Starting the watcher when the backend boots and stopping it on shutdown is wired in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts` — `main()` (calls `startWatcher()` after `app.listen`; `stopWatcher()` on `SIGINT`/`SIGTERM`)
 
+### 2.3 Scan staleness → the repo header's "Scan now" primary (LOCKED)
+
+A repo's metric panels ([task_tabs.mdx §2](./task_tabs.mdx)) are only as trustworthy as its **last scan**.
+When a repo has **never been scanned**, or its **`lastScanAt` is older than 2 weeks**, we can't trust the
+counts, so re-scanning takes **precedence over every recommendation**: the One-repo header primary
+([one_repo.mdx §3.1](./one_repo.mdx#31-header)) becomes **"Scan now"** instead of "View recommendation".
+Clicking it runs the same on-demand discovery worker (§2). When the scan lands, `lastScanAt` refreshes and
+the button flips back to "View recommendation".
+
+* The **2-week window** is the staleness threshold; the 4-hour scheduled pass (§2) and the live watcher
+  (§2.2) normally keep a running install far fresher, so "Scan now" appears mainly on a repo that hasn't
+  been opened/scanned in a long time (or was just registered). When the watcher knows the tree changed,
+  that too triggers a scan, after which the button returns to a recommendation.
+* `lastScanAt` is carried per-repo on `RepoDetail` (sourced from `UnitStatus.last_scan_at`), and the
+  staleness decision is a pure client check so no extra fetch is needed.
+
+The last-scan timestamp on the repo detail, the 2-week staleness gate, and the header wiring live in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail()` (sets `lastScanAt: status.last_scan_at`);
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `scanIsStale()` (the 2-week gate);
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (`scanDue` drives the "Scan now" button).
+
 ---
 
 ## 3. Cross-platform — runs on Mac, Windows, and Linux

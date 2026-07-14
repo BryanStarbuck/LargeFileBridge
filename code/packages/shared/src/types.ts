@@ -32,6 +32,19 @@ export interface RepoCounts {
   ignored: number;
 }
 
+// A repo's company/personal ownership (repo_company_mapping.mdx §1.1). `kind` is the split; `companyId` is
+// the owning company storage's id (null until that storage exists — auto-create is a later seam);
+// `displayName` is what the product shows ("Personal", or the friendly/derived company name); `source` is
+// auto-derived-from-git-remote vs. a user override; `host`/`ownerSlug` record the remote origin used.
+export interface RepoOwner {
+  kind: "personal" | "company";
+  companyId: string | null;
+  displayName: string;
+  source: "auto" | "manual";
+  host: string | null;
+  ownerSlug: string | null;
+}
+
 // One row of the Repos table (repos.mdx §1).
 export interface RepoRow {
   repoId: string; // stable hash of the absolute path
@@ -43,7 +56,14 @@ export interface RepoRow {
   lastPinAt: string | null;
   status: RepoStatus;
   pinned: boolean; // per-repo master toggle (one_repo.mdx §3.2)
+  owner?: RepoOwner; // company/personal mapping (repo_company_mapping.mdx §7) — drives left-bar grouping
 }
+
+// Per-file status for a task tab (task_tabs.mdx §4.4/§5/§6). "could" = an actionable candidate
+// (a compressible-but-uncompressed media file / a transcribable file with no transcript yet); "done" =
+// the task is already handled; "na" = the task does not apply to this file kind. Drives the three-state
+// Transcribe/Compress status icons and the per-tab row filters + default sort.
+export type TaskStatus = "could" | "done" | "na";
 
 // One row of the files table on the One-repo screen (one_repo.mdx §1).
 export interface FileRow {
@@ -55,6 +75,15 @@ export interface FileRow {
   transfer: TransferStatus;
   peers: string[];
   changedAt: string;
+  // Compress task status (task_tabs.mdx §6) — from the extension verdict compressInfo(name): "could" =
+  // a video/image that looks uncompressed, "done" = already compressed, "na" = not a compressible kind.
+  compress?: TaskStatus;
+  // Transcribe task status (task_tabs.mdx §5) — "could" = audio/video with no .transcription sidecar yet,
+  // "done" = a transcript exists, "na" = not audio/video.
+  transcribe?: TaskStatus;
+  // AI-description task status (ai_description.mdx §11) — mirrors transcribe: "could" = image/video with no
+  // .ai_description sidecar yet, "done" = a description exists, "na" = not image/video (audio → transcription).
+  describe?: TaskStatus;
   // Decision provenance from the folded, team-shared ledger (decisions.mdx §10). Both null when the file
   // has no decision record yet (Undecided). `decidedBy` is the allow-listed email, the sentinel
   // "policy:<email>" for a policy auto-decision, or null when attribution is anonymous.
@@ -80,6 +109,23 @@ export interface MissingPinnedFile {
   addedByDevice: string | null; // the peer device that pinned it ("added by {device}")
 }
 
+// Per-tab "what could be done" metric counts (task_tabs.mdx §2.5). Rolled up from the file rows; the
+// MetricsStrip renders one panel per count for the active tab (a light-green big-0 when a count is 0).
+// `pullDown` is NOT here — it comes from RepoDetail.missingPinned.length (computed in the router).
+export interface TaskMetrics {
+  undecided: number; // files with no decision yet
+  pending: number; // sync files queued to transfer
+  notBackedUp: number; // sync files with a CID but 0 peers (live only on this machine)
+  compressibleVideos: number; // videos that look uncompressed
+  compressibleImages: number; // images that look uncompressed / convertible
+  alreadyCompressed: number; // media already compressed
+  transcribable: number; // audio/video with no transcript yet ("could")
+  transcribed: number; // audio/video that already have a transcript ("done")
+  describable: number; // image/video with no AI description yet ("could") — mirrors transcribable
+  described: number; // image/video that already have an AI description ("done")
+  bigNotIgnored: number; // large files not yet git-ignored (the git-ignore nudge)
+}
+
 // The One-repo detail payload: header/status strip + file rows.
 export interface RepoDetail {
   repoId: string;
@@ -90,12 +136,19 @@ export interface RepoDetail {
   status: RepoStatus;
   peerCount: number;
   lastPinAt: string | null;
+  // When this repo was last scanned for big files (ISO), or null if never. Drives the "Scan now"
+  // header primary when the repo is scan-stale (one_repo.mdx §3.1 / scan.mdx §2.3).
+  lastScanAt: string | null;
   ipfs: IpfsHealth;
   counts: RepoCounts;
   files: FileRow[];
   // Files a peer computer of yours pinned that this computer lacks — drives the "pull them down" warning
   // (warnings.mdx §10.8.12). Empty/absent when there is nothing to pull.
   missingPinned?: MissingPinnedFile[];
+  // Per-tab "what could be done" metric counts for the task-tab MetricsStrip (task_tabs.mdx §2).
+  taskMetrics?: TaskMetrics;
+  // Company/personal mapping (repo_company_mapping.mdx §7) — drives the Ownership section + grouping.
+  owner?: RepoOwner;
 }
 
 export type IpfsHealth = "ok" | "unreachable";
@@ -521,6 +574,13 @@ export interface SecuritySetupResult {
   restartRecommended: boolean;
 }
 
+// Where a repo's transcripts / AI descriptions are written (placement_radios.mdx). A FROZEN wire enum:
+//   • "lfbridge"  — the repo's hidden `.lfbridge/`, path-mirrored, ext appended (the default).
+//   • "beside"    — next to the media file (the beside-media layout, reintroduced as an opt-in).
+//   • "sync_repo" — the owning company/Personal LFB state-sync repo (only usable once one is configured;
+//                   falls back to "lfbridge" until then).
+export type PlacementChoice = "lfbridge" | "beside" | "sync_repo";
+
 // ── Per-repo settings (repo_settings.mdx) ───────────────────────────────────
 export interface RepoSettings {
   repoId: string;
@@ -547,6 +607,12 @@ export interface RepoSettings {
     shared: boolean;
     participants: string[];
   };
+  // Company/personal mapping shown in the Ownership section (repo_settings.mdx §6 / repo_company_mapping.mdx).
+  owner?: RepoOwner;
+  // Where transcripts land (repo_settings.mdx §4 / placement_radios.mdx). Default "lfbridge".
+  transcription: { placement: PlacementChoice };
+  // Where AI descriptions land (repo_settings.mdx §5) — the mirror of transcription. Default "lfbridge".
+  aiDescription: { placement: PlacementChoice };
 }
 
 // ── Scheduled workers — the transparency contract (scan.mdx §7, storage.mdx §13)
@@ -631,6 +697,7 @@ export type ProgressKind =
   | "ignore"
   | "import"
   | "install"
+  | "download" // large model-weights download (transcribe_engine.mdx §3.3 — the qwen provisioning download)
   | "configure"; // engine start / config-repair fixes (e.g. Start IPFS from a warning popup)
 
 // One in-flight job as reported by GET /api/progress (server-side) or held optimistically in the
@@ -663,6 +730,32 @@ export interface ProgressListResult {
   // Budget's core-slots are BUSY right now (`busy`) vs the live budget total (`budget`, ≈ 90% of cores).
   // Lets the Processing page show "12 / 14 workers busy (~90% of cores)". Absent when nothing is running.
   workers?: { busy: number; budget: number };
+  // PENDING items as rows for the per-item Processing table (processing.mdx §4.3) — the head of the queue
+  // (capped, e.g. 500), so the user sees exactly what is waiting-but-not-started. Absent when idle.
+  queuedItems?: QueuedItemView[];
+  // Recently-FAILED items + reason (processing.mdx §4.3), kept through the retention window so failures stay
+  // visible after the run — including a transcription that came back short of the full duration. Absent when
+  // nothing failed.
+  recentFailures?: FailedItemView[];
+}
+
+// One PENDING item (queued, not started) shown as a row on the Processing page's per-item table
+// (processing.mdx §4.3.1). `kind` is audio/video/image where meaningful (transcribe/compress).
+export interface QueuedItemView {
+  op: ProgressKind;
+  path: string;
+  kind?: string | null;
+  sizeBytes?: number;
+}
+// One recently-FAILED item (processing.mdx §4.3.1). For a truncated transcript the covered-vs-total seconds
+// are carried so the table can show "covered 00:20:00 of 01:47:12" (transcribe_engine.mdx §4).
+export interface FailedItemView {
+  op: ProgressKind;
+  path: string;
+  reason: string;
+  coveredSec?: number;
+  durationSec?: number;
+  at: string; // ISO
 }
 
 // The plan a producing PAGE ACTION returns (page_actions.mdx §5): after resolving scope (checked set or
@@ -1039,6 +1132,39 @@ export interface TranscribeTools {
   whisper: boolean;
   ffmpeg: boolean;
   ffprobe: boolean;
+}
+
+// ── Transcription engine + heavyweight-model provisioning (transcribe_engine.mdx) ────────────────────
+// The engine identity: `qwen` = Qwen3-ASR via Apple MLX (the `mlx-qwen3-asr` CLI at Qwen/Qwen3-ASR-1.7B —
+// the heavyweight, multi-GB-download engine, Apple-Silicon only); `mac` = OpenAI Whisper at `base`
+// (MPS→CPU, the cross-platform fallback). A `qwen` run auto-falls-back to `mac` on error (§2.1).
+export type TranscribeEngineId = "qwen" | "mac";
+// Readiness of the heavyweight (`qwen`) model on this machine (transcribe_engine.mdx §3.1). `unsupported` =
+// not an Apple-Silicon Mac, so `qwen` can never run here and selection falls to `mac`.
+export type TranscribeModelReadiness = "installed" | "missing" | "partial" | "outdated" | "unsupported";
+// GET /api/transcribe/engine — engine + heavyweight-model readiness. Drives the consent popup (§3.2) and
+// the Settings → Transcription panel (§6).
+export interface TranscribeEngineStatus {
+  active: TranscribeEngineId; // which engine pickEngine() would use right now
+  configured: "auto" | TranscribeEngineId; // the transcribe.engine setting
+  consent: "approved" | "declined" | "use_fallback" | null; // remembered popup decision (§3.2); null = never asked
+  appleSilicon: boolean; // qwen is only available on Apple Silicon
+  qwen: {
+    cliInstalled: boolean; // mlx-qwen3-asr on PATH
+    readiness: TranscribeModelReadiness;
+    installedBytes: number | null; // measured on-disk size of the weights once present
+    estimateBytes: number; // ballpark→stored disk estimate for a fresh install
+    freeDiskBytes: number; // free space where the model would live
+    model: string; // "Qwen/Qwen3-ASR-1.7B"
+  };
+  whisper: { installed: boolean }; // the fallback CLI (openai-whisper)
+  ffmpeg: boolean; // required for video demux
+}
+// POST /api/transcribe/engine/provision — the two-phase provisioning outcome (transcribe_engine.mdx §3.3):
+// a `download`/`install` job pair is registered; this is what the request returns immediately.
+export interface TranscribeProvisionResult {
+  started: boolean; // false when nothing to do (already installed) or unsupported hardware
+  reason: string | null; // why not started (already-installed / unsupported / declined)
 }
 // The result of transcribing one media file (Transcribe.mdx §1). transcriptPath = the sidecar written
 // beside the media at <root>/<relpath-without-ext>.transcription (§3).

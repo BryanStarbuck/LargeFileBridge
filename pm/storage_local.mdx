@@ -138,6 +138,15 @@ Resolving the state root and the `LFB_STATE_DIR` / `LFB_LOG_DIR` overrides is ha
 │   ├── gdrive_<account>_2_do.yaml  # one per Google Drive account
 │   ├── repo_<name>_2_do.yaml   #   one per repo WITH WORK (clean repos have none)
 │   └── <scope>_<name>_transcribe_2_do.yaml  # transcribe batches (transcribe_calc_engine.mdx)
+├── repos/                      # PRE-THRESHOLD per-repo TRACKING STATE — one dir per repo (§2.2b)
+│   └── <repoKey>/              #   repoKey = shortHash(resolve(repoPath)) — the storageSid() scheme
+│       ├── repo_storage.yaml   #     repo-wide file, re-stamped freely here (no git churn)
+│       ├── files.yaml          #     fast per-file fingerprint index
+│       ├── files/              #     per-file <name>.yaml sidecars, path-mirrored
+│       ├── history/            #     per-computer audit logs (<device>.txt)
+│       ├── decisions.yaml      #     HELD here pre-threshold when no state-sync repo (artifact_placement_policy §7)
+│       ├── manifest.yaml       #     HELD here pre-threshold when no state-sync repo
+│       └── origin.txt          #     the absolute repo path this <repoKey> maps to (collision guard)
 ├── .auth_session_secret        # stable HS256 signing secret (auto-created; never in .env) (§10)
 ├── log.log                     # INFO/DEBUG/VERBOSE — the normal event trail (§12)
 └── error.err                   # WARN/ERROR/FATAL — the fault trail (§12)
@@ -174,6 +183,47 @@ There are three tiers, and one of them is unusual on purpose:
 
 The `_do_batches/` path under the state root is resolved by `resolveTodoBatchesDir()` (honoring `LFB_STATE_DIR`) in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — beside `resolveStateDir()` / `resolveLogDir()`; read/written by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts`.
+
+### 2.2b `repos/<repoKey>/` — the pre-threshold per-repo tracking directory (LOCKED)
+
+`repos/` holds **one directory per repo** for that repo's **noisy tracking state** — the repo-wide
+`repo_storage.yaml`, the `files.yaml` index, the per-file `files/…` sidecars, and the `history/…` logs
+([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)) — **while the repo is below the content
+threshold** (it has produced no durable transcript or AI description yet) and has no state-sync repo
+configured. It is the **Tier-3 fallback** of the
+[Artifact & Tracking-State Placement Policy](./artifact_placement_policy.mdx#3-the-three-tier-decision-order-locked),
+and it is the piece that keeps a never-transcribed repo's working tree **pristine** — no `.lfbridge/`,
+no `.gitignore` edit, no per-scan commit.
+
+* **Keying.** `<repoKey> = shortHash(resolve(repoPath))` — the 12-hex hash `storageSid()` already
+  derives for repo/personal storages (`shortHash(resolved)`). Deriving it from the **absolute** path
+  means the same repo on the same machine always maps to the same directory across restarts and
+  re-scans, with no name-collision games. `origin.txt` records the path the key was minted from so a
+  (vanishingly unlikely) 48-bit collision between two different paths is **detected**, not silently
+  merged (append `-2`/`-3`, the pin-unit disambiguation of §6.1).
+* **What lives here.** The **same locked shapes** as the in-repo `.lfbridge/` (repo_tracking_scheme
+  §2–§4), laid out identically so that crossing the threshold — or running **Promote**
+  ([artifact_placement_policy.mdx §8](./artifact_placement_policy.mdx#8-migration--no-automatic-move-the-threshold-governs-future-writes-only-locked))
+  — is a move of an already-correct tree, not a reformat. The committed travellers `decisions.yaml` /
+  `manifest.yaml` are **held here too** before the threshold when no state-sync repo exists, keeping the
+  decision durable and locally honored while it waits for a git-backed home
+  ([artifact_placement_policy.mdx §7](./artifact_placement_policy.mdx#7-committed-travellers-vs-the-threshold--decisionsyaml--manifestyaml-locked)).
+* **Computer-wide, never committed, never travels.** Like the `pin/` state and `_do_batches/`, this is a
+  property of **this machine's** view of the repo. It is under the state root — the code/runtime boundary
+  (§1) — so nothing here is ever committed or visible in a working tree. A different computer keeps its
+  own `repos/<repoKey>/` and the two never contend.
+* **Lifecycle.** Created **lazily** on the first tracking write for a repo. When the repo **crosses the
+  threshold** (or a state-sync repo is configured), the resolver stops writing here and future writes go
+  to `.lfbridge/` or the sync repo; the files here become stale-but-harmless and are reconciled forward
+  (no automatic move — [artifact_placement_policy.mdx §8](./artifact_placement_policy.mdx#8-migration--no-automatic-move-the-threshold-governs-future-writes-only-locked)).
+* **Cleanup.** When the user **de-lists** a repo, its `repos/<repoKey>/` directory is removed. A repo that
+  merely went **missing** (unmounted drive) **retains** its directory so configuration is not lost on
+  remount — the same caution the pin units use (§7). A stray `repos/<repoKey>/` whose `origin.txt` points
+  at a path no longer registered is safe to garbage-collect on a later full scan.
+
+The per-repo state-root directory is resolved by a new helper beside `resolveStateDir()` /
+`resolveTodoBatchesDir()` in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveRepoStateDir(repoKey)` → `<stateDir>/repos/<repoKey>/` (honors `LFB_STATE_DIR`; created on demand). The `repoKey` is computed by `shortHash()` / `storageSid()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts`, and this directory is chosen as the Tier-3 destination by `resolveTrackingRoot()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts`.
 
 ### Why YAML for config + manifests
 
@@ -951,6 +1001,7 @@ persisted file or key requires a row here.
 | **Computer unit: pinned on/off + roots + excludes** | `pin/computer/config.yaml` | pin unit |
 | **Computer unit: large-file manifest** | `pin/computer/manifest.yaml` (published via IPNS) | pin unit |
 | Computer unit scan/pin cache | `pin/computer/status.yaml` | pin unit |
+| **Pre-threshold per-repo tracking state** (repo_storage.yaml, files.yaml, sidecars, history; held decisions/manifest) | `repos/<repoKey>/…` (Tier-3 of [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)) | pin unit (computer-wide) |
 | The user's other computers (peers) | `peers.yaml` | app |
 | Auth session records (revocation tombstones on sign-out) | `users/<email>/sessions/<sid>.json` | runtime |
 | Auth signing secret | `.auth_session_secret` | runtime |
@@ -1029,6 +1080,11 @@ Storage is correct when **all** of the following hold:
 14. The layout, formats, and code are **identical** in local and server mode — only the resolved state
     root and the logged-in user differ; a state dir copies between machines unchanged.
 15. Every persisted file/key appears in the §14 inventory — never a silent store.
+16. Pre-threshold per-repo **tracking state** lives under `repos/<repoKey>/` (§2.2b,
+    `repoKey = shortHash(resolve(repoPath))`), resolved by `resolveRepoStateDir()`; a repo that has
+    produced no durable transcript/description and has no state-sync repo keeps **all** of its tracking
+    files here, so its working tree stays pristine (no `.lfbridge/`, no `.gitignore` edit, no per-scan
+    commit), per [artifact_placement_policy.mdx](./artifact_placement_policy.mdx).
 
 ---
 

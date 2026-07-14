@@ -1,0 +1,401 @@
+---
+title: LargeFileBridge — Use-Case Tour — company auto-detect from a git remote (clone an org repo, rename the company, regroup, route tracking)
+description: The end-to-end scenario tour that proves COMPANY / PERSONAL mapping (repo_company_mapping.mdx). A user clones an organization repo (github.com/AcmeCorp/marketing-videos); LargeFileBridge parses the forge OWNER segment out of the git remote, recognizes it as an ORG rather than the user's own account, and auto-creates a new company "AcmeCorp" that appears as a child in the left-bar Storages disclosure — with the repo grouped under it. The user opens that company's settings and renames the cryptic org slug to a friendly "Acme Marketing"; the repo re-labels and stays grouped under the renamed company. The tour then walks every awkward branch: a repo whose remote owner is the user's OWN personal account stays under Personal (the default); an AMBIGUOUS owner (can't tell org from personal) defaults to Personal but offers a one-click "This is a company"; MANUAL reassignment moves a repo between Personal and any company (or to a brand-new company typed in place); and configuring the company's STATE-SYNC REPO so the repo's pre-threshold tracking files route to <syncRepo>/repos/<repoKey>/ instead of the local state root — watched landing where expected. Each step states what the user does, what LargeFileBridge does automatically, exactly what it writes and where (companies.yaml, the per-repo company tag, the company storage.yaml), which left-bar children appear, and what we DOUBLE-CHECK. Sibling of repo_company_mapping.mdx (the mapping rules this tour proves), storage_company.mdx (the company storage a detected company materializes), storage_personal.mdx (the default home), storages.mdx + left_bar.mdx (the Storages disclosure the company child appears in), repo_settings.mdx (where manual reassignment lives), artifact_placement_policy.mdx (the state-sync-repo routing of pre-threshold tracking), and devices.mdx (the graft that resolves the company's mapped dirs per computer).
+---
+
+# LargeFileBridge — Company Auto-Detect Tour (clone an org repo → a company appears in the left bar)
+
+This is a **scenario walkthrough**. It answers *"what happens, step by step, when I add a repo that clearly
+belongs to a company — how does Large File Bridge figure that out from the git remote, show it, let me
+rename it, and let me correct it when the guess is wrong."* In doing so it exercises **every** branch of
+[repo_company_mapping.mdx](./repo_company_mapping.mdx): the auto-detect from the remote owner, the
+Personal default, the ambiguous-owner fallback, the rename, manual reassignment, and the company
+state-sync-repo routing.
+
+The through-line: **a repo defaults to Personal; a forge ORG in its remote auto-creates a company you can
+rename and re-file — you are always one click from correcting the guess.**
+
+One computer, one user, several repos:
+
+* **`studio-tower`** — the user's Mac tower; the user is signed in as `bryan@act3ai.com`, whose own GitHub
+  handle is `BryanStarbuck` (this handle is what tells "my own account" apart from "an org").
+
+This spec builds on the siblings and does not repeat them:
+
+* [repo_company_mapping.mdx](./repo_company_mapping.mdx) — **the mapping rules this tour proves**: parse the
+  remote owner, org → company, personal account → Personal, ambiguous → Personal + offer, manual override.
+* [storage_company.mdx](./storage_company.mdx) — the **company storage** a detected company materializes
+  (its `storage.yaml` `company_name`, mapped dirs, the Storages child labeled by company name).
+* [storage_personal.mdx](./storage_personal.mdx) — the **default** home for any repo with no company.
+* [storages.mdx §2](./storages.mdx) / [left_bar.mdx §3](./left_bar.mdx) — the **Storages** left-bar tab
+  whose **children** are Personal · one per Company (labeled by `company_name`, derived at runtime) · Repos
+  · Communities. A detected company is inserted here.
+* [repo_settings.mdx](./repo_settings.mdx) — the per-repo settings page where **manual reassignment** lives.
+* [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) — the churn policy whose pre-threshold
+  tracking root a company **state-sync repo** overrides to `<syncRepo>/repos/<repoKey>/`.
+* [devices.mdx §4](./devices.mdx) — the **graft** that resolves a company's mapped directories to each
+  computer's local path.
+
+---
+
+## 0. The setup — how a repo gets a company, and where that lives
+
+Every repo maps to **exactly one** owner in the Storages tab: **a company**, or **Personal** (the default).
+The mapping is computed once, at add time, from the repo's **git remote**, then stored so the user can
+override it:
+
+* **Parse the remote.** From `https://github.com/AcmeCorp/marketing-videos.git` (or the `git@` form) LFB
+  extracts the **host** (`github.com`) and the **owner** segment (`AcmeCorp`) — the org-or-account slug that
+  precedes the repo name.
+* **Classify the owner.** Is that owner **the user's own personal account**, or an **organization**? LFB
+  answers **locally, from configuration** (the user's known personal handles per host) — it does **not**
+  phone a forge API (charter: LFB does not reach the network except the one AI-description path). Owner ∈
+  known-personal-handles → **Personal**; owner is a plausible org (not a known personal handle) →
+  **company**; can't decide → **ambiguous → Personal, with an offer** (§4).
+* **Store two things.** A **company registry** in the state root
+  (`~/T/_large_files_bridge/companies.yaml`) listing each known company (id, display name, source org, host,
+  optional state-sync repo), and a **per-repo company tag** so the repo remembers its assignment across
+  re-scans.
+
+Companies default to **Personal**; the whole feature exists so a repo that obviously belongs to a company
+lands in the right bucket without manual filing, while staying **correctable**.
+
+Parsing the remote owner/host, classifying org-vs-personal from local config, and reading/writing the
+company registry are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/company-mapping.service.ts` — `parseRemoteOwner(remote)` / `classifyOwner(owner, host)` / `readCompanies()` / `upsertCompany()` / `assignRepoCompany(repoKey, companyId)`.
+
+---
+
+## 1. Timeline at a glance
+
+| Step | What the user does | What LFB does automatically | New writes / left-bar effect |
+| --- | --- | --- | --- |
+| **1** | Clones + adds `github.com/AcmeCorp/marketing-videos`. | Parses owner `AcmeCorp`; classifies **org**; auto-creates company. | `companies.yaml` gains `AcmeCorp`; the repo is tagged to it; a **new child "AcmeCorp"** appears under Storages. |
+| **2** | Opens the AcmeCorp company settings; renames it **"Acme Marketing"**. | Updates the company display name; leaves the source org slug intact. | `companies.yaml` `display_name` changes; the Storages child **re-labels** to "Acme Marketing"; the repo still groups under it. |
+| **3** | Adds a repo from their **own** account `github.com/BryanStarbuck/dotfiles`. | Owner is a **known personal handle** → **Personal**. | No new company; the repo appears under **Personal**. |
+| **4** | Adds a repo whose owner is **ambiguous** (`github.com/renderlab/...`). | Can't tell org from personal → **Personal**, plus a **"This looks like it could be a company"** offer. | Repo under Personal; a dismissible offer chip; one click promotes it to a company. |
+| **5** | **Manually reassigns** a Personal repo to Acme Marketing (and creates a new company by typing a name). | Re-tags the repo; materializes a new company on demand. | Per-repo tag flips; `companies.yaml` may gain a hand-named company; Storages regroups. |
+| **6** | Configures Acme Marketing's **state-sync repo**. | Routes that company's repos' **pre-threshold tracking** to `<syncRepo>/repos/<repoKey>/`. | Company `storage.yaml` gains the sync repo; new tracking lands in the sync repo, not the local state root. |
+
+---
+
+## 2. STEP 1 — add an org repo → a company auto-appears in the left bar
+
+**What the user does.** On `studio-tower` they `git clone https://github.com/AcmeCorp/marketing-videos.git`
+into `~/BGit/act3/marketing-videos` and **+ Add repo** ([repos.mdx §6](./repos.mdx)). The repo holds a
+`campaigns/` folder of big promo videos.
+
+**What LFB does automatically — parse, classify, auto-create.** LFB reads the repo's `origin` remote,
+extracts host `github.com` and owner `AcmeCorp`, and classifies the owner: `AcmeCorp` is **not** in the
+user's known-personal-handles (`BryanStarbuck`), and it matches the org shape, so it is an **organization**.
+LFB **auto-creates a company** from it:
+
+```yaml
+# ~/T/_large_files_bridge/companies.yaml
+companies:
+  - id: "co_acmecorp"
+    display_name: "AcmeCorp"        # ← seeded from the org slug (cryptic on purpose until the user renames it)
+    source:
+      host: github.com
+      org: AcmeCorp                 # ← the immutable slug parsed from the remote (rename never touches this)
+    created: 2026-03-01T10:00:00Z
+    auto_created: true              # ← LFB made this from a remote, not the user
+    state_sync_repo: null           # ← none configured yet (Step 6)
+```
+
+The repo is **tagged** to that company (so a re-scan never re-asks), and — the visible payoff — a **new
+child labeled "AcmeCorp" appears in the left-bar Storages disclosure**, between Personal and the Repos
+child ([storages.mdx §2](./storages.mdx) / [left_bar.mdx §3](./left_bar.mdx)):
+
+```
+Storages
+├── Personal
+├── AcmeCorp                 ← NEW — auto-created from the org in the remote
+├── Repos  →                ← (links to the Repos tab)
+└── (communities…)
+```
+
+Opening the **AcmeCorp** child shows a company view listing its repos — currently just `marketing-videos`.
+
+> **No directory is relocated.** Auto-detect creates a **company record** and a **grouping**, not a moved
+> file. A full [company storage](./storage_company.mdx) (a dedicated SDL directory with mapped dirs) is
+> **materialized on demand** — when the user gives the company a state-sync repo (Step 6) or maps
+> directories to it. Until then the company is a lightweight left-bar grouping of repos.
+
+Deriving a company from a repo's remote on add (auto-create when the owner classifies as an org, tag the
+repo, insert the Storages child) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.service.ts` — `onRepoAdded(repo)` (calls `company-mapping.service.ts` `classifyOwner()` then `upsertCompany()` + `assignRepoCompany()`); the runtime Storages children are assembled in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` from the discovered companies.
+
+**What we double-check (Step 1):**
+* The remote owner `AcmeCorp` is parsed and classified **org** from **local config only** (no forge API
+  call).
+* `companies.yaml` gains a `co_acmecorp` record with `auto_created: true`, `source.org: AcmeCorp`, and a
+  seeded `display_name: "AcmeCorp"`.
+* A **new Storages child "AcmeCorp"** renders in the left bar and lists `marketing-videos` under it.
+
+---
+
+## 3. STEP 2 — rename the cryptic org to a friendly company name
+
+**What the user does.** "AcmeCorp" is the raw org slug; the user wants it to read nicely. They open the
+**AcmeCorp** company view, click its **settings gear**, and rename it to **"Acme Marketing"** ([storage_company.mdx §2](./storage_company.mdx),
+`company_name` is the label shown in the Storages tab).
+
+**What LFB does automatically — rename the label, keep the identity.** LFB updates **`display_name`** only.
+The **`source.org` slug is immutable** — it is the identity key the auto-detect matched on, so a future
+re-add of another `AcmeCorp` repo still recognizes the company and files it under the renamed entry:
+
+```yaml
+# ~/T/_large_files_bridge/companies.yaml  (after rename)
+companies:
+  - id: "co_acmecorp"
+    display_name: "Acme Marketing"   # ← renamed by the user
+    source: { host: github.com, org: AcmeCorp }   # ← UNCHANGED — the match key survives the rename
+    auto_created: true
+```
+
+The Storages child **re-labels to "Acme Marketing"** immediately; `marketing-videos` stays grouped under
+it (the grouping is by company **id**, not by label, so a rename never regroups anything). If a company
+storage directory has been materialized, its `.lfbridge/storage.yaml` `company.company_name` is updated to
+match ([storage_company.mdx §2](./storage_company.mdx)).
+
+Renaming a company (updating `display_name`, never `source.org`) and re-labeling the Storages child are
+handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/company-mapping.service.ts` — `renameCompany(companyId, displayName)`.
+
+**What we double-check (Step 2):**
+* Only `display_name` changes; `source.org` is untouched.
+* The Storages child re-labels to "Acme Marketing" and `marketing-videos` remains grouped under the same
+  company id.
+* Re-adding a second `github.com/AcmeCorp/...` repo files under the **renamed** company (matched by org
+  slug), not a fresh "AcmeCorp".
+
+---
+
+## 4. STEP 3 & 4 — a personal-account repo stays Personal; an ambiguous owner defaults to Personal with an offer
+
+### 4.1 Step 3 — the owner is the user's own account → Personal (the default)
+
+**What the user does.** They add `git@github.com:BryanStarbuck/dotfiles.git`.
+
+**What LFB does automatically.** The owner `BryanStarbuck` **is** a known personal handle for the signed-in
+user, so it classifies as **Personal**. No company is created, no new Storages child appears; the repo shows
+under **Personal** ([storage_personal.mdx](./storage_personal.mdx)). This is the default path for the common
+case — most of a solo user's repos are their own.
+
+```
+Storages
+├── Personal          ← dotfiles lands here (owner = the user's own account)
+├── Acme Marketing
+├── Repos  →
+└── (communities…)
+```
+
+The user's known personal handles are configuration the user can edit (add a second GitHub username, a
+GitLab handle, a work account) so "my own account" is recognized on every host. Where an org is *also* one
+the user personally controls, they can add it to the personal-handles list to force it Personal.
+
+### 4.2 Step 4 — an ambiguous owner → Personal, plus a one-click "This is a company"
+
+**What the user does.** They add `https://github.com/renderlab/promo-cuts.git`. `renderlab` is neither a
+known personal handle nor confidently an org — it is **ambiguous** (a lowercase handle that could be a
+solo dev's account or a small studio's org).
+
+**What LFB does automatically — default safe, offer the promotion.** LFB **does not guess wrong loudly**: an
+ambiguous owner **defaults to Personal** (the conservative choice — a repo under Personal is never
+mis-shared into a company), and surfaces a **non-intrusive offer** on the repo row and the Personal view:
+
+> **"`renderlab/promo-cuts` looks like it could belong to a company. File it under a company?"** —
+> **[Create company "renderlab"]** · **[Assign to existing…]** · **[Keep in Personal]**
+
+Clicking **Create company "renderlab"** runs the same auto-create as Step 1 (a `companies.yaml` entry +
+a Storages child + the repo re-tagged), which the user can then rename. **Keep in Personal** dismisses the
+offer and **remembers the dismissal** (per-repo) so it never nags again for that repo.
+
+```yaml
+# the per-repo tag while ambiguous-and-defaulted:
+repo_company:
+  repo_key: promo-cuts-9f8e7d
+  company_id: null                 # ← null = Personal (the default)
+  owner_ambiguous: true            # ← drives the offer
+  offer_dismissed: false           # ← flips true on "Keep in Personal"
+```
+
+Classifying an owner as ambiguous, defaulting to Personal, and surfacing/dismissing the promote offer are
+handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/company-mapping.service.ts` — `classifyOwner()` returns `{ kind: "ambiguous" }`; the offer state (`owner_ambiguous`, `offer_dismissed`) rides the per-repo tag written by `assignRepoCompany()`.
+
+**What we double-check (Steps 3 & 4):**
+* A repo whose owner is a **known personal handle** classifies **Personal** with **no** company created.
+* An **ambiguous** owner **defaults to Personal** and shows a **one-click promote offer**; "Keep in
+  Personal" dismisses it stickily.
+* No ambiguous repo is ever silently filed into a company.
+
+---
+
+## 5. STEP 5 — manual reassignment (move between Personal and any company, or a new one)
+
+**What the user does.** They realize `dotfiles` (Step 3) actually holds a client's brand assets and belongs
+to Acme Marketing; and separately they want to file a fourth repo under a **brand-new** company they'll type
+by hand. Both are done from the repo's **[Settings](./repo_settings.mdx)** page (or the repo-row kebab's
+"Move to company…"), which carries a **Company** control:
+
+* A dropdown: **Personal** (default) · **Acme Marketing** · *(each known company)* · **+ New company…**.
+* Choosing **Acme Marketing** re-tags `dotfiles` to `co_acmecorp`; it leaves Personal and appears under Acme
+  Marketing on the next render. The move is a **tag change only** — no bytes move, no directory relocates.
+* Choosing **+ New company…** opens an inline name field; typing "Skunkworks" and confirming creates a
+  **hand-authored** company (`auto_created: false`, `source: null` since it came from no remote) and files
+  the repo under it.
+
+```yaml
+# companies.yaml after the hand-created company:
+companies:
+  - id: "co_acmecorp"    { display_name: "Acme Marketing", source: {host: github.com, org: AcmeCorp} }
+  - id: "co_skunkworks"  { display_name: "Skunkworks", source: null, auto_created: false }
+```
+
+Manual reassignment is the universal escape hatch: **any** repo can be moved to Personal, any existing
+company, or a new one, regardless of what auto-detect guessed — the guess is only a starting point.
+
+Reassigning a repo's company (including creating a hand-named company with `source: null`) is handled in
+code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /api/repos/:repoId/company` (via `company-mapping.service.ts` `assignRepoCompany()` / `upsertCompany()`); the Company control renders in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/RepoSettingsPage.tsx`.
+
+**What we double-check (Step 5):**
+* Reassigning `dotfiles` to Acme Marketing re-tags it (tag change only, no relocation) and it regroups in
+  the Storages tab.
+* **+ New company…** creates a hand-authored company (`auto_created: false`, `source: null`) and files the
+  repo under it.
+* A manual assignment **wins** over auto-detect and survives re-scans (the tag is the source of truth once
+  the user has touched it).
+
+---
+
+## 6. STEP 6 — configure the company's state-sync repo → pre-threshold tracking routes there
+
+**What the user does.** Acme Marketing has several member computers, so the user wants the company's LFB
+tracking to travel. In the Acme Marketing company settings they set a **state-sync repo** — a dedicated
+tracking-data git repo they made for the company, e.g. `~/BGit/Bryan_git/acme_large_files_bridge/`
+([storage_company.mdx §1](./storage_company.mdx), [devices.mdx §11.2](./devices.mdx)).
+
+**What LFB does automatically — materialize the company storage and re-route tracking.** Setting the
+state-sync repo does two things:
+
+1. **Materializes the company storage.** A [company storage](./storage_company.mdx) is created rooted at the
+   sync repo, with `.lfbridge/storage.yaml` carrying `type: company` + `company.company_name: "Acme
+   Marketing"`. The company is now a real storage, not just a grouping.
+
+   ```yaml
+   # companies.yaml — the company now points at its sync repo:
+   - id: "co_acmecorp"
+     display_name: "Acme Marketing"
+     source: { host: github.com, org: AcmeCorp }
+     state_sync_repo: ~/BGit/Bryan_git/acme_large_files_bridge   # ← configured in Step 6
+   ```
+
+2. **Re-routes pre-threshold tracking** for **every repo mapped to Acme Marketing**. This is the direct
+   hand-off to the [churn policy](./artifact_placement_policy.mdx): for a company repo below the content
+   threshold, the pre-threshold tracking root becomes **`<syncRepo>/repos/<repoKey>/`** instead of the local
+   `~/T/_large_files_bridge/repos/<repoKey>/`. So `marketing-videos`' `repo_storage.yaml` and sidecars now
+   land in the sync repo and travel to the other member computers — while **`marketing-videos`' own working
+   tree stays untouched** (the churn invariant holds regardless of routing):
+
+```
+~/BGit/Bryan_git/acme_large_files_bridge/          ← the company state-sync repo (committed, travels)
+├── .lfbridge/storage.yaml                         ← type: company, company_name: "Acme Marketing"
+└── repos/
+    └── marketing-videos-77aa/                      ← <repoKey> — pre-threshold tracking for the company repo
+        ├── repo_storage.yaml                       ← routed HERE, not the local state root
+        └── files/campaigns/…
+
+~/BGit/act3/marketing-videos/                        ← the media repo itself — STILL untouched by scan churn
+```
+
+When `marketing-videos` later crosses the content threshold (someone transcribes or describes a clip), the
+**durable artifact** still lands in the **media repo's** committed `.lfbridge/` (that is where a transcript
+belongs), and the tracking migrates there per the churn policy — the state-sync routing governs only the
+**pre-threshold** home. (See [use_case_churn_free_repo.mdx §9.2](./use_case_churn_free_repo.mdx).)
+
+Materializing a company storage on state-sync-repo configuration and re-routing its repos' pre-threshold
+tracking are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/company-mapping.service.ts` — `setCompanyStateSyncRepo(companyId, path)` (writes the company `storage.yaml` via `storage.service.ts` and updates `companies.yaml`); the routing is read by `artifact-placement.service.ts` `trackingRootFor(repoKey)` (`resolveStateSyncRepo()` returns the company's sync repo for a company-mapped repo).
+
+**What we double-check (Step 6):**
+* Setting the state-sync repo materializes a real company storage (`storage.yaml`, `type: company`,
+  `company_name: "Acme Marketing"`).
+* `marketing-videos`' pre-threshold `repo_storage.yaml` + sidecars now land in
+  `<syncRepo>/repos/marketing-videos-77aa/`, **not** the local state root.
+* The **media repo's** working tree is **still untouched** — routing changes the pre-threshold home, not the
+  churn invariant.
+
+---
+
+## 7. The cross-cutting invariants this tour proves
+
+1. **A repo defaults to Personal.** No company, no assignment, ambiguous owner — all resolve to Personal; a
+   company assignment is always something LFB detected from a remote org or the user chose.
+2. **Detection is local, never a forge API call.** The org-vs-personal decision is made from the parsed
+   remote owner against the user's known-personal-handles config — no network (charter).
+3. **A forge org auto-creates a renamable company.** The company seeds its label from the org slug, appears
+   as a Storages child, and the user renames the label while the immutable `source.org` stays the match key.
+4. **The guess is always correctable.** Ambiguous → Personal + a one-click promote offer; any repo →
+   manual reassignment to Personal, an existing company, or a new one; a manual choice wins and sticks.
+5. **Assignment is a tag, not a move.** Changing a repo's company re-groups it in the left bar; **no bytes
+   relocate** and **no working tree is mutated**.
+6. **State-sync routing rides the churn policy.** A company's state-sync repo relocates its repos'
+   **pre-threshold** tracking to `<syncRepo>/repos/<repoKey>/` while the media repo's working tree stays
+   untouched and the threshold crossing still writes the durable artifact into the media repo.
+
+---
+
+## 8. Acceptance criteria
+
+1. Adding `github.com/AcmeCorp/marketing-videos` parses owner `AcmeCorp`, classifies it an **org** from
+   **local config only**, **auto-creates** a company (`companies.yaml` entry, `auto_created: true`,
+   `source.org: AcmeCorp`, seeded `display_name`), tags the repo to it, and inserts a **"AcmeCorp" child**
+   in the left-bar **Storages** disclosure listing that repo.
+2. Renaming the company changes **`display_name`** only (never `source.org`); the Storages child re-labels
+   to "Acme Marketing" and the repo stays grouped by company **id**; a later same-org repo files under the
+   renamed company.
+3. A repo whose owner is a **known personal handle** classifies **Personal** with **no** company created and
+   appears under Personal.
+4. An **ambiguous** owner **defaults to Personal** and shows a **one-click "This is a company"** offer;
+   "Keep in Personal" dismisses it stickily; promoting runs the same auto-create.
+5. **Manual reassignment** (repo Settings / kebab) moves a repo to Personal, an existing company, or a
+   **+ New company…** typed in place (creating an `auto_created: false`, `source: null` company); a manual
+   choice **wins over auto-detect** and survives re-scans; assignment relocates **no bytes**.
+6. Configuring a company's **state-sync repo** materializes a real [company storage](./storage_company.mdx)
+   and routes its repos' **pre-threshold** tracking to **`<syncRepo>/repos/<repoKey>/`**
+   ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)) while the media repo's working tree
+   stays untouched; the threshold crossing still writes the durable artifact into the media repo.
+7. Every write matches [repo_company_mapping.mdx](./repo_company_mapping.mdx),
+   [storage_company.mdx](./storage_company.mdx), [storage_personal.mdx](./storage_personal.mdx),
+   [storages.mdx](./storages.mdx), [left_bar.mdx](./left_bar.mdx), and
+   [artifact_placement_policy.mdx](./artifact_placement_policy.mdx).
+
+<!--
+  Scenario tour proving COMPANY/PERSONAL mapping (repo_company_mapping.mdx). ONE computer (studio-tower),
+  user bryan@act3ai.com, personal handle BryanStarbuck. S1 add github.com/AcmeCorp/marketing-videos: parse
+  host+owner, classify owner AcmeCorp as ORG (LOCAL config only, NO forge API — charter), AUTO-CREATE
+  company (companies.yaml co_acmecorp, auto_created:true, source.org:AcmeCorp immutable, display_name seeded
+  from slug), tag repo, NEW left-bar Storages child "AcmeCorp". Company is a lightweight grouping; full
+  company STORAGE (dedicated SDL dir) materializes on demand (S6). S2 rename -> display_name "Acme
+  Marketing" ONLY; source.org unchanged (match key); child re-labels; grouping by company id not label. S3
+  add github.com/BryanStarbuck/dotfiles: owner = known personal handle -> Personal (default, no company). S4
+  add github.com/renderlab/...: AMBIGUOUS -> default Personal + one-click "This is a company" offer (Create
+  company / Assign existing / Keep in Personal[sticky dismiss]); never silently filed into a company. S5
+  MANUAL reassignment (repo Settings / kebab Company dropdown): move dotfiles to Acme Marketing (tag change
+  only, no bytes move) + "+ New company..." types "Skunkworks" (auto_created:false, source:null); manual
+  wins over auto-detect & survives re-scans. S6 configure Acme Marketing STATE-SYNC repo
+  (~/BGit/Bryan_git/acme_large_files_bridge/): materialize company storage (storage.yaml type:company
+  company_name) + RE-ROUTE pre-threshold tracking to <syncRepo>/repos/<repoKey>/ per churn policy
+  (artifact_placement_policy) while media repo working tree STILL untouched; threshold crossing still writes
+  durable artifact into the MEDIA repo. Invariants (§7): default Personal; detection local not forge-API;
+  org auto-creates renamable company (source.org immutable match key); always correctable (ambiguous+offer,
+  manual reassign, manual wins); assignment is a TAG not a move; state-sync routing rides churn policy. Code:
+  company-mapping.service.ts parseRemoteOwner/classifyOwner/readCompanies/upsertCompany/assignRepoCompany/
+  renameCompany/setCompanyStateSyncRepo; repos.service.ts onRepoAdded; repos.router.ts PATCH
+  /api/repos/:id/company; Sidebar.tsx company children; RepoSettingsPage.tsx Company control;
+  artifact-placement.service.ts trackingRootFor/resolveStateSyncRepo. Reuses repo_company_mapping,
+  storage_company, storage_personal, storages, left_bar, repo_settings, artifact_placement_policy, devices.
+-->

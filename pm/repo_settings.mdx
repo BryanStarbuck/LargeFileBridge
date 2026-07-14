@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Repo Settings (Per-Repo)
-description: The per-repo settings page. Reached by the GEAR ICON shown on a single repo's page (the "one repo" view) — clicking the gear opens this settings page scoped to that one repo. It holds the settings that can differ per repo: the big-file threshold override (a checkbox that is OFF by default = inherit the global setting from settings.mdx; ON reveals a value + MB/GB/TB unit dropdown that overrides just this repo), the pinned on/off master toggle, the large-file selection rules (follow .gitignore, include/exclude globs), the pinning/fetch policy, and sharing (private to your own computers vs. shared with allow-listed participants). Everything on this page writes to that repo's pin/r/<repo_name>/config.yaml. Settings not overridden here fall back to the global values.
+description: The per-repo settings page. Reached by the GEAR ICON shown on a single repo's page (the "one repo" view) — clicking the gear opens this settings page scoped to that one repo. It holds the settings that can differ per repo: the big-file threshold override (a checkbox that is OFF by default = inherit the global setting from settings.mdx; ON reveals a value + MB/GB/TB unit dropdown that overrides just this repo), the pinned on/off master toggle, the large-file selection rules (follow .gitignore, include/exclude globs), the pinning/fetch policy, and sharing (private to your own computers vs. shared with allow-listed participants). It ALSO holds three organized sections added on top of those: a Transcription section and an IDENTICAL AI-descriptions section, each mounting the shared 3-way placement radio (placement_radios.mdx) that chooses where the repo's `.transcription` / `.ai_description` artifacts are written — (a) the repo's hidden `.lfbridge/` folder (default, committed, travels by git), (b) beside the media file (a deliberate opt-in reintroduction of the previously-superseded beside-media layout, now with the extension APPENDED not replaced), or (c) the owning company/Personal storage's LFB state-sync repo (only enabled when that storage has one configured, else disabled with a setup hint); switching a radio affects only FUTURE artifacts and a "move existing" action migrates the rest — plus an Ownership section showing the repo's derived company/Personal owner (auto from git remote vs. manual) with a reassign control. Everything on this page writes to that repo's pin/r/<repo_name>/config.yaml (new fields transcription.placement, aiDescription.placement, and ownership on RepoSettings). Settings not overridden here fall back to the global values.
 ---
 
 # LargeFileBridge — Repo Settings (Per-Repo)
@@ -227,7 +227,168 @@ team-shared `.lfbridge/decisions.yaml` ledger, §2.6.)
 
 ---
 
-## 4. Acceptance criteria
+## 4. Transcription — where transcripts are stored
+
+This section chooses **where this repo's transcripts** (`<rel>.transcription`,
+[Transcribe.mdx](./Transcribe.mdx)) are written on disk, using the **shared 3-way placement radio**
+defined in [placement_radios.mdx](./placement_radios.mdx). The AI descriptions section (§5) uses the
+**identical** control for `<rel>.ai_description` artifacts.
+
+### 4.1 The radio
+
+The section header reads **"Transcription — where transcripts are stored"** and mounts one instance of
+the placement radio with the transcript-flavored copy:
+
+* **(a) In this repo's hidden `.lfbridge/` folder** *(recommended)* — `<repo>/.lfbridge/<relDir>/<name.ext>.transcription`,
+  path-mirrored, extension **appended**, committed, travels with the repo by git
+  ([Transcribe.mdx §3](./Transcribe.mdx#3-where-transcripts-are-stored--inside-the-repostorage-lfbridge-path-mirrored-extension-appended-locked--supersedes-the-earlier-beside-media-layout)).
+* **(b) Next to the media file** — `<mediaDir>/<name.ext>.transcription`, a sibling of the media. This
+  **deliberately reintroduces** the beside-media layout Transcribe.mdx marked "superseded", now offered as a
+  supported user choice with **appended** (not replaced) extensions — see the reconciliation in
+  [placement_radios.mdx §4](./placement_radios.mdx#4-the-beside-media-reintroduction-reconciliation--locked).
+* **(c) In this storage's LFB sync repo** — `<syncRepo>/repos/<repoKey>/…`, **only offered (enabled)** when
+  the owning company/Personal storage has a state-sync repo configured
+  ([storage_company.mdx](./storage_company.mdx)); otherwise **disabled with a hint** on how to set one up
+  ([placement_radios.mdx §5.1](./placement_radios.mdx#51-sync_repo-disabled-when-no-sync-repo-exists)).
+
+All radio behavior — labels, helper text, disabled/hint states, and the resolution to an on-disk path — is
+owned by [placement_radios.mdx](./placement_radios.mdx); this section only says **which artifact** it governs
+(the `.transcription` transcript) and **its default** (§4.4).
+
+### 4.2 Switching affects only FUTURE transcripts
+
+Changing this radio **does not move** existing transcripts. Transcripts already written stay where they are;
+only the next transcript uses the new tier
+([placement_radios.mdx §7](./placement_radios.mdx#7-switching-the-radio-only-affects-future-artifacts)).
+
+### 4.3 Move existing transcripts
+
+When transcripts exist in a tier other than the selected one, the section shows
+**"Move N existing transcripts here"** — the explicit, confirmed, non-destructive migration defined in
+[placement_radios.mdx §8](./placement_radios.mdx#8-the-move-existing-artifacts-action). Hidden when N = 0.
+
+### 4.4 Default
+
+* **When the owning storage has a company state-sync repo:** the **noisy tracking state** (`repo_storage.yaml`
+  and per-file sidecars) defaults into that sync repo per
+  [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) — **but transcripts default to `lfbridge`
+  (the repo's hidden `.lfbridge/`)**, because a transcript is content *about the media in this repo* and users
+  expect it to travel *with* that repo, not with the tracking-data repo.
+* **When there is no sync repo:** default is **`lfbridge`** as well. In both cases the default is `lfbridge`;
+  the sync repo only changes where *tracking* data goes, never the transcript default.
+
+### 4.5 Persistence
+
+Persists as `RepoSettings.transcription.placement` (enum `lfbridge` | `beside` | `sync_repo`) — see §7.
+
+---
+
+## 5. AI descriptions — where descriptions are stored
+
+**Identical** to §4 in every respect except the artifact it governs: this section places the repo's
+**AI descriptions** (`<rel>.ai_description`, [ai_description.mdx](./ai_description.mdx)) using the **same**
+[placement radio](./placement_radios.mdx).
+
+### 5.1 The radio
+
+Header: **"AI descriptions — where descriptions are stored"**. Same three options as §4.1, with the copy
+swapped to "AI descriptions" and the extension to `.ai_description`:
+
+* **(a)** `<repo>/.lfbridge/<relDir>/<name.ext>.ai_description` *(recommended)*.
+* **(b)** `<mediaDir>/<name.ext>.ai_description` — the reintroduced, opt-in beside-media layout
+  ([placement_radios.mdx §4](./placement_radios.mdx#4-the-beside-media-reintroduction-reconciliation--locked)).
+* **(c)** `<syncRepo>/repos/<repoKey>/…` — enabled only with a configured state-sync repo, else disabled with
+  the setup hint.
+
+### 5.2 Switching affects only FUTURE descriptions
+
+Same rule as §4.2 — existing `.ai_description` artifacts stay put; only new ones use the changed tier.
+
+### 5.3 Move existing descriptions
+
+Same as §4.3, with the action labeled **"Move N existing AI descriptions here"**
+([placement_radios.mdx §8](./placement_radios.mdx#8-the-move-existing-artifacts-action)).
+
+### 5.4 Default
+
+Same defaults as §4.4: AI descriptions default to **`lfbridge`** whether or not a company state-sync repo
+exists — only the *noisy tracking state* follows a sync repo when present.
+
+### 5.5 Persistence
+
+Persists as `RepoSettings.aiDescription.placement` (enum `lfbridge` | `beside` | `sync_repo`) — see §7.
+
+> The two radios (§4, §5) are **independent** — a repo may keep transcripts in `.lfbridge/` while writing AI
+> descriptions beside the media, or any other combination. They share the control, not the value.
+
+---
+
+## 6. Ownership — which company (or Personal) owns this repo
+
+This section surfaces and lets the user change the repo's **owner** — the company or **Personal** storage the
+repo maps to, derived per [repo_company_mapping.mdx](./repo_company_mapping.mdx). It is **read-mostly** (the
+mapping is normally automatic) with one control to override it.
+
+### 6.1 What it shows
+
+* **Owner** — the resolved **company name** or **Personal**. This is the same owner that decides whether the
+  §4/§5 `sync_repo` option is enabled (a company with a state-sync repo makes it available).
+* **Derivation source** — how the owner was determined:
+  * **Auto (from git remote)** — inferred from the git remote's org/host
+    ([repo_company_mapping.mdx](./repo_company_mapping.mdx)); shows the remote it matched on.
+  * **Manual** — the user reassigned it (§6.2); shows *"set by you"* and when.
+* **State-sync repo** — whether the owner has one configured (drives §4/§5 option (c)); if not, a link to set
+  one up ([storage_company.mdx](./storage_company.mdx) / [storage_settings.mdx](./storage_settings.mdx)).
+
+### 6.2 Reassign control
+
+A **"Reassign owner…"** control lets the user override the derived mapping:
+
+* Opens a picker of known companies + **Personal**; choosing one sets a **manual** mapping that **wins over**
+  the auto-derivation.
+* A **"Reset to auto"** affordance clears the override so the owner reverts to the git-remote derivation.
+* Reassigning **re-evaluates** the §4/§5 `sync_repo` availability immediately (a repo moved to a company that
+  *has* a sync repo enables option (c); moved to one that doesn't disables it with the hint).
+* Reassigning **does not move** any existing artifacts or tracking data — it changes *ownership/derivation*
+  only; use the §4.3/§5.3 move actions to relocate artifacts if desired.
+
+The owner, its derivation source, and the manual override are read/written in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` reads the derived/overridden owner into `RepoSettings` and accepts the reassign via the same `PATCH /api/repos/:repoId/settings` (owner override field); the derivation itself belongs to [repo_company_mapping.mdx](./repo_company_mapping.mdx).
+
+---
+
+## 7. Persistence additions — the new RepoSettings fields
+
+§4, §5, and §6 add fields to the per-repo config and to the shared `RepoSettings` type. They save through the
+**existing** PATCH — no new settings endpoint:
+
+```yaml
+# pin/r/<repo_name>/config.yaml  (excerpt — the fields §4/§5/§6 add)
+transcription:
+  placement: lfbridge      # §4 — lfbridge | beside | sync_repo  (default lfbridge)
+ai_description:
+  placement: lfbridge      # §5 — lfbridge | beside | sync_repo  (default lfbridge)
+ownership:
+  owner: null              # §6 — company id or "personal"; null = use derived
+  source: auto             # auto | manual
+```
+
+* `transcription.placement` and `ai_description.placement` are **machine-local intents**; the `sync_repo`
+  *availability* is derived from the owner, not stored, so the setting resolves correctly on another computer
+  that has the sync repo configured (§6.1, [placement_radios.mdx §6](./placement_radios.mdx#6-persistence)).
+* `ownership.owner` is the **manual override**; when null, the owner is the git-remote derivation
+  ([repo_company_mapping.mdx](./repo_company_mapping.mdx)). `source` records which of the two applied.
+
+The two placement enums and the ownership override are added to the shared type and mapped by the settings
+router in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `RepoSettings` gains `transcription: { placement }`, `aiDescription: { placement }`, and `ownership: { owner, source }` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `toRepoSettings()` maps `config.yaml` → these fields and `PATCH /api/repos/:repoId/settings` writes them back.
+
+The placement enums are consumed when an artifact is written by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveArtifactPlacement()` (honors the per-repo `placement` before its own fallback order).
+
+---
+
+## 8. Acceptance criteria
 
 1. The per-repo settings page is opened by the **gear icon** on a single repo's page, is scoped to
    that one repo, and names the repo + its path.
@@ -242,3 +403,37 @@ team-shared `.lfbridge/decisions.yaml` ledger, §2.6.)
 5. Everything on this page writes to that repo's `pin/r/<repo_name>/config.yaml` — never the global
    config; unoverridden settings fall back to the global defaults in [settings.mdx](./settings.mdx).
 6. Repo identity (`repo:` name/path/remote) is written by the scanner and shown read-only here.
+7. A **Transcription** section (§4) offers the shared 3-way placement radio
+   ([placement_radios.mdx](./placement_radios.mdx)) for `.transcription` artifacts: `lfbridge` (default,
+   recommended), `beside`, and `sync_repo` (enabled only when a state-sync repo exists, else disabled with a
+   setup hint). Switching affects only future transcripts; a **"Move N existing transcripts here"** action
+   migrates the rest.
+8. An **AI descriptions** section (§5) offers the **identical** radio for `.ai_description` artifacts, with
+   the same defaults, disabled states, and move action; the two radios are independent.
+9. In both §4 and §5, the default is **`lfbridge`** whether or not a company state-sync repo exists — only
+   the noisy tracking state follows a sync repo per
+   [artifact_placement_policy.mdx](./artifact_placement_policy.mdx).
+10. The `beside` option is documented as a **deliberate, opt-in reintroduction** of the previously-superseded
+    beside-media layout (appended, not replaced, extension), reconciled with Transcribe.mdx / ai_description.mdx.
+11. An **Ownership** section (§6) shows the repo's company/**Personal** owner, its derivation source
+    (auto from git remote / manual), and whether a state-sync repo exists, with a **"Reassign owner…"** control
+    (and reset-to-auto) that re-evaluates `sync_repo` availability without moving artifacts.
+12. Persistence (§7) adds `RepoSettings.transcription.placement`, `RepoSettings.aiDescription.placement`
+    (enum `lfbridge` | `beside` | `sync_repo`), and `RepoSettings.ownership { owner, source }`, all saved via
+    the existing `PATCH /api/repos/:repoId/settings`; the placement enums are consumed by
+    `resolveArtifactPlacement()`.
+
+<!-- summary -->
+The per-repo Settings page (gear icon on a single repo) holding settings that differ per repo. Locked
+sections: big-file threshold override (checkbox off = inherit global 100 MB), pinned master toggle,
+large-file selection rules, pinning/fetch policy, sharing, and the noted team-shared per-file decisions.
+Added: a **Transcription** section (§4) and an **identical AI descriptions** section (§5), each mounting the
+shared 3-way placement radio ([placement_radios.mdx](./placement_radios.mdx)) — `lfbridge` (default) |
+`beside` (the deliberately reintroduced, opt-in, appended-extension beside-media layout) | `sync_repo`
+(enabled only with a company/Personal state-sync repo, else disabled with a setup hint) — where switching
+affects only future artifacts and a "move existing" action migrates the rest; plus an **Ownership** section
+(§6) showing the derived company/Personal owner + source with a reassign control. New RepoSettings fields
+`transcription.placement`, `aiDescription.placement`, and `ownership { owner, source }` persist via the
+existing settings PATCH.
+-->
+

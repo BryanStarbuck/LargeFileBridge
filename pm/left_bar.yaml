@@ -67,13 +67,23 @@ Left_Nav:
           route: "/storages"
           order: 2
           description: "All the large-file storages you belong to in one map: your Personal files, each Company you're in, a Repos link to the repos list, and the Communities you carry. Each directory-based storage has a storage.yaml (name + type) and a hidden .lfbridge/ tracking area, pins over IPFS, and may also clone to Google Drive / Dropbox. See pm/storages.mdx."
+          # OWNER-GROUPED REPO NESTING (pm/left_bar.mdx §3.2, pm/repo_company_mapping.mdx): on top of the
+          # static children below, each repo GROUPS UNDER ITS OWNER — the Personal child and each per-Company
+          # child are THEMSELVES expandable to reveal the repos owned by them (label = repo name, route =
+          # /repos/$repoId). This is IN ADDITION TO the flat "Repos" child (which still routes to the long
+          # list) — a repo appears both under its owner group and in the flat list. These per-owner repo
+          # sub-lists are RUNTIME-INJECTED by Sidebar.tsx (like the per-Company children), grouping the
+          # discovered repos by RepoRow.owner and labeling companies by their friendly display name
+          # (storage_company.mdx §6); an auto-derived company group carries an (auto-detected) hint. They are
+          # NOT static array elements here (they depend on live state) — documented, not rendered from yaml.
           children:
             - id: storages_personal
               label: "Personal"
               route: "/storages/personal"
-              description: "Your own private big files (storage_personal.mdx)."
-            # One child PER COMPANY is inserted here at runtime, labeled by company_name
-            # (storage_company.mdx) — derived from each company storage's storage.yaml.
+              description: "Your own private big files, and the DEFAULT owner of any repo with no forge org — expands to the repos owned by you (storage_personal.mdx, repo_company_mapping.mdx)."
+            # One child PER COMPANY is inserted here at runtime, labeled by the company's friendly display
+            # name (storage_company.mdx §6, derived from each company storage's storage.yaml company_name).
+            # Each company child is EXPANDABLE to the repos mapped to that company (repo_company_mapping.mdx).
             - id: storages_repos
               label: "Repos"
               route: "/"

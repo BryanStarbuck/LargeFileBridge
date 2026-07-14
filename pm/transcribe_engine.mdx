@@ -1,0 +1,405 @@
+---
+title: LargeFileBridge — The Transcription Engine (two engines · on-demand model provisioning · full-duration robustness · per-machine parallelism)
+description: The deep spec behind Transcribe.mdx, learned from the canonical tool at ~/BGit/all/tools/Transcription/Transcribe.js. LargeFileBridge transcribes with a PRIMARY heavyweight local LLM engine (Qwen3-ASR via Apple MLX — the `mlx-qwen3-asr` CLI at Qwen/Qwen3-ASR-1.7B, the "very large download" one, Apple Silicon only) and a WHISPER-ON-MAC fallback engine (OpenAI Whisper at the base model, MPS→CPU, cross-platform); a Qwen run that errors auto-falls-back to Whisper. The heavyweight model is a multi-GB download most users will NOT have; the FIRST time a user tries to transcribe and it is absent, LargeFileBridge shows a one-time PERMISSION popup that warns how much disk it needs (a ballparked, then stored, estimate), and — only on approval — DOWNLOADS, INSTALLS, and CONFIGURES it, each with its own progress UI; if it is already present the popup is SKIPPED; if it is half-installed or outdated a HEALTH CHECK finishes/repairs it. After provisioning, the flow RESUMES where the user left off (proceed with a confirmed transcribe, or re-open the offer window). A CRITICAL requirement: whichever engine runs, the settings are triple-checked so a 1–2-hour-plus file transcribes to the FULL duration and NEVER truncates (e.g. stops at 20 minutes) — coverage is verified end-to-end. Parallelism is CALIBRATED per machine from cores + RAM + the model's footprint (low-power boxes = 1 at a time; a ~24-core box runs several), drawing the shared Core Budget of parallelization.mdx. Sibling of Transcribe.mdx (the feature that calls this engine), parallelization.mdx (the Core Budget), tools.mdx (the CLI-binary preflight), processing.mdx (where provisioning + transcription jobs are watched), settings.mdx (the engine + parallelism knobs), and security.mdx (the local-only, permissioned-download posture).
+---
+
+# LargeFileBridge — The Transcription Engine
+
+[Transcribe.mdx](./Transcribe.mdx) defines the transcription **feature** — the entry points, where the
+`.transcription` output lands (inside `.lfbridge/`, §3 there), the async/non-blocking discipline, and the
+truthful reporting. **This file is the ENGINE spec underneath it.** It answers four questions the feature
+spec deliberately defers:
+
+1. **Which engine runs** — the primary heavyweight **Qwen3-ASR** LLM, or the **Whisper-on-Mac** fallback (§2).
+2. **How the heavyweight model gets onto the machine** — the on-demand, permission-gated
+   **download → install → configure** flow, with a disk-space warning, health-check/repair, two progress
+   UIs, and flow-resume (§3).
+3. **How we guarantee a 1–2-hour-plus file transcribes in FULL and never truncates** — the critical
+   no-truncation requirement and its end-to-end verification (§4).
+4. **How many files transcribe in parallel on this machine** — the per-machine calibration (§5).
+
+Siblings this builds on and does not repeat:
+
+* [Transcribe.mdx](./Transcribe.mdx) — the feature. Output placement (§3 there: `.lfbridge/<rel>/<name.ext>.transcription`),
+  entry points, the REST surface, the status icon. This engine is what its `transcribeOne()` drives.
+* [parallelization.mdx](./parallelization.mdx) — the shared **Core Budget** (mass-compute = `round(cores ×
+  max_core_fraction)`, default 0.9; the anti-oversubscription invariant). §5 here is the transcribe-specific
+  calibration that draws that budget.
+* [tools.mdx](./tools.mdx) — the CLI-binary preflight (`whisper`, `ffmpeg`, `ffprobe`). This engine's
+  **model** provisioning (§3) is the layer *above* those binaries.
+* [processing.mdx](./processing.mdx) — where the `download` / `install` provisioning jobs and the
+  `transcribe` jobs are watched (Running now · Waiting · failures).
+* [settings.mdx](./settings.mdx) — the engine-choice and parallelism knobs (§5.4, §6).
+* [security.mdx](./security.mdx) — the local-only posture; the one permissioned, content-free model download.
+
+---
+
+## 1. What "the engine" is (LOCKED)
+
+The engine is the copied-in `Transcriber` class ([Transcribe.mdx §5](./Transcribe.mdx#5-the-engine--copied-in-called-in-process-locked))
+— in-process, async, non-blocking. This spec extends it with **engine selection**, **model provisioning**,
+**full-duration guarantees**, and **parallel calibration**. Nothing here changes where the transcript is
+written (that is [Transcribe.mdx §3](./Transcribe.mdx#3-where-transcripts-are-stored--inside-the-repostorage-lfbridge-path-mirrored-extension-appended-locked-supersedes-the-earlier-beside-media-layout)) or that transcription is always an explicit user action.
+
+The engine abstraction (a common interface both concrete engines implement — `describeReadiness()` /
+`transcribeToFile(onProgress)` — so the caller is engine-agnostic) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/engine.ts` — interface `TranscribeEngine`, resolver `pickEngine()`.
+
+---
+
+## 2. Two engines — heavyweight Qwen3-ASR (primary) + Whisper-on-Mac (fallback) (LOCKED)
+
+There are **two** transcription engines, tried in a fixed order (learned from the canonical tool at
+`~/BGit/all/tools/Transcription/Transcribe.js`, which LFBridge's copied engine mirrors). Both produce the
+**same** `.transcription` output ([Transcribe.mdx §3–§4](./Transcribe.mdx)); they differ only in how the
+speech-to-text is computed.
+
+| # | Engine id | What it is | When it's used |
+| --- | --- | --- | --- |
+| **2** | **`qwen`** (primary, heavyweight LLM — DEFAULT) | **Qwen3-ASR via Apple MLX** — the `mlx-qwen3-asr` CLI at model **`Qwen/Qwen3-ASR-1.7B`** (label `qwen3-asr-1.7b-mlx`). Apple-Silicon-native, faster than real time, higher quality. The **multi-GB download** engine: the CLI installs via `pipx install mlx-qwen3-asr` and the **weights download from Hugging Face on first run** (~3.4 GB) into `~/.cache/huggingface/hub/`. **Apple Silicon (M1+) only.** | The default whenever the model is **provisioned** (§3) and the machine qualifies (Apple Silicon, §5). |
+| **1** | **`mac`** (fallback — Whisper on Mac) | **OpenAI Whisper** CLI at model **`base`** (`whisper-base`), preferring the Apple-Silicon **MPS** GPU with an automatic **CPU fallback** and an English sanity-check. Reliable, cross-platform, English-tuned; small (~140 MB), installs via `pipx install openai-whisper`. | When `qwen` is **absent and the user declines** to provision it, on a **non-Apple-Silicon** machine, or **automatically when a `qwen` run errors** (§2.1) — so the user is **never left with no way to transcribe**. |
+
+* **Selection order.** `pickEngine()` returns **`qwen`** if the machine is Apple Silicon, the `mlx-qwen3-asr`
+  CLI + model are ready (§3), and the machine clears the RAM bar (§5.2); otherwise **`mac`** (Whisper).
+  The `transcribe.engine` setting (`auto` / `qwen` / `mac`) overrides the default (§5.4).
+* **Auto-fallback (§2.1).** A `qwen` run that errors (missing weights, an MLX hiccup, an unexpected CLI
+  failure) **transparently retries on `mac`** so a file is never lost — it just costs a retry. An explicit
+  `-c mac` / `transcribe.engine: mac` runs Whisper directly with no fallback layer.
+* **Quality note (honest).** Qwen3-ASR-1.7B is materially more accurate than whisper-base. The transcript
+  **header records which engine actually ran** ([Transcribe.mdx §4](./Transcribe.mdx#4-what-a-transcript-file-contains))
+  so the user always knows — including when the fallback produced it.
+* **Both must satisfy §4** (full-duration, no truncation). The fallback is a **fallback in accuracy, not in
+  completeness** — it still transcribes the whole 2-hour file.
+
+The two concrete engines + the selector are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/qwen-asr.ts` — class `Qwen3AsrTranscriber` (drives `mlx-qwen3-asr`) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — class `Transcriber` (Whisper, MPS→CPU) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/engine.ts` — `pickEngine()` + the `qwen→mac` auto-fallback wrapper.
+
+### 2.1 Auto-fallback `qwen → mac` (LOCKED)
+
+The default `qwen` engine **transparently falls back** to `mac` (Whisper) on any error, exactly as the
+reference tool does: a missing model download, an MLX numerical hiccup, or an unexpected CLI non-zero exit
+never loses the file — it retries on Whisper (installing Whisper first if only the Qwen engine was set up),
+and the header reflects **whichever engine actually produced the text**. A user who explicitly pins `mac`
+gets Whisper with no fallback layer.
+
+---
+
+## 3. Provisioning the heavyweight model — download → install → configure, with permission (LOCKED)
+
+The heavyweight `qwen` engine is a **multi-GB download**: the `mlx-qwen3-asr` CLI installs via
+`pipx install mlx-qwen3-asr` (an isolated venv with `mlx`, `numpy`, `huggingface-hub`, …), and the
+**`Qwen/Qwen3-ASR-1.7B` weights download from Hugging Face on first run** (~**3.4 GB**) into
+`~/.cache/huggingface/hub/models--Qwen--Qwen3-ASR-1.7B/`. **Most users will not have it, and that is
+normal** — many people install LargeFileBridge and never use transcription at all. So we do **not** ship it
+and we do **not** download it eagerly. We provision it **the first time the user actually tries to
+transcribe** and it is absent — **only with their explicit permission**. (Apple Silicon only; a non-Apple
+machine simply uses the `mac`/Whisper engine, which needs no big download.)
+
+### 3.1 Detecting readiness + estimating disk (LOCKED)
+
+Before any transcribe runs, the engine reports a **readiness** for the heavyweight model, one of:
+
+| Readiness | Meaning | What happens |
+| --- | --- | --- |
+| **`installed`** | The `mlx-qwen3-asr` CLI **and** the `Qwen/Qwen3-ASR-1.7B` weights are present and pass the health check (§3.4). | Transcribe proceeds — **no popup** (§3.5). |
+| **`missing`** | Not downloaded at all. | First-time **permission popup** (§3.2) with the disk estimate. |
+| **`partial`** | Half-installed — weights present but runtime broken, or an interrupted prior download. | **Health-check/repair** (§3.4): finish/redo only what's missing, then proceed. |
+| **`outdated`** | Installed but an older model/runtime than we now target. | Offer to **update** (same download/configure flow, framed as an upgrade). |
+
+* **Disk estimate — measured, then stored.** We **find out** how much the install actually needs rather
+  than guessing: probe the target model's published weight size and the runtime footprint, sum them with
+  headroom, and **warn the user with that number** before they approve. After a real install we **store the
+  measured actual size** so future estimates (and the Settings display) are exact, not ballparked. The
+  estimate is a **range** ("about 3–6 GB") until we have a stored measurement, then a firm number.
+* We **also** check there is **enough free disk** for the estimate and warn if not — never start a download
+  that cannot finish.
+
+Readiness detection + the (ballpark → stored) disk estimate are computed in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/model-provision.service.ts` — `describeReadiness()` (returns `{ state, installedBytes, estimateBytes, freeDiskBytes }`; the stored measurement lives in the app config under `transcribe.model`).
+
+### 3.2 The first-time permission popup (LOCKED)
+
+When readiness is `missing` and the user takes a transcribe action, we do **not** silently download. We
+show a **one-time permission popup**:
+
+* **What it says.** That transcription uses a powerful local model that must be **downloaded and installed
+  once**, that it will use **about {estimate}** of disk (the §3.1 number), that it runs **entirely on this
+  computer afterwards** (no per-use network, no content leaves the machine), and that they can instead use
+  the **Whisper-on-Mac** engine (§2) without downloading anything.
+* **The choice.** **Download & install** (primary), **Use the Whisper-on-Mac engine instead** (secondary, on
+  macOS), or **Cancel**. Approval is the charter's explicit consent — nothing large is fetched without it.
+* **Shown once.** The decision (approved / declined / use-fallback) is **remembered** so the popup does not
+  nag on every file; the user can change it later in **Settings → Transcription** (§6).
+
+The permission popup + the remembered decision are rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/TranscribeModelConsentDialog.tsx` — `TranscribeModelConsentDialog` (opened via the same global request bus the storage wizard uses, `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/setupWizard.ts`).
+
+### 3.3 Two progress UIs — download, then install/configure (LOCKED)
+
+On approval, provisioning runs as **two sequential progress operations**, each its own dock/Processing job
+([processing.mdx](./processing.mdx), [webapp.mdx §11](./webapp.mdx)):
+
+1. **Download** — a `download` op with a **determinate byte bar** ("Downloading transcription model — 1.8
+   GB / 3.0 GB"). Resumable where the source supports it; a failed/partial download leaves readiness
+   `partial` (§3.4), never a corrupt "installed".
+2. **Install & configure** — an `install` op ("Installing & configuring the transcription model") that puts
+   the weights in their cache dir, ensures the `whisper` runtime + its Python deps, and runs the **health
+   check** (§3.4). Determinate where step counts are known, else a labeled spinner with streamed detail.
+
+Both surface on the **Processing page** and the dock like any other background work, and the triggering UI
+shows an inline state ("Setting up the transcription model…") so the user knows why their transcribe is
+waiting.
+
+The two-phase provisioning job (download then install/configure, each a registry op) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/model-provision.service.ts` — `provision()` (registers `track("download", …)` then `track("install", …)` from `modules/progress/progress.registry.ts`), served by `POST /api/transcribe/engine/provision` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.router.ts`.
+
+### 3.4 Health check & repair — half-installed or outdated (LOCKED)
+
+An install can be interrupted (a killed download, a machine sleep, a partial pip). So provisioning is
+**idempotent and self-healing** — we never assume "the folder exists ⇒ it works":
+
+* **Verify, don't trust.** The health check confirms: the `mlx-qwen3-asr` CLI is on `PATH`; the
+  `Qwen/Qwen3-ASR-1.7B` snapshot exists in the Hugging Face cache with a **non-trivial size**; and a **tiny
+  smoke transcription** of a bundled ~2-second clip returns sane text. Only all-pass ⇒ `installed`.
+* **Repair only what's broken.** A `partial` state re-does **just** the failed step (re-`pipx install` the
+  CLI, or re-trigger the weights download) rather than wiping and restarting — fast, and safe to run
+  repeatedly. On non-Apple-Silicon, "repair" is a no-op and selection falls to `mac`.
+* **Outdated ⇒ update.** When the target model/runtime version moves ahead of what's installed, readiness is
+  `outdated` and the same flow runs as an **upgrade** (with the user's ok).
+
+The verify-then-repair health check (checksum + import + smoke test; per-step repair) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/model-provision.service.ts` — `healthCheck()` / `repair()`.
+
+### 3.5 Skip the popup when already installed (LOCKED)
+
+When readiness is `installed`, the whole permission/provisioning UI is **skipped entirely** — the transcribe
+runs immediately. The popup, the two progress UIs, and the consent prompt exist **only** for the
+first-time / broken / outdated cases. A user who provisioned the model months ago never sees any of it again.
+
+### 3.6 Flow-resume after provisioning — return to exactly where they were (LOCKED)
+
+Provisioning interrupts something the user was doing; when it finishes we **resume that exact thing**. Two
+cases, both required:
+
+* **They had already CONFIRMED a transcribe.** (e.g. they left all 58 files checked in the transcribe popup
+  and hit the blue **Confirm** — [transcribe_calc_engine.mdx §4](./transcribe_calc_engine.mdx),
+  [task_tabs.mdx §5.1](./task_tabs.mdx) — and only *then* did we discover the model was missing.) After the
+  install completes, we **proceed with the transcription** they confirmed: the `transcribe` jobs enqueue and
+  the **Processing** page shows them running. The UI keeps them informed (a bottom toast → the Processing
+  tab powering the run).
+* **They had only OPENED the offer UI.** (e.g. they clicked the Transcribe metric/icon which *opened* the
+  choose-what-to-transcribe window, but had **not** confirmed — and we prompted to install first.) After the
+  install completes, we **return to the right page and re-open the window they left off on**, now showing the
+  **"continue to transcribe"** option — so they finish the choice they were making, nothing lost.
+
+The distinction is a **pending intent** captured before provisioning starts (`confirmed` vs `offered`) and
+replayed after. The pending-intent capture + replay is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/transcribe.ts` — `withModelReady(intent, run)` (records the intent, awaits `provision()`, then either enqueues the confirmed set or re-opens the offer popup on the originating route).
+
+---
+
+## 4. CRITICAL — a 1–2-hour-plus file MUST transcribe in FULL, never truncated (LOCKED)
+
+**This is a hard, load-bearing requirement, not a nicety.** We routinely transcribe media that is **one or
+two hours long (and sometimes longer)**. Whichever engine runs — the heavyweight Qwen3-ASR **or** the
+Whisper-on-Mac fallback — the settings and the pipeline are **triple-checked** so the transcript covers the
+**entire** source. A run that transcribes the first 20 minutes and stops, or silently drops the tail, is a
+**failure** — it must **never** be reported or stored as a success.
+
+### 4.1 The failure modes we design against (LOCKED)
+
+Long-audio truncation has specific, known causes; each is closed off:
+
+* **No time/segment limit is ever passed.** We never pass a flag that caps duration (no `--clip_timestamps`
+  bound, no max-segment cutoff). Whisper's default is to slide its 30-second window across the **whole**
+  file; we keep it that way.
+* **No process/HTTP timeout kills a long run.** The engine is async ([Transcribe.mdx §5.1](./Transcribe.mdx#51-async--non-blocking--the-generate-transcript-didnt-work-fix-locked));
+  the spawn has **no wall-clock timeout**, and the request may stay open for the full run without being
+  reaped. A 2-hour file at RTF≈2–3 on CPU can take hours — that is allowed.
+* **Enough scratch + memory.** The video→MP3 demux and the model both need headroom. We ensure **temp-disk
+  space** for the demuxed audio of a long file and pick settings/chunking (§4.3) that fit the machine's RAM
+  so the OS never OOM-kills the run mid-file.
+* **The MPS→CPU fallback must not accept a partial.** The existing Apple-Silicon MPS path re-runs on CPU when
+  it emits garbage; we additionally require the **English/sanity check to run against a FULL-length output**,
+  not a truncated one — a short MPS result is rejected and CPU re-runs the whole file (§4.2).
+* **Both CLIs transcribe full-length audio natively.** Neither `mlx-qwen3-asr` nor `whisper` caps duration —
+  Whisper slides its 30-second window over the **whole** file and Qwen3-ASR ingests the full audio — so a
+  long file is transcribed end-to-end by default. We never pass a limiting flag, and for the very longest /
+  memory-tight files we **chunk-and-stitch** (§4.3) to bound peak memory rather than risk an OOM kill.
+
+### 4.2 Verify coverage end-to-end (LOCKED)
+
+We do not merely hope it finished — we **verify**:
+
+* The engine reads the **source duration** (`ffprobe`) and, on completion, checks the **last decoded segment
+  end timestamp** (whisper) or the **last recognized time** (Apple) against it.
+* If coverage is **≥ (duration − tolerance)** (a few seconds), the run is **complete**: the header records
+  `Transcript covers: HH:MM:SS ✓ full` ([Transcribe.mdx §4](./Transcribe.mdx#4-what-a-transcript-file-contains)).
+* If coverage is **short**, the run is **incomplete → it is a failure**: we do **not** write a "done"
+  transcript. We retry per §4.3 (chunked / CPU), and if still short, report an honest **failed** with the
+  covered-vs-total figures — surfaced on [Processing](./processing.mdx). A previously-stored short transcript
+  makes the file a **re-transcribe candidate** ([transcribe_calc_engine.mdx §2](./transcribe_calc_engine.mdx)).
+
+### 4.3 Chunk-and-stitch for very long / memory-tight runs (LOCKED)
+
+For files beyond a length the machine can hold in one pass — or after a first attempt comes back
+short — the engine **splits the audio into overlapping chunks** (e.g. ~10-minute windows with a few seconds
+of overlap), transcribes each, and **stitches** them into one transcript (de-duplicating the overlap). This:
+
+* bounds peak memory (a 2-hour file never needs the whole thing decoded at once),
+* makes a failure **recoverable per chunk** (retry the one chunk, not the whole 2 hours), and
+* still yields **one** `.transcription` covering the full duration, verified by §4.2.
+
+Chunking is **transparent** — the output is a single stitched transcript; the header still shows full
+coverage. It is used when needed, not always (a short file runs in one pass).
+
+The duration-coverage verification, the no-timeout long spawn, and the chunk-and-stitch path are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — `transcribeToFile()` (Whisper; coverage check via `parseSegmentEndSec()` vs `probeDurationSec()`, MPS→CPU on a short/garbled result), and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/qwen-asr.ts` — `Qwen3AsrTranscriber.transcribeToFile()` (drives `mlx-qwen3-asr`; coverage verified against `probeDurationSec()`). The `engine.ts` wrapper applies the shared chunk-and-stitch and the `qwen→mac` auto-fallback.
+
+---
+
+## 5. Per-machine parallel calibration (LOCKED)
+
+Transcription is **resource-heavy**, and how many files we run **at once** must be **calibrated to the
+machine**, not fixed. The product owner: *"A lot of lower-power computers can only handle one in parallel,
+but my computer [~24 cores] should be able to handle several more in parallel."* This section is the
+transcribe-specific application of the shared **Core Budget** ([parallelization.mdx](./parallelization.mdx)).
+
+### 5.1 The transcribe concurrency formula (LOCKED)
+
+Batch transcription draws the **mass-compute budget** ([parallelization.mdx §1](./parallelization.mdx)) but,
+because Qwen3-ASR is **internally multi-threaded and memory-heavy**, it fans **narrow** and is
+additionally **RAM-clamped**:
+
+```
+transcribeConcurrency = clamp(
+  1,                                             // never below 1 — every machine can do one
+  floor(coreBudget() / whisperThreadsPerJob),    // CPU: don't exceed the ~90%-of-cores budget
+  floor(usableRAM / modelRamPerJob),             // RAM: each Qwen3-ASR job needs several GB
+  gpuStreams                                     // GPU: how many streams the MPS/VRAM allows (≥1)
+)
+```
+
+* **`whisperThreadsPerJob`** — a heavy ASR job uses multiple threads/GPU per file; default ~**4** so
+  `jobs × threads ≈ budget`, never `cores²` ([parallelization.mdx §2](./parallelization.mdx)).
+* **`modelRamPerJob`** — the measured resident footprint of one job: **`qwen` (Qwen3-ASR-1.7B via MLX)**
+  holds the model in **unified memory** (several GB per instance); **`mac` (whisper-base)** is much lighter
+  (~1 GB). This is the clamp that keeps a **16 GB laptop at 1** `qwen` job while a **64 GB / 24-core
+  workstation runs several**.
+* **The `mac` fallback** is lighter, so it resolves to a **higher** concurrency than `qwen` on the same box.
+* **Result:** low-power boxes converge on **1 at a time** (correct — one heavy run is all they can hold);
+  the product owner's ~24-core / large-RAM machine runs **several** jobs concurrently, filling the budget
+  without thrashing.
+
+### 5.2 The minimum bar to run Qwen3-ASR (LOCKED)
+
+A machine that cannot hold even **one** Qwen3-ASR instance (too little RAM/VRAM) is **not** forced to —
+`pickEngine()` (§2) routes it to the **Whisper-on-Mac** fallback (or `whisper-base`) instead of OOM-crashing.
+The bar is a simple RAM/VRAM floor checked at selection time.
+
+### 5.3 Calibrate once, cache it (LOCKED)
+
+The core count, usable RAM, and the model's measured footprint are read **once** and cached (refreshed when
+the model or the parallelism knob changes), so every batch doesn't re-probe the machine. The resolved number
+is **shown to the user** on the Processing page's worker-utilization read
+([processing.mdx §3a](./processing.mdx#3a-worker-utilization--the-parallelism-read-locked)) — e.g. *"3 / 3
+transcription workers busy."*
+
+### 5.4 The knobs (LOCKED)
+
+* **`performance.max_core_fraction`** (default 0.9) — the shared Core-Budget fraction
+  ([parallelization.mdx §4](./parallelization.mdx)); tunes the CPU term above.
+* **`transcribe.max_parallel`** (optional override) — a hard cap the user can set in **Settings →
+  Transcription** for machines where the auto-calibration is too aggressive/conservative; blank = auto (§5.1).
+* **`transcribe.engine`** — `auto` (default; §2 selection order) · `qwen` · `mac`.
+
+The transcribe concurrency calibration (the clamp, the RAM/GPU terms, the min-bar routing) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe-concurrency.ts` — `transcribeConcurrency()` (draws `coreBudget()`/`logicalCores()` from `shared/concurrency.ts`, clamps by measured `modelRamPerJob` + `usableRAM` + `gpuStreams`), read by the queue's `transcribe` admission bucket in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts`.
+
+---
+
+## 6. Settings — the Transcription panel (LOCKED)
+
+**Settings → Transcription** ([settings.mdx](./settings.mdx)) surfaces the engine state and the knobs:
+
+* **Engine + model status** — which engine is active, the model readiness (§3.1), its **on-disk size**, and
+  actions: **Download / Update the heavyweight model**, **Repair**, **Remove** (frees the disk), and
+  **Re-check**.
+* **Engine choice** — `Auto` / `qwen` / `Whisper-on-Mac` (`transcribe.engine`).
+* **Parallelism** — the resolved auto number (§5.1) with the optional `transcribe.max_parallel` override,
+  next to the shared **Parallelism** slider ([parallelization.mdx §4](./parallelization.mdx)).
+
+The Transcription settings panel is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` — `TranscriptionSettingsSection` (reads `GET /api/transcribe/engine`, drives provision/repair/remove).
+
+---
+
+## 7. Acceptance criteria
+
+1. **Two engines (§2):** a primary **heavyweight Qwen3-ASR** engine and a **Whisper-on-Mac** (`mac`)
+   fallback; `pickEngine()` selects Qwen3-ASR when its model is ready and the machine qualifies, else the
+   Whisper-on-Mac, else whisper-base; the transcript header records which engine ran.
+2. **Detect + estimate (§3.1):** before transcribing, readiness is one of `installed` / `missing` / `partial`
+   / `outdated`; a **disk estimate** (ballparked, then replaced by a **stored measured size**) and a
+   **free-disk** check are computed; the number is shown before any download.
+3. **Permission-gated first-time provisioning (§3.2–§3.3):** when the model is `missing` and the user tries
+   to transcribe, a **one-time permission popup** warns the disk cost and offers Download / use the Mac
+   built-in / Cancel; **only on approval** does LFBridge **download → install → configure**, each with its
+   **own progress UI** (a byte-determinate download, then an install/configure op) watchable on Processing.
+4. **Skip when installed (§3.5):** when readiness is `installed`, **no popup or progress UI** appears — the
+   transcribe runs immediately.
+5. **Health-check / repair (§3.4):** a `partial`/`outdated` model is **verified** (checksum + runtime import
+   + 2-second smoke test) and **repaired per-step** (or upgraded), never blindly trusted; only all-pass ⇒
+   `installed`.
+6. **Flow-resume (§3.6):** after provisioning, a **confirmed** transcribe **proceeds** (jobs enqueue, shown
+   on Processing); an **offer that was only opened** re-opens **on the original page/window** showing the
+   continue-to-transcribe option — nothing the user was doing is lost.
+7. **CRITICAL full-duration, no truncation (§4):** a 1–2-hour-plus file transcribes to the **full duration**
+   under either engine; **no** duration cap/timeout is ever applied; coverage is **verified** (last segment
+   end vs source duration); a **short/truncated** result is a **failure** (retried, chunked if needed, and
+   reported honestly) — **never** stored as a success. Chunk-and-stitch bounds memory and makes long runs
+   recoverable per chunk while yielding one full-coverage transcript.
+8. **Per-machine parallelism (§5):** batch transcription concurrency is **calibrated** from the Core Budget,
+   RAM per Qwen3-ASR job, and GPU streams — **≥ 1 always**; a low-power box runs **1 at a time**, a
+   ~24-core/large-RAM box runs **several**; a machine that can't hold one Qwen3-ASR instance is routed to
+   the fallback, not OOM-crashed. Knobs: `performance.max_core_fraction`, `transcribe.max_parallel`,
+   `transcribe.engine`.
+9. **Local-only posture (§3, security.mdx):** at run time nothing about the media/transcript leaves the
+   machine; the **only** network step is the **permissioned, content-free** model-weights download, which
+   never recurs once installed.
+
+<!--
+  TRANSCRIBE ENGINE deep-spec (under Transcribe.mdx). FOUR things:
+  Learned from ~/BGit/all/tools/Transcription/Transcribe.js (the canonical two-engine tool).
+  §2 TWO ENGINES: (2, DEFAULT) qwen = Qwen3-ASR via Apple MLX — `mlx-qwen3-asr` CLI @ Qwen/Qwen3-ASR-1.7B;
+     Apple-Silicon-only; `pipx install mlx-qwen3-asr`; weights ~3.4GB download from HF on first run.
+     (1) mac = OpenAI Whisper @ base, MPS→CPU + English sanity check; `pipx install openai-whisper`; small.
+     pickEngine(): qwen if Apple-Silicon + CLI/weights ready + RAM ok, else mac. AUTO-FALLBACK qwen→mac on any
+     qwen error (never lose a file). Both produce the SAME .transcription and BOTH satisfy §4. Header records
+     which engine ran. Code: tools/transcribe/engine.ts pickEngine+fallback, qwen-asr.ts, Transcribe.ts.
+  §3 MODEL PROVISIONING (permission-gated): readiness = installed|missing|partial|outdated. missing + user
+     tries to transcribe → ONE-TIME permission popup w/ DISK ESTIMATE (ballpark→STORED measured size) + free
+     disk check; approve → DOWNLOAD (byte-determinate op) then INSTALL/CONFIGURE (op) — TWO progress UIs
+     (processing.mdx). installed → SKIP popup entirely (§3.5). partial/outdated → HEALTH CHECK (checksum +
+     runtime import + 2s smoke test) + per-step REPAIR/upgrade (§3.4). FLOW-RESUME (§3.6): confirmed
+     transcribe → proceed (enqueue, Processing); only-offered → re-open the offer window on the original
+     page. Code: model-provision.service.ts describeReadiness/provision/healthCheck/repair,
+     POST /api/transcribe/engine/provision, TranscribeModelConsentDialog.tsx, lib/transcribe.ts withModelReady.
+  §4 CRITICAL — FULL DURATION, NEVER TRUNCATE (LOCKED). 1–2h+ files must transcribe end-to-end. No duration
+     cap flag, NO wall-clock/HTTP timeout, enough temp-disk+RAM, Whisper MPS→CPU fallback must reject a
+     PARTIAL not accept it. Both mlx-qwen3-asr and whisper transcribe full-length audio natively. VERIFY
+     coverage: last segment end / recognized time vs ffprobe duration; short = FAILURE (retry/chunk, honest
+     fail, re-transcribe candidate), never a silent success. CHUNK-AND-STITCH (~10min overlapping windows) for
+     very long / memory-tight / after-short-retry; one stitched full-coverage transcript. Code:
+     engine.ts chunk-and-stitch + Transcribe.ts/qwen-asr.ts transcribeToFile coverage check.
+  §5 PER-MACHINE PARALLELISM: transcribeConcurrency = clamp(1, floor(coreBudget/whisperThreadsPerJob≈4),
+     floor(usableRAM/modelRamPerJob), gpuStreams). Low-power → 1; ~24-core/big-RAM → several. Min-bar: can't
+     hold one Qwen3-ASR → route to fallback (not OOM). Calibrate once + cache; show on processing §3a.
+     Knobs: performance.max_core_fraction (0.9), transcribe.max_parallel (override), transcribe.engine
+     (auto|qwen|mac). Code: transcribe-concurrency.ts, jobqueue transcribe bucket.
+  §6 Settings → Transcription: engine+model status/size, Download/Update/Repair/Remove/Re-check, engine
+     choice, parallelism. SettingsPage TranscriptionSettingsSection.
+  Keep in sync with Transcribe.mdx (feature, §3 output placement), parallelization.mdx (Core Budget),
+  tools.mdx (CLI binaries), processing.mdx (§3a utilization + where provisioning/transcribe jobs show),
+  settings.mdx (knobs), security.mdx (local-only + the one permissioned download).
+-->

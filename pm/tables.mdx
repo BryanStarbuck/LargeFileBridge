@@ -28,6 +28,8 @@ Applies to (every primary/listing table):
 * [Repos](./repos.mdx) — the repo list (`/`). *(Reference implementation.)*
 * [Full-paths](./full_paths.mdx) — the flat **files** table of large files under a folder (`/fs/paths`).
 * [Communities](./communities.mdx) — the communities list (`/communities`).
+* [Task tabs](./task_tabs.mdx) — a per-repo screen where the visible column SET (not just widths) changes
+  with the active task tab, on top of this spec's per-user sort/filter persistence.
 * Every future listing table inherits this by default.
 
 > The Finder-style **column** browser ([directories.mdx](./directories.mdx)) is a column view, not a
@@ -257,6 +259,25 @@ Repo / File) and its Status verdict are pinned. Implemented in
 6. **Sort and filter persist per user, per page** in `users/<email>/config.yaml` `tables.views`, saved
    on every change and restored on load; the default is not written until the user changes something
    (§4).
+
+## 6. Tab-scoped column sets (LOCKED)
+
+Beyond responsive width-based hiding ([repos.mdx §3.2.1](./repos.mdx#321-responsive-column-priority--drop-the-least-important-column-as-the-table-narrows-locked)),
+a table may **switch which columns exist** based on a **task tab** above it. The per-repo files table does
+this ([task_tabs.mdx §7](./task_tabs.mdx#7-how-a-tab-re-tunes-the-table-mechanism-locked)): the page defines
+the **union** of all columns once, and the active tab selects and orders a **subset** (`columnIds`) plus a
+**default sort** for that task. Rules:
+
+* **Tab selection is presentation, not preference.** The active tab is ephemeral view state; it is **not**
+  written to `config.yaml` (unlike this spec's per-user sort/filter persistence, §4, which still applies
+  *within* whatever tab is active).
+* **The two hiding mechanisms compose.** The tab picks the column *set*; the responsive priority rule then
+  drops the least-important of *those* as width shrinks.
+* **Sort/filter still reach columns the tab hides.** As with responsive hiding, a column absent from the
+  active tab is simply not shown; switching tabs re-projects the same underlying rows (no refetch).
+
+Applied in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (reads `TASK_TABS[activeTab].columnIds` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts`).
 
 <!--
   LOCKED: Every primary table has a leading bookmark toggle (per-computer, per-entity flag, §1.1).

@@ -119,6 +119,33 @@ in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar`
 (reads `useProgress()`; renders the Processing `<Link>` after the yaml items when `processing` is true).
 
+### 3.2 Repos nest under their owner in the Storages disclosure (LOCKED)
+
+The **Storages** disclosure (§3) already lists **Personal**, one child **per Company**, a flat **Repos** link, and
+**Communities**. On top of that, **each repo groups under its owner** — the company or Personal it maps to
+([repo_company_mapping.mdx](./repo_company_mapping.mdx)) — so the disclosure doubles as an owner-grouped repo tree,
+**in addition to** (never replacing) the flat **Repos** child that routes to the long list ([repos.mdx](./repos.mdx)).
+
+* **Where the nesting appears.** The **Personal** child and **each Company** child are **themselves expandable**:
+  expanding one reveals a sub-list of the repos owned by it (label = repo name, route = `/repos/$repoId`). A
+  company with no repos yet expands to an empty/"No repos" leaf; Personal always has at least the repos with no
+  forge org ([repo_company_mapping.mdx §3](./repo_company_mapping.mdx#3-the-heuristic--which-parse-becomes-a-company-locked)).
+* **The flat Repos child stays.** Clicking the **Repos** child still routes to the dedicated Repos tab (the whole
+  list) — the owner nesting is a *convenience grouping*, not a replacement. A repo therefore appears **twice**: once
+  under its owner group, and in the flat Repos list.
+* **Runtime-injected, like the company children.** These per-owner repo sub-lists depend on **live** state (the
+  discovered repos and their derived/overridden owners), so — exactly like the dynamic per-Company children (§3)
+  and the Processing item (§3.1) — they are **not** static rows in `pm/left_bar.yaml`. The yaml documents them as a
+  commented, runtime-only shape; `Sidebar.tsx` injects them under each owner child at render time.
+* **Auto vs. manual owner.** A company group derived automatically from a forge org
+  ([repo_company_mapping.mdx §3.1](./repo_company_mapping.mdx#31-the-honest-limitation-locked)) carries a subtle
+  **(auto-detected)** hint on its group header; a user-assigned owner shows no hint. The friendly **display name**
+  ([storage_company.mdx §6](./storage_company.mdx#6-the-friendly-display-name)) — not the cryptic org slug — labels
+  each company group.
+
+Injecting each owner child's repo sub-list under the Storages disclosure at runtime (grouping the discovered repos by their `owner`, labeling companies by display name) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (builds `storageChildren`, then nests the repos grouped by `RepoRow.owner` under the matching Personal / Company child), reading owners composed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoRow()`.
+
 ---
 
 ## 4. The account slot (bottom of the bar)
@@ -211,4 +238,9 @@ Resolving a nav item's lucide icon by name (unknown name renders nothing) is han
   account slot to host the NON-INTRUSIVE hover-info panel (non_intrusive_tooltip.mdx) — blank at rest so the
   account slot never jumps; HoverInfoPanel.tsx mounted by Sidebar.tsx between </nav> and the account div.
   The nav list is therefore NOT a bare flex-1 down to the slot; the panel block is carved out above it.
+  §3.2 (repo_company_mapping.mdx): each repo GROUPS UNDER ITS OWNER — the Personal child and each Company child are
+  themselves expandable to the repos owned by them (route /repos/$repoId), IN ADDITION TO the flat Repos child
+  (which still routes to the long list — a repo appears twice). Runtime-injected like the per-Company children (NOT
+  static yaml rows); Sidebar.tsx nests repos grouped by RepoRow.owner under each owner child, labeling companies by
+  the friendly display name (storage_company §6), with an (auto-detected) hint on auto-derived company groups.
 -->

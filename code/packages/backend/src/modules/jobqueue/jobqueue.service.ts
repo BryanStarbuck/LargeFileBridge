@@ -15,8 +15,10 @@ import { describeOne } from "../describe/describe.service.js";
 import { compressFile } from "../compress/compression.service.js";
 import { track } from "../progress/progress.registry.js";
 import type { ProviderId } from "../describe/adapters.js";
-import type { DeleteOriginalMode, ProcessingBatch, ProgressKind } from "@lfb/shared";
+import type { DeleteOriginalMode, ProcessingBatch, ProgressKind, QueuedItemView, FailedItemView } from "@lfb/shared";
+import { mediaKindForName } from "@lfb/shared";
 import { coreBudget } from "../../shared/concurrency.js";
+import { transcribeConcurrency, activeTranscribeModelKey } from "../transcribe/transcribe-concurrency.js";
 import { log } from "../../shared/logging.js";
 
 export type JobOp = "transcribe" | "describe" | "compress";
@@ -66,7 +68,13 @@ function capFor(bucket: Bucket, budget: number): number {
     case "compress:video":
       return Math.max(1, Math.floor(budget / VIDEO_THREADS)); // NARROW — thread-capped jobs fill the budget
     case "transcribe":
-      return Math.max(1, Math.floor(budget / WHISPER_THREADS)); // NARROW — Whisper is heavy + multi-threaded
+      // NARROW + RAM/GPU-clamped (transcribe_engine.mdx §5.1): Whisper is heavy + multi-threaded AND multi-GB
+      // per instance, so beyond the CPU term we clamp by RAM — a low-power box runs 1, a big box runs several.
+      return transcribeConcurrency({
+        budget,
+        whisperThreads: WHISPER_THREADS,
+        model: activeTranscribeModelKey(),
+      });
     case "describe":
       return DESCRIBE_CONCURRENCY; // network-parallel, not core-bound
   }
@@ -184,6 +192,35 @@ export function activeBatchCount(): number {
   return n;
 }
 
+// ── Per-item Processing table feeds (processing.mdx §4.3) ──────────────────────
+// PENDING items as rows (the head of the queue, capped) + recently-FAILED items with their reason (kept
+// through a retention window). These drive the Processing page's per-item table's Pending and Failed rows.
+const QUEUED_ITEMS_CAP = 500;
+/** The head of the pending backlog as rows (op + path + media kind), capped for a light poll. */
+export function listQueuedItems(): QueuedItemView[] {
+  return pending.slice(0, QUEUED_ITEMS_CAP).map((t) => ({
+    op: t.op,
+    path: t.path,
+    kind: mediaKindForName(path.basename(t.path)),
+  }));
+}
+
+const recentFailures: FailedItemView[] = [];
+const FAILURE_RETENTION_MS = 30 * 60 * 1000;
+const MAX_FAILURES = 500;
+function recordFailure(f: Omit<FailedItemView, "at">): void {
+  recentFailures.push({ ...f, at: new Date().toISOString() });
+  if (recentFailures.length > MAX_FAILURES) recentFailures.splice(0, recentFailures.length - MAX_FAILURES);
+}
+/** Recently-failed items, pruned past the retention window (so failures stay readable after a run). */
+export function listRecentFailures(): FailedItemView[] {
+  const now = Date.now();
+  for (let i = recentFailures.length - 1; i >= 0; i--) {
+    if (now - Date.parse(recentFailures[i].at) > FAILURE_RETENTION_MS) recentFailures.splice(i, 1);
+  }
+  return [...recentFailures];
+}
+
 /** Start as many pending tasks as the per-op caps allow. Synchronous; parks when nothing is runnable. */
 function pump(): void {
   for (;;) {
@@ -247,12 +284,20 @@ export function workerUtilization(): { busy: number; budget: number } {
 async function runTask(t: QueueTask): Promise<void> {
   try {
     if (t.op === "transcribe") {
-      await transcribeOne(t.path, t.overwrite);
+      // Capture the per-file result so a failure (incl. a truncated-transcript failure — transcribe_engine
+      // §4) surfaces as a Failed ROW on the Processing table (processing.mdx §4.3), not just a log line.
+      const tr = await transcribeOne(t.path, t.overwrite);
+      if (tr.status === "failed" || tr.status === "tool_missing") {
+        recordFailure({ op: "transcribe", path: t.path, reason: tr.reason ?? tr.status });
+      }
     } else if (t.op === "describe") {
-      await describeOne(t.path, {
+      const dr = await describeOne(t.path, {
         overwrite: t.overwrite,
         provider: (t.provider as ProviderId | "auto" | undefined) ?? undefined,
       });
+      if (dr.status === "failed" || dr.status === "no_provider" || dr.status === "unsupported") {
+        recordFailure({ op: "describe", path: t.path, reason: dr.reason ?? dr.status });
+      }
     } else {
       // compress — wrap in a track("compress", …) so the file shows a live dock card while it runs.
       // The heavy transcode is async inside compressFile (spawn), so this does NOT block the event loop.
@@ -272,10 +317,13 @@ async function runTask(t: QueueTask): Promise<void> {
       // present. "blocked" / "failed" are errors surfaced in the batch's final error list.
       const ok = r.status === "compressed" || r.status === "skipped";
       recordBatchResult(t.batchId, { ok, path: t.path, reason: r.reason ?? undefined });
+      if (!ok) recordFailure({ op: "compress", path: t.path, reason: r.reason ?? r.status });
     }
   } catch (e) {
     // A thrown compress task must still be counted against its batch, else the batch never finishes.
     if (t.op === "compress") recordBatchResult(t.batchId, { ok: false, path: t.path, reason: (e as Error).message });
+    // Any thrown op surfaces as a Failed row on the Processing table (processing.mdx §4.3).
+    recordFailure({ op: t.op, path: t.path, reason: (e as Error).message });
     log.error("jobqueue", `${t.op} failed for ${t.path}: ${(e as Error).message}`);
   }
 }

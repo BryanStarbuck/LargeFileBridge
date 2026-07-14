@@ -34,6 +34,11 @@ It builds on and does not repeat: [Use cases & health model](./use_cases.mdx),
 [Security](./security.mdx), [Settings](./settings.mdx), [Devices](./devices.mdx),
 [File system](./file_system.mdx).
 
+* [Task tabs](./task_tabs.mdx) — the per-repo screen's metrics-panel strip, where each warning is
+  presented as a **narrow tile** (Title-Case label over a big number; green big-`0` when clear). On that
+  page the tiles **replace the warning banner** (§2.6): **clicking a tile** opens the same educate-and-fix
+  popup this spec defines.
+
 ---
 
 ## 1. The warning model (built on the LOCKED health model)
@@ -59,11 +64,14 @@ not decided to Pin or Ignore, a yellow banner reads:
 > **6 files need a decision**
 > Choose Pin or Ignore for them in the table below so LFBridge knows what to move.
 
-That banner is produced in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` —
-component `RepoStatusVerdict`, the `undecided > 0` branch. This spec generalizes that banner into a
-**reusable warning surface with an arrow button and an educate-and-fix popup**, and then requires the
-**same** surface for every other warnable condition (§10+).
+This spec generalizes that message into a **reusable warning surface with an educate-and-fix popup**,
+and then requires the **same** surface for every other warnable condition (§10+). **On the One-repo page
+the launcher is the metric panel** (clicking it opens the popup, [task_tabs.mdx §2.6](./task_tabs.mdx)) —
+the old `RepoVerdict` `StatusBanner` there has been removed; other pages still launch the popup from the
+banner's blue **arrow button** (§3). The popup itself is identical either way; only what you press to open
+it differs. The undecided popup is built in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+`buildMetricWarning` (the `undecided` case).
 
 > **Rule — every warning is a first-class, specified thing.** No warning ships as an ad-hoc string in
 > a page. Every warning is declared in the **warning registry** (§8), rendered by the shared
@@ -83,8 +91,11 @@ and uncommitted, under `~/T/_large_files_bridge/_do_batches/`.
 
 1. **A repo's file-work warning *is* that repo's TO DO Batch surfacing itself on the repo page**
    (LOCKED). The existing "N files need a decision" warning (§10.2.7, id `repo-files-need-decision`) is
-   the `repo_<name>_2_do.yaml` batch rendered as a banner. The banner's **blue-arrow popup (§3–§4) IS
-   the batch popup** — the same educate-list-apply surface.
+   the `repo_<name>_2_do.yaml` batch. **On the One-repo page it is surfaced through the repo's metric
+   panels, not a banner** ([task_tabs.mdx §2.6](./task_tabs.mdx)): the panel's count is the headline and
+   **clicking the panel opens the batch popup**. That **popup (§3–§4) IS the batch popup** — the same
+   educate-list-apply surface a banner's blue-arrow button would have opened; only the launcher differs
+   (the metric tile instead of a banner arrow). The One-repo page shows **no separate warning banner**.
 2. **The same batch also appears as a SLUG on the To Do page** (`/todo`,
    [to_do.mdx](./to_do.mdx) §8). Applying from **either** surface writes the same decisions to the
    team-shared `.lfbridge/decisions.yaml` ([decisions.mdx](./decisions.mdx)) and **clears the work from
@@ -1814,21 +1825,21 @@ This category owns every warning about **shrinking, converting, or refusing to t
 
 **Notes / gaps.** Not an alarm — surface as a quiet explanation. **Gap:** the badges/counts **don't** account for the global `enabled`/`skipExts` state, so a user can be offered a compress that immediately returns "disabled." Reconcile the offer surfaces (badges/counts) with settings.
 
-#### 10.5.17 Describe auto-writes a .gitignore entry for its sidecar (charter-tension note) — `neutral` (id: describe-autogitignores-sidecar)
+#### 10.5.17 Describe auto-writes a .gitignore entry for its artifact (RETIRED — no longer applies) — `neutral` (id: describe-autogitignores-sidecar)
 
-*Where shown:* **not user-visible today** — a silent `.gitignore` edit on a successful describe in a plain git repo. Owned here as a compliance flag against the charter's big-file gitignore rule (see also §10.4 for the general big-file gitignore nudge).
+*Where shown:* **not user-visible, and no longer occurs.** This flag covered a silent `.gitignore` edit on a successful describe in a plain git repo. It is **RETIRED** by the current locked artifact layout: the `.ai_description` (and `.transcription`) artifacts now live **inside the committed `.lfbridge/` tracking directory**, path-mirrored, with the extension **appended** ([ai_description.mdx §2](./ai_description.mdx), [Transcribe.mdx §3](./Transcribe.mdx)). Because `.lfbridge/` is deliberately committed and travels with the repo, **no `*.ai_description` / `*.transcription` git-ignore line is injected anymore** — so the charter tension this flag described is **gone**.
 
-**(A) Detect it & all conditions.** On a successful describe in a plain repo (the `gitIgnore` flag true), `ensureLfbridgeIgnored()` **automatically** appends `*.ai_description` to the repo's `.gitignore` if absent — no user click. *Computed in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `ensureLfbridgeIgnored()` (L58–75), called at L221.
+**(A) What changed.** The old code appended `*.ai_description` to a plain repo's `.gitignore` on a successful describe (via a `gitIgnore` placement flag). That per-case flag and the auto-ignore write are **removed**: the artifact is written under `.lfbridge/` and committed like every other tracking artifact. *Placement in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `lfbridgeArtifactPath()`; `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()` (no `.gitignore` edit).
 
-**(B) The popup.** *What this is:* if surfaced — explain that LFBridge keeps its generated description sidecars out of Git in a plain repo (mirroring transcription's `*.transcription`), and let the user **opt out** — because the charter's big-file policy says "**never add a `.gitignore` entry automatically for anyone**." *Why it matters:* it's an unrequested write to the user's `.gitignore`, however benign. *Options:* checkbox "Don't auto-ignore my description sidecars." *Action button:* none for correctness — an offer/confirm at most.
+**(B) The popup.** *None.* There is nothing to surface — the app makes no unrequested `.gitignore` write for these artifacts.
 
-**(C) The fix.** No fix needed for correctness, but for charter compliance consider gating this behind a user confirm/offer rather than an automatic write, consistent with the big-file gitignore nudge policy. *Fix in:* `describe.service.ts` `ensureLfbridgeIgnored()` (L58–75). No auto-fix — a policy/design change.
+**(C) The fix.** *Resolved by design* — the retirement of the git-ignore nudge already satisfies the charter's "**never add a `.gitignore` entry automatically for anyone**" rule for these artifacts. If any residual auto-ignore code remains, delete it.
 
-**Notes / gaps.** **Compliance tension:** this auto-write is for the app's **own** artifact (arguably fine, like transcribe's sidecar), but it's the one place the describe module edits `.gitignore` without an explicit user click — flagged for review against the "never auto-gitignore" charter rule.
+**Notes / gaps.** Kept in the catalog for traceability: the earlier "charter tension" (an automatic `.gitignore` write for the app's own artifact) no longer exists under the committed-`.lfbridge/` layout.
 
 ## 10.6 AI description (vision) warnings
 
-These warnings govern the **"Generate AI description"** feature — the one place LFBridge deliberately sends a file's bytes off-box, to a hosted vision model (Gemini / Grok / OpenAI), to produce a `.ai_description` sidecar. Every failure mode of that flow surfaces through the standard banner + popup: the file can't be described because no key is configured, the pinned model was retired, the provider rejected/timed-out the call, no Personal storage owns the file, or the file is over the inline-upload cap. The one hard rule threaded through all of them: **generation never modifies the original** — large files are transcoded to a throwaway temp copy purely for upload. All backend logic lives in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/` (`describe.service.ts`, `adapters.ts`, `models.ts`, `fit-media.ts`, `describe.router.ts`); the surfaces are the `MediaViewer` entity page and the Settings/Tools/AI-credentials pages. Ranked Broken (`bad`) before Improvable (`warn`).
+These warnings govern the **"Generate AI description"** feature — the one place LFBridge deliberately sends a file's bytes off-box, to a hosted vision model (Gemini / Grok / OpenAI), to produce a `.ai_description` artifact under the owning storage's `.lfbridge/`. Every failure mode of that flow surfaces through the standard banner + popup: the file can't be described because no key is configured, the pinned model was retired, the provider rejected/timed-out the call, no Personal storage owns the file, or the file is over the inline-upload cap. The one hard rule threaded through all of them: **generation never modifies the original** — large files are transcoded to a throwaway temp copy purely for upload. All backend logic lives in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/` (`describe.service.ts`, `adapters.ts`, `models.ts`, `fit-media.ts`, `describe.router.ts`); the surfaces are the `MediaViewer` entity page and the Settings/Tools/AI-credentials pages. Ranked Broken (`bad`) before Improvable (`warn`).
 
 #### 10.6.1 The AI model you pinned was retired — update it — `bad` (id: describe-model-retired)
 
@@ -1884,7 +1895,7 @@ These warnings govern the **"Generate AI description"** feature — the one plac
 
 **(A) Detect it & all conditions.** `resolveDescriptionPath()` walks ancestors looking for a home storage (a `storage.yaml` / `.lfbridge` / `.git` marker) — if none owns the file, `needsSetup=true` and `describeOne` returns `status='needs_setup'` ("no storage is set up for this file — configure Personal storage first"). In the batch path, `enqueueDescribe` counts `needSetup`; when `needSetup === eligible.length` (i.e. **all** eligible files lack storage) it queues **nothing** and returns `{needsSetup:true, setupPath}` (the representative path) to open the wizard rather than write a sidecar in a surprising directory. *Computed in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `resolveDescriptionPath()` (from line 44), `describeOne` `needs_setup` (line 189), `enqueueDescribe` all-need-setup gate (lines 309–311). Frontend: `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/describe.ts` — `runDescribeFile` `needs_setup` branch (lines 48–55) + `msgOne` (lines 21–23) → `requestStorageSetup({mediaPath, actionLabel, retry})`; `~/.../frontend/src/lib/setupWizard.ts` `requestStorageSetup`; component `FirstTimeStorageWizard.tsx`.
 
-**(B) The popup.** *What this is:* AI descriptions (and other per-file metadata) are written into the **syncable-data-location of a Personal storage** so they get placed and pinned predictably — but no storage currently owns this file, so a one-time storage must be created first. The popup explains, in plain terms, what a storage/SDL is and that setup is quick and one-time. *Why it matters:* Without a home storage the sidecar would either not be written or land somewhere unexpected and un-pinned. *Options:* the wizard flow (choose/create the Personal storage location). *Action button:* the wizard's own primary (creates/registers the Personal storage covering this path).
+**(B) The popup.** *What this is:* AI descriptions (and other per-file metadata) are written into the **syncable-data-location of a Personal storage** so they get placed and pinned predictably — but no storage currently owns this file, so a one-time storage must be created first. The popup explains, in plain terms, what a storage/SDL is and that setup is quick and one-time. *Why it matters:* Without a home storage the `.lfbridge/` artifact would either not be written or land somewhere unexpected and un-committed. *Options:* the wizard flow (choose/create the Personal storage location). *Action button:* the wizard's own primary (creates/registers the Personal storage covering this path).
 
 **(C) The fix.** Run the `FirstTimeStorageWizard` for `setupPath` to create/register a Personal storage (SDL) covering the file; on success the queued describe **auto-retries** (the retry closure is passed through from `describe.ts`). Manual alternative: Settings → Storages → add a Personal storage. **No silent auto-fix** — the user must pick the storage location. *Fix in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `enqueueDescribe` setup return (lines 309–311); frontend `~/.../frontend/src/lib/setupWizard.ts` `requestStorageSetup` + `components/FirstTimeStorageWizard.tsx`, with the auto-retry closure from `describe.ts` (lines 48–55).
 
@@ -2692,6 +2703,118 @@ This category owns every warnable condition on the **Settings**, **Tools**, and 
 **(C) The fix.** **No user fix.** Developer next step: inspect `error.err` for the repeated `client:*` context to find the looping component/effect and fix the source of the flood. *Fix in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/clientlog/clientlog.router.ts` (guard only — no remediation endpoint). No auto-fix — routes to developer inspection of `~/T/_large_files_bridge/error.err`.
 
 **Notes / gaps.** Flagged for completeness — **not a candidate for the amber/red verdict banner**; it's a flood guard on the shared fault trail (charter: logs live in the state root, never `/tmp`). Its **firing is a proxy** for a frontend error loop worth developer attention, and it pairs with §10.10.14 (a re-login loop is a common cause).
+
+## 11. Warnings as metric panels — the per-repo task-tab strip (LOCKED)
+
+On the per-repo screen ([one_repo.mdx](./one_repo.mdx)), warnings are also presented as a strip of **metric
+panels** above the files table, scoped to the active **task tab**
+([task_tabs.mdx §2](./task_tabs.mdx#2-the-metrics-panels--the-what-could-be-done-boxes-locked)). This is a
+compact rendering of the same warning model this spec defines — not a new warning system.
+
+* **One panel = one warning/metric.** Each panel is a **terse label + a number + a right chevron (`›`)** —
+  e.g. `Undecided 5`, `Not backed up 3`, `Compressible videos 12`. **No description prose in the panel**;
+  the explanation appears in the **hover-info region** to the right of the strip
+  ([task_tabs.mdx §3](./task_tabs.mdx#3-the-hover-info-region--the-space-to-the-right-of-the-panels-locked),
+  [non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)).
+* **Green-zero = nothing to do.** When a panel's count is **0**, it renders as a **light-green filled
+  rounded rectangle with a big `0`** — the all-clear reassurance state. A count `> 0` is **health-tinted**
+  (red = data at risk / owed; amber/accent = action needed).
+* **The chevron opens this spec's popup.** Clicking a panel's chevron opens the **educate-and-fix popup**
+  (§4 of this spec) for that warning, scoped to exactly the files the number counts — the two/three
+  per-row action toggles, the media preview pane, the composed Apply label, all as already specified. A
+  green-`0` panel opens the popup in its **all-clear** state.
+* **Which panels show is per active tab** ([task_tabs.mdx §4](./task_tabs.mdx#4-per-tab-tuning-locked--filter--columns--sort--metrics)):
+  All shows every actionable metric; IPFS/Compress/Transcribe show only their task's metrics.
+
+The metric-panel strip and its chevron → popup wiring are rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricsStrip` / `MetricPanel` (each panel's chevron mounts the existing `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningArrowButton.tsx` — `WarningArrowButton`, resolved per metric in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts`).
+
+### 11.1 The task-work metric popups — transcribe / describe / compress (the metric-tile fix) (`warn`)
+
+Historically **only** the `undecided` and `pullDown` metric tiles had an educate-and-fix `WarningDef`; the
+`ipfs-down` condition rode the header primary. So clicking the **task** tiles — `Transcribable`,
+`Describable`, `Compressible Videos`, `Compressible Images` — resolved `null` and the tile **did nothing
+useful** (it fell through to its `onOpen` fallback, which re-selects the tab the user is already on — a
+visible no-op), and no blue task-verb header primary ever showed. **This subsection catalogs the fix**: a
+`WarningDef` builder for every actionable task metric, so the tile opens the scoped popup and the header can
+name the work. These are **Improvable offers** (`warn`), never data-at-risk alarms — the popup is an *offer
+to start the work*, dismissible per §5.6. See [task_tabs.mdx §2.4.1](./task_tabs.mdx#241-every-actionable-metric-tile-opens-a-popup--the-transcribe--compress--describe-builders-the-fix-locked)
+(the fix) and [task_tabs.mdx §2.7](./task_tabs.mdx#27-the-per-metric-blue-header-primary--every-actionable-metric-can-be-the-recommendation-locked)
+(the worst-first header primary: **ipfs-down → pull-down → undecided → transcribe → describe → compress**).
+
+All three builders live in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+`buildTranscribeWarning()` / `buildDescribeWarning()` / `buildCompressWarning()`, wired into
+`buildMetricWarning()`'s `switch` and ranked in `topRecommendation()`.
+
+#### 11.1.1 Transcribable — audio/video with no transcript — `warn` (id: repo-transcribable-work)
+
+*Where shown:* One-repo page, the **Transcribe** tab's `Transcribable` metric tile, and the blue
+**"Transcribe ›"** header primary when transcription is the top pending recommendation (§11 / task_tabs.mdx §2.7).
+
+**(A) Detect it & all conditions.** The count is `RepoDetail.taskMetrics.transcribable` — audio/video rows
+whose `FileRow.transcribe === "could"` (transcribable by the classifier, [special_files.mdx §3](./special_files.mdx), with no complete
+`.transcription` sidecar; a truncated transcript re-counts, [transcribe_engine.mdx §4](./transcribe_engine.mdx)). `> 0` ⇒ the tile is amber and
+`buildTranscribeWarning` returns a non-null `WarningDef`; `0` ⇒ light-green big-`0`, all-clear popup.
+*Computed in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail` (`taskMetrics.transcribable`); frontend `metricWarnings.ts` — `metricCount("transcribable")`.
+
+**(B) The popup.** *What this is:* the ~80%-of-screen transcribe list ([Transcribe.mdx §5.1](./Transcribe.mdx), [transcribe_calc_engine.mdx §4](./transcribe_calc_engine.mdx)) — the counted
+candidates **checked by default**. *Why it matters:* these files' speech isn't searchable/quotable text yet.
+*Options / targets:* per-file checkboxes (uncheck to exclude). *Action button:* solid-blue **"Transcribe N
+files"**.
+
+**(C) The fix.** Apply enqueues background `transcribe` jobs — **gated behind the heavyweight-model
+readiness / consent** flow (`withModelReady`, [transcribe_engine.mdx §3](./transcribe_engine.mdx)): a missing/partial/outdated model interposes
+the permission + provisioning UI, then **resumes** the batch. Runs async and in parallel, watchable on
+[processing.mdx](./processing.mdx); each completed file gains its `.transcription` and drops out.
+*Fix in:* `metricWarningDefs.tsx` — `buildTranscribeWarning()` (`apply` → the enqueue used by
+`TranscribeBatchPopup`, gated by `withModelReady()` from `frontend/src/lib/transcribe.ts`).
+
+#### 11.1.2 Describable — image/video with no AI description — `warn` (id: repo-describable-work)
+
+*Where shown:* One-repo page, the **AI descriptions** tab's `Describable` metric tile, and the blue
+**"Describe ›"** header primary when description is the top pending recommendation.
+
+**(A) Detect it & all conditions.** The count is `RepoDetail.taskMetrics.describable` — image/video rows
+whose `FileRow.describe === "could"` (describable — image always, video only where a video-capable provider
+exists, [ai_description.mdx §4](./ai_description.mdx) — with no `.ai_description` artifact). `> 0` ⇒ amber + non-null `WarningDef`; `0` ⇒
+green-`0`. *Computed in:* `units.service.ts` — `computeRepoDetail` (`taskMetrics.describable`);
+`metricWarnings.ts` — `metricCount("describable")`.
+
+**(B) The popup.** *What this is:* the ~80%-of-screen describe list ([describe_calc_engine.mdx §4](./describe_calc_engine.mdx), [task_tabs.mdx §5.2.1](./task_tabs.mdx#521-the-describable-metric--popup--confirm--processing-flow-locked)) —
+candidates **checked by default**. *Why it matters:* these images/videos have no AI alt-text/description yet.
+*Options / targets:* per-file checkboxes. *Action button:* solid-blue **"Describe N files"**.
+
+**(C) The fix.** Apply enqueues background `describe` jobs — **gated behind the AI provider-key + model
+readiness**: no usable vision key opens the credentials setup (§10.6.3), a video with only image-capable
+keys is skipped as "needs Gemini" (§10.6.4), and an unowned file interposes the first-time-storage wizard
+(§10.6.5); on satisfaction the batch **resumes**. Watchable on [processing.mdx](./processing.mdx); each
+completed file gains its `.ai_description` (Describe icon toggles to teal "done") and drops out.
+*Fix in:* `metricWarningDefs.tsx` — `buildDescribeWarning()` (`apply` → the enqueue used by
+`DescribeBatchPopup`, gated by the describe consent check in `frontend/src/lib/describe.ts`).
+
+#### 11.1.3 Compressible videos / images — media that looks uncompressed — `warn` (id: repo-compressible-work)
+
+*Where shown:* One-repo page, the **Compress** tab's `Compressible Videos` and `Compressible Images` metric
+tiles, and the blue **"Compress ›"** header primary when compression is the top pending recommendation.
+
+**(A) Detect it & all conditions.** The counts are `RepoDetail.taskMetrics.compressibleVideos` /
+`compressibleImages` — video/image rows whose `FileRow.compress === "could"` (the extension/heuristic verdict
+`compressInfo(name)`, §10.5 / [compression.mdx](./compression.mdx)). `> 0` ⇒ amber + non-null `WarningDef` (one builder, keyed
+`kind: "video" | "image"`); `0` ⇒ green-`0`. *Computed in:* `units.service.ts` — `computeRepoDetail`
+(`taskMetrics.compressibleVideos` / `compressibleImages`); `metricWarnings.ts` — `metricCount(…)`.
+
+**(B) The popup.** *What this is:* the compress list over the counted videos (or images), the same
+pre-compress offer/verdict §10.5 governs. *Why it matters:* uncompressed media wastes disk/IPFS bandwidth —
+compressing reclaims space with no resolution loss (§10.5 / [compression.mdx §5](./compression.mdx)). *Options / targets:* per-file
+checkboxes. *Action button:* solid-blue **"Compress N files"**.
+
+**(C) The fix.** Apply enqueues background `compress` jobs (no model gate — the local `ffmpeg`/`magick`
+binaries; a missing binary is §10.10.9). Original moves to the recoverable LFBridge trash
+([compression.mdx §8](./compression.mdx)); watchable on [processing.mdx](./processing.mdx); each completed file's Compress icon toggles
+to green "done". *Fix in:* `metricWarningDefs.tsx` — `buildCompressWarning(kind)` (`apply` → the compress
+enqueue). **Note:** the per-file *pre-compress safety* warnings (may-grow, cwebp-GIF routing, no-gain,
+disabled) remain §10.5.11–§10.5.16 — this entry is only the tile/header **offer** that opens the batch.
 
 <!-- CATALOG-END -->
 <!-- Batch relationship (§1a): most file-scoped catalog warnings above are projections of a per-storage TO DO Batch (to_do_batches.mdx); the blue-arrow popup IS the batch popup, the same batch renders as a slug on the To Do page (to_do.mdx), and applying from either surface writes the same decisions to .lfbridge/decisions.yaml and clears both. Engine/config warnings (§10.1) are NOT batches and never appear on the To Do page. -->

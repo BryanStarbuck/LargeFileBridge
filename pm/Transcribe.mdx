@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Transcribe (audio & video → text)
-description: The transcription feature. LFBridge transcribes AUDIO files (MP3, WAV, FLAC, M4A, AAC, OGG, …) and VIDEO files (MP4, MOV, MKV, WEBM, … — the audio track is demuxed to MP3 with ffmpeg first), turning speech into a plain-text transcript. Entry points span every scale: transcribe ONE file (its ⋮ kebab / right-click "Transcribe…", or the Transcribe button on the open MP3/MP4 in the Media Viewer), a FEW selected files, or ALL audio/video under a DIRECTORY, a REPO, or a whole STORAGE ("Transcribe all files…"). Transcripts are NOT stored in the local state dir and there is NO extra .transcribe/ directory — the transcript is a SIDECAR written BESIDE the media, mirrored under the OWNING storage's placement root, as the media's own base name with its extension REPLACED by .transcription (render/talk.mp3 → <root>/render/talk.transcription; TheFunnyVideo.mp4 → TheFunnyVideo.transcription). The transcription engine is COPIED into this repo's code tools directory (we do NOT reuse the ACT3-internal copy) and is called IN-PROCESS as a class from the web app — never by shelling out to `node Transcribe.js`. It drives the local `whisper` (+ `ffmpeg`) binaries, entirely on-machine (no network). Sibling of storages.mdx (the storage roots + the .lfbridge tracking area), media_viewer.mdx (the open-one-file view whose action bar gains Transcribe), menus.mdx (the ⋮ catalogs that gain Transcribe / Transcribe all files), and compression.mdx (the sibling "drive a local media tool over a file" engine this mirrors).
+description: The transcription feature. LFBridge transcribes AUDIO files (MP3, WAV, FLAC, M4A, AAC, OGG, …) and VIDEO files (MP4, MOV, MKV, WEBM, … — the audio track is demuxed to MP3 with ffmpeg first), turning speech into a plain-text transcript. Entry points span every scale: transcribe ONE file (its ⋮ kebab / right-click "Transcribe…", or the Transcribe button on the open MP3/MP4 in the Media Viewer), a FEW selected files, or ALL audio/video under a DIRECTORY, a REPO, or a whole STORAGE ("Transcribe all files…"). Transcripts are NOT stored in the local state dir and there is NO extra .transcribe/ directory — the transcript is written INSIDE the owning repo/storage's committed .lfbridge/ tracking directory, path-mirrored, under the media's FULL filename (extension kept) with .transcription APPENDED as a second extension (repo file a/b/talk.mp3 → <repo>/.lfbridge/a/b/talk.mp3.transcription). Because .lfbridge/ is committed, transcripts travel with the repo across the user's computers; appending (not replacing) the extension means talk.mp3 and talk.wav no longer collide. The transcription engine is COPIED into this repo's code tools directory (we do NOT reuse the ACT3-internal copy) and is called IN-PROCESS as a class from the web app — never by shelling out to `node Transcribe.js`. It drives the local `whisper` (+ `ffmpeg`) binaries, entirely on-machine (no network). Sibling of storages.mdx (the storage roots + the .lfbridge tracking area), media_viewer.mdx (the open-one-file view whose action bar gains Transcribe), menus.mdx (the ⋮ catalogs that gain Transcribe / Transcribe all files), and compression.mdx (the sibling "drive a local media tool over a file" engine this mirrors).
 ---
 
 # LargeFileBridge — Transcribe (audio & video → text)
@@ -32,6 +32,14 @@ Siblings this builds on and does not repeat:
   determinate card shows while Whisper runs (§5.1).
 * [special_files.mdx](./special_files.mdx) — the classifier that sets the **`transcribable`** sub-flag
   (video — because it carries an audio track — and audio), i.e. *which* files this engine may run over.
+* [Task tabs](./task_tabs.mdx) — the per-repo screen's **Transcribe tab**, where audio/video files are
+  surfaced with a three-state **Transcribe status icon**; opening the tab filters the file table to
+  transcribable files and sorts the not-yet-transcribed ones to the top. The tab's **`Transcribable` metric
+  tile** opens the transcribe popup, and a blue **"Transcribe ›"** header primary appears when transcription
+  is the top recommendation (§9.1).
+* [placement_radios.mdx](./placement_radios.mdx) · [repo_settings.mdx](./repo_settings.mdx) — where the
+  **placement radio** that chooses the transcript's artifact root lives. This spec describes the resolved
+  path *shape* (§3); those specs own *choosing the root* (§9.2 — cross-link only, not re-specified here).
 * [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx) — a completed transcription appends a
   **`transcribe` event** to the file's per-file sidecar (`output:` → the `.transcription` path) and a
   `TRANSCRIBE` line to the per-computer history log, and increments `repo_storage.yaml → counts.transcribed`.
@@ -54,8 +62,9 @@ For one media file, transcription is:
    the copied engine already carries). Whisper is spawned **asynchronously** and its stdout is streamed
    to derive a **determinate percentage** (segment end-timestamp ÷ media duration) — see §5.1.
 4. **Write the transcript** — a plain-text file with a small metadata header (source name, timestamp,
-   model) — as a **`.transcription` sidecar beside the media**, mirrored under the owning storage root
-   (§3): the media's name with its extension replaced (`talk.mp3` → `talk.transcription`).
+   engine/model, source duration) — **inside the owning root's `.lfbridge/`**, path-mirrored, under the
+   media's full filename with `.transcription` **appended** (§3): `<repo>/a/b/talk.mp3` →
+   `<repo>/.lfbridge/a/b/talk.mp3.transcription`.
 5. **Report truthfully** — word count on success; an honest skip/error otherwise (never a silent
    "done"; the [pin_process.mdx §6](./pin_process.mdx#6-never-a-silent-no-op--report-truthfully-locked-learned-from-a-defect)
    rule applies here too).
@@ -141,79 +150,114 @@ The "Create Transcriptions" page action, its plan/skip/queue, and the toast are 
 
 ---
 
-## 3. Where transcripts are stored — a `.transcription` sidecar beside the media (LOCKED)
+## 3. Where transcripts are stored — inside the repo/storage `.lfbridge/`, path-mirrored, extension APPENDED (LOCKED — supersedes the earlier beside-media layout)
 
-Transcripts do **not** go in the Local state dir, and they do **not** sit loose next to the media. They
-live in a **parallel hidden hierarchy under the owning storage's own root** — the storage for that
-storage *type* ([storages.mdx](./storages.mdx)), not `~/T/_large_files_bridge/`.
+Transcripts do **not** go in the Local state dir, and — as of this revision — they do **not** sit loose
+next to the media either. They live **inside the owning repo/storage's own `.lfbridge/` tracking
+directory**, in a **path-mirrored hierarchy**, under the media's **full filename (extension kept)** with
+**`.transcription` appended** as a **second** extension.
 
-### 3.1 The layout — a sidecar beside the media (LOCKED)
+> **This supersedes the previous LOCKED "beside the media, extension replaced" layout.** An earlier
+> revision wrote `render/talk.mp3` → `render/talk.transcription` next to the media. The product owner's
+> current, authoritative instruction replaces that: *"because I'm in the repo and what I'm transcribing is
+> in the repo, it'll have that `.lfbridge` directory in the repo. Say a file is two directories deep in the
+> repo — it creates those two directories inside the `.lfbridge`, then creates the same file name including
+> that extension, and we add a second dot extension `.transcription`, and puts the transcription output
+> there."* So the transcript is a **tracking artifact under `.lfbridge/`**, not a sibling of the media, and
+> its name **appends** `.transcription` rather than **replacing** the original extension.
 
-There is **no dot-directory** and **no extra transcription folder**. The transcript is written **right
-beside the media file**, in the **same directory**, under the media file's **own base name** with its
-extension **replaced** by **`.transcription`**:
+### 3.1 The layout — under `.lfbridge/`, mirror the path, append `.transcription` (LOCKED)
+
+For a repo file at `<repo>/a/b/talk.mp3`, the transcript is written to
+`<repo>/.lfbridge/a/b/talk.mp3.transcription`:
 
 ```
-<placement root>/
-└── render/
-    ├── talk.mp3                         ← the real media file
-    └── talk.transcription               ← the transcript, right next to it (ext replaced)
+<repo>/
+├── a/
+│   └── b/
+│       └── talk.mp3                       ← the real media file (untouched, still in the working tree)
+└── .lfbridge/
+    └── a/
+        └── b/
+            └── talk.mp3.transcription     ← the transcript: same relative path under .lfbridge/,
+                                              full filename (talk.mp3) with .transcription APPENDED
 ```
 
-So for a file at **`render/talk.mp3`** (relative to the resolved placement root), the transcript is written
-to **`<placement root>/render/talk.transcription`** — same folder, `.mp3` → `.transcription`. The media's
-**relative directory hierarchy is still mirrored** under the placement root (§3.4 decides which root); what
-is dropped is the old `.transcribe/` middle directory. A transcript is therefore always findable directly
-from its media file: same path, swap the extension for `.transcription`.
+Three rules, together, define the path — **all LOCKED**:
 
-> **The key is the file extension.** We do **not** add any intermediate directory. A media file's
-> transcript is that file's name with the extension changed to **`.transcription`**. (Example:
-> `TheFunnyVideo.mp4` → `TheFunnyVideo.transcription`.) The token `.transcription` is a **single
-> constant** — `TRANSCRIPTION_EXT` in `artifact-placement.service.ts` — rename it in one place if desired.
+1. **Root = `<owning root>/.lfbridge/`.** The transcript lands under the owning repo/storage's hidden
+   `.lfbridge/` tracking directory — the same directory that already holds `repo_storage.yaml`, the
+   per-file sidecars, and `history/` ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)) — **not**
+   beside the media and **not** in `~/T/_large_files_bridge/`.
+2. **Mirror the media's relative directory hierarchy.** A file two directories deep (`a/b/talk.mp3`)
+   **creates `a/b/` inside `.lfbridge/`** and writes there. The media's path relative to the root is
+   reproduced verbatim under `.lfbridge/`.
+3. **Keep the full filename, APPEND `.transcription`.** The transcript filename is the media's **entire
+   filename including its original extension**, with **`.transcription` appended** — `talk.mp3` →
+   `talk.mp3.transcription` (**not** `talk.transcription`). The `.transcription` token is a single constant
+   — `TRANSCRIPTION_EXT` — **appended**, never substituted.
 
-### 3.2 Extension-replace naming (and the one caveat)
+> **Why `.lfbridge/` (and not beside the media).** `.lfbridge/` is **committed and travels with the repo**
+> ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx); the working tree's own `git status` shows
+> `.lfbridge/repo_storage.yaml` tracked). Putting the transcript there means it is **version-controlled and
+> synced across the user's computers by git** — exactly the *"the transcript is produced on one computer and
+> travels with the repo"* behavior of [use_case_two_computers.mdx](./use_case_two_computers.mdx) — while the
+> media working tree stays **clean** (no loose `.transcription` files scattered next to videos), and every
+> derived tracking artifact lives in **one** hidden place. Transcripts are small UTF-8 text, so committing
+> them is cheap and desirable (unlike the multi-GB media, which stays git-ignored and rides IPFS).
 
-The transcript **replaces** the media's extension rather than appending to it: `talk.mp3` →
-`talk.transcription` (not `talk.mp3.txt`). The `.transcription` body is plain text and opens in the
-ordinary `/file` viewer like any other text file.
+### 3.2 Append-not-replace resolves the old collision caveat (LOCKED)
 
-> **Collision caveat (accepted).** Because the extension is replaced, two media files that differ **only**
-> by extension in the **same folder** — e.g. `talk.mp3` and `talk.wav` — map to the **same**
-> `talk.transcription` and the second run overwrites the first. This is the deliberate tradeoff of
-> extension-based, no-extra-directory naming (the product owner's explicit choice); it is rare in practice
-> and preferred over scattering a parallel directory tree.
+Because the original extension is **kept** and `.transcription` is **appended** (not substituted), two
+media files that differ only by extension in the same folder **no longer collide**: `talk.mp3` →
+`.lfbridge/…/talk.mp3.transcription` and `talk.wav` → `.lfbridge/…/talk.wav.transcription` are **distinct
+files**. The earlier layout's accepted "`talk.mp3` and `talk.wav` overwrite each other" caveat is therefore
+**retired** — appending the extension is precisely what fixes it.
+
+The `.transcription` body is plain text and opens in the ordinary `/file` viewer like any other text file.
+A tool that wants a media file's transcript computes the path deterministically:
+`join(root, ".lfbridge", relDir, mediaFilename + ".transcription")`.
 
 ### 3.3 Relationship to `.lfbridge/analysis/`
 
 [storages.mdx §6](./storages.mdx#6-per-file-media-analysis-transcription--description--visuals-by-time)
 sketched transcripts as `transcript.yaml` under `.lfbridge/analysis/<relpath>/`. **This spec is
-authoritative for the transcript files** and uses the simpler, human-openable **sidecar
-`<relpath-without-ext>.transcription`** layout above — never a dot-directory. When the storage file table
-needs to note that a transcript exists (the `analysis: ["transcript"]` indicator), it detects the
-`.transcription` **sidecar** beside the media rather than any YAML under `.lfbridge/analysis/`.
+authoritative for the transcript files.** Transcripts live **inside `.lfbridge/`** (§3.1) — the same hidden
+tracking area storages.mdx §6 pointed at — but as a **path-mirrored, human-openable plain-text
+`<name.ext>.transcription` file placed directly under `.lfbridge/`** (mirroring the media's relative
+directory), **not** as a `transcript.yaml` and **not** under an `analysis/` sub-directory. When the
+storage/repo file table needs to note that a transcript exists (the `analysis: ["transcript"]` indicator),
+it detects the presence of `.lfbridge/<rel-dir>/<name.ext>.transcription`, computed deterministically from
+the media path.
 
 ### 3.4 Resolving where the parallel hierarchy lives — the ordered rule (LOCKED)
 
-The sidecar (`.transcription`, and the `.ai_description` of ai_description.mdx §2) is written into a
-**placement root** that does **not** always match the media file's nearest storage-carrying ancestor. A
-media file very often lives **out in the user's wider filesystem** (e.g.
+The transcript (and the `.ai_description` of ai_description.mdx §2) is written into a **placement root**
+that does **not** always match the media file's nearest storage-carrying ancestor. A media file very often
+lives **out in the user's wider filesystem** (e.g.
 `~/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4`) — not inside a Git repo and not inside a
 storage root. For those files we want the transcript to travel with the storage that owns them (often a
-dedicated Git repo), mirroring the media's relative hierarchy under that root. Placement is therefore
-resolved by an **ordered rule** — the first case that matches wins. This is the **authoritative**
+dedicated Git repo), mirroring the media's relative hierarchy under that root's `.lfbridge/`. Placement is
+therefore resolved by an **ordered rule** — the first case that matches wins. This is the **authoritative**
 resolution for *every* derived-artifact producer (transcription and AI description share it). In every case
-the sidecar lands at **`<root>/<rel-without-ext>.transcription`** — the resolved `root` + the media's
-mirrored relative path, extension replaced; no `.transcribe/` middle directory:
+the transcript lands at **`<root>/.lfbridge/<rel-dir>/<name.ext>.transcription`** — the resolved `root`, the
+`.lfbridge/` tracking directory, the media's mirrored relative directory, and the full filename with
+`.transcription` **appended** (§3.1):
 
 **A. Containing storage root (walk-up).** Walk **up** from the media file's directory to the filesystem
 root. The **nearest ancestor** carrying a `storage.yaml`, a `.lfbridge/`, or a `.git/` (a repo *is* a
 storage — [storages.mdx](./storages.mdx)) is the containing root. This is the "repo root" walk the
 product owner described: we are usually in some subdirectory *under* a repo, so we climb until we find the
 `.git/`. When found:
-* `root` = that ancestor · `rel` = the media file's path **relative to it**.
-* If the root is a **Git repo**, the sidecars are kept out of commits with a **`*.transcription`
-  git-ignore** nudge (the AI-description producer adds `*.ai_description`) so plain repos never bloat
-  commits; the bytes are pinned over IPFS. A repo's own per-repo config UI is
+* `root` = that ancestor · `rel` = the media file's path **relative to it** · the transcript lands at
+  **`<root>/.lfbridge/<rel-dir>/<name.ext>.transcription`**. This is the **common, primary case** the
+  product owner described: *"I'm in the repo and what I'm transcribing is in the repo,"* so the transcript
+  is written **inside the repo's `.lfbridge/`**, path-mirrored, extension appended (§3.1).
+* **No `*.transcription` git-ignore nudge is needed** anymore. Because the transcript lives **inside
+  `.lfbridge/`** — which is **committed and travels with the repo** ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)) —
+  it is version-controlled and synced by git across the user's computers on purpose (small text; the
+  multi-GB media stays git-ignored and rides IPFS). This **removes** the earlier revision's need to inject a
+  `*.transcription` line into a plain repo's `.gitignore`. A repo's own per-repo config UI is
   [repo_settings.mdx](./repo_settings.mdx) — reached *because* we detected we are inside a repo.
 
 **B. Owning storage by mapping — routed to the dedicated repo (the fix, LOCKED).** When walk-up finds
@@ -225,36 +269,41 @@ nothing (the file is out in the wider filesystem), the file is still **owned** b
   anything under the user's home tree ([storage_personal.mdx](./storage_personal.mdx)).
 * **Where the artifact goes.**
   * If the owning storage has its **dedicated Git repo** backing **enabled** (storage_settings.mdx §4.1),
-    the artifact is written **under that dedicated repo**, mirroring the file's hierarchy —
-    `<dedicatedRepo>/<rel-without-ext>.transcription`. `rel` is the file's path relative to its
+    the artifact is written **under that dedicated repo's `.lfbridge/`**, mirroring the file's hierarchy —
+    `<dedicatedRepo>/.lfbridge/<rel-dir>/<name.ext>.transcription`. `rel` is the file's path relative to its
     **mapped-dir root** (prefixed by the mapped-dir key), or relative to **`~`** for the personal default
-    catch-all. The sidecars are **NOT git-ignored** here — the dedicated repo **exists to hold and back up
-    these artifacts**, so we just put them in (the product owner: *"it won't need to add the `.gitignore` if
-    you have a dedicated git repo — it'll just put it in there"*).
+    catch-all. The transcript is **committed** (it lives in `.lfbridge/`) — the dedicated repo **exists to
+    hold and back up these artifacts** (the product owner: *"it won't need to add the `.gitignore` if you
+    have a dedicated git repo — it'll just put it in there"*).
   * If the owning storage has **no** dedicated repo enabled, the artifact goes under the storage's own
-    **root** (`<storageRoot>/<rel-without-ext>.transcription`), where its `.lfbridge/` already lives.
+    **root** — `<storageRoot>/.lfbridge/<rel-dir>/<name.ext>.transcription`, where its `.lfbridge/` already
+    lives.
 
 **C. First-time experience (no storage yet).** If the file is owned by **no** storage **and** the user has
 **no Personal storage configured at all**, we do **not** silently write beside the media. The action is
 gated by the **first-time setup wizard** (§3.5).
 
 **D. Last resort.** Personal exists but the file is genuinely outside every mapped hierarchy and no
-dedicated repo is enabled → the media file's own directory is the placement root, so the `.transcription`
-sidecar lands **literally beside the media**. This is the narrow legacy fallback, not the common path.
+dedicated repo is enabled → the media file's **own directory** is the placement root, so a `.lfbridge/` is
+created **in that directory** and the transcript lands at `<mediaDir>/.lfbridge/<name.ext>.transcription`.
+This is the narrow fallback, not the common path — the `.lfbridge/` + append-extension invariant (§3.1)
+still holds, so a transcript is **never** written loose beside the media.
 
 > **Worked example (the reported case).** With the Personal storage's **dedicated Git repo** turned ON at
 > `~/BGit/Bryan_git/personal_large_files_bridge/`, transcribing
 > `~/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4` writes to
-> `~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.transcription`
-> — mirrored into the dedicated repo, **no `.transcribe/` directory**, extension replaced, and **not**
-> git-ignored. Turn the dedicated repo back off and the same file falls to rule D (`.transcription` beside
-> the media itself).
+> `~/BGit/Bryan_git/personal_large_files_bridge/.lfbridge/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4.transcription`
+> — mirrored under the dedicated repo's **`.lfbridge/`**, the full filename with **`.transcription`
+> appended**, **committed** (travels with the repo), and **no** `.transcribe/` directory. In-repo, the same
+> file two directories deep at `<repo>/CIA/FINAL_CIA_Drones.mp4` writes to
+> `<repo>/.lfbridge/CIA/FINAL_CIA_Drones.mp4.transcription`.
 
-The ordered resolution (walk-up → owning-storage/dedicated-repo → first-time signal → beside-media), the
-home-`~` expansion of pasted paths, and the per-case `gitIgnore` flag are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveArtifactPlacement()` (sidecar path via `siblingArtifactPath()` + constant `TRANSCRIPTION_EXT`).
-The transcript path (`<root>/<rel-without-ext>.transcription`) and the git-ignore-only-when-flagged behaviour wrap it in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `resolveTranscriptPath()` / `resolveStorageRoot()`.
+The ordered resolution (walk-up → owning-storage/dedicated-repo → first-time signal → last-resort), the
+`.lfbridge/`-rooted path-mirrored placement, the **append**-`.transcription` naming, and the home-`~`
+expansion of pasted paths are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveArtifactPlacement()` (transcript path via `lfbridgeArtifactPath(root, relPath)` = `join(root, ".lfbridge", relPath) + TRANSCRIPTION_EXT`, where `TRANSCRIPTION_EXT` is **appended**, not substituted).
+The transcript path (`<root>/.lfbridge/<rel-dir>/<name.ext>.transcription`) and the owning-root resolution wrap it in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `resolveTranscriptPath()` / `resolveStorageRoot()`. The per-case `gitIgnore` flag is **retired** — transcripts live in the committed `.lfbridge/` area, so no `*.transcription` ignore line is ever injected.
 
 ### 3.5 The first-time setup wizard — actions that trigger it (LOCKED)
 
@@ -302,25 +351,40 @@ path. Home-expansion of every inbound path is handled in code:
 
 ## 4. What a transcript file contains
 
-A transcript is plain UTF-8 text: a short metadata header, a divider, then the transcript body.
+A transcript is plain UTF-8 text: a short metadata header, a divider, then the transcript body. The header
+records the **actual engine + model** used ([transcribe_engine.mdx](./transcribe_engine.mdx)) — the
+heavyweight `qwen` engine (`qwen3-asr-1.7b-mlx`) or the Whisper-on-Mac fallback (`whisper-base`) — and the
+**source duration**, so a reader can confirm the transcript covers the whole file (§critical: the full
+1–2h+ duration, [transcribe_engine.mdx §4](./transcribe_engine.mdx)):
 
 ```
 Transcription of: talk.mp3
 Generated on: 2026-07-05 09:41:00
-Model used: whisper-base (language: en)
+Engine: qwen3-asr-1.7b-mlx (device: mlx, language: en)
+Source duration: 01:47:12   ·   Transcript covers: 01:47:12  ✓ full
 ============================================================
 
 Welcome back to the show. Today we're talking about …
 ```
 
 A video with **no audio stream** yields a one-line placeholder (`[No audio stream — nothing to
-transcribe]`) so a re-run over a tree can skip it cheaply. Results are **idempotent by path**: an
-existing transcript is reported as "already transcribed" unless the caller asks to overwrite
-(Re-transcribe).
+transcribe]`) so a re-run over a tree can skip it cheaply. Results are **idempotent by path**: an existing
+transcript at `<root>/.lfbridge/<rel-dir>/<name.ext>.transcription` (§3) is reported as "already
+transcribed" unless the caller asks to overwrite (Re-transcribe). A transcript whose header shows
+**`Transcript covers` < `Source duration`** (a truncated run) is treated as **incomplete** and is a
+candidate to re-transcribe, never a silent success ([transcribe_engine.mdx §4](./transcribe_engine.mdx)).
 
 ---
 
 ## 5. The engine — copied in, called in-process (LOCKED)
+
+> **Deep engine spec: [transcribe_engine.mdx](./transcribe_engine.mdx).** This section defines the
+> *in-process, non-blocking* discipline (the load-bearing §5.1 rule). The **two engines** (the heavyweight
+> local **Qwen3-ASR** LLM and the **Whisper-on-Mac** fallback), the **on-demand model
+> download/install/configure with the user's permission** (disk estimate, health-check/repair, the two
+> progress UIs, and the flow-resume after install), the **critical full-duration / no-truncation
+> requirement for 1–2h+ media**, and the **per-machine parallel calibration** all live in
+> [transcribe_engine.mdx](./transcribe_engine.mdx). This file references it and does not restate it.
 
 The transcription engine is our existing **`Transcribe.js`** tool (canonically
 `~/BGit/all/tools/Transcription/Transcribe.js`, and a copy in the ACT3-internal web app). LFBridge does
@@ -338,11 +402,22 @@ The transcription engine is our existing **`Transcribe.js`** tool (canonically
   transcription/demux tools (Whisper is a Python CLI). "In-process" means *we don't shell out to our own
   Node script*; invoking the underlying `whisper`/`ffmpeg` executables is expected and mirrors how
   `compression.service.ts` invokes `ffmpeg`/`magick`.
-* **Entirely local — no network.** Whisper runs on-machine; nothing about the media or the transcript
-  leaves the computer (charter alignment: only-our-content, no phone-home).
-* **Tools may be missing.** If `whisper` or `ffmpeg` is not installed, the engine returns a clear
-  `tool_missing` result with the install hint (`pipx install openai-whisper`, `brew install ffmpeg`) —
-  it does **not** silently no-op and does **not** auto-install behind a web request.
+* **Entirely local at run time — no phone-home.** Transcription runs **on-machine**; nothing about the
+  **media or the transcript** ever leaves the computer (charter alignment: only-our-content, no phone-home).
+  The **one** networked step is the **one-time provisioning download of open-source model weights** (the
+  heavyweight Qwen3-ASR weights) — this is analogous to `brew install` fetching a formula, sends **none
+  of the user's content**, happens **only with explicit permission**, and never recurs once installed. See
+  [transcribe_engine.mdx §3](./transcribe_engine.mdx).
+* **Binaries vs. model weights are two different "missing" cases.**
+  * A **missing CLI binary** (`whisper`, `ffmpeg`) is handled by the **Tools preflight**
+    ([tools.mdx](./tools.mdx)) / the **setup card** (§5.2): a clear `tool_missing` result with the exact
+    install command and a **Re-check** — an **explicit-click** install, never silent.
+  * A **missing / half-installed / outdated heavyweight model** is a **separate, larger provisioning step**
+    that LFBridge **can download, install, and configure for the user — with their explicit permission and
+    a disk-space warning** — showing a **download progress UI** then an **install/configure progress UI**
+    ([transcribe_engine.mdx §3](./transcribe_engine.mdx)). This is the piece the earlier "does not
+    auto-install behind a web request" wording did **not** cover; it is now allowed **because the user
+    approves it** (charter consent posture preserved).
 
 The copied in-process engine (ffmpeg demux + Whisper with the MPS→CPU fallback and English sanity check, returning a structured result instead of logging/exiting) lives in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — class `Transcriber`, methods `toolStatus()` / `transcribeToFile()`.
@@ -391,6 +466,15 @@ The setup card + Re-check are implemented in code:
 preflight also lists these under **Settings → Tools**
 (`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/ToolsPage.tsx`).
 
+> **The heavyweight model is provisioned separately — with permission — not by this setup card.** The
+> setup card covers only the small **CLI binaries**. The **heavyweight model weights** (multi-GB,
+> [transcribe_engine.mdx §3](./transcribe_engine.mdx)) are a distinct provisioning flow: on the **first**
+> transcribe attempt where the model is absent, LFBridge shows a **permission popup** with a **disk-space
+> estimate** and, on approval, **downloads → installs → configures** it (each with its own progress UI),
+> then **resumes the original action**. If the model is already present the popup is **skipped**; if it is
+> half-installed or outdated, a **health check** finishes/repairs it. That flow is owned by
+> [transcribe_engine.mdx](./transcribe_engine.mdx), not restated here.
+
 ---
 
 ## 6. REST surface
@@ -400,8 +484,10 @@ Allow-list-gated like every data route, mirroring `compression.router.ts`:
 | Method + path | Body / query | What |
 | --- | --- | --- |
 | `GET /api/transcribe/tools` | — | Are `whisper` + `ffmpeg` installed (drives the disabled state + install hint). |
+| `GET /api/transcribe/engine` | — | **Engine + model readiness** ([transcribe_engine.mdx §3](./transcribe_engine.mdx)): which engine is active (`qwen` / `mac`), whether the heavyweight model is `installed` / `partial` / `missing` / `outdated`, its on-disk size, and the disk-space estimate for a fresh install. Drives the permission popup. |
+| `POST /api/transcribe/engine/provision` | `{ approve: true }` | **Download → install → configure** the heavyweight model (explicit consent). Registers a `download` then an `install` progress job ([transcribe_engine.mdx §3.3](./transcribe_engine.mdx)); returns immediately, watchable on [Processing](./processing.mdx). |
 | `GET /api/transcribe/file?path=<abs>` | — | The existing transcript for a media file (text + transcript path), or `null`. |
-| `POST /api/transcribe/file` | `{ path, overwrite? }` | Transcribe ONE file → the `<rel-without-ext>.transcription` sidecar beside the media. |
+| `POST /api/transcribe/file` | `{ path, overwrite? }` | Transcribe ONE file → the `.lfbridge/<rel-dir>/<name.ext>.transcription` transcript under the owning root (§3). |
 | `POST /api/transcribe/batch` | `{ paths[], overwrite? }` | Transcribe a selected set. |
 | `POST /api/transcribe/tree` | `{ path, overwrite? }` | Transcribe ALL audio/video under a directory or repo. |
 | `POST /api/transcribe/storage/:id` | `{ overwrite? }` | Transcribe ALL audio/video in a storage. |
@@ -430,27 +516,41 @@ The transcription REST surface (tools / read-transcript / file / batch / tree / 
 2. **Entry points at every scale:** the **Media Viewer** Transcribe button on an open audio/video; a
    **Transcribe…** item in the file ⋮ kebab / right-click / more-menu; a selected-set batch; and
    **Transcribe all files…** on a **directory**, a **repo**, and a **storage**.
-3. Transcripts are stored as a **`.transcription` sidecar beside the media** (not the Local state dir, and
-   **no** `.transcribe/` directory), **mirroring the media file's relative directory path** under the
-   owning storage's placement root and keeping the media's own base name with the extension **replaced**
-   (`render/talk.mp3` → `<root>/render/talk.transcription`). In a plain Git repo `*.transcription` is
-   git-ignored; in a dedicated repo it is committed and backed up.
-4. The **owning storage root** is the nearest ancestor with `storage.yaml` / `.lfbridge/` / `.git/`;
-   when none exists, the file's own directory is the base.
+3. Transcripts are stored **inside the owning repo/storage's `.lfbridge/` directory** (not the Local state
+   dir, and no `.transcribe/` directory), **mirroring the media file's relative directory path** under
+   `.lfbridge/`, keeping the media's **full filename including its extension** with **`.transcription`
+   appended** (`<repo>/a/b/talk.mp3` → `<repo>/.lfbridge/a/b/talk.mp3.transcription`). Because `.lfbridge/`
+   is **committed**, transcripts are version-controlled and travel with the repo across the user's
+   computers; **no `*.transcription` git-ignore line is injected**. Appending (not replacing) the extension
+   means `talk.mp3` and `talk.wav` no longer collide.
+4. The **owning root** is the nearest ancestor with `storage.yaml` / `.lfbridge/` / `.git/`; when none
+   exists, a `.lfbridge/` is created in the file's own directory as the base (§3.4 rules A–D).
 5. The engine is **copied into this repo's `tools/` directory** (the ACT3-internal copy is **not**
    reused) and is **called in-process as a class** — never by shelling out to `node Transcribe.js`; it
-   still invokes the local `whisper` + `ffmpeg` binaries and runs **entirely on-machine (no network)**.
-6. Missing `whisper`/`ffmpeg` produces a clear **tool-missing** result with an install hint (no silent
-   no-op, no auto-install behind a request); every run **reports truthfully** (word count on success,
-   honest skip/error otherwise).
-7. Transcription is **always an explicit user action** — LFBridge offers, never transcribes on its own.
+   still invokes the local `whisper` + `ffmpeg` binaries and runs **entirely on-machine** at run time (the
+   only networked step is the one-time, permissioned model-weights download, §5 / [transcribe_engine.mdx](./transcribe_engine.mdx)).
+6. Missing `whisper`/`ffmpeg` **binaries** produce a clear **tool-missing** result with an install hint
+   (explicit-click install, no silent no-op); a missing / half-installed / **outdated heavyweight model**
+   triggers the **permission-gated provisioning** flow ([transcribe_engine.mdx §3](./transcribe_engine.mdx))
+   — a disk-space warning, then download → install → configure with progress UIs — not a bare error. Every
+   run **reports truthfully** (word count on success, honest skip/error otherwise).
+7. Transcription is **always an explicit user action** — LFBridge offers, never transcribes on its own; and
+   the heavyweight model is **never downloaded/installed without explicit permission** (charter consent).
 8. The engine is **async / non-blocking**: a running transcription never freezes the API (health &
    progress keep responding), the button flips to a **Transcribing…** pending state the instant it's
    clicked, and a **live progress card** (determinate % for one file) shows in the dock — including for a
    run this tab did not start.
-9. Transcription needs **no credentials and no cloud** (local Whisper); the repo ships **no transcription
-   credentials file**. When the local binaries are missing, a **setup card** shows the install commands
-   and a **Re-check** button that re-enables the run once fixed, **without a page reload**.
+9. Transcription needs **no credentials and no cloud** (local engine); the repo ships **no transcription
+   credentials file**. When the local **binaries** are missing, a **setup card** shows the install commands
+   and a **Re-check** button that re-enables the run once fixed, **without a page reload**; when the
+   **model** is missing/partial/outdated, the permission popup + provisioning flow of
+   [transcribe_engine.mdx](./transcribe_engine.mdx) handles it and then **resumes the original action**.
+9a. **Two engines + long-media robustness** ([transcribe_engine.mdx](./transcribe_engine.mdx)): a primary
+    **heavyweight Qwen3-ASR** engine and a **Whisper-on-Mac** fallback; whichever runs, the settings are
+    **triple-checked to transcribe the FULL duration of 1–2h+ media without truncating** — the run is
+    verified to cover the source duration end-to-end (a short/truncated result is a failure, never a silent
+    success), and the machine's **parallel-job count is calibrated** to its cores/RAM/model (low-power
+    boxes = 1 at a time; a ~24-core box runs several).
 10. **Bulk discovery via the To-Do transcribe slugs:** the on-demand **What Can Be Transcribed Calc
     Engine** ([transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx)) — triggered only by the
     **"Show what could be transcribed"** link on the To Do page, never by the scheduled scan — walks every
@@ -459,6 +559,16 @@ The transcription REST surface (tools / read-transcript / file / batch / tree / 
     **checked by default**, and **Apply** ("Transcribe N files") **enqueues background jobs** (this spec's
     §5 engine, unchanged) watchable on [processing.mdx](./processing.mdx). Completed files gain a sidecar
     and drop out of the next run.
+11. **Transcribe-tab metric tile + header primary (§9.1):** clicking the **`Transcribable`** metric tile
+    opens the transcribe popup (candidates checked by default → **"Transcribe N files"** confirm → model
+    gate may interpose → async parallel → Processing), instead of the old no-op that re-selected the tab.
+    When transcription is the repo's top pending recommendation, the header primary is a **blue**
+    (`--lfb-primary`) **"Transcribe ›"** button (trailing `›`) that opens the same popup; it sits at the
+    **transcribe** slot of the worst-first order **ipfs-down → pull-down → undecided → transcribe → describe
+    → compress**, is **model-gated on Apply not on display**, and disappears (green-`0` tile) once every
+    audio/video file has a complete transcript. **Where** the transcript lands is not decided here — it is
+    the placement radio owned by [placement_radios.mdx](./placement_radios.mdx) / [repo_settings.mdx](./repo_settings.mdx)
+    (§9.2, cross-link only).
 
 ## 8. Bulk discovery — "Show what could be transcribed" (the To-Do transcribe slugs) (LOCKED)
 
@@ -484,9 +594,11 @@ When invoked it walks **each storage** — Personal, Dropbox, every Google Drive
 * **Transcribable** — audio, or **video that carries an audio track**. This is the same
   `transcribable` flag defined in [special_files.mdx §3](./special_files.mdx#3-the-transcribable-flag)
   (a silent video is **not** a candidate — it would only ever yield the "no audio" placeholder of §4), and
-* **Not yet transcribed** — they have **no `.transcription` sidecar** beside the media at the resolved
-  placement root (§3). This is exactly the **skip-already-done** test the page action uses
-  (§2.5 / [page_actions.mdx §1.2](./page_actions.mdx)): *absence of the sidecar* is the candidate test, so a
+* **Not yet transcribed** — they have **no `.transcription` transcript** at the resolved
+  `.lfbridge/<rel-dir>/<name.ext>.transcription` path (§3), **or** an existing transcript whose header shows
+  it **did not cover the full source duration** (a truncated run, §4 / [transcribe_engine.mdx §4](./transcribe_engine.mdx)).
+  This is exactly the **skip-already-done** test the page action uses
+  (§2.5 / [page_actions.mdx §1.2](./page_actions.mdx)): *absence of a complete transcript* is the candidate test, so a
   file transcribed by any earlier path never re-appears.
 
 It writes **one "transcribe batch" per storage** into `~/T/_large_files_bridge/_do_batches/` (`kind:
@@ -519,15 +631,96 @@ The transcribe slug, its default-checked ~80% popup, and the "Transcribe N files
 background jobs are implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TranscribeBatchPopup` (the popup + Apply) and `ShowTranscribableLink` (the "Show what could be transcribed" trigger).
 
+## 9. The Transcribe status icon & the Transcribe tab (LOCKED)
+
+On the per-repo screen ([one_repo.mdx](./one_repo.mdx)) the **Transcribe tab**
+([task_tabs.mdx §4.4](./task_tabs.mdx#44-transcribe--get-transcripts)) narrows the files table to
+**transcribable** files (audio, or video with audio — [special_files.mdx §3](./special_files.mdx#3-the-transcribable-sub-flag--video-has-audio-and-audio))
+and adds a per-row **Transcribe status icon** (lucide `Captions`) with **three** states — the authoritative
+definition is [task_tabs.mdx §5](./task_tabs.mdx#5-the-transcribe-status-icon--three-states-locked):
+
+* **Done** — the file has a `.transcription` transcript (§3) → **solid blue fill, white edge/glyph**.
+* **Could be transcribed** — audio/video with **no** transcript yet (exactly this engine's candidate) →
+  **red/orange normal-thickness edge, 99%-white / 1%-tint fill** (the token is the shared "actionable"
+  warm color the product owner refers to as **red** — the same `could` wash the Compress icon uses;
+  see [task_tabs.mdx §5](./task_tabs.mdx#5-the-transcribe-status-icon--three-states-locked)). Clicking it
+  **queues** a transcription for that one file (a background job, [processing.mdx](./processing.mdx)) — the
+  same enqueue the transcribe popup uses.
+* **Not applicable** — not audio/video → **white fill, very-thin very-light-grey edge** (inert).
+
+* **Position (LOCKED — [task_tabs.mdx §4.4/§5](./task_tabs.mdx#5-the-transcribe-status-icon--three-states-locked)).**
+  On the Transcribe tab the icon is a **leading control column to the LEFT of the File column** — the same
+  slot the **Pin** and **IPFS** icons occupy on their tabs — and its column header carries **no title text**
+  (an icon-only control column). The product owner's instruction: *"move that transcribe icon over to the
+  left of the file icon and get rid of the title of it — like the pin icons and the IPFS icon."*
+
+The tab's default sort puts the red/orange "could" rows first (most work-to-do at the top), then Size desc.
+The icon is a control cell — it stops click propagation and never navigates the row.
+
+The Transcribe status icon is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/TranscribeStatusIcon.tsx` — `TranscribeStatusIcon` (state from the new `FileRow.transcribe` field composed in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows`).
+
+### 9.1 The `Transcribable` metric tile → popup, and the blue "Transcribe ›" header primary (LOCKED)
+
+On the Transcribe tab the **`Transcribable`** metric tile ([task_tabs.mdx §2](./task_tabs.mdx#2-the-metrics-panels--the-what-could-be-done-boxes-locked))
+counts the audio/video files with no complete transcript yet. **Clicking it opens the transcribe popup** —
+the same ~80%-of-screen confirm flow §5.1 walks (candidates checked by default → uncheck → solid-blue
+**"Transcribe N files"** → model gate may interpose → async parallel → Processing). This is part of the
+metric-tile fix ([task_tabs.mdx §2.4.1](./task_tabs.mdx#241-every-actionable-metric-tile-opens-a-popup--the-transcribe--compress--describe-builders-the-fix-locked)):
+before it, clicking `Transcribable` did nothing (it merely re-selected the Transcribe tab you were already
+on); now it opens the popup and lets the user **start the transcription**.
+
+* **The blue "Transcribe ›" header primary.** When transcription is the repo's **top pending
+  recommendation**, the header primary button ([one_repo.mdx §3.1](./one_repo.mdx#31-header)) is a **blue**
+  (`--lfb-primary`) **"Transcribe ›"** (white text, trailing right chevron) — the verb-named variant of the
+  smart header button. It opens the **same** transcribe popup the `Transcribable` tile opens. Its place in
+  the worst-first order is **ipfs-down → pull-down → undecided → transcribe → describe → compress**
+  ([task_tabs.mdx §2.7](./task_tabs.mdx#27-the-per-metric-blue-header-primary--every-actionable-metric-can-be-the-recommendation-locked)):
+  transcription outranks describe and compress, but a data-integrity condition (a paused IPFS engine,
+  peer-pinned files not here, or files still needing a decision) always shows first.
+* **Model-gated on Apply, not on display.** The **"Transcribe ›"** primary (and the tile's popup) shows
+  whenever transcription is pending even if the heavyweight model isn't installed; the permission +
+  provisioning gate (§5 / [transcribe_engine.mdx §3](./transcribe_engine.mdx)) fires only when the popup's
+  **"Transcribe N files"** Apply runs, and then **resumes** the batch — identical to the per-row "could"
+  status-icon path (§9, `withModelReady`).
+* **Green-zero.** When every audio/video file already has a complete transcript, the `Transcribable` tile is
+  a **light-green big `0`** and no **"Transcribe ›"** header primary shows — the Transcribe tab reads as done.
+
+The `Transcribable` tile's and the **"Transcribe ›"** header primary's shared `WarningDef` (the same
+transcribe popup, scoped to the counted candidates, gated by `withModelReady`) is built in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+`buildTranscribeWarning()`, wired into `buildMetricWarning()` (the `transcribable` case) and ranked in
+`topRecommendation()` (the transcribe slot of the worst-first order).
+
+### 9.2 Where the transcript lands is chosen elsewhere — cross-links only (LOCKED)
+
+Nothing on the Transcribe tab decides **where** a transcript file is written — that is owned by the
+**placement radios** and the **repo settings**, not this feature:
+
+* **Placement radios** — the repo/storage setting that picks the artifact home (inside the repo's committed
+  `.lfbridge/`, a dedicated Git repo, or beside-the-media as a last resort) is specified in
+  **[placement_radios.mdx](./placement_radios.mdx)** and surfaced per repo in
+  **[repo_settings.mdx](./repo_settings.mdx)**. §3 of this spec describes the resolved *path shape*
+  (`<root>/.lfbridge/<rel-dir>/<name.ext>.transcription`); the **radio that chooses the root** lives there.
+* **AI descriptions share the identical placement.** The `.ai_description` artifact
+  ([ai_description.mdx §2](./ai_description.mdx)) resolves through the **same** ordered rule (§3.4) and the
+  **same** placement radios — so the Transcribe and AI-descriptions tabs behave identically on *where the
+  output goes*, differing only in the artifact and the engine.
+
+This spec does **not** re-specify placement configuration — it only points at it, so the two surfaces stay
+in one place.
+
 <!--
   Transcribe = audio+video → plain-text transcript. LOCKED:
-  (§3) transcripts are a SIDECAR BESIDE THE MEDIA — NO .transcribe/ dir: <root>/<relpath-without-ext>.
-       transcription — mirror the media file's relative dir path under the placement root, keep the media
-       base name with the extension REPLACED by .transcription (talk.mp3 → talk.transcription). NOT the
-       local state dir. Token is a single constant (TRANSCRIPTION_EXT in artifact-placement.service.ts).
-       git-ignore *.transcription in a plain repo; commit + back up it in a dedicated repo. Caveat: talk.mp3 and
-       talk.wav in one folder collide on talk.transcription (accepted tradeoff). Supersedes storages.mdx
-       §6's transcript.yaml sketch for transcripts.
+  (§3) transcripts live INSIDE the owning repo/storage's committed .lfbridge/ dir — NO .transcribe/ dir,
+       NOT beside the media, NOT the local state dir: <root>/.lfbridge/<rel-dir>/<name.ext>.transcription —
+       mirror the media's relative dir path UNDER .lfbridge/, keep the FULL filename incl. extension and
+       APPEND .transcription as a 2nd ext (a/b/talk.mp3 → <repo>/.lfbridge/a/b/talk.mp3.transcription).
+       TRANSCRIPTION_EXT is APPENDED, never substituted (artifact-placement.service.ts lfbridgeArtifactPath).
+       .lfbridge/ is COMMITTED so transcripts travel with the repo across computers — NO *.transcription
+       git-ignore line is injected (gitIgnore flag retired). Appending (not replacing) the ext means
+       talk.mp3 & talk.wav no longer collide (old caveat RETIRED). SUPERSEDES the earlier beside-media/
+       replace-ext LOCKED layout AND storages.mdx §6's transcript.yaml sketch.
   (§5) engine = our Transcribe.js COPIED into code/packages/backend/src/tools/transcribe/Transcribe.ts as
        a TS class, called IN-PROCESS (no `node Transcribe.js`, no reuse of ACT3-internal copy). Still
        spawns local whisper+ffmpeg; entirely on-machine, no network. Missing tools → clear tool_missing.

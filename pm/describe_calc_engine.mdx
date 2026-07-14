@@ -1,0 +1,269 @@
+---
+title: LargeFileBridge — What Can Be AI-Described Calc Engine
+description: The on-demand engine behind the To Do page's "Show what could be AI-described" action link — the exact mirror of the What Can Be Transcribed Calc Engine. Unlike the always-on TO DO Batch Calc Engine, this one runs only when the user asks — it walks each storage (Personal, Dropbox, each Google Drive, each repo) for IMAGE and VIDEO files that do NOT yet have a .ai_description artifact, and writes one describe batch per storage (kind: describe) into _do_batches/. Each describe batch becomes a describe SLUG on the To Do page; opening it shows an 80%-of-screen popup listing the describable files with checkboxes (checked = describe), and Apply enqueues AI description as background jobs visible on the Processing page — gated by the provider-readiness check (withDescribeReady) rather than a local model download, because AI description uploads bytes to a hosted vision provider (Gemini / OpenAI / Grok). Sibling of transcribe_calc_engine.mdx (the transcription mirror), to_do_batch_calc_engine.mdx (the always-on engine), to_do_batches.mdx (the describe batch schema), ai_description.mdx (the AI-description feature it enqueues), ai_credentials.mdx (the provider key the gate checks), to_do.mdx (the Show link + describe slug), and processing.mdx (where the jobs run).
+---
+
+# LargeFileBridge — What Can Be AI-Described Calc Engine
+
+The **What Can Be AI-Described Calc Engine** answers one question, per storage: *"which of my image and
+video files still have no AI description?"* It is the **exact mirror** of the
+[What Can Be Transcribed Calc Engine](./transcribe_calc_engine.mdx) — the on-demand sibling of the always-on
+[TO DO Batch Calc Engine](./to_do_batch_calc_engine.mdx) — and it produces **describe batches**, which the
+[To Do page](./to_do.mdx) renders as **describe slugs**. Where the transcribe engine looks for **audio and
+video without a `.transcription`**, this one looks for **images and videos without a `.ai_description`**;
+everything else about its shape is identical (§0).
+
+It exists as a **separate, opt-in** engine — for **two** reasons. First, like transcription, opening every
+media file's tracking area to check for a `.ai_description` artifact is heavier than the default batch
+rollup. Second — and unlike transcription — the action it feeds **uploads bytes to a hosted vision
+provider** (§5, the one deliberate external-network path,
+[ai_description.mdx §7](./ai_description.mdx#7-charter--privacy-posture--the-one-deliberate-network-path-locked)),
+so surfacing "what *could* be described" and letting the user choose is doubly important. LFBridge runs it
+**only when the user clicks "Show what could be AI-described"** ([to_do.mdx §7](./to_do.mdx)), never on a
+scan.
+
+Siblings this builds on and does not repeat:
+
+* [ai_description.mdx](./ai_description.mdx) — the **AI-description feature** this enqueues, and the
+  `.ai_description` **artifact** ([§2 there](./ai_description.mdx#2-where-the-description-is-stored--inside-the-repostorage-lfbridge-path-mirrored-extension-appended-locked-supersedes-the-earlier-beside-media-layout))
+  whose absence makes a file a candidate. §14 there is the feature-side cross-reference to this engine.
+* [transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx) — the **transcription mirror**. This spec
+  matches it section-for-section; the only differences are what it looks for (image/video vs audio/video),
+  the artifact it checks (`.ai_description` vs `.transcription`), the batch `kind` (`describe` vs
+  `transcribe`), and the Apply-time gate (a **provider key** vs a **model download**).
+* [to_do.mdx §7](./to_do.mdx) — the **"Show what could be AI-described"** action link that triggers this
+  engine, and the describe **slug** + popup it produces.
+* [to_do_batches.mdx](./to_do_batches.mdx) — the **output schema**: `kind: describe`, `pattern: describe`,
+  `describe_image` / `describe_video` totals (the sibling of the `transcribe` batch kind, §3).
+* [special_files.mdx](./special_files.mdx) — the classifier that decides a file is an **image or video**
+  (the visual counterpart of the `transcribable` audio/video flag) — i.e. what counts as **describable**.
+* [ai_credentials.mdx](./ai_credentials.mdx) — the provider-key resolution and the **credentials-missing
+  popup** the Apply-time gate opens when no usable key exists.
+* [processing.mdx](./processing.mdx) — where the enqueued `describe` jobs run and are watched.
+* [to_do_batch_calc_engine.mdx](./to_do_batch_calc_engine.mdx) — the always-on engine; this one mirrors its
+  per-storage batching and `_do_batches/` output, differing only in what it looks for and when it runs.
+
+---
+
+## 0. What is identical to the transcribe calc engine, and what differs (LOCKED)
+
+This engine is the transcription calc engine with three substitutions and one extra Apply-time gate — nothing else:
+
+| | Transcribe calc engine | Describe calc engine (this spec) |
+| --- | --- | --- |
+| **Trigger** | "Show what could be transcribed" | "Show what could be AI-described" (§1) |
+| **Candidate media** | audio, or video **with an audio track** | image, or video (§2) |
+| **"Already done" artifact** | `.transcription` under `.lfbridge/` | `.ai_description` under `.lfbridge/` (§2) |
+| **Batch kind** | `kind: transcribe` (`transcribe_video`/`transcribe_audio`) | `kind: describe` (`describe_image`/`describe_video`) (§3) |
+| **Slug / popup** | transcribe slug, ~80% popup, "Transcribe N files" | describe slug, ~80% popup, "Describe N files" (§4) |
+| **Apply-time gate** | first-time **model download** (`withModelReady`) | provider **key** (`withDescribeReady`) — an upload, so cost matters (§4, §5) |
+| **Run-time cost** | local, offline, free | **uploads bytes to a paid hosted provider** (§5) |
+
+Everything else — on-demand only, per-storage batching into `_do_batches/`, read-only until Apply,
+default-checked popup, background jobs on Processing, self-clearing as artifacts appear — is the **same**.
+
+---
+
+## 1. When it runs (LOCKED)
+
+**Only on explicit request.** Triggers:
+
+| Trigger | Scope |
+| --- | --- |
+| **"Show what could be AI-described"** link on the To-Do page ([to_do.mdx §7](./to_do.mdx)) | all storages (or the currently focused one) |
+| **`POST /api/todo/describe-scan?scope=<id>`** | one storage, or all |
+| A **storage detail** page's "Show what could be AI-described" action ([storages.mdx §7.1](./storages.mdx#71-page-actions--the-action-links-row)) | that one storage |
+
+It is **never** part of the every-4h / every-15-min scan. Once its batches exist, a subsequent normal scan
+leaves them alone (they are a distinct `kind`); the user re-runs the link to refresh them. This is the same
+on-demand posture as [transcribe_calc_engine.mdx §1](./transcribe_calc_engine.mdx#1-when-it-runs-locked).
+
+Triggering the on-demand scan is served in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/describe-scan`, calling
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/describe-scan.engine.ts` — `WhatCanBeDescribedCalcEngine.scanStorage(storage)` / `scanAll()` (mirror of `transcribe-scan.engine.ts`).
+
+---
+
+## 2. What counts as "can be AI-described" (LOCKED)
+
+A file is a candidate when **all** hold:
+
+1. It is an **image or a video** — the visual media AI description operates on
+   ([ai_description.mdx §1](./ai_description.mdx#1-the-two-tab-analysis-panel--the-default-tab-rule)). **Audio
+   is never a candidate** here (audio is covered by transcription, not description) — this is the mirror-image
+   of the transcribe engine's rule, which *excludes* silent video. A video is described from its **frames**
+   (Gemini ingests the video inline, §2.1); an image from the still.
+2. It has **no AI description yet** — there is no `.ai_description` artifact for it at the resolved artifact
+   location ([ai_description.mdx §2](./ai_description.mdx#2-where-the-description-is-stored--inside-the-repostorage-lfbridge-path-mirrored-extension-appended-locked-supersedes-the-earlier-beside-media-layout)).
+3. It is not flagged to skip (no relevant sticky flag).
+
+Absence of a `.ai_description` is the whole test — a file that already has one never appears (mirroring the
+[transcribe engine's absence test](./transcribe_calc_engine.mdx#2-what-counts-as-can-be-transcribed-locked)
+and the [page-action skip-already-done rule](./page_actions.mdx#1-scope--skip-already-done--background-queue-locked)).
+A file described by **any** earlier path (the viewer button, a kebab, the metric popup, a prior slug) is
+therefore already excluded.
+
+Deciding "describable and not yet described" (artifact existence check via the same `.lfbridge/` resolver the feature uses) is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/describe-scan.engine.ts` — `isUndescribed(file)` (reuses `analysisOutputs()` from `storage/tracking.service.ts` — the same `.ai_description`-presence check that lights the storage-table indicator and the Describe status icon, [ai_description.mdx §2.2/§11.2](./ai_description.mdx)).
+
+### 2.1 Provider capability is NOT part of the candidate test (LOCKED)
+
+A **video** can only be described by **Gemini** ([ai_description.mdx §3.1](./ai_description.mdx#31-the-video--gemini-only-rule-locked)),
+but that is **not** a reason to exclude a video from the candidate list. The engine lists **every**
+describable-and-undescribed image/video regardless of which keys are currently configured — discovery is
+about *what could be described*, not *what can be described on this machine right now*. Whether a usable key
+exists is resolved **at Apply** by the provider gate (§4); a video with no Gemini key surfaces the
+credentials popup there, honestly, rather than silently vanishing from the list. This mirrors how the
+transcribe engine lists candidates even when the heavyweight model is not yet installed.
+
+---
+
+## 3. Per-storage batching (LOCKED)
+
+Like the To-Do engine and the transcribe calc engine, it emits **one describe batch per storage** that has
+candidates:
+
+* `~/Pictures`, `~/Movies`, loose screenshots, Dropbox media, Google Drive media → **Personal / Dropbox /
+  each Google Drive** describe batches.
+* Each **repo** with undescribed image/video → its own `repo_<name>_describe_2_do.yaml`.
+
+Example: Personal has **412 images + 58 videos** undescribed → one `personal_describe_2_do.yaml` totalling
+470. Of 30 repos, only **6** have describable media without descriptions → **6** describe slugs, one each.
+
+Output goes to the same `~/T/_large_files_bridge/_do_batches/` directory with the describe schema
+([to_do_batches.mdx](./to_do_batches.mdx) — `kind: describe`, `pattern: describe`, `describe_image` /
+`describe_video` totals + the per-file `items`); storages with no candidates produce no slug. This is the
+identical per-storage fan-out the transcribe engine uses
+([transcribe_calc_engine.mdx §3](./transcribe_calc_engine.mdx#3-per-storage-batching-locked)).
+
+The recommendable categories and the batch kind these batches use are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `RecommendableCategory` gains `describe_image` / `describe_video` (alongside `transcribe_video` / `transcribe_audio`), and `BatchKind` gains `"describe"` (alongside `"todo"` / `"transcribe"`).
+
+The on-demand per-storage / all-storage walk (describable-and-no-artifact candidate test, one `kind: describe` batch written per storage) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/describe-scan.engine.ts` — class `WhatCanBeDescribedCalcEngine`, methods `scanStorage()` / `scanAll()`.
+
+---
+
+## 4. The describe slug & popup (LOCKED)
+
+Each describe batch renders as a **describe slug** ([to_do.mdx §5.1](./to_do.mdx)) — e.g.
+*"Personal · 412 images + 58 videos can be AI-described."* Its **chevron button** opens the describe popup,
+which is **larger than a normal batch popup** (~**80% of the screen's width and height**) because the file
+lists are long — the exact mirror of the transcribe popup
+([transcribe_calc_engine.mdx §4](./transcribe_calc_engine.mdx#4-the-transcribe-slug--popup-locked)):
+
+* A checklist of every candidate — each row **checked by default** (the user can uncheck ones to skip, or
+  toggle all). The user hits **Continue** into the list, **unchecks** anything to exclude, and whatever
+  stays checked is the set.
+* The right-side **Apply / Confirm** button is a **solid-blue** button reading *"Describe N files"* (N =
+  the checked count) and, on click, **enqueues AI description as background jobs**
+  ([ai_description.mdx §5.1](./ai_description.mdx#51-the-page-action--create-ai-descriptions-selected-or-all-background-queued)).
+* **First-time provider gate (may interpose).** If **no usable provider key** exists for the set's kinds,
+  the **credentials-missing popup** ([ai_description.mdx §10](./ai_description.mdx#10-the-provider-readiness-gate--withdescribeready-locked--mirror-of-withmodelready) /
+  [ai_credentials.mdx](./ai_credentials.mdx)) interposes first; because the user **confirmed**, the flow
+  **resumes into the descriptions** once a key is added (the `withDescribeReady` replay). This is the
+  **structural mirror** of the transcribe popup's model-download gate — but it gates on a **key**, not a
+  multi-GB download, and it is **kind-aware** (a set containing a video needs **Gemini** specifically;
+  [ai_description.mdx §3.1](./ai_description.mdx#31-the-video--gemini-only-rule-locked)). If a usable key is
+  already present the gate is skipped.
+* **Cost acknowledgement (describe-only, LOCKED).** Because Apply **uploads bytes to a paid external
+  provider** (unlike free/local transcription), the popup states plainly that describing **N** files will
+  make **N provider calls** and upload each file (compressing over-cap files to a temporary copy first,
+  [ai_description.mdx §3.3](./ai_description.mdx#33-the-inline-cap--compress-to-fit-locked)). A large set
+  shows a soft **"this uploads {N} files to {provider}"** caution above the blue button so the user is never
+  surprised by cost or by bytes leaving the machine (§5).
+* Work runs **in the background, asynchronously and in parallel** and is watchable on the
+  **[Processing](./processing.mdx)** page/dock, where the per-item table shows **which files are running in
+  parallel, which are pending, and which failed** ([processing.mdx §4.3](./processing.mdx#43-the-per-item-processing-table--every-state-with-responsive-columns-locked)); the
+  popup can be closed immediately after Apply.
+
+As each file's description completes, its `.ai_description` artifact appears, so it **drops out** of the
+next run of this engine — the slug shrinks and eventually disappears (self-clearing, exactly like the
+transcribe slugs).
+
+The describe popup (80% modal, default-checked list, "Describe N files" apply → enqueue, provider gate + cost caution) is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `DescribeBatchPopup` (mirror of `TranscribeBatchPopup`; apply calls `POST /api/todo/batches/:id/apply`, which fans out to the `describe` queue) and `ShowDescribableLink` (the "Show what could be AI-described" trigger); the popup's `onApply` is wrapped in `withDescribeReady()` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/describe.ts`.
+
+---
+
+## 5. Cost & safety (CTO notes)
+
+* **Opt-in for TWO reasons.** Like transcription, checking artifact existence for potentially thousands of
+  media files (across cloud mounts) is expensive — gating the *scan* behind the explicit link keeps the
+  default To-Do recompute cheap. **Additionally**, unlike transcription, the *Apply* uploads bytes to a
+  **paid, hosted vision provider** — so keeping both the discovery and the generation strictly
+  **user-initiated** is a charter requirement, not just a performance one
+  ([ai_description.mdx §7](./ai_description.mdx#7-charter--privacy-posture--the-one-deliberate-network-path-locked)).
+* **Read-only until Apply — nothing is uploaded by the scan.** The engine only *lists* candidates; it
+  describes nothing, uploads nothing, and makes **zero** provider calls until the user Applies. No file is
+  read/decoded beyond what the image/video classification already established. This is the critical safety
+  property: **discovery never touches the network** — only Apply does.
+* **The external-provider posture is honest and bounded.** At Apply, each file is uploaded **inline** to the
+  chosen provider (Gemini for video; any configured provider for images); an over-cap file is first
+  **compressed to a throwaway temporary copy** and the **original is never modified**
+  ([ai_description.mdx §3.3](./ai_description.mdx#33-the-inline-cap--compress-to-fit-locked)). The popup's
+  cost caution (§4) names the provider and the count up front. This is the **one deliberate difference** from
+  the transcribe calc engine, which enqueues a **local, offline, credential-free** engine.
+* **Provider errors surface honestly per file.** A `no_provider` (missing/incapable key), a retired-model
+  404, a rate-limit/timeout, or a safety block comes back as a per-file **failed** on Processing with the
+  reason ([ai_description.mdx §8](./ai_description.mdx#8-empty-error--disabled-states),
+  [warnings.mdx §10.6](./warnings.mdx)) — the batch never reports a silent "done". A rate-limited provider
+  simply slows the queue; failed files remain candidates and reappear in the next run.
+* **Network-mount aware & cancelable.** The *scan* runs as a detached job with the scan's hard-skip /
+  network-mount caution ([scan.mdx §4.3](./scan.mdx#43-the-hard-skip-directory-set-never-descend)); a long
+  Google-Drive walk shows progress and can be canceled without leaving partial slugs.
+* **Reuses the AI-description feature wholesale** — it does **not** re-implement description; Apply hands
+  each file to the in-process `/api/describe` engine ([ai_description.mdx §3–§5](./ai_description.mdx)),
+  which selects the provider, resolves the key (config → env → shared Gemini file), compresses over-cap
+  files to fit, uploads, and writes the `.ai_description` under `.lfbridge/`. The **first** Apply on a
+  machine with no configured provider triggers the one-time credentials popup
+  ([ai_description.mdx §10](./ai_description.mdx#10-the-provider-readiness-gate--withdescribeready-locked--mirror-of-withmodelready));
+  thereafter it is skipped.
+
+---
+
+## 6. Acceptance criteria
+
+1. The engine runs **only on explicit request** ("Show what could be AI-described" / the API / a storage
+   page action) — **never** as part of the scheduled scan.
+2. A file is a candidate iff it is **describable** (an **image or a video**; audio never) **and** has **no
+   `.ai_description`** artifact yet. Provider capability (video → Gemini-only) does **not** exclude a file
+   from the list — it is resolved at Apply (§2.1).
+3. It writes **one describe batch per storage** (`kind: describe`, `pattern: describe`, `describe_image` /
+   `describe_video` totals) into `_do_batches/`; storages with no candidates produce no slug.
+4. Each describe batch renders as a **describe slug**; its chevron opens an **~80%-screen** popup with a
+   **default-checked** file list; **Apply** ("Describe N files") **enqueues AI description as background
+   jobs** watchable on the Processing page, after the **provider-readiness gate** (`withDescribeReady`) —
+   which interposes the credentials-missing popup when no usable key exists and **resumes** the confirmed
+   set once a key is added.
+5. The **scan uploads nothing and makes zero provider calls**; only **Apply** uploads. The popup states the
+   **cost** (N provider calls / uploads) up front; over-cap files are compressed to a temporary copy and the
+   **original is never modified**.
+6. It **describes nothing until Apply**; completed files gain a `.ai_description` and drop out of the next
+   run (self-clearing slugs).
+7. It reuses the [AI-description feature](./ai_description.mdx) wholesale and is network-mount-safe,
+   cancelable, and non-blocking; per-file failures (no provider, retired model, rate-limit, timeout, safety
+   block) surface honestly on Processing and remain candidates.
+8. It is the **section-for-section mirror** of [transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx),
+   differing only in candidate media (image/video vs audio/video), the checked artifact (`.ai_description`
+   vs `.transcription`), the batch kind (`describe` vs `transcribe`), and the Apply-time gate (a **provider
+   key** vs a **model download**).
+
+<!--
+  What Can Be AI-Described Calc Engine = ON-DEMAND mirror of transcribe_calc_engine.mdx. Trigger: the "Show
+  what could be AI-described" link (never the scheduled scan). Candidate = describable (IMAGE or VIDEO; audio
+  NEVER) AND no .ai_description artifact yet. Provider capability (video=Gemini-only) does NOT filter the
+  list — resolved at Apply. Emits ONE describe batch per storage (kind:describe, describe_image/describe_video)
+  into _do_batches/ → describe SLUG. Chevron opens ~80% popup, default-checked list, "Describe N files" →
+  enqueue background `describe` jobs (processing.mdx). DIFFERENCE FROM TRANSCRIBE: Apply uploads bytes to a
+  PAID hosted vision provider (Gemini/OpenAI/Grok), so (a) opt-in is doubly required, (b) the popup shows a
+  cost/upload caution, (c) the Apply-time gate is a PROVIDER KEY (withDescribeReady + CredentialsMissingDialog)
+  NOT a model download (withModelReady). SCAN uploads NOTHING / zero provider calls — only Apply uploads.
+  Over-cap files compressed to a TEMP copy, original never modified (ai_description.mdx §3.3). Read-only until
+  Apply; reuses ai_description.mdx /api/describe engine wholesale. Engine: describe-scan.engine.ts
+  (WhatCanBeDescribedCalcEngine.scanStorage/scanAll, isUndescribed reusing tracking.service analysisOutputs);
+  route POST /api/todo/describe-scan. Output schema: to_do_batches.mdx (kind:describe). Page: to_do.mdx §7.
+  Frontend TodoPage.tsx DescribeBatchPopup/ShowDescribableLink, lib/describe.ts withDescribeReady. Types:
+  RecommendableCategory += describe_image/describe_video, BatchKind += "describe". Keep section-for-section
+  in sync with transcribe_calc_engine.mdx and ai_description.mdx §5.1/§10/§12/§14.
+-->

@@ -27,6 +27,17 @@ export function resolveTodoBatchesDir(): string {
   return dir;
 }
 
+// The machine-local per-repo tracking directory (artifact_placement_policy.mdx §3):
+// ~/T/_large_files_bridge/repos/<repoKey>/ — the PRE-THRESHOLD home for a repo's noisy tracking state
+// (repo_storage.yaml, sidecars, history) so a repo that has never been transcribed/described NEVER gets a
+// `.lfbridge/` written into its git working tree (no churn, no stray check-ins). `repoKey` is the stable
+// 12-hex hash of the repo's absolute path (see tracking-root.service.ts `repoKeyFor`). Created on demand.
+export function resolveRepoStateDir(repoKey: string): string {
+  const dir = path.join(resolveStateDir(), "repos", repoKey);
+  ensureDir(dir);
+  return dir;
+}
+
 function safeJoin(...parts: string[]): string | null {
   try {
     return path.join(...parts);

@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — AI description of images & videos
-description: The AI-description feature. At the bottom of the View-one-file media viewer sit two analysis tabs — Transcription and AI description — each with a ✓ when its content already exists, defaulting to whichever is available (preferring transcription). AI description generates a HYPER-DETAILED, searchable prose description of an IMAGE or a VIDEO by uploading the file's bytes to a vision provider with a per-kind prompt, then stores the result so it can be searched and re-found without re-opening the file. Only image + video are describable here (audio is covered by transcription). The description is written as a SIDECAR BESIDE the media — the media's base name with its extension replaced by .ai_description (skyline.mp4 → skyline.ai_description; TheFunnyVideo.mp4 → TheFunnyVideo.ai_description), mirrored under the owning storage's placement root, with NO .lfbridge/analysis/ directory. It is a self-contained "done" YAML record, so the Storage file table's "description" indicator lights up from the sidecar's presence. Providers are pluggable adapters: Gemini (Google — the ONLY one that describes VIDEO, via inline base64), OpenAI (gpt-4o, images only), and Grok (xAI grok-2-vision, images only); keys resolve from app config first then well-known env vars, and the file is uploaded inline as base64 (bounded ~18MB) — so any file over ~17.5MB is FIRST auto-compressed to a temporary copy that fits (H.264 video / JPEG image, stepping resolution down only when needed), and the ORIGINAL is never modified. Prompts are shipped defaults the user can customize per-computer from Settings → Tools. IMPORTANT CHARTER NOTE: this is the ONE deliberate external-network path in LFBridge — generating a description uploads the file to the chosen provider; it is ALWAYS explicit and user-initiated, never automatic, and entirely separate from the charter's local-only perceptual-fingerprint feature (which must never phone home). Implemented by the /api/describe backend module, the describe adapters/prompts, and the MediaAnalysis tabs + Tools-page settings on the frontend.
+description: The AI-description feature. At the bottom of the View-one-file media viewer sit two analysis tabs — Transcription and AI description — each with a ✓ when its content already exists, defaulting to whichever is available (preferring transcription). AI description generates a HYPER-DETAILED, searchable prose description of an IMAGE or a VIDEO by uploading the file's bytes to a vision provider with a per-kind prompt, then stores the result so it can be searched and re-found without re-opening the file. Only image + video are describable here (audio is covered by transcription). The description is written INSIDE the owning repo/storage's .lfbridge/ tracking directory, path-mirrored, under the media's FULL filename (original extension kept) with .ai_description APPENDED (skyline.mp4 → .lfbridge/render/skyline.mp4.ai_description; TheFunnyVideo.mp4 → TheFunnyVideo.mp4.ai_description) — committed and traveling with the repo by git, with NO .transcribe/ and NO .lfbridge/analysis/ directory. It is a self-contained "done" YAML record, so the Storage file table's "description" indicator lights up from that artifact's presence. Providers are pluggable adapters: Gemini (Google — the ONLY one that describes VIDEO, via inline base64), OpenAI (gpt-4o, images only), and Grok (xAI grok-2-vision, images only); keys resolve from app config first then well-known env vars, and the file is uploaded inline as base64 (bounded ~18MB) — so any file over ~17.5MB is FIRST auto-compressed to a temporary copy that fits (H.264 video / JPEG image, stepping resolution down only when needed), and the ORIGINAL is never modified. Prompts are shipped defaults the user can customize per-computer from Settings → Tools. IMPORTANT CHARTER NOTE: this is the ONE deliberate external-network path in LFBridge — generating a description uploads the file to the chosen provider; it is ALWAYS explicit and user-initiated, never automatic, and entirely separate from the charter's local-only perceptual-fingerprint feature (which must never phone home). Implemented by the /api/describe backend module, the describe adapters/prompts, and the MediaAnalysis tabs + Tools-page settings on the frontend.
 ---
 
 # LargeFileBridge — AI description of images & videos
@@ -25,14 +25,69 @@ Siblings this builds on and does not repeat:
 * [media_viewer.mdx](./media_viewer.mdx) — the **View one file** viewer whose bottom band hosts the
   Transcription · AI description tabs. This file is **authoritative** for the AI-description tab.
 * [storages.mdx §6](./storages.mdx) — the per-file media-analysis area. This file **supersedes** §6's
-  `description.yaml` sketch: the description is now a **`.ai_description` sidecar beside the media**, not a
-  YAML under `.lfbridge/analysis/` (§2).
+  `description.yaml` sketch: the description is now a **path-mirrored `<name.ext>.ai_description` file
+  inside the owning storage's `.lfbridge/`** (extension **appended**), not a YAML under
+  `.lfbridge/analysis/` (§2).
 * [os_open.mdx](./os_open.mdx) — the neighboring localhost-only viewer action; unrelated to the network,
   but shares the viewer's action surface.
 * [ai_credentials.mdx](./ai_credentials.mdx) — the **credential resolution order** (config → env → the
   shared `~/.config/GoogleCloud/apikey.yaml`) and the **credentials-missing popup** (Close /
   Instructions → the `/ai-credentials` setup page). Authoritative for how a key is found and how the user
-  is told to add one.
+  is told to add one. AI description's **provider-readiness gate** (§10) is the mirror of transcription's
+  heavyweight-model gate, but credential-gated rather than download-gated.
+* [describe_calc_engine.mdx](./describe_calc_engine.mdx) — the on-demand **"What Can Be AI-Described" calc
+  engine** that feeds the **describable** metric (§12) and the To-Do **describe slugs**; the exact mirror of
+  [transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx).
+* [task_tabs.mdx](./task_tabs.mdx) — the per-repo screen's **AI descriptions tab** (§11), the three-state
+  **Describe status icon** (§11.2), and the **describable/described metric panels** whose click opens the
+  describe educate-and-fix popup (§12). Authoritative for the tab strip, the metric panels, and the status
+  icon grammar; this file supplies the describe-specific mirror of each.
+* [one_repo.mdx](./one_repo.mdx) — the per-repo header where the blue **"Describe ›"** recommendation
+  primary surfaces alongside **"Transcribe ›"**, and the `Actions ▾` **Create AI descriptions** page action.
+* [warnings.mdx §10.6](./warnings.mdx) — the authoritative catalog of every **AI-description warning**
+  (no provider, retired model, provider error/rate-limit/timeout, no-storage-owner, over-cap). This file
+  points at those; it does not restate them.
+* [repo_settings.mdx](./repo_settings.mdx) + [placement_radios.mdx](./placement_radios.mdx) — the **3-way
+  placement radios** that decide **where** a `.ai_description` (and a `.transcription`) lands; AI description
+  reuses the same radios and the same [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)
+  resolution (§13).
+* [job_queue.mdx](./job_queue.mdx) / [processing.mdx](./processing.mdx) — the background queue (op
+  `describe`) and the Processing surface where queued descriptions run and are watched.
+
+---
+
+## 0. The symmetry contract with Transcribe (LOCKED)
+
+**Everything transcription has, AI description mirrors.** The two features are deliberately kept
+**structurally symmetric** across the whole product, so a user who has learned one has learned the other,
+and so a developer touching one knows to touch the other. This is a **hard design rule**, not a
+coincidence — every surface in the left column below has the mirror in the right column, and adding a new
+surface to one obliges adding it to the other.
+
+| Transcription ([Transcribe.mdx](./Transcribe.mdx)) | AI description (this spec) |
+| --- | --- |
+| **Transcribe…** action button, every scale (viewer, file/dir ⋮, repo kebab, storage) — [Transcribe.mdx §2](./Transcribe.mdx) | **Create AI description / Describe…** action button, every scale — §9 |
+| **Create Transcriptions** `Actions ▾` page action — [Transcribe.mdx §2.5](./Transcribe.mdx) | **Create AI descriptions** `Actions ▾` page action — §5.1 |
+| **Transcribe** task tab — [task_tabs.mdx §4.4](./task_tabs.mdx) | **AI descriptions** task tab — §11 |
+| Three-state **Transcribe status icon** (`Captions`) — [task_tabs.mdx §5](./task_tabs.mdx) | Three-state **Describe status icon** (`ScanText`) — §11.2 |
+| **`transcribable` / `transcribed`** metric pair + educate-and-fix popup — [task_tabs.mdx §2/§5.1](./task_tabs.mdx) | **`describable` / `described`** metric pair + popup — §12 |
+| Blue **"Transcribe ›"** header recommendation — [one_repo.mdx §3.1](./one_repo.mdx) | Blue **"Describe ›"** header recommendation — §12.3 |
+| **"What Can Be Transcribed" calc engine** — [transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx) | **"What Can Be AI-Described" calc engine** — [describe_calc_engine.mdx](./describe_calc_engine.mdx) |
+| Permission-gated **heavyweight-model provisioning** (`withModelReady`) — [transcribe_engine.mdx §3](./transcribe_engine.mdx) | Provider/credential-gated **readiness flow** (`withDescribeReady`) — §10 |
+| Shared launcher **`lib/transcribe.ts`** — [transcribe_engine.mdx §3.6](./transcribe_engine.mdx) | Shared launcher **`lib/describe.ts`** — §10.1 |
+| **3-way placement radios** (where `.transcription` lands) — [placement_radios.mdx](./placement_radios.mdx) | Same 3-way radios (where `.ai_description` lands) — §13 |
+| `FileRow.transcribe` · `TaskMetrics.{transcribable,transcribed}` · `TranscribeResult` | `FileRow.describe` · `TaskMetrics.{describable,described}` · `DescribeResult` |
+
+**The one deliberate asymmetry** is the runtime backend: transcription drives a **local ASR model**
+(offline, no credentials), while AI description calls a **hosted vision provider** (the one deliberate
+network upload, §7). So transcription's "readiness" is a **model download**; AI description's "readiness" is
+a **provider key**. Everywhere *else* — the buttons, the tab, the icon, the metrics, the header primary, the
+calc engine, the placement radios, the shared launcher, the shared types — the two are **the same shape**.
+
+The symmetry is asserted in code by the parallel module trees `modules/transcribe/` ↔ `modules/describe/`,
+`lib/transcribe.ts` ↔ `lib/describe.ts`, `TranscribeStatusIcon.tsx` ↔ `DescribeStatusIcon.tsx`, and the
+paired fields on `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` (`TaskMetrics`,
+`FileRow`, `DescribeResult`/`DescribeBatchResult` mirroring `TranscribeResult`/`TranscribeBatchResult`).
 
 ---
 
@@ -58,7 +113,7 @@ At the bottom of the media viewer (band 6) sits an analysis panel with up to **t
   therefore shows **both** tabs; an **image** shows **only AI description**; an **audio** file shows **only
   Transcription** (audio is deliberately *not* AI-described — transcription covers "what was said").
 * **The ✓ marker.** Each tab carries a small **✓** when its content already exists (an existing transcript,
-  or an existing `description.yaml`), so the user can see at a glance what has already been generated.
+  or an existing `.ai_description` artifact), so the user can see at a glance what has already been generated.
 * **The default-tab rule.** On open, the panel selects, in order: (1) **Transcription if it has content**;
   else (2) the **first tab that has content**; else (3) the **first tab**. So a described-but-not-yet-
   transcribed video still lands the user on real content, and the *preference* is transcription when both
@@ -69,40 +124,65 @@ The two-tab panel, the ✓ presence markers, and the transcription-preferring de
 
 ---
 
-## 2. Where the description is stored — a `.ai_description` sidecar beside the media (LOCKED)
+## 2. Where the description is stored — inside the repo/storage `.lfbridge/`, path-mirrored, extension APPENDED (LOCKED — supersedes the earlier beside-media layout)
 
-The description does **not** live in the Local state dir and there is **no** `.lfbridge/analysis/`
-directory for it. Exactly like the transcript, it is a **sidecar written beside the media** — the media
-file's own base name with its extension **replaced** by **`.ai_description`**:
+The description does **not** live in the Local state dir, there is **no** `.lfbridge/analysis/`
+directory for it, and — as of this revision — it does **not** sit loose next to the media either. Exactly
+like the transcript ([Transcribe.mdx §3](./Transcribe.mdx), the authoritative template), it lives **inside
+the owning repo/storage's own `.lfbridge/` tracking directory**, in a **path-mirrored hierarchy**, under
+the media's **full filename (extension kept)** with **`.ai_description` appended** as a **second**
+extension:
 
 ```
 <placement root>/
-└── render/
-    ├── skyline.mp4                              ← the real media file
-    └── skyline.ai_description                   ← the generated description, right next to it
+├── render/
+│   └── skyline.mp4                              ← the real media file (untouched, still in the working tree)
+└── .lfbridge/
+    └── render/
+        └── skyline.mp4.ai_description           ← the generated description: same relative path under
+                                                    .lfbridge/, full filename (skyline.mp4) with
+                                                    .ai_description APPENDED
 ```
 
 For a file at **`render/skyline.mp4`** the description is written to
-**`<placement root>/render/skyline.ai_description`** — same folder, `.mp4` → `.ai_description`, no
-intermediate directory. (Example: `TheFunnyVideo.mp4` → `TheFunnyVideo.ai_description`.) The **placement
-root** and the media's mirrored relative hierarchy are resolved **exactly like transcription — by the
-shared ordered placement rule** ([Transcribe.mdx §3.4](./Transcribe.mdx), the authoritative spec): walk
-**up** to the nearest ancestor carrying `storage.yaml` / `.lfbridge/` / `.git/`; else route to the **owning
-storage's dedicated Git repo** when enabled (mirroring the file's hierarchy —
-`<dedicatedRepo>/<rel-without-ext>.ai_description`, **not** git-ignored there); else the owning storage's
-root; else the **first-time setup wizard** ([Transcribe.mdx §3.5](./Transcribe.mdx)) when no Personal
-storage exists; else, as a last resort, the file's own directory. **Get AI details / AI description is one
-of the actions that triggers the first-time wizard**, and it consults placement (`needsSetup`) before it
-runs. Pasted `~/…` paths are home-expanded first (Transcribe.mdx §3.6).
+**`<placement root>/.lfbridge/render/skyline.mp4.ai_description`** — the media's relative directory
+mirrored under `.lfbridge/`, the full filename kept, `.ai_description` **appended** (**not** substituted).
+(Example: `TheFunnyVideo.mp4` → `.lfbridge/…/TheFunnyVideo.mp4.ai_description`.) The `.ai_description`
+token is a single constant — `AI_DESCRIPTION_EXT` — **appended**, never replacing the original extension.
 
-> **Collision caveat (accepted).** As with `.transcription`, replacing the extension means two files that
-> differ **only** by extension in the same folder map to the same `.ai_description` and the second run
-> overwrites the first — the deliberate tradeoff of extension-based, no-extra-directory naming.
+The **placement root** and the media's mirrored relative hierarchy are resolved **exactly like
+transcription — by the shared ordered placement rule** ([Transcribe.mdx §3.4](./Transcribe.mdx), the
+authoritative spec): walk **up** to the nearest ancestor carrying `storage.yaml` / `.lfbridge/` / `.git/`
+(the artifact lands at `<root>/.lfbridge/<rel-dir>/<name.ext>.ai_description`); else route to the **owning
+storage's dedicated Git repo** when enabled (mirroring the file's hierarchy under that repo's `.lfbridge/`
+— `<dedicatedRepo>/.lfbridge/<rel-dir>/<name.ext>.ai_description`, **committed** there); else the owning
+storage's own root (`<storageRoot>/.lfbridge/<rel-dir>/<name.ext>.ai_description`); else the **first-time
+setup wizard** ([Transcribe.mdx §3.5](./Transcribe.mdx)) when no Personal storage exists; else, as a last
+resort, a `.lfbridge/` created in the media's **own directory**
+(`<mediaDir>/.lfbridge/<name.ext>.ai_description`) — never loose beside the media. **Get AI details / AI
+description is one of the actions that triggers the first-time wizard**, and it consults placement
+(`needsSetup`) before it runs. Pasted `~/…` paths are home-expanded first (Transcribe.mdx §3.6).
+
+> **Why `.lfbridge/` (and not beside the media).** `.lfbridge/` is **committed and travels with the repo**
+> ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)), so the description is **version-controlled and
+> synced across the user's computers by git** — generated once on one computer and reused everywhere —
+> while the media working tree stays **clean** (no loose `.ai_description` files scattered next to videos).
+> Descriptions are small UTF-8 YAML, so committing them is cheap and desirable (the multi-GB media stays
+> git-ignored and rides IPFS). The old **`*.ai_description` git-ignore nudge is RETIRED** — no ignore line
+> is injected anymore.
+
+> **Append-not-replace resolves the old collision caveat.** Because the original extension is **kept** and
+> `.ai_description` is **appended** (not substituted), two media files that differ only by extension in the
+> same folder **no longer collide**: `skyline.mp4` → `.lfbridge/…/skyline.mp4.ai_description` and
+> `skyline.mov` → `.lfbridge/…/skyline.mov.ai_description` are **distinct files**. The earlier layout's
+> accepted "second run overwrites the first" caveat is therefore **retired** — appending the extension is
+> precisely what fixes it. A tool that wants a media file's description computes the path deterministically:
+> `join(root, ".lfbridge", relDir, mediaFilename + ".ai_description")`.
 
 ### 2.1 The YAML shape — a self-contained `done` record
 
-The `.ai_description` sidecar is a small YAML document. Generating a description writes it directly as a
-**done** record (there is no separate pre-seeded skeleton to upgrade — the sidecar either exists as a
+The `.ai_description` artifact is a small YAML document. Generating a description writes it directly as a
+**done** record (there is no separate pre-seeded skeleton to upgrade — the artifact either exists as a
 `done` record or does not exist yet):
 
 ```yaml
@@ -118,25 +198,25 @@ description: |
   ## Composition … ## People …
 ```
 
-A read returns a usable `DescribeView` **only** when the sidecar exists with `status: done` **and** a
+A read returns a usable `DescribeView` **only** when the artifact exists with `status: done` **and** a
 non-empty `description` string — otherwise it reads back as **null** (no content yet), so the tab shows the
 generate pane rather than an empty box.
 
 ### 2.2 The Storage table indicator
 
 The **Storage file table's `analysis: ["description"]` indicator lights up** the moment the
-`.ai_description` sidecar exists beside the media — one source of truth for "this file has a description,"
-shared by the viewer tab and the storage table (which now detects the sidecar rather than a YAML under
-`.lfbridge/analysis/`). When the artifact lands in a **plain** repo (placement rule A) generating also
-ensures that repo git-ignores **`*.ai_description`** (the same nudge transcription makes for
-`*.transcription`) so descriptions never bloat commits; when it lands in the owning storage's **dedicated
-Git repo** (rule B) it is **deliberately not** git-ignored — that repo exists to track and back up the
-artifacts.
+`.ai_description` artifact exists under `.lfbridge/` for the media (computed deterministically from the
+media path) — one source of truth for "this file has a description," shared by the viewer tab and the
+storage table (which detects the path-mirrored artifact under `.lfbridge/` rather than a YAML under
+`.lfbridge/analysis/`). Because the artifact lives **inside the committed `.lfbridge/`** in every placement
+case, generating it injects **no** git-ignore line — the old **`*.ai_description` nudge is retired** (the
+same retirement transcription made for `*.transcription`); the small text artifact is committed and travels
+with the repo, while the multi-GB media stays git-ignored and rides IPFS.
 
-Resolving the description path via the shared ordered placement rule, reading back a done description, and writing the `.ai_description` sidecar (with the git-ignore nudge only when the placement flags it) are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `resolveDescriptionPath()` / `readDescription()` / `describeOne()` (sidecar path via `siblingArtifactPath()` + `AI_DESCRIPTION_EXT` in `storage/artifact-placement.service.ts`).
+Resolving the description path via the shared ordered placement rule, reading back a done description, and writing the `.ai_description` artifact under `.lfbridge/` are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `resolveDescriptionPath()` / `readDescription()` / `describeOne()` (artifact path via `lfbridgeArtifactPath(root, relPath)` = `join(root, ".lfbridge", relPath) + AI_DESCRIPTION_EXT` in `storage/artifact-placement.service.ts`, where `AI_DESCRIPTION_EXT` is **appended**, not substituted).
 
-The storage-table indicator that detects the `.ai_description` sidecar is handled in code:
+The storage-table indicator that detects the `.ai_description` artifact is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `analysisOutputs()`.
 
 ---
@@ -451,19 +531,290 @@ The adapter module is annotated as the one deliberate outbound path, and the upl
 
 ---
 
-## 9. Acceptance criteria
+## 9. Entry points (every scale) — the "Create AI description" / "Describe" action
+
+AI description is reachable everywhere a media file, or a bag of them, is visible — the **exact mirror** of
+[Transcribe.mdx §2](./Transcribe.mdx#2-entry-points-every-scale). The same `/api/describe` backend (§5)
+serves all of them; only **image + video** files are eligible (audio → transcription, §1). The button copy
+follows the charter rule to spell the product out in English: the verb is **"Create AI description"** (or the
+compact **"Describe…"** where space is tight), never "AI it" or an abbreviation.
+
+### 9.1 One file — the Media Viewer (LOCKED)
+
+Open an image or a video in the **[Media Viewer](./media_viewer.mdx)**; the **AI description** analysis tab
+(band 6, §1) shows a **Generate description** pane, and — for an image or video — the action bar (band 3)
+carries a **Describe…** button. This mirrors the Transcribe button/`Generate transcript` pane exactly:
+
+* Clicking either flips the control to a disabled **Describing…** spinner **instantly** (the click never
+  looks like a no-op — the same defect-class the transcription async fix closed,
+  [Transcribe.mdx §5.1](./Transcribe.mdx#51-async--non-blocking--the-generate-transcript-didnt-work-fix-locked)),
+  and a live **progress card** appears in the dock (op `describe`, [job_queue.mdx](./job_queue.mdx)).
+* On completion the AI-description tab fills in and a toast reports success + the model that ran; when a
+  description already exists the button reads **Re-describe** (passes `overwrite`, §5).
+* **No provider configured** → the button stays clickable and opens the **credentials-missing popup**
+  (§8, [ai_credentials.mdx](./ai_credentials.mdx)) — the mirror of the transcription **setup card**, but
+  for a provider **key** rather than a CLI binary.
+
+The instant pending state, the Describe action-bar button, and the credentials-missing branch are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` / `MediaAnalysis` (calls `api.describeFile` / `api.description`, opens `CredentialsMissingDialog` on `no_provider`), driven by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/describe.ts` — `runDescribeFile()`.
+
+### 9.2 One file — the ⋮ kebab / right-click (LOCKED)
+
+Every image/video row (File System, repo files, storage files) and its single-entity page carry a
+**Create AI description…** item in the **Work** group of the entity ⋮ catalog
+([menus.mdx §5.3](./menus.mdx#5-the-per-entity-action-catalogs-locked)) — the same group and position that
+holds **Transcribe…**. On an audio-only or non-media row the item is **absent** (not merely disabled), just
+as Transcribe is absent on an image.
+
+### 9.3 A few files — selection (LOCKED)
+
+A multi-select of image/video rows describes the selected set via the batch endpoint
+(`POST /api/describe/batch`, §5), mirroring the bulk Transcribe/Compress selection path. Per-file results
+come back as a `DescribeBatchResult` with honest `described` / `skipped` / `no_provider` / `unsupported` /
+`failed` counts.
+
+### 9.4 All files under a directory / repo / storage — "Create AI descriptions for all files…" (LOCKED)
+
+* **Directory** — the directory ⋮ catalog gains **Create AI descriptions for all files…**, which walks the
+  directory for image/video and describes each (`POST /api/describe/tree`).
+* **Repo** — the repo row / one-repo page ⋮ ([menus.mdx §5.1](./menus.mdx)) gains the same item over the
+  repo's working tree.
+* **Storage** — the storage detail page ([storages.mdx §2](./storages.mdx)) gains a **Describe all** action
+  over the whole storage.
+
+These mirror **Transcribe all files…** at each scale ([Transcribe.mdx §2.4](./Transcribe.mdx)). The kebab/menu items are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (file + directory) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `RepoKebab` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage`.
+
+### 9.5 The page action (cross-reference)
+
+The primary **bulk, page-scoped** entry point — **Create AI descriptions** in the header `Actions ▾`
+menu — is specified in **§5.1** (scope / skip-already-done / background-queue, the mirror of **Create
+Transcriptions**). The §9.4 kebab items walk **one** entity; the §5.1 page action honours the **whole
+page's checked-or-all set** and obeys the three LOCKED page-action rules.
+
+---
+
+## 10. The provider-readiness gate — `withDescribeReady` (LOCKED — mirror of `withModelReady`)
+
+Transcription wraps every launch in **`withModelReady()`**, which interposes the heavyweight-model
+permission/provisioning flow when the local model is absent and then **resumes the original action**
+([transcribe_engine.mdx §3.6](./transcribe_engine.mdx)). AI description has the **exact structural mirror**,
+**`withDescribeReady()`** — but because descriptions call a **hosted provider** rather than a local model,
+the thing it gates on is a **usable provider key**, not a multi-GB download. There is **no download, no disk
+estimate, and no two-phase install** — the readiness check is a fast credential probe.
+
+### 10.1 The shared launcher (`lib/describe.ts`) (LOCKED)
+
+Every describe entry point (§9, §5.1, the metric popup §12, the calc-engine Apply
+[describe_calc_engine.mdx §4](./describe_calc_engine.mdx)) routes through **one** frontend launcher, the
+mirror of `lib/transcribe.ts`:
+
+```
+withDescribeReady(intent, run):
+  1. probe readiness  → GET /api/describe/providers  (anyAvailable? + which kinds each supports)
+  2. if a usable provider exists for the intent's kind → run() immediately (the common case)
+  3. else capture a PENDING INTENT (confirmed | offered) and open CredentialsMissingDialog
+  4. on a successful key add (the user returns from /ai-credentials) → REPLAY the pending intent:
+       - confirmed  → enqueue the confirmed describe set (Processing shows it)
+       - offered    → re-open the describe offer popup on the originating route
+```
+
+* **The kind-aware probe.** For a **video** the gate needs **Gemini specifically** (only Gemini describes
+  video, §3.1); for an **image** any of the three keys satisfies it. So the same "no provider" gate can fire
+  for a video on a machine that has an OpenAI/Grok key but no Gemini key — the popup says so.
+* **Pending-intent replay is identical to transcription's.** A **confirmed** describe (the user pressed the
+  blue *"Describe N files"* in the metric popup, §12) **proceeds** after the key is added; an **offered**
+  popup that was only *opened* **re-opens on the original page**. This is the same `confirmed` vs `offered`
+  distinction `withModelReady` captures.
+
+`withDescribeReady()` (readiness probe, pending-intent capture, credentials-dialog interpose, replay-after-fix) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/describe.ts` — `withDescribeReady(intent, run)` (mirror of `lib/transcribe.ts` `withModelReady`); the dialog is `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/describe/CredentialsMissingDialog.tsx`, opened via the shared global request bus `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/setupWizard.ts` — `requestAiCredentials()`.
+
+### 10.2 The two "not-ready" cases, and how they differ from transcription (LOCKED)
+
+| | Transcription | AI description |
+| --- | --- | --- |
+| **Missing local dependency** | `whisper`/`ffmpeg` binary absent → **setup card** with a `brew`/`pipx` install + Re-check ([Transcribe.mdx §5.2](./Transcribe.mdx)). | **n/a** — no local binary is needed to call a provider (the compress-to-fit path *does* need ffmpeg/ImageMagick for over-cap files, §3.3; that surfaces as a `failed` with a `brew` hint). |
+| **Missing "engine"** | Heavyweight model missing → **permission popup + download/install/configure** ([transcribe_engine.mdx §3](./transcribe_engine.mdx)). | Provider key missing → **credentials-missing popup** (Close / Instructions → `/ai-credentials`), **no download** ([ai_credentials.mdx](./ai_credentials.mdx)). |
+| **First-time storage** | Placement `needsSetup` → first-time storage wizard ([Transcribe.mdx §3.5](./Transcribe.mdx)). | **Same** wizard — Get AI details is a listed trigger ([Transcribe.mdx §3.5](./Transcribe.mdx), §2 here). |
+| **Resume after fix** | `withModelReady` replays confirmed/offered intent. | `withDescribeReady` replays confirmed/offered intent (identical shape, §10.1). |
+
+The point of the mirror: **the user experience is the same** ("you're not set up to do this yet — here's the
+one thing to fix, then we'll pick up where you left off"), even though the underlying "thing to fix" is a
+**key** for description and a **model** for transcription.
+
+---
+
+## 11. The AI descriptions task tab & the three-state Describe status icon (LOCKED)
+
+On the per-repo screen ([one_repo.mdx](./one_repo.mdx), [task_tabs.mdx](./task_tabs.mdx)) the tab strip
+carries an **AI descriptions** tab — the mirror of the **Transcribe** tab
+([task_tabs.mdx §4.4](./task_tabs.mdx#44-transcribe--get-transcripts)). task_tabs.mdx is **authoritative**
+for the tab strip, the metric panels, and the status-icon grammar; this section is the describe-specific
+mirror.
+
+### 11.1 The tab (LOCKED)
+
+* **Filter:** **describable** files only — **images and videos**
+  ([special_files.mdx](./special_files.mdx); the visual counterpart of the `transcribable` audio/video
+  filter). Audio and non-media never appear on this tab.
+* **Columns:** **`Describe`** (the three-state icon, §11.2) **as the LEADING control column — to the LEFT of
+  `File`, with NO header title (icon only)** — then `File`, `Size`, `Kind` (image/video), `Changed`. This is
+  the **same leading, header-less control slot** the `Pin`, IPFS, and `Transcribe` icons occupy on their
+  tabs (the product owner's rule for the Transcribe icon applies identically here).
+* **Default sort:** **could-describe first** (the warm "not yet" rows), then **Size desc** — most
+  work-to-do at the top, exactly like the Transcribe tab.
+* **Metrics:** `Describable` (could) · `Described` (done) — §12.
+
+### 11.2 The three-state Describe status icon (LOCKED)
+
+The tab shows a **Describe status icon** per row, in the leading header-less control column, using the
+lucide **`ScanText`** glyph (an image being read into text) in a 16×16 box — the **visual sibling** of the
+Transcribe tab's `Captions` glyph. It follows the **same three-state grammar** as the Transcribe and
+Compress icons ([task_tabs.mdx §5/§6](./task_tabs.mdx#5-the-transcribe-status-icon--three-states-locked)),
+with a **blue** "done" fill because it is a status/action indicator, not a stored two-axis decision:
+
+| State | When | Fill | Edge | Glyph |
+| --- | --- | --- | --- | --- |
+| **Done** | The file **has an AI description** — a `.ai_description` artifact exists under `.lfbridge/` (§2). | **solid blue** (`--lfb-pin`, the same done-blue Transcribe uses) | none — **white** glyph | **white** |
+| **Could be AI-described** | The file is an **image or video with no description yet** — exactly the [What-Can-Be-AI-Described engine](./describe_calc_engine.mdx)'s candidate. | **~99% white / ~1% tint** wash | **normal-thickness "actionable" edge** (`--lfb-decision-on`, the warm red/orange the product owner calls **red**) | red/orange |
+| **Not applicable** | The file is **not** an image/video (audio, text, other). | **white** | **very thin, very-light-grey** (hairline) | faint grey |
+
+> **Color parity (reconciled).** The "could" edge uses the **same `--lfb-decision-on`** token as the
+> Transcribe icon's "could" state — a warm burnt color (`#c2410c`) the code calls **orange** and the product
+> owner calls **red**. Same token, same behavior: a red/orange edge with a near-white fill for "could",
+> toggling to solid blue with a white glyph for "done". The Compress icon uses the identical grammar with a
+> **green** done color; Describe uses **blue** (like Transcribe), so a repo's rows read consistently across
+> all task tabs.
+
+* **Click behavior** (a control cell — stops propagation, never navigates the row):
+  * **Could →** offers/queues an AI description for that one file (an explicit-click action, a background
+    `describe` job, watchable on [Processing](./processing.mdx)) — the same enqueue the describe popup uses,
+    **gated by `withDescribeReady`** (§10) so a missing key opens the credentials popup first.
+  * **Done →** opens/views the description (flips the media viewer to the AI-description tab, §1).
+  * **Not applicable →** inert.
+
+The Describe status icon (three states, click-to-describe / click-to-view) is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/DescribeStatusIcon.tsx` — `DescribeStatusIcon` (mirror of `TranscribeStatusIcon.tsx`; state from the new `FileRow.describe` field composed in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows`, joining each image/video row against the `.ai_description` presence check of `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `analysisOutputs()`).
+
+The new per-file field is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FileRow.describe` (a `TaskStatus`, alongside the existing `FileRow.transcribe` / `FileRow.compress`).
+
+---
+
+## 12. The describable / described metric pair, the popup, and the "Describe ›" header primary (LOCKED)
+
+### 12.1 The metric pair (LOCKED)
+
+The AI descriptions tab's metrics panel shows the **describable / described** pair — the mirror of
+**transcribable / transcribed** ([task_tabs.mdx §2](./task_tabs.mdx)):
+
+* **`Describable`** — how many image/video files in this repo **could** be AI-described but have no
+  `.ai_description` yet (the "could" count; **green big-zero** when none, per the task-tab metric grammar).
+* **`Described`** — how many already have a description (the "done" count).
+
+Both panels are health-tinted and, at zero-work, show the calm green-zero state
+([task_tabs.mdx §2.2](./task_tabs.mdx)). The counts are the repo-level rollup of the per-row `describe`
+state (§11.2), carried on `RepoDetail.taskMetrics`.
+
+The paired metric fields are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `TaskMetrics.describable` / `TaskMetrics.described` (added alongside `transcribable` / `transcribed`), rolled up in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail`.
+
+### 12.2 The metric → popup → Confirm → Processing flow (LOCKED)
+
+Clicking the **`Describable`** metric panel opens the **describe educate-and-fix popup** — the exact mirror
+of the transcribe popup ([task_tabs.mdx §5.1](./task_tabs.mdx)), an ~80%-of-screen list because the file
+lists are long:
+
+1. **Open.** The popup lists all describable-not-yet-described candidates **checked by default**.
+2. **Continue / adjust.** The user may **uncheck** any files; whatever stays checked is the set.
+3. **Confirm (the solid blue button).** They press the **solid-blue** button labelled **"Describe N files"**
+   (N = the checked count). This is the commit.
+4. **Provider gate (may interpose).** If no usable provider key exists for the set's kinds, the
+   **credentials-missing popup** of §10 / [ai_credentials.mdx](./ai_credentials.mdx) interposes; because the
+   user **confirmed**, the flow **resumes into the descriptions** once a key is added (§10.1 replay). If a
+   key is already present the gate is skipped.
+5. **Async + Processing.** The descriptions run as **background `describe` jobs**
+   ([job_queue.mdx](./job_queue.mdx), cap 3) watchable on the **[Processing](./processing.mdx)** page — which
+   run in parallel, which are pending, which failed. The popup can be closed immediately.
+6. **Self-clearing.** As each file completes it gains its `.ai_description` (its row icon toggles to solid
+   **blue** "done"), and it drops out of the next [describe_calc_engine.mdx](./describe_calc_engine.mdx) run.
+
+> **The one difference from the transcribe popup** is the gate at step 4: transcription may interpose a
+> **model download**; AI description interposes a **provider key**. The list, the default-checked behavior,
+> the solid-blue "N files" confirm, the background enqueue, and the Processing watch are **identical**.
+
+The describe metric popup (~80% modal, default-checked list, "Describe N files" apply → enqueue) is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — the `describable` panel's `onOpen` (opens the popup gated by `withDescribeReady()` from `lib/describe.ts`) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `DescribeBatchPopup` (the shared list + Apply, mirror of `TranscribeBatchPopup`).
+
+### 12.3 The blue "Describe ›" header recommendation (LOCKED)
+
+On the per-repo header ([one_repo.mdx §3.1](./one_repo.mdx)) the single smart **recommendation primary**
+can surface a blue **"Describe ›"** call-to-action — the mirror of **"Transcribe ›"** — when the repo's
+**worst** outstanding task is *"you have {describable} images/videos with no AI description."* It is the
+same header-primary machinery `one_repo.mdx` owns (worst-first `topRecommendation()` across
+ipfs → pull → transcribe → describe → …); clicking it opens the **same describe popup** as the metric panel
+(§12.2), so header and tile drive one flow. When AI description is **not** the worst task, "Describe ›"
+does not appear — the header shows whatever the worst task's primary is. one_repo.mdx is authoritative for
+the ranking and the button; this file only names the describe entry in it.
+
+The describe recommendation's contribution to the header primary is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — the `describable` entry in `topRecommendation()` (worst-first, alongside the `transcribable` entry), consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (`topRec`).
+
+---
+
+## 13. Where descriptions land — the shared 3-way placement radios (LOCKED — cross-reference)
+
+**Where** a `.ai_description` artifact is written is **not** decided here — §2 gives the resolved path shape
+(`<root>/.lfbridge/<rel-dir>/<name.ext>.ai_description`), and the **policy** that chooses the placement root
+is owned by [artifact_placement_policy.mdx](./artifact_placement_policy.mdx): the **content threshold is
+crossed by a transcript OR an AI description**, and `<rel>.ai_description` artifacts follow **the same
+placement resolution** as `<rel>.transcription`. The user-facing control is the **3-way placement radios**
+([repo_settings.mdx](./repo_settings.mdx) + [placement_radios.mdx](./placement_radios.mdx)):
+
+* AI description **reuses the identical radios** transcription uses — there is **no** separate
+  "where do descriptions go" control. A repo/storage's one placement choice governs **both** its
+  `.transcription` and its `.ai_description` artifacts, because both are committed tracking artifacts under
+  the same `.lfbridge/` hierarchy (§2).
+* The three choices, the default, and the migration behavior are specified in
+  [placement_radios.mdx](./placement_radios.mdx); this spec defers to it wholesale and only asserts that
+  **descriptions obey the same radio the transcripts obey**.
+
+Resolving a `.ai_description` path through the shared placement policy is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveArtifactPlacement()` / `lfbridgeArtifactPath(root, relPath)` (appends `AI_DESCRIPTION_EXT`), the **same** resolver transcription's `resolveTranscriptPath()` calls.
+
+---
+
+## 14. Bulk discovery — the "What Can Be AI-Described" calc engine (cross-reference)
+
+The **discovery** direction — *"across all my storages, what could still be AI-described?"* — is owned by
+its own deep spec, [describe_calc_engine.mdx](./describe_calc_engine.mdx), the exact mirror of
+[transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx). It is **on-demand only** (triggered by a
+**"Show what could be AI-described"** link, never the scheduled scan), walks each storage for
+image/video files lacking a `.ai_description`, writes **one describe batch per storage** into
+`_do_batches/`, and renders each as a **describe slug** whose ~80% popup Apply enqueues background
+`describe` jobs. It **produces nothing** on its own — it only lists candidates and feeds Apply. See that
+file for the candidate test, the per-storage batching, the slug/popup, and the cost/safety posture (the
+external-provider opt-in).
+
+---
+
+## 15. Acceptance criteria
 
 1. The media viewer's bottom band shows **Transcription** and **AI description** tabs, each with a **✓**
    when its content exists; **video** shows both, **image** shows only AI description, **audio** shows only
    Transcription. The default tab **prefers Transcription** when present, else the first tab with content,
    else the first tab.
-2. AI description works on **image + video only** (audio → transcription). The description is stored as a
-   **`.ai_description` sidecar beside the media** — the media's base name with its extension replaced
-   (`skyline.mp4` → `skyline.ai_description`) — mirrored under the resolved placement root (the shared
-   ordered rule), **no** `.lfbridge/analysis/` directory. It is a self-contained `done` YAML record
+2. AI description works on **image + video only** (audio → transcription). The description is stored
+   **inside the owning repo/storage's `.lfbridge/`**, path-mirrored, under the media's **full filename with
+   `.ai_description` appended** (`render/skyline.mp4` → `.lfbridge/render/skyline.mp4.ai_description`) —
+   resolved by the shared ordered placement rule, **no** `.lfbridge/analysis/` and **no** `.transcribe/`
+   directory. It is a self-contained `done` YAML record
    `{ source, status, engine, provider, generated, kind, description }` — so the Storage table's
-   **`description` indicator** lights up from the sidecar's presence. In a plain repo `*.ai_description` is
-   git-ignored; in a dedicated repo it is committed and backed up.
+   **`description` indicator** lights up from that artifact's presence. Because it lives in the committed
+   `.lfbridge/`, it is **committed and travels with the repo** in every placement case — **no**
+   `*.ai_description` git-ignore line is injected (that nudge is retired); appending the extension (rather
+   than replacing it) means two files differing only by extension no longer collide.
 3. Providers are the pluggable adapters **Gemini / OpenAI / Grok**; **only Gemini describes video**;
    selection is requested → configured-default → first available that supports the kind (preference Gemini,
    OpenAI, Grok). Keys resolve **config → env → (Gemini only) the shared `~/.config/GoogleCloud/apikey.yaml`**
@@ -489,19 +840,79 @@ The adapter module is annotated as the one deliberate outbound path, and the upl
    explicit and user-initiated (never automatic), states the upload in the UI, and is **entirely separate**
    from the charter's local-only perceptual-fingerprint feature (which must never phone home). With no
    provider configured, nothing is uploaded.
+8. **Symmetry contract (§0):** every transcription surface has an AI-description mirror — the action button
+   at every scale, the `Actions ▾` page action, the task tab, the three-state status icon, the metric pair +
+   popup, the header recommendation primary, the calc engine, the readiness gate, the shared launcher, and
+   the shared `FileRow` / `TaskMetrics` / `DescribeResult` fields — with the **one** deliberate asymmetry
+   that description's readiness is a **provider key** while transcription's is a **local model**.
+9. **Entry points at every scale (§9):** the **Media Viewer** Describe button + AI-description tab on an
+   open image/video (instant **Describing…** pending state); a **Create AI description…** item in the
+   file ⋮ kebab / right-click; a selected-set batch; and **Create AI descriptions for all files…** on a
+   **directory**, a **repo**, and a **storage** — only **image + video** are eligible (audio → transcription).
+10. **Provider-readiness gate (§10):** every launch routes through **`withDescribeReady()`** (mirror of
+    `withModelReady`), which probes providers **kind-aware** (video needs Gemini specifically), interposes
+    the **credentials-missing popup** when no usable key exists (no download — the difference from
+    transcription's model provisioning), and **replays the pending intent** (`confirmed` proceeds,
+    `offered` re-opens) after a key is added. The launcher is `lib/describe.ts`, the mirror of `lib/transcribe.ts`.
+11. **AI descriptions task tab + Describe status icon (§11):** the per-repo tab filters to describable
+    (image/video) files, puts the three-state **Describe** icon (`ScanText`) in the **leading, header-less**
+    control column to the LEFT of `File`, and default-sorts **could-first**. The icon's three states —
+    **done** (blue fill, `.ai_description` exists), **could** (warm red/orange edge), **not applicable** —
+    match the Transcribe/Compress grammar; state comes from the new `FileRow.describe`.
+12. **Metric pair, popup, header primary (§12):** the tab shows the **`Describable` / `Described`** metric
+    pair (green big-zero at no-work); clicking `Describable` opens the **~80%** educate-and-fix popup
+    (default-checked list, solid-blue **"Describe N files"** → background `describe` jobs on Processing,
+    self-clearing as files complete); the per-repo header can surface a blue **"Describe ›"** recommendation
+    primary (worst-first, opening the same popup). The metric fields are `TaskMetrics.describable` /
+    `TaskMetrics.described`.
+13. **Placement is shared (§13):** a `.ai_description` lands via the **same** placement policy and the
+    **same 3-way placement radios** as a `.transcription` ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx),
+    [placement_radios.mdx](./placement_radios.mdx), [repo_settings.mdx](./repo_settings.mdx)); a repo's one
+    placement choice governs both artifact kinds. No separate "where do descriptions go" control exists.
+14. **Bulk discovery (§14):** the on-demand **What Can Be AI-Described Calc Engine**
+    ([describe_calc_engine.mdx](./describe_calc_engine.mdx)) — triggered only by **"Show what could be
+    AI-described"**, never the scheduled scan — writes one per-storage **describe batch** of
+    image/video files lacking a `.ai_description`; each renders as a **describe slug** whose ~80% popup
+    **Apply** enqueues background `describe` jobs; completed files gain a `.ai_description` and drop out of
+    the next run.
 
 <!--
   AI description = hyper-detailed searchable description of an IMAGE or VIDEO via a vision provider.
+  PARITY CONTRACT (§0, LOCKED): everything Transcribe has, AI description mirrors — action button every scale
+  (§9: viewer/file+dir ⋮/repo kebab/storage), Actions▾ "Create AI descriptions" page action (§5.1), AI
+  descriptions TASK TAB (§11, mirror task_tabs §4.4), 3-state DESCRIBE STATUS ICON `ScanText` leading/
+  header-less to the LEFT of File (§11.2, blue done / red-orange could / grey n-a; FileRow.describe), the
+  describable/described METRIC PAIR + ~80% educate-and-fix popup "Describe N files" (§12, mirror task_tabs
+  §2/§5.1; TaskMetrics.describable/described), blue "Describe ›" HEADER PRIMARY (§12.3, one_repo topRecommendation),
+  the "What Can Be AI-Described" CALC ENGINE (describe_calc_engine.mdx, mirror transcribe_calc_engine.mdx),
+  the PROVIDER-READINESS GATE withDescribeReady (§10, mirror withModelReady — but credential-gated NOT
+  download-gated; confirmed→proceed / offered→re-open replay), shared launcher lib/describe.ts (mirror
+  lib/transcribe.ts), shared 3-way PLACEMENT RADIOS (§13, placement_radios.mdx/repo_settings.mdx —
+  .ai_description obeys the SAME radio as .transcription per artifact_placement_policy.mdx). THE ONE
+  DELIBERATE ASYMMETRY: description = hosted vision provider (key), transcription = local ASR model (download).
+  Code mirrors: modules/describe/ ↔ modules/transcribe/, lib/describe.ts ↔ lib/transcribe.ts,
+  DescribeStatusIcon.tsx ↔ TranscribeStatusIcon.tsx, DescribeBatchPopup ↔ TranscribeBatchPopup,
+  MetricsStrip describable panel, metricWarningDefs topRecommendation, units.service composeFileRows/
+  computeRepoDetail, types.ts FileRow.describe + TaskMetrics.{describable,described} + DescribeResult/
+  DescribeBatchResult ↔ TranscribeResult/TranscribeBatchResult, describe-scan.engine.ts +
+  POST /api/todo/describe-scan. Warnings owned by warnings.mdx §10.6 (don't restate).
+  ORIGINAL LOCKED CONTENT BELOW:
+  (§1) Two viewer tabs: Transcription (audio+video) · AI description (image+video). ✓ = content exists.
+       Default-tab prefers Transcription, else first-with-content, else first. MediaAnalysis in MediaViewer.
   LOCKED:
   (§1) Two viewer tabs: Transcription (audio+video) · AI description (image+video). ✓ = content exists.
        Default-tab prefers Transcription, else first-with-content, else first. MediaAnalysis in MediaViewer.
-  (§2) Store as a SIDECAR BESIDE THE MEDIA — NO .lfbridge/analysis/ dir: <root>/<relpath-without-ext>.
-       ai_description (skyline.mp4 -> skyline.ai_description). Self-contained done YAML
-       {source,status:done,engine,provider,generated,kind,description}. AI_DESCRIPTION_EXT constant in
-       artifact-placement.service.ts. tracking.service.ts analysisOutputs detects the .ai_description
-       sidecar -> Storage table "description" indicator. Placement root = shared ordered rule (nearest
-       storage.yaml/.lfbridge/.git, else dedicated repo, else storage root, else beside media). Supersedes
-       storages.mdx §6's description.yaml skeleton. git-ignore *.ai_description in a plain repo only.
+  (§2) Store INSIDE the owning repo/storage's .lfbridge/, PATH-MIRRORED, extension APPENDED — NO
+       .lfbridge/analysis/ and NO .transcribe/ dir: <root>/.lfbridge/<rel-dir>/<name.ext>.ai_description
+       (render/skyline.mp4 -> .lfbridge/render/skyline.mp4.ai_description). Self-contained done YAML
+       {source,status:done,engine,provider,generated,kind,description}. AI_DESCRIPTION_EXT constant
+       APPENDED (not substituted) in artifact-placement.service.ts via lfbridgeArtifactPath(root,relPath)
+       = join(root,".lfbridge",relPath)+EXT. tracking.service.ts analysisOutputs detects the
+       .ai_description artifact under .lfbridge/ -> Storage table "description" indicator. Placement root =
+       shared ordered rule (nearest storage.yaml/.lfbridge/.git, else dedicated repo's .lfbridge/, else
+       storage root's .lfbridge/, else a .lfbridge/ in the media's own dir). Supersedes storages.mdx §6's
+       description.yaml skeleton. Committed & travels with repo — NO *.ai_description git-ignore nudge
+       (retired). Append-not-replace => files differing only by ext no longer collide.
   (§3) Adapters gemini/openai/grok. VIDEO = Gemini ONLY (inline base64). Keys config->env. 18MB inline cap.
        selectAdapter: requested->config default->first available supporting the kind (pref Gemini,OpenAI,Grok).
   (§3.3) COMPRESS-TO-FIT: files >17.5MB are transcoded to a TEMP copy that fits (original never touched),

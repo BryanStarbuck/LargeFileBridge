@@ -20,6 +20,11 @@ The One-repo screen is rendered in code:
 
 This spec builds on the siblings and does not repeat them:
 
+* [Task tabs](./task_tabs.mdx) — the **All / IPFS / Compress / Transcribe / AI descriptions** tab strip this
+  screen's header now carries (§3.1 here). Selecting a tab re-tunes the metrics strip, the visible table
+  columns, the default sort, and the row filter; that whole system — including the metrics panels, the
+  hover-info region, the per-metric popup + blue header-primary behavior, and the three-state
+  Transcribe / Compress / Describe status icons — is defined there and only summarized here.
 * [Repos](./repos.mdx) — the list this screen drills into; defines the LOCKED vocabulary
   **Repo → Large file → Decision** (§1 there), the `RepoStatus` enum, and the per-repo counts.
 * [pin_process.mdx](./pin_process.mdx) — the **pin process** the Pin-now button triggers:
@@ -80,19 +85,21 @@ export type TransferStatus =
 
 ## 2. Layout
 
-Three regions stacked in the content column: the **header** (repo identity + Pin now), the
-**status/settings strip**, and the **files table** with its control row.
+Three regions stacked in the content column: the **header** (repo identity + the "View recommendation" /
+"Scan now" primary, §3.1), the **status/settings strip**, and the **files table** with its control row.
 
 ```
 ┌────────────┬───────────────────────────────────────────────────────────────────────────┐
-│            │  ‹ Repos   /   Our_Movies                              ┌──────────────┐     │
-│  LEFT BAR  │  ~/BGit/…/Our_Movies                                   │ ⟳ Pin now    │     │
-│            │                                                        └──────────────┘     │
+│            │  ‹ Repos / Our_Movies    ▦All ⌂IPFS ▤Compress ⌯Transcribe   ⚙  ┌──────────┐ │ ← task tabs (right of center)
+│  LEFT BAR  │  ~/BGit/…/Our_Movies                                          │View rec ›│ │
+│            │                                                               └──────────┘ │
 │ Repos      ├───────────────────────────────────────────────────────────────────────────┤
-│ Peers      │  Pin ◉ on    Status ● up to date    Peers 3    Last pin 09:14   IPFS ● ok   │ ← status strip
+│ Peers      │  ┌Undecided┐ ┌Pull Down┐ ┌ Not  ┐   hover-info text (≥25% width)…         │ ← metrics strip + hover region (task_tabs.mdx §2–§3)
+│            │  │    5    │ │    0    │ │Backed│                                          │   narrow tiles (as wide as widest word),
+│            │  └─────────┘ └─────────┘ │ Up 3 │                                          │   Title-Case label over big number, NO banner
+│            │                          └──────┘                                          │
 │ Scans      ├───────────────────────────────────────────────────────────────────────────┤
-│ Settings   │  128 Pin    ·   5 Undecided   ·   40 Ignore            (summary counts)     │
-│            │  search…                                                     ⇅   ⛛   ⋮bulk │ ← control row
+│ Settings   │  search…                                                     ⇅   ⛛   ⋮bulk │ ← control row (columns/sort tuned per active tab)
 │            ├───────────────────────────────────────────────────────────────────────────┤
 │            │  ☐  File                     Size   Decision   Status    Peers  Changed     │
 │            │  ☐  render/final_4k.mov      8.2GB  [Pin ▾]    Pinned    3      2h ago    ⋮ │
@@ -104,6 +111,22 @@ Three regions stacked in the content column: the **header** (repo identity + Pin
 ```
 
 * The header's **‹ Repos** breadcrumb returns to the [Repos](./repos.mdx) list.
+* **No warning banner on this page.** The **metrics-panel strip is the only warning surface**
+  ([task_tabs.mdx §2.6](./task_tabs.mdx)): there is no `StatusBanner` / worst-first verdict banner between
+  the header and the strip. Each condition a banner would have raised (undecided files, pull-down,
+  not-backed-up, pending) reads off its own **narrow metric tile** — a small Title-Case label over a big
+  number — and **clicking the tile opens that condition's educate-and-fix popup**
+  ([task_tabs.mdx §2.4](./task_tabs.mdx), [warnings.mdx §4](./warnings.mdx)). **Every actionable tile opens a
+  popup now — not just Undecided and Pull-down.** The task tiles (`Transcribable`, `Describable`,
+  `Compressible Videos`, `Compressible Images`) each got a `WarningDef` builder, so clicking one opens the
+  scoped popup and **lets the user start that work** (transcribe / describe / compress) instead of the old
+  no-op that merely re-selected the current tab
+  ([task_tabs.mdx §2.4.1](./task_tabs.mdx#241-every-actionable-metric-tile-opens-a-popup--the-transcribe--compress--describe-builders-the-fix-locked)).
+  The hover-info region to the
+  right keeps ≥25% width and the tiles wrap into balanced rows rather than squeeze it ([task_tabs.mdx §3.1](./task_tabs.mdx)).
+  IPFS-down no longer raises a page banner here — it becomes the **top recommendation**, so the header
+  primary shows a **red "View recommendation ›"** that opens the one-click *Start IPFS* popup (§3.1); it
+  also stays reflected in the per-row pin toggles (§3.2).
 * The files table is the same flat, chromeless TanStack `DataTable` house style as everywhere else.
 
 ---
@@ -114,36 +137,88 @@ Three regions stacked in the content column: the **header** (repo identity + Pin
 
 * **Breadcrumb** — `‹ Repos / <repo name>`; the repo name is the title, the absolute **path** shown
   muted beneath it.
-* **Pin now** button (top-right, `RefreshCw`) — the repo's one **primary** action. It **prioritizes
-  this repo but still runs the full pin pass**: this repo is pinned first (push out every
-  `sync`-decision file this machine has that peers lack, fetch every `sync`-decision file peers have
-  that this machine lacks), then LFBridge continues the pass over every other known unit in the
-  background ([pin_process.mdx §2/§3](./pin_process.mdx)). States:
-  idle (`Pin now`) → running (`Pinning…`, spinner, disabled) → done (counts + table refresh). It never
-  changes any decision. Because clicking it is an explicit opt-in, it also flips this repo's IPFS-pinning
-  toggle on so the every-15-min pass keeps it fresh (§3.2). It must **never** be a silent no-op — it does
-  real work and its toast reports what happened, not a fixed "complete"
+* **Task tabs** (a little **right of center**, between the breadcrumb and the right-hand buttons) — the
+  **All / IPFS / Compress / Transcribe / AI descriptions** strip ([task_tabs.mdx §1](./task_tabs.mdx#1-the-tab-strip-locked)).
+  **All** is the default. Selecting a tab re-tunes the **metrics-panel strip**, the **visible table
+  columns**, the **default sort**, and **which files the table shows** — all client-side, no refetch, no
+  mutation. Everything below the header in §3.2 / §4 is presented *through* the active tab; the tab system,
+  its metrics panels, the hover-info region, and the three-state Transcribe / Compress / **Describe** status
+  icons are defined in [task_tabs.mdx](./task_tabs.mdx).
+* **Header primary — "View recommendation" / "Scan now"** (top-right, the SAME button on all four tabs).
+  This one smart button replaces the old always-`Pin now` primary. It surfaces the single next thing to
+  do, so a non-expert never has to guess which panel to open:
+  * **"Scan now"** (leading `Search` icon) — shown **only** when the repo is **scan-stale**: it has never
+    been scanned, or its `lastScanAt` is **older than 2 weeks**. A stale scan means the metrics can't be
+    trusted, so re-scanning takes precedence over everything else. Clicking runs the same rescan worker;
+    when the scan lands, `lastScanAt` refreshes and the button flips back to "View recommendation".
+    When a repo's contents are known to have changed (the live watcher, scan.mdx §2.2), that also drives a
+    fresh scan, after which the button returns to a recommendation.
+  * **A pending recommendation** (no leading icon; a trailing right chevron `›`) — shown when a scan is
+    **not** due and there is pending work. It opens the **most important** pending metric's educate-and-fix
+    popup — the SAME popup its metric panel opens ([task_tabs.mdx §2.4](./task_tabs.mdx)) — resolved
+    **worst-first across the full task set**:
+
+    ```
+    ipfs-down → pull-down → undecided → transcribe → describe → compress
+      (bad)      (bad)       (warn)      (warn)        (warn)     (warn)
+    ```
+
+    **The button's label names the recommendation** ([task_tabs.mdx §2.7](./task_tabs.mdx#27-the-per-metric-blue-header-primary--every-actionable-metric-can-be-the-recommendation-locked)):
+    the three **integrity** conditions keep the generic **"View recommendation ›"** ("here's what's wrong —
+    view it"), while the three **producing** tasks name the verb — **"Transcribe ›"**, **"Describe ›"**,
+    **"Compress ›"** — so a non-expert reads the one action to take. Every one opens the identical popup its
+    metric tile opens, and its Apply **starts the work** ([task_tabs.mdx §2.4.1](./task_tabs.mdx#241-every-actionable-metric-tile-opens-a-popup--the-transcribe--compress--describe-builders-the-fix-locked)).
+
+    | Top pending recommendation | Label | Fill |
+    | --- | --- | --- |
+    | IPFS engine down / peer-pinned files not here | **View recommendation ›** | **red** (`--lfb-bad`) |
+    | Files need a decision | **View recommendation ›** | **blue** (`--lfb-primary`) |
+    | Audio/video with no transcript | **Transcribe ›** | **blue** (`--lfb-primary`) |
+    | Image/video with no AI description | **Describe ›** | **blue** (`--lfb-primary`) |
+    | Video/image that could be compressed | **Compress ›** | **blue** (`--lfb-primary`) |
+
+    The button tints **red** (`--lfb-bad`) only when the top recommendation is a Broken (`bad`) state
+    (IPFS-down, pull-down), brand-**blue** (`--lfb-primary`) otherwise. A **"Transcribe ›"** / **"Describe ›"**
+    primary shows whenever that work is pending even if the heavyweight model or AI key isn't ready — the
+    **consent/provisioning gate fires when the popup's Apply runs**, then resumes (§3.1 gating mirrors the
+    per-row status-icon path, [task_tabs.mdx §2.7](./task_tabs.mdx)).
+  * **Neither** — when no scan is due and nothing is pending, there is **no** header primary: the metric
+    panels (all green zeros) already say "all clear".
+
+  Which button shows, and which popup it opens, is decided in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+  `scanIsStale()` (the 2-week staleness gate) and `topRecommendation()` (the worst-first pick); wired into
+  the header in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` —
+  `OneRepoPage` (`scanDue` / `topRec`). `lastScanAt` is carried on `RepoDetail` from
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail`.
+
+* **Pin now** — no longer the header primary. It moves into the **`Actions ▾` page menu** (and stays in
+  the `⋮` more menu). It still **prioritizes this repo but runs the full pin pass**: this repo is pinned
+  first (push out every `sync`-decision file this machine has that peers lack, fetch every `sync`-decision
+  file peers have that this machine lacks), then LFBridge continues the pass over every other known unit in
+  the background ([pin_process.mdx §2/§3](./pin_process.mdx)). It never changes any decision, flips this
+  repo's IPFS-pinning toggle on (§3.2), and must **never** be a silent no-op — its toast reports what
+  happened, not a fixed "complete"
   ([pin_process.mdx §6](./pin_process.mdx#6-never-a-silent-no-op--report-truthfully-locked-learned-from-a-defect)).
+  Handled in code: `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` —
+  `POST /api/repos/:repoId/pin` (calls `pinRepoFolder(folder, only, { manual: true })` then `pinAll({ priorityDone: folder })`).
 
-Pin now — which pins THIS repo first as the priority unit (moving bytes even when the repo's pinning toggle was off, and flipping it on), then runs the full pass over the remaining units in the background — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/repos/:repoId/pin` (calls `pinRepoFolder(folder, only, { manual: true })` then `pinAll({ priorityDone: folder })`)
-
-* **`Actions ▾` page menu** (top-right, between Pin now and the `⋮` more menu) — the header
+* **`Actions ▾` page menu** (top-right, between the header primary and the `⋮` more menu) — the header
   **page-action** menu that operates on this repo's **files** (the whole working tree, or the checked
   subset), as opposed to the `⋮` more menu which operates on the **repo entity**. It carries **Create
-  Transcriptions · Create AI descriptions · Compress videos · Compress images · Git ignore · Rescan**
-  ([page_actions.mdx §4](./page_actions.mdx)). The two producing actions obey the LOCKED
+  Transcriptions · Create AI descriptions · Compress videos · Compress images · Git ignore · Pin now ·
+  Rescan** ([page_actions.mdx §4](./page_actions.mdx)) — Pin now moved here from the header primary. The two producing actions obey the LOCKED
   scope / skip-already-done / background-queue rules ([page_actions.mdx §1](./page_actions.mdx)): with no
   rows checked they run over **all files recursively**, skipping files that already have the output, and
   the eligible remainder is background-queued with a "{N} files will have their Transcriptions created"
   toast. Rendered by `PageActions` ([page_actions.mdx §3](./page_actions.mdx)).
-* **`⋮` "more" menu** (top-right, next to Pin now) — because this page **is one repo**, it carries the
+* **`⋮` "more" menu** (top-right, next to the header primary) — because this page **is one repo**, it carries the
   **repo entity menu**: the same catalog as a Repos-table row's kebab
   ([menus.mdx §4 / §5.1](./menus.mdx#4-the-entity--more-menu--single-entity-pages)) — Open in File
   System · View pinned on IPFS · Rescan · Pin now · Git ignore · Toggle Pinned · Repo
   settings… · Copy path · **Remove repo (unregister)** (destructive, last, never deletes local bytes).
-  *Open repo* is omitted (you are already here). Pin now appears both as the primary button and in the
-  menu so the menu is a complete catalog.
+  *Open repo* is omitted (you are already here). Pin now — no longer the header primary — appears in both
+  the `Actions ▾` page menu and this `⋮` more menu so the catalog stays complete.
 
 ### 3.2 Status / settings strip
 
@@ -155,7 +230,7 @@ A single horizontal strip of the repo's live status (read) and its one per-repo 
 | **Status** | The rolled-up `RepoStatus` pill ([Repos §4.2](./repos.mdx)) — up to date / pinning / behind / needs review / error / never. |
 | **Peers** | Count of your computers currently pinning this repo → clicking opens [Peers](./left_bar.mdx) filtered to this repo (peers page is out of scope here). |
 | **Last pin** | Relative time of the last completed pin pass (absolute on hover). |
-| **IPFS** | The local IPFS node health — `ok` (green) / `unreachable` (red). If unreachable, Pin now is disabled with a tooltip. |
+| **IPFS** | The local IPFS node health — `ok` (green) / `unreachable` (red). If unreachable, it becomes the top recommendation: the header primary is a **red "View recommendation ›"** opening the *Start IPFS* popup (§3.1), and the `Actions ▾` **Pin now** is disabled with a tooltip. |
 
 Note: the app-wide **background pin process** (installed? on/off? the every-15-min `launchd`
 schedule) is the **Scans** left-bar page, not this strip. This strip's toggle is only *this repo's*
@@ -185,6 +260,12 @@ A one-line summary the user reads first: **`128 Pin · 5 Undecided · 40 Ignore`
 label for the **Add to IPFS (pin)** decision (stored value `sync`). Each segment is a **quick filter** —
 clicking `Undecided` filters the table to the undecided files (the triage queue), etc. `Undecided` is
 accent-highlighted whenever it is > 0.
+
+> **The richer, tab-scoped surface is the metrics-panel strip** ([task_tabs.mdx §2](./task_tabs.mdx#2-the-metrics-panels--the-what-could-be-done-boxes-locked)),
+> which sits above the control row and shows the **active tab's** "what could be done" panels (each a terse
+> label + number + right chevron → its warning popup; a light-green big-`0` when nothing is to be done),
+> with the **hover-info region** to its right ([task_tabs.mdx §3](./task_tabs.mdx#3-the-hover-info-region--the-space-to-the-right-of-the-panels-locked)).
+> This one-line summary is the compact IPFS-decision readout; the metrics strip is the per-task overview.
 
 ### 4.2 Control row — LOCKED
 
@@ -394,6 +475,19 @@ The per-row `decidedBy` / `decidedAt` (joined from the folded shared ledger) tha
     Changed → View one file; Peers → Peers filtered to the file; CID copies); the row **`⋮` kebab** (and
     right-click) opens the **file** catalog ([menus.mdx §5.3](./menus.mdx#53-file)) and never navigates,
     with compress/convert/ignore gated behind an explicit-click confirm.
+11. The header carries the **task tab strip** (right of center) — **All** (default) / **IPFS** / **Compress**
+    / **Transcribe** / **AI descriptions** ([task_tabs.mdx](./task_tabs.mdx)); selecting a tab re-tunes the
+    metrics-panel strip, the visible columns, the default sort, and the row filter client-side. **All** is
+    metrics-forward (light-green big-`0` panels when nothing is to be done); the **Transcribe** tab shows the
+    three-state Transcribe status icon, the **Compress** tab the Compress status icon, and the **AI
+    descriptions** tab the three-state Describe status icon; the hover-info region right of the panels shows
+    contextual text for whatever is hovered.
+12. **The header primary is labeled per metric** and resolves worst-first **ipfs-down → pull-down →
+    undecided → transcribe → describe → compress** (§3.1): the integrity trio keeps **"View recommendation
+    ›"** (red for `bad`, blue otherwise), the task trio names the verb — **"Transcribe ›"**, **"Describe ›"**,
+    **"Compress ›"** (blue) — and each opens the same educate-and-fix popup its metric tile opens. **Every
+    actionable metric tile opens a popup** and lets the user start the work (not only Undecided / Pull-down);
+    the transcribe/describe applies are model/consent-gated, interposing then resuming.
 
 <!--
   Keep this page aligned with repos.mdx (the list it drills into) and left_bar.yaml (the nav).

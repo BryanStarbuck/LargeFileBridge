@@ -9,6 +9,7 @@ import type { EnqueuePlan } from "@lfb/shared";
 import { api } from "../api/client.js";
 import { clientLog } from "./clientLog.js";
 import { requestStorageSetup } from "./setupWizard.js";
+import { withModelReady } from "./transcribe.js";
 
 // The page's set for an action (page_actions.mdx §1.1): a non-empty `paths` = the CHECKED subset; otherwise
 // `root` is walked recursively. Callers pass one or the other.
@@ -56,8 +57,14 @@ function describeToast(plan: EnqueuePlan): void {
 }
 
 /** Enqueue transcriptions for the page's scope and toast the eligible count. Returns immediately (the queue
- *  drains in the background; each file surfaces its own `transcribe` dock card). */
+ *  drains in the background; each file surfaces its own `transcribe` dock card). Gated behind the
+ *  heavyweight-model provisioning flow (transcribe_engine.mdx §3) — the first bulk run offers the download,
+ *  then proceeds (§3.6). */
 export async function createTranscriptions(scope: ActionScope): Promise<void> {
+  await withModelReady({ label: "transcribe these files", run: () => void doCreateTranscriptions(scope) });
+}
+
+async function doCreateTranscriptions(scope: ActionScope): Promise<void> {
   try {
     const plan = await api.transcribeEnqueue(scope);
     // First-time gate (Transcribe.mdx §3.5): the whole scope needs setup — open the wizard, then re-run
