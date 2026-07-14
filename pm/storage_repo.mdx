@@ -214,7 +214,89 @@ Producing the repo batch during scan recalc, and naming/replacing its YAML, is h
 
 ---
 
-## 7. Acceptance criteria
+## 7. Merge conflicts (why tracking state never lives in the working repo)
+
+**The single most common failure this storage is designed to prevent is a Git merge conflict on our own
+tracking files.** Because a repo storage lives inside a real Git repo the user is *also* committing and
+pushing across their computers, anything churny LFB writes into the working tree gets swept into the user's
+commits — and then two computers editing it produce a merge conflict *in the user's repo*, on a file the
+user never touched and cannot meaningfully resolve.
+
+The canonical break — and the exact command trail that triggered this section:
+
+```
+~/BGit/act3/act3_Marketing_NextGen> git fetch
+~/BGit/act3/act3_Marketing_NextGen> git merge
+CONFLICT (modify/delete): .lfbridge/repo_storage.yaml deleted in HEAD and modified in
+  refs/remotes/origin/main.  Version refs/remotes/origin/main of .lfbridge/repo_storage.yaml
+  left in tree.
+Automatic merge failed; fix conflicts and then commit the result.
+```
+
+* This is a **modify/delete** conflict, the transitional signature of the placement redesign. Under the
+  **old** scheme `repo_storage.yaml` was committed inside the working repo's `.lfbridge/`. This computer
+  (**HEAD**) had already migrated to the new scheme and **deleted** the in-repo copy; the other computer
+  (**origin/main**) was still on the old scheme and **modified** and pushed it. Git can't reconcile
+  "deleted here / edited there," so it stops and leaves the stale remote copy in the tree.
+* It is **not** a real content disagreement. `repo_storage.yaml` is machine-generated **Category-B tracking
+  state** — repo-wide settings + special-file counts that Local Storage regenerates on the next scan. There
+  is nothing for the user to hand-merge; **neither committed side is worth keeping.**
+
+### 7.1 Prevention — Category-B tracking state is never committed
+
+The **root fix** is the placement policy of §1 / [artifact_placement_policy.mdx](./artifact_placement_policy.mdx):
+**every churny tracking file lives in Local Storage** at `~/T/_large_files_bridge/repos/<repoKey>/`, **never
+in the working repo**, so it is **outside the user's Git history entirely and can never merge-conflict.**
+This covers `repo_storage.yaml`, `storage.yaml`, `files.yaml`, the per-file sidecars, and the per-computer
+history. Registering a repo seeds that Local-Storage directory and **no longer** writes `repo_storage.yaml`
+into the repo or adds `.lfbridge/` to the repo `.gitignore` (nothing churny is written there anymore).
+
+* Enforcing "Local Storage always, working repo never" for `repo_storage.yaml` (path resolved so it lands
+  under `resolveTrackingRoot()`, never a working repo) is done in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` —
+  `repoStoragePath(repoRoot)` / `writeRepoStorage(repoRoot, doc)` (Local-Storage-always, not gated on the
+  keep-`.lfbridge/` consent).
+
+### 7.2 The two shared ledgers that DO travel via git — folded, never conflicted
+
+A few files are *meant* to be shared across computers through the sync repo (the SyncList, the IPFS
+`manifest.yaml`, and the team-shared `decisions.yaml` ledger). These are **append/union-shaped**, so instead
+of conflicting, their two sides are **unioned** — every computer's lines are kept. LFB writes a
+`.gitattributes` marking those paths `merge=union` **before** each merge, so git folds them conflict-free.
+
+* Writing the union-merge `.gitattributes` ahead of every fetch/merge is done in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` —
+  `GitBackbone.ensureMergeAttributes()` (constant `UNION_MERGE_PATHS`), called at the top of
+  `GitBackbone.pull()` ([git_backbone.mdx §4.2](./git_backbone.mdx)).
+
+### 7.3 Cure — auto-resolving the legacy `repo_storage.yaml` conflict
+
+Repos that already committed the old in-repo `repo_storage.yaml` will still hit the modify/delete conflict
+above **once**, during the first merge after either computer migrates. LFB's backbone detects this narrow
+case and heals it deterministically: when **every** conflicted path is a `repo_storage.yaml` (any depth —
+the legacy `.lfbridge/repo_storage.yaml` and the `repos/<repoKey>/repo_storage.yaml` sync-repo mirror
+alike), it **drops the file from the merge** (`git rm -f`) rather than keeping either stale side, commits
+the resolution, and lets Local Storage / the next mirror pass regenerate it. **If any *other* path is
+conflicted, LFB does the safe thing — aborts the merge and surfaces the conflict for the user's own Git
+tools; it never clobbers real content** ([git_backbone.mdx §4.3](./git_backbone.mdx)).
+
+* Detecting the all-`repo_storage.yaml` conflict, dropping the regeneratable file, and committing (else
+  abort-and-surface) is done in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` —
+  `GitBackbone.pull()` guarded by `isRepoStorageYamlPath(...)`, resolving via
+  `GitBackbone.autoResolveRepoStorageConflicts(conflicts)`.
+
+### 7.4 The standing rule
+
+**Never write a churny, machine-generated file into a working repo the user commits.** New per-repo state is
+Category-B by default and belongs in Local Storage; the only things that ride the user's git are the
+Category-A content artifacts (§1, §4) and the three union-merged shared ledgers of §7.2. Any new file that
+would land in the working tree and change on most scans is a latent merge conflict — treat it as
+out-of-compliance and move it to Local Storage.
+
+---
+
+## 8. Acceptance criteria
 
 1. Any Git repo LFB tracks is a **repo storage** whose **root is the repo root** (`~/BGit/xyz/`); its
    **committed** **`~/BGit/xyz/.lfbridge/`** holds **only Category-A derived content** (transcripts / AI
@@ -261,4 +343,11 @@ Producing the repo batch during scan recalc, and naming/replacing its YAML, is h
   banner (warnings.mdx) AND the To-Do page slug (to_do.mdx §8, decision_toggles.mdx). Transcribe discovery
   via transcribe_calc_engine.mdx → transcribe slug. Code: todo-batch.engine.ts recalcForStorage,
   todo-batches.store.ts batchFileName, transcribe-scan.engine.ts.
+  §7 MERGE CONFLICTS (added from the real .lfbridge/repo_storage.yaml modify/delete break): the whole
+  point of Category-B-in-Local-Storage. PREVENTION = churny tracking files never committed (repo-storage.service.ts
+  repoStoragePath/writeRepoStorage, Local-Storage-always). Only 3 shared ledgers ride git and they UNION-merge via
+  .gitattributes merge=union (git.service.ts GitBackbone.ensureMergeAttributes, UNION_MERGE_PATHS). CURE for legacy
+  in-repo repo_storage.yaml = GitBackbone.pull auto-resolves when EVERY conflicted path isRepoStorageYamlPath by
+  git rm -f + commit (autoResolveRepoStorageConflicts); any OTHER path aborts+surfaces (git_backbone.mdx §4.3).
+  Acceptance renumbered §7→§8.
 -->
