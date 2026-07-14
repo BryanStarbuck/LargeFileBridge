@@ -364,7 +364,7 @@ transcribeConcurrency = clamp(
 * **`whisperThreadsPerJob`** — a heavy ASR job uses multiple threads/GPU per file; default ~**4** so
   `jobs × threads ≈ budget`, never `cores²` ([parallelization.mdx §2](./parallelization.mdx)).
 * **`modelRamPerJob`** — the measured resident footprint of one job: **`qwen` (Qwen3-ASR-1.7B via MLX)**
-  holds the model in **unified memory** (several GB per instance); **`mac` (whisper-base)** is much lighter
+  holds the model in **unified memory** (several GB per instance); **`mac` (whisper-small)** is much lighter
   (~1 GB). This is the clamp that keeps a **16 GB laptop at 1** `qwen` job while a **64 GB / 24-core
   workstation runs several**.
 * **The `mac` fallback** is lighter, so it resolves to a **higher** concurrency than `qwen` on the same box.
@@ -375,7 +375,7 @@ transcribeConcurrency = clamp(
 ### 5.2 The minimum bar to run Qwen3-ASR (LOCKED)
 
 A machine that cannot hold even **one** Qwen3-ASR instance (too little RAM/VRAM) is **not** forced to —
-`pickEngine()` (§2) routes it to the **Whisper-on-Mac** fallback (or `whisper-base`) instead of OOM-crashing.
+`pickEngine()` (§2) routes it to the **Whisper Small** fallback (`whisper-small`) instead of OOM-crashing.
 The bar is a simple RAM/VRAM floor checked at selection time.
 
 ### 5.3 Calibrate once, cache it (LOCKED)
