@@ -616,6 +616,18 @@ export async function compressFile(input: string, opts?: CompressFileOpts | stri
 
   // §5 — verify resolution unchanged (never downscale) and that we actually gained.
   const outDims = media === "images" ? imageDims(out, tools) : (videoInfo(out, tools) && { w: videoInfo(out, tools)!.w, h: videoInfo(out, tools)!.h });
+  // §5.1 — OUTPUT INTEGRITY GATE (LOCKED, fail-CLOSED). A transcode can exit 0 yet leave a TRUNCATED or
+  // CORRUPT file — e.g. a ~134-byte broken JPEG — that `safeSize` (>0) and the size-gain guard both happily
+  // accept (it IS smaller than the original), after which the irreversible replace clobbers a good file
+  // with garbage. Before we touch the original we therefore PROVE the output decodes: we re-probe its pixel
+  // dimensions with the SAME probe that read the input. If the input's dimensions were readable but the
+  // output's are NOT, the encoder produced an unreadable file — refuse and keep the original untouched.
+  // This is independent of preserveResolution (a user turning that off must NOT disable corruption
+  // detection). This is the last line of defense against silent compression data-loss.
+  if (inDims && !outDims) {
+    tryUnlink(out);
+    return fail(abs, "refused: compressed output is unreadable/corrupt — could not verify its dimensions; original kept", "blocked", beforeBytes);
+  }
   if (settings.preserveResolution && inDims && outDims && (inDims.w !== outDims.w || inDims.h !== outDims.h)) {
     tryUnlink(out);
     return fail(abs, `refused: resolution changed ${inDims.w}×${inDims.h} → ${outDims.w}×${outDims.h}`, "blocked", beforeBytes);

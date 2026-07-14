@@ -188,8 +188,16 @@ shapes are [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx):
 
 ### 4.1 Per-file tracking metadata (charter)
 
-The per-file fingerprint index **`files.yaml`** — Category B, so it lives in Local Storage at
-`~/T/_large_files_bridge/repos/<repoKey>/files.yaml`, never in the working repo — records, per file, enough
+The per-file fingerprint index **`files.yaml`** is Category B, and **where it lives depends on the storage
+kind**: for a **working `repo`** it lives in Local Storage at
+`~/T/_large_files_bridge/repos/<repoKey>/files.yaml`, **never in the working tree** (so a repo with no
+transcripts keeps no `.lfbridge/` at all); for a dedicated **SDL storage** (personal / company / community)
+it is committed to that storage's own **`.lfbridge/files.yaml`** so the index **travels** with the
+purpose-built LFB repo to teammates and the user's other computers (storage_personal.mdx §1,
+storage_company.mdx §1). The kind is resolved leaf-safe in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` —
+`resolveStorageType()` / `tracksIndexInLocalStorage()`, consumed by `tracking.service.ts` `filesYamlPath()`.
+Whichever the location, `files.yaml` records, per file, enough
 to tell whether it changed since last seen: a **hash** (fingerprint), **size**, **created**, and
 **modified**. Compressible media (video/image) carry **two** hashes, **compressed** and **uncompressed**,
 nested under the file entry (charter — see the CLAUDE.md "Per-file tracking metadata" example). This is the

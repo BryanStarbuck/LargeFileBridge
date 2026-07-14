@@ -5,11 +5,13 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import YAML from "yaml";
-import type { StorageFileRow } from "@lfb/shared";
+import type { StorageFileRow, StorageType } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import { compressInfo, HARD_SKIP } from "../fs/badges.js";
 import { mapLimit, responsiveBudget } from "../../shared/concurrency.js";
 import { log } from "../../shared/logging.js";
+import { repoStateDir } from "./tracking-root.service.js";
+import { resolveStorageType, tracksIndexInLocalStorage } from "./storage-type.service.js";
 
 export const LFBRIDGE_DIR = ".lfbridge";
 const FILES_YAML = "files.yaml";
@@ -28,8 +30,21 @@ const AI_DESCRIPTION_EXT = ".ai_description";
 const MAX_FILES = 5000; // a safety cap so an enormous tree can't run the index unbounded (logged if hit).
 const FINGERPRINT_CHUNK = 64 * 1024;
 
-function filesYamlPath(root: string): string {
+/** The legacy in-repo index location — `<root>/.lfbridge/files.yaml`. Still READ as a fallback so a repo that
+ *  was indexed before the Local-Storage migration keeps its counts until its next re-index; SWEPT afterward
+ *  (§ sweepLegacyRepoIndex). For an SDL storage this is ALSO the canonical location. */
+function lfbridgeFilesYamlPath(root: string): string {
   return path.join(root, LFBRIDGE_DIR, FILES_YAML);
+}
+
+/** Where THIS storage's `files.yaml` fingerprint index lives, by storage KIND (storage-type.service.ts):
+ *  a working `repo` → Local Storage `~/T/_large_files_bridge/repos/<repoKey>/files.yaml` (never the working
+ *  tree); a personal/company/community SDL → its committed `<root>/.lfbridge/files.yaml` (travels). Pass the
+ *  known `type` to skip a descriptor read on hot paths (the Storages/Repos list); omit it to resolve here. */
+function filesYamlPath(root: string, type?: StorageType): string {
+  const t = type ?? resolveStorageType(root);
+  if (tracksIndexInLocalStorage(t)) return path.join(repoStateDir(root), FILES_YAML);
+  return lfbridgeFilesYamlPath(root);
 }
 
 /** Which §6 analysis outputs already exist for a file. Transcript + description are detected inside the
@@ -94,7 +109,8 @@ async function fingerprint(abs: string, st: fs.Stats): Promise<string | null> {
  * RESPONSIVE budget (cores − 2), so a large storage indexes quickly without pinning the app. Indexing
  * MULTIPLE storages parallelizes across storages too — each writes only its own `.lfbridge/files.yaml`.
  */
-export async function indexStorageFiles(root: string): Promise<number> {
+export async function indexStorageFiles(root: string, type?: StorageType): Promise<number> {
+  const t = type ?? resolveStorageType(root);
   const threshold = getAppConfig().big_file.threshold_bytes;
 
   // Phase 1 — metadata-only walk: collect the eligible large files (bounded by MAX_FILES). No hashing yet.
@@ -149,16 +165,95 @@ export async function indexStorageFiles(root: string): Promise<number> {
   });
   const files: Record<string, unknown> = Object.fromEntries(rows);
 
-  fs.mkdirSync(path.join(root, LFBRIDGE_DIR), { recursive: true });
-  fs.writeFileSync(filesYamlPath(root), YAML.stringify({ files }), "utf8");
+  // Write to the KIND-correct location: a working repo indexes into Local Storage (never its own `.lfbridge/`,
+  // so the walk above never has to create one); an SDL commits into `<root>/.lfbridge/`. mkdir the index file's
+  // OWN parent — for a repo that is the Local-Storage `repos/<repoKey>/` dir, so a repo with no transcripts
+  // keeps NO `.lfbridge/` at all (the absolute rule).
+  const outPath = filesYamlPath(root, t);
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  fs.writeFileSync(outPath, YAML.stringify({ files }), "utf8");
+  // Now that a repo's index lives in Local Storage, remove any stale Category-B state a prior build left in the
+  // working repo's `.lfbridge/` (and drop the folder if it's left empty) — the one-time on-disk migration.
+  if (tracksIndexInLocalStorage(t)) sweepLegacyRepoTracking(root);
   if (capped) log.warn("storage", `index for ${root} hit the ${MAX_FILES}-file cap — some files not indexed`);
   else log.info("storage", `indexed ${collected.length} large file(s) in ${root}`);
   return collected.length;
 }
 
-/** Read `<root>/.lfbridge/files.yaml` into rows (empty when absent). */
-export function readStorageIndex(root: string): StorageFileRow[] {
-  const p = filesYamlPath(root);
+// Category-B files/dirs a PRIOR build may have written into a working repo's `.lfbridge/` before they were all
+// moved to Local Storage (repo_storage.yaml / decisions.yaml / manifest.yaml / files/ / history/ are already
+// written to `~/T/_large_files_bridge/repos/<repoKey>/` today — these are only ever STALE leftovers now).
+const LEGACY_CATEGORY_B_FILES = ["files.yaml", "repo_storage.yaml", "decisions.yaml", "manifest.yaml"];
+const LEGACY_CATEGORY_B_DIRS = ["files", "history"];
+
+/** One-time on-disk migration for a WORKING repo: delete stale Category-B tracking state from its `.lfbridge/`
+ *  (all of it is now written to Local Storage) and, if `.lfbridge/` is then empty (no transcripts / AI
+ *  descriptions / visuals), remove it entirely so the repo carries NO `.lfbridge/`. Best-effort — a failure
+ *  just leaves the stale file to be retried next index; NEVER touches Category-A content (transcripts,
+ *  descriptions, `analysis/`) or the device registry. Only ever called for `repo`-type roots. */
+export function sweepLegacyRepoTracking(root: string): void {
+  const lfb = path.join(root, LFBRIDGE_DIR);
+  try {
+    if (!fs.existsSync(lfb)) return;
+  } catch {
+    return;
+  }
+  let removed = 0;
+  for (const f of LEGACY_CATEGORY_B_FILES) {
+    try {
+      fs.rmSync(path.join(lfb, f), { force: true });
+      removed++;
+    } catch {
+      /* best-effort */
+    }
+  }
+  for (const d of LEGACY_CATEGORY_B_DIRS) {
+    try {
+      if (fs.existsSync(path.join(lfb, d))) {
+        fs.rmSync(path.join(lfb, d), { recursive: true, force: true });
+        removed++;
+      }
+    } catch {
+      /* best-effort */
+    }
+  }
+  // Remove `.lfbridge/` only when nothing Category-A remains — rmdir fails (harmlessly) if it isn't empty.
+  try {
+    if (fs.readdirSync(lfb).length === 0) fs.rmdirSync(lfb);
+  } catch {
+    /* not empty (has transcripts/analysis) or racing — leave it */
+  }
+  if (removed) log.info("storage", `swept legacy Category-B state from ${lfb} — a working repo tracks in Local Storage`);
+}
+
+/** Resolve which `files.yaml` to READ: the KIND-correct canonical path, but if that doesn't exist yet and this
+ *  is a working repo whose index still sits in the legacy in-repo location, read that so counts survive until
+ *  the next re-index sweeps it (§ indexStorageFiles). Returns the canonical (ENOENT) path when neither exists
+ *  so callers still see the ordinary "never indexed" state. */
+function indexReadPath(root: string, type?: StorageType): string {
+  const t = type ?? resolveStorageType(root);
+  const canonical = filesYamlPath(root, t);
+  try {
+    if (fs.existsSync(canonical)) return canonical;
+  } catch {
+    /* fall through */
+  }
+  if (tracksIndexInLocalStorage(t)) {
+    const legacy = lfbridgeFilesYamlPath(root);
+    try {
+      if (fs.existsSync(legacy)) return legacy;
+    } catch {
+      /* fall through */
+    }
+  }
+  return canonical;
+}
+
+/** Read the storage's `files.yaml` index into rows (empty when absent). For a working repo this reads Local
+ *  Storage (with a one-migration fallback to the legacy in-repo index); for an SDL it reads its committed
+ *  `.lfbridge/`. Pass the known `type` to skip a descriptor read on hot paths. */
+export function readStorageIndex(root: string, type?: StorageType): StorageFileRow[] {
+  const p = indexReadPath(root, type);
   let doc: { files?: Record<string, Record<string, unknown>> };
   try {
     doc = YAML.parse(fs.readFileSync(p, "utf8")) ?? {};
@@ -183,9 +278,11 @@ export function readStorageIndex(root: string): StorageFileRow[] {
   }));
 }
 
-/** File count from the index without materializing rows; null when the storage was never indexed. */
-export function countStorageIndex(root: string): number | null {
-  const p = filesYamlPath(root);
+/** File count from the index without materializing rows; null when the storage was never indexed. Reads the
+ *  KIND-correct location (Local Storage for a repo, `.lfbridge/` for an SDL) with the same legacy fallback as
+ *  {@link readStorageIndex}. Pass the known `type` to skip a descriptor read on the Storages/Repos list. */
+export function countStorageIndex(root: string, type?: StorageType): number | null {
+  const p = indexReadPath(root, type);
   try {
     const doc = YAML.parse(fs.readFileSync(p, "utf8")) ?? {};
     return Object.keys(doc.files ?? {}).length;

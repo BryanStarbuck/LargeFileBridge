@@ -281,7 +281,7 @@ function buildRow(root: string): StorageRow {
     communityId,
     initialized: !!desc,
     hasLfbridge: safeIsDir(path.join(root, LFBRIDGE_DIR)),
-    fileCount: countStorageIndex(root),
+    fileCount: countStorageIndex(root, type),
     clones: desc?.clones ?? { ...EMPTY_CLONES },
     route: type === "personal" ? "/storages/personal" : `/storages/${id}`,
   };
@@ -343,7 +343,7 @@ export function getStorageDetail(id: string): StorageDetail {
   return {
     storage,
     descriptor: storage.type === "local" ? null : readDescriptor(storage.root),
-    files: storage.type === "local" ? [] : readStorageIndex(storage.root),
+    files: storage.type === "local" ? [] : readStorageIndex(storage.root, storage.type),
   };
 }
 
@@ -388,7 +388,7 @@ export async function createPersonalStorage(opts: { dedicatedRepo?: boolean }): 
 export async function indexStorageById(id: string): Promise<{ indexed: number }> {
   const storage = findRowById(id);
   if (!storage || storage.type === "local") throw new Error(`cannot index storage: ${id}`);
-  return { indexed: await indexStorageFiles(storage.root) };
+  return { indexed: await indexStorageFiles(storage.root, storage.type) };
 }
 
 export function analyzeStorageFile(id: string, rel: string): { path: string; outputs: string[] } {
