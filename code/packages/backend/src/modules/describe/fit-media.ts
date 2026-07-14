@@ -18,7 +18,8 @@
 // H.264 (libx264, yuv420p, +faststart) is chosen deliberately over "better-compressing" HEVC/AV1: the
 // point is that the provider's decoder MUST accept it, and H.264/mp4 is the one format every vision
 // provider decodes. AAC audio is kept but re-encoded low so it can't dominate the byte budget.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir, ensureDir } from "../../config/state-dir.js";
@@ -47,6 +48,8 @@ export interface FitResult {
 const NOOP_CLEANUP = () => {};
 
 // ── small process helpers ───────────────────────────────────────────────────────
+// `which` is a near-instant detection probe (a few ms), so it stays synchronous — the mirror of
+// compression.service.ts `onPath()`. Only the HEAVY calls below (ffprobe/ffmpeg/magick) run async.
 function which(bin: string): boolean {
   try {
     return spawnSync("which", [bin], { encoding: "utf8" }).status === 0;
@@ -54,9 +57,50 @@ function which(bin: string): boolean {
     return false;
   }
 }
-function run(bin: string, args: string[], timeoutMs = 15 * 60 * 1000): { code: number | null; err: string; out: string } {
-  const r = spawnSync(bin, args, { encoding: "utf8", timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 });
-  return { code: r.status, err: r.stderr ?? "", out: r.stdout ?? "" };
+// The heavy process runner — ASYNC (child_process.spawn), so a multi-minute ffmpeg/magick transcode (and
+// even the shorter ffprobe/magick probes) NEVER block the Node event loop (ai_description.mdx §3.3.1,
+// job_queue.mdx §3, performance.mdx P-27). This is what lets the describe queue run ~24 files in parallel
+// (job_queue.mdx §3) while the web app stays responsive and GET /api/progress keeps answering — the exact
+// freeze that made the Processing page fail to load during a mass AI-description run. Captures stdout too
+// (probeVideo needs the ffprobe JSON), both streams bounded so a chatty tool can't grow memory unbounded.
+function runAsync(
+  bin: string,
+  args: string[],
+  timeoutMs = 15 * 60 * 1000,
+): Promise<{ code: number | null; err: string; out: string }> {
+  return new Promise((resolve) => {
+    let out = "";
+    let err = "";
+    let settled = false;
+    let child;
+    try {
+      child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    } catch (e) {
+      resolve({ code: null, err: (e as Error).message, out: "" });
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (!settled) child!.kill("SIGKILL");
+    }, timeoutMs);
+    child.stdout?.on("data", (d) => {
+      out = (out + d.toString()).slice(-32 * 1024 * 1024); // bounded (the old maxBuffer)
+    });
+    child.stderr?.on("data", (d) => {
+      err = (err + d.toString()).slice(-4096); // keep only the tail — a long ffmpeg log can be huge
+    });
+    child.on("error", (e) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ code: null, err: e.message, out });
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ code, err, out });
+    });
+  });
 }
 function sizeOf(p: string): number {
   try {
@@ -72,12 +116,12 @@ function tryUnlink(p: string): void {
     /* ignore */
   }
 }
-let tmpCounter = 0;
 function tmpPath(ext: string): string {
   const dir = path.join(resolveStateDir(), "tmp");
   ensureDir(dir);
-  const rand = spawnSync("uuidgen", [], { encoding: "utf8" }).stdout?.trim() || `${process.hrtime.bigint()}-${tmpCounter++}`;
-  return path.join(dir, `describe-fit-${rand}${ext}`);
+  // randomUUID() (no child process) — the old spawnSync("uuidgen") was a synchronous process spawn per
+  // temp file, another needless event-loop hit on the hot path.
+  return path.join(dir, `describe-fit-${randomUUID()}${ext}`);
 }
 function lastErr(err: string): string {
   return (err || "").split("\n").filter(Boolean).slice(-2).join(" ").slice(0, 200);
@@ -118,8 +162,8 @@ interface VideoInfo {
   height: number;
   duration: number; // seconds
 }
-function probeVideo(abs: string): VideoInfo | null {
-  const r = run("ffprobe", [
+async function probeVideo(abs: string): Promise<VideoInfo | null> {
+  const r = await runAsync("ffprobe", [
     "-v", "error", "-select_streams", "v:0",
     "-show_entries", "stream=width,height:format=duration",
     "-of", "json", abs,
@@ -139,9 +183,9 @@ function probeVideo(abs: string): VideoInfo | null {
 }
 
 /** CRF-based encode of the whole clip to a temp mp4. Only downscales when targetH < origH. */
-function encodeCrf(src: string, out: string, origH: number, targetH: number, crf: number): { code: number | null; err: string } {
+async function encodeCrf(src: string, out: string, origH: number, targetH: number, crf: number): Promise<{ code: number | null; err: string }> {
   const scale = targetH < origH ? ["-vf", `scale=-2:${targetH}`] : [];
-  return run("ffmpeg", [
+  return runAsync("ffmpeg", [
     "-y", "-i", src,
     ...scale,
     "-c:v", "libx264", "-preset", "medium", "-crf", String(crf), "-pix_fmt", "yuv420p",
@@ -152,17 +196,17 @@ function encodeCrf(src: string, out: string, origH: number, targetH: number, crf
 }
 
 /** Two-pass encode to an EXACT target video bitrate — the deterministic "must fit" fallback. */
-function encodeTwoPass(src: string, out: string, origH: number, targetH: number, videoKbps: number): { code: number | null; err: string } {
+async function encodeTwoPass(src: string, out: string, origH: number, targetH: number, videoKbps: number): Promise<{ code: number | null; err: string }> {
   const scale = targetH < origH ? ["-vf", `scale=-2:${targetH}`] : [];
   const logbase = tmpPath("").replace(/\.$/, "") + "-2pass";
   const common = [...scale, "-c:v", "libx264", "-preset", "medium", "-b:v", `${videoKbps}k`, "-passlogfile", logbase];
-  const p1 = run("ffmpeg", ["-y", "-i", src, ...common, "-pass", "1", "-an", "-f", "mp4", "/dev/null"]);
+  const p1 = await runAsync("ffmpeg", ["-y", "-i", src, ...common, "-pass", "1", "-an", "-f", "mp4", "/dev/null"]);
   if (p1.code !== 0) {
     tryUnlink(`${logbase}-0.log`);
     tryUnlink(`${logbase}-0.log.mbtree`);
     return p1;
   }
-  const p2 = run("ffmpeg", [
+  const p2 = await runAsync("ffmpeg", [
     "-y", "-i", src, ...common, "-pass", "2",
     "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart", out,
   ]);
@@ -171,11 +215,11 @@ function encodeTwoPass(src: string, out: string, origH: number, targetH: number,
   return p2;
 }
 
-function fitVideoUnderLimit(src: string, limitBytes: number): { out: string; note: string } {
+async function fitVideoUnderLimit(src: string, limitBytes: number): Promise<{ out: string; note: string }> {
   if (!which("ffmpeg")) {
     throw new Error("this video is over the AI-description size limit and needs ffmpeg to compress it — install it with: brew install ffmpeg");
   }
-  const info = probeVideo(src); // ffprobe may be absent; we degrade gracefully below
+  const info = await probeVideo(src); // ffprobe may be absent; we degrade gracefully below
   const origH = info?.height ?? 1080;
   const ladder = resolutionLadder(origH);
 
@@ -186,7 +230,7 @@ function fitVideoUnderLimit(src: string, limitBytes: number): { out: string; not
     const crfs = i === 0 ? [28, 34] : [30];
     for (const crf of crfs) {
       const out = tmpPath(".mp4");
-      const r = encodeCrf(src, out, origH, targetH, crf);
+      const r = await encodeCrf(src, out, origH, targetH, crf);
       const outSize = sizeOf(out);
       if (r.code === 0 && outSize > 0 && outSize <= limitBytes) {
         const note = targetH < origH
@@ -206,7 +250,7 @@ function fitVideoUnderLimit(src: string, limitBytes: number): { out: string; not
   const totalKbps = Math.floor((limitBytes * 8 * 0.94) / 1000 / duration);
   const videoKbps = Math.max(120, totalKbps - audioKbps);
   const out = tmpPath(".mp4");
-  const r = encodeTwoPass(src, out, origH, floorH, videoKbps);
+  const r = await encodeTwoPass(src, out, origH, floorH, videoKbps);
   const outSize = sizeOf(out);
   if (r.code === 0 && outSize > 0 && outSize <= limitBytes) {
     return { out, note: `compressed to fit: H.264 two-pass ${videoKbps}kbps at ${floorH}p (${(outSize / 1024 / 1024).toFixed(1)}MB)` };
@@ -221,7 +265,7 @@ function magickBin(): string | null {
   if (which("convert")) return "convert";
   return null;
 }
-function fitImageUnderLimit(src: string, limitBytes: number): { out: string; note: string } {
+async function fitImageUnderLimit(src: string, limitBytes: number): Promise<{ out: string; note: string }> {
   const bin = magickBin();
   if (!bin) {
     throw new Error("this image is over the AI-description size limit and needs ImageMagick to compress it — install it with: brew install imagemagick");
@@ -232,7 +276,7 @@ function fitImageUnderLimit(src: string, limitBytes: number): { out: string; not
     for (const q of [85, 72, 60]) {
       const out = tmpPath(".jpg");
       const resize = scalePct < 100 ? ["-resize", `${scalePct}%`] : [];
-      const r = run(bin, [src, ...resize, "-strip", "-quality", String(q), out], 5 * 60 * 1000);
+      const r = await runAsync(bin, [src, ...resize, "-strip", "-quality", String(q), out], 5 * 60 * 1000);
       const outSize = sizeOf(out);
       if (r.code === 0 && outSize > 0 && outSize <= limitBytes) {
         const note = scalePct < 100
@@ -252,14 +296,14 @@ function fitImageUnderLimit(src: string, limitBytes: number): { out: string; not
  * its path with a cleanup(). Never modifies the original. Throws (with a helpful message) only when the
  * required tool is missing or the file genuinely can't be squeezed under the cap.
  */
-export function fitMediaUnderLimit(absPath: string, kind: "image" | "video", limitBytes = FIT_TARGET_BYTES): FitResult {
+export async function fitMediaUnderLimit(absPath: string, kind: "image" | "video", limitBytes = FIT_TARGET_BYTES): Promise<FitResult> {
   const size = sizeOf(absPath);
   if (size >= 0 && size <= limitBytes) {
     return { path: absPath, compressed: false, cleanup: NOOP_CLEANUP, note: null };
   }
   const { out, note } = kind === "video"
-    ? fitVideoUnderLimit(absPath, limitBytes)
-    : fitImageUnderLimit(absPath, limitBytes);
+    ? await fitVideoUnderLimit(absPath, limitBytes)
+    : await fitImageUnderLimit(absPath, limitBytes);
   log.info("describe", `${absPath} (${(size / 1024 / 1024).toFixed(1)}MB) → ${note}`);
   return {
     path: out,

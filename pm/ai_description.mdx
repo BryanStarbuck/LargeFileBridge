@@ -306,6 +306,40 @@ The compress-to-fit pipeline (the 17.5MB target, the resolution ladder, the CRF 
 guarantee — all to a temp file, never the original) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `fitMediaUnderLimit()` (with `fitVideoUnderLimit()` / `fitImageUnderLimit()` / `resolutionLadder()`); invoked from `describeOne()` in `describe.service.ts` right before the adapter call, with the temp copy cleaned up in a `finally`.
 
+### 3.3.1 Compress-to-fit runs ASYNC — it must NEVER block the event loop (LOCKED)
+
+The compress-to-fit transcode (§3.3) shells out to **ffmpeg / ffprobe / ImageMagick**, and a single video
+re-encode can take **minutes**. Because AI description is the product's **most parallel** background op —
+the queue fans out to **~24 in-flight `describe` jobs at once** (§12.6, [job_queue.mdx §3](./job_queue.mdx))
+— every one of those child-process calls **MUST be asynchronous** (`child_process.spawn`, awaited), the
+**exact mirror** of the compression engine's async transcode runner ([compression.mdx](./compression.mdx)).
+Running them **synchronously** (`spawnSync`) is a **LOCKED-closed defect**:
+
+* A synchronous `spawnSync("ffmpeg", …)` **freezes the entire Node event loop** for the whole transcode —
+  the single API server can serve **no other request** while it blocks. With ~24 describe workers each able
+  to hit a synchronous transcode, the server stalls for **seconds to minutes at a time**.
+* The user-visible symptom is precisely the reported bug: firing **2,000 AI descriptions**, then opening
+  **`/processing`** in another tab — and **the Processing page never loads**, because `GET /api/progress`
+  ([processing.mdx §5](./processing.mdx)) is stuck behind a blocked event loop and can't answer the poll.
+  Everything downstream (the dock, the conditional nav item, every other page) hangs with it.
+* Therefore: `fit-media.ts` runs **all** heavy child processes through an **async** runner
+  (`runAsync` = `child_process.spawn` with a hard-kill timeout, capturing stdout for the ffprobe JSON), and
+  `fitMediaUnderLimit()` / `fitVideoUnderLimit()` / `fitImageUnderLimit()` / `probeVideo()` / `encodeCrf()` /
+  `encodeTwoPass()` are **all `async`** and **awaited** by `describeOne()`. The one-off temp-name generator
+  uses `crypto.randomUUID()` (no child process at all), not `spawnSync("uuidgen")`. Only the near-instant
+  `which` tool-detection probe stays synchronous (a few ms — the same choice the compression engine makes
+  for `onPath()`).
+* The **inline base64 read** of the up-to-18MB upload payload is likewise **async** (`fs.promises.readFile`,
+  not `fs.readFileSync`), so encoding a file for upload doesn't block the loop under the same 24-way
+  concurrency.
+
+This is catalogued as a performance defect in [performance.mdx P-27](./performance.mdx) (theme **T3 — the
+backend blocks the Node event loop**) and is the describe-side sibling of the compress queue's
+"heavy transcode is async" rule ([job_queue.mdx §3](./job_queue.mdx)).
+
+The async compress-to-fit + async base64 read (no synchronous child process on the describe hot path) are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `runAsync()` (the `spawn` runner) with `async` `fitMediaUnderLimit` / `fitVideoUnderLimit` / `fitImageUnderLimit` / `probeVideo` / `encodeCrf` / `encodeTwoPass`, `tmpPath()` via `randomUUID()`; and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `readBase64Capped()` (`await fs.promises.readFile`), awaited in both `gemini.describe()` and `chatVisionAdapter.describe()`. The sibling async transcode runner it mirrors is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `runAsync()`.
+
 The adapter set, per-kind support, key resolution (config → env), `selectAdapter` precedence, the inline base64 read with the 18MB cap, and `providerStatus` are handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `ADAPTERS` (gemini / openai / grok), `selectAdapter(kind, requested)`, `readBase64Capped()`, `providerStatus()`, `mimeForMedia()`.
 
@@ -880,6 +914,42 @@ The per-bucket concurrency (describe = the generous fixed cap, transcribe/compre
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` —
 `DESCRIBE_CONCURRENCY` (env-overridable) returned by `capFor()` for the `describe` bucket, alongside the
 core-budgeted `transcribe` / `compress:image` / `compress:video` caps. Policy: [parallelization.mdx §3](./parallelization.mdx).
+
+### 12.7 The 2,000-file run — async end-to-end, watchable, never a server freeze (LOCKED)
+
+This is the **"2,000 AI descriptions" scenario** the product owner walked through: open a directory with
+**~2,000 describable files**, hit **Confirm** in the batch popup, watch them queue up, then — in a **second
+browser** — open **`/processing`** to watch progress. Every link in that chain is **asynchronous and
+non-blocking**, and the whole run must stay **fully watchable at 2,000+ items with no performance problem**.
+The invariants, each cross-referenced to where it is owned:
+
+1. **Confirm returns immediately.** The popup Apply calls `POST /api/describe/enqueue`, which resolves the
+   eligible set, pushes it onto the background queue, and **returns the plan** — it never runs a single
+   description inline (§12.4, [job_queue.mdx §2](./job_queue.mdx)). The popup closes at once; the 2,000 jobs
+   drain in the background.
+2. **The workers drain async, ~24 at a time.** The queue runs the `describe` bucket at the generous fixed
+   concurrency (§12.6), and **every heavy child process is async** (§3.3.1) — so 24 in-flight uploads/
+   transcodes **never freeze the event loop**. The server keeps answering `GET /api/progress` throughout,
+   which is exactly why the second browser's Processing page **loads and starts moving**.
+3. **Every file is visible on `/processing`.** Running descriptions show as **Running** rows/cards (each
+   `describeOne` registers a `track("describe", …)` job), the not-yet-started ones show as **Pending** rows
+   and a per-op **Waiting** count, and any failure shows as a **Failed** row with its reason
+   ([processing.mdx §4.3](./processing.mdx)). Nothing about the run is invisible.
+4. **The Processing page stays light at 2,000+ items.** The poll payload is **bounded** (the pending rows
+   are capped, the failures are capped — [processing.mdx §5](./processing.mdx)) while the **counts stay
+   exact**, and the per-item table **windows its rows** (only the on-screen rows are in the DOM —
+   [performance.mdx P-01](./performance.mdx)). So a 2,000-file backlog is a **small, fast** poll and a
+   **fixed-cost** render, not a 2,000-row DOM dump ([processing.mdx §4.4](./processing.mdx)).
+5. **Any tab, any browser, wakes on its own.** Because the queue/registry state is **process-global** and
+   every surface polls the one `GET /api/progress`, an **idle** Processing page opened in a **different
+   browser** that did nothing itself **starts moving within one poll interval**
+   ([processing.mdx §4.1](./processing.mdx)) — the behavior the product owner exercised by refreshing the
+   page in a second browser.
+
+The end-to-end async path (enqueue-and-return → async ~24-way drain → registry cards → bounded, windowed
+Processing view) is the composition of the code cited in §3.3.1, §12.4, §12.6, and
+[processing.mdx §4–§5](./processing.mdx) / [job_queue.mdx §2–§4](./job_queue.mdx). The concrete tour is
+[use_case_ai_description_at_scale.mdx](./use_case_ai_description_at_scale.mdx).
 
 ---
 

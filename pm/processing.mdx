@@ -314,6 +314,46 @@ priority-drop column set) is rendered in code:
 
 ---
 
+## 4.4 Performance at scale — thousands of items without a slow page (LOCKED)
+
+A single batch can be **2,000+ files** (the "2,000 AI descriptions" scenario,
+[ai_description.mdx §12.7](./ai_description.mdx)). The Processing page must stay **fast to load and smooth to
+watch** at that size — it is a monitoring surface, and a monitoring surface that itself janks under load is
+useless. Three properties, each LOCKED, guarantee it:
+
+1. **The backend never blocks — so the poll always answers.** The single API server must keep serving
+   `GET /api/progress` on its normal cadence even while thousands of jobs drain. That holds only because
+   **every producer's heavy work is asynchronous** — the `describe` compress-to-fit transcode + base64 read
+   ([ai_description.mdx §3.3.1](./ai_description.mdx)) and the `compress` transcode
+   ([job_queue.mdx §3](./job_queue.mdx)) all run via `child_process.spawn` / `fs.promises`, never a
+   synchronous `spawnSync`/`readFileSync` that would freeze the event loop
+   ([performance.mdx P-27](./performance.mdx)). **This is the property whose absence produced the reported
+   "the Processing page would not load" bug** — with a synchronous describe transcode, the poll was stuck
+   behind a blocked loop.
+2. **The poll payload is bounded, the counts stay exact.** The pending rows (`queuedItems`) and the failure
+   rows (`recentFailures`) are **capped** (500 each, §5) so a 2,000- or 20,000-item queue is still a **small,
+   fixed-size** JSON body — the rows are the **head of the line**, not the whole backlog. The **exact**
+   totals still travel as integers (`queued` / `queuedByOp`), so the Waiting count reads *"2,000 describing"*
+   even though only the first 500 ride as rows. The poll cost is **O(cap)**, not O(N).
+3. **The table renders a fixed number of rows.** The per-item table (§4.3) is the house `DataTable`, which
+   **windows** its rows — only the ~30 rows intersecting the viewport are in the DOM, regardless of whether
+   the page has 50 rows or the 500-row cap ([performance.mdx P-01](./performance.mdx)) — and paginates at
+   500. So the render is **fixed-cost**; a big backlog never becomes a 500/2,000-`<tr>` DOM dump.
+
+Together these mean the page **loads instantly and scrolls smoothly** at any batch size, the numbers are
+always truthful, and the only thing that grows with the backlog is the integer counts — never the work the
+browser or the poll has to do. The poll also **self-accelerates** while busy (§4.1) so the picture stays
+live without a heavier idle poll.
+
+The bounded-payload caps are enforced server-side (`listQueuedItems()` / `listRecentFailures()` cap at 500)
+in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts`; the
+row windowing + 500-default pagination live in the shared
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` (the
+`useWindowedRows` windowing, [performance.mdx P-01](./performance.mdx)); the non-blocking backend is the
+async producers cited in §5 and [ai_description.mdx §3.3.1](./ai_description.mdx).
+
+---
+
 ## 5. The one polled source — `GET /api/progress` (extended)
 
 All three surfaces read the **same** poll ([webapp.mdx §12](./webapp.mdx)); this spec extends its payload
@@ -398,6 +438,13 @@ The extended payload is assembled in code:
    **transcribe** kinds appear as Running-now / dock cards and count into **Waiting** per op; a
    **transcribe slug's** Apply is the **main producer of transcribe jobs**; a **mixed** batch fans out all
    three kinds into the same queue and the same `GET /api/progress` poll, with no new surface.
+9. **Scale — 2,000+ items (§4.4):** enqueuing **2,000 AI descriptions** (or any large batch) and opening
+   `/processing` — including in a **second browser that did nothing** — **loads promptly and stays smooth**:
+   the poll keeps answering because **no producer blocks the event loop** (async transcode + async base64
+   read, [ai_description.mdx §3.3.1](./ai_description.mdx), [performance.mdx P-27](./performance.mdx)); the
+   payload is **bounded** (pending/failure rows capped at 500) while the counts stay **exact**; and the
+   per-item table **windows** its rows so the render is fixed-cost. The reported "the Processing page would
+   not load during a mass describe run" defect stays closed.
 
 <!--
   The THREE surfaces for background work, all driven by GET /api/progress:
@@ -427,6 +474,13 @@ The extended payload is assembled in code:
       a done+failed/total progress bar + on-finish the ERROR LIST from compression.mdx §12.4). Finished batches
       linger 30 min (retention) so errors stay readable after the nav item vanished. Empty state: "Nothing is
       processing right now."
+   §4.4 PERFORMANCE AT SCALE (LOCKED) — a 2,000+ item batch (ai_description.mdx §12.7) must load fast + stay
+      smooth: (1) the backend NEVER blocks the event loop (every producer's heavy child process is async —
+      describe transcode+base64 ai_description.mdx §3.3.1, compress transcode job_queue.mdx §3; a synchronous
+      spawnSync was the "Processing page won't load" bug, performance.mdx P-27), so GET /api/progress always
+      answers; (2) the poll payload is BOUNDED (queuedItems + recentFailures capped 500) while counts stay
+      EXACT (queued/queuedByOp integers) → O(cap) poll; (3) the per-item table WINDOWS rows (P-01) → fixed-cost
+      render. Caps in jobqueue.service listQueuedItems()/listRecentFailures(); windowing in DataTable.
    §5 GET /api/progress EXTENDED: + queuedByOp (Partial<Record<ProgressKind,number>>) + batches (ProcessingBatch[])
       + workers?{busy,budget} (§3a Core Budget utilization; absent when idle). Backend progress.router folds in
       queueDepthByOp()+listBatches()+(in-flight slot count & coreBudget()); jobqueue.service owns the batch registry

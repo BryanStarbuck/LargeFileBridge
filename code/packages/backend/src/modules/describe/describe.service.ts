@@ -191,7 +191,7 @@ export async function describeOne(
     // wrapped in a track("describe", …) progress-registry job so the dock shows a live card while it uploads
     // — including for a file the background queue started (job_queue.mdx §3).
     const { text, model } = await track("describe", name, async () => {
-      const fit = fitMediaUnderLimit(abs, kind);
+      const fit = await fitMediaUnderLimit(abs, kind);
       try {
         const mimeType = mimeForMedia(fit.path, kind);
         return await adapter.describe({ absPath: fit.path, kind, mimeType, prompt });

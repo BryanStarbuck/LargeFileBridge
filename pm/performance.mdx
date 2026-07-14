@@ -383,6 +383,31 @@ The media-aware, core-budgeted queue drain — per-op caps and the image-vs-vide
 fan-out — is in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` / `bucketOf()` / `pump()`, drawing `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()`
 
+### 🔴 P-27 — AI description's compress-to-fit ran synchronously (`spawnSync`), freezing the server under a mass run · T3
+- **Where:** `code/packages/backend/src/modules/describe/fit-media.ts` ran **every** ffmpeg / ffprobe /
+  ImageMagick call through **`spawnSync`** (and `spawnSync("uuidgen")` per temp file), and
+  `adapters.ts` `readBase64Capped()` read the up-to-18MB upload payload with **`fs.readFileSync`**.
+- **Symptom:** This is the disease of T3 (P-04 / P-16) on the **describe hot path**. Describe is the
+  **most parallel** background op — the queue fans out to **~24 in-flight `describe` jobs**
+  ([job_queue.mdx §3](./job_queue.mdx)) — so each synchronous transcode **froze the entire Node event loop**
+  for **seconds to minutes**. The exact reported failure: firing **2,000 AI descriptions**, then opening
+  `/processing` in **another browser**, and **the Processing page never loads** — `GET /api/progress`
+  ([processing.mdx §5](./processing.mdx)) was stuck behind the blocked loop, so the poll couldn't answer and
+  the whole app hung. Every other request (any page, any tab) stalled with it.
+- **Fix (done):** `fit-media.ts` now runs all heavy child processes through an **async** runner
+  (`runAsync` = `child_process.spawn` with a hard-kill timeout, capturing stdout for the ffprobe JSON) — the
+  exact mirror of the compression engine's `runAsync` ([P-26](#-p-26--the-background-job-queue-drained-at-a-fixed-tiny-cap-232-ignoring-many-cores--throughput)
+  / compression.mdx). `fitMediaUnderLimit` / `fitVideoUnderLimit` / `fitImageUnderLimit` / `probeVideo` /
+  `encodeCrf` / `encodeTwoPass` are **all `async`** and awaited by `describeOne()`; temp names use
+  `crypto.randomUUID()` (no child process); and `readBase64Capped()` reads via **`fs.promises.readFile`**.
+  Only the near-instant `which` tool-detection probe stays sync (a few ms — the same choice compression's
+  `onPath()` makes). With this, 24 describe jobs run in parallel while `GET /api/progress` keeps answering
+  and the Processing page loads instantly — the invariant is LOCKED in
+  [ai_description.mdx §3.3.1](./ai_description.mdx) and [processing.mdx §4.4](./processing.mdx).
+
+The async compress-to-fit + async base64 read are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `runAsync()` + the `async` fit/probe/encode functions; `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `readBase64Capped()` (`await fs.promises.readFile`), awaited in `gemini.describe()` / `chatVisionAdapter.describe()`.
+
 ---
 
 ## Part III — The architecture transformation (streaming background filesystem index)

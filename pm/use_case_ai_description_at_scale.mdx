@@ -1,0 +1,192 @@
+---
+title: LargeFileBridge — Use-Case Tour — 2,000 AI descriptions run asynchronously and stay watchable on the Processing page
+description: The end-to-end scenario tour that proves AI descriptions at SCALE are fully ASYNCHRONOUS and never freeze the app. The product owner opens a directory holding ~2,000 describable images/videos, hits Confirm in the unified batch popup, watches the jobs queue up, and — in a SECOND browser — opens /processing to watch progress. This tour walks every link in that chain and its performance guarantee: Confirm calls POST /api/describe/enqueue which plans the eligible set and RETURNS IMMEDIATELY (never runs descriptions inline in the request); the background job queue drains the describe bucket at a generous ~24-way concurrency; every heavy child process on the describe path (the compress-to-fit ffmpeg/ffprobe/ImageMagick transcode AND the up-to-18MB inline base64 read) runs ASYNC (child_process.spawn / fs.promises), never spawnSync/readFileSync, so the single API server NEVER blocks the Node event loop; therefore GET /api/progress keeps answering and the Processing page loads and moves — the exact bug the tour closes is "the Processing page would not load during a mass describe run"; the Processing page shows every file's state (Running / Pending / Failed) with a bounded, capped poll payload (500 rows each, exact integer counts) and a windowed table so 2,000+ items render at fixed cost; and an idle Processing page in a second browser that did nothing itself starts moving on its own within one poll interval because the queue state is process-global and every surface polls the one endpoint. Each step names WHAT LargeFileBridge does, WHERE it is implemented, and what we DOUBLE-CHECK. Sibling of ai_description.mdx (§3.3.1 async transcode, §12.4 enqueue-not-inline, §12.6 generous parallelism, §12.7 the 2,000-file scenario), job_queue.mdx (the async ~24-way queue), processing.mdx (§4.3 per-item table, §4.4 performance at scale, §5 the one polled source, §4.1 cross-tab wake), performance.mdx (P-01 windowing, P-27 the spawnSync freeze fix), and dialogs.mdx (the unified batch-confirm popup).
+---
+
+# LargeFileBridge — 2,000 AI Descriptions, Async and Watchable (the scale tour)
+
+This is a **scenario walkthrough** with a single claim: **firing thousands of AI descriptions is fully
+asynchronous and never freezes the app, and the Processing page shows every one of them without slowing
+down** — even when opened from a second browser that did nothing itself.
+
+The through-line: **enqueue-and-return + async workers + a bounded, windowed Processing view = a mass run
+you can start and walk away from, and watch from anywhere.** This tour is the concrete proof of
+[ai_description.mdx §12.7](./ai_description.mdx) (the 2,000-file scenario), and it closes the reported
+defect: *"I hit Confirm on ~2,000 AI descriptions, saw them queue, opened the Processing page in another
+browser, and it would not load."*
+
+This tour builds on the siblings and does not repeat them:
+
+* [ai_description.mdx](./ai_description.mdx) — the feature. **§3.3.1** (compress-to-fit is async), **§12.4**
+  (Apply enqueues, never inline), **§12.6** (describe fans wide, ~24), **§12.7** (the 2,000-file scenario).
+* [job_queue.mdx](./job_queue.mdx) — the background queue that drains the describe bucket async at ~24-way
+  concurrency (**§3**) and the enqueue-and-return contract (**§2**).
+* [processing.mdx](./processing.mdx) — the Processing page: the per-item table (**§4.3**), performance at
+  scale (**§4.4**), the one polled source (**§5**), and cross-tab wake (**§4.1**).
+* [performance.mdx](./performance.mdx) — **P-01** (table row windowing) and **P-27** (the `spawnSync`
+  event-loop freeze fix that this tour depends on).
+* [dialogs.mdx](./dialogs.mdx) — the unified batch-confirm popup every describe entry point opens.
+
+One computer, one big folder:
+
+* **`studio-tower`** — the user's Mac tower running Large File Bridge on localhost.
+* **`~/Media/Shoots/2026/`** — a directory whose subtree holds **~2,000 describable images and videos**,
+  none described yet.
+* **Two browsers** — Browser A (where the user starts the run) and Browser B (a different browser, opened
+  fresh to `http://localhost:2222/processing` to watch).
+
+---
+
+## Step 1 — Open the folder and choose "Create AI descriptions" (any entry point)
+
+In **Browser A** the user navigates the folder in the File System browser, opens the directory's
+**`⋮` → Create AI descriptions** (or the page header's **Actions ▾ → Create AI descriptions**, or the blue
+**"Describe ›"** header primary — every entry point behaves identically,
+[ai_description.mdx §9](./ai_description.mdx)).
+
+**What LargeFileBridge does.** The chosen entry point opens the **one unified batch-confirm popup**
+([dialogs.mdx §5](./dialogs.mdx)) off `POST /api/describe/plan` — it walks the subtree, drops already-
+described and non-media files ([ai_description.mdx §12.5](./ai_description.mdx)), and lists the **~2,000
+candidate files**, checked by default. Planning is **non-fatal per candidate**: one un-resolvable file is
+skipped, never a 400 that stops the popup opening ([ai_description.mdx §9.6](./ai_description.mdx)).
+
+**Where.** `backend/src/modules/describe/describe.service.ts` — `previewDescribe()`;
+`frontend/src/lib/batchPopup.ts` — `openDescribeBatch()`.
+
+**We double-check.** The popup **opens** and shows the count. No entry point is a silent no-op.
+
+---
+
+## Step 2 — Hit Confirm: the request returns immediately, the run drains in the background (LOCKED)
+
+The user presses the blue **"Describe 2000 files"** button.
+
+**What LargeFileBridge does.** Confirm calls **`POST /api/describe/enqueue`**, which resolves the eligible
+set, **pushes all ~2,000 tasks onto the background queue (op `describe`), and returns the plan
+immediately** — the popup closes at once and the user is free to navigate away.
+**It never runs a single description inline in the HTTP request** ([ai_description.mdx §12.4](./ai_description.mdx),
+[job_queue.mdx §2](./job_queue.mdx)) — an inline batch would hold one request open for the whole run, show
+nothing on the Processing page, and die on a dev restart or network blip.
+
+**Where.** `backend/src/modules/describe/describe.router.ts` — `POST /api/describe/enqueue` →
+`describe.service.ts` `enqueueDescribe()` → `jobqueue.service.ts` `enqueue()`.
+
+**We double-check.** Confirm returns in **well under a second** regardless of the 2,000-file size; the toast
+states the eligible count; the browser is immediately responsive.
+
+---
+
+## Step 3 — The queue drains ~24 at a time, and every worker is async (LOCKED — the crux)
+
+**What LargeFileBridge does.** A pool of workers drains the queue. Because AI description's heavy wait is a
+**vision-API round-trip**, not local CPU, the `describe` bucket runs at a **generous fixed concurrency —
+~24 in flight at once** ([ai_description.mdx §12.6](./ai_description.mdx), [job_queue.mdx §3](./job_queue.mdx)).
+Each worker calls `describeOne`, which — for any file over the ~18MB inline cap — first compresses it to a
+temporary copy that fits, then uploads it.
+
+**Crucially, every heavy child process on that path is asynchronous.** The compress-to-fit ffmpeg / ffprobe
+/ ImageMagick transcode runs through `child_process.spawn` (awaited), the temp name uses
+`crypto.randomUUID()`, and the up-to-18MB inline base64 read uses `fs.promises.readFile` — **never**
+`spawnSync` or `fs.readFileSync` ([ai_description.mdx §3.3.1](./ai_description.mdx)). So **24 in-flight
+describe jobs never freeze the Node event loop**, and the single API server keeps serving every other
+request throughout.
+
+**Where.** `backend/src/modules/describe/fit-media.ts` — `runAsync()` + the `async`
+`fitMediaUnderLimit`/`fitVideoUnderLimit`/`fitImageUnderLimit`/`probeVideo`/`encodeCrf`/`encodeTwoPass`;
+`backend/src/modules/describe/adapters.ts` — `readBase64Capped()` (`await fs.promises.readFile`);
+`backend/src/modules/jobqueue/jobqueue.service.ts` — `DESCRIBE_CONCURRENCY` / `pump()`.
+
+**We double-check.** With a mix of large videos in the folder, `GET /api/progress` **still answers on its
+normal cadence** while transcodes run — the property whose absence caused the original freeze
+([performance.mdx P-27](./performance.mdx)).
+
+---
+
+## Step 4 — In a SECOND browser, open /processing — it loads and starts moving (LOCKED)
+
+The user opens **Browser B** fresh at `http://localhost:2222/processing`. Browser B did **not** start the
+run.
+
+**What LargeFileBridge does.** The Processing page reads the **one polled source**, `GET /api/progress`
+([processing.mdx §5](./processing.mdx)). Because the queue/registry state is **process-global** and the
+server is **not blocked** (Step 3), the poll **answers**, and the page **loads and starts moving within one
+poll interval** — the cross-tab wake behavior ([processing.mdx §4.1](./processing.mdx)). This is the exact
+action the product owner took; before the async fix, the page hung here because the poll was stuck behind a
+blocked event loop.
+
+**Where.** `frontend/src/progress/ProgressContext.tsx` — `ProgressProvider` (the self-accelerating poll);
+`frontend/src/pages/processing/ProcessingPage.tsx` — `ProcessingPage`.
+
+**We double-check.** Browser B, which did nothing itself, shows live progress — **the Processing page
+loads**.
+
+---
+
+## Step 5 — Every file's state is visible: Running · Pending · Failed (LOCKED)
+
+**What LargeFileBridge does.** The Processing page shows:
+
+* **Running now** — a per-item table row (and dock card) for each of the ~24 in-flight descriptions, each
+  registered by `describeOne`'s `track("describe", …)` job.
+* **Waiting** — the per-op backlog, labeled *"1,976 describing"* and draining as workers pick files up.
+* **Failed** — any file that errored (a provider `429`, a missing key, an un-encodable file) as a red row
+  with its reason, kept through the retention window.
+
+Multiple **Running** rows at once **is** the parallelism made visible ([processing.mdx §4.3](./processing.mdx)).
+
+**Where.** `frontend/src/pages/processing/ProcessingItemsTable.tsx` — `ProcessingItemsTable`;
+`backend/src/modules/progress/progress.router.ts` — `GET /` (folds `queuedByOp` / `queuedItems` /
+`recentFailures`).
+
+**We double-check.** Nothing about the 2,000-file run is invisible — the user can see what's underway, what's
+queued, and what failed, all at once.
+
+---
+
+## Step 6 — 2,000 items stay fast: bounded poll, exact counts, windowed table (LOCKED)
+
+**What LargeFileBridge does.** The page stays **light** at 2,000+ items
+([processing.mdx §4.4](./processing.mdx)):
+
+* the poll payload is **bounded** — the pending rows and failure rows are **capped at 500 each**, so the JSON
+  body is small no matter how large the backlog;
+* the **counts stay exact** — the Waiting line reads *"1,976 describing"* from the integer `queuedByOp`, even
+  though only the first 500 ride as rows;
+* the per-item table **windows its rows** — only the ~30 rows on screen are in the DOM
+  ([performance.mdx P-01](./performance.mdx)), so the render is **fixed-cost**, never a 2,000-`<tr>` dump.
+
+**Where.** `backend/src/modules/jobqueue/jobqueue.service.ts` — `listQueuedItems()` / `listRecentFailures()`
+(the 500 caps); `frontend/src/components/table/DataTable.tsx` — `useWindowedRows` (windowing) + 500-default
+pagination.
+
+**We double-check.** The page **scrolls smoothly** and the poll is **cheap** whether the backlog is 50 or
+20,000; only the integer counts grow with the backlog, never the browser's or the poll's work.
+
+---
+
+## Step 7 — The run finishes; the conditional nav item and dock clear
+
+**What LargeFileBridge does.** As the queue drains, the **Waiting** count falls to zero, the **Running**
+rows empty, the bottom-left dock and the conditional **Processing** nav item **vanish from the DOM**
+([processing.mdx §1–§3](./processing.mdx)), and each `.ai_description` artifact is written into the owning
+repo's committed `.lfbridge/` ([ai_description.mdx §2](./ai_description.mdx)). Failed rows linger through the
+retention window so the user can still read them.
+
+**We double-check.** The described count on the folder's metric tile rises to match; re-opening
+**Create AI descriptions** on the same folder now finds **fewer (or zero)** candidates — already-described
+files are never re-offered ([ai_description.mdx §12.5](./ai_description.mdx)).
+
+---
+
+## What this tour proves
+
+1. **Confirm is instant** — enqueue-and-return, never an inline run (Step 2).
+2. **The workers are async and wide** — ~24 describe jobs, every child process via `spawn`/`fs.promises`,
+   so the server never blocks (Step 3, the crux).
+3. **The Processing page loads — even in a second browser** — because the non-blocked, process-global poll
+   answers and wakes an idle page (Step 4). *This is the reported bug, closed.*
+4. **Every file is visible** — Running / Pending / Failed, with the parallelism shown (Step 5).
+5. **2,000+ items stay fast** — bounded poll, exact counts, windowed table (Step 6).
+
+The single principle behind all five: **do the heavy work asynchronously in a background queue, return the
+request immediately, and let every surface read one bounded, self-accelerating poll.**

@@ -46,14 +46,17 @@ function firstEnv(...names: string[]): string | null {
   return null;
 }
 
-function readBase64Capped(absPath: string): string {
-  const size = fs.statSync(absPath).size;
+// ASYNC read (fs.promises) so encoding an up-to-18MB file to base64 never blocks the Node event loop —
+// under the describe queue's ~24-way concurrency (job_queue.mdx §3) a synchronous read per in-flight file
+// would stall GET /api/progress and every other request (ai_description.mdx §3.3.1, performance.mdx P-27).
+async function readBase64Capped(absPath: string): Promise<string> {
+  const size = fs.statSync(absPath).size; // one fast stat — the gate before the big read
   if (size > INLINE_MAX_BYTES) {
     throw new Error(
       `file is ${(size / (1024 * 1024)).toFixed(1)}MB — over the ${INLINE_MAX_BYTES / (1024 * 1024)}MB inline limit for AI description. Compress it first, then try again.`,
     );
   }
-  return fs.readFileSync(absPath).toString("base64");
+  return (await fs.promises.readFile(absPath)).toString("base64");
 }
 
 /** Rewrite a provider's raw HTTP error into an actionable one when it looks like the configured model was
@@ -118,7 +121,7 @@ const gemini: DescribeAdapter = {
     const key = this.apiKey();
     if (!key) throw new Error("no Gemini API key");
     const model = getAppConfig().ai.gemini.model || DEFAULT_GEMINI_MODEL;
-    const data = readBase64Capped(absPath);
+    const data = await readBase64Capped(absPath);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
     const body = {
       contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: mimeType, data } }] }],
@@ -162,7 +165,7 @@ function chatVisionAdapter(cfg: {
       const key = cfg.key();
       if (!key) throw new Error(`no ${cfg.label} API key`);
       const model = cfg.model();
-      const data = readBase64Capped(absPath);
+      const data = await readBase64Capped(absPath);
       const body = {
         model,
         messages: [

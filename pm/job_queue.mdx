@@ -117,8 +117,12 @@ The `compress` op is **media-aware** because the two media kinds have opposite t
   `track("transcribe"/"describe"/"compress", …)` job in the progress registry ([webapp.mdx §12](./webapp.mdx)),
   so the moment a queued item **starts**, a **live dock card** appears (determinate % for transcribe/compress,
   spinner for describe) — including in a tab that did not start the batch. The queue writes **no** dock code
-  of its own. The `compress` task's heavy transcode is **async** (`spawn`, [compression.mdx §12.6](./compression.mdx))
-  so it **never blocks the event loop** while the batch drains.
+  of its own. **Every op's heavy child-process work is `async` (`spawn`), never `spawnSync`** — the `compress`
+  task's transcode ([compression.mdx §12.6](./compression.mdx)) **and** the `describe` task's compress-to-fit
+  transcode + inline base64 read ([ai_description.mdx §3.3.1](./ai_description.mdx)) — so a worker **never
+  blocks the event loop** while the batch drains. This is what keeps `GET /api/progress` answering (and the
+  Processing page loading) while ~24 describe jobs or a wide compress batch run at once; a synchronous
+  transcode here would freeze the single API server for the whole run ([performance.mdx P-27](./performance.mdx)).
 * **Per-item isolation.** A task that throws is caught, logged to `error.err`
   ([ai_description.mdx §8](./ai_description.mdx)), and the worker moves on — one bad file never stalls the
   queue. Each runner already returns a truthful status rather than throwing for expected outcomes.
