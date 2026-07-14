@@ -29,7 +29,7 @@ export const DeviceHardwareSchema = z
     screen_inches: z.number().nullable().default(null), // built-in display size (model table)
     screen_count: z.number().nullable().default(null), // SPDisplaysDataType resolution count
   })
-  .default({});
+  .prefault({});
 // On-disk (snake_case) shape. The camelCase UI mirror is `DeviceHardware` in types.ts.
 export type DeviceHardwareDoc = z.infer<typeof DeviceHardwareSchema>;
 
@@ -44,7 +44,7 @@ export const AppConfigSchema = z.object({
       mode: z.enum(["local", "server"]).default("local"),
       cors_origins: z.array(z.string()).default([]),
     })
-    .default({}),
+    .prefault({}),
   computer: z
     .object({
       id: z.string().optional(),
@@ -52,7 +52,7 @@ export const AppConfigSchema = z.object({
       ipfs_peer_id: z.string().nullable().default(null),
       hardware: DeviceHardwareSchema, // this machine's fingerprint (devices.mdx §7) — seeded on first run
     })
-    .default({}),
+    .prefault({}),
   ipfs: z
     .object({
       api_addr: z.string().default("/ip4/127.0.0.1/tcp/5001"),
@@ -63,7 +63,7 @@ export const AppConfigSchema = z.object({
       reprovide_strategy: z.enum(["pinned", "roots", "all"]).default("pinned"),
       public_gateway: z.boolean().default(false),
     })
-    .default({}),
+    .prefault({}),
   // Mass-parallelization policy (parallelization.mdx §4). `max_core_fraction` ∈ (0,1] tunes the
   // MASS-COMPUTE core budget — round(cores × fraction) — used for user-kicked-off batch CPU work
   // (compression, fingerprinting, batch transcode). Default 0.9 = "use up to ~90% of cores". Read LIVE
@@ -73,7 +73,7 @@ export const AppConfigSchema = z.object({
     .object({
       max_core_fraction: z.number().min(0.01).max(1).default(0.9),
     })
-    .default({}),
+    .prefault({}),
   // Transcription engine + parallelism (transcribe_engine.mdx §5.4/§6). `engine`: auto (qwen if the machine
   // is Apple-Silicon and the mlx-qwen3-asr model is ready, else the mac/Whisper fallback) / qwen / mac.
   // `max_parallel`: optional hard cap overriding the auto per-machine calibration (§5.1); null = auto.
@@ -87,7 +87,7 @@ export const AppConfigSchema = z.object({
       model_installed_bytes: z.number().nullable().default(null),
       model_consent: z.enum(["approved", "declined", "use_fallback"]).nullable().default(null),
     })
-    .default({}),
+    .prefault({}),
   big_file: z
     .object({
       threshold_bytes: z.number().default(104857600),
@@ -96,9 +96,9 @@ export const AppConfigSchema = z.object({
           value: z.number().default(100),
           unit: z.enum(["MB", "GB", "TB"]).default("MB"),
         })
-        .default({}),
+        .prefault({}),
     })
-    .default({}),
+    .prefault({}),
   // Compression preferences (compression.mdx §7). Per-media codec allow/deny + quality. Defaults chosen
   // for social-media compatibility (deny jpeg2000 for images, av1 for video). Audio disabled for now.
   compression: z
@@ -117,7 +117,7 @@ export const AppConfigSchema = z.object({
           // leading-dot (".heic"). An ext listed here is skipped entirely ("excluded by settings").
           skip_exts: z.array(z.string()).default([]),
         })
-        .default({}),
+        .prefault({}),
       video: z
         .object({
           enabled: z.boolean().default(true),
@@ -127,7 +127,7 @@ export const AppConfigSchema = z.object({
           convert_types: z.boolean().default(true), // same policy for video (images.mdx §1.4)
           skip_exts: z.array(z.string()).default([]),
         })
-        .default({}),
+        .prefault({}),
       audio: z
         .object({
           enabled: z.boolean().default(false), // audio not compressed for now (compression.mdx §1)
@@ -137,11 +137,11 @@ export const AppConfigSchema = z.object({
           convert_types: z.boolean().default(true), // uniform shape (audio disabled; fields unused)
           skip_exts: z.array(z.string()).default([]),
         })
-        .default({}),
+        .prefault({}),
       preserve_resolution: z.boolean().default(true), // LOCKED on (compression.mdx §5)
       replace_original_to_trash: z.boolean().default(true), // recoverable replace (compression.mdx §8)
     })
-    .default({}),
+    .prefault({}),
   // AI description providers (ai_description.mdx §5). Vision models the app may call to describe a local
   // image/video. Keys are OPTIONAL here — an empty key falls back to the matching env var
   // (GEMINI_API_KEY / XAI_API_KEY / OPENAI_API_KEY). `provider` = "auto" picks the first available that
@@ -158,21 +158,21 @@ export const AppConfigSchema = z.object({
           // backend describe/models.ts; retired ids are auto-healed on load (ai_description.mdx §3.4).
           model: z.string().default("gemini-flash-latest"),
         })
-        .default({}),
+        .prefault({}),
       grok: z
         .object({
           api_key: z.string().nullable().default(null),
           model: z.string().default("grok-2-vision-1212"),
         })
-        .default({}),
+        .prefault({}),
       openai: z
         .object({
           api_key: z.string().nullable().default(null),
           model: z.string().default("gpt-4o"),
         })
-        .default({}),
+        .prefault({}),
     })
-    .default({}),
+    .prefault({}),
   // The IPFS add/pin background worker (pin_process.mdx). Renamed from the legacy `sync_process` block;
   // the one-time startup migration rewrites an old on-disk `sync_process` (and its
   // `com.largefilebridge.sync` label) into this shape.
@@ -185,7 +185,7 @@ export const AppConfigSchema = z.object({
       last_run_at: iso.nullable().default(null),
       last_run_ok: z.boolean().nullable().default(null),
     })
-    .default({}),
+    .prefault({}),
   // The DEVICE-REGISTRATION background worker (devices.mdx §12). A dedicated, every-10-minute pass whose
   // ONE job is: make sure THIS computer's device info (its self-owned devices/<self>.yaml) is written and
   // pushed up to each Git-backed storage's repo — pulling first (git fetch + auto-merge) EVERY run even
@@ -207,7 +207,7 @@ export const AppConfigSchema = z.object({
       // that the auto-on happened, so if the user later turns it OFF it stays off (we never force it back).
       auto_provisioned: z.boolean().default(false),
     })
-    .default({}),
+    .prefault({}),
   scan_process: z
     .object({
       installed: z.boolean().default(false),
@@ -217,7 +217,7 @@ export const AppConfigSchema = z.object({
       last_run_at: iso.nullable().default(null),
       last_run_ok: z.boolean().nullable().default(null),
     })
-    .default({}),
+    .prefault({}),
   // The live filesystem watcher (scan.mdx §2.2). Event-driven — NOT a scheduleTask: it runs only while
   // the web-app process is up (no plist/installed flag), subscribes to the OS's native change
   // notifications (FSEvents/inotify/ReadDirectoryChangesW) over scanner.roots, and on a qualifying
@@ -227,7 +227,7 @@ export const AppConfigSchema = z.object({
       enabled: z.boolean().default(true), // subscribe to file-change events while the app runs
       debounce_ms: z.number().default(1500), // quiet-period before a settled burst triggers a rescan
     })
-    .default({}),
+    .prefault({}),
   // Security allow-list (security.mdx §2). Set once by the first-run Security Setup page, then read
   // LIVE on every request by identify.ts. `configured` gates the setup page; both switches are OR'd.
   access: z
@@ -238,7 +238,7 @@ export const AppConfigSchema = z.object({
       allow_individuals: z.boolean().default(false), // section-2 checkbox — allow exact accounts
       allowed_emails: z.array(z.string()).default([]), // exact emails, lowercased
     })
-    .default({}),
+    .prefault({}),
   scanner: z
     .object({
       roots: z.array(z.string()).default([]),
@@ -247,24 +247,25 @@ export const AppConfigSchema = z.object({
         .default(["**/node_modules/**", "**/.git/**", "**/.Trash/**"]),
       follow_symlinks: z.boolean().default(false),
     })
-    .default({}),
+    .prefault({}),
   defaults: z
     .object({
       theme: z.enum(["system", "light", "dark"]).default("system"),
       density: z.enum(["comfortable", "compact"]).default("comfortable"),
     })
-    .default({}),
+    .prefault({}),
   // Sticky per-entity flags keyed by ABSOLUTE path (menus.mdx §6.6, files.mdx, directories.mdx).
   // App-scope so they work for any file/dir whether or not it lives inside a registered repo. A
   // directory's flag applies to everything under it (checked by path-prefix at read time).
   file_flags: z
     .record(
+      z.string(),
       z.object({
         never_ipfs: z.boolean().default(false),
         no_compress: z.boolean().default(false),
       }),
     )
-    .default({}),
+    .prefault({}),
   // The single computer-wide storage budget LFB may devote to ALL community content combined
   // (communities.mdx §5.2). Bytes. null = not yet set → the service proposes a recommendation.
   community_budget: z.number().nullable().default(null),
@@ -295,7 +296,7 @@ export const RepoUnitConfigSchema = z.object({
       path: z.string().default(""),
       remote: z.string().nullable().default(null),
     })
-    .default({}),
+    .prefault({}),
   pinned: z.boolean().default(false),
   bookmarked: z.boolean().default(false), // user favorite (repos.mdx §8) — local, not shared to peers
   big_file_override: z
@@ -304,27 +305,27 @@ export const RepoUnitConfigSchema = z.object({
       value: z.number().default(100),
       unit: z.enum(["MB", "GB", "TB"]).default("MB"),
     })
-    .default({}),
+    .prefault({}),
   large_files: z
     .object({
       follow_gitignore: z.boolean().default(true),
       include_globs: z.array(z.string()).default([]),
       exclude_globs: z.array(z.string()).default([]),
     })
-    .default({}),
+    .prefault({}),
   pin: z
     .object({
       pin_locally: z.boolean().default(true),
       fetch_missing: z.boolean().default(true),
       publish_manifest: z.boolean().default(true),
     })
-    .default({}),
+    .prefault({}),
   access: z
     .object({
       shared: z.boolean().default(false),
       participants: z.array(z.string()).default([]),
     })
-    .default({}),
+    .prefault({}),
   // Where this repo's transcripts / AI descriptions are written (repo_settings.mdx §4/§5,
   // placement_radios.mdx). Frozen wire enum lfbridge | beside | sync_repo; both default to lfbridge.
   artifacts: z
@@ -332,10 +333,10 @@ export const RepoUnitConfigSchema = z.object({
       transcription_placement: z.enum(["lfbridge", "beside", "sync_repo"]).default("lfbridge"),
       ai_description_placement: z.enum(["lfbridge", "beside", "sync_repo"]).default("lfbridge"),
     })
-    .default({}),
+    .prefault({}),
   // Per-file decisions (one_repo.mdx §1). Keyed by relative path. The "sync" value is a FROZEN wire
   // literal (= add-to-IPFS / pin) that travels between computers — do not rename it.
-  decisions: z.record(z.enum(["sync", "ignore", "undecided"])).default({}),
+  decisions: z.record(z.string(), z.enum(["sync", "ignore", "undecided"])).default({}),
 });
 export type RepoUnitConfig = z.infer<typeof RepoUnitConfigSchema>;
 
@@ -385,7 +386,7 @@ export const TodoBatchItemSchema = z.object({
   estCompressedBytes: z.number().optional(),
   recommend: z
     .object({ ipfs: z.boolean().optional(), gitignore: z.boolean().optional(), compress: z.boolean().optional() })
-    .default({}),
+    .prefault({}),
 });
 export const TodoCategoryTotalSchema = z.object({ count: z.number(), reclaimableBytes: z.number().optional() });
 export const TodoBatchDocSchema = z.object({
@@ -397,7 +398,7 @@ export const TodoBatchDocSchema = z.object({
   kind: z.enum(["todo", "transcribe"]).default("todo"),
   pattern: z.enum(["compress", "git_ignore", "pull_down", "pin", "transcribe", "mixed"]).default("mixed"),
   repoId: z.string().optional(),
-  totals: z.record(TodoCategoryTotalSchema).default({}),
+  totals: z.record(z.string(), TodoCategoryTotalSchema).default({}),
   items: z.array(TodoBatchItemSchema).default([]),
   dismissed: z.boolean().default(false),
   dismissedAt: z.string().nullable().default(null),
@@ -432,22 +433,22 @@ export const RepoStorageDocSchema = z.object({
         by: z.string().nullable().default(null), // allow-listed Google email that enlisted it
         on_device: z.string().default(""), // unique device name (devices.mdx) that enlisted it
       })
-      .default({}),
-    counts: RepoStorageCountsSchema.default({}),
+      .prefault({}),
+    counts: RepoStorageCountsSchema.prefault({}),
     policy: z
       .object({
         recommend_ipfs_pin: z.boolean().default(true),
         recommend_compress: z.boolean().default(true),
         recommend_transcribe: z.boolean().default(false),
       })
-      .default({}),
+      .prefault({}),
     last_scan: z
       .object({
         at: iso.optional(),
         on_device: z.string().default(""),
         headless: z.boolean().default(false), // true when a background scan wrote this
       })
-      .default({}),
+      .prefault({}),
   }),
 });
 export type RepoStorageDoc = z.infer<typeof RepoStorageDocSchema>;
@@ -496,7 +497,7 @@ export const FileSidecarSchema = z.object({
     fingerprint: PerceptualFingerprintSchema.nullable().default(null), // perceptual fp (media only)
     first_seen: z
       .object({ at: iso.optional(), on_device: z.string().default("") })
-      .default({}),
+      .prefault({}),
     events: z.array(FileEventSchema).default([]),
   }),
 });
@@ -536,9 +537,9 @@ export const ComputerUnitConfigSchema = z.object({
       fetch_missing: z.boolean().default(true),
       publish_manifest_ipns: z.boolean().default(true),
     })
-    .default({}),
+    .prefault({}),
   // "sync" is a FROZEN wire literal (= add-to-IPFS / pin) that travels between computers — do not rename.
-  decisions: z.record(z.enum(["sync", "ignore", "undecided"])).default({}),
+  decisions: z.record(z.string(), z.enum(["sync", "ignore", "undecided"])).default({}),
 });
 export type ComputerUnitConfig = z.infer<typeof ComputerUnitConfigSchema>;
 
@@ -551,7 +552,7 @@ const StorageBackingSchema = z
     enabled: z.boolean().default(false),
     path: z.string().nullable().default(null),
   })
-  .default({});
+  .prefault({});
 export const StorageUnitConfigSchema = z.object({
   schema_version: z.number().default(1),
   updated_at: iso.optional(),
@@ -562,7 +563,7 @@ export const StorageUnitConfigSchema = z.object({
       type: z.enum(["local", "repo", "personal", "company", "community"]).default("personal"),
       root: z.string().default(""),
     })
-    .default({}),
+    .prefault({}),
   // The per-storage IPFS-pinning opt-in (pin_process.mdx §1 semantics, mirrored for storages). Default
   // OFF — a storage is known & visited every pass, but its mapped-dir bytes are added/pinned/fetched only
   // once the user opts in. Charter: never pin content without an explicit, user-confirmed action.
@@ -572,14 +573,14 @@ export const StorageUnitConfigSchema = z.object({
       enabled: z.boolean().default(true), // keep .lfbridge/ on this computer (default ON — §3)
       path: z.string().nullable().default(null), // null = default <root>/.lfbridge/
     })
-    .default({}),
+    .prefault({}),
   backing: z
     .object({
       dedicated_repo: StorageBackingSchema,
       google_drive: StorageBackingSchema,
       dropbox: StorageBackingSchema,
     })
-    .default({}),
+    .prefault({}),
 });
 export type StorageUnitConfig = z.infer<typeof StorageUnitConfigSchema>;
 
@@ -632,7 +633,7 @@ export const UnitStatusSchema = z.object({
       moved: z.array(z.object({ from: z.string(), to: z.string() })).default([]),
       deleted: z.array(z.string()).default([]),
     })
-    .default({}),
+    .prefault({}),
 });
 export type UnitStatus = z.infer<typeof UnitStatusSchema>;
 
@@ -707,16 +708,16 @@ export const DeviceFileSchema = z.object({
       ipfs_peer_id: z.string().nullable().default(null), // for peer dialing (may change; id above does not)
       hardware: DeviceHardwareSchema, // this device's fingerprint (devices.mdx §7) — travels with the SDL
     })
-    .default({}),
+    .prefault({}),
   schedule: z
     .object({
       enabled: z.boolean().default(true), // does this device pin this storage at all
       interval_minutes: z.number().default(15), // cadence (default matches the 15-min background pass)
       windows: z.array(DeviceScheduleWindowSchema).default([]), // optional specific times/windows
     })
-    .default({}),
+    .prefault({}),
   // one entry per mapped source directory keyed in mapped_dirs.yaml (§4)
-  graft: z.record(DeviceGraftEntrySchema).default({}),
+  graft: z.record(z.string(), DeviceGraftEntrySchema).default({}),
 });
 export type DeviceFile = z.infer<typeof DeviceFileSchema>;
 
@@ -766,7 +767,7 @@ export const FileSystemViewSchema = z.object({
       images: z.boolean().default(true),
       audio: z.boolean().default(true),
     })
-    .default({}),
+    .prefault({}),
   updated_at: iso.optional(),
 });
 export type FileSystemView = z.infer<typeof FileSystemViewSchema>;
@@ -781,11 +782,11 @@ export const UserConfigSchema = z.object({
       density: z.enum(["comfortable", "compact"]).default("comfortable"),
       last_route: z.string().default("/"),
     })
-    .default({}),
-  tables: z.record(z.unknown()).default({}),
+    .prefault({}),
+  tables: z.record(z.string(), z.unknown()).default({}),
   // The File System page's persisted view state (directories.mdx §1.3). A fresh user with no block
   // reads back the schema defaults (empty columns/selection, all filters ON) — never an error.
-  file_system: FileSystemViewSchema.default({}),
+  file_system: FileSystemViewSchema.prefault({}),
   // Last 5 web sessions, newest first (sessions.mdx §4). At most one open (ended_at null), at index 0.
   sessions: z.array(SessionRecordSchema).default([]),
 });

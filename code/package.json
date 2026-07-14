@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "LargeFileBridge — sync large git-ignored files across your own computers over IPFS.",
-  "packageManager": "pnpm@11.12.0",
+  "packageManager": "pnpm@11.13.0",
   "engines": { "node": ">=20" },
   "scripts": {
     "dev": "pnpm --filter @lfb/frontend --filter @lfb/backend --parallel dev",

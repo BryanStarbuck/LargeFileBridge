@@ -15,7 +15,7 @@ export interface RowWindow {
 export function useWindowedRows(
   count: number,
   rowHeight: number,
-  containerRef: RefObject<HTMLElement>,
+  containerRef: RefObject<HTMLElement | null>,
   overscan = 10,
 ): RowWindow {
   const [scrollTop, setScrollTop] = useState(0);
