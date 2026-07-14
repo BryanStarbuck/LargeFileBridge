@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Company Storage
-description: The Company storage spec. A shared pile of a company's large files, one directory-based storage per company, e.g. ~/BGit/Bryan_git/act3_large_files_bridge/. Each carries a storage.yaml with name + type: company + a company block (company_name and company-scoped child properties) and a hidden .lfbridge/ area (fingerprint index, IPFS manifest, media-analysis outputs). A user may belong to MORE THAN ONE company, so several company storages can coexist; each appears as its own child in the Storages left-bar tab (labeled by company name). Company storages are pinned across the members' computers over IPFS and often also clone to a shared Google Drive / Dropbox. Sibling of storage_repo / storage_personal / storage_community; shares the storage.yaml schema and .lfbridge/ layout defined in storages.mdx.
+description: The Company storage spec. A shared pile of a company's large files, one directory-based storage per company, e.g. ~/BGit/Bryan_git/act3_large_files_bridge/. Each carries a storage.yaml with name + type: company + a company block (company_name and company-scoped child properties) and a hidden .lfbridge/ area (fingerprint index, IPFS manifest, media-analysis outputs). A user may belong to MORE THAN ONE company, so several company storages can coexist; each appears as its own child in the Storages left-bar tab (labeled by company name). Company storages are pinned across the members' computers over IPFS and often also clone to a shared Google Drive / Dropbox. The company's settings page also lists the repos owned by this company with a per-row reassign control (§7.1 → storage_settings.mdx §4c); reassigning a repo INTO this company records a travelling ownership assertion (repo_owner_propagation.mdx) that reaches other members but applies on their machines only via review-and-consent, moves NO bytes, and only re-targets which sync repo the repo's tracking mirrors to. Sibling of storage_repo / storage_personal / storage_community; shares the storage.yaml schema and .lfbridge/ layout defined in storages.mdx.
 ---
 
 # LargeFileBridge — Company Storage
@@ -25,6 +25,12 @@ Siblings this builds on and does not repeat:
 * [storage_repo.mdx](./storage_repo.mdx) — the canonical directory-based storage; company storage is the
   same shape with a `company` block and a shared (multi-user) audience.
 * [storage_personal.mdx](./storage_personal.mdx) — the single-user private counterpart.
+* [repo_company_mapping.mdx](./repo_company_mapping.mdx) — the owner mapping whose §5 reassign the company
+  settings' Owned-repos list (§7.1) reuses, and [repo_owner_propagation.mdx](./repo_owner_propagation.mdx) —
+  how a reassignment **into** this company travels (an `owner_map.yaml` assertion) and is consent-gated on
+  other members' computers (§7.1).
+* [storage_settings.mdx §4c](./storage_settings.mdx#4c-owned-repos--the-repos-mapped-to-this-storage) —
+  where the company's Owned-repos list + per-row reassign actually render (§7.1 points there).
 
 ---
 
@@ -206,6 +212,29 @@ repos owned by this company **additionally mirror** their **LFB tracking state**
 Resolving the company's sync repo and the additive mirror root for an owned repo (`<syncRepo>/repos/<repoKey>/` or null) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `readStorageSettings()` (the company's `sync_repo` block) consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)`, whose mirror is written by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)`.
 
+### 7.1 The company's owned-repos list & reassign
+
+This company's [settings page](./storage_settings.mdx) surfaces the **repos owned by this company** with a
+per-row **reassign** control, so a member manages the whole company's repo membership from one place rather
+than one repo at a time. The list and the control are defined in full in
+[storage_settings.mdx §4c](./storage_settings.mdx#4c-owned-repos--the-repos-mapped-to-this-storage); this
+section only ties it to company storage:
+
+* **What it lists.** Every repo whose resolved owner is **this company** (§5,
+  [repo_company_mapping.mdx](./repo_company_mapping.mdx)) — auto-derived from the forge org **or** manually
+  reassigned — appears as a row in the company settings' Owned-repos table.
+* **Reassigning INTO this company records the travelling assertion.** When a member reassigns a repo **to
+  this company** (and this company has a **sync repo**, §7), LFB commits an **ownership assertion** into that
+  sync repo's `owner_map.yaml` ([repo_owner_propagation.mdx §2](./repo_owner_propagation.mdx#2-where-the-assertion-lives--owner_mapyaml-in-the-company-sync-repo-locked)),
+  which **travels** to the other members and is applied on their machines **only through the explicit
+  review-and-consent page** ([repo_owner_propagation.mdx §4](./repo_owner_propagation.mdx#4-the-review-page--member-2-reviews-and-consents-locked))
+  — never silently. Reassigning a repo **out** of this company tombstones its assertion.
+* **No bytes move.** Reassignment is grouping/tracking-target metadata only; it changes **which sync repo**
+  an owned repo's Category-B tracking mirrors to (§7), never the files themselves
+  ([repo_company_mapping.mdx §1](./repo_company_mapping.mdx#1-what-an-owner-is-locked)).
+
+The Owned-repos read (`getOwnedRepos(storageId)`) and the reassign endpoint (`POST /api/repos/:repoId/owner`, which asserts into this company's sync repo via `assertCompanyOwnership()`) are the same as cited in [storage_settings.mdx §4c](./storage_settings.mdx#4c-owned-repos--the-repos-mapped-to-this-storage) and [repo_owner_propagation.mdx §2](./repo_owner_propagation.mdx#2-where-the-assertion-lives--owner_mapyaml-in-the-company-sync-repo-locked).
+
 ---
 
 ## 8. Acceptance criteria
@@ -239,6 +268,12 @@ Resolving the company's sync repo and the additive mirror root for an owned repo
    (`~/T/_large_files_bridge/repos/<repoKey>/`), never instead of it (§7,
    [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)); default **OFF**, and **ownership** (auto or
    manual) — not how it was derived — decides which sync repo a repo can mirror to.
+9. The company's [settings page](./storage_settings.mdx#4c-owned-repos--the-repos-mapped-to-this-storage)
+   lists the **repos owned by this company** with a per-row **reassign** control (§7.1); reassigning a repo
+   **into** this company (when it has a sync repo) records the travelling **ownership assertion** in
+   `owner_map.yaml` ([repo_owner_propagation.mdx](./repo_owner_propagation.mdx)) — applied on other members'
+   machines **only via review-and-consent**, never silently — and **moves no bytes**, only re-targeting which
+   sync repo the repo's tracking mirrors to.
 
 <!--
   Company storage = a company's SHARED big files, one per company. The root (e.g.
@@ -263,4 +298,12 @@ Resolving the company's sync repo and the additive mirror root for an owned repo
   storage-settings.service sync_repo, tracking-root.service resolveStateSyncRepo, tracking-sync.service
   mirrorToSyncRepo. Keep aligned with repo_company_mapping.mdx (the mapping), storage_personal.mdx
   (personal-accounts + personal sync repo), artifact_placement_policy.mdx + repo_tracking_scheme.mdx (placement).
+  §7.1 (NEW) the company's OWNED-REPOS list & reassign — points to storage_settings.mdx §4c (the list + per-row
+  reassign render there): lists repos whose owner is THIS company (auto from forge org OR manual); reassigning a
+  repo INTO this company (when it has a sync repo, §7) records the travelling ownership ASSERTION in
+  <syncRepo>/owner_map.yaml (repo_owner_propagation.mdx §2) → travels to members, applied on their machines ONLY
+  via the review-and-consent page (§4), never silently; reassigning OUT tombstones it. Moves NO bytes — only
+  re-targets which sync repo the owned repo's Category-B tracking mirrors to. Same getOwnedRepos(storageId) +
+  POST /api/repos/:repoId/owner (→ assertCompanyOwnership) code as storage_settings §4c. Cross-links
+  repo_owner_propagation.mdx (added to siblings).
 -->

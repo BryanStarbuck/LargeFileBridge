@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Storages (the umbrella)
-description: The umbrella spec for LargeFileBridge "storages". A storage is a place LFBridge tracks and pins large files. There are five kinds — Local (this computer's settings/config, the database replacement), Repo (any Git repo, whose committed .lfbridge/ folder in the repo root carries ONLY derived content), Personal (the user's own personal_large_files_bridge directory), Company (one directory per company), and Community (one per community the user chooses to help / download / share). Every directory-based storage is a real directory hierarchy with a storage.yaml at its root declaring its name + type (and type-specific properties like company_name or community), plus a hidden .lfbridge/ tracking area. Placement splits by DATA CATEGORY: the working repo's committed .lfbridge/ holds ONLY Category-A derived content (the path-mirrored transcript + AI-description artifacts, plus the visuals-and-action-by-time YAML of the AI-description family), which travels with the repo; all Category-B tracking state (the per-file fingerprint index files.yaml, the IPFS manifest.yaml, repo_storage.yaml, per-file sidecars, history, decisions.yaml, compression records) lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ ALWAYS — never in a working repo, so it can never merge-conflict — and is ADDITIONALLY mirrored to a configured company/Personal SYNC REPO when the per-repo toggle is on (default off). Storages are pinned between the user's computers over IPFS and often also keep a clone in Google Drive and Dropbox. This spec defines the storage family, the Storages left-bar tab and its children, the shared storage.yaml schema, the .lfbridge/ (Category-A content) layout, the media-analysis outputs, the sync repo (the additive tracking-state mirror), and how a user belongs to many storages at once. Sibling specs: storage_local.mdx, storage_repo.mdx, storage_personal.mdx, storage_company.mdx, storage_community.mdx, artifact_placement_policy.mdx, repo_tracking_scheme.mdx.
+description: The umbrella spec for LargeFileBridge "storages". A storage is a place LFBridge tracks and pins large files. There are five kinds — Local (this computer's settings/config, the database replacement), Repo (any Git repo, whose committed .lfbridge/ folder in the repo root carries ONLY derived content), Personal (the user's own personal_large_files_bridge directory), Company (one directory per company), and Community (one per community the user chooses to help / download / share). Every directory-based storage is a real directory hierarchy with a storage.yaml at its root declaring its name + type (and type-specific properties like company_name or community), plus a hidden .lfbridge/ tracking area. Placement splits by DATA CATEGORY: the working repo's committed .lfbridge/ holds ONLY Category-A derived content (the path-mirrored transcript + AI-description artifacts, plus the visuals-and-action-by-time YAML of the AI-description family), which travels with the repo; all Category-B tracking state (the per-file fingerprint index files.yaml, the IPFS manifest.yaml, repo_storage.yaml, per-file sidecars, history, decisions.yaml, compression records) lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ ALWAYS — never in a working repo, so it can never merge-conflict — and is ADDITIONALLY mirrored to a configured company/Personal SYNC REPO when the per-repo toggle is on (default off). Storages are pinned between the user's computers over IPFS and often also keep a clone in Google Drive and Dropbox. This spec defines the storage family, the Storages left-bar tab and its children, the shared storage.yaml schema, the .lfbridge/ (Category-A content) layout, the media-analysis outputs, the sync repo (the additive tracking-state mirror), and how a user belongs to many storages at once. Sibling specs: storage_local.mdx, storage_repo.mdx, storage_personal.mdx, storage_company.mdx, storage_community.mdx, artifact_placement_policy.mdx, repo_tracking_scheme.mdx, repo_owner_propagation.mdx.
 ---
 
 # LargeFileBridge — Storages (the umbrella)
@@ -368,6 +368,9 @@ only cross-linked here:
   it never enters a working repo (the earlier content-threshold three-tier model is retired).
 * [repo_company_mapping.mdx](./repo_company_mapping.mdx) — the authoritative **owner mapping** (every repo
   maps to a company or Personal owner). The owner is **which** storage a repo's sync repo comes from (§9).
+* [repo_owner_propagation.mdx](./repo_owner_propagation.mdx) — how a repo→company **ownership decision
+  travels** to teammates (an assertion committed into the sync repo's `owner_map.yaml`) and is applied on
+  another member's computer **only with that member's consent** (§9).
 * [placement_radios.mdx](./placement_radios.mdx) / [repo_settings.mdx](./repo_settings.mdx) — the per-repo
   **placement radios** that let a repo's transcripts / AI descriptions go to `.lfbridge/`, **beside the
   file**, or **into the sync repo** (§8.2), and the per-repo **sync-repo toggle** (default off).
@@ -435,6 +438,14 @@ therefore **whose** sync repo (§8) its tracking state mirrors to.
 * The owner shows in the storages UI: a company storage's detail page can surface **the repos it owns**
   (a filtered view of the [Repos](./repos.mdx) list), and each `StorageRow` already carries
   `companyName` for the label.
+* **A company assignment travels to teammates, consent-gated.** Assigning a repo to a company is not only a
+  local grouping choice — because it changes **whose** sync repo the repo's tracking mirrors into (from
+  Personal to the *shared* company repo), the decision is committed as an **assertion** into that company's
+  sync repo (`<syncRepo>/owner_map.yaml`, keyed by the git remote) and **travels** to other members. It is
+  never applied on another member's machine silently: the receiving member reviews and consents through a
+  review page before any of their repos are re-mapped. This travel + consent layer is owned by
+  [repo_owner_propagation.mdx](./repo_owner_propagation.mdx); this spec only notes that the owner→sync-repo
+  routing above is what makes the decision a team fact worth propagating.
 
 The owner→storage resolution the storages model consumes (already setting `companyName` per row from the remote's forge org, defaulting to Personal) — which the sync-repo resolver `resolveStateSyncRepo()` reuses to find whose sync repo a repo mirrors to — lives in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `classifyByConvention()` and `buildRow()` (sets `companyName`); the repo→owner mapping it reads is owned by [repo_company_mapping.mdx](./repo_company_mapping.mdx).
@@ -512,7 +523,10 @@ Populating the per-storage `stateSyncRepo` descriptor when it splits the page in
    [repo_company_mapping.mdx](./repo_company_mapping.mdx); the storages model consumes that only to decide
    **whose** sync repo a repo mirrors to (§9) — Personal-owned → the Personal storage's, company-owned
    → that company storage's. Placement radios ([repo_settings.mdx](./repo_settings.mdx)) may target the
-   sync repo for transcripts / AI descriptions (§8.2).
+   sync repo for transcripts / AI descriptions (§8.2). Because a company assignment redirects the repo's
+   tracking into the **shared** company sync repo, the decision **travels** to teammates as an assertion in
+   `<syncRepo>/owner_map.yaml` and is applied on another member's computer **only with that member's consent**
+   ([repo_owner_propagation.mdx](./repo_owner_propagation.mdx), §9).
 10. The Storages-page payload gains a per-storage **`stateSyncRepo`** descriptor (§10) — `configured`,
     `root`, `ownedRepoCount`, `remote` — non-null only for **company** and **Personal** storages, `null`
     for `local` and `community`; it extends `StorageRow` / `StoragesPageData` and is populated by
@@ -540,7 +554,10 @@ Populating the per-storage `stateSyncRepo` descriptor when it splits the page in
   Policy OWNED by artifact_placement_policy.mdx (cross-link, don't redefine). §8.2 placement radios
   (repo_settings/placement_radios) may target the sync repo for Category-A artifacts. (§9) every repo maps
   to a company/Personal OWNER (repo_company_mapping.mdx owns the mapping; classifyByConvention/buildRow set
-  companyName) — the storages model consumes it only to route which sync repo a repo mirrors to. (§10)
+  companyName) — the storages model consumes it only to route which sync repo a repo mirrors to. A company
+  assignment redirects tracking into the SHARED company sync repo, so it TRAVELS to teammates as an assertion
+  in <syncRepo>/owner_map.yaml and is applied on another member's computer ONLY with consent — owned by
+  repo_owner_propagation.mdx (cross-linked in §8 siblings + §9). (§10)
   Storages-page payload gains a per-storage stateSyncRepo descriptor (code symbol kept; configured/root/
   ownedRepoCount/remote; company+Personal only) → extends StorageRow/StoragesPageData, populated by
   listStoragesPage(). Code seams: tracking-root.service.ts resolveTrackingRoot()/resolveStateSyncRepo(),

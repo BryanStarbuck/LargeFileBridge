@@ -1,0 +1,314 @@
+---
+title: LargeFileBridge — Repo → Company ownership propagation (the cross-member review-and-consent flow)
+description: How a repo→company OWNERSHIP decision travels between teammates and is applied on another member's computer only with that member's explicit consent. When one company member reassigns a repo to a company (repo_company_mapping.mdx §5), that decision is not just a local grouping preference — it is an ASSERTION that "this repo belongs to the company", and it is COMMITTED into the company's sync repo as a small `owner_map.yaml` at the sync-repo root, keyed by the repo's git REMOTE URL (the only identity that is portable across computers — repoKey is a per-machine path hash and cannot travel). Because turning a repo company-owned changes WHERE that member's Category-B tracking state flows (it starts mirroring into the SHARED company repo where other members read it), a second member must not have that happen silently — that would be a security surprise. So when member #2 pulls the company sync repo and LFB sees ownership assertions whose remotes match repos on member #2's machine that are NOT yet mapped to that company locally, LFB routes member #2 to a REVIEW PAGE the next time they use the web app: a table of the pending repos, each with a checkbox and a two-radio choice on the left — "Move to company" (default, pre-checked) vs "Keep personal" — and a primary "Continue & apply ›" chevron button. Applying writes member #2's LOCAL owner overrides (config.yaml) for the accepted repos so those repos now map to the company; declined repos stay Personal and the decline is remembered so it never re-nags. This reconciles repo_company_mapping.mdx §5.2 (the local per-computer grouping override) with the fact that the company-ownership ASSERTION does travel — it travels via the company repo, but is applied on other computers only through this explicit consent gate, never automatically. Sibling of repo_company_mapping.mdx (the owner model + the local override), storage_company.mdx §7 / storage_personal.mdx §14 (the sync repo the assertion rides in), storage_settings.mdx §4b (where the sync repo is configured), artifact_placement_policy.mdx (why company ownership changes where tracking flows), use_case_company_autodetect.mdx (the single-computer mapping tour this multi-member flow extends), and left_bar.mdx (the review-needed affordance).
+---
+
+# LargeFileBridge — Repo → Company ownership propagation
+
+Assigning a repo to a **company** ([repo_company_mapping.mdx §5](./repo_company_mapping.mdx)) is more than a
+personal grouping choice. It is an **assertion** — *"this repo belongs to this company"* — and it has a
+**consequence for other people**: once a repo is company-owned and its per-repo sync toggle is on, that
+member's **Category-B tracking state** starts mirroring into the **shared company sync repo**
+([artifact_placement_policy.mdx](./artifact_placement_policy.mdx), [storage_company.mdx §7](./storage_company.mdx)),
+where every other company member reads it. So the decision has to **travel** to the other members — but it must
+**never be applied to another member's computer silently**. Doing that unasked would be a security surprise:
+one member unilaterally deciding that another member's repo now feeds the shared company repo.
+
+This spec defines how the decision travels (a small **`owner_map.yaml`** committed into the **company sync
+repo**, keyed by the repo's **git remote**) and how a receiving member **reviews and consents** to it (a
+**review page** with a per-repo checkbox + a **Move to company / Keep personal** choice and a **Continue &
+apply ›** button) before any of their repos are re-mapped.
+
+Read the owner model first; this spec does not restate it:
+
+* [repo_company_mapping.mdx](./repo_company_mapping.mdx) — the **owner** of a repo (company | Personal), the
+  local `owner_override` in `config.yaml` (§5.2), and the auto/manual derivation. This spec is the **travel +
+  consent** layer on top of that model.
+* [storage_company.mdx §7](./storage_company.mdx#7-the-company-sync-repo) / [storage_personal.mdx §14](./storage_personal.mdx) —
+  the **sync repo** the assertion is committed into and travels through.
+* [storage_settings.mdx §4b](./storage_settings.mdx#4b-the-sync-repo--an-additive-mirror-of-owned-repos-tracking-state) —
+  where the company/Personal sync repo is configured; the **owned-repos list + reassign** control there is the
+  companion surface to this flow.
+* [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) — **why** company ownership matters: it
+  decides which sync repo a repo's tracking state additionally mirrors to. That is the shared side effect this
+  consent gate protects.
+* [use_case_company_autodetect.mdx](./use_case_company_autodetect.mdx) — the single-computer mapping tour; this
+  spec extends it to **two members**.
+
+---
+
+## 1. Two facts, two homes (LOCKED)
+
+The reconciliation with [repo_company_mapping.mdx §5.2](./repo_company_mapping.mdx) rests on separating **two
+different facts** that used to be conflated:
+
+* **The local grouping override** — *"on THIS computer, group repo X under company Y."* This stays exactly
+  where §5.2 puts it: the repo's pin-unit **`config.yaml`** `owner_override`, **machine-local**, never
+  auto-overwritten by anyone else. Nothing about this spec changes that.
+* **The company-ownership assertion** — *"repo X (identified by its remote) belongs to company Y."* This is a
+  **team fact**, not a per-computer preference, so it **travels** — committed into the company sync repo's
+  `owner_map.yaml` (§2). It is what lets member #2's LFB know member #1 declared the repo company-owned.
+
+The assertion **travels**; it is **not auto-applied**. On any other member's computer it becomes a **pending
+mapping** (§3) that only turns into that member's local `owner_override` when **that member consents** through
+the review page (§4). So §5.2 is honored — a member's local grouping is only ever changed by that member — while
+the master requirement is met — the decision does reach teammates.
+
+---
+
+## 2. Where the assertion lives — `owner_map.yaml` in the company sync repo (LOCKED)
+
+When a member assigns a repo to a company that has a **sync repo** configured
+([storage_settings.mdx §4b](./storage_settings.mdx)), LFB records the assertion at the **root of that sync
+repo** in a committed **`owner_map.yaml`** — the same repo that already carries the company's per-repo tracking
+state under `repos/<repoKey>/`, so the assertion travels the same git backbone:
+
+```yaml
+# <syncRepo>/owner_map.yaml   — committed at the company sync-repo ROOT, travels to every member
+schema_version: 1
+company_id: "co_acmecorp"
+assertions:
+  # keyed by the repo's git REMOTE — the only identity portable across members' machines
+  "github.com/ACT3ai/jfksocial_server":
+    remote: "git@github.com:ACT3ai/jfksocial_server.git"   # the canonical remote, as captured
+    asserted_by: "bryan@act3ai.com"     # who declared it (from the auth session)
+    asserted_at: 2026-07-14T09:41:00Z
+    withdrawn: false                    # true after an un-assign (§6) — a tombstone, never a hard delete
+```
+
+* **Keyed by the git remote, NOT `repoKey`.** `repoKey = shortHash(resolve(localPath))` is a **per-machine**
+  path hash ([artifact_placement_policy.mdx §2](./artifact_placement_policy.mdx)) — it means nothing on another
+  member's computer, where the same repo lives at a different path. The **remote** (normalized to
+  `host/owner/repo`, the SSH and HTTPS forms collapsing to one key per
+  [repo_company_mapping.mdx §2](./repo_company_mapping.mdx#2-parsing-the-remote--host--owner--repo-locked)) is
+  the identity that lets member #2 recognize *their* clone of the same repo.
+* **A repo with no remote can't be asserted.** A purely local repo has no portable identity, so it can never be
+  company-asserted — it stays a local-only decision (`owner_override` on that one machine). This is correct: a
+  repo only member #1 can see is not a team fact.
+* **The file is small text and travels like the rest of Category-B state** — committed + pushed by the sync
+  repo's git backbone ([backbone_resilience.mdx](./backbone_resilience.mdx),
+  [git_backbone.mdx](./git_backbone.mdx)). It **union-merges** on pull (each key self-contained; last-writer per
+  key wins on `asserted_at`), exactly like `decisions.yaml` ([decisions.mdx](./decisions.mdx)).
+
+Writing an ownership assertion into the company sync repo's root `owner_map.yaml` when a member assigns a repo
+to a company (and tombstoning it on un-assign) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/owner-propagation.service.ts` — `assertCompanyOwnership(remote, companyId)` / `withdrawCompanyOwnership(remote, companyId)` (write/tombstone the keyed entry, then `mirrorToSyncRepo`-style commit + push via the company's git backbone), reading the company's sync-repo root from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getStateSyncRepo()`. Invoked from the reassign path `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/repos/:repoId/owner`.
+
+---
+
+## 3. Detecting pending mappings on another member's computer (LOCKED)
+
+Every time the company sync repo is **pulled** (the backbone pass, [backbone_resilience.mdx](./backbone_resilience.mdx)),
+LFB reads the pulled `owner_map.yaml` and computes the member's **pending mappings**: the assertions that this
+member has **not yet resolved** on this computer. An assertion is **pending** for this member when **all** hold:
+
+1. The assertion is **not `withdrawn`** (§6).
+2. A repo **on this computer** has a git remote whose normalized key **matches** the assertion's key.
+3. That repo's **current local owner is NOT already this company** — i.e. its `config.yaml` has no
+   `owner_override` pointing at `company_id`, and it did not auto-derive to this company already
+   ([repo_company_mapping.mdx §3](./repo_company_mapping.mdx)). (A repo already company-owned locally needs no
+   review — the member is in agreement.)
+4. The member has **not previously declined** this assertion (§4.4 records declines so they never re-nag).
+
+An assertion whose remote matches **no** repo on this computer is **not** pending here — the member simply
+doesn't have that repo. It stays in `owner_map.yaml` and becomes pending if/when they later clone that repo.
+
+```ts
+// shared/src/types.ts — one row on the review page (repo_owner_propagation.mdx §3).
+export interface PendingCompanyMapping {
+  repoId: string;          // the local repo this resolves to (matched by remote)
+  repoName: string;        // display name for the row
+  remoteKey: string;       // "github.com/ACT3ai/jfksocial_server" — the matched key
+  companyId: string;       // the asserting company
+  companyName: string;     // its friendly display name (storage_company.mdx §6)
+  assertedBy: string;      // who asserted it — shown so the member knows the source
+  assertedAt: string;      // when
+}
+```
+
+Computing the pending set (match pulled assertions against this computer's repos by remote, minus already-owned
+and previously-declined) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/owner-propagation.service.ts` — `computePendingMappings()` (reads each configured company's sync-repo `owner_map.yaml`, joins against the repo list by normalized remote, filters out already-owned + declined), surfaced by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `GET /api/company-mappings/pending`.
+
+---
+
+## 4. The review page — member #2 reviews and consents (LOCKED)
+
+When pending mappings exist, the member is **routed to a review page** the next time they use the web app,
+before they land on their normal view — so a change to where their tracking state flows is **never** applied
+behind their back. A **left-bar affordance** (a badge on the Storages entry, [left_bar.mdx](./left_bar.mdx))
+also links here so a dismissed review can be reopened.
+
+Route: **`/company-mappings/review`**.
+
+```
+ ┌ Review company repo mappings ─────────────────────────────────────────────────┐
+ │  bryan@act3ai.com asserted that these repos belong to Acme Marketing.          │
+ │  Choose what happens on THIS computer. Moving a repo to the company means its   │
+ │  Large File Bridge tracking state will sync into the shared company repo.       │
+ ├───────────────────────────────────────────────────────────────────────────────┤
+ │        Repo                        Remote                     Asserted by       │
+ │  (•) Move to company   ☑  jfksocial_server   github.com/ACT3ai/…   bryan@…      │
+ │  ( ) Keep personal                                                              │
+ │                                                                                 │
+ │  (•) Move to company   ☑  ai-service         github.com/ACT3ai/…   bryan@…      │
+ │  ( ) Keep personal                                                              │
+ │                                                                                 │
+ │  (•) Move to company   ☐  dotfiles           github.com/ACT3ai/…   bryan@…      │
+ │  ( ) Keep personal                                                              │
+ ├───────────────────────────────────────────────────────────────────────────────┤
+ │                                                        [ Continue & apply › ]   │
+ └───────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 4.1 The per-row control — a checkbox and a two-radio choice (LOCKED)
+
+Each pending repo is one row carrying **both**:
+
+* A **checkbox** — whether this row is included in the apply at all (checked = included).
+* A **two-radio choice on the left**: **Move to company** (top) and **Keep personal** (bottom).
+
+**The default is company.** On load, every row's checkbox is **checked** and its radio is set to **Move to
+company** — the master's *"If the user leaves \[it] checked, the auto default \[is] to company."* A member who
+trusts the assertion can hit the button immediately and accept them all. To keep a repo Personal, the member
+either **unchecks** the row or flips its radio to **Keep personal** (the two express the same intent; the row is
+"declined" if unchecked **or** set to Keep personal).
+
+### 4.2 The primary button — Continue & apply ›
+
+A single primary chevron button, **Continue & apply ›** ([page_actions.mdx](./page_actions.mdx) button style),
+commits the member's choices. There is no per-row save — the page is a **batch decision**, applied once.
+
+### 4.3 What "apply" does (LOCKED)
+
+For every row the member **accepted** (checked **and** Move to company), LFB writes that repo's **local
+`owner_override`** to this company ([repo_company_mapping.mdx §5.2](./repo_company_mapping.mdx)) — exactly as if
+the member had reassigned it by hand — so it now groups under the company and (with the per-repo sync toggle on)
+its tracking begins mirroring to the company sync repo. **This is the member's own local decision now** — it is
+their `config.yaml`, on their computer, `source: "manual"`. LFB does **not** re-assert it back into
+`owner_map.yaml` (member #1's assertion is already there); accepting only records the local override.
+
+For every row the member **declined** (unchecked or Keep personal), the repo **stays Personal** and the decline
+is **remembered** (§4.4) so the review never re-nags for it. The member can still reassign it manually later.
+
+### 4.4 Declines are remembered (LOCKED)
+
+A declined assertion is recorded in the member's **machine-local** state so it is **not** pending again on the
+next pull:
+
+```yaml
+# ~/T/_large_files_bridge/company_mapping_declines.yaml  (machine-local — never travels)
+declined:
+  - remote_key: "github.com/ACT3ai/dotfiles"
+    company_id: "co_acmecorp"
+    declined_at: 2026-07-14T10:02:00Z
+```
+
+* Keyed by **remote + company** so a *different* company later asserting the same repo still surfaces.
+* If member #1 **withdraws** and **re-asserts** the same repo with a newer `asserted_at`, the decline is
+  **superseded** and it becomes pending again — a fresh assertion is a fresh question.
+* The decline is machine-local (it is *this member's* choice on *this* computer), so it is not committed to the
+  sync repo and does not affect other members.
+
+Applying the batch (write accepted repos' `owner_override`, record declines) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/owner-propagation.service.ts` — `applyPendingMappings(selections)` (per row: accepted → `resolveRepoOwner` override via the same writer the manual reassign uses; declined → append to `company_mapping_declines.yaml`), exposed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/company-mappings/apply`. The page is rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/company/CompanyMappingReviewPage.tsx` — `CompanyMappingReviewPage` (route in `router.tsx`; the Storages-badge link in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx`).
+
+---
+
+## 5. Why this is a security gate, not a nuisance (LOCKED)
+
+The review is not ceremony — it protects a real boundary:
+
+* **Moving a repo to a company redirects that member's tracking state into a SHARED repo.** Before the move, the
+  repo's `repo_storage.yaml` / sidecars / `decisions.yaml` live only in that member's Local Storage. After the
+  move (with the sync toggle on), they mirror into the company sync repo where **other members read them**. A
+  member must **choose** to expose their repo's tracking to the team.
+* **One member must not silently reach into another member's mapping.** Auto-applying member #1's assertion
+  would let anyone with commit access to the company repo re-file arbitrary repos on every teammate's machine —
+  a privilege-escalation-shaped surprise. The consent gate makes each member the sole author of their own
+  local mappings, which is exactly [repo_company_mapping.mdx §5.2](./repo_company_mapping.mdx)'s invariant.
+* **Default-accept is fine because the gate is explicit.** The rows default to *Move to company* (the common,
+  cooperative case) so the flow is one click for a member who agrees — but nothing changes until they press the
+  button, and they can decline any row. Convenience without silence.
+
+---
+
+## 6. Un-assign, withdrawal, and non-default cases (LOCKED)
+
+| Case | Behavior |
+| --- | --- |
+| **Member #1 un-assigns** the repo (back to Personal) | The assertion is **tombstoned** (`withdrawn: true`) in `owner_map.yaml`, not hard-deleted, so the withdrawal itself travels. Members who had **not** yet accepted see it drop out of their pending list; members who **had** accepted keep their local override (their choice stands until *they* change it — un-asserting does not reach into their `config.yaml`, same invariant as §5). |
+| **No sync repo configured** for the company | There is nowhere to commit the assertion, so it stays a **local-only** override on member #1's machine and never propagates. Configuring a sync repo later begins asserting **future** decisions; a one-time "publish existing company mappings" backfill may be offered from the company settings. |
+| **Two members assert the same repo** | Both write the same key; union-merge keeps the newest `asserted_at`. The fact is idempotent — the repo is company-owned either way; no conflict. |
+| **Member declines, then reconsiders** | The Storages badge / company settings still list the repo as "asserted by a teammate — Keep personal (change)"; the member can accept it later, which clears the decline and writes the override. |
+| **Remote changes / repo transferred to another org** | The assertion is keyed by the **old** remote; after the transfer the repo's new remote no longer matches, so a stale assertion simply stops matching (and member #1's next scan re-asserts under the new remote if still company-owned). No incorrect mapping is forced. |
+| **A member without the repo** | An assertion with no matching local repo is **inert** here — never pending, never shown — until that member clones the repo, at which point it surfaces for review. |
+| **Pull brings an assertion for a company the member isn't in** | Only companies whose **sync repo this member has configured** are read, so a member never sees assertions from a company they don't carry. |
+
+Tombstoning on un-assign and re-surfacing a superseded decline are handled by the same
+`owner-propagation.service.ts` functions (§2, §4.4); the pull-time recompute runs on the company backbone pass
+in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileFromSyncRepo()` (which, after merging tracking state, refreshes the pending-mappings cache).
+
+---
+
+## 7. Acceptance criteria
+
+1. Assigning a repo to a company that has a **sync repo** writes a **company-ownership assertion** into
+   `<syncRepo>/owner_map.yaml` at the sync-repo **root**, **keyed by the normalized git remote** (SSH/HTTPS
+   collapse to one key), recording `asserted_by` / `asserted_at`; it is small committed text that travels the
+   company git backbone and **union-merges** on pull (§2). A repo with **no remote** cannot be asserted.
+2. The **local grouping override** stays exactly where [repo_company_mapping.mdx §5.2](./repo_company_mapping.mdx)
+   puts it — the repo's `config.yaml` `owner_override`, machine-local, never auto-overwritten by a teammate.
+   The **assertion** is the travelling fact; §5.2 is reconciled, not contradicted (§1).
+3. On each **pull** of a configured company's sync repo, LFB computes the member's **pending mappings**:
+   assertions (not withdrawn) whose remote matches a repo on this computer that is **not already** owned by that
+   company locally and was **not previously declined** (§3).
+4. When pending mappings exist, the member is **routed to `/company-mappings/review`** (with a left-bar badge to
+   reopen it) **before** any repo is re-mapped — nothing is applied silently (§4, §5).
+5. The review page lists each pending repo as a row with a **checkbox** and a **two-radio Move to company /
+   Keep personal** choice; **both default to company** (checked + Move to company); a single **Continue & apply
+   ›** primary button applies the batch (§4.1–4.2).
+6. **Apply** writes a local `owner_override` (→ this company, `source: "manual"`) for every **accepted** repo —
+   after which its tracking mirrors to the company sync repo per
+   [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) — and records a **remembered decline** for
+   every **declined** repo so it never re-nags (§4.3–4.4). Accepting does **not** re-assert into `owner_map.yaml`.
+7. The flow is a **security gate**: moving a repo to a company redirects that member's tracking into a **shared**
+   repo, so consent is required; auto-applying a teammate's assertion is a privilege-escalation-shaped surprise
+   and is never done (§5).
+8. **Un-assign tombstones** the assertion (`withdrawn: true`, travels), never reaching into a member who already
+   accepted; **no sync repo** → local-only, no propagation; the remaining non-default cases (§6) resolve as
+   tabled.
+9. New/updated code exists and is cited: `assertCompanyOwnership` / `withdrawCompanyOwnership` /
+   `computePendingMappings` / `applyPendingMappings` (owner-propagation.service.ts),
+   `GET /api/company-mappings/pending` + `POST /api/company-mappings/apply` (repos.router.ts),
+   `CompanyMappingReviewPage` (frontend), and the pull-time recompute in `reconcileFromSyncRepo`.
+
+<!--
+  repo_owner_propagation.mdx — NEW. The TRAVEL + CONSENT layer over repo_company_mapping.mdx. A repo→company
+  assignment is an ASSERTION ("this repo belongs to company Y"), not just a local grouping pref, because it
+  changes WHERE the member's Category-B tracking flows (into the SHARED company sync repo). §1 LOCKED split of
+  two facts: (a) LOCAL grouping override = config.yaml owner_override, machine-local, never auto-overwritten
+  (repo_company_mapping §5.2 UNCHANGED); (b) company-ownership ASSERTION = team fact, TRAVELS. This reconciles
+  §5.2 ("not replicated to peers") with the master requirement: the assertion travels via the company repo but
+  is APPLIED on other computers ONLY through explicit consent. §2 assertion lives in <syncRepo>/owner_map.yaml at
+  the sync-repo ROOT, KEYED BY NORMALIZED GIT REMOTE (NOT repoKey — repoKey is a per-machine path hash, meaningless
+  elsewhere; remote host/owner/repo collapses SSH+HTTPS). No remote => can't assert (no portable identity). Small
+  text, union-merges like decisions.yaml, committed+pushed by the company git backbone. §3 on every PULL,
+  computePendingMappings = assertions(not withdrawn) whose remote matches a LOCAL repo NOT already company-owned
+  here AND not previously declined. §4 REVIEW PAGE /company-mappings/review (left-bar badge to reopen): each
+  pending repo = row w/ CHECKBOX + two-radio "Move to company"(default, top)/"Keep personal"(bottom); ALL default
+  checked+company; single primary "Continue & apply ›" chevron. Apply: accepted => write LOCAL owner_override to
+  company (source:manual, same writer as manual reassign) — does NOT re-assert; declined => remember in machine-
+  local company_mapping_declines.yaml (keyed remote+company) so never re-nags (superseded by a newer assertion).
+  §5 WHY security gate: company-owning a repo redirects that member's tracking into a SHARED repo other members
+  read; one member must not silently re-file another's repos (privilege-escalation shape); default-accept is fine
+  because the gate is explicit. §6 un-assign TOMBSTONES (withdrawn:true, travels, never reaches into an accepter's
+  config.yaml); no sync repo => local-only; two asserters => idempotent union-merge; remote change/transfer =>
+  stale assertion stops matching; member w/o repo => inert until cloned; only configured companies read. Code:
+  owner-propagation.service.ts assertCompanyOwnership/withdrawCompanyOwnership/computePendingMappings/
+  applyPendingMappings; repos.router GET /api/company-mappings/pending + POST /api/company-mappings/apply;
+  CompanyMappingReviewPage.tsx; recompute in tracking-sync.service reconcileFromSyncRepo. Keep aligned with
+  repo_company_mapping.mdx (§5.2 reconciliation + cross-link), storage_company §7 / storage_personal §14 (sync
+  repo), storage_settings §4b (owned-repos list + reassign companion), artifact_placement_policy (why ownership
+  moves tracking), use_case_company_autodetect (single-computer tour this extends), left_bar (review badge).
+-->

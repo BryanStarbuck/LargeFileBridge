@@ -24,6 +24,10 @@ Read the shared model first; this spec does not restate it:
 * [storage_personal.mdx](./storage_personal.mdx) — the default owner; owns the **"my personal accounts"** list.
 * [repos.mdx](./repos.mdx) / [one_repo.mdx](./one_repo.mdx) — the Repos list (row → `RepoRow`) and per-repo screen.
 * [repo_settings.mdx](./repo_settings.mdx) — the per-repo settings page where the manual **Reassign owner** control lives.
+* [repo_owner_propagation.mdx](./repo_owner_propagation.mdx) — the **travel + consent** layer: how a
+  company assignment is committed into the company sync repo as an **assertion** and applied on other members'
+  computers only through an explicit **review page**. This spec owns the *local* override; that one owns how it
+  *travels*.
 * [devices.mdx](./devices.mdx) — the device graft; unaffected by ownership (owner is a *grouping*, not a path).
 
 ---
@@ -209,10 +213,27 @@ Owner   ( ) Personal    (•) Company:  [ ACT3ai ▾ ]   (auto-detected)      [ 
 
 ### 5.2 Persistence — the override lives in the repo's `config.yaml` (LOCKED)
 
-Ownership is a **local, per-computer** grouping preference (like the bookmark, [repos.mdx §8.3](./repos.mdx#83-persistence--it-lives-in-the-repos-configyaml-locked)),
-so it persists in that repo's pin-unit **`config.yaml`** — **not** in the shared manifest and **not** replicated to
-peers. Only the **override** is stored; an `auto` owner is *derived*, never written, so it always re-reflects the
-current remote.
+The **local grouping override** is a **per-computer** preference (like the bookmark, [repos.mdx §8.3](./repos.mdx#83-persistence--it-lives-in-the-repos-configyaml-locked)),
+so it persists in that repo's pin-unit **`config.yaml`** — **not** in the shared manifest — and is **never
+overwritten by a teammate**: only *this* member changes *this* computer's grouping. Only the **override** is
+stored; an `auto` owner is *derived*, never written, so it always re-reflects the current remote.
+
+**But the company assignment is also a team fact that travels — via consent, not silently.** Assigning a repo
+to a company is more than a local grouping tweak: it changes **where that member's tracking state flows** (a
+company-owned repo with the sync toggle on mirrors into the **shared** company sync repo). So the *decision*
+must reach the other members — yet applying it to their machines unasked would be a security surprise. The
+resolution, owned in full by [repo_owner_propagation.mdx](./repo_owner_propagation.mdx):
+
+* The **local override here** stays exactly as above — machine-local, never auto-overwritten.
+* In **addition**, when the company has a **sync repo** configured, LFB commits a small
+  **ownership assertion** (*"this repo, by its git remote, belongs to company Y"*) into that sync repo's
+  `owner_map.yaml`. That assertion **travels** to every member.
+* On another member's computer the assertion becomes a **pending mapping** that is applied to their local
+  `owner_override` **only after they consent** through the review page
+  ([repo_owner_propagation.mdx §4](./repo_owner_propagation.mdx)). No teammate's grouping ever changes silently.
+
+So "the override is per-computer" and "company ownership propagates" are both true: the *override* is local; the
+*assertion* travels; the *application* on another machine is gated by that member's explicit choice.
 
 ```yaml
 # pin/r/<repo>/config.yaml  (excerpt)
@@ -232,7 +253,7 @@ owner_override:                 # ABSENT unless the user reassigned (source beco
   `companyId` → 400.
 
 Resolving the effective owner (override else derivation) and persisting the override is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `resolveRepoOwner(cfg)` (override-or-derive) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `POST /api/repos/:repoId/owner`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `resolveRepoOwner(cfg)` (override-or-derive) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `POST /api/repos/:repoId/owner`. When the chosen owner is a **company with a sync repo**, the same endpoint also **asserts** the ownership into the company sync repo (and tombstones it on un-assign) via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/owner-propagation.service.ts` — `assertCompanyOwnership()` / `withdrawCompanyOwnership()` ([repo_owner_propagation.mdx §2](./repo_owner_propagation.mdx)).
 
 ---
 
@@ -352,7 +373,13 @@ Ownership decides **which sync repo** a repo's LFB tracking state may travel to
    overridable to a **friendly display name** shown everywhere (§6, [storage_company.mdx](./storage_company.mdx)).
 6. The user can **reassign** any repo to Personal or a Company (existing or new), or **reset to auto**, from repo
    settings / the `⋮` menu (§5); the choice persists as **`owner_override`** in the repo's **`config.yaml`**
-   (`source: "manual"`, sticky across rescans), and an absent block means auto-derive.
+   (`source: "manual"`, sticky across rescans, **never overwritten by a teammate**), and an absent block means
+   auto-derive.
+6b. The **local override is per-computer**, but a company assignment is **also a travelling assertion**: when the
+   company has a **sync repo**, LFB commits the ownership into `owner_map.yaml` there, and on other members'
+   computers it is applied **only through the explicit review-and-consent flow**
+   ([repo_owner_propagation.mdx](./repo_owner_propagation.mdx)) — never silently. §5.2's "per-computer override"
+   and propagation are reconciled, not contradictory.
 7. The **limitation is documented honestly** (§3.1): plain `github.com/<owner>/<repo>` cannot be perfectly
    org-vs-personal from the URL; LFB **defaults per the heuristic, surfaces the guess as (auto-detected), and lets
    the user correct it** — and **never** calls a forge network API to resolve it.
@@ -378,8 +405,11 @@ Ownership decides **which sync repo** a repo's LFB tracking state may travel to
   forge API call (local-first). §4 "my personal accounts" list (owned by storage_personal, stored in app config
   personalAccounts; host optional=wildcard; editing re-derives auto only). §5 manual reassign (Personal / Company
   / Reset to auto) from repo_settings + ⋮ menu; persists as owner_override in pin/r/<repo>/config.yaml
-  (source:manual, sticky across rescans like bookmark); POST /api/repos/:repoId/owner; resolveRepoOwner(cfg)=
-  override-or-derive in storage.service. §6 auto-create company storage (ensureCompanyForOwner→ensureStorage
+  (source:manual, sticky across rescans like bookmark, NEVER overwritten by a teammate); POST /api/repos/:repoId/owner;
+  resolveRepoOwner(cfg)=override-or-derive in storage.service. §5.2 RECONCILED w/ repo_owner_propagation.mdx: LOCAL
+  override is per-computer, but a company assignment is ALSO a travelling ASSERTION committed to the company sync repo's
+  owner_map.yaml (assertCompanyOwnership, owner-propagation.service) + applied on other members' machines ONLY via the
+  explicit review-and-consent page — never silently. §6 auto-create company storage (ensureCompanyForOwner→ensureStorage
   company) so it shows under Storages; cryptic slug → friendly display name (owned by storage_company); fallback =
   slug, never blank. §7 grouping: repos nest under owner in left-bar Storages disclosure (left_bar §3.2, defined
   by this spec) + optional Repos "Group by owner"; ownership decides WHICH company vs personal SYNC REPO a repo's

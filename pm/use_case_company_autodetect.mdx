@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Use-Case Tour — company auto-detect from a git remote (clone an org repo, rename the company, regroup, route tracking)
-description: The end-to-end scenario tour that proves COMPANY / PERSONAL mapping (repo_company_mapping.mdx). A user clones an organization repo (github.com/AcmeCorp/marketing-videos); LargeFileBridge parses the forge OWNER segment out of the git remote, recognizes it as an ORG rather than the user's own account, and auto-creates a new company "AcmeCorp" that appears as a child in the left-bar Storages disclosure — with the repo grouped under it. The user opens that company's settings and renames the cryptic org slug to a friendly "Acme Marketing"; the repo re-labels and stays grouped under the renamed company. The tour then walks every awkward branch: a repo whose remote owner is the user's OWN personal account stays under Personal (the default); an AMBIGUOUS owner (can't tell org from personal) defaults to Personal but offers a one-click "This is a company"; MANUAL reassignment moves a repo between Personal and any company (or to a brand-new company typed in place); and configuring the company's SYNC REPO so the repo's Category-B tracking state — which ALWAYS lives in Local Storage at ~/T/_large_files_bridge/repos/<repoKey>/ — is ADDITIONALLY mirrored to <syncRepo>/repos/<repoKey>/ so it travels across the company's computers (in addition to Local Storage, not instead of it) — watched landing where expected. Each step states what the user does, what LargeFileBridge does automatically, exactly what it writes and where (companies.yaml, the per-repo company tag, the company storage.yaml), which left-bar children appear, and what we DOUBLE-CHECK. Sibling of repo_company_mapping.mdx (the mapping rules this tour proves), storage_company.mdx (the company storage a detected company materializes), storage_personal.mdx (the default home), storages.mdx + left_bar.mdx (the Storages disclosure the company child appears in), repo_settings.mdx (where manual reassignment + the per-repo sync toggle live), artifact_placement_policy.mdx (the data-category policy: tracking in Local Storage always, sync-repo mirror when enabled), and devices.mdx (the graft that resolves the company's mapped dirs per computer).
+description: The end-to-end scenario tour that proves COMPANY / PERSONAL mapping (repo_company_mapping.mdx). A user clones an organization repo (github.com/AcmeCorp/marketing-videos); LargeFileBridge parses the forge OWNER segment out of the git remote, recognizes it as an ORG rather than the user's own account, and auto-creates a new company "AcmeCorp" that appears as a child in the left-bar Storages disclosure — with the repo grouped under it. The user opens that company's settings and renames the cryptic org slug to a friendly "Acme Marketing"; the repo re-labels and stays grouped under the renamed company. The tour then walks every awkward branch: a repo whose remote owner is the user's OWN personal account stays under Personal (the default); an AMBIGUOUS owner (can't tell org from personal) defaults to Personal but offers a one-click "This is a company"; MANUAL reassignment moves a repo between Personal and any company (or to a brand-new company typed in place); and configuring the company's SYNC REPO so the repo's Category-B tracking state — which ALWAYS lives in Local Storage at ~/T/_large_files_bridge/repos/<repoKey>/ — is ADDITIONALLY mirrored to <syncRepo>/repos/<repoKey>/ so it travels across the company's computers (in addition to Local Storage, not instead of it) — watched landing where expected. Each step states what the user does, what LargeFileBridge does automatically, exactly what it writes and where (companies.yaml, the per-repo company tag, the company storage.yaml), which left-bar children appear, and what we DOUBLE-CHECK. Sibling of repo_company_mapping.mdx (the mapping rules this tour proves), storage_company.mdx (the company storage a detected company materializes), storage_personal.mdx (the default home), storages.mdx + left_bar.mdx (the Storages disclosure the company child appears in), repo_settings.mdx (where manual reassignment + the per-repo sync toggle live), artifact_placement_policy.mdx (the data-category policy: tracking in Local Storage always, sync-repo mirror when enabled), repo_owner_propagation.mdx (how the repo→company assignment travels to teammates as a consent-gated assertion once a sync repo exists — §6.1), and devices.mdx (the graft that resolves the company's mapped dirs per computer).
 ---
 
 # LargeFileBridge — Company Auto-Detect Tour (clone an org repo → a company appears in the left bar)
@@ -335,6 +335,28 @@ are handled in code:
 * The **media repo's** working tree is **still untouched** — the sync repo adds a mirror, it does not move
   tracking out of Local Storage or into the media repo.
 
+### 6.1 A teammate sees the mapping — it travels, consent-gated
+
+The tour so far is **one computer, one user**. The moment Acme Marketing has a **sync repo** (Step 6), the
+repo→company assignments made on `studio-tower` become a **team fact** and travel to other members — because
+the assignment now decides that `marketing-videos`' tracking mirrors into the **shared** company repo, not
+just where it groups in one user's left bar.
+
+* **Member #1 (`bryan@act3ai.com`) asserts.** When Step 5/6 assigns `marketing-videos` (and `dotfiles`) to
+  Acme Marketing, LFB commits an **ownership assertion** into the company sync repo's root
+  `owner_map.yaml`, **keyed by the git remote** (`github.com/AcmeCorp/marketing-videos`) — the only identity
+  portable across machines. It rides the same git backbone as the tracking state.
+* **Member #2 pulls and gets a review page.** On another member's Mac, pulling the Acme Marketing sync repo
+  brings that `owner_map.yaml`. LFB matches the asserted remotes against that member's local repos and, for
+  any match **not** already company-owned there, routes them to **`/company-mappings/review`** before
+  applying anything — a per-repo checkbox + **Move to company** (default) / **Keep personal** choice + a
+  **Continue & apply ›** button. Nothing is re-mapped on member #2's machine silently, because moving the
+  repo redirects **their** tracking into the shared company repo.
+
+This two-member travel + consent flow is owned by
+[repo_owner_propagation.mdx](./repo_owner_propagation.mdx); this tour only shows where it begins (the Step 6
+sync repo turns the single-computer assignment into a travelling, consent-gated assertion).
+
 ---
 
 ## 7. The cross-cutting invariants this tour proves
@@ -353,6 +375,10 @@ are handled in code:
    repos' always-in-Local-Storage tracking to `<syncRepo>/repos/<repoKey>/` (in addition to Local Storage,
    not instead of it) while the media repo's working tree stays untouched and content artifacts still travel
    via the media repo's own git.
+7. **A company assignment travels to teammates, consent-gated.** Once the company has a sync repo, a
+   repo→company assignment is committed as an assertion in `<syncRepo>/owner_map.yaml` (keyed by the git
+   remote) and travels to other members; it is applied on their computers only through a review-and-consent
+   page, never silently ([repo_owner_propagation.mdx](./repo_owner_propagation.mdx), §6.1).
 
 ---
 
@@ -377,10 +403,15 @@ are handled in code:
    ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)) — in addition to Local Storage, not
    instead of it — while the media repo's working tree stays untouched; content artifacts still travel via
    the media repo's own git.
-7. Every write matches [repo_company_mapping.mdx](./repo_company_mapping.mdx),
+7. Once the company has a **sync repo**, a repo→company assignment is committed as an assertion into
+   `<syncRepo>/owner_map.yaml` (keyed by the git remote) and **travels** to other members, who apply it only
+   through the review-and-consent page — never silently ([repo_owner_propagation.mdx](./repo_owner_propagation.mdx),
+   §6.1).
+8. Every write matches [repo_company_mapping.mdx](./repo_company_mapping.mdx),
    [storage_company.mdx](./storage_company.mdx), [storage_personal.mdx](./storage_personal.mdx),
-   [storages.mdx](./storages.mdx), [left_bar.mdx](./left_bar.mdx), and
-   [artifact_placement_policy.mdx](./artifact_placement_policy.mdx).
+   [storages.mdx](./storages.mdx), [left_bar.mdx](./left_bar.mdx),
+   [artifact_placement_policy.mdx](./artifact_placement_policy.mdx), and
+   [repo_owner_propagation.mdx](./repo_owner_propagation.mdx).
 
 <!--
   Scenario tour proving COMPANY/PERSONAL mapping (repo_company_mapping.mdx). ONE computer (studio-tower),
@@ -399,7 +430,11 @@ are handled in code:
   (~/BGit/Bryan_git/acme_large_files_bridge/) + per-repo sync toggle ON: materialize company storage
   (storage.yaml type:company company_name) + ADDITIONALLY MIRROR the always-in-Local-Storage tracking to
   <syncRepo>/repos/<repoKey>/ (additive, not instead of Local Storage; per artifact_placement_policy) while
-  media repo working tree STILL untouched; content artifacts travel via the media repo's own git. Invariants
+  media repo working tree STILL untouched; content artifacts travel via the media repo's own git. S6.1 a
+  TEAMMATE sees the mapping: once the company has a sync repo, member #1's repo->company assignment is
+  committed as an ASSERTION into <syncRepo>/owner_map.yaml (keyed by git remote) + travels; member #2 pulls
+  and gets /company-mappings/review (checkbox + Move-to-company default / Keep-personal + Continue & apply)
+  before any repo is re-mapped — never silent (owned by repo_owner_propagation.mdx). Invariants
   (§7): default Personal; detection local not forge-API; org auto-creates renamable company (source.org
   immutable match key); always correctable (ambiguous+offer, manual reassign, manual wins); assignment is a
   TAG not a move; sync repo is an ADDITIVE tracking mirror. Code:

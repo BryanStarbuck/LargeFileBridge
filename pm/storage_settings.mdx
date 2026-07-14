@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Storage Settings (Per-Storage)
-description: The per-storage settings page. Reached from a SINGLE storage — the gear icon on the storage detail page header, the row ⋮ kebab / right-click on a storage row in the Storages table, and the entity ⋮ "more" menu on the storage detail page — all opening this page scoped to that one storage. It controls the machine-local choices for that storage: whether this computer keeps the hidden .lfbridge/ tracking directory and WHERE it goes, and which BACKING LOCATIONS the storage is materialized into — a dedicated Git repo (preferred when available), a Google Drive location, and a Dropbox directory — each independently ON/OFF with its own path. LFB picks good default directories that the user can change. The settings persist to a machine-local per-storage config file (pin/s/<storage_id>/config.yaml) — the local "settings file" distinct from the SHARED storage.yaml, because where the hidden dir and each mirror live differs per computer. On each pin pass, LFB reads these settings and, for every enabled backing location, CREATES the directory if missing and UPDATES it. Sibling of repo_settings.mdx (the per-repo counterpart) and storages.mdx (the storage family + storage.yaml + .lfbridge layout).
+description: The per-storage settings page. Reached from a SINGLE storage — the gear icon on the storage detail page header, the row ⋮ kebab / right-click on a storage row in the Storages table, and the entity ⋮ "more" menu on the storage detail page — all opening this page scoped to that one storage. It controls the machine-local choices for that storage: whether this computer keeps the hidden .lfbridge/ tracking directory and WHERE it goes, and which BACKING LOCATIONS the storage is materialized into — a dedicated Git repo (preferred when available), a Google Drive location, and a Dropbox directory — each independently ON/OFF with its own path. LFB picks good default directories that the user can change. The settings persist to a machine-local per-storage config file (pin/s/<storage_id>/config.yaml) — the local "settings file" distinct from the SHARED storage.yaml, because where the hidden dir and each mirror live differs per computer. On each pin pass, LFB reads these settings and, for every enabled backing location, CREATES the directory if missing and UPDATES it. For a company/Personal storage it also shows an OWNED REPOS list (§4c) — a TanStack table of the repos currently mapped to this storage (Personal includes the auto-defaulted no-org repos) — each row with a reassign dropdown (Personal | each company | + New company…) that re-files the repo via the same POST /api/repos/:repoId/owner as the per-repo Owner control; reassigning INTO a company with a sync repo records the travelling ownership assertion (repo_owner_propagation.mdx §2), moves NO bytes, and only changes which sync repo the repo's Category-B tracking mirrors to. Sibling of repo_settings.mdx (the per-repo counterpart), storages.mdx (the storage family + storage.yaml + .lfbridge layout), repo_company_mapping.mdx (the owner mapping the list reads), and repo_owner_propagation.mdx (how a company reassignment travels + is consent-gated).
 ---
 
 # LargeFileBridge — Storage Settings (Per-Storage)
@@ -35,6 +35,11 @@ Siblings this builds on and does not repeat:
   state root (§5). · [pin_process.mdx](./pin_process.mdx) — the pass that materializes enabled
   locations (§6). · [menus.mdx](./menus.mdx) — the kebab / right-click / more-menu that opens this page
   (§1).
+* [repo_company_mapping.mdx](./repo_company_mapping.mdx) — the owner model whose mapping feeds the
+  **Owned repos** list (§4c) and whose §5 / §5.2 manual reassign this page's per-row reassign control reuses.
+* [repo_owner_propagation.mdx](./repo_owner_propagation.mdx) — the **travel + consent** layer: reassigning
+  a repo **into** a company with a sync repo records the travelling **assertion** (§4c); this page is its
+  companion surface.
 
 ---
 
@@ -312,6 +317,89 @@ Reading/writing the sync-repo pick (validate git working tree / URL, reject mapp
 
 ---
 
+## 4c. Owned repos — the repos mapped to this storage
+
+For a **company** or **Personal** storage, this page also shows the **repos that are currently mapped to
+this storage** — its [owner mapping](./repo_company_mapping.mdx) — and lets the user **reassign** any of
+them to Personal or another company right here. This is the settings-side companion to the per-repo Owner
+control ([repo_company_mapping.mdx §5](./repo_company_mapping.mdx#5-manual-reassignment--the-user-always-wins-locked)):
+instead of opening one repo at a time, the user sees **every repo this storage owns** in one list and
+re-files them from a single place. It is exactly the charter case *"in that company's settings they see the
+repos mapped to it, and can drop one down and say I actually do want this linked to a company."*
+
+* **Shows only for company / Personal storages.** These are the only two storage kinds that **own** repos
+  ([repo_company_mapping.mdx §1](./repo_company_mapping.mdx#1-what-an-owner-is-locked)). A **repo** storage
+  is a single repo (it owns no others), `local` is settings/config, and a **community** consumes rather than
+  owns — so this section is **hidden** for `repo`, `local`, and `community`, exactly like the sync-repo
+  section (§4b).
+* **A list of the owned repos.** Each repo whose resolved owner is **this storage** (the §5-derived owner:
+  an `auto` derivation or a `manual` `owner_override`, [repo_company_mapping.mdx §5.2](./repo_company_mapping.mdx#52-persistence--the-override-lives-in-the-repos-configyaml-locked))
+  is one row. It is a **TanStack table** like every other list in the product (house style — search box +
+  single filter icon + single sort icon above it, click-a-header to sort, 500-per-page, bounded height
+  because content sits below it on this settings form). Each row shows the repo **name**, its **remote**
+  (`github.com/ACT3ai/…`), and an **`(auto-detected)`** hint when the mapping is still the heuristic's guess
+  (`source: "auto"`, [repo_company_mapping.mdx §3.1](./repo_company_mapping.mdx#31-the-honest-limitation-locked)).
+  For **Personal**, this list includes the repos that **auto-defaulted** here because they have no forge org
+  ([repo_company_mapping.mdx §3](./repo_company_mapping.mdx#3-the-heuristic--which-parse-becomes-a-company-locked))
+  — the *"ones that have no organization appear over Personal storage"* case the charter calls out.
+
+### 4c.1 The per-row reassign control (LOCKED)
+
+Each row carries a **reassign dropdown** — the same choice the per-repo Owner control offers
+([repo_company_mapping.mdx §5.1](./repo_company_mapping.mdx#51-the-reassign-control)) — so the user re-files
+the repo without leaving this page:
+
+```
+ Owned repos   (12 — search / filter / sort above; click a header to sort)
+ ┌──────────────────────────┬──────────────────────────────┬─────────────────────────┐
+ │ Repo                     │ Remote                       │ Owner                   │
+ ├──────────────────────────┼──────────────────────────────┼─────────────────────────┤
+ │ jfksocial_server         │ github.com/ACT3ai/…          │ [ ACT3 AI ▾ ]           │
+ │ ai-service               │ github.com/ACT3ai/…          │ [ ACT3 AI ▾ ]           │
+ │ dotfiles   (auto)        │ github.com/BryanStarbuck/…   │ [ Personal ▾ ]          │
+ └──────────────────────────┴──────────────────────────────┴─────────────────────────┘
+        dropdown ▾ :  Personal · ACT3 AI · Acme Marketing · … · + New company…
+```
+
+* The dropdown lists **Personal**, **each existing company** (by friendly display name,
+  [storage_company.mdx §6](./storage_company.mdx#6-the-friendly-display-name)), and a **`+ New company…`**
+  entry (opens a name field → creates the company storage, [repo_company_mapping.mdx §6](./repo_company_mapping.mdx#6-auto-creating-the-company--and-its-friendly-name)).
+  Picking a target reassigns that repo — **the identical effect and endpoint as the manual reassign** on the
+  repo's own settings page: it writes the repo's **local `owner_override`** in that repo's `config.yaml`
+  (`source: "manual"`, machine-local, never overwritten by a teammate, [repo_company_mapping.mdx §5.2](./repo_company_mapping.mdx#52-persistence--the-override-lives-in-the-repos-configyaml-locked)).
+* **Reassigning off this storage drops the row.** Choosing a different owner re-files the repo out of this
+  storage; on the next read its row leaves this list and appears under the target storage's Owned-repos list.
+* A repo mapped here **manually** can be **reset to auto** from its own repo-settings Owner control (§4c does
+  not duplicate the reset affordance; it is the batch-reassign surface, not the full per-repo panel).
+
+### 4c.2 Reassigning records the travelling assertion — and re-targets tracking (LOCKED)
+
+Reassigning here is not only a local grouping change; it has the same two consequences as any owner change
+([repo_company_mapping.mdx §5.2](./repo_company_mapping.mdx#52-persistence--the-override-lives-in-the-repos-configyaml-locked),
+[repo_owner_propagation.mdx](./repo_owner_propagation.mdx)):
+
+* **Into a company with a sync repo → the assertion travels.** When the user reassigns a repo **to a company
+  that has a sync repo** (§4b) configured, LFB also commits an **ownership assertion** (*"this repo, by its
+  git remote, belongs to company Y"*) into that sync repo's `owner_map.yaml`
+  ([repo_owner_propagation.mdx §2](./repo_owner_propagation.mdx#2-where-the-assertion-lives--owner_mapyaml-in-the-company-sync-repo-locked)).
+  The assertion **travels** to every member, but is **applied on their machines only through the explicit
+  review-and-consent page** ([repo_owner_propagation.mdx §4](./repo_owner_propagation.mdx#4-the-review-page--member-2-reviews-and-consents-locked))
+  — never silently. Reassigning **away** from a company tombstones the assertion (`withdrawn: true`).
+* **No bytes move.** Reassigning is **grouping/tracking-target** metadata only — it never relocates,
+  re-roots, or copies a single file ([repo_company_mapping.mdx §1](./repo_company_mapping.mdx#1-what-an-owner-is-locked)).
+  The repo's big files stay exactly where they are; the repo's tracking state stays in **Local Storage
+  always** ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
+* **It changes which sync repo the repo's tracking mirrors to.** What *does* change is the **additive mirror
+  target** (§4b): a repo now owned by this company (with the per-repo toggle on) mirrors its Category-B
+  tracking state to **this** storage's `<syncRepo>/repos/<repoKey>/` instead of the previous owner's — the
+  same routing described in [artifact_placement_policy.mdx](./artifact_placement_policy.mdx). Local Storage
+  stays the authoritative copy regardless.
+
+Reading the set of repos this storage owns (the owner mapping) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getOwnedRepos(storageId)` (joins the repo list against `resolveRepoOwner`, returning the rows whose owner is this storage), rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageSettingsPage.tsx` — `StorageSettingsPage` (the Owned-repos TanStack table). The per-row reassign reuses the same endpoint as the manual reassign — `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/repos/:repoId/owner` (which, for a company target with a sync repo, also asserts via `owner-propagation.service.ts` — `assertCompanyOwnership()`, [repo_owner_propagation.mdx §2](./repo_owner_propagation.mdx#2-where-the-assertion-lives--owner_mapyaml-in-the-company-sync-repo-locked)).
+
+---
+
 ## 5. Persistence — the machine-local per-storage config
 
 Everything on this page (except the canonical `clones` paths, which go to `storage.yaml`) writes to a
@@ -424,6 +512,17 @@ The page is a single scrollable settings form (no table beneath it, so it does n
  │       └──────────────────────────────────────────────┘                   │
  │       ⓘ 12 owned repos can mirror their tracking state here (§4b).        │
  │                                                                           │
+ │  Owned repos   (company/Personal — the repos mapped to this storage)      │
+ │   [search…]                                          [ ⛁ filter ] [ ⇅ sort]│
+ │   ┌──────────────────┬──────────────────────┬───────────────────────────┐ │
+ │   │ Repo             │ Remote               │ Owner                     │ │
+ │   ├──────────────────┼──────────────────────┼───────────────────────────┤ │
+ │   │ jfksocial_server │ github.com/ACT3ai/…  │ [ ACT3 AI ▾ ]             │ │
+ │   │ ai-service       │ github.com/ACT3ai/…  │ [ ACT3 AI ▾ ]             │ │
+ │   │ dotfiles  (auto) │ github.com/Bryan…/…  │ [ Personal ▾ ]           │ │
+ │   └──────────────────┴──────────────────────┴───────────────────────────┘ │
+ │       ⓘ Reassigning re-targets tracking; moves NO bytes (§4c).            │
+ │                                                                           │
  │   ⓘ Directories are created and updated on the next pin pass.             │
  │                                                    [ Cancel ] [ Save ]     │
  └───────────────────────────────────────────────────────────────────────────┘
@@ -433,6 +532,13 @@ The page is a single scrollable settings form (no table beneath it, so it does n
   `repo`, `local`, and `community`. **Clear** unsets it without deleting the repo on disk. An invalid pick
   (not a git tree, not writable, or overlapping a mapped source directory) shows an inline error and keeps
   Save disabled.
+
+* The **Owned repos** table (§4c) likewise shows only for **company / Personal** storages, hidden for
+  `repo`, `local`, and `community`. Each row's **Owner** dropdown reassigns that repo (Personal · each
+  company · **+ New company…**) via the same `POST /api/repos/:repoId/owner` as the per-repo Owner control;
+  reassigning **into** a company with a sync repo records the travelling assertion
+  ([repo_owner_propagation.mdx](./repo_owner_propagation.mdx)) and **moves no bytes** — it only changes which
+  sync repo the repo's Category-B tracking mirrors to (§4c.2).
 
 * A disabled toggle whose drive isn't connected greys its path field and shows the connect hint (§4.4).
 * Saving writes the machine-local config (§5) and the canonical `clones` paths; a toast confirms, and the
@@ -483,6 +589,15 @@ The page is a single scrollable settings form (no table beneath it, so it does n
    (`~/T/_large_files_bridge/repos/<repoKey>/`) and, when the per-repo toggle is on, this storage's **sync
    repo** as the additive mirror (§4b). Tracking state **never** enters a working repo, and the old
    content-threshold "three homes" model is **retired**.
+10. For a **company/Personal** storage the page shows an **Owned repos** list (§4c) — a TanStack table of the
+    repos whose owner is this storage (Personal includes the auto-defaulted no-org repos) — each row carrying
+    a **reassign dropdown** (Personal · each company · **+ New company…**) that re-files the repo via the same
+    **`POST /api/repos/:repoId/owner`** as the per-repo Owner control, writing the local `owner_override`
+    (`source: "manual"`). Reassigning **into** a company with a sync repo records the travelling **assertion**
+    ([repo_owner_propagation.mdx §2](./repo_owner_propagation.mdx)); it **moves no bytes** and only changes
+    **which sync repo** the repo's Category-B tracking mirrors to (§4c.2). The section is **hidden** for
+    `repo`, `local`, and `community` storages. Read via `getOwnedRepos(storageId)` in
+    `storage-settings.service.ts`, rendered by `StorageSettingsPage.tsx`.
 
 <!--
   Per-STORAGE settings page (the storage counterpart of repo_settings.mdx). Opened from ONE storage:
@@ -517,5 +632,20 @@ The page is a single scrollable settings form (no table beneath it, so it does n
   resolveStateSyncRepo in tracking-root.service.ts + mirrorToSyncRepo in tracking-sync.service.ts. Hidden
   for repo/local/community. Cross-links artifact_placement_policy.mdx, repo_tracking_scheme.mdx,
   repo_company_mapping.mdx, placement_radios.mdx, repo_settings.mdx, storage_local.mdx.
+  §4c (NEW) OWNED REPOS list — for company/Personal only (hidden for repo/local/community): a TanStack table
+  (house style: search+filter+sort, click-header sort, 500/pg, bounded height b/c content below) of the repos
+  whose owner is THIS storage (the repo_company_mapping.mdx owner mapping; Personal includes auto-defaulted
+  no-org repos — the charter "ones with no organization appear over Personal"). Each row = repo name + remote +
+  a REASSIGN dropdown (Personal · each company by friendly name · + New company…) that re-files the repo via
+  the SAME endpoint as the per-repo Owner control — POST /api/repos/:repoId/owner — writing the LOCAL
+  owner_override (source:manual, machine-local, never overwritten by a teammate; repo_company_mapping §5.2).
+  §4c.2: reassigning INTO a company w/ a sync repo (§4b) ALSO records the travelling ownership ASSERTION in
+  <syncRepo>/owner_map.yaml (repo_owner_propagation.mdx §2) — travels to members, applied on their machines ONLY
+  via the review-and-consent page (§4), never silently; reassigning AWAY tombstones it. Moves NO bytes (grouping/
+  tracking-target metadata only); tracking stays in Local Storage always; what changes = WHICH sync repo the
+  repo's Category-B tracking additively mirrors to (artifact_placement_policy.mdx). Code: getOwnedRepos(storageId)
+  in storage-settings.service.ts rendered by StorageSettingsPage.tsx; reassign reuses POST /api/repos/:repoId/owner
+  (repos.router) → assertCompanyOwnership in owner-propagation.service.ts for a company target w/ a sync repo.
+  Cross-links repo_owner_propagation.mdx (added to siblings).
 -->
 

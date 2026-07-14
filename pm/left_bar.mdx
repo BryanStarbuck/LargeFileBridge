@@ -146,6 +146,25 @@ The **Storages** disclosure (§3) already lists **Personal**, one child **per Co
 Injecting each owner child's repo sub-list under the Storages disclosure at runtime (grouping the discovered repos by their `owner`, labeling companies by display name) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (builds `storageChildren`, then nests the repos grouped by `RepoRow.owner` under the matching Personal / Company child), reading owners composed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoRow()`.
 
+### 3.3 The Storages entry carries a pending-mapping-review badge (LOCKED)
+
+When a teammate has asserted that one or more of **this computer's** repos belong to a company — an ownership
+assertion pulled in via the company sync repo's `owner_map.yaml` — the **Storages** nav item shows a small
+**count badge** (same badge treatment as the **To Do** item's, §3 row 8) for the number of **pending
+company-mapping reviews**. Clicking it (or the Storages item itself) routes to
+**`/company-mappings/review`**, the review-and-consent page where the member accepts or declines each
+asserted repo before any of their repos are re-mapped. The badge is a **reopen affordance**: a member who
+navigated away from the review can always get back to it here. Nothing is applied silently — the badge is the
+only nag. The pending set, the assertion travel, and the review page are owned by
+[repo_owner_propagation.mdx §4](./repo_owner_propagation.mdx); this bar only surfaces the badge + link.
+
+The badge count is **runtime-injected** (it depends on live pulled state), like the dynamic company children
+(§3) and the Processing item (§3.1), so it is not a static row in `pm/left_bar.yaml`. Rendering the
+pending-review badge on the Storages item and linking it to `/company-mappings/review` is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar`
+(reads the pending-mappings count from `GET /api/company-mappings/pending`, renders the badge on the Storages
+`<Link>`).
+
 ---
 
 ## 4. The account slot (bottom of the bar)
@@ -225,6 +244,10 @@ Resolving a nav item's lucide icon by name (unknown name renders nothing) is han
    **directly above the account slot**, hosting the **non-intrusive hover-info panel**
    ([non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)); it is blank white at rest, shows badge / folder
    / row explanations on hover, shows **only what fits**, and **never** pushes or overlaps the account slot.
+9. **Pending-mapping badge (§3.3):** when a teammate has asserted that one or more of this computer's repos
+   belong to a company, the **Storages** item shows a runtime **count badge** of pending company-mapping
+   reviews and links to **`/company-mappings/review`** ([repo_owner_propagation.mdx §4](./repo_owner_propagation.mdx));
+   it is a reopen affordance and nothing is applied silently.
 
 <!--
   This file is the styling/behavior spec; pm/left_bar.yaml is the content source of truth the
@@ -243,4 +266,8 @@ Resolving a nav item's lucide icon by name (unknown name renders nothing) is han
   (which still routes to the long list — a repo appears twice). Runtime-injected like the per-Company children (NOT
   static yaml rows); Sidebar.tsx nests repos grouped by RepoRow.owner under each owner child, labeling companies by
   the friendly display name (storage_company §6), with an (auto-detected) hint on auto-derived company groups.
+  §3.3 (repo_owner_propagation.mdx §4): the Storages nav item carries a runtime count BADGE of pending
+  company-mapping reviews (a teammate asserted this computer's repos belong to a company, pulled via
+  <syncRepo>/owner_map.yaml); clicking routes to /company-mappings/review to accept/decline before any repo is
+  re-mapped — a reopen affordance, never a silent apply. Sidebar.tsx reads GET /api/company-mappings/pending.
 -->

@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Personal Storage
-description: The Personal storage spec. A user's own personal large files, tracked as a directory-based storage whose Syncable Data Location is a Git repo the user configures — conventionally ~/BGit/Bryan_git/personal_large_files_bridge/. This is the CANONICAL Git-backbone use case: one user with two (or more) computers, each running LFB, each pointed at the same Personal repo. On each computer the user opens Personal storage settings, turns Git ON, and supplies the repo either as a LOCAL FILE PATH (a checkout already on that box) or as an HTTP(S) URL (a Git server not mapped to the local filesystem, which LFB clones into a machine-local working-copy cache). Turning Git on GRANTS LFB permission to run git fetch, git merge (automatic), git add/commit, and git push on every backbone pass, carried by the git_backbone.mdx engine using simple-git over the system git binary. Each computer registers itself as a UNIQUE device: it writes a .lfbridge/devices/<device-id>.yaml — its stable minted id plus a hardware fingerprint (model, year, disk, screen, RAM, chip, OS user) collected from OS APIs, falling back to a composed fingerprint — into the Personal repo, and reads the OTHER devices' files to discover the user's other computers, which then appear in the Devices left-bar tab. There is exactly one Personal storage per user. The storage.yaml carries name + type: personal; the .lfbridge/ area carries the fingerprint index, IPFS manifest, media-analysis outputs, and the device registry; big files stay in their natural home directories, git-ignored, moving over IPFS while the small SDL text moves over Git. Sibling of storage_repo / storage_company / storage_community (shared storage.yaml + .lfbridge layout in storages.mdx), storage_settings.mdx (where Git is turned on), git_backbone.mdx (the Git engine), devices.mdx (the device registry + graft), and syncable_data_location.mdx (the SDL that travels).
+description: The Personal storage spec. A user's own personal large files, tracked as a directory-based storage whose Syncable Data Location is a Git repo the user configures — conventionally ~/BGit/Bryan_git/personal_large_files_bridge/. This is the CANONICAL Git-backbone use case: one user with two (or more) computers, each running LFB, each pointed at the same Personal repo. On each computer the user opens Personal storage settings, turns Git ON, and supplies the repo either as a LOCAL FILE PATH (a checkout already on that box) or as an HTTP(S) URL (a Git server not mapped to the local filesystem, which LFB clones into a machine-local working-copy cache). Turning Git on GRANTS LFB permission to run git fetch, git merge (automatic), git add/commit, and git push on every backbone pass, carried by the git_backbone.mdx engine using simple-git over the system git binary. Each computer registers itself as a UNIQUE device: it writes a .lfbridge/devices/<device-id>.yaml — its stable minted id plus a hardware fingerprint (model, year, disk, screen, RAM, chip, OS user) collected from OS APIs, falling back to a composed fingerprint — into the Personal repo, and reads the OTHER devices' files to discover the user's other computers, which then appear in the Devices left-bar tab. There is exactly one Personal storage per user. The storage.yaml carries name + type: personal; the .lfbridge/ area carries the fingerprint index, IPFS manifest, media-analysis outputs, and the device registry; big files stay in their natural home directories, git-ignored, moving over IPFS while the small SDL text moves over Git. Personal's settings page also lists the repos owned by Personal — including the auto-defaulted no-org repos — with a per-row reassign dropdown (Personal | each company | + New company…) to move any to a company (§14.1 → storage_settings.mdx §4c); moving a repo to a company with a sync repo records a travelling ownership assertion (repo_owner_propagation.mdx) that applies on the company members' machines only via review-and-consent, moves NO bytes, and re-targets the repo's tracking mirror from Personal's sync repo to the company's. Sibling of storage_repo / storage_company / storage_community (shared storage.yaml + .lfbridge layout in storages.mdx), storage_settings.mdx (where Git is turned on and the Owned-repos list renders), git_backbone.mdx (the Git engine), devices.mdx (the device registry + graft), syncable_data_location.mdx (the SDL that travels), repo_company_mapping.mdx (the owner mapping), and repo_owner_propagation.mdx (how a company reassignment travels + is consent-gated).
 ---
 
 # LargeFileBridge — Personal Storage
@@ -29,6 +29,11 @@ Read the shared model first; this spec does not restate it:
   Personal Git repo *is*.
 * [Communities](./communities.mdx) — *other people's* files; personal storage is the opposite: **your
   own** private files, not shared with anyone else.
+* [repo_company_mapping.mdx](./repo_company_mapping.mdx) — the owner mapping (Personal is the default
+  owner), and [repo_owner_propagation.mdx](./repo_owner_propagation.mdx) — how reassigning a Personal repo
+  **to a company** with a sync repo travels as an assertion and is consent-gated (§14.1).
+* [storage_settings.mdx §4c](./storage_settings.mdx#4c-owned-repos--the-repos-mapped-to-this-storage) —
+  where Personal's Owned-repos list + per-row reassign dropdown render (§14.1 points there).
 
 ---
 
@@ -466,6 +471,34 @@ can also have a sync repo** — indeed it is the **canonical** one: the Personal
 Resolving the Personal sync-repo mirror root for a Personal-owned repo (`<syncRepo>/repos/<repoKey>/` or null) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)` (Personal branch resolves the Personal dedicated repo from `storage-settings.service.ts`), whose additive mirror is written by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)`.
 
+### 14.1 Personal's owned-repos list & reassign to a company
+
+Personal's [settings page](./storage_settings.mdx) surfaces the **repos owned by Personal** with a per-row
+**reassign** control — the mirror of the company case ([storage_company.mdx §7.1](./storage_company.mdx#71-the-companys-owned-repos-list--reassign)).
+The list and control are defined in full in
+[storage_settings.mdx §4c](./storage_settings.mdx#4c-owned-repos--the-repos-mapped-to-this-storage); this
+section only ties it to Personal:
+
+* **What it lists — including the no-org repos.** Every repo whose resolved owner is **Personal** appears as
+  a row: repos you explicitly reassigned here, plus the **auto-defaulted** ones — those with no forge org (no
+  remote, a local-path/self-hosted remote, or a known forge owner on your personal-accounts list, §13). This
+  is the charter's *"they'll often take ones that have no organization, which appear over Personal storage."*
+* **Reassign any one to a company.** Each row's dropdown (**Personal · each company · + New company…**) moves
+  that repo to a company — *"a drop-down, pick a company, and say I actually do want this linked to a
+  company."* Choosing a company writes the repo's local `owner_override`
+  ([repo_company_mapping.mdx §5.2](./repo_company_mapping.mdx#52-persistence--the-override-lives-in-the-repos-configyaml-locked))
+  and drops the row from Personal's list.
+* **Moving to a company with a sync repo records the assertion and re-targets tracking.** When the target
+  company has a **sync repo** ([storage_company.mdx §7](./storage_company.mdx#7-the-company-sync-repo)), LFB
+  commits the **ownership assertion** into that sync repo's `owner_map.yaml`
+  ([repo_owner_propagation.mdx §2](./repo_owner_propagation.mdx#2-where-the-assertion-lives--owner_mapyaml-in-the-company-sync-repo-locked)),
+  which travels to the company's members and applies on their machines **only via review-and-consent**, never
+  silently. **No bytes move** — the repo's tracking stops mirroring to Personal's sync repo (§14) and instead
+  mirrors to **the company's** `<syncRepo>/repos/<repoKey>/` ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx));
+  the files and the Local-Storage tracking copy are untouched.
+
+The Owned-repos read (`getOwnedRepos("personal")`) and the reassign endpoint (`POST /api/repos/:repoId/owner`) are the same as cited in [storage_settings.mdx §4c](./storage_settings.mdx#4c-owned-repos--the-repos-mapped-to-this-storage) — for a company target with a sync repo it also asserts via `owner-propagation.service.ts` — `assertCompanyOwnership()`.
+
 ---
 
 ## 15. Acceptance criteria
@@ -515,6 +548,14 @@ Resolving the Personal sync-repo mirror root for a Personal-owned repo (`<syncRe
     **`<syncRepo>/repos/<repoKey>/`** — in addition to Local Storage `~/T/_large_files_bridge/repos/<repoKey>/`,
     never instead of it ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)) — and carried to the
     user's other computers over the same backbone; default is Local-Storage-only, and **ownership** decides.
+13. Personal's [settings page](./storage_settings.mdx#4c-owned-repos--the-repos-mapped-to-this-storage) lists
+    the **repos owned by Personal** — including the **auto-defaulted no-org repos** — with a per-row
+    **reassign dropdown** (Personal · each company · **+ New company…**) to move any to a company (§14.1). Moving
+    a repo to a company with a **sync repo** records the travelling **ownership assertion**
+    ([repo_owner_propagation.mdx §2](./repo_owner_propagation.mdx)) — applied on the company members' machines
+    **only via review-and-consent** — and **moves no bytes**, only re-targeting the repo's tracking mirror from
+    Personal's sync repo to the company's `<syncRepo>/repos/<repoKey>/`. Same `getOwnedRepos` +
+    `POST /api/repos/:repoId/owner` code as [storage_settings.mdx §4c](./storage_settings.mdx#4c-owned-repos--the-repos-mapped-to-this-storage).
 
 <!--
   Personal storage = the user's OWN private big files, and the CANONICAL Git-backbone use case: one user,
@@ -548,6 +589,16 @@ Resolving the Personal sync-repo mirror root for a Personal-owned repo (`<syncRe
   transcript exists" framing. Code: tracking-root.service resolveStateSyncRepo, tracking-sync.service
   mirrorToSyncRepo. Keep aligned with repo_company_mapping.mdx (mapping), storage_company.mdx (company sync repo +
   rename), artifact_placement_policy.mdx + repo_tracking_scheme.mdx (placement policy).
+  §14.1 (NEW) Personal's OWNED-REPOS list & reassign — mirror of storage_company §7.1, renders in
+  storage_settings.mdx §4c: lists the repos whose owner is Personal INCLUDING the auto-defaulted no-org repos
+  (no/local/self-hosted remote or a personal-accounts owner — the charter "ones with no organization appear over
+  Personal"); each row's dropdown (Personal · each company · + New company…) moves the repo to a company (writes
+  local owner_override; repo_company_mapping §5.2). Moving to a company WITH a sync repo records the travelling
+  ownership ASSERTION in <syncRepo>/owner_map.yaml (repo_owner_propagation.mdx §2) → applied on the company
+  members' machines ONLY via review-and-consent, never silently. Moves NO bytes — only re-targets the repo's
+  Category-B tracking mirror FROM Personal's sync repo TO the company's <syncRepo>/repos/<repoKey>/
+  (artifact_placement_policy.mdx). Same getOwnedRepos + POST /api/repos/:repoId/owner (→ assertCompanyOwnership)
+  code as storage_settings §4c. Cross-links repo_owner_propagation.mdx (added to siblings).
   §12 TO DO Batch: Personal owns ONE local/disposable/uncommitted batch personal_2_do.yaml under
   ~/T/_large_files_bridge/_do_batches/, recalc-and-replace each scan (to_do_batch_calc_engine.mdx,
   recommends-only, skips folded decisions); categories = compress_video/compress_image/pin/pull_down
