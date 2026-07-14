@@ -67,7 +67,7 @@ export interface QueueTask {
 The `compress` task carries its **media kind** (image vs video) because the two draw **different**
 concurrency budgets (§3) — image tools are single-threaded (fan wide), ffmpeg is multi-threaded (fan
 narrow). The producer stamps it from the file's extension when it plans the batch
-([compress_inside.mdx §5](./compress_inside.mdx)).
+([compression.mdx §12.6](./compression.mdx)).
 
 * **`enqueue(tasks: QueueTask[]): { queued: number; deduped: number }`** appends the tasks and **kicks the
   drain loop**, then returns immediately. `queued` is how many were actually added (after dedup); `deduped`
@@ -117,7 +117,7 @@ The `compress` op is **media-aware** because the two media kinds have opposite t
   `track("transcribe"/"describe"/"compress", …)` job in the progress registry ([webapp.mdx §12](./webapp.mdx)),
   so the moment a queued item **starts**, a **live dock card** appears (determinate % for transcribe/compress,
   spinner for describe) — including in a tab that did not start the batch. The queue writes **no** dock code
-  of its own. The `compress` task's heavy transcode is **async** (`spawn`, [compress_inside.mdx §5](./compress_inside.mdx))
+  of its own. The `compress` task's heavy transcode is **async** (`spawn`, [compression.mdx §12.6](./compression.mdx))
   so it **never blocks the event loop** while the batch drains.
 * **Per-item isolation.** A task that throws is caught, logged to `error.err`
   ([ai_description.mdx §8](./ai_description.mdx)), and the worker moves on — one bad file never stalls the
@@ -153,7 +153,7 @@ The `queued` count is exposed by the queue and folded into the progress payload 
 ## 4a. Batches — grouping one bulk run's tasks
 
 A **batch** groups the per-file tasks of **one bulk run** — today, a **"Compress inside"** run
-([compress_inside.mdx](./compress_inside.mdx)) — so a surface can show that run's **progress bar** and, when
+([compression.mdx §12](./compression.mdx)) — so a surface can show that run's **progress bar** and, when
 it finishes, its **final error list**. Each enqueued `compress` task carries the run's `batchId` (§2).
 
 * **`createBatch(label, total): batchId`** — opens a batch when the bulk producer plans the set; records its
@@ -167,7 +167,7 @@ it finishes, its **final error list**. Each enqueued `compress` task carries the
   are pruned) so the user can still read the error list after the run ended.
 
 The batch registry is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `createBatch()` / `recordBatchResult()` / `listBatches()` (the 30-min prune of finished batches). The producer that opens a batch is `compression.service.ts` — `enqueueCompressInside()` ([compress_inside.mdx §5](./compress_inside.mdx)); the surfaces that render batch progress + the error list are the [Processing page](./processing.mdx) (processing.mdx §4).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `createBatch()` / `recordBatchResult()` / `listBatches()` (the 30-min prune of finished batches). The producer that opens a batch is `compression.service.ts` — `enqueueCompressInside()` ([compression.mdx §12.6](./compression.mdx)); the surfaces that render batch progress + the error list are the [Processing page](./processing.mdx) (processing.mdx §4).
 
 ## 4b. TO DO batch Apply is a queue producer (LOCKED)
 
@@ -254,7 +254,7 @@ The queue is **in-memory only**, exactly like the job registry ([webapp.mdx §12
   LOCKED:
    - QueueTask { op: transcribe|describe|compress, path, overwrite, provider?, compress?{deleteOriginal},
      batchId? }; enqueue(tasks) => {queued,deduped}, appends + kicks drain + RETURNS IMMEDIATELY. Producers =
-     page_actions.mdx enqueue endpoints + compress_inside.mdx enqueueCompressInside().
+     page_actions.mdx enqueue endpoints + compression.mdx §12 enqueueCompressInside().
    - DEDUP by op+path already pending/running (not the same as skip-already-DONE, which is the producer's).
    - CORE-BUDGETED, MEDIA-AWARE worker loops (parallelization.mdx): mass-compute budget = round(cores ×
      max_core_fraction), default 0.9 (~90% of cores). compress splits into buckets compress:image (WIDE =
@@ -283,7 +283,7 @@ The queue is **in-memory only**, exactly like the job registry ([webapp.mdx §12
   Code: modules/jobqueue/jobqueue.service.ts (enqueue/pump/runTask/queueDepth, capFor()/bucketOf() drawing
   shared/concurrency.ts coreBudget(), pending[] + inflight Set, createBatch/recordBatchResult/listBatches),
   shared/concurrency.ts (logicalCores/coreBudget/responsiveBudget), progress.router.ts (fold `queued`+`batches` into
-  ProgressListResult), ProgressDock.tsx (footer). Keep in sync with page_actions.mdx (producer), compress_inside.mdx
+  ProgressListResult), ProgressDock.tsx (footer). Keep in sync with page_actions.mdx (producer), compression.mdx §12
   (compress producer + batches), processing.mdx (batch surfaces), webapp.mdx §11–§14 (dock/registry/mapLimit),
   Transcribe.mdx + ai_description.mdx (the per-file runners).
 -->

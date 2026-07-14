@@ -491,7 +491,7 @@ losing the user's intent or leaving zombie records:
   decision applies. No surprise re-pinning, no surprise re-asking.
 
 Carrying a decision across a rename (fingerprint match), re-stamping it across a compress/convert, and staling/compacting an orphaned record are to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `carryOnRename()` / `restampOnTransform()` / `staleOrphans()`, called from `scanner.service.ts` and the compress/convert flows ([compress_inside.mdx](./compress_inside.mdx), [codecs.mdx](./codecs.mdx)).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `carryOnRename()` / `restampOnTransform()` / `staleOrphans()`, called from `scanner.service.ts` and the compress/convert flows ([compression.mdx §12](./compression.mdx), [codecs.mdx](./codecs.mdx)).
 
 ---
 

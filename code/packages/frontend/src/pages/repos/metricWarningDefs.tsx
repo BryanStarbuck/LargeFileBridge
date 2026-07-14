@@ -19,6 +19,11 @@ import type { MetricId } from "./metricWarnings.js";
 // metrics — the header primary becomes "Scan now" until it's re-scanned (one_repo.mdx §3.1 / scan.mdx §2.3).
 const SCAN_STALE_MS = 14 * 24 * 60 * 60 * 1000; // 2 weeks
 
+/** The file's basename (§4.5 ROW 1); the popup row strips the extension for display. */
+function basename(p: string): string {
+  return p.split("/").pop() || p;
+}
+
 /** True when the repo has never been scanned, or its last scan is older than the 2-week staleness window. */
 export function scanIsStale(detail: RepoDetail, nowMs: number = Date.now()): boolean {
   if (!detail.lastScanAt) return true;
@@ -108,7 +113,9 @@ export function buildPullDownWarning(detail: RepoDetail, repoId: string): Warnin
         return {
           id: mf.path,
           label: mf.name,
-          sublabel: `${dir || "(repo root)"} · ${formatBytes(mf.sizeBytes)} · added by ${mf.addedByDevice ?? "another computer"}`,
+          name: mf.name,
+          sizeText: formatBytes(mf.sizeBytes),
+          pathText: `${dir || "(repo root)"} · added by ${mf.addedByDevice ?? "another computer"}`,
         };
       }),
       targetNoun: "file",
@@ -177,7 +184,9 @@ export function buildUndecidedWarning(detail: RepoDetail, repoId: string): Warni
       targets: undecidedFiles.map((f) => ({
         id: f.path,
         label: f.path,
-        sublabel: formatBytes(f.sizeBytes),
+        name: basename(f.path),
+        sizeText: formatBytes(f.sizeBytes),
+        pathText: f.path,
       })),
       targetNoun: "file",
       actionLabel: "Apply",
@@ -225,7 +234,9 @@ export function buildTranscribeWarning(detail: RepoDetail, repoId: string): Warn
       targets: files.map((f) => ({
         id: absPath(detail, f),
         label: f.path,
-        sublabel: formatBytes(f.sizeBytes),
+        name: basename(f.path),
+        sizeText: formatBytes(f.sizeBytes),
+        pathText: f.path,
       })),
       targetNoun: "file",
       actionLabel: "Transcribe",
@@ -284,7 +295,9 @@ export function buildDescribeWarning(detail: RepoDetail, repoId: string): Warnin
       targets: files.map((f) => ({
         id: absPath(detail, f),
         label: f.path,
-        sublabel: formatBytes(f.sizeBytes),
+        name: basename(f.path),
+        sizeText: formatBytes(f.sizeBytes),
+        pathText: f.path,
       })),
       targetNoun: "file",
       actionLabel: "Describe",
@@ -332,7 +345,9 @@ export function buildCompressWarning(
       targets: files.map((f) => ({
         id: absPath(detail, f),
         label: f.path,
-        sublabel: formatBytes(f.sizeBytes),
+        name: basename(f.path),
+        sizeText: formatBytes(f.sizeBytes),
+        pathText: f.path,
       })),
       targetNoun: noun,
       actionLabel: "Compress",

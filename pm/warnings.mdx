@@ -405,10 +405,23 @@ seeing *which* 6. The **right pane** of the two-pane layout (§4.0) is that list
 
 * **What it is.** A scrollable list of the exact subjects the warning found — one row per file (or
   directory). To the **left of each row** sit the **per-row action toggles** (§4.5.1) — up to **three**
-  checkboxes (pin / git-ignore / compress); then the **name/path** (repo-relative or middle-truncated
-  absolute path) and a **sublabel** (size, and/or the fuller path). Media rows carry a small type glyph
-  and drive the left-pane **preview** on hover (§4.5.2). The list is the honest, itemized answer to
-  "*which ones, and what will we do to each?*".
+  checkboxes (pin / git-ignore / compress); then the **two-line name/size/path stack** (below). Media
+  rows carry a small type glyph and drive the left-pane **preview** on hover (§4.5.2). The list is the
+  honest, itemized answer to "*which ones, and what will we do to each?*".
+* **Two-line row layout (LOCKED).** Each subject renders as **exactly two lines**:
+  1. **Row 1 — name (left) + size (right).** The **file name with the extension stripped** is
+     **left-aligned**; on the **same row**, the **file size** is **right-aligned** (a muted, smaller,
+     `tabular-nums` figure like `128 MB`). The name truncates (middle/tail) to make room; the size never
+     wraps. Stripping the extension is a **display rule applied by the row itself** — callers pass the
+     plain basename (with extension) and the row removes the trailing `.ext`. For a **directory** subject
+     the name is the folder name and the right-aligned figure is its rollup count (e.g. "12 videos")
+     rather than a byte size.
+  2. **Row 2 — the file path.** The subject's **path** on a second line in **light-gray, smaller-font**
+     text (repo-relative when we have a repo, otherwise the middle-truncated absolute path). It, too,
+     truncates to one line.
+  This replaces the older "name on row 1, size on row 2" stack: **size moves up beside the name**, and
+  **the path takes row 2**. A subject that genuinely has no path (a rare non-file target) simply omits
+  row 2.
 * **Two row control models (LOCKED).** A row leads with **either**:
   1. **the up-to-three per-row action toggles** (§4.5.1) — the default for the To-Do batch popups and any
      warning whose subjects carry per-axis recommendations; a row is **"included"** (counts toward the
@@ -439,7 +452,8 @@ seeing *which* 6. The **right pane** of the two-pane layout (§4.0) is that list
   **row checkboxes** decide *which subjects* Task X runs on. Apply receives **both**: the chosen options
   **and** the list of checked target ids.
 * **Directory-scoped warnings** work the same way, listing directories (e.g. "Compress videos & images
-  inside" per directory). A directory row may show a rollup count (e.g. "12 videos") as its sublabel.
+  inside" per directory). A directory row shows a rollup count (e.g. "12 videos") as its row-1
+  right-aligned figure (in place of a byte size), with the directory path on row 2.
 * **Scale.** For a large found set the list is windowed/virtualized and paged like the app's tables
   ([tables.mdx](./tables.mdx)); "Select all"/"Clear" operate on the **whole** found set, not just the
   visible window, and the count reflects the whole set. If the found set was itself capped by a scan
@@ -762,8 +776,12 @@ type WarningTargetPreview = {
 // One subject the warning is about — a file or directory (§4.5). The right-pane row model.
 type WarningTarget = {
   id: string;             // stable key — usually the absolute path
-  label: string;          // display name (repo-relative or middle-truncated path)
-  sublabel?: string;      // size and/or fuller path, shown muted under the label
+  label: string;          // fallback display text when `name` is absent (repo-relative or truncated path)
+  // §4.5 two-line row layout. Preferred over label/sublabel:
+  name?: string;          // ROW 1 left — the file's basename; the ROW strips the extension for display
+  sizeText?: string;      // ROW 1 right — right-aligned size ("128 MB") or a directory rollup ("12 videos")
+  pathText?: string;      // ROW 2 — the path, in light-gray smaller font (repo-relative or truncated abs)
+  sublabel?: string;      // LEGACY fallback for the ROW-2 line when `pathText` is absent (shown muted)
   defaultChecked?: boolean; // SINGLE-checkbox model (§4.5 model 2): default true; false opts row OUT at open
   axes?: WarningTargetAxes; // PER-ROW TOGGLES model (§4.5.1, model 1): present ⇒ row leads with up-to-3
                             // axis toggles pre-set to these open states; row is "included" when ≥1 axis ON

@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Compression
-description: How LargeFileBridge compresses IMAGE and VIDEO files (audio is out of scope for now, planned later). Compression is always an explicit, user-chosen action — never automatic — and can be run on one file, several checked files, or every file in the current table filter. It uses quality-controllable brew-installed command-line tools (ffmpeg for video; ImageMagick / oxipng / cwebp / mozjpeg for images) run at a MEDIUM quality level — never maximum-aggression — preferring LOSSLESS re-encoding where that applies, so files shrink without visible quality loss. Two hard invariants: (1) the output must keep the SAME aspect ratio and the SAME pixel resolution — we never downscale; and (2) before compressing we run an ALPHA-CHANNEL SAFETY CHECK — if a PNG's alpha is actually used, or a video's format carries a used alpha channel, we refuse a target codec that would drop it (unless the chosen codec preserves alpha). PNG typically converts to JPEG (or JPEG 2000 when better, unless the user denied it). Settings let the user allow/deny specific codecs per media type (images / video / eventually audio) with good, social-media-safe defaults. The View-one-file page shows which codec a file is compressed with and whether it is compressed. Tools run via a temp file, then replace the original (the original goes to LFBridge trash — recoverable). Implemented by the /api/compress backend module and the media viewer / repo table / settings frontend.
+description: How LargeFileBridge compresses IMAGE and VIDEO files (audio is out of scope for now, planned later). Compression is always an explicit, user-chosen action — never automatic — and can be run on one file, several checked files, or every file in the current table filter. It uses quality-controllable brew-installed command-line tools (ffmpeg for video; ImageMagick / oxipng / cwebp / mozjpeg for images) run at a MEDIUM quality level — never maximum-aggression — preferring LOSSLESS re-encoding where that applies, so files shrink without visible quality loss. Two hard invariants: (1) the output must keep the SAME aspect ratio and the SAME pixel resolution — we never downscale; and (2) before compressing we run an ALPHA-CHANNEL SAFETY CHECK — if a PNG's alpha is actually used, or a video's format carries a used alpha channel, we refuse a target codec that would drop it (unless the chosen codec preserves alpha). PNG typically converts to JPEG (or JPEG 2000 when better, unless the user denied it). Settings let the user allow/deny specific codecs per media type (images / video / eventually audio) with good, social-media-safe defaults. The View-one-file page shows which codec a file is compressed with and whether it is compressed. Tools run via a temp file, then replace the original (the original goes to LFBridge trash — recoverable). Implemented by the /api/compress backend module and the media viewer / repo table / settings frontend. This is the ONE compression spec — the superset that also owns the user-facing Compress ACTION and every SURFACE that launches it (§4), the DATA-SAFETY GUARANTEE that a compress must never replace a good file with a broken one (§5, including the 2026-07 output-integrity fix), and the "Compress videos & images inside…" POP-OVER DIALOG + per-file-safe background batch (§12). (It absorbed the former compress.mdx and compress_inside.mdx.)
 ---
 
 # LargeFileBridge — Compression
@@ -9,9 +9,13 @@ Compression is a **core value** ([charter](../CLAUDE.md#compression-a-core-value
 pin are **uncompressed when they don't need to be**. LFBridge finds those and, **only when the user
 asks**, compresses them — **images** and **video** (audio is out of scope for now, planned later).
 
-This spec defines the compression **engine**: the quality-controllable brew tools we drive, the
-medium-quality / prefer-lossless policy, the two hard invariants (resolution-preserving + alpha-safety),
-the codec preference settings, and how the user triggers it on one / many / a whole filter.
+This spec is the **superset**: it defines the compression **engine** (the quality-controllable brew tools
+we drive, the medium-quality / prefer-lossless policy, the two hard invariants — resolution-preserving +
+alpha-safety — and the codec preference settings), **and** the user-facing **Compress action + every
+surface** that launches it (§4), the **data-safety guarantee** (§5), and the **"Compress inside" pop-over
+dialog + per-file-safe background batch** (§12). It covers the two headline transforms the user cares about
+— **PNG → JPEG** and **video re-encode to a smaller codec** — the **"may we change the file extension?"**
+setting, and the **hard data-safety guarantee** (a compress must never leave a broken file behind).
 
 Siblings this builds on and does not repeat:
 
@@ -20,9 +24,10 @@ Siblings this builds on and does not repeat:
   requirement; the two-hash (compressed/uncompressed) per-file tracking.
 * [Menus](./menus.mdx) — the **Compress…** and **Convert to compressible…** catalog items (explicit-click
   offers with a confirm, §6.1). This spec is what those items run.
-* [Compress inside](./compress_inside.mdx) — the pop-over dialog + **per-file-safe background batch** that
-  drives this engine over **many** files in a directory (the directory `⋮` and page-level compress links).
-  It surfaces originals disposition as a per-run choice (§8.2) and drives `compressFile` file-by-file.
+* [codecs.mdx](./codecs.mdx) — the video codec catalog and the browser/upload-safe **H.264** convert.
+* [images.mdx](./images.mdx) — the **file-type conversion policy** (PNG→JPEG, HEIC→JPEG, the two settings).
+* [job_queue.mdx](./job_queue.mdx) — the background queue the bulk "Compress inside" batch (§12) drains onto.
+* [processing.mdx](./processing.mdx) — the surfaces that show a running batch and its final error list (§12).
 * [View one file / media viewer](./media_viewer.mdx) — where a single file's **codec + compressed state**
   are shown and the **Compress** button lives (§4).
 * [One repo](./one_repo.mdx) — the files table where the user **checks several** files or **compresses the
@@ -210,26 +215,135 @@ Compression is always user-initiated ([menus.mdx §6.1](./menus.mdx)):
 Every path runs the same engine, the same alpha check, and the same resolution verification per file, and
 reports per-file results (compressed / skipped-no-gain / blocked-alpha / failed).
 
+### 4.1 The one action, in one sentence
+
+**Compress** takes a single image or video file, re-encodes it to a smaller, quality-controlled form —
+optionally in a **better file format** (PNG → JPEG, an old video codec → H.264) — while keeping the **exact
+same pixel resolution**, and swaps the new file in **only after proving the new file is valid** (§5); the
+original is moved to a **recoverable trash**. It is **always explicit** — never automatic. Everything the
+action does — from the click to the replaced file — is orchestrated by one backend function:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`compressFile()`.
+
+### 4.2 One page that "utilizes" compression — View-one-file
+
+There is **one page whose job is to look at a single media file and act on it**: the **View-one-file /
+media viewer** page. It shows the file, tells the user **whether it is already compressed** and **which
+codec** it uses, and offers the **Compress** button. Before acting, it reads a **dry-run** so the user sees
+the plan and any warning (e.g. "this would lose transparency") **without touching the file**.
+
+* The page shell + action band are in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneFilePage.tsx` and
+  `MediaViewer.tsx` (`ActionBar` = the **Compress** button; `PropertyGrid` = the Codec + Compressed cells).
+* The no-side-effect dry-run (plan + alpha safety) runs in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+  `checkFile()`, served at `compression.router.ts` — `GET /api/compress/check`.
+
+### 4.3 One action link, on many different pages
+
+The same Compress action is reachable from **many pages** — the user clicks a link and "goes off" to
+compress. Each link ends in the **same** `compressFile()` engine call; they differ only in *how many* files
+and *which options* they pass.
+
+| Where the link lives | What it compresses | Code that renders / wires the link |
+| --- | --- | --- |
+| **View-one-file** action band | this one file | `~/…/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` Compress button |
+| **File's `⋮` / right-click menu** | this one file | `~/…/frontend/src/components/menu/EntityMenu.tsx` + `domainActions.tsx` (Compress… item) |
+| **One-repo files table** — checked rows / whole filter | many files | `~/…/frontend/src/pages/repos/OneRepoPage.tsx` (bulk `⋮` → Compress selected) |
+| **Compress task tab** — per-row status icon | one file per click | `~/…/frontend/src/components/CompressStatusIcon.tsx` + `pages/repos/taskTabs.config.ts` |
+| **Directory `⋮` / page action** — "Compress inside…" | every eligible file under a dir (§12) | `~/…/frontend/src/components/menu/PageActions.tsx` → `lib/compressInside.ts` `openCompressInside()` |
+| **Warning / To-Do batch popup** — per-row Compress toggle | each checked row | `~/…/frontend/src/components/ui/WarningPopup.tsx` + `pages/repos/metricWarningDefs.tsx` |
+| **Metric tile "uncompressed" recommendation** | opens the popup above | `~/…/frontend/src/pages/repos/metricWarnings.ts` / `metricWarningDefs.tsx` |
+| **Media viewer "Convert to H.264…"** offer | this one video (forced codec, §8.1) | `~/…/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` convert button |
+
+Every one of those links resolves to one of five REST calls, all allow-list-gated, all in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.router.ts`.
+
+* `GET  /api/compress/tools`   — which brew tools are installed.
+* `GET  /api/compress/settings`, `PATCH /api/compress/settings` — the codec + quality prefs.
+* `GET  /api/compress/check`   — dry-run plan + alpha safety, no side effects.
+* `POST /api/compress/file`    — compress ONE file; optional `videoCodec` forces H.264.
+* `POST /api/compress/batch`   — compress MANY files: checked rows / whole filter.
+* `POST /api/compress/inside`  — plan + background-queue a directory's media (§12).
+
 ---
 
-## 5. The resolution-preserving verification (LOCKED)
+## 5. The data-safety guarantee — a compress must NEVER leave a broken file (LOCKED)
 
-After encoding to the temp file and **before** replacing the original, the engine **re-measures the
-output's width × height** and compares to the input:
+This is the **most important correctness rule** of the whole feature. Compressing a file means
+**replacing** it, and a replace that ships a **broken** file is **data loss**. The engine is
+**transactional and fail-closed**: it works on a **temp file**, and it only disposes of the original
+**after** the new file has **passed every check**. A file that fails any check keeps its original
+**untouched**.
 
-* **Equal** → proceed (move original to trash, move temp into place).
-* **Different** → **abort**: delete the temp, leave the original untouched, and report
-  "compression changed the resolution — refused". We never ship a downscaled file.
+The checks, in the **exact order** they run inside `compressFile()`
+(`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts`):
 
-We also require the output to be **smaller** than the input; if it isn't, we keep the original and report
-**"no gain"**. **One deliberate exception:** a **compatibility conversion** — HEIC/HEIF/AVIF → JPEG (§3.1)
-or the forced H.264 convert (§8.1) — is **exempt from the size-gain check**, because its purpose is
-universal playback/compatibility, not shrinkage, and it may legitimately grow the file. The
-resolution-preserving and alpha-safety invariants are **never** waived. The exemption is carried by a
-`formatConvert` flag on the plan.
+1. **Tool exit + non-empty.** The transcode must exit `0` and produce a file with **bytes > 0**. Else
+   fail, delete temp, keep original.
+   * `runAsync()` result check + `safeSize()` (bytes > 0) in code — inside `compressFile()`.
+2. **Output integrity — the output must actually DECODE (LOCKED — the 2026-07 fix).** We re-probe the
+   output's pixel dimensions with the **same** probe that read the input. If the input's dimensions were
+   readable but the **output's are not**, the encoder produced a **corrupt/truncated** file → **refuse,
+   keep the original**. This is **independent of the `preserve_resolution` setting** — a user turning that
+   off must not disable corruption detection.
+   * The fail-closed integrity gate runs in code — the `if (inDims && !outDims)` block inside
+     `compressFile()` (added 2026-07-14).
+3. **Resolution unchanged.** Output width × height must equal input; a size change **aborts** — we never
+   ship a downscaled file. (Verified after encoding via `videoInfo()` / `imageDims()`, i.e. `ffprobe` /
+   `magick identify`; gated on the `preserve_resolution` setting.)
+4. **Real size gain.** The output must be **smaller** than the input, or we keep the original and report
+   **"no gain."** **One deliberate exception:** a **compatibility conversion** — HEIC/HEIF/AVIF → JPEG
+   (§3.1) or the forced H.264 convert (§8.1) — carries a **`formatConvert`** flag and is **exempt from
+   this one check** (never from checks 2 or 3), because its purpose is universal playback/compatibility,
+   not shrinkage, and it may legitimately grow the file.
+5. **Recoverable replace.** Only now do we dispose of the original (to **trash** by default — recoverable,
+   §7) and move the temp into place (with the new extension if the format changed).
+   * The disposition + rename run in code — the disposition block at the end of `compressFile()`;
+     `trashOriginal()`.
 
-Verifying the output keeps the same width × height (and is smaller) before any replacement is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — the resolution + size-gain checks inside `compressFile()` (dimensions re-measured via `videoInfo()` / `imageDims()`, i.e. `ffprobe` / `magick identify`), gated on the `preserve_resolution` setting.
+The resolution-preserving and alpha-safety invariants are **never** waived.
+
+### 5.1 The bug we fixed — a big file replaced by a ~134-byte broken JPEG
+
+**Symptom (reported 2026-07):** JPEG files that were several KB were found reduced to **~134 bytes of
+broken garbage** after a compress run; they had to be restored from a bigger prior version.
+
+**Root cause — a missing output-integrity gate.** Before the fix, the only output validation between the
+transcode and the irreversible replace was **`safeSize()` = "bytes > 0."** A **134-byte truncated/corrupt
+JPEG passes that check** (134 > 0). The one deeper guard — the **resolution check** — was written as
+`if (preserveResolution && inDims && outDims && dims differ)`, so when the output was **too broken to
+probe** (`magick identify` exits non-zero → `imageDims()` returns `null`), that guard was **silently
+skipped**. The corrupt 134-byte file is **smaller** than the original, so the **"no gain"** check *passed*
+too — and the engine went on to **replace the original with garbage**. Verified reproduction: a 134-byte
+truncated JPEG returns non-zero from `magick identify` (so `imageDims → null`) yet passes `safeSize`.
+
+**The fix — fail closed on unreadable output.** We added **check 2 above**: if the input's dimensions were
+readable but the **output's are not**, the output is corrupt → **block and keep the original**. A 134-byte
+file can no longer decode to `640×480`, so it is now caught and the original is preserved. The fix is in
+code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`compressFile()`'s output-integrity gate (the `if (inDims && !outDims)` block, added 2026-07-14).
+
+**Two facts that keep this honest:**
+
+* The default originals disposition is **trash** (`replace_original_to_trash: true`, §7) — which is *why
+  the restore was possible*. The bulk "Compress inside" flow can opt into **hard delete** (§12), which
+  would have made the same corruption **unrecoverable** — so the integrity gate matters most there.
+* The specific example file (`austin_food_truck_tacos.jpg` in the `jfk/code` repo) currently shows
+  **129-byte blobs in git** — but those are **Git LFS pointer files** (that repo's `.gitattributes`
+  LFS-tracks `*.jpg/*.png/…`, per its "Renormalize test feed images into Git LFS" commit), **not**
+  compressor output. That is a separate git-LFS smudge artifact. The **latent compressor defect above is
+  real and independent**, fits the reported symptom exactly, and is now closed regardless of that repo's
+  LFS state.
+
+### 5.2 Residual / follow-up
+
+If ImageMagick is **absent** but `oxipng` is present (a PNG-only lossless path), `imageDims()` can't read
+input dims, so the integrity gate can't compare — the pre-existing tool-gap behavior. In practice `magick`
+is installed (it's needed for almost every image plan and for the alpha check), so the gate is active on
+the real path. A future hardening could add a format-agnostic decode probe for the oxipng-without-magick
+case.
 
 ---
 
@@ -380,10 +494,10 @@ universal-safe target, [codecs.mdx §5](./codecs.mdx)). It is otherwise an ordin
 ### 8.2 Per-run originals disposition (bulk Compress inside)
 
 A **one-off** compress (§1.5 / §8) always moves the original to the **recoverable LFBridge trash** — the
-global `compression.replace_original_to_trash` default (§7). The bulk **Compress Inside** dialog
-([compress_inside.mdx](./compress_inside.mdx)) deliberately differs: it surfaces disposition as an
-**explicit per-run choice** and **defaults it to HARD DELETE** — a reconciled contradiction (the user asked
-for exactly that for a bulk run; the one-off default is untouched, [compress_inside.mdx §4.1](./compress_inside.mdx)).
+global `compression.replace_original_to_trash` default (§7). The bulk **Compress Inside** dialog (§12)
+deliberately differs: it surfaces disposition as an **explicit per-run choice** and **defaults it to HARD
+DELETE** — a reconciled contradiction (the user asked for exactly that for a bulk run; the one-off default
+is untouched, §12.5).
 
 The engine honors a per-call `deleteOriginal: "hard" | "trash"` override (`CompressFileOpts`) that **wins
 over the global default** — `"hard"` → `fs.unlinkSync`, `"trash"` → `trashOriginal`; when omitted it falls
@@ -409,7 +523,7 @@ thread cap** — the knob that lets the queue pack many jobs into the budget wit
   default** and that one interactive file finishes as fast as the machine allows. This is the §2 corollary of
   the parallelization policy ([parallelization.mdx §2](./parallelization.mdx)).
 * **A batch caps each job so the queue can fan WIDE/NARROW.** When the background queue drains a **"Compress
-  inside"** run over **many** files ([compress_inside.mdx](./compress_inside.mdx)), each `compress` task is
+  inside"** run over **many** files (§12), each `compress` task is
   **thread-capped** so `concurrentJobs × threadsPerJob ≈ budget`, never `cores²`
   ([parallelization.mdx §2](./parallelization.mdx), LOCKED). The two media kinds fan **opposite** directions
   because their tools have opposite threading profiles:
@@ -576,6 +690,21 @@ Surfacing the codec + compressed-state and the Compress action per file is handl
    111,360→28,253 bytes; a second pass on the output → `skipped (marker)`, no re-encode. (Reading the
    Local-Storage compression record to prune the batch up-front is a tracked speed follow-up, not required
    for this.)
+10. **Never leaves a broken file (§5, the data-safety guarantee, LOCKED):** before the irreversible
+    replace, the output must (a) exit 0 with bytes > 0, (b) **decode** — unreadable output dimensions
+    **block** the replace and keep the original (the 2026-07 fix, independent of `preserve_resolution`),
+    (c) keep the exact resolution, and (d) be smaller (except a `formatConvert` compatibility conversion).
+    The original goes to **recoverable trash** by default. Regression guarded: a ~134-byte truncated JPEG
+    (passes `safeSize`, fails to probe) is now caught and the original preserved.
+11. **The "Compress inside" dialog (§12, LOCKED):** the directory `⋮` / right-click "Compress
+    videos/images inside…" and the page-level "Compress videos / Compress images" links open a
+    darkened-backdrop **pop-over modal** (never `window.confirm`) with four inputs — **Images**, **Videos**,
+    **also-recursive (default ON)**, and an **Originals** radio (**Hard delete DEFAULT** / recoverable
+    trash) — plus the red PNG→JPEG warning shown only while Images is checked. **Continue** is disabled
+    unless a kind is checked, plans + enqueues a **per-file-safe** background batch, and **returns
+    immediately**; each file is temp → verify → dispose independently (a part-way error leaves that
+    original untouched and the batch continues), errored files are listed on finish, and the batch drains
+    against the media-aware core budget (§8.3).
 
 ## 11. The Compress status icon & the Compress tab (LOCKED)
 
@@ -599,6 +728,213 @@ single source of truth `compressInfo(name)` in `~/BGit/Bryan_git/LargeFileBridge
 
 The Compress status icon is rendered in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/CompressStatusIcon.tsx` — `CompressStatusIcon` (state from the new `FileRow.compress` field composed in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows`).
+
+---
+
+## 12. "Compress videos & images inside…" — the pop-over dialog + per-file-safe batch (LOCKED)
+
+The user navigates the [File System](./file_system.mdx) column browser to some mid-level directory, opens
+that directory's **`⋮`** menu (or right-clicks it), and picks **"Compress videos/images inside…"**
+([menus.mdx §5.2](./menus.mdx)). That opens a **pop-over configuration dialog** whose **Continue** wires a
+background, **per-file-safe** batch compression of that directory. The same dialog also backs the
+page-level **"Compress videos / Compress images"** action-links ([page_actions.mdx §4](./page_actions.mdx))
+on any file-list page — those links open this dialog scoped to the page's directory, with the matching kind
+pre-checked.
+
+### 12.1 Why a pop-over, not a browser confirm (LOCKED)
+
+The trigger must **never** fire a bare `window.confirm` — a jarring hard dialog with no options. Instead:
+
+* The trigger opens a **modal pop-over**: a fixed full-screen **darkened, semi-transparent backdrop**
+  (`bg-black/40`, what's behind stays faintly visible) with a **centered white card** on top — the app's
+  standard hand-rolled modal ([dialogs.mdx](./dialogs.mdx): no native browser dialogs, ever).
+* Backdrop-click cancels, inner click does not bubble, **Esc** cancels, and the **Cancel** control is
+  focused by default so the batch is never one stray **Enter** away.
+
+The dialog is a **web modal, not a native prompt**, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/compress/CompressInsideDialog.tsx` —
+`CompressInsideDialog` (the fixed `bg-black/40` overlay + centered card, `stopPropagation`, Esc-to-cancel).
+
+### 12.2 How the dialog is opened (one shared bus)
+
+Both entry points open the **same** dialog through a single app-level provider + event bus, so no call-site
+wires the modal itself:
+
+1. **Directory `⋮` / right-click → "Compress videos/images inside…"** ([menus.mdx §5.2](./menus.mdx)) opens
+   it scoped to that directory, **both** kinds pre-checked.
+2. **Page action-links "Compress videos" / "Compress images"** ([page_actions.mdx §4](./page_actions.mdx))
+   open it scoped to the page's directory, with **only the clicked kind** pre-checked so the label matches
+   what the user asked for.
+
+Opening the dialog from anywhere is a single bus call (path + which kinds start checked), handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/compressInside.ts` — `openCompressInside()`
+/ `onCompressInsideRequested()` (the single-slot bus), consumed by the once-mounted
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/compress/CompressInsideProvider.tsx`
+— `CompressInsideProvider` (mounted at the app root in `.../frontend/src/main.tsx`). The directory catalog
+item calls the bus instead of the old confirm:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` —
+`buildActions()` (the `compress-dir` action's `onSelect` → `openCompressInside(v.path, { images: true, videos: true })`);
+the page-level links call it with a single kind via `.../frontend/src/lib/pageActions.ts` —
+`compressAllVideos()` / `compressAllImages()`.
+
+### 12.3 The dialog anatomy (LOCKED)
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│  🗜  Compress videos & images inside                            │
+│  ~/Movies/Trip_2026                                             │
+│                                                                 │
+│   ☑  Images                                                     │
+│   ⚠  Warning: PNG files will be turned into JPEG files.         │ ← red; only while Images is checked
+│   ☑  Videos                                                     │
+│   ☑  Also compress recursively in subdirectories                │ ← default ON
+│                                                                 │
+│   Originals                                                     │
+│     ◉  Hard delete                                              │ ← DEFAULT
+│     ○  LargeFileBridge trash (recoverable)                      │
+│                                                                 │
+│                                   [ Cancel ]   [ Continue ]     │
+└───────────────────────────────────────────────────────────────┘
+```
+
+The controls, in order, all LOCKED:
+
+1. **Images** — a checkbox. When **on**, image files are included.
+2. **PNG→JPEG warning** — the line **directly under the Images checkbox**, shown **only while Images is
+   checked**, tinted **red** (`var(--lfb-bad)`): **"Warning: PNG files will be turned into JPEG files."**
+   (The engine's alpha-safety check still protects genuinely-transparent PNGs — §6 — but the warning
+   states the common outcome plainly up front.)
+3. **Videos** — a checkbox. When **on**, video files are included.
+4. **Also compress recursively in subdirectories** — a checkbox, **default ON**. When off, only the chosen
+   directory's **immediate** files are compressed; when on, the whole subtree is (skipping the same
+   hidden / tracking / build-output dirs the scan skips, [scan.mdx §4](./scan.mdx) `HARD_SKIP`).
+5. **Originals** — a **radio group** (exactly one selected) deciding what happens to each original **after**
+   its file compresses successfully:
+   * **Hard delete** — **the DEFAULT**. The original is `unlink`-ed (permanently removed).
+   * **LargeFileBridge trash (recoverable)** — the original is moved to the LFBridge trash under the state
+     dir (recoverable), the same trash a per-file Compress uses.
+6. **Continue** / **Cancel** — **Continue** starts the batch (§12.6); **Cancel** closes with no effect.
+   **Continue is disabled** while **neither Images nor Videos** is checked (nothing to do).
+
+> **At least one kind (LOCKED).** With both Images and Videos unchecked there is nothing to compress, so
+> Continue is disabled and the enqueue endpoint also rejects the empty selection with a `400` — the UI
+> never sends a no-kind request.
+
+The four inputs, the conditional red PNG warning, the default-on recursive box, and the delete-defaulted
+radio are rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/compress/CompressInsideDialog.tsx`
+— `CompressInsideDialog` (state: `images`/`videos`/`recursive`/`deleteOriginal`; the PNG warning gated on
+`images`; Continue gated on `images || videos`).
+
+### 12.4 The per-file transactional safety rule (LOCKED — the load-bearing invariant)
+
+This is the heart of the bulk flow and it is **LOCKED**. The batch treats **each file independently** and
+it **never deletes an original that did not successfully compress**:
+
+* **Per file, in order:** compress the file to a **temp** output, **verify** it (§5: decode, same
+  resolution, real size gain), and **only then** dispose of the original per the Originals radio
+  (hard-delete or trash) and move the temp into place.
+* **A file that errors part-way is left completely untouched.** If a file's transcode fails, or its output
+  fails verification, or the alpha check blocks it, **its original is not deleted** — neither hard-deleted
+  nor trashed — and the temp is discarded. The batch **records the error and continues to the next file**.
+  One bad file never halts the run and never endangers a different file's original.
+* **Half-done is safe.** If the run compresses the first ten files fine (and, with Hard delete chosen,
+  those ten originals are gone) and the eleventh errors, the eleventh's original **remains on disk**; files
+  twelve onward still process. Deletion is strictly downstream of that one file's verified success.
+* **Final error list.** When the whole run finishes, the files that errored are **shown to the user as a
+  list** (with each file's reason). A clean run shows a success summary and no list.
+
+This safety is structural: disposal lives at the very end of the single-file path in the engine, reached
+only after verify + gain (§5). It is enforced in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`compressFile()` (the disposition block runs only after the integrity/resolution/gain checks; on any
+earlier failure it returns a `blocked`/`failed` result **without** touching the original). The per-op
+override the radio drives is the `deleteOriginal` field of `CompressFileOpts` (`"hard"` → `fs.unlinkSync`,
+`"trash"` → `trashOriginal`). The batch's per-file isolation (catch a task's throw, record it against the
+batch, move on) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` —
+`runTask()` (the `compress` branch: `track(...)` around `compressFile`, then `recordBatchResult()`;
+`compressed`/`skipped` count as OK, `blocked`/`failed` are recorded as errors; a thrown task is still
+counted so the batch always finishes) and `recordBatchResult()` (appends `{ path, reason }` to the batch's
+`errors[]`).
+
+### 12.5 The default-hard-delete contradiction, reconciled (LOCKED)
+
+§1.5 / §8 and the charter say a compressed file's original always goes to the **recoverable LFBridge
+trash** — never hard-deleted — and that stays the default for a **one-off** Compress (the file/viewer menu,
+[menus.mdx §5.3](./menus.mdx)). **This bulk dialog deliberately differs:** it makes disposition an
+**explicit per-run choice** and **defaults it to Hard delete**, because the user asked for exactly that.
+The reconciliation:
+
+* The **global** `compression.replace_original_to_trash` setting still governs one-off compresses (trash by
+  default).
+* This **dialog's radio** is a **per-run override** passed to the engine (`deleteOriginal`), so a bulk run
+  does what the user picked **for that run** regardless of the global default.
+* The dialog's **default is Hard delete**; the user can switch to the recoverable trash for any run.
+
+The per-run override winning over the global default is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`compressFile()` (`const disposition = o.deleteOriginal ?? (settings.replaceOriginalToTrash ? "trash" : "hard")`).
+
+### 12.6 Continue → background batch, return immediately (LOCKED)
+
+**Continue** does **not** run the work in the request. It calls the enqueue endpoint, which plans the set
+and hands it to the [background queue](./job_queue.mdx), then **returns immediately** so the user can keep
+navigating other tabs while the batch drains ([processing.mdx](./processing.mdx)).
+
+* **The walk (server-side).** The endpoint walks the directory for the **selected kinds**, honoring the
+  **recursive** flag and skipping the scan's `HARD_SKIP` / hidden / tracking dirs. It includes only files
+  whose **extension heuristic** (`compressInfo`) says they should compress, so already-lossy extensions are
+  dropped with zero I/O. The stronger, cross-machine skip — the authoritative **in-file marker** (§8.4) —
+  is enforced **per file when it reaches the front of the queue**, inside `compressFile()`: a file that
+  already carries our `comment` marker (`LFBcompressed;…`) returns `skipped ("already compressed (marker)")`
+  **before any transcode**. That is why a **re-run** (a second pass after a reboot) — and a run on
+  **another computer in the mesh** that already has the compressed files — skips them **instantly instead
+  of re-encoding**: the marker rides inside the file's bytes over IPFS. As it goes, the walk **stamps each
+  eligible file with its media kind** — `image` or `video` — because the two kinds draw **different**
+  concurrency budgets downstream (§8.3, [job_queue.mdx §3](./job_queue.mdx)).
+* **A batch is created** grouping those files, and each file is enqueued as a `compress` task carrying the
+  chosen `deleteOriginal` mode, the stamped **`mediaKind`** (image vs video), and the `batchId`.
+* **The plan returns immediately** — `{ batchId, considered, eligible, queued, images, videos }` — and a
+  single toast states what will happen (§12.7). The queue drains the tasks against the **media-aware
+  mass-compute core budget** (§8.3, [parallelization.mdx](./parallelization.mdx)): **image** tasks fan
+  **wide** — ≈90% of cores, one thread each — while **video** tasks fan **narrower** — `floor(budget /
+  videoThreads)` jobs, each ffmpeg `-threads`-capped — so `concurrentJobs × threadsPerJob ≈ budget`, never
+  `cores²`. A folder of 300 files therefore **pins the machine near 90%** until it's done, instead of
+  crawling two-at-a-time. The heavy transcode runs via an **async** `spawn` (`runAsync()`) so it **never
+  blocks the event loop**.
+
+> **Parallelism does not weaken the safety rule (§12.4, LOCKED).** Draining many files at once changes
+> **how many** files are in flight, never **how** each one is handled: every file is still processed
+> **independently** — temp → verify → dispose — so the transactional guarantee of §12.4 is **unchanged**.
+
+`POST /api/compress/inside` with body `{ root, images, videos, recursive, deleteOriginal }` returns the
+`CompressInsidePlan`, implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.router.ts` —
+`POST /inside` (rejects a no-kind selection with `400`) →
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`enqueueCompressInside()` / `walkCompressible()`, which creates the batch via `jobqueue.service.ts` —
+`createBatch()` and enqueues through `enqueue()`. The client method is
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `compressInside()`.
+
+### 12.7 The notification (LOCKED wording)
+
+On Continue, one toast states what was queued (never a silent start):
+
+* **Something eligible** → **"{N} files will be compressed"** (`N` = the `queued` figure from the plan).
+* **Nothing eligible** (no files of the selected kinds under the directory, or all already compressed) →
+  **"Nothing to compress here — no {images/videos} that need it"** — an honest no-op, no batch card.
+
+When the batch **finishes**, the user is told the outcome and, if any errored, pointed at the list
+([processing.mdx §4](./processing.mdx)):
+
+* **Clean** → **"Compressed {done} files"**.
+* **With errors** → **"Compressed {done} files — {failed} had errors"**, and the failed files are shown as
+  a list on the [Processing page](./processing.mdx) (each with its reason).
+
+The Continue toast is emitted from the plan in `CompressInsideDialog.tsx` (`onContinue` toasts the returned
+`queued`); the finish summary + the error list live in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingPage.tsx`.
 
 <!--
   Compression engine for IMAGE + VIDEO (audio later). Explicit user action only (one / checked / whole
@@ -632,7 +968,7 @@ The Compress status icon is rendered in code:
   ~/T/_large_files_bridge/repos/<repoKey>/analysis/<rel>/compression.yaml in walkCompressible() to drop
   known-compressed files from the batch up-front (avoids the per-file probe on a same-machine re-run).
   Verified E2E: 111360→28253 bytes, second pass skipped (marker).
-  BULK (§8.2, compress_inside.mdx): the Compress Inside dialog drives compressFile file-by-file with a
+  BULK (§8.2 + §12, the absorbed compress_inside): the Compress Inside dialog drives compressFile file-by-file with a
   per-run `deleteOriginal: "hard"|"trash"` override (CompressFileOpts) that WINS over the global
   replace_original_to_trash default (bulk DEFAULTS to hard delete; one-off stays recoverable-trash). Heavy
   transcode runs via async spawn (runAsync) so a background batch never blocks the event loop.

@@ -367,7 +367,7 @@ both draw from the **same** shared helper, and the two named budgets are defined
 - **Where:** `code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `pump()` drained each op
   under **hard-coded per-type caps** (`transcribe` 2 / `describe` 3 / `compress` 2), computed with **no
   reference to the machine's core count**. The caps were tuned for the smallest box and never scaled up.
-- **Symptom:** A **"Compress inside"** run ([compress_inside.mdx](./compress_inside.mdx)) over **300 files**
+- **Symptom:** A **"Compress inside"** run ([compression.mdx §12](./compression.mdx)) over **300 files**
   crawled **2-at-a-time on a 16-core box** — ≈**12% utilization** — while 14 cores sat idle. The more cores
   a user had, the more the queue wasted; the fixed cap capped throughput regardless of the hardware.
 - **Fix (done):** The queue now draws the shared **media-aware CORE BUDGET**

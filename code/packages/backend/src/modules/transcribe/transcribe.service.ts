@@ -184,14 +184,23 @@ export function enqueueTranscribe(opts: { paths?: string[]; root?: string; overw
       unsupported++;
       continue;
     }
-    const tp = resolveTranscriptPath(abs);
-    // A file that needs first-time setup has no real destination yet — never counts as already-done.
-    if (!overwrite && !tp.needsSetup && exists(tp.transcriptPath)) {
-      alreadyDone++;
-      continue;
+    // Resolving the placement must not be fatal to the whole enqueue (mirror of previewTranscribe). On a
+    // resolve failure, still queue the file — the per-file transcribe job records its own failure — rather
+    // than 400-ing Confirm and dropping the entire batch.
+    let needsSetupForThis = false;
+    try {
+      const tp = resolveTranscriptPath(abs);
+      // A file that needs first-time setup has no real destination yet — never counts as already-done.
+      if (!overwrite && !tp.needsSetup && exists(tp.transcriptPath)) {
+        alreadyDone++;
+        continue;
+      }
+      needsSetupForThis = tp.needsSetup;
+    } catch (e) {
+      log.warn("transcribe", `enqueue: could not resolve transcript state for ${abs}: ${(e as Error).message}`);
     }
     eligible.push(abs);
-    if (tp.needsSetup) needSetup++;
+    if (needsSetupForThis) needSetup++;
   }
   // First-time gate (Transcribe.mdx §3.5): if EVERY eligible file needs setup (no Personal storage owns
   // them), queue nothing and tell the UI to open the wizard with a representative path.
@@ -223,10 +232,18 @@ export function previewTranscribe(opts: { paths?: string[]; root?: string; overw
       unsupported++;
       continue;
     }
-    const tp = resolveTranscriptPath(abs);
-    if (!overwrite && !tp.needsSetup && exists(tp.transcriptPath)) {
-      alreadyDone++;
-      continue;
+    // Resolving the transcript placement (or checking an existing transcript) must NEVER be fatal to the
+    // whole preview — a single un-resolvable candidate would otherwise 400 /transcribe/plan and the batch
+    // popup would never open (dialogs.mdx §6.4). Treat a resolve/read failure as "not yet transcribed" so
+    // the file is still OFFERED rather than dropping the whole scan.
+    try {
+      const tp = resolveTranscriptPath(abs);
+      if (!overwrite && !tp.needsSetup && exists(tp.transcriptPath)) {
+        alreadyDone++;
+        continue;
+      }
+    } catch (e) {
+      log.warn("transcribe", `preview: could not resolve transcript state for ${abs}: ${(e as Error).message}`);
     }
     let sizeBytes = 0;
     try {

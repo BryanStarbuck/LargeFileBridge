@@ -72,8 +72,12 @@ export type WarningTargetPreview = {
 //      receives the checked ids and the left-pane options decide what to do.
 export type WarningTarget = {
   id: string; // stable key — usually the absolute path (also what apply() receives)
-  label: string; // display name (repo-relative or middle-truncated absolute path)
-  sublabel?: string; // size and/or fuller path, shown muted under the label
+  label: string; // fallback display text when `name` is absent (repo-relative or middle-truncated path)
+  // §4.5 two-line row layout — preferred over label/sublabel:
+  name?: string; // ROW 1 left — the file's basename; the ROW strips the extension for display
+  sizeText?: string; // ROW 1 right — right-aligned size ("128 MB") or a directory rollup ("12 videos")
+  pathText?: string; // ROW 2 — the path, light-gray smaller font (repo-relative or middle-truncated abs)
+  sublabel?: string; // LEGACY fallback for the ROW-2 line when `pathText` is absent (shown muted)
   defaultChecked?: boolean; // single-checkbox model: default true; false opts the row OUT at open (rare)
   axes?: WarningTargetAxes; // per-row-toggles model (§4.5.1) — present ⇒ row shows up-to-3 axis toggles
   preview?: WarningTargetPreview; // §4.5.2 — media the left pane previews on hover/focus

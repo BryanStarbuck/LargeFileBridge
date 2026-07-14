@@ -216,7 +216,7 @@ The repo action catalog (Open / Work / Config / Copy, and Remove-repo that unreg
 | Create | **Create AI descriptions** | mutate | Same popup, for describable images/videos under this directory ([dialogs.mdx §5/§6.4](./dialogs.mdx)) — a **"Describe N files"** confirm, provider/model-gated. |
 | Work | **Rescan** | mutate | Discovery scan of this directory now (`scan` op). |
 | Work | **Track / Pin this directory** | mutate | Add it to the computer pin unit ([storage §8](./storage_local.mdx#8-pincomputer--the-whole-computer-pin-unit)); the files inside become triage-able. |
-| Work | **Compress videos/images inside…** | mutate | Opens the **Compress Inside pop-over dialog** ([compress_inside.mdx](./compress_inside.mdx)) — a darkened-backdrop modal (Images / Videos / "also recursive" checkboxes, a **red** PNG→JPEG warning shown while Images is checked, and an **Originals** radio [Hard delete default / LargeFileBridge trash]) whose **Continue** background-queues a per-file-safe batch. The batch **fans the eligible files out across the machine's cores (≈90%)** via the **media-aware** background queue — image files wide (1 thread each), video files thread-capped — so a big folder pins the box near 90% until done, not two-at-a-time ([parallelization.mdx §5](./parallelization.mdx), [compress_inside.mdx](./compress_inside.mdx)). **Not** a `window.confirm`. Offer only, **explicit click only** (charter: video 1st, image 2nd; §6.1). |
+| Work | **Compress videos/images inside…** | mutate | Opens the **Compress Inside pop-over dialog** ([compression.mdx §12](./compression.mdx)) — a darkened-backdrop modal (Images / Videos / "also recursive" checkboxes, a **red** PNG→JPEG warning shown while Images is checked, and an **Originals** radio [Hard delete default / LargeFileBridge trash]) whose **Continue** background-queues a per-file-safe batch. The batch **fans the eligible files out across the machine's cores (≈90%)** via the **media-aware** background queue — image files wide (1 thread each), video files thread-capped — so a big folder pins the box near 90% until done, not two-at-a-time ([parallelization.mdx §5](./parallelization.mdx), [compression.mdx §12](./compression.mdx)). **Not** a `window.confirm`. Offer only, **explicit click only** (charter: video 1st, image 2nd; §6.1). |
 | Work | **Git ignore** | mutate | Opens the **Git Ignore pop-over dialog** ([git_ignore.mdx](./git_ignore.mdx)) scoped to this directory (Recursive checkbox shown; off = the immediate files via `/dir/*` + `!/dir/*/`, on = the whole folder `/dir/`). The dialog is the confirm (§6.1). |
 | Flag | **Never IPFS** (toggle) | mutate | Sticky per-directory flag: nothing under here is ever added to IPFS / pinned, and no "add to IPFS" offers appear for it (§6.6). Turning it **on** clears any `sync` decisions on files below and stops offering them; turning it **off** returns them to `undecided`. |
 | Flag | **Do not compress** (toggle) | mutate | Sticky per-directory flag: suppress the `C` "should compress" badge/offer for media under here — the user has said "leave these alone" (§6.6). |
@@ -339,7 +339,7 @@ These are charter rules the menus must honor — they are **why** several action
 ### 6.1 Never act on files without an explicit click — and NEVER via a native browser dialog (LOCKED)
 **Compress, convert (PNG→compressible), and git-ignore are OFFERS, not automatic.** They exist in the
 menu, but selecting one **opens a pop-over configuration dialog** that *is* the confirm step — the
-[Compress Inside dialog](./compress_inside.mdx) for compress, the [Git Ignore dialog](./git_ignore.mdx)
+[Compress Inside dialog](./compression.mdx) for compress, the [Git Ignore dialog](./git_ignore.mdx)
 for git-ignore, and the alpha-channel/functionality warning for a convert — LFB never compresses,
 converts, or writes a `.gitignore` entry on its own (charter: "Never compress or alter a file unless the
 user explicitly asks"; "Never add a `.gitignore` entry automatically"). Once applied, the work runs
@@ -359,7 +359,7 @@ The explicit-click Compress OFFER with its `confirmModal` step (never compresses
 
 > **Directory compress is no longer a native confirm (§5.2).** The old bare browser confirm for
 > **Compress videos/images inside…** is **superseded** by the pop-over configuration dialog in
-> [compress_inside.mdx](./compress_inside.mdx) (four inputs + a per-file-safe background batch). The
+> [compression.mdx §12](./compression.mdx) (four inputs + a per-file-safe background batch). The
 > single-file **Compress…** offer (§5.3) is unchanged in intent — it stays a confirm-gated per-file offer,
 > but its confirm is now a **`ConfirmDialog`** ([dialogs.mdx](./dialogs.mdx)), not a `window.confirm`.
 

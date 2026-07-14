@@ -42,10 +42,15 @@ function plural(n: number): string {
   return n === 1 ? "" : "s";
 }
 
-/** Middle-truncate a long absolute path for the target label so the popup rows stay readable. */
+/** Middle-truncate a long absolute path for the target's ROW-2 path line so the popup rows stay readable. */
 function labelForPath(p: string): string {
   if (p.length <= 60) return p;
   return `${p.slice(0, 28)}…${p.slice(-30)}`;
+}
+
+/** The file's basename (§4.5 ROW 1); the popup row strips the extension for display. */
+function basename(p: string): string {
+  return p.split("/").pop() || p;
 }
 
 // ── Transcribe ──────────────────────────────────────────────────────────────────────────────────────
@@ -88,7 +93,9 @@ export async function openTranscribeBatch(scope: BatchScope): Promise<void> {
       targets: plan.files.map((f) => ({
         id: f.path,
         label: labelForPath(f.path),
-        sublabel: formatBytes(f.sizeBytes),
+        name: basename(f.path),
+        sizeText: formatBytes(f.sizeBytes),
+        pathText: labelForPath(f.path),
       })),
       targetNoun: "file",
       actionLabel: "Transcribe",
@@ -170,7 +177,9 @@ export async function openDescribeBatch(scope: BatchScope): Promise<void> {
       targets: plan.files.map((f) => ({
         id: f.path,
         label: labelForPath(f.path),
-        sublabel: formatBytes(f.sizeBytes),
+        name: basename(f.path),
+        sizeText: formatBytes(f.sizeBytes),
+        pathText: labelForPath(f.path),
       })),
       targetNoun: "file",
       actionLabel: "Describe",
@@ -185,13 +194,20 @@ export async function openDescribeBatch(scope: BatchScope): Promise<void> {
         invalidate: [["repos"], ["fs"]],
       },
       apply: async (_sel, checkedPaths) => {
-        const enq = await api.describeEnqueue({ paths: checkedPaths });
-        if (enq.needsSetup) {
-          requestStorageSetup({
-            mediaPath: enq.setupPath ?? checkedPaths[0] ?? "",
-            actionLabel: "generate AI descriptions for",
-            retry: () => void openDescribeBatch({ paths: checkedPaths }),
-          });
+        // Mirror openTranscribeBatch's enqueue guard: a rejected enqueue must surface a clear message
+        // (not the popup host's generic error), and a needsSetup response routes into the storage wizard.
+        try {
+          const enq = await api.describeEnqueue({ paths: checkedPaths });
+          if (enq.needsSetup) {
+            requestStorageSetup({
+              mediaPath: enq.setupPath ?? checkedPaths[0] ?? "",
+              actionLabel: "generate AI descriptions for",
+              retry: () => void openDescribeBatch({ paths: checkedPaths }),
+            });
+          }
+        } catch (e) {
+          clientLog.error("batchPopup.describeEnqueue", e);
+          toast.error(e instanceof Error ? e.message : "Could not queue AI descriptions");
         }
       },
     },

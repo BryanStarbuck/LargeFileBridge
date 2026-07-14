@@ -210,6 +210,11 @@ function TodoSlug({ s, onOpen, onDismiss }: { s: TodoBatchSummary; onOpen: () =>
 }
 
 /** The recommended-action label for one item (shown in the popup list). */
+/** The file's basename (§4.5 ROW 1); the popup row strips the extension for display. */
+function basename(p: string): string {
+  return p.split("/").pop() || p;
+}
+
 function recommendLabel(it: TodoBatchItem): string {
   switch (it.category) {
     case "pull_down":
@@ -269,7 +274,9 @@ function BatchPopup({ id, onClose }: { id: string; onClose: () => void }) {
       return {
         id: it.path,
         label: it.path,
-        sublabel: `${formatBytes(it.sizeBytes)} · ${recommendLabel(it)}`,
+        name: basename(it.path),
+        sizeText: formatBytes(it.sizeBytes),
+        pathText: `${it.path} · ${recommendLabel(it)}`,
         // Transcribe is a single action → single include checkbox; every other batch → per-row toggles.
         axes: isTranscribe ? undefined : axesForItem(it),
         preview: kind ? { kind, url: "" } : undefined, // url resolved lazily via mediaGrant on hover

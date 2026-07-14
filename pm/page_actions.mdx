@@ -73,7 +73,7 @@ Siblings this builds on and does not repeat:
   behaviour (scope, skip, queue, toast), those files own the *engine*.
 * [webapp.mdx §10–§14](./webapp.mdx) — the **progress dock** + job registry the queued work surfaces
   through, and the bounded-concurrency model.
-* [compress_inside.mdx](./compress_inside.mdx) / [git_ignore.mdx](./git_ignore.mdx) — the **pop-over
+* [compression.mdx §12](./compression.mdx) / [git_ignore.mdx](./git_ignore.mdx) — the **pop-over
   dialogs** the **Compress videos / Compress images** and **Git ignore** links open (this file owns the
   *links*; those own the *dialogs + engines*).
 
@@ -323,11 +323,11 @@ bar ([media_viewer.mdx](./media_viewer.mdx)), not this page row. (View-one-file'
 > **Producing actions are the LOCKED core of this spec.** **Create Transcriptions** and **Create AI
 > descriptions** appear on **every file-list page** and behave identically everywhere (§1–§2). The other
 > links are the page's pre-existing operations shown inline; their engines are specified in their own files
-> ([compression.mdx](./compression.mdx), [compress_inside.mdx](./compress_inside.mdx), [scan.mdx](./scan.mdx), [ipfs_share_files.mdx](./ipfs_share_files.mdx)).
+> ([compression.mdx §12](./compression.mdx), [scan.mdx](./scan.mdx), [ipfs_share_files.mdx](./ipfs_share_files.mdx)).
 
 > **Compress links open the Compress Inside dialog (LOCKED).** The **Compress videos** / **Compress images**
 > action-links do **not** run inline or fire a bare `window.confirm` — they open the **Compress Inside**
-> pop-over dialog ([compress_inside.mdx](./compress_inside.mdx)) scoped to the page's directory, with the
+> pop-over dialog ([compression.mdx §12](./compression.mdx)) scoped to the page's directory, with the
 > **matching kind pre-checked** (videos-only or images-only). They stay **red-tinted, confirm-gated offers**
 > (§3, [menus.mdx §6.1](./menus.mdx)): the dialog *is* the confirm step, and its **Continue**
 > background-queues the per-file-safe batch.
@@ -485,7 +485,7 @@ The routes are mounted on the existing feature routers:
   collapses into a RIGHT-PINNED "More ▾" popover rendered only when overflow.length>0 — never a second row.
   Labels are SHORT: "Compress videos" / "Compress images" / "Git ignore" (was "Compress all videos…" /
   "Git-ignore big files…"). Destructive links (compress/git-ignore/delete) tinted red + confirm modal.
-  Compress links → compress_inside.mdx dialog; the Git ignore link → git_ignore.mdx dialog.
+  Compress links → compression.mdx §12 dialog; the Git ignore link → git_ignore.mdx dialog.
 
   THREE LOCKED behavior rules (unchanged by the reversal):
    (1) SCOPE — nothing checked => ALL files on the page RECURSIVELY; ≥1 checked => exactly the checked set

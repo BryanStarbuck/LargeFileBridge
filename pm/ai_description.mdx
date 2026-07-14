@@ -592,6 +592,44 @@ menu — is specified in **§5.1** (scope / skip-already-done / background-queue
 Transcriptions**). The §9.4 kebab items walk **one** entity; the §5.1 page action honours the **whole
 page's checked-or-all set** and obeys the three LOCKED page-action rules.
 
+### 9.6 The popup must ALWAYS open — the non-fatal-preview guarantee (LOCKED)
+
+Every entry point in §9 (and the metric tile / header primary, §12) opens the **one unified batch-confirm
+popup** ([dialogs.mdx §6.4](./dialogs.mdx)) so the user is shown the candidate list, educated on what will
+happen, and only then clicks the blue **Describe N files** button. **Choosing "Create AI descriptions" from
+a directory right-click, a directory/repo ⋮ kebab, or a page action MUST open that popup** — a click that
+does nothing is a defect (the same defect-class the transcription async fix closed,
+[Transcribe.mdx §5.1](./Transcribe.mdx#51-async--non-blocking--the-generate-transcript-didnt-work-fix-locked)).
+Two failure modes are LOCKED closed:
+
+* **(a) Symmetry on every ⋮/right-click surface (LOCKED).** Wherever **Create Transcriptions** appears,
+  **Create AI descriptions** appears **beside it**, wired to `openDescribeBatch(...)` the same way
+  `openTranscribeBatch(...)` is. The reported bug — a repo row's ⋮ opened Transcribe's popup but "Create AI
+  descriptions" was **missing entirely** — was exactly this asymmetry. Enforced in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `RepoKebab`
+  (the `create-transcriptions` **and** `create-descriptions` actions), and
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` —
+  `buildActions()` (both actions for a file **and** a directory target). The launchers live in
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` —
+  `openDescribeBatch()` / `openTranscribeBatch()`.
+
+* **(b) The preview must be NON-FATAL per candidate (LOCKED).** The popup opens off the result of
+  `POST /api/describe/plan`. If planning that scope **throws** — e.g. resolving one candidate's description
+  placement fails — the whole request returns **400**, the launcher swallows it into a toast and **returns
+  without opening the popup** (`batchPopup.ts` `openDescribeBatch` catch → `toast.error` → `return`). So a
+  **single** un-resolvable file under a directory used to sink the entire scan and the popup never appeared.
+  The fix: per-candidate resolution is **wrapped so one bad file is skipped, never fatal** — the file is
+  still offered rather than dropping the whole scan. Implemented in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` —
+  `previewDescribe()` (the try/caught `resolveDescriptionPath` / `readDescription` block) and
+  `enqueueDescribe()` (the same guard so **Confirm** likewise can't 400 on one bad file). The identical
+  hardening is mirrored on the transcription side in
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` —
+  `previewTranscribe()` / the transcribe enqueue.
+
+An **empty** scope is **not** a failure: `previewDescribe` returns zero files and the popup still opens in
+its all-clear state ("Nothing to describe here"), so the click is never a silent no-op.
+
 ---
 
 ## 10. The provider-readiness gate — `withDescribeReady` (LOCKED — mirror of `withModelReady`)
@@ -877,6 +915,15 @@ external-provider opt-in).
     image/video files lacking a `.ai_description`; each renders as a **describe slug** whose ~80% popup
     **Apply** enqueues background `describe` jobs; completed files gain a `.ai_description` and drop out of
     the next run.
+15. **The popup ALWAYS opens (§9.6, LOCKED):** choosing **Create AI descriptions** from a directory
+    right-click, a directory/repo ⋮ kebab, or a page action **opens the unified batch-confirm popup** —
+    never a silent no-op. (a) **Symmetry:** wherever **Create Transcriptions** appears, **Create AI
+    descriptions** appears beside it wired to `openDescribeBatch` — the repo-row ⋮ (`RowKebabs.RepoKebab`)
+    and both file+directory targets in `EntityMenu.buildActions` carry both. (b) **Non-fatal preview:**
+    `previewDescribe` / `enqueueDescribe` wrap per-candidate placement resolution so **one un-resolvable
+    file can never 400** `/describe/plan` (or `/enqueue`) and suppress the popup; the same guard is mirrored
+    in `previewTranscribe` / the transcribe enqueue. An **empty** scope still opens the popup in its
+    all-clear "Nothing to describe here" state.
 
 <!--
   AI description = hyper-detailed searchable description of an IMAGE or VIDEO via a vision provider.
@@ -892,6 +939,14 @@ external-provider opt-in).
   lib/transcribe.ts), shared 3-way PLACEMENT RADIOS (§13, placement_radios.mdx/repo_settings.mdx —
   .ai_description obeys the SAME radio as .transcription per artifact_placement_policy.mdx). THE ONE
   DELIBERATE ASYMMETRY: description = hosted vision provider (key), transcription = local ASR model (download).
+  POPUP-ALWAYS-OPENS (§9.6 + acc.15, LOCKED, FIXED): the reported "right-click a folder → Create AI descriptions
+  does nothing" had TWO causes, both closed. (a) RowKebabs.RepoKebab was MISSING the create-descriptions item
+  (only create-transcriptions existed) → describe unreachable on the repo ⋮; added openDescribeBatch item beside it
+  (EntityMenu already symmetric for file+dir). (b) previewDescribe/enqueueDescribe called resolveDescriptionPath
+  per candidate UNWRAPPED → one un-resolvable file threw → /describe/plan 400 → batchPopup.openDescribeBatch catch
+  → toast+return → popup never opened; now try/caught per candidate (skip, don't drop the scan). Same guard mirrored
+  in previewTranscribe / transcribe enqueue. Empty scope still opens the all-clear popup. Also added describe apply
+  try/catch in batchPopup.ts for parity with transcribe.
   Code mirrors: modules/describe/ ↔ modules/transcribe/, lib/describe.ts ↔ lib/transcribe.ts,
   DescribeStatusIcon.tsx ↔ TranscribeStatusIcon.tsx, DescribeBatchPopup ↔ TranscribeBatchPopup,
   MetricsStrip describable panel, metricWarningDefs topRecommendation, units.service composeFileRows/

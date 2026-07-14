@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Dialogs (in-app HTML modals only, and the one unified batch-confirm popup)
-description: The cross-cutting spec that owns TWO product-wide rules this whole app obeys. (1) NO NATIVE BROWSER DIALOGS — Large File Bridge never calls window.confirm / window.alert / window.prompt. Every confirmation, every warning, and every text prompt is one of OUR in-app HTML modals: ConfirmDialog for a yes/no confirm, PromptDialog for a single text input (e.g. a move-file destination path), a toast for a passive notice, and the pop-over configuration dialogs (Compress Inside, Git Ignore) where the dialog IS the confirm. The imperative call sites that used to `if (!window.confirm(...))` now `await confirmModal(...)` / `await promptModal(...)` — thin promise-returning helpers backed by ONE ModalHost mounted at the app root, so a click handler can await a real HTML modal without threading React state. This file catalogs every conversion site so none is missed. (2) THE UNIFIED BATCH-CONFIRM POPUP — the "great pop-up" the Transcribable / Describable metric tile opens on the View-one-repo page is the SINGLE surface every "Create Transcriptions" / "Create AI descriptions" entry point opens, everywhere: the metric tile, the blue Transcribe ›/Describe › header primary, the page action-links row on EVERY file-list page (File System, one repo, a directory, Full paths, Storage detail), and the directory/file ⋮ kebab / right-click menu item. It is WarningPopup fed a transcribe/describe WarningDef — a checked-by-default candidate list, a live "Transcribe N files" / "Describe N files" solid-blue confirm, the model/provider consent gate on Apply, background enqueue, and the Processing surface. No producing action is ever a fire-and-forget toast or a window.confirm again. Sibling of page_actions.mdx (the action-links row that opens the popup), menus.mdx (the ⋮ catalogs + the old §6.1 confirm rule), task_tabs.mdx §5.1/§5.2.1 (the metric → popup confirm flow this generalizes), warnings.mdx (the WarningPopup component + WarningDef model), transcribe_calc_engine.mdx §4 / describe_calc_engine.mdx §4 (the ~80% popup shape), compress_inside.mdx / git_ignore.mdx (the two pop-over configuration dialogs), and file_system.mdx (the FS hub that carries both).
+description: The cross-cutting spec that owns TWO product-wide rules this whole app obeys. (1) NO NATIVE BROWSER DIALOGS — Large File Bridge never calls window.confirm / window.alert / window.prompt. Every confirmation, every warning, and every text prompt is one of OUR in-app HTML modals: ConfirmDialog for a yes/no confirm, PromptDialog for a single text input (e.g. a move-file destination path), a toast for a passive notice, and the pop-over configuration dialogs (Compress Inside, Git Ignore) where the dialog IS the confirm. The imperative call sites that used to `if (!window.confirm(...))` now `await confirmModal(...)` / `await promptModal(...)` — thin promise-returning helpers backed by ONE ModalHost mounted at the app root, so a click handler can await a real HTML modal without threading React state. This file catalogs every conversion site so none is missed. (2) THE UNIFIED BATCH-CONFIRM POPUP — the "great pop-up" the Transcribable / Describable metric tile opens on the View-one-repo page is the SINGLE surface every "Create Transcriptions" / "Create AI descriptions" entry point opens, everywhere: the metric tile, the blue Transcribe ›/Describe › header primary, the page action-links row on EVERY file-list page (File System, one repo, a directory, Full paths, Storage detail), and the directory/file ⋮ kebab / right-click menu item. It is WarningPopup fed a transcribe/describe WarningDef — a checked-by-default candidate list, a live "Transcribe N files" / "Describe N files" solid-blue confirm, the model/provider consent gate on Apply, background enqueue, and the Processing surface. No producing action is ever a fire-and-forget toast or a window.confirm again. Sibling of page_actions.mdx (the action-links row that opens the popup), menus.mdx (the ⋮ catalogs + the old §6.1 confirm rule), task_tabs.mdx §5.1/§5.2.1 (the metric → popup confirm flow this generalizes), warnings.mdx (the WarningPopup component + WarningDef model), transcribe_calc_engine.mdx §4 / describe_calc_engine.mdx §4 (the ~80% popup shape), compression.mdx §12 / git_ignore.mdx (the two pop-over configuration dialogs), and file_system.mdx (the FS hub that carries both).
 ---
 
 # LargeFileBridge — Dialogs (in-app HTML modals only, and the one unified batch-confirm popup)
@@ -38,7 +38,7 @@ Siblings this builds on and does not restate:
   popup is built on (§4.5 there = the two-pane checked list).
 * [transcribe_calc_engine.mdx §4](./transcribe_calc_engine.mdx) / [describe_calc_engine.mdx §4](./describe_calc_engine.mdx)
   — the ~80%-of-screen popup shape the batch popup uses.
-* [compress_inside.mdx](./compress_inside.mdx) / [git_ignore.mdx](./git_ignore.mdx) — the two **pop-over
+* [compression.mdx §12](./compression.mdx) / [git_ignore.mdx](./git_ignore.mdx) — the two **pop-over
   configuration dialogs** that already replace bare confirms for compress / git-ignore.
 
 ---
@@ -55,7 +55,7 @@ surfaces instead:
 | --- | --- | --- |
 | **Confirm a yes/no action** (Compress this? Move to trash? Stop pinning? Remove repo/peer/pin?) | **`ConfirmDialog`** — a fixed-overlay modal, backdrop + `Esc` cancel, **Cancel focused by default** so a destructive confirm is never one stray `Enter` away, red button for destructive. | §2.1 |
 | **Type one value** (the move-file destination path) | **`PromptDialog`** — the same modal shell with a single labelled text input, **Confirm disabled until non-empty**, `Enter` submits, `Esc` cancels. | §2.2 |
-| **Configure + confirm a batch** (compress videos/images inside; git-ignore) | the **pop-over configuration dialog** — [Compress Inside](./compress_inside.mdx) / [Git Ignore](./git_ignore.mdx); the dialog **is** the confirm. | those specs |
+| **Configure + confirm a batch** (compress videos/images inside; git-ignore) | the **pop-over configuration dialog** — [Compress Inside](./compression.mdx) / [Git Ignore](./git_ignore.mdx); the dialog **is** the confirm. | those specs |
 | **Confirm + adjust a producing batch** (Create Transcriptions / Create AI descriptions) | the **unified batch-confirm popup** (§5) — the checked-by-default candidate list. | §5 |
 | **Be passively told an outcome** ("28 files will have their Transcriptions created") | a **toast** ([sonner](./page_actions.mdx#2-the-notification-locked-wording)) — never `window.alert`. | page_actions.mdx §2 |
 
@@ -141,7 +141,7 @@ its right column. (Line numbers are indicative — match on the message text.)
 | `pages/repos/OneRepoPage.tsx` — "Compress {n} files? …" (batch) | `confirmModal` (danger) — or the compress popup where one exists |
 | `pages/repos/OneRepoPage.tsx` — "Transcribe {path}? …" (per-file) | `confirmModal` (or the single-file row-icon path, task_tabs.mdx §5) |
 | `pages/repos/OneRepoPage.tsx` — "Compress {path}? …" (per-file) | `confirmModal` (danger) |
-| `pages/entity/ViewOneDirectoryPage.tsx` — "Compress media inside {name}?" | the [Compress Inside](./compress_inside.mdx) dialog (already the pattern) or `confirmModal` |
+| `pages/entity/ViewOneDirectoryPage.tsx` — "Compress media inside {name}?" | the [Compress Inside](./compression.mdx) dialog (already the pattern) or `confirmModal` |
 | `pages/entity/MediaViewer.tsx` — "Compress {name}? …" | `confirmModal` (danger) |
 | `pages/entity/MediaViewer.tsx` — "Move file to (absolute path):" | `promptModal` |
 | `pages/entity/MediaViewer.tsx` — "Move {name} to LFBridge trash?" | `confirmModal` (danger) |
@@ -350,7 +350,7 @@ mechanics; this file owns what the popup does once opened.
   (1) NO NATIVE BROWSER DIALOGS (§1-§4): window.confirm/alert/prompt are BANNED in packages/frontend/src
       (grep must return 0 — §8.1). Replacements: ConfirmDialog (yes/no, Cancel-focused, red for danger),
       NEW PromptDialog (one text input, Confirm-disabled-until-nonempty), pop-over config dialogs
-      (compress_inside.mdx / git_ignore.mdx = the confirm), and the batch popup (§5). Imperative bridge:
+      (compression.mdx §12 / git_ignore.mdx = the confirm), and the batch popup (§5). Imperative bridge:
       NEW lib/modals.ts confirmModal()/promptModal() promise helpers backed by ONE app-root ModalHost
       (single-slot bus like setupWizard.requestStorageSetup / transcribe.requestModelConsent) so handlers
       `await confirmModal(...)`. §3 catalogs every site (EntityMenu ×4, RowKebabs ×3, OneRepoPage ×3,
@@ -375,7 +375,7 @@ mechanics; this file owns what the popup does once opened.
   Keep in sync with page_actions.mdx (the row — enqueue moves to Confirm), menus.mdx (§5.2/§5.3 catalogs +
   §6.1 confirm rule now points here), task_tabs.mdx §5.1/§5.2.1 (the flow generalized), warnings.mdx
   (WarningPopup/WarningDef), transcribe_calc_engine.mdx §4 / describe_calc_engine.mdx §4 (~80% popup),
-  compress_inside.mdx / git_ignore.mdx (the config dialogs), file_system.mdx (the FS hub).
+  compression.mdx §12 / git_ignore.mdx (the config dialogs), file_system.mdx (the FS hub).
 -->
 </content>
 </invoke>

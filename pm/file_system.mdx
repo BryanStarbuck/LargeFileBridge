@@ -419,7 +419,7 @@ Git ignore · Track / Pin this directory**
   plan/preview endpoint over that scope. This is present on every file-list page.
 * Compress / Git ignore links are **red-tinted explicit offers with a confirm modal** ([page_actions.mdx
   §3](./page_actions.mdx), [menus.mdx §6.1](./menus.mdx)) — never a one-click mutation. **Compress videos /
-  Compress images** open the **Compress Inside** dialog ([compress_inside.mdx](./compress_inside.mdx));
+  Compress images** open the **Compress Inside** dialog ([compression.mdx §12](./compression.mdx));
   **Git ignore** opens the **Git Ignore** dialog ([git_ignore.mdx](./git_ignore.mdx)), whose target is the
   **rightmost column that has a selection** (§5.1 generalized — [git_ignore.mdx §2](./git_ignore.mdx)).
 * Scope is the **deepest (rightmost) open column's directory** walked recursively when nothing is checked,
@@ -572,7 +572,7 @@ The directory/file entity menu's producing items opening the scoped batch popup 
     the **short-label** catalog items above (**Compress videos · Compress images · Git ignore**), following
     [page_actions.mdx](./page_actions.mdx) — a **single measured row** with a right-pinned **`More ▾`**
     overflow (§3.1), not a dropdown, never a second row. Compress / Git ignore are red-tinted confirm-gated
-    offers opening the [Compress Inside](./compress_inside.mdx) / [Git Ignore](./git_ignore.mdx) dialogs.
+    offers opening the [Compress Inside](./compression.mdx) / [Git Ignore](./git_ignore.mdx) dialogs.
 11. **Scope containment (§5.1):** with nothing checked, a producing action's scope is the **deepest
    (rightmost) open column's directory**, walked **recursively downward only**. Walking
    `Home → _Mirror → Politics → Charlie_Kirk_Mi` and clicking **Create Transcriptions** processes **only
@@ -647,7 +647,7 @@ The directory/file entity menu's producing items opening the scoped batch popup 
        Transcriptions · Create AI descriptions · Compress
        videos · Compress images · Git ignore · Track / Pin this directory. Labels are the SHORT forms;
        the row is ONE measured line with a right-pinned "More ▾" overflow (page_actions.mdx §3.1). Compress
-       links → compress_inside.mdx dialog; Git ignore → git_ignore.mdx dialog (target = the rightmost column
+       links → compression.mdx §12 dialog; Git ignore → git_ignore.mdx dialog (target = the rightmost column
        that HAS a selection, §5.1 generalized).
        §5.1 SCOPE CONTAINMENT (LOCKED): with nothing checked, scope = the DEEPEST (rightmost) open column's
        dir = currentDir = stack[stack.length-1], walked RECURSIVELY DOWNWARD ONLY. Never ascends to a parent

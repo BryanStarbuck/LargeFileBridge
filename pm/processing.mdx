@@ -1,12 +1,12 @@
 ---
 title: LargeFileBridge — Background Processing (the conditional left-bar item, the bottom-left progress window, and the Processing page)
-description: The three surfaces that show background work while it runs. (1) A CONDITIONAL "Processing" left-bar item that appears as the LAST item of the top nav list (below Settings, above the empty space before the account slot) ONLY while background work is running, and disappears when it is done — clicking it opens the Processing page. (2) The bottom-left PROGRESS WINDOW in the main area (the existing progress dock) — a small stack of live cards for the items running right now, plus a "+ N queued" backlog footer; now clickable to open the Processing page. (3) The PROCESSING PAGE (route /processing) — the full queue view: the items running now, the per-op pending backlog, and the "Compress inside" BATCHES with a progress bar each and, when a batch finishes, its ERROR LIST. All three read one polled source, GET /api/progress, extended with a per-op backlog split and the batches. Sibling of webapp.mdx §10–§14 (the dock + registry the window reuses), job_queue.mdx (the queue + batches this surfaces), left_bar.mdx / left_bar.yaml (the nav the conditional item joins), and compress_inside.mdx (the batch producer whose error list lands here).
+description: The three surfaces that show background work while it runs. (1) A CONDITIONAL "Processing" left-bar item that appears as the LAST item of the top nav list (below Settings, above the empty space before the account slot) ONLY while background work is running, and disappears when it is done — clicking it opens the Processing page. (2) The bottom-left PROGRESS WINDOW in the main area (the existing progress dock) — a small stack of live cards for the items running right now, plus a "+ N queued" backlog footer; now clickable to open the Processing page. (3) The PROCESSING PAGE (route /processing) — the full queue view: the items running now, the per-op pending backlog, and the "Compress inside" BATCHES with a progress bar each and, when a batch finishes, its ERROR LIST. All three read one polled source, GET /api/progress, extended with a per-op backlog split and the batches. Sibling of webapp.mdx §10–§14 (the dock + registry the window reuses), job_queue.mdx (the queue + batches this surfaces), left_bar.mdx / left_bar.yaml (the nav the conditional item joins), and compression.mdx §12 (the batch producer whose error list lands here).
 ---
 
 # LargeFileBridge — Background Processing
 
 When the user kicks off heavy background work — a **"Compress inside"** run
-([compress_inside.mdx](./compress_inside.mdx)), a batch of transcriptions/descriptions
+([compression.mdx §12](./compression.mdx)), a batch of transcriptions/descriptions
 ([page_actions.mdx](./page_actions.mdx)) — the work drains **in the background**
 ([job_queue.mdx](./job_queue.mdx)) while they navigate elsewhere. This spec owns the **three surfaces**
 that make that work visible and reachable:
@@ -25,7 +25,7 @@ Siblings this builds on and does not repeat:
   ops), the pending backlog count, and the **batch** grouping (`createBatch` / `recordBatchResult`).
 * [left_bar.mdx](./left_bar.mdx) / [left_bar.yaml](./left_bar.yaml) — the nav the **Processing** item joins
   as a runtime-conditional entry.
-* [compress_inside.mdx](./compress_inside.mdx) — the batch **producer**; its per-file error list is shown
+* [compression.mdx §12](./compression.mdx) — the batch **producer**; its per-file error list is shown
   on the Processing page (§4).
 
 ---
@@ -176,11 +176,11 @@ with three stacked regions, each shown only when it has content:
    * a **title** (the batch label, e.g. *Compress inside ~/Movies/Trip_2026*) and how originals were
      handled (*Originals: hard-deleted* / *…moved to trash*);
    * a **progress bar** — `done + failed` of `total` — that fills as the run drains;
-   * on **finish**, the **error list** ([compress_inside.mdx §4](./compress_inside.mdx)): every file that
+   * on **finish**, the **error list** ([compression.mdx §12.4](./compression.mdx)): every file that
      failed/was blocked, with its reason. A clean finish shows **"All {done} files compressed"** and no
      list. Finished batches linger for a **retention window** (30 min) so the user can still read the
      errors after the run ended (and after the conditional nav item has vanished, §2) — the finish toast
-     ([compress_inside.mdx §6](./compress_inside.mdx)) is the pointer back here.
+     ([compression.mdx §12.7](./compression.mdx)) is the pointer back here.
 
 When the whole page has nothing to show (no jobs, no backlog, no batches), it renders a calm empty state —
 **"Nothing is processing right now."** — rather than a blank screen (a user can reach `/processing`
@@ -424,7 +424,7 @@ The extended payload is assembled in code:
       progress.router GET / from jobqueue in-flight slot count + concurrency.ts coreBudget().
    §4 PROCESSING PAGE (/processing, ProcessingPage.tsx, processingRoute) — Running now (jobs) · Waiting
       (queuedByOp, per-op backlog) · Batches (one card per Compress-inside run: label + Originals disposition +
-      a done+failed/total progress bar + on-finish the ERROR LIST from compress_inside.mdx §4). Finished batches
+      a done+failed/total progress bar + on-finish the ERROR LIST from compression.mdx §12.4). Finished batches
       linger 30 min (retention) so errors stay readable after the nav item vanished. Empty state: "Nothing is
       processing right now."
    §5 GET /api/progress EXTENDED: + queuedByOp (Partial<Record<ProgressKind,number>>) + batches (ProcessingBatch[])
@@ -440,7 +440,7 @@ The extended payload is assembled in code:
       queue so an idle page wakes (§4.1). Served by todo.router POST /api/todo/batches/:id/apply → jobqueue enqueue().
   Keep in sync with webapp.mdx §10–§14 (dock/registry/poll), job_queue.mdx (queue+batches +§3 Core Budget),
   parallelization.mdx (the Core Budget the §3a utilization read reflects), left_bar.mdx + left_bar.yaml (the
-  conditional item), compress_inside.mdx (the batch producer + error list), to_do.mdx + to_do_batches.mdx +
+  conditional item), compression.mdx §12 (the batch producer + error list), to_do.mdx + to_do_batches.mdx +
   transcribe_calc_engine.mdx (the TO DO batch Apply producer, §4.2).
 -->
 </content>

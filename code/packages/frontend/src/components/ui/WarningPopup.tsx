@@ -41,6 +41,21 @@ const AXIS_META: Record<AxisId, { title: string; glyph: React.ReactNode }> = {
   compress: { title: "Compress", glyph: <Shrink className="h-2.5 w-2.5" strokeWidth={2.5} /> },
 };
 
+// §4.5 ROW 1 — strip the trailing file extension for display (callers pass the plain basename).
+// Leaves dotfiles (".gitignore") and extensionless names untouched; strips only a final ".ext".
+function stripExt(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(0, dot) : name;
+}
+
+// §4.5 — the two preferred display fields, with legacy label/sublabel fallbacks.
+function rowName(t: { name?: string; label: string }): string {
+  return t.name != null ? stripExt(t.name) : t.label;
+}
+function rowPath(t: { pathText?: string; sublabel?: string }): string | undefined {
+  return t.pathText ?? t.sublabel;
+}
+
 // §4.4.1 — the per-row-axes composed label: each axis carries its OWN checked-row count, joined by "·",
 // with the IPFS/pin carrier last ("Continue: IPFS Add — N"). Zero-count axes drop out; all-zero ⇒ the
 // "Save decision" fallback (a reviewed-but-no-action decision is still valid).
@@ -372,7 +387,10 @@ export function WarningPopup({
     if (!query.trim()) return targets;
     const q = query.toLowerCase();
     return targets.filter(
-      (t) => t.label.toLowerCase().includes(q) || (t.sublabel ?? "").toLowerCase().includes(q),
+      (t) =>
+        (t.name ?? t.label).toLowerCase().includes(q) ||
+        (rowPath(t) ?? "").toLowerCase().includes(q) ||
+        (t.sizeText ?? "").toLowerCase().includes(q),
     );
   }, [targets, query]);
 
@@ -617,8 +635,15 @@ export function WarningPopup({
                         />
                       )}
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-black">{t.label}</span>
-                        {t.sublabel && <span className="block truncate text-xs text-black/50">{t.sublabel}</span>}
+                        {/* §4.5 ROW 1 — name (left) · size (right, muted, tabular) */}
+                        <span className="flex items-baseline gap-2">
+                          <span className="min-w-0 flex-1 truncate text-black">{rowName(t)}</span>
+                          {t.sizeText && (
+                            <span className="shrink-0 text-xs tabular-nums text-black/50">{t.sizeText}</span>
+                          )}
+                        </span>
+                        {/* §4.5 ROW 2 — path, light gray, smaller font */}
+                        {rowPath(t) && <span className="block truncate text-xs text-black/40">{rowPath(t)}</span>}
                       </span>
                       {t.preview && (
                         <span className="shrink-0 text-black/30" aria-hidden>
@@ -684,7 +709,10 @@ function PreviewPane({
 }) {
   const p = target.preview!;
   const dims = p.width && p.height ? `${p.width}×${p.height}` : null;
-  const caption = [target.label, dims, target.sublabel].filter(Boolean).join(" · ");
+  // §4.5.2 caption — file name · pixel dimensions · size
+  const caption = [target.name ?? target.label, dims, target.sizeText ?? target.sublabel]
+    .filter(Boolean)
+    .join(" · ");
 
   // Use the target's direct url, else lazily resolve one (e.g. a media grant) on first preview (§4.5.2).
   const [url, setUrl] = useState<string | null>(p.url || null);

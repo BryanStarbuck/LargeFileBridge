@@ -281,14 +281,23 @@ export function enqueueDescribe(opts: {
       unsupported++;
       continue;
     }
-    const dp = resolveDescriptionPath(abs);
-    // A file that needs first-time setup has no real destination yet — never counts as already-done.
-    if (!overwrite && !dp.needsSetup && readDescription(abs)) {
-      alreadyDone++;
-      continue;
+    // Resolving the placement must not be fatal to the whole enqueue (mirror of previewDescribe). On a
+    // resolve/read failure, still queue the file — the per-file describe job records its own failure
+    // gracefully — rather than 400-ing Confirm and dropping the entire batch.
+    let needsSetupForThis = false;
+    try {
+      const dp = resolveDescriptionPath(abs);
+      // A file that needs first-time setup has no real destination yet — never counts as already-done.
+      if (!overwrite && !dp.needsSetup && readDescription(abs)) {
+        alreadyDone++;
+        continue;
+      }
+      needsSetupForThis = dp.needsSetup;
+    } catch (e) {
+      log.warn("describe", `enqueue: could not resolve description state for ${abs}: ${(e as Error).message}`);
     }
     eligible.push(abs);
-    if (dp.needsSetup) needSetup++;
+    if (needsSetupForThis) needSetup++;
   }
   // First-time gate (Transcribe.mdx §3.5): if EVERY eligible file needs setup (no Personal storage owns
   // them), queue nothing and tell the UI to open the wizard with a representative path.
@@ -317,10 +326,19 @@ export function previewDescribe(opts: { paths?: string[]; root?: string; overwri
       unsupported++;
       continue;
     }
-    const dp = resolveDescriptionPath(abs);
-    if (!overwrite && !dp.needsSetup && readDescription(abs)) {
-      alreadyDone++;
-      continue;
+    // Resolving the AI-description placement (or reading an existing description) must NEVER be fatal to
+    // the whole preview. A single un-resolvable candidate would otherwise throw, /describe/plan would
+    // return 400, and the unified batch popup would never open (dialogs.mdx §6.4 — the reported "right-click
+    // → Create AI descriptions does nothing" bug). Treat a resolve/read failure as "not yet described" so
+    // the file is still OFFERED in the popup rather than silently dropping the whole scan.
+    try {
+      const dp = resolveDescriptionPath(abs);
+      if (!overwrite && !dp.needsSetup && readDescription(abs)) {
+        alreadyDone++;
+        continue;
+      }
+    } catch (e) {
+      log.warn("describe", `preview: could not resolve description state for ${abs}: ${(e as Error).message}`);
     }
     let sizeBytes = 0;
     try {

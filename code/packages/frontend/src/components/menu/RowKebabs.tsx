@@ -20,12 +20,13 @@ import {
   Trash2,
   Ban,
   Captions,
+  Sparkles,
 } from "lucide-react";
 import { HardDrive } from "lucide-react";
 import type { RepoRow, PeerRow, IpfsPinRow, StorageRow } from "@lfb/shared";
 import { api } from "@/api/client";
 import { ActionsKebab, type Action } from "./EntityMenu";
-import { openTranscribeBatch } from "@/lib/batchPopup";
+import { openTranscribeBatch, openDescribeBatch } from "@/lib/batchPopup";
 import { confirmModal } from "@/lib/modals";
 import { clientLog } from "../../lib/clientLog.js";
 
@@ -147,6 +148,16 @@ export function RepoKebab({ repo }: { repo: RepoRow }) {
       icon: <Captions className="h-4 w-4" />,
       // Opens the unified batch popup (dialogs.mdx §5/§6) over the repo's working tree, scoped downward-only.
       onSelect: () => openTranscribeBatch({ root: repo.path }),
+    },
+    {
+      id: "create-descriptions",
+      label: "Create AI descriptions",
+      group: "Create",
+      icon: <Sparkles className="h-4 w-4" />,
+      // Mirror of Create Transcriptions (dialogs.mdx §6.4 — every producing entry point opens the ONE batch
+      // popup). This item was previously missing from the repo-row ⋮, so "Create AI descriptions" was
+      // unreachable here; both producing actions must be symmetric on every ⋮/right-click surface.
+      onSelect: () => openDescribeBatch({ root: repo.path }),
     },
     {
       id: "toggle-pin",
