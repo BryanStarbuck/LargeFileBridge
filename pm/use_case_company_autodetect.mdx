@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Use-Case Tour — company auto-detect from a git remote (clone an org repo, rename the company, regroup, route tracking)
-description: The end-to-end scenario tour that proves COMPANY / PERSONAL mapping (repo_company_mapping.mdx). A user clones an organization repo (github.com/AcmeCorp/marketing-videos); LargeFileBridge parses the forge OWNER segment out of the git remote, recognizes it as an ORG rather than the user's own account, and auto-creates a new company "AcmeCorp" that appears as a child in the left-bar Storages disclosure — with the repo grouped under it. The user opens that company's settings and renames the cryptic org slug to a friendly "Acme Marketing"; the repo re-labels and stays grouped under the renamed company. The tour then walks every awkward branch: a repo whose remote owner is the user's OWN personal account stays under Personal (the default); an AMBIGUOUS owner (can't tell org from personal) defaults to Personal but offers a one-click "This is a company"; MANUAL reassignment moves a repo between Personal and any company (or to a brand-new company typed in place); and configuring the company's STATE-SYNC REPO so the repo's pre-threshold tracking files route to <syncRepo>/repos/<repoKey>/ instead of the local state root — watched landing where expected. Each step states what the user does, what LargeFileBridge does automatically, exactly what it writes and where (companies.yaml, the per-repo company tag, the company storage.yaml), which left-bar children appear, and what we DOUBLE-CHECK. Sibling of repo_company_mapping.mdx (the mapping rules this tour proves), storage_company.mdx (the company storage a detected company materializes), storage_personal.mdx (the default home), storages.mdx + left_bar.mdx (the Storages disclosure the company child appears in), repo_settings.mdx (where manual reassignment lives), artifact_placement_policy.mdx (the state-sync-repo routing of pre-threshold tracking), and devices.mdx (the graft that resolves the company's mapped dirs per computer).
+description: The end-to-end scenario tour that proves COMPANY / PERSONAL mapping (repo_company_mapping.mdx). A user clones an organization repo (github.com/AcmeCorp/marketing-videos); LargeFileBridge parses the forge OWNER segment out of the git remote, recognizes it as an ORG rather than the user's own account, and auto-creates a new company "AcmeCorp" that appears as a child in the left-bar Storages disclosure — with the repo grouped under it. The user opens that company's settings and renames the cryptic org slug to a friendly "Acme Marketing"; the repo re-labels and stays grouped under the renamed company. The tour then walks every awkward branch: a repo whose remote owner is the user's OWN personal account stays under Personal (the default); an AMBIGUOUS owner (can't tell org from personal) defaults to Personal but offers a one-click "This is a company"; MANUAL reassignment moves a repo between Personal and any company (or to a brand-new company typed in place); and configuring the company's SYNC REPO so the repo's Category-B tracking state — which ALWAYS lives in Local Storage at ~/T/_large_files_bridge/repos/<repoKey>/ — is ADDITIONALLY mirrored to <syncRepo>/repos/<repoKey>/ so it travels across the company's computers (in addition to Local Storage, not instead of it) — watched landing where expected. Each step states what the user does, what LargeFileBridge does automatically, exactly what it writes and where (companies.yaml, the per-repo company tag, the company storage.yaml), which left-bar children appear, and what we DOUBLE-CHECK. Sibling of repo_company_mapping.mdx (the mapping rules this tour proves), storage_company.mdx (the company storage a detected company materializes), storage_personal.mdx (the default home), storages.mdx + left_bar.mdx (the Storages disclosure the company child appears in), repo_settings.mdx (where manual reassignment + the per-repo sync toggle live), artifact_placement_policy.mdx (the data-category policy: tracking in Local Storage always, sync-repo mirror when enabled), and devices.mdx (the graft that resolves the company's mapped dirs per computer).
 ---
 
 # LargeFileBridge — Company Auto-Detect Tour (clone an org repo → a company appears in the left bar)
@@ -10,7 +10,7 @@ belongs to a company — how does Large File Bridge figure that out from the git
 rename it, and let me correct it when the guess is wrong."* In doing so it exercises **every** branch of
 [repo_company_mapping.mdx](./repo_company_mapping.mdx): the auto-detect from the remote owner, the
 Personal default, the ambiguous-owner fallback, the rename, manual reassignment, and the company
-state-sync-repo routing.
+sync-repo mirror of tracking state.
 
 The through-line: **a repo defaults to Personal; a forge ORG in its remote auto-creates a company you can
 rename and re-file — you are always one click from correcting the guess.**
@@ -31,8 +31,9 @@ This spec builds on the siblings and does not repeat them:
   whose **children** are Personal · one per Company (labeled by `company_name`, derived at runtime) · Repos
   · Communities. A detected company is inserted here.
 * [repo_settings.mdx](./repo_settings.mdx) — the per-repo settings page where **manual reassignment** lives.
-* [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) — the churn policy whose pre-threshold
-  tracking root a company **state-sync repo** overrides to `<syncRepo>/repos/<repoKey>/`.
+* [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) — the data-category policy whose
+  always-in-Local-Storage tracking a company **sync repo** **additionally** mirrors to
+  `<syncRepo>/repos/<repoKey>/`.
 * [devices.mdx §4](./devices.mdx) — the **graft** that resolves a company's mapped directories to each
   computer's local path.
 
@@ -54,8 +55,7 @@ override it:
   **company**; can't decide → **ambiguous → Personal, with an offer** (§4).
 * **Store two things.** A **company registry** in the state root
   (`~/T/_large_files_bridge/companies.yaml`) listing each known company (id, display name, source org, host,
-  optional state-sync repo), and a **per-repo company tag** so the repo remembers its assignment across
-  re-scans.
+  optional sync repo), and a **per-repo company tag** so the repo remembers its assignment across re-scans.
 
 Companies default to **Personal**; the whole feature exists so a repo that obviously belongs to a company
 lands in the right bucket without manual filing, while staying **correctable**.
@@ -75,7 +75,7 @@ company registry are handled in code:
 | **3** | Adds a repo from their **own** account `github.com/BryanStarbuck/dotfiles`. | Owner is a **known personal handle** → **Personal**. | No new company; the repo appears under **Personal**. |
 | **4** | Adds a repo whose owner is **ambiguous** (`github.com/renderlab/...`). | Can't tell org from personal → **Personal**, plus a **"This looks like it could be a company"** offer. | Repo under Personal; a dismissible offer chip; one click promotes it to a company. |
 | **5** | **Manually reassigns** a Personal repo to Acme Marketing (and creates a new company by typing a name). | Re-tags the repo; materializes a new company on demand. | Per-repo tag flips; `companies.yaml` may gain a hand-named company; Storages regroups. |
-| **6** | Configures Acme Marketing's **state-sync repo**. | Routes that company's repos' **pre-threshold tracking** to `<syncRepo>/repos/<repoKey>/`. | Company `storage.yaml` gains the sync repo; new tracking lands in the sync repo, not the local state root. |
+| **6** | Configures Acme Marketing's **sync repo**. | **Additionally** mirrors that company's repos' Local-Storage tracking to `<syncRepo>/repos/<repoKey>/`. | Company `storage.yaml` gains the sync repo; tracking now lands in Local Storage **and** the sync repo (additive). |
 
 ---
 
@@ -100,7 +100,7 @@ companies:
       org: AcmeCorp                 # ← the immutable slug parsed from the remote (rename never touches this)
     created: 2026-03-01T10:00:00Z
     auto_created: true              # ← LFB made this from a remote, not the user
-    state_sync_repo: null           # ← none configured yet (Step 6)
+    sync_repo: null                 # ← none configured yet (Step 6)
 ```
 
 The repo is **tagged** to that company (so a re-scan never re-asks), and — the visible payoff — a **new
@@ -119,7 +119,7 @@ Opening the **AcmeCorp** child shows a company view listing its repos — curren
 
 > **No directory is relocated.** Auto-detect creates a **company record** and a **grouping**, not a moved
 > file. A full [company storage](./storage_company.mdx) (a dedicated SDL directory with mapped dirs) is
-> **materialized on demand** — when the user gives the company a state-sync repo (Step 6) or maps
+> **materialized on demand** — when the user gives the company a sync repo (Step 6) or maps
 > directories to it. Until then the company is a lightweight left-bar grouping of repos.
 
 Deriving a company from a repo's remote on add (auto-create when the owner classifies as an org, tag the
@@ -271,15 +271,16 @@ code:
 
 ---
 
-## 6. STEP 6 — configure the company's state-sync repo → pre-threshold tracking routes there
+## 6. STEP 6 — configure the company's sync repo → tracking is additionally mirrored there
 
 **What the user does.** Acme Marketing has several member computers, so the user wants the company's LFB
-tracking to travel. In the Acme Marketing company settings they set a **state-sync repo** — a dedicated
+tracking to travel. In the Acme Marketing company settings they set a **sync repo** — a dedicated
 tracking-data git repo they made for the company, e.g. `~/BGit/Bryan_git/acme_large_files_bridge/`
-([storage_company.mdx §1](./storage_company.mdx), [devices.mdx §11.2](./devices.mdx)).
+([storage_company.mdx §1/§7](./storage_company.mdx), [devices.mdx §11.2](./devices.mdx)) — and turn on the
+per-repo sync toggle for its repos ([repo_settings.mdx §2](./repo_settings.mdx), default OFF).
 
-**What LFB does automatically — materialize the company storage and re-route tracking.** Setting the
-state-sync repo does two things:
+**What LFB does automatically — materialize the company storage and add a tracking mirror.** Setting the
+sync repo does two things:
 
 1. **Materializes the company storage.** A [company storage](./storage_company.mdx) is created rooted at the
    sync repo, with `.lfbridge/storage.yaml` carrying `type: company` + `company.company_name: "Acme
@@ -290,43 +291,49 @@ state-sync repo does two things:
    - id: "co_acmecorp"
      display_name: "Acme Marketing"
      source: { host: github.com, org: AcmeCorp }
-     state_sync_repo: ~/BGit/Bryan_git/acme_large_files_bridge   # ← configured in Step 6
+     sync_repo: ~/BGit/Bryan_git/acme_large_files_bridge   # ← configured in Step 6
    ```
 
-2. **Re-routes pre-threshold tracking** for **every repo mapped to Acme Marketing**. This is the direct
-   hand-off to the [churn policy](./artifact_placement_policy.mdx): for a company repo below the content
-   threshold, the pre-threshold tracking root becomes **`<syncRepo>/repos/<repoKey>/`** instead of the local
-   `~/T/_large_files_bridge/repos/<repoKey>/`. So `marketing-videos`' `repo_storage.yaml` and sidecars now
-   land in the sync repo and travel to the other member computers — while **`marketing-videos`' own working
-   tree stays untouched** (the churn invariant holds regardless of routing):
+2. **Adds a tracking mirror** for **every repo mapped to Acme Marketing** with the sync toggle on. This is the
+   direct hand-off to the [data-category placement policy](./artifact_placement_policy.mdx): a company repo's
+   Category-B tracking **always** lives in Local Storage at `~/T/_large_files_bridge/repos/<repoKey>/`, and is
+   now **additionally** mirrored to **`<syncRepo>/repos/<repoKey>/`** — **in addition to** Local Storage, not
+   instead of it. So `marketing-videos`' `repo_storage.yaml` and sidecars are written to Local Storage **and**
+   the sync repo, and travel to the other member computers — while **`marketing-videos`' own working tree
+   stays untouched** (the tracking-never-enters-the-repo invariant holds regardless):
 
 ```
-~/BGit/Bryan_git/acme_large_files_bridge/          ← the company state-sync repo (committed, travels)
+~/T/_large_files_bridge/repos/marketing-videos-77aa/  ← ALWAYS written here (authoritative Local-Storage copy)
+├── repo_storage.yaml
+└── files/campaigns/…
+
+~/BGit/Bryan_git/acme_large_files_bridge/          ← the company sync repo (committed, travels to members)
 ├── .lfbridge/storage.yaml                         ← type: company, company_name: "Acme Marketing"
 └── repos/
-    └── marketing-videos-77aa/                      ← <repoKey> — pre-threshold tracking for the company repo
-        ├── repo_storage.yaml                       ← routed HERE, not the local state root
+    └── marketing-videos-77aa/                      ← <repoKey> — the ADDITIVE mirror of the tracking above
+        ├── repo_storage.yaml
         └── files/campaigns/…
 
 ~/BGit/act3/marketing-videos/                        ← the media repo itself — STILL untouched by scan churn
 ```
 
-When `marketing-videos` later crosses the content threshold (someone transcribes or describes a clip), the
-**durable artifact** still lands in the **media repo's** committed `.lfbridge/` (that is where a transcript
-belongs), and the tracking migrates there per the churn policy — the state-sync routing governs only the
-**pre-threshold** home. (See [use_case_churn_free_repo.mdx §9.2](./use_case_churn_free_repo.mdx).)
+When someone later transcribes or describes a clip in `marketing-videos`, that **content artifact**
+(Category A) lands in the **media repo's** committed `.lfbridge/` (that is where a transcript belongs) and
+travels via the media repo's own git — while the tracking state stays in Local Storage + the sync repo. The
+sync repo governs only the **tracking** mirror, never content placement. (See
+[use_case_churn_free_repo.mdx §9.2](./use_case_churn_free_repo.mdx).)
 
-Materializing a company storage on state-sync-repo configuration and re-routing its repos' pre-threshold
-tracking are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/company-mapping.service.ts` — `setCompanyStateSyncRepo(companyId, path)` (writes the company `storage.yaml` via `storage.service.ts` and updates `companies.yaml`); the routing is read by `artifact-placement.service.ts` `trackingRootFor(repoKey)` (`resolveStateSyncRepo()` returns the company's sync repo for a company-mapped repo).
+Materializing a company storage on sync-repo configuration and mirroring its repos' Local-Storage tracking
+are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/company-mapping.service.ts` — `setCompanySyncRepo(companyId, path)` (writes the company `storage.yaml` via `storage.service.ts` and updates `companies.yaml`); the mirror target is resolved by `tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)` (returns the company's `<syncRepo>/repos/<repoKey>/` for a company-mapped repo) and written by `tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)`.
 
 **What we double-check (Step 6):**
-* Setting the state-sync repo materializes a real company storage (`storage.yaml`, `type: company`,
+* Setting the sync repo materializes a real company storage (`storage.yaml`, `type: company`,
   `company_name: "Acme Marketing"`).
-* `marketing-videos`' pre-threshold `repo_storage.yaml` + sidecars now land in
-  `<syncRepo>/repos/marketing-videos-77aa/`, **not** the local state root.
-* The **media repo's** working tree is **still untouched** — routing changes the pre-threshold home, not the
-  churn invariant.
+* `marketing-videos`' `repo_storage.yaml` + sidecars are in **both** `~/T/_large_files_bridge/repos/
+  marketing-videos-77aa/` (authoritative) **and** `<syncRepo>/repos/marketing-videos-77aa/` (mirror).
+* The **media repo's** working tree is **still untouched** — the sync repo adds a mirror, it does not move
+  tracking out of Local Storage or into the media repo.
 
 ---
 
@@ -342,9 +349,10 @@ tracking are handled in code:
    manual reassignment to Personal, an existing company, or a new one; a manual choice wins and sticks.
 5. **Assignment is a tag, not a move.** Changing a repo's company re-groups it in the left bar; **no bytes
    relocate** and **no working tree is mutated**.
-6. **State-sync routing rides the churn policy.** A company's state-sync repo relocates its repos'
-   **pre-threshold** tracking to `<syncRepo>/repos/<repoKey>/` while the media repo's working tree stays
-   untouched and the threshold crossing still writes the durable artifact into the media repo.
+6. **The sync repo is an additive tracking mirror.** A company's sync repo **additionally** mirrors its
+   repos' always-in-Local-Storage tracking to `<syncRepo>/repos/<repoKey>/` (in addition to Local Storage,
+   not instead of it) while the media repo's working tree stays untouched and content artifacts still travel
+   via the media repo's own git.
 
 ---
 
@@ -364,10 +372,11 @@ tracking are handled in code:
 5. **Manual reassignment** (repo Settings / kebab) moves a repo to Personal, an existing company, or a
    **+ New company…** typed in place (creating an `auto_created: false`, `source: null` company); a manual
    choice **wins over auto-detect** and survives re-scans; assignment relocates **no bytes**.
-6. Configuring a company's **state-sync repo** materializes a real [company storage](./storage_company.mdx)
-   and routes its repos' **pre-threshold** tracking to **`<syncRepo>/repos/<repoKey>/`**
-   ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)) while the media repo's working tree
-   stays untouched; the threshold crossing still writes the durable artifact into the media repo.
+6. Configuring a company's **sync repo** materializes a real [company storage](./storage_company.mdx) and
+   **additionally** mirrors its repos' always-in-Local-Storage tracking to **`<syncRepo>/repos/<repoKey>/`**
+   ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)) — in addition to Local Storage, not
+   instead of it — while the media repo's working tree stays untouched; content artifacts still travel via
+   the media repo's own git.
 7. Every write matches [repo_company_mapping.mdx](./repo_company_mapping.mdx),
    [storage_company.mdx](./storage_company.mdx), [storage_personal.mdx](./storage_personal.mdx),
    [storages.mdx](./storages.mdx), [left_bar.mdx](./left_bar.mdx), and
@@ -386,16 +395,18 @@ tracking are handled in code:
   company / Assign existing / Keep in Personal[sticky dismiss]); never silently filed into a company. S5
   MANUAL reassignment (repo Settings / kebab Company dropdown): move dotfiles to Acme Marketing (tag change
   only, no bytes move) + "+ New company..." types "Skunkworks" (auto_created:false, source:null); manual
-  wins over auto-detect & survives re-scans. S6 configure Acme Marketing STATE-SYNC repo
-  (~/BGit/Bryan_git/acme_large_files_bridge/): materialize company storage (storage.yaml type:company
-  company_name) + RE-ROUTE pre-threshold tracking to <syncRepo>/repos/<repoKey>/ per churn policy
-  (artifact_placement_policy) while media repo working tree STILL untouched; threshold crossing still writes
-  durable artifact into the MEDIA repo. Invariants (§7): default Personal; detection local not forge-API;
-  org auto-creates renamable company (source.org immutable match key); always correctable (ambiguous+offer,
-  manual reassign, manual wins); assignment is a TAG not a move; state-sync routing rides churn policy. Code:
+  wins over auto-detect & survives re-scans. S6 configure Acme Marketing SYNC repo
+  (~/BGit/Bryan_git/acme_large_files_bridge/) + per-repo sync toggle ON: materialize company storage
+  (storage.yaml type:company company_name) + ADDITIONALLY MIRROR the always-in-Local-Storage tracking to
+  <syncRepo>/repos/<repoKey>/ (additive, not instead of Local Storage; per artifact_placement_policy) while
+  media repo working tree STILL untouched; content artifacts travel via the media repo's own git. Invariants
+  (§7): default Personal; detection local not forge-API; org auto-creates renamable company (source.org
+  immutable match key); always correctable (ambiguous+offer, manual reassign, manual wins); assignment is a
+  TAG not a move; sync repo is an ADDITIVE tracking mirror. Code:
   company-mapping.service.ts parseRemoteOwner/classifyOwner/readCompanies/upsertCompany/assignRepoCompany/
-  renameCompany/setCompanyStateSyncRepo; repos.service.ts onRepoAdded; repos.router.ts PATCH
+  renameCompany/setCompanySyncRepo; repos.service.ts onRepoAdded; repos.router.ts PATCH
   /api/repos/:id/company; Sidebar.tsx company children; RepoSettingsPage.tsx Company control;
-  artifact-placement.service.ts trackingRootFor/resolveStateSyncRepo. Reuses repo_company_mapping,
-  storage_company, storage_personal, storages, left_bar, repo_settings, artifact_placement_policy, devices.
+  tracking-root.service.ts resolveStateSyncRepo + tracking-sync.service.ts mirrorToSyncRepo. Reuses
+  repo_company_mapping, storage_company, storage_personal, storages, left_bar, repo_settings,
+  artifact_placement_policy, devices.
 -->

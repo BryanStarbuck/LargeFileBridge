@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type { IpfsNodeStatus, IpfsInstallJob, CompressTools, DescribeKind } from "@lfb/shared";
+import type { IpfsNodeStatus, IpfsInstallJob, CompressTools, DescribeKind, TranscribeTools } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { Section } from "../../components/ui/Section.js";
@@ -38,6 +38,10 @@ export function ToolsPage() {
   const { data: node } = useQuery({ queryKey: ["ipfs-node"], queryFn: api.ipfsNode });
   // The optional compression tools (ffmpeg/ffprobe/magick/…).
   const { data: tools } = useQuery({ queryKey: ["compress-tools"], queryFn: api.compressTools });
+  // The transcription CLI binaries (Transcribe.mdx §5.2: "the full install preflight also lists these
+  // under Settings → Tools"). Only the small binaries belong here — the heavyweight Qwen3-ASR model has
+  // its own provisioning UI in Settings → Transcription (transcribe_engine.mdx §6).
+  const { data: transcribeTools } = useQuery({ queryKey: ["transcribe-tools"], queryFn: api.transcribeTools });
 
   // Install job polling — only while an install is running (single-flight, re-attachable server job).
   const [installing, setInstalling] = useState(false);
@@ -69,17 +73,17 @@ export function ToolsPage() {
 
   if (!node) return <div className="text-black/50">Loading…</div>;
 
-  const rows = buildRows(node, tools ?? null);
+  const rows = buildRows(node, tools ?? null, transcribeTools ?? null);
   const missingRequired = rows.filter((r) => r.level === "required" && !r.installed);
   const allCommand = missingRequired.map((r) => r.command).join("\n") || node.installCommand;
 
   return (
     <div className="max-w-2xl">
-      <PageHeader title="Tools" subtitle="Command-line tools LargeFileBridge uses to scan, pin, and compress." />
+      <PageHeader title="Tools" subtitle="Command-line tools LargeFileBridge uses to scan, pin, compress, and transcribe." />
 
       <PackageManagerCard node={node} />
 
-      <Section title="Tools" subtitle="Required tools must be present to scan and pin; optional tools enable compression.">
+      <Section title="Tools" subtitle="Required tools must be present to scan and pin; optional tools enable compression and transcription.">
         <div className="divide-y divide-[var(--lfb-border)]">
           {rows.map((r) => (
             <ToolRowView
@@ -216,12 +220,13 @@ function AiDescriptionSection() {
   );
 }
 
-function buildRows(node: IpfsNodeStatus, tools: CompressTools | null): ToolRow[] {
+function buildRows(node: IpfsNodeStatus, tools: CompressTools | null, transcribeTools: TranscribeTools | null): ToolRow[] {
   const brew = (formula: string): string =>
     node.platform === "darwin" ? `brew install ${formula}` : node.installCommand;
   const ffmpeg = tools?.ffmpeg ?? false;
   const ffprobe = tools?.ffprobe ?? false;
   const magick = tools?.magick ?? false;
+  const whisper = transcribeTools?.whisper ?? false;
 
   return [
     {
@@ -233,6 +238,16 @@ function buildRows(node: IpfsNodeStatus, tools: CompressTools | null): ToolRow[]
       providedBy: null,
       command: node.installCommand,
       canInstall: !!node.installMethod, // brew/winget only; Linux/other is manual
+    },
+    {
+      name: "whisper",
+      level: "optional",
+      usedFor: "Transcribe audio & video locally (OpenAI Whisper) — runs entirely on this machine",
+      installed: whisper,
+      version: null,
+      providedBy: null,
+      command: "pipx install openai-whisper",
+      canInstall: false,
     },
     {
       name: "ffmpeg",

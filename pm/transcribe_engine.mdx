@@ -117,6 +117,29 @@ Before any transcribe runs, the engine reports a **readiness** for the heavyweig
 Readiness detection + the (ballpark → stored) disk estimate are computed in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/model-provision.service.ts` — `describeReadiness()` (returns `{ state, installedBytes, estimateBytes, freeDiskBytes }`; the stored measurement lives in the app config under `transcribe.model`).
 
+> **Detection must survive a thin `PATH` (hardened).** `describeReadiness()` checks the `mlx-qwen3-asr` CLI
+> with `commandExists()` and the weights with a direct filesystem read of the Hugging Face cache
+> (`~/.cache/huggingface/hub/models--Qwen--Qwen3-ASR-1.7B/`, verified on a real machine to hold the full
+> ~4.4 GB snapshot once installed) — so the **weights** check never depends on `PATH` at all. The **CLI**
+> check does, though, and pipx (which installs `mlx-qwen3-asr`) shims land in `~/.local/bin`, a directory
+> that is on an interactive shell's `PATH` but is **not** guaranteed to be on a background/launchd process's
+> — see [Transcribe.mdx §5.2.1](./Transcribe.mdx#521-detection-detail--why-a-genuinely-installed-tool-must-never-be-reported-missing-locked)
+> for the full detection-robustness writeup (measured proof that a minimal `PATH` finds none of `whisper`,
+> `ffmpeg`, or `mlx-qwen3-asr`, while a Homebrew-only `PATH` still misses the two pipx tools). `commandExists()`
+> therefore searches a **widened** `PATH` (current `PATH` plus `~/.local/bin` and both Homebrew prefixes) so a
+> `partial`/`missing` readiness is never misreported for a machine that actually has the CLI installed — this
+> is the same `toolSearchPath()`/`toolEnv()` helper the tool-missing binary check (§Transcribe.mdx §5.2) uses,
+> shared so the two never disagree.
+
+> **Every failure path here logs — never a silent catch (LOCKED).** A `describeReadiness()` /
+> `provision()` / `healthCheck()` / `repair()` / `removeModel()` / `recordConsent()` failure always writes a
+> reason to `error.err` via the shared `log` (`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts`)
+> before returning/throwing — e.g. a broken `statfsSync` (free-disk check silently disabled for that request),
+> a `pipx`/`brew` bootstrap failure during `installCli()`, or a config-write failure in `recordConsent()` that
+> would otherwise make the popup nag again with no trail of why. This applies equally to the
+> `transcribeConcurrency()` admission path (§5 below): a transient config read failure there logs a warning
+> and keeps the last-known engine/RAM key rather than failing the whole batch silently.
+
 ### 3.2 The first-time permission popup (LOCKED)
 
 When readiness is `missing` and the user takes a transcribe action, we do **not** silently download. We
@@ -195,6 +218,19 @@ cases, both required:
 The distinction is a **pending intent** captured before provisioning starts (`confirmed` vs `offered`) and
 replayed after. The pending-intent capture + replay is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/transcribe.ts` — `withModelReady(intent, run)` (records the intent, awaits `provision()`, then either enqueues the confirmed set or re-opens the offer popup on the originating route).
+
+> **`withModelReady` gates every transcribe launcher — no exceptions (hardened).** Both frontend entry
+> points that start a single-file transcription — the Media Viewer button/tab
+> (`useTranscribeFile()`) and the ⋮ kebab / row action (`runTranscribeFile()`) — call `withModelReady()`
+> before ever invoking `api.transcribeFile()`. A prior defect had the Media Viewer hook bypass this
+> entirely (calling the transcribe API directly), which meant the first-time consent popup **never** showed
+> for that button — the model would silently resolve to whichever fallback was available with no chance for
+> the user to opt into the higher-quality Qwen3-ASR engine. Fixed; see
+> [Transcribe.mdx §5.2.2](./Transcribe.mdx#522-every-entry-point-gates-identically--no-bypass-locked) for the
+> code pointers. The common case (§3.5 — model already installed, or the user already decided) resolves
+> `withModelReady()` synchronously enough that the instant-pending button feel
+> ([Transcribe.mdx §5.1](./Transcribe.mdx#51-async--non-blocking--the-generate-transcript-didnt-work-fix-locked))
+> is preserved; only a genuine first-time-missing-model run pauses for the popup.
 
 ---
 

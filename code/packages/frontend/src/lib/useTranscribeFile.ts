@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import type { TranscribeResult } from "@lfb/shared";
 import { api } from "@/api/client";
 import { clientLog } from "./clientLog.js";
-import { transcribeMsgOne } from "./transcribe.js";
+import { transcribeMsgOne, withModelReady } from "./transcribe.js";
 import { requestStorageSetup } from "./setupWizard.js";
 
 export interface UseTranscribeFile {
@@ -48,5 +48,17 @@ export function useTranscribeFile(path: string, name: string): UseTranscribeFile
       void qc.invalidateQueries({ queryKey: ["progress"] });
     },
   });
-  return { run: (overwrite = false) => m.mutate(overwrite), isPending: m.isPending };
+  return {
+    // Gate behind the heavyweight-model provisioning flow FIRST (transcribe_engine.mdx §3.2/§3.6): the
+    // Media Viewer's Transcribe button is the primary entry point this hook drives, so it must not bypass
+    // the first-time consent popup the way a direct api.transcribeFile() call would. Ready / already
+    // decided / non-Apple-Silicon / model installed all resolve synchronously to "run now" (§3.5 skip), so
+    // the instant-pending feel (Transcribe.mdx §5.1) is preserved in the common case; only a genuine
+    // first-time-missing-model run pauses for the popup, exactly as `runTranscribeFile` (lib/transcribe.ts)
+    // already does for the kebab-menu entry point — both entry points must agree.
+    run: (overwrite = false) => {
+      void withModelReady({ label: `transcribe ${name}`, run: () => m.mutate(overwrite) });
+    },
+    isPending: m.isPending,
+  };
 }

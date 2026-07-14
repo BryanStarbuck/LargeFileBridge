@@ -20,7 +20,7 @@ Read the shared model first; this spec does not restate it:
 * [storages.mdx](./storages.mdx) — the storage family, the `storage.yaml` descriptor (§3), the `.lfbridge/`
   tracking area (§4), and **the Storages left-bar tab and its derived children** (§2).
 * [storage_company.mdx](./storage_company.mdx) — the company storage this mapping **auto-creates**; owns the
-  friendly display-name rename and the company state-sync repo.
+  friendly display-name rename and the company sync repo.
 * [storage_personal.mdx](./storage_personal.mdx) — the default owner; owns the **"my personal accounts"** list.
 * [repos.mdx](./repos.mdx) / [one_repo.mdx](./one_repo.mdx) — the Repos list (row → `RepoRow`) and per-repo screen.
 * [repo_settings.mdx](./repo_settings.mdx) — the per-repo settings page where the manual **Reassign owner** control lives.
@@ -32,9 +32,10 @@ Read the shared model first; this spec does not restate it:
 
 An **owner** is the answer to *"whose repo is this?"* — a **company** or **Personal**. It is **grouping metadata**,
 not a location: assigning an owner **never moves a byte**, never re-roots the repo, and never touches the device
-graft. It changes only **where the repo appears** (which group in the left bar / Repos list) and **which state-sync
-repo** its noisy tracking may travel to ([§7](#7-how-ownership-drives-grouping-and-artifact-placement), and
-[artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
+graft. It changes only **where the repo appears** (which group in the left bar / Repos list) and **which sync
+repo** its tracking state may additionally mirror to ([§7](#7-how-ownership-drives-grouping-and-artifact-placement),
+and [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)). The tracking state itself lives in **Local
+Storage always** regardless of owner — the owner only decides the additive travel mirror.
 
 Two owner kinds:
 
@@ -249,7 +250,7 @@ When the heuristic (§3 case 3) or a manual "New company…" (§5) needs a compa
 * Until the user renames it, the display name **falls back to the slug** — never blank, never the raw URL.
 
 An auto-derived company from an org (case 3) is a **lightweight** entry: it exists to group repos and to be
-renamed. It becomes a *full* company storage (mapped source directories, a state-sync repo, an allow-list) only if
+renamed. It becomes a *full* company storage (mapped source directories, a sync repo, an allow-list) only if
 the user configures those in [storage_company.mdx](./storage_company.mdx) — a repo-group company and a
 media-pile company are the same storage kind at different levels of configuration.
 
@@ -275,19 +276,23 @@ The mapping's main payoff: **repos become groupable under their owner.**
 
 ### 7.2 Artifact placement follows the owner
 
-Ownership decides **which state-sync repo** a repo's noisy tracking data may travel to
-([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)):
+Ownership decides **which sync repo** a repo's LFB tracking state may travel to
+([artifact_placement_policy.mdx](./artifact_placement_policy.mdx),
+[repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)):
 
-* By default a repo's per-repo tracking (`repo_storage.yaml` and the noisy per-file sidecars) stays in the
-  **state root** `~/T/_large_files_bridge/repos/<repoKey>/` until a transcript / AI-description exists
-  ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
-* If the repo's **owner** is a **company** that has configured a **state-sync repo**
-  ([storage_company.mdx §7](./storage_company.mdx#7-the-company-lfb-state-sync-repo)), that repo's tracking travels to
-  `<syncRepo>/repos/<repoKey>/` instead — so a teammate on the same company sees it. A **Personal**-owned repo can
-  likewise route to Personal's state-sync repo ([storage_personal.mdx §14](./storage_personal.mdx#14-personals-optional-state-sync-repo)).
-* Transcripts / descriptions themselves still obey the per-repo placement radios
-  ([repo_settings.mdx](./repo_settings.mdx)); ownership only decides the **company-vs-personal state-sync repo**
-  when the "company state-sync repo" radio is chosen.
+* A repo's tracking state (`repo_storage.yaml`, `files.yaml`, per-file sidecars, `history/<device>.txt`,
+  `decisions.yaml`, `manifest.yaml`) lives in **Local Storage always** at
+  `~/T/_large_files_bridge/repos/<repoKey>/` — machine-local, never in the working repo.
+* If the repo's **owner** is a **company** that has configured a **sync repo**
+  ([storage_company.mdx §7](./storage_company.mdx#7-the-company-sync-repo)) **and** the repo's per-repo sync
+  toggle is on ([repo_settings.mdx §2.9](./repo_settings.mdx)), that state is **additionally mirrored** to
+  `<syncRepo>/repos/<repoKey>/` — in addition to Local Storage, not instead of it — so a teammate on the same
+  company sees it. A **Personal**-owned repo can likewise mirror to Personal's sync repo
+  ([storage_personal.mdx §14](./storage_personal.mdx#14-personals-optional-sync-repo)).
+* Ownership only decides **which** company-vs-personal sync repo is the mirror target; the additive mirror
+  itself is **default OFF** and per-repo. Transcripts / descriptions are a **separate data category** that
+  obey the per-repo placement radios ([repo_settings.mdx](./repo_settings.mdx),
+  [placement_radios.mdx](./placement_radios.mdx)).
 
 ---
 
@@ -352,8 +357,10 @@ Ownership decides **which state-sync repo** a repo's noisy tracking data may tra
    org-vs-personal from the URL; LFB **defaults per the heuristic, surfaces the guess as (auto-detected), and lets
    the user correct it** — and **never** calls a forge network API to resolve it.
 8. Ownership makes repos **groupable under their owner** (§7.1) in the left-bar Storages disclosure and the Repos
-   list, and drives the **company-vs-personal state-sync repo** for a repo's noisy tracking (§7.2,
-   [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
+   list, and decides **which company-vs-personal sync repo** a repo's tracking state additionally mirrors to when
+   the per-repo sync toggle is on — the state lives in Local Storage always regardless (§7.2,
+   [artifact_placement_policy.mdx](./artifact_placement_policy.mdx),
+   [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)).
 9. All **non-default / edge cases** (§8) resolve as tabled — SSH↔HTTPS stable, origin-only, one owner per repo
    (submodules included), renamed/moved org re-derives auto owners — and the **error cases** (§9) fail safe toward
    Personal, never delete a user-touched company, and surface (never swallow) creation failures.
@@ -375,12 +382,13 @@ Ownership decides **which state-sync repo** a repo's noisy tracking data may tra
   override-or-derive in storage.service. §6 auto-create company storage (ensureCompanyForOwner→ensureStorage
   company) so it shows under Storages; cryptic slug → friendly display name (owned by storage_company); fallback =
   slug, never blank. §7 grouping: repos nest under owner in left-bar Storages disclosure (left_bar §3.2, defined
-  by this spec) + optional Repos "Group by owner"; artifact placement → company vs personal state-sync repo
-  (artifact_placement_policy, storage_company, storage_personal). §8 edge cases (no/local remote, SSH=HTTPS,
+  by this spec) + optional Repos "Group by owner"; ownership decides WHICH company vs personal SYNC REPO a repo's
+  tracking state additively mirrors to (default OFF, per-repo toggle) — state lives in Local Storage ALWAYS
+  regardless of owner (artifact_placement_policy, repo_tracking_scheme, storage_company, storage_personal). §8 edge cases (no/local remote, SSH=HTTPS,
   ambiguous, personal-account, self-hosted, renamed/moved org re-derives auto, multiple remotes=origin only,
   monorepo=one owner, two forges same name merge, odd slugs). §9 errors fail safe toward Personal; GC only bare
   auto companies, never user-touched; surface creation failures. Keep aligned with storages.mdx §2/§3,
-  storage_company.mdx (rename + state-sync repo), storage_personal.mdx (default owner + personal-accounts +
-  state-sync repo), repos.mdx (RepoRow + config.yaml persistence pattern), repo_settings.mdx (Owner control),
-  left_bar.mdx/left_bar.yaml (repos nested under owner), artifact_placement_policy.mdx (state-sync repo routing).
+  storage_company.mdx (rename + sync repo), storage_personal.mdx (default owner + personal-accounts +
+  sync repo), repos.mdx (RepoRow + config.yaml persistence pattern), repo_settings.mdx (Owner control + §2.9 sync
+  toggle), left_bar.mdx/left_bar.yaml (repos nested under owner), artifact_placement_policy.mdx + repo_tracking_scheme.mdx (sync-repo mirror routing).
 -->

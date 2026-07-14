@@ -767,9 +767,11 @@ The describe recommendation's contribution to the header primary is handled in c
 
 **Where** a `.ai_description` artifact is written is **not** decided here — §2 gives the resolved path shape
 (`<root>/.lfbridge/<rel-dir>/<name.ext>.ai_description`), and the **policy** that chooses the placement root
-is owned by [artifact_placement_policy.mdx](./artifact_placement_policy.mdx): the **content threshold is
-crossed by a transcript OR an AI description**, and `<rel>.ai_description` artifacts follow **the same
-placement resolution** as `<rel>.transcription`. The user-facing control is the **3-way placement radios**
+is owned by [artifact_placement_policy.mdx](./artifact_placement_policy.mdx): both `<rel>.transcription`
+and `<rel>.ai_description` are **Category-A content artifacts** that live in the working repo's committed
+`.lfbridge/` and travel with the repo, so `<rel>.ai_description` follows **the same placement resolution**
+as `<rel>.transcription`. (There is **no** content threshold that redirects LFB's tracking state into the
+repo — that model is retired; tracking state always lives in Local Storage.) The user-facing control is the **3-way placement radios**
 ([repo_settings.mdx](./repo_settings.mdx) + [placement_radios.mdx](./placement_radios.mdx)):
 
 * AI description **reuses the identical radios** transcription uses — there is **no** separate

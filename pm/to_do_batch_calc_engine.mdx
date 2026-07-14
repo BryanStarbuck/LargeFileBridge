@@ -105,11 +105,15 @@ rule: **never act on files without an explicit click**.
 
 ## 3. What it reads to decide (inputs, LOCKED)
 
+All of these inputs are **Category B** tracking state and live in **Local Storage** at
+`~/T/_large_files_bridge/repos/<repoKey>/` (never the working repo), per
+[artifact_placement_policy.mdx](./artifact_placement_policy.mdx):
+
 | Input | Source | Used for |
 | --- | --- | --- |
-| **Classification flags** | [special_files.mdx](./special_files.mdx) `.lfbridge/files/<path>.yaml` + `repo_storage.yaml` counts | which categories a file can enter |
+| **Classification flags** | [special_files.mdx](./special_files.mdx) `repos/<repoKey>/files/<path>.yaml` + `repos/<repoKey>/repo_storage.yaml` counts (Local Storage) | which categories a file can enter |
 | **Compression baseline** | [compression.mdx](./compression.mdx) learned YAML/CSV | `compress_video` / `compress_image` "looks uncompressed" |
-| **Shared decisions ledger** | [decisions.mdx](./decisions.mdx) `.lfbridge/decisions.yaml` (folded) | skip already-decided axes (§3.1) |
+| **Shared decisions ledger** | [decisions.mdx](./decisions.mdx) `repos/<repoKey>/decisions.yaml` (Local Storage, folded) | skip already-decided axes (§3.1) |
 | **Shared manifest + IPFS pinset** | [storage_local.mdx §9](./storage_local.mdx#9-the-manifest--ipfs-pin-model) | `pull_down` (pinned elsewhere, missing here) + `pin` eligibility |
 | **Device registry** | [devices.mdx](./devices.mdx) | which peer holds a pull-down candidate |
 | **Sticky flags** | [menus.mdx §6.6](./menus.mdx) | exclude Never-IPFS / Do-not-compress files |
@@ -169,8 +173,10 @@ renders all categories present.
 ## 6. Cost & safety (CTO notes)
 
 * **Cheap by construction.** The heavy work (classification, fingerprints, compression baseline) is done
-  by the scan's discovery/classification stage and cached in `.lfbridge/`; this engine mostly **reads
-  cached flags** and folds the ledger + manifest. The every-15-min pass only touches `pull_down`/`pin`.
+  by the scan's discovery/classification stage and cached in **Local Storage**
+  (`~/T/_large_files_bridge/repos/<repoKey>/`, [artifact_placement_policy.mdx](./artifact_placement_policy.mdx));
+  this engine mostly **reads cached flags** and folds the ledger + manifest. The every-15-min pass only
+  touches `pull_down`/`pin`.
 * **Never blocks the UI.** It runs in the detached scan job ([scan.mdx §10](./scan.mdx#10-on-demand-scan-execution--the-detached-background-job-locked));
   the To-Do page reads the last-written batches and shows a "recomputing…" hint while a scan is live.
 * **Idempotent.** Two runs over an unchanged tree produce byte-identical batches (modulo `computed_at`),

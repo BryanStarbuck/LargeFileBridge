@@ -179,7 +179,9 @@ navigating other tabs while the batch drains ([processing.mdx](./processing.mdx)
   second pass after a reboot) — and a run on **another computer in the mesh** that already has the
   compressed files — skips them **instantly instead of re-encoding**: the marker rides inside the file's
   bytes over IPFS, so it is present even on a peer with an empty local index. (Pruning known-compressed
-  files from the batch **up-front** via the local `.lfbridge` record is a tracked speed follow-up.) As it
+  files from the batch **up-front** via the Local-Storage compression record
+(`~/T/_large_files_bridge/repos/<repoKey>/analysis/<rel>/compression.yaml`, never the working repo —
+[artifact_placement_policy.mdx](./artifact_placement_policy.mdx)) is a tracked speed follow-up.) As it
   goes, the walk **stamps each eligible file with its media kind** — `image` or `video` — from that same
   extension heuristic, because the two kinds draw **different** concurrency budgets downstream (below,
   [job_queue.mdx §3](./job_queue.mdx)).
@@ -292,7 +294,8 @@ The Continue toast is emitted from the plan in code:
   written INLINE by ffmpeg -metadata / ImageMagick -set comment (NO new tool), read via ffprobe / magick identify
   at the top of compressFile() → skipped("already compressed (marker)") before any transcode, for one-off AND batch.
   Rides in the bytes over IPFS so a reboot re-run AND a peer skip instantly. isAlreadyCompressed()/readMarker()/
-  markerPayload() in compression.service.ts. Follow-up (optimization): read .lfbridge compression.yaml in
+  markerPayload() in compression.service.ts. Follow-up (optimization): read the Local-Storage compression.yaml
+  (~/T/_large_files_bridge/repos/<repoKey>/analysis/<rel>/, never the working repo) in
   walkCompressible() to prune the batch up-front.
   BACKGROUND (§5): Continue → POST /api/compress/inside → enqueueCompressInside()/walkCompressible() walks the
   selected kinds (recursive|shallow, HARD_SKIP-skipping, should-compress-only), STAMPS each file's mediaKind

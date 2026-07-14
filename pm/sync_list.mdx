@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — The Sync List & Bridge Backbones
-description: The hub spec for the Sync List — the portable, human-readable YAML file (LargeFilesBridge_SyncList.yaml) that declares what LargeFileBridge should pin, and travels between a user's computers over a "bridge backbone." Defines the two scopes of list (one per COMPUTER, one per REPO), the single top-level YAML key `large_files` and its level-2 children (`settings`, `repos`, `directories`) that nest four-to-six levels deep, and the provenance/origin block that stamps who wrote each revision and when. Its centerpiece is the TRUST rule: because a backbone (Dropbox, Google Drive, or the git repo) may deliver a Sync List that was written on another computer and carried in asynchronously, THIS computer must NEVER treat an incoming list as ground truth — it reconciles the list against its own filesystem reality per-entry, verifies local claims against the local IPFS pinset, treats absences as untrusted (not deletes), and resolves conflicts by revision + content (CID/sha256). Names the three bridge backbones and links to their per-backbone specs (dropbox.mdx, google_drive.mdx, repo__list_syns.mdx), and reconciles the whole model with the on-disk state in storage_local.mdx (per-unit config.yaml + manifest.yaml, the committed in-repo manifest, and the IPNS transport).
+description: The hub spec for the Sync List — the portable, human-readable YAML file (LargeFilesBridge_SyncList.yaml) that declares what LargeFileBridge should pin, and travels between a user's computers over a "bridge backbone." Defines the two scopes of list (one per COMPUTER, one per REPO), the single top-level YAML key `large_files` and its level-2 children (`settings`, `repos`, `directories`) that nest four-to-six levels deep, and the provenance/origin block that stamps who wrote each revision and when. Its centerpiece is the TRUST rule: because a backbone (Dropbox, Google Drive, or the git repo) may deliver a Sync List that was written on another computer and carried in asynchronously, THIS computer must NEVER treat an incoming list as ground truth — it reconciles the list against its own filesystem reality per-entry, verifies local claims against the local IPFS pinset, treats absences as untrusted (not deletes), and resolves conflicts by revision + content (CID/sha256). Names the three bridge backbones and links to their per-backbone specs (dropbox.mdx, google_drive.mdx, repo__list_syns.mdx). Reconciles the whole model with the on-disk state in storage_local.mdx and the data-category placement policy (artifact_placement_policy.mdx): the per-repo manifest is Category B — it lives in Local Storage at ~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml always and travels via the company/Personal SYNC REPO (git_backbone.mdx), NOT committed into the working repo — superseding the old committed in-repo manifest; the computer-scope list still rides Dropbox/Drive (or IPNS).
 ---
 
 # LargeFileBridge — The Sync List & Bridge Backbones
@@ -30,8 +30,10 @@ syncs files between your computers. LFB supports three, each with its own spec:
 This spec builds on its siblings and does not repeat them:
 
 * [storage_local.mdx](./storage_local.mdx) — where state lives on disk (per-unit `config.yaml` + `manifest.yaml`,
-  the committed in-repo manifest, peers, the state root). The Sync List is the **portable, backbone-
-  carried composition** of that state; [§7](#7-reconciliation-with-storagemdx) maps the two.
+  peers, the state root). The per-repo manifest now lives in **Local Storage** and travels via the **sync
+  repo**, not committed in the working repo ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx),
+  superseding storage_local.mdx §9.2's committed in-repo manifest). The Sync List is the **portable,
+  backbone-carried composition** of that state; [§7](#7-reconciliation-with-storagemdx) maps the two.
 * [settings.mdx](./settings.mdx) / [repo_settings.mdx](./repo_settings.mdx) — the settings whose
   values appear inside the list's `settings:` and per-repo blocks.
 * [knowledge/ipfs.mdx](../knowledge/ipfs.mdx) — CIDs, pinning, the only-our-content rule that the
@@ -71,11 +73,17 @@ There are two kinds of Sync List, and they ride different backbones:
   sync a folder that belongs to the user's account, not to any one repo. This is the file-based
   alternative to the IPNS transport in [storage_local.mdx §9.3](./storage_local.mdx#93-computer-manifests-travel-via-ipns).
 
-* **The per-repo Sync List (scope: `repo`).** One per repo. It covers exactly one repo and lives
-  **inside that repo**, so `git pull` carries it to your other computers for free. This is the **repo
-  (git) backbone** ([repo__list_syns.mdx](./repo__list_syns.mdx)) and it is the same idea as the
-  committed manifest in [storage_local.mdx §9.2](./storage_local.mdx#92-repo-manifests-travel-via-git-the-elegant-part),
-  widened to the full `large_files` hierarchy.
+* **The per-repo Sync List (scope: `repo`).** One per repo — the repo's big-file **manifest**
+  (large-file → CID + pin state). It is **Category B** tracking state
+  ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)), so it lives in **Local Storage** at
+  `~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml` **always** and **travels via the company/Personal
+  sync repo** — the dedicated `*_large_files_bridge` tracking repo driven by the
+  [git backbone engine](./git_backbone.mdx). This is the **repo (git) backbone**
+  ([repo__list_syns.mdx](./repo__list_syns.mdx)). It **no longer lives committed inside the working repo** —
+  that earlier design (the committed `<repo>/.lfbridge/manifest.yaml`, [storage_local.mdx §9.2](./storage_local.mdx#92-repo-manifests-travel-via-git-the-elegant-part))
+  is retired because its per-scan churn merge-conflicted the working repo. The working repo's own git now
+  carries only its small committed files and its committed **Category-A** content (transcripts / AI
+  descriptions).
 
 ```
         ┌──────────────── your computers ────────────────┐
@@ -83,12 +91,12 @@ There are two kinds of Sync List, and they ride different backbones:
         └───────┬───────────┬───────────────┬─────────────┘
                 │           │               │
    COMPUTER list rides  Dropbox / Google Drive   (one file per machine, whole-scope)
-   PER-REPO  list rides  the repo itself over git (one file per repo, in-repo)
+   PER-REPO  list rides  the company/Personal SYNC repo over git (one manifest per repo, in Local Storage)
 ```
 
 A repo may therefore be described in **two** places at once — as an entry in the computer list *and*
-as its own in-repo list. That is fine and expected; [§5.4](#54-when-the-same-repo-arrives-on-two-backbones)
-defines which wins.
+as its own per-repo manifest (in Local Storage, travelling via the sync repo). That is fine and expected;
+[§5.4](#54-when-the-same-repo-arrives-on-two-backbones) defines which wins.
 
 ---
 
@@ -260,14 +268,15 @@ they disagree:
 
 ### 5.4 When the same repo arrives on two backbones
 
-A repo can appear in the computer list (Dropbox/Drive) *and* in its own in-repo list (git). The
-**in-repo (git) list is authoritative for that repo's `files`**, because it travels atomically with
-the repo's own commits — the computer-list copy is a convenience mirror. Settings still resolve
-per the normal inherit chain (per-repo override → computer `settings` → global `config.yaml`). The
-per-backbone specs restate this from their side.
+A repo can appear in the computer list (Dropbox/Drive) *and* in its own per-repo manifest (the sync repo).
+The **per-repo manifest is authoritative for that repo's `files`**, because it is the Category-B tracking
+state LFB owns for that repo — resolved from Local Storage and reconciled through the sync repo — so it
+cannot drift the way a separately-carried computer-list mirror can. The computer-list copy is a convenience
+mirror. Settings still resolve per the normal inherit chain (per-repo override → computer `settings` →
+global `config.yaml`). The per-backbone specs restate this from their side.
 
-The per-repo in-repo list that git carries atomically with the repo's own commits is written in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `writeCommittedManifest()` (writes `<repo>/.lfbridge/manifest.yaml`)
+The per-repo manifest — written to Local Storage and mirrored to the sync repo — is written in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `writeManifest()` (writes `~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml`, mirrored to `<syncRepo>/repos/<repoKey>/manifest.yaml` via `tracking-sync.service.ts` when enabled).
 
 ### 5.5 Backbone-delivered hazards the reader must expect
 
@@ -304,15 +313,16 @@ and pushes it onto each enabled backbone so peers can reconcile it:
   truth, not invented.
 * Write atomically (temp-then-rename) so a peer's backbone never sees a half-written list.
 * Publish to each backbone whose `settings.backbones.<kind>.enabled` is true, at that backbone's
-  path convention (per its own spec). The computer list goes to Dropbox/Drive; each repo's list goes
-  into the repo (git).
+  path convention (per its own spec). The computer list goes to Dropbox/Drive; each repo's manifest is
+  written to Local Storage and mirrored into the company/Personal **sync repo** (the git backbone),
+  **never** into the working repo.
 
 The security defaults of [knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule)
 are part of `settings.ipfs`: publishing a list never turns this machine into a public gateway/relay,
 and `reprovide_strategy` stays `pinned`.
 
-Writing this computer's own view — with `pinned_by` set only for CIDs it actually pins — and publishing the committed list happen in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()` (self-only `setPinClaim()`, then `writeCommittedManifest()`)
+Writing this computer's own view — with `pinned_by` set only for CIDs it actually pins — and publishing the per-repo manifest to Local Storage (+ the sync-repo mirror) happen in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()` (self-only `setPinClaim()`, then `writeManifest()` → `repos/<repoKey>/manifest.yaml`, mirrored to the sync repo via `tracking-sync.service.ts` when enabled)
 
 ---
 
@@ -328,12 +338,14 @@ The Sync List does not replace the on-disk model — it is its **portable projec
 | a file entry (`path`/`cid`/`size`/`sha256`/`pinned_by`) | a `manifest.yaml` file row ([storage_local.mdx §9.1](./storage_local.mdx#91-manifest-shape-per-pin-unit)) |
 | `origin` / `revision` | new provenance this spec adds; `status.yaml` records the last reconciled revision per peer |
 
-Transport mapping: the **repo (git) backbone** is [storage_local.mdx §9.2](./storage_local.mdx#92-repo-manifests-travel-via-git-the-elegant-part)
-(the committed `<repo>/.lfbridge/…` file — the per-repo Sync List *is* that committed artifact, widened
-to the `large_files` hierarchy). The **Dropbox / Google Drive backbones** are the file-based
-alternative to [storage_local.mdx §9.3](./storage_local.mdx#93-computer-manifests-travel-via-ipns)'s IPNS transport
-for the computer-scope list. IPNS and a file-backbone can both be enabled; they reconcile through the
-same §5 rules.
+Transport mapping: the **repo (git) backbone** now carries the per-repo manifest as **Category B** tracking
+state ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)) — Local Storage
+`~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml` always, travelling via the company/Personal **sync
+repo** ([git_backbone.mdx](./git_backbone.mdx)), **not** committed into the working repo (this supersedes the
+old committed `<repo>/.lfbridge/manifest.yaml` of [storage_local.mdx §9.2](./storage_local.mdx#92-repo-manifests-travel-via-git-the-elegant-part)).
+The **Dropbox / Google Drive backbones** are the file-based alternative to
+[storage_local.mdx §9.3](./storage_local.mdx#93-computer-manifests-travel-via-ipns)'s IPNS transport for the
+computer-scope list. IPNS and a file-backbone can both be enabled; they reconcile through the same §5 rules.
 
 ---
 
@@ -343,7 +355,8 @@ same §5 rules.
    top-level key is **`large_files`**, with level-2 children **`settings`**, **`repos`**, and
    **`directories`** nesting 4–6 levels deep per [§3.1](#31-the-hierarchy-level-by-level-locked).
 2. There are **two scopes**: one **computer** list (whole machine; rides Dropbox / Google Drive) and
-   one **repo** list per repo (rides the repo over git). `scope:` records which.
+   one **repo** manifest per repo (Category B — Local Storage always, rides the company/Personal **sync
+   repo** over git, never the working repo). `scope:` records which.
 3. Every list carries an **`origin`** block (`computer_id`, `label`, `owner`, `written_at`,
    `revision`); a list without it is treated as maximally untrusted.
 4. **An incoming list is never applied — it is reconciled** ([§5](#5-trust--reconciliation-the-load-bearing-rule)):
@@ -351,7 +364,7 @@ same §5 rules.
    **not** a delete unless explicitly `state: removed` (§5.2); conflicts resolve by same-writer
    revision, then content-fork (kept + surfaced, never auto-deleted), then `written_at` as a
    last-resort tiebreaker (§5.3).
-5. When a repo appears on both the computer list and its own in-repo list, the **in-repo (git) list is
+5. When a repo appears on both the computer list and its own per-repo manifest, the **per-repo manifest is
    authoritative for that repo's files** (§5.4).
 6. The reader tolerates backbone hazards — **conflict copies, partial/zero-byte files, clock skew,
    foreign-owner files** — quarantining/rejecting rather than trusting (§5.5), and reconciliation is
@@ -359,8 +372,9 @@ same §5 rules.
 7. Publishing bumps `revision`, stamps `written_at`, writes **only self-verifiable `pinned_by`**
    claims, writes atomically, and honors the IPFS only-our-content defaults (§6).
 8. The model maps cleanly onto [storage_local.mdx](./storage_local.mdx) (§7): the list is the portable projection
-   of the per-unit `config.yaml` + `manifest.yaml`; git carries the repo list, Dropbox/Drive carry the
-   computer list, alongside (not instead of) the existing committed-manifest / IPNS transports.
+   of the per-unit `config.yaml` + `manifest.yaml`; the **sync repo** carries each repo's Category-B manifest
+   (Local Storage always, per [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)), Dropbox/Drive
+   carry the computer list, alongside (not instead of) the IPNS transport — and **never** the working repo.
 9. Each of the three backbones has its own spec — [dropbox.mdx](./dropbox.mdx),
    [google_drive.mdx](./google_drive.mdx), [repo__list_syns.mdx](./repo__list_syns.mdx) — and none
    redefines the schema or the trust rules; they reference this hub.
@@ -374,4 +388,12 @@ same §5 rules.
   google_drive.mdx, and repo__list_syns.mdx are the three bridge backbones and must reference this
   file rather than restate it. Reconciles with storage_local.mdx (§7) — the list is the portable projection
   of the on-disk per-unit config.yaml + manifest.yaml.
+  UPDATED FOR THE DATA-CATEGORY SPLIT (artifact_placement_policy.mdx): the REPO-scope Sync List is the
+  per-repo big-file MANIFEST and is CATEGORY B — it lives in Local Storage at
+  ~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml ALWAYS and travels via the company/Personal SYNC
+  REPO (git_backbone.mdx), NOT committed into the working repo (supersedes the old committed
+  <repo>/.lfbridge/manifest.yaml). The working repo's git carries only its small files + committed CATEGORY-A
+  content (transcripts/AI descriptions). The COMPUTER-scope list still rides Dropbox/Drive (or IPNS).
+  Per-repo manifest is authoritative for that repo's files (§5.4). manifest.service writeManifest →
+  repos/<repoKey>/manifest.yaml + tracking-sync mirror to the sync repo.
 -->

@@ -44,7 +44,8 @@ Siblings this builds on and does not repeat:
   **`transcribe` event** to the file's per-file sidecar (`output:` → the `.transcription` path) and a
   `TRANSCRIBE` line to the per-computer history log, and increments `repo_storage.yaml → counts.transcribed`.
 * [use_case_two_computers.mdx](./use_case_two_computers.mdx) — the tour where a video's transcript is
-  produced on one computer and its sidecar event travels with the repo.
+  produced on one computer and travels with the repo (the sidecar event travels separately, via the
+  company sync repo, since it is Local-Storage tracking state — [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
 
 ---
 
@@ -186,9 +187,12 @@ For a repo file at `<repo>/a/b/talk.mp3`, the transcript is written to
 Three rules, together, define the path — **all LOCKED**:
 
 1. **Root = `<owning root>/.lfbridge/`.** The transcript lands under the owning repo/storage's hidden
-   `.lfbridge/` tracking directory — the same directory that already holds `repo_storage.yaml`, the
-   per-file sidecars, and `history/` ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)) — **not**
-   beside the media and **not** in `~/T/_large_files_bridge/`.
+   `.lfbridge/` directory — **not** beside the media and **not** in `~/T/_large_files_bridge/`. Note that
+   the working repo's committed `.lfbridge/` now holds **only** the two content artifacts (transcripts and
+   AI descriptions); LFB's tracking state — `repo_storage.yaml`, the per-file sidecars, and `history/` —
+   lives in **Local Storage** at `~/T/_large_files_bridge/repos/<repoKey>/`, never the working repo
+   ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx),
+   [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
 2. **Mirror the media's relative directory hierarchy.** A file two directories deep (`a/b/talk.mp3`)
    **creates `a/b/` inside `.lfbridge/`** and writes there. The media's path relative to the root is
    reproduced verbatim under `.lfbridge/`.
@@ -197,9 +201,10 @@ Three rules, together, define the path — **all LOCKED**:
    `talk.mp3.transcription` (**not** `talk.transcription`). The `.transcription` token is a single constant
    — `TRANSCRIPTION_EXT` — **appended**, never substituted.
 
-> **Why `.lfbridge/` (and not beside the media).** `.lfbridge/` is **committed and travels with the repo**
-> ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx); the working tree's own `git status` shows
-> `.lfbridge/repo_storage.yaml` tracked). Putting the transcript there means it is **version-controlled and
+> **Why `.lfbridge/` (and not beside the media).** The working repo's `.lfbridge/` is **committed and
+> travels with the repo** ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx); the working tree's own
+> `git status` shows the committed `.lfbridge/…/talk.mp3.transcription` artifact tracked). Putting the
+> transcript there means it is **version-controlled and
 > synced across the user's computers by git** — exactly the *"the transcript is produced on one computer and
 > travels with the repo"* behavior of [use_case_two_computers.mdx](./use_case_two_computers.mdx) — while the
 > media working tree stays **clean** (no loose `.transcription` files scattered next to videos), and every
@@ -463,8 +468,66 @@ the "fix it, then hit the button to run again" flow the product owner asked for.
 
 The setup card + Re-check are implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/TranscribeSetupCard.tsx` — `TranscribeSetupCard` (Re-check calls the `["transcribe-tools"]` query's `refetch`). The full install
-preflight also lists these under **Settings → Tools**
-(`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/ToolsPage.tsx`).
+preflight also lists `whisper` (alongside `ffmpeg`/`ffprobe`) under **Settings → Tools**, implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/ToolsPage.tsx` — `buildRows()` (reads `GET /api/transcribe/tools` via `api.transcribeTools()` for the `whisper` row; `GET /api/compress/tools` for `ffmpeg`/`ffprobe`, shared with the Compress feature since both drive the same binary).
+
+#### 5.2.1 Detection detail — why a genuinely-installed tool must never be reported missing (LOCKED)
+
+The setup card's entire premise — "install what's missing, then Re-check" — only works if the **detection**
+is trustworthy. A false "missing" for a tool that is actually on the machine sends the user chasing a
+problem that doesn't exist (the exact complaint this hardening pass answers: *"I clicked Transcribe and it
+failed — I suspect it didn't install what it needs,"* when in fact `whisper`, `ffmpeg`, and the Qwen3-ASR
+model were all present).
+
+* **How detection works.** `commandExists(cmd)` shells out to `which` (`where` on Windows) — never a shell
+  alias, never `command -v` (which can see builtins/aliases a spawned child can't run). A tool is "installed"
+  exactly when `which` finds it **on the searched `PATH`**.
+* **The PATH gap this closes.** Both `whisper` and `mlx-qwen3-asr` are installed by **pipx**, which places
+  its shims in **`~/.local/bin`** — a directory that is on an **interactive shell's** `PATH` (via `.zshrc` /
+  `.bash_profile`) but is **not** guaranteed to be on the `PATH` of every process that might run this code:
+  a `launchd` agent with no `EnvironmentVariables` block gets macOS's bare minimum
+  (`/usr/bin:/bin:/usr/sbin:/sbin`), and even a hand-rolled `EnvironmentVariables` PATH (see the IPFS
+  daemon's autostart plist, which hard-codes `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`) still omits
+  `~/.local/bin`. Measured on a real machine with all three tools genuinely installed, a minimal/launchd-style
+  `PATH` finds **none** of `whisper`, `ffmpeg`, or `mlx-qwen3-asr`; a Homebrew-only `PATH` finds `ffmpeg` but
+  still misses the two pipx tools. So the risk is real, not hypothetical: a background-launched or
+  restricted-environment process can see the **same machine** as "missing everything" while an interactive
+  terminal sees it as fully set up.
+* **The fix — search a WIDENED path, not the bare inherited one.** Tool detection (`commandExists()`) and
+  tool **execution** (`spawnAsync()`, so a bare command name like `"whisper"` resolves the same way it was
+  detected) both search `process.env.PATH` **plus** the well-known install locations pipx and Homebrew use:
+  `~/.local/bin`, `/opt/homebrew/bin`, `/opt/homebrew/sbin`, `/usr/local/bin`, `/usr/local/sbin`, in addition
+  to the standard system dirs. This is **additive only** — an already-correct interactive `PATH` is untouched
+  — so it only ever makes a genuinely-installed tool **more** likely to be found, never less.
+* **Detection and execution must agree.** It would be a subtler version of the same bug to detect a tool
+  successfully (widened `PATH`) but then fail to actually run it (bare inherited `PATH`) — the button would
+  look enabled and then fail on click. Both `commandExists()` and `spawnAsync()` search the identical widened
+  `PATH` for exactly this reason.
+
+The widened tool-search `PATH` (shared by detection and execution, so the two never disagree) is implemented
+in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/audio-prep.ts` — `toolSearchPath()` / `toolEnv()` / `commandExists()` / `spawnAsync()`, reused by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/qwen-asr.ts` and
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/model-provision.service.ts`
+(pipx/brew/ffmpeg detection during provisioning, §3 below). The Whisper engine
+(`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — private
+`commandExists()` / `spawnAsync()`) keeps its own copy of the engine logic (deliberately not merged into
+`audio-prep.ts`, to avoid churn on the working engine) but draws the **same** `toolEnv()` so the two engines
+never disagree on what's installed.
+
+#### 5.2.2 Every entry point gates identically — no bypass (LOCKED)
+
+Transcription has two frontend launchers that must apply the **exact same** gates before calling the
+backend: the **Media Viewer** button/tab (`useTranscribeFile()`, §2.1) and the **⋮ kebab / row actions**
+(`runTranscribeFile()` in `lib/transcribe.ts`, §2.2). Both funnel through `withModelReady()`
+([transcribe_engine.mdx §3.2](./transcribe_engine.mdx#32-the-first-time-permission-popup-locked)) before
+ever calling `api.transcribeFile()`, so the first-time heavyweight-model consent popup interposes **no
+matter which button the user clicked** — a real defect this hardening pass fixed: the Media Viewer hook
+previously called the transcribe API directly, silently skipping the consent gate every time (the model
+would then always resolve straight to whichever fallback was available, and the user was never offered the
+higher-quality engine on their first run from that button). The two launchers are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/useTranscribeFile.ts` — `useTranscribeFile()` (wraps its `run()` in `withModelReady()` before `mutate()`) ·
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/transcribe.ts` — `runTranscribeFile()` / `withModelReady()`.
 
 > **The heavyweight model is provisioned separately — with permission — not by this setup card.** The
 > setup card covers only the small **CLI binaries**. The **heavyweight model weights** (multi-GB,

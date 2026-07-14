@@ -9,16 +9,28 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { ManifestSchema, type Manifest, type ManifestFile } from "@lfb/shared";
+import { resolveTrackingRoot } from "../storage/tracking-root.service.js";
+import { mirrorToSyncRepo } from "../storage/tracking-sync.service.js";
 import { log } from "../../shared/logging.js";
 
-/** The committed manifest lives in the repo working tree so `git pull` carries it. */
+/** The committed manifest for an SDL storage lives in its `.lfbridge/` (that dedicated repo IS the travel
+ *  vehicle, storage_personal.mdx §1). A plain repo storage does NOT use this — its manifest is Category-B
+ *  tracking state in Local Storage (see {@link repoTrackingManifestPath}). */
 export function committedManifestPath(repoPath: string): string {
   return path.join(repoPath, ".lfbridge", "manifest.yaml");
 }
 
-/** Where a conflicted/half-merged committed list is quarantined so we never parse it as truth (§5.1). */
-function quarantinePath(repoPath: string): string {
-  return path.join(repoPath, ".lfbridge", "manifest.conflicted.yaml");
+/** A repo storage's manifest is Category-B tracking state: it lives in LOCAL STORAGE at
+ *  `~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml` (never the working repo, so it can't
+ *  merge-conflict there), and travels via the company/Personal sync repo when configured
+ *  (artifact_placement_policy.mdx §1.2). */
+export function repoTrackingManifestPath(repoRoot: string): string {
+  return path.join(resolveTrackingRoot(repoRoot), "manifest.yaml");
+}
+
+/** Where a conflicted/half-merged list is quarantined so we never parse it as truth (§5.1). */
+function quarantinePathFor(file: string): string {
+  return file.replace(/manifest\.yaml$/, "manifest.conflicted.yaml");
 }
 
 /** True if the raw file text carries git merge-conflict markers (repo__list_syns.mdx §5.1). */
@@ -33,8 +45,9 @@ function hasConflictMarkers(raw: string): boolean {
  *   half-merged file as if it were valid — even if it parsed it would be a lie. Throwing here keeps the
  *   caller from overwriting the previous good copy (the unit pin pass aborts and retains prior state).
  */
-export function readCommittedManifest(repoPath: string): Manifest {
-  const file = committedManifestPath(repoPath);
+/** Read a manifest FROM A GIVEN FILE (shared by the SDL-committed and repo-tracking readers). Missing →
+ *  schema defaults; merge-conflict markers → quarantine + refuse (§5.1). */
+function readManifestFile(file: string): Manifest {
   let raw: string;
   try {
     raw = fs.readFileSync(file, "utf8");
@@ -45,49 +58,45 @@ export function readCommittedManifest(repoPath: string): Manifest {
     return ManifestSchema.parse({}); // defaults-on-absence
   }
   if (hasConflictMarkers(raw)) {
-    // Quarantine the half-merged file, retain the previous good copy, and refuse (hub §5.3 reconciliation
-    // resolves the two sides later; we must NEVER load a half-merged list as valid).
+    // Quarantine the half-merged file, retain the previous good copy, and refuse (a sync-repo pull can also
+    // produce markers — never load a half-merged list as valid).
+    const quarantine = quarantinePathFor(file);
     try {
-      fs.copyFileSync(file, quarantinePath(repoPath));
+      fs.copyFileSync(file, quarantine);
     } catch (e) {
       log.warn("manifest", `quarantine copy failed: ${(e as Error).message}`);
     }
     log.error(
       "manifest",
-      `${file}: git merge-conflict markers detected — REFUSING to load; quarantined to ${quarantinePath(repoPath)}`,
+      `${file}: git merge-conflict markers detected — REFUSING to load; quarantined to ${quarantine}`,
     );
-    throw new Error(`Merge conflict in committed manifest at ${file} (quarantined, not loaded)`);
+    throw new Error(`Merge conflict in manifest at ${file} (quarantined, not loaded)`);
   }
   let parsed: unknown;
   try {
     parsed = YAML.parse(raw) ?? {};
   } catch (e) {
     log.error("manifest", `YAML parse failed: ${file}: ${(e as Error).message}`);
-    throw new Error(`Corrupt committed manifest at ${file}`);
+    throw new Error(`Corrupt manifest at ${file}`);
   }
   const result = ManifestSchema.safeParse(parsed);
   if (!result.success) {
     log.error("manifest", `Schema validation failed: ${file}: ${result.error.message}`);
-    throw new Error(`Invalid committed manifest at ${file}`);
+    throw new Error(`Invalid manifest at ${file}`);
   }
   return result.data;
 }
 
-/**
- * Write the committed in-repo manifest DETERMINISTICALLY (repo__list_syns.mdx §6) and ATOMICALLY (§7 /
- * storage.mdx §15). Files are sorted by `path` with a stable key order and NO volatile timestamp, so an
- * unchanged list re-serializes byte-identically (no git noise) and independent edits on two machines
- * touch different regions and merge cleanly.
- */
-export function writeCommittedManifest(repoPath: string, manifest: Manifest): void {
-  const dir = path.join(repoPath, ".lfbridge");
+/** Write a manifest TO A GIVEN FILE DETERMINISTICALLY (repo__list_syns.mdx §6) and ATOMICALLY (§7 /
+ *  storage.mdx §15) — sorted by `path`, stable key order, no volatile timestamp, so an unchanged list
+ *  re-serializes byte-identically. */
+function writeManifestFile(file: string, manifest: Manifest): void {
   try {
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(path.dirname(file), { recursive: true });
   } catch {
     /* best effort */
   }
   const body = serializeDeterministic(manifest);
-  const file = committedManifestPath(repoPath);
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
   try {
     const fd = fs.openSync(tmp, "w");
@@ -104,6 +113,29 @@ export function writeCommittedManifest(repoPath: string, manifest: Manifest): vo
     log.error("manifest", `Write failed: ${file}: ${(e as Error).message}`);
     throw e;
   }
+}
+
+/** Read an SDL storage's committed manifest from its `.lfbridge/` (storage_personal.mdx §1). */
+export function readCommittedManifest(repoPath: string): Manifest {
+  return readManifestFile(committedManifestPath(repoPath));
+}
+
+/** Write an SDL storage's committed manifest into its `.lfbridge/` (that dedicated repo commits + pushes it). */
+export function writeCommittedManifest(repoPath: string, manifest: Manifest): void {
+  writeManifestFile(committedManifestPath(repoPath), manifest);
+}
+
+/** Read a repo storage's manifest from LOCAL STORAGE (`repos/<repoKey>/manifest.yaml`) — reconciled there
+ *  from the sync repo when one is configured (artifact_placement_policy.mdx §1.2/§5). */
+export function readRepoTrackingManifest(repoRoot: string): Manifest {
+  return readManifestFile(repoTrackingManifestPath(repoRoot));
+}
+
+/** Write a repo storage's manifest to LOCAL STORAGE (never the working repo → no merge conflict), then
+ *  additively mirror it to the company/Personal sync repo when configured (default off → no-op). */
+export function writeRepoTrackingManifest(repoRoot: string, manifest: Manifest): void {
+  writeManifestFile(repoTrackingManifestPath(repoRoot), manifest);
+  mirrorToSyncRepo(repoRoot);
 }
 
 /**

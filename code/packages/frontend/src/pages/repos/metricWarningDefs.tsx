@@ -6,9 +6,12 @@
 // primary (the worst-first top one) resolve the identical popup. Previously these lived inline in
 // OneRepoPage's RepoVerdict banner; the banner is gone (metric panels replace it, task_tabs.mdx §2.6), so
 // the builders moved here where the tiles and the header button can share them.
+import { toast } from "sonner";
 import type { RepoDetail, FileRow } from "@lfb/shared";
 import { formatBytes, mediaKindForName } from "@lfb/shared";
 import { api } from "../../api/client.js";
+import { clientLog } from "../../lib/clientLog.js";
+import { withModelReady } from "../../lib/transcribe.js";
 import type { WarningDef } from "../../components/ui/warnings/registry.js";
 import type { MetricId } from "./metricWarnings.js";
 
@@ -233,8 +236,29 @@ export function buildTranscribeWarning(detail: RepoDetail, repoId: string): Warn
         doneLabel: (_sel, count) => `${count} file${count === 1 ? "" : "s"} queued to transcribe`,
         invalidate: [["repo", repoId]],
       },
+      // Model-gated on Apply, then BACKGROUND-ENQUEUED (Transcribe.mdx §2.5/§9.1, transcribe_engine.mdx §3.6).
+      // We must NOT run api.transcribeBatch here: that transcribes every file inline inside ONE HTTP request,
+      // which stays open for minutes on a big repo and dies on a network error / dev restart (the reported
+      // "it failed to transcribe" bug). enqueue plans + queues on the server and returns immediately; each
+      // file then surfaces its own determinate `transcribe` job on the Processing page / dock.
       apply: async (_sel, checkedPaths) => {
-        await api.transcribeBatch(checkedPaths);
+        const label = `transcribe ${checkedPaths.length} file${checkedPaths.length === 1 ? "" : "s"}`;
+        await withModelReady({
+          label,
+          run: () => {
+            void api
+              .transcribeEnqueue({ paths: checkedPaths })
+              .then((plan) => {
+                if (plan.needsSetup) {
+                  toast.error("Set up Personal storage first — Settings → Storages");
+                }
+              })
+              .catch((e) => {
+                clientLog.error("transcribe.enqueue", e);
+                toast.error(e instanceof Error ? e.message : "Could not queue transcription");
+              });
+          },
+        });
       },
     },
   };

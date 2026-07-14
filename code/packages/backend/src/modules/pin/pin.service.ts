@@ -28,7 +28,12 @@ import {
   writeComputerStatus,
   isGitWorkingTree,
 } from "../store-model/units.service.js";
-import { writeCommittedManifest, readCommittedManifest } from "./manifest.service.js";
+import {
+  writeCommittedManifest,
+  readCommittedManifest,
+  writeRepoTrackingManifest,
+  readRepoTrackingManifest,
+} from "./manifest.service.js";
 import { listStorageIds, ensureBackingLocations, getStorageRow } from "../storage/storage.service.js";
 import { readStorageIndex } from "../storage/tracking.service.js";
 import { writeSelfDevice, resolveGraftedPath } from "../storage/devices.service.js";
@@ -292,8 +297,9 @@ export async function pinRepoFolder(
       status: getRepoStatus(folder),
       writeManifest: (m) => writeRepoManifest(folder, m),
       writeStatus: (s) => writeRepoStatus(folder, s),
-      // Publish the committed in-repo manifest so git carries the list (storage.mdx §9.2).
-      publish: cfg.pin.publish_manifest ? (m) => writeCommittedManifest(repoPath, m) : undefined,
+      // Publish the repo's manifest to LOCAL STORAGE (never the working repo → no merge conflict); it
+      // travels via the company/Personal sync repo when configured (artifact_placement_policy.mdx §1.2).
+      publish: cfg.pin.publish_manifest ? (m) => writeRepoTrackingManifest(repoPath, m) : undefined,
       preflightError: () => (isGitWorkingTree(repoPath) ? null : "repo missing"),
     },
     onlyPaths,
@@ -660,7 +666,7 @@ function resolveAddedBy(repoRoot: string, entry: ManifestFile, selfLabel: string
 export async function missingPinnedFromPeers(repoRoot: string): Promise<MissingPinnedFile[]> {
   let manifest: Manifest;
   try {
-    manifest = readCommittedManifest(repoRoot); // throws on a merge-conflicted/corrupt committed list
+    manifest = readRepoTrackingManifest(repoRoot); // Local-Storage manifest (reconciled from the sync repo)
   } catch (e) {
     log.warn("pin", `missingPinnedFromPeers: cannot read committed manifest for ${repoRoot}: ${(e as Error).message}`);
     return [];

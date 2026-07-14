@@ -70,7 +70,7 @@ the decision to the shared ledger and queues the effect, and the file drops out 
 
 | Month | Computer | What happens | New / changed `_do_batches/` writes |
 | --- | --- | --- | --- |
-| **June** | `studio-tower` | A fresh batch of large image files is **pinned + git-ignored** on the tower (via the inline toggles). Sidecars + shared ledger + manifest updated. No `pull_down` here — the files exist locally. | (this computer *has* the files, so they are **not** in its batch — the writes are to `.lfbridge/` + the manifest, not `_do_batches/`) |
+| **June** | `studio-tower` | A fresh batch of large image files is **pinned + git-ignored** on the tower (via the inline toggles). Sidecars + shared ledger + manifest updated in Local Storage. No `pull_down` here — the files exist locally. | (this computer *has* the files, so they are **not** in its batch — the writes are to the Local-Storage `decisions.yaml` + `manifest.yaml`, plus the repo's `.gitignore`, not `_do_batches/`) |
 | **July** | `bryan-macbook-pro` | The laptop does **not** have those images → they qualify as **`pull_down`**. Scan recalc writes them into `personal_2_do.yaml` (or the repo batch). A **warning** appears **and** a **To-Do slug**. User opens the popup, toggles pre-set to **RECOMMENDED**, confirms, **Applies** → files pull down over IPFS, land git-ignored, ledger updated. | `personal_2_do.yaml` (pattern `pull_down`) written by the recalc; **removed** on the next recalc after Apply. |
 | **August** | `bryan-macbook-pro` | A repo with a **mix** — 12 uncompressed videos + 3 big-unignored files + 41 pull_downs → a **`mixed`** slug. The mixed batch popup shows three sections; user Applies. | `repo_charlie-kirk_2_do.yaml` (pattern `mixed`) — shrinks/clears as each section is acted on. |
 | **September** | either | **"Show what could be transcribed"** → 58 videos + 13 audio in Personal, 4 repos each with a transcribe slug. The ~80% popup opens ~default-checked; user unchecks a few, **"Transcribe N files"** → background jobs on Processing. | `personal_transcribe_2_do.yaml` + 4× `repo_<name>_transcribe_2_do.yaml` (kind `transcribe`) written on demand. |
@@ -89,9 +89,10 @@ inline decision toggles on: the **Pin** column and the **Ignore** column
 **optimistic and immediate** ([decision_toggles.mdx §2](./decision_toggles.mdx#2-clicking-a-toggle--one-decision-event-locked)):
 
 * The **Add-to-IPFS** toggle flips to **ON** (solid orange). LFB appends **one decision event** for the
-  `sync` axis to the repo's team-shared `.lfbridge/decisions.yaml` (with `decided_by`, `decided_at`, the
-  Storage ID, the path, the fingerprint), adds the file to the **manifest**, records its **CID**, pins it,
-  and queues it to peers.
+  `sync` axis to the repo's team-shared `decisions.yaml` in Local Storage
+  (`~/T/_large_files_bridge/repos/<repoKey>/decisions.yaml`, mirrored to the company/Personal sync repo when
+  enabled — with `decided_by`, `decided_at`, the Storage ID, the path, the fingerprint), adds the file to the
+  Local-Storage **manifest**, records its **CID**, pins it, and queues it to peers.
 * The **Add-to-git-ignore** toggle (⊘) flips to **ON**. Because a per-file ignore is a single file, it
   writes an anchored, repo-root-relative rule into the repo's `.gitignore` via the git-ignore engine
   ([git_ignore.mdx §5](./git_ignore.mdx)). (Had the user turned ⊘ on for the whole *folder*, it would open
@@ -107,12 +108,14 @@ The tower's TO DO Batch for this repo may still recommend other things (compress
 `compress_image`), but the pinned/ignored decisions the user just made mean those files are **decided** and
 drop out of the recompute. The important artifacts of June are the **manifest** (carrying each image's CID
 so another computer can fetch it) and the **shared ledger** (carrying each pin/ignore decision so nobody is
-re-asked).
+re-asked) — both Category-B tracking state in Local Storage, mirrored to the sync repo, never the working
+repo ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
 
 **What we double-check (June):**
-* Each image has **two** decision events in `.lfbridge/decisions.yaml` (one per axis), attributed to the
-  tower user, and the toggles render **ON/ON** (solid orange, no edge) on the tower's file table.
-* The **manifest** carries each image's **CID** (this is what lets the laptop, in July, name and pull them).
+* Each image has **two** decision events in the Local-Storage `decisions.yaml` (one per axis), attributed to
+  the tower user, and the toggles render **ON/ON** (solid orange, no edge) on the tower's file table.
+* The **manifest** (in Local Storage) carries each image's **CID** (this is what lets the laptop, in July,
+  name and pull them, once it reconciles from the sync repo).
 * No `pull_down` entry exists in the tower's `repo_charlie-kirk_2_do.yaml` for these files — they are present
   locally, so they are not pull candidates *here*.
 
@@ -120,14 +123,18 @@ re-asked).
 
 ## 3. JULY — `bryan-macbook-pro` — the images qualify as `pull_down`
 
-**What the user does.** On the Mac laptop they pull the repo's Git changes (the committed `manifest.yaml`
-and `decisions.yaml` arrive; the **large images do not** — they are git-ignored and travel over IPFS). The
-next **scan recalc** runs on the laptop.
+**What the user does.** On the Mac laptop they pull the repo's Git changes (source only — the **large images
+do not** arrive, they are git-ignored and travel over IPFS; and neither `manifest.yaml` nor `decisions.yaml`
+ride the working repo — those are Category-B tracking state). LFB pulls the **company/Personal sync repo** and
+**reconciles** the tower's `repos/<repoKey>/` subtree (manifest + decisions) into the laptop's Local Storage
+([artifact_placement_policy.mdx §5](./artifact_placement_policy.mdx)). The next **scan recalc** runs on the
+laptop.
 
 **What LFB does automatically — the recalc writes a `pull_down` batch.** The
-[TO DO Batch Calc Engine](./to_do_batch_calc_engine.mdx) resolves each manifest CID against the laptop's
-working tree and IPFS node and finds the 60 images are **absent locally and not pinned here** — the exact
-`pull_down` condition. It writes them into the owning storage's batch:
+[TO DO Batch Calc Engine](./to_do_batch_calc_engine.mdx) resolves each manifest CID (reconciled from the sync
+repo) against the laptop's working tree and IPFS node and finds the 60 images are **absent locally and not
+pinned here** — the exact `pull_down` condition. It writes them into the owning storage's batch under the
+state root:
 
 * If the images are **under the repo**, they land in **`repo_charlie-kirk_2_do.yaml`** with `pattern:
   pull_down`.
@@ -189,9 +196,9 @@ The user leaves all 60 checked and clicks **Apply**.
 ([to_do_batches.mdx §6](./to_do_batches.mdx#6-reading-batches--the-api-surface-locked) — `POST
 /api/todo/batches/:id/apply`):
 
-1. Writes **each row's decisions** to the shared ledger — one `sync` event and one `git_ignore` event per
-   image, attributed to the laptop user, `on_device: bryan-macbook-pro`. The dashed **RECOMMENDED** toggles
-   become **solid ON**.
+1. Writes **each row's decisions** to the shared ledger (the Local-Storage `decisions.yaml`, mirrored back to
+   the sync repo) — one `sync` event and one `git_ignore` event per image, attributed to the laptop user,
+   `on_device: bryan-macbook-pro`. The dashed **RECOMMENDED** toggles become **solid ON**.
 2. **Queues the effects** as background work ([job_queue.mdx](./job_queue.mdx)): each image is **pinned on
    the laptop**, and because the manifest carries the **CID**, pinning **fetches the bytes down over IPFS**;
    each also gets its anchored `.gitignore` line. This drains on the [Processing](./processing.mdx) page —
@@ -202,7 +209,8 @@ The user leaves all 60 checked and clicks **Apply**.
 
 **What we double-check (July):**
 * The recalc wrote a `pull_down` batch naming files **absent locally** — identity (name / size / CID /
-  `pinned_on`) comes from the committed manifest, not from local bytes.
+  `pinned_on`) comes from the manifest reconciled from the sync repo, not from local bytes or the working
+  repo.
 * The same batch shows as **both** a repo-page warning banner **and** a To-Do slug; the To-Do badge counts it.
 * The popup's toggles start **RECOMMENDED (dashed)** and the Apply label reads **"Pull down 60 · git-ignore
   60"**; unchecking a row drops the live count and rewrites the label.
@@ -351,8 +359,8 @@ out** of the next run of this engine — re-running the link later shows the slu
    the next recompute, so slugs shrink and vanish on their own.
 2. **`pull_down` is a cross-computer fact.** A file is `pull_down` only where it is *absent* — the same files
    that are pinned-and-present on studio-tower (June) become the laptop's pull_down batch (July). Identity
-   travels via the committed manifest's CID, so the laptop can **name, size, and pull** files it does not yet
-   have.
+   travels via the manifest's CID **through the sync repo** (Category-B tracking, not the working repo), so
+   the laptop can **name, size, and pull** files it does not yet have.
 3. **The engine recommends; the user decides.** A batch pre-sets its toggles to **RECOMMENDED (dashed)** —
    never silently ON. One click confirms (solid ON); Apply writes the **team-shared** decision so **no other
    computer re-asks** ([decisions.mdx](./decisions.mdx), [decision_toggles.mdx §2](./decision_toggles.mdx#2-clicking-a-toggle--one-decision-event-locked)).
@@ -372,15 +380,18 @@ out** of the next run of this engine — re-running the link later shows the slu
 ## 7. Acceptance criteria
 
 1. **June:** flipping the inline **Pin** and **Ignore** toggles ON for a batch of repo images writes **two**
-   decision events per file (one per axis) to the shared `.lfbridge/decisions.yaml`, records each CID in the
-   manifest, pins, and writes anchored `.gitignore` lines; the toggles render **ON/ON** (solid orange); the
-   present-locally files are **not** a `pull_down` entry in that computer's batch.
-2. **July:** on a computer **missing** those files, the scan recalc writes a **`pull_down`** batch
-   (`repo_<name>_2_do.yaml` or `personal_2_do.yaml`) naming files **absent locally** (identity from the
-   manifest CID + `pinned_on`); the same batch surfaces as **both** a repo-page **warning** and a **To-Do
-   slug** with a badge; its popup shows toggles pre-set to **RECOMMENDED (dashed)** and an Apply label
-   **"Pull down N · git-ignore N"**; **Apply** writes the decisions, pulls the bytes over IPFS, git-ignores
-   them, and the **next recalc** drops the batch (slug + banner gone).
+   decision events per file (one per axis) to the shared Local-Storage `decisions.yaml`
+   (`~/T/_large_files_bridge/repos/<repoKey>/decisions.yaml`, mirrored to the sync repo), records each CID in
+   the Local-Storage manifest, pins, and writes anchored `.gitignore` lines into the repo; the toggles render
+   **ON/ON** (solid orange); the present-locally files are **not** a `pull_down` entry in that computer's
+   batch.
+2. **July:** on a computer **missing** those files, after reconciling the manifest/decisions **from the sync
+   repo**, the scan recalc writes a **`pull_down`** batch (`repo_<name>_2_do.yaml` or `personal_2_do.yaml`)
+   naming files **absent locally** (identity from the synced manifest CID + `pinned_on`); the same batch
+   surfaces as **both** a repo-page **warning** and a **To-Do slug** with a badge; its popup shows toggles
+   pre-set to **RECOMMENDED (dashed)** and an Apply label **"Pull down N · git-ignore N"**; **Apply** writes
+   the decisions, pulls the bytes over IPFS, git-ignores them, and the **next recalc** drops the batch (slug +
+   banner gone).
 3. **August:** a repo with **two-or-more categories** (12 `compress_video` + 3 `git_ignore` + 41
    `pull_down`) is stamped **`pattern: mixed`**; the slug uses the **mixed template** (top category as
    headline, one detail cell per category); the popup renders **all sections** with per-section toggles/offers
@@ -401,10 +412,12 @@ out** of the next run of this engine — re-running the link later shows the slu
   Chronological tour: the TO DO Batch system + decision toggles across studio-tower (Mac tower) +
   bryan-macbook-pro (laptop), June→September. JUN(tower): 60 large repo images pinned+git-ignored via the
   inline decision toggles (Pin + Ignore ⊘ both → solid ON); TWO decision events/file into shared
-  .lfbridge/decisions.yaml; CIDs into manifest. NOT pull_down here (files present locally). JUL(laptop,
-  MISSING the files): scan recalc writes a pull_down batch (repo_charlie-kirk_2_do.yaml or
-  personal_2_do.yaml, pattern:pull_down) naming files ABSENT locally (identity from manifest CID +
-  pinned_on:[studio-tower]); same batch = repo-page WARNING BANNER + To-Do SLUG (+badge); batch popup shows
+  Local-Storage decisions.yaml (mirrored to the sync repo); CIDs into Local-Storage manifest; .gitignore
+  edited in the repo. Category-B tracking NEVER in the working repo. NOT pull_down here (files present
+  locally). JUL(laptop, MISSING the files): manifest/decisions arrive via SYNC-REPO reconcile (not git clone),
+  scan recalc writes a pull_down batch (repo_charlie-kirk_2_do.yaml or personal_2_do.yaml, pattern:pull_down)
+  naming files ABSENT locally (identity from synced manifest CID + pinned_on:[studio-tower]); same batch =
+  repo-page WARNING BANNER + To-Do SLUG (+badge); batch popup shows
   toggles pre-set RECOMMENDED (dashed orange), Apply label "Pull down 60 · git-ignore 60"; Apply writes
   decisions + pulls bytes over IPFS + git-ignores → next recalc DROPS the batch (recalculate-and-replace).
   AUG(laptop): repo with 12 compress_video + 3 git_ignore + 41 pull_down = pattern:mixed; mixed slug (top

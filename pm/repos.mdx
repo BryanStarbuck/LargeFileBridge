@@ -26,8 +26,10 @@ This spec builds on the siblings and does not repeat them:
 * [Left bar](./left_bar.mdx) — the left navigation (data source of truth `pm/left_bar.yaml`); this
   document does not redefine it and only shows where it sits.
 * [One repo](./one_repo.mdx) — the per-file screen a row click opens.
-* [Repo tracking scheme](./repo_tracking_scheme.mdx) — what a repo writes into its hidden `.lfbridge/`
+* [Repo tracking scheme](./repo_tracking_scheme.mdx) — the tracking state LFB keeps for a repo
   (`repo_storage.yaml`, per-file `<name>.yaml` sidecars, the per-computer history log) as these counts change.
+  This state lives in **Local Storage** at `~/T/_large_files_bridge/repos/<repoKey>/`, never in the working
+  repo ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
 * [Special files](./special_files.mdx) — the classifier (large · already-pinned · video/image/audio) behind
   the per-repo counts on this table.
 * [Two-computer tour](./use_case_two_computers.mdx) — the month-by-month scenario of one repo across a Mac

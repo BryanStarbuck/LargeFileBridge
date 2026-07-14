@@ -54,10 +54,12 @@ export class Qwen3AsrTranscriber {
   async transcribeToFile(inputFile: string, outputPath: string, onProgress?: ProgressSink): Promise<TranscribeEngineResult> {
     if (!this.available()) {
       const why = os.platform() === "darwin" && os.arch() === "arm64" ? `${QWEN_CLI} not installed — pipx install ${QWEN_CLI}` : "Qwen3-ASR (MLX) requires an Apple Silicon Mac";
+      log.warn("transcribe", `${inputFile}: ${why}`);
       return { status: "tool_missing", outputPath: null, words: null, reason: why };
     }
     const ext = path.extname(inputFile).toLowerCase();
     if (VIDEO_EXTENSIONS.includes(ext) && !commandExists("ffmpeg")) {
+      log.warn("transcribe", `${inputFile}: ffmpeg not installed — brew install ffmpeg`);
       return { status: "tool_missing", outputPath: null, words: null, reason: "ffmpeg not installed — brew install ffmpeg" };
     }
 
@@ -77,6 +79,7 @@ export class Qwen3AsrTranscriber {
         tempAudio = await demuxToMp3(inputFile);
         audioFile = tempAudio;
       } catch (e) {
+        log.error("transcribe", `${inputFile}: ffmpeg demux failed: ${(e as Error).message}`);
         return { status: "failed", outputPath: null, words: null, reason: `ffmpeg demux failed: ${(e as Error).message}` };
       }
     }

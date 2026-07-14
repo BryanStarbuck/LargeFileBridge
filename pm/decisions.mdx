@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Decisions (the two-axis per-file decision + the shared, team-visible decision ledger)
-description: The authoritative spec for what LargeFileBridge remembers when a user decides what to do with a large file. Replaces the old single mutually-exclusive Pin-XOR-Ignore choice with TWO INDEPENDENT AXES — "Add to IPFS (pin)" on/off and "Add to git ignore" on/off — surfaced as two CHECKBOXES (not radios), because a big video usually wants BOTH (git-ignored so git never commits it AND pinned so it is backed up across your computers), and "both off" (reviewed, leave it) is itself a valid, sticky decision that stops the warning from coming back. Every decision is written to a REPO-LEVEL, TEAM-SHARED ledger — .lfbridge/decisions.yaml — that travels via the git backbone (union-merged like the manifest), so a ten-person team shares one set of decisions and no one is re-asked about a file a teammate already triaged. Each decision record carries: whether we ASKED, the two axes (ipfs, gitignore), WHICH USER decided (allow-listed email), WHEN (timestamp), and the SID (Storage ID) that binds the decision to its storage even when a teammate has not materialized the file locally. Defines the record schema, the append-only-then-folded merge model, the machine-local reconciliation into the FROZEN decisions map (sync/ignore/undecided), the consent gate (keeping .lfbridge/ on this computer), and every multi-user situation. Sibling of one_repo.mdx (the per-file UI that writes decisions), repos.mdx (the vocabulary), warnings.mdx §10.2.7 (the educate-and-fix popup that now shows the two checkboxes), git_ignore.mdx (the gitignore axis engine), storage_repo.mdx / storage_local.mdx (where the ledger lives on disk), and git_backbone.mdx (the union-merge transport).
+description: The authoritative spec for what LargeFileBridge remembers when a user decides what to do with a large file. Replaces the old single mutually-exclusive Pin-XOR-Ignore choice with TWO INDEPENDENT AXES — "Add to IPFS (pin)" on/off and "Add to git ignore" on/off — surfaced as two CHECKBOXES (not radios), because a big video usually wants BOTH (git-ignored so git never commits it AND pinned so it is backed up across your computers), and "both off" (reviewed, leave it) is itself a valid, sticky decision that stops the warning from coming back. decisions.yaml is Category-B tracking state: it lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/decisions.yaml ALWAYS (machine-local, never touching the working repo's git, so it can never merge-conflict there), and travels to the team via the owning company/Personal SYNC REPO at <syncRepo>/repos/<repoKey>/decisions.yaml — union-merged like the manifest — NOT via the working repo. It is still REPO-LEVEL and TEAM-SHARED: a ten-person team shares one set of decisions and no one is re-asked about a file a teammate already triaged; only the travelling vehicle changed (the sync repo, not the working repo). Absent a configured sync repo it is honored locally but not yet shared. Each decision record carries: whether we ASKED, the two axes (ipfs, gitignore), WHICH USER decided (allow-listed email), WHEN (timestamp), and the SID (Storage ID) that binds the decision to its storage even when a teammate has not materialized the file locally. Defines the record schema, the append-only-then-folded merge model, the machine-local reconciliation into the FROZEN decisions map (sync/ignore/undecided), the sync-repo transport, and every multi-user situation. Sibling of one_repo.mdx (the per-file UI that writes decisions), repos.mdx (the vocabulary), warnings.mdx §10.2.7 (the educate-and-fix popup that now shows the two checkboxes), git_ignore.mdx (the gitignore axis engine), repo_tracking_scheme.mdx / storage_local.mdx (where the ledger lives on disk), artifact_placement_policy.mdx (the data-category placement policy that roots it in Local Storage + the sync repo), and git_backbone.mdx (the union-merge transport the sync repo rides).
 ---
 
 # LargeFileBridge — Decisions
@@ -22,13 +22,18 @@ This spec builds on the siblings and does not repeat them:
   spec changes its options from **radios** to the **two checkboxes** defined here.
 * [git_ignore.mdx](./git_ignore.mdx) — the engine that actually writes `.gitignore` lines (the
   git-ignore axis's "apply"); this spec only records the **decision** to use it.
-* [storage_repo.mdx](./storage_repo.mdx) / [storage_local.mdx](./storage_local.mdx) — where the ledger
-  file physically lives (`<repo>/.lfbridge/decisions.yaml`) and how the machine-local `decisions:` map
-  reconciles from it.
-* [git_backbone.mdx](./git_backbone.mdx) — the git engine that carries the ledger between the user's
-  computers and their teammates, and the **union-merge** rule that keeps concurrent edits conflict-free.
-* [storage_settings.mdx §3](./storage_settings.mdx) — the machine-local "keep `.lfbridge/` on this
-  computer" control that is the **consent gate** for writing the shared ledger (§6).
+* [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) — the **data-category placement policy**:
+  `decisions.yaml` is Category B, so it lives in **Local Storage** always and travels via the **sync repo**,
+  never the working repo. This spec follows that placement.
+* [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx) / [storage_local.mdx](./storage_local.mdx) — where
+  the ledger file physically lives (`~/T/_large_files_bridge/repos/<repoKey>/decisions.yaml` in Local
+  Storage) and how the machine-local `decisions:` map reconciles from it.
+* [git_backbone.mdx](./git_backbone.mdx) — the git engine that carries the ledger **through the company/
+  Personal sync repo** between the user's computers and their teammates, and the **union-merge** rule that
+  keeps concurrent edits conflict-free.
+* [storage_company.mdx §7](./storage_company.mdx) / [storage_personal.mdx §14](./storage_personal.mdx) —
+  the owning storage that configures the **sync repo**, and [repo_settings.mdx §2](./repo_settings.mdx) —
+  the per-repo toggle that turns sharing on (§6, §15).
 
 ---
 
@@ -111,7 +116,8 @@ Each decision is one record. It carries exactly what the user asked us to rememb
 needed for a **team** to share it:
 
 ```yaml
-# <repo>/.lfbridge/decisions.yaml  — the SHARED, team-visible decision ledger (committed; §4)
+# ~/T/_large_files_bridge/repos/<repoKey>/decisions.yaml  — the SHARED, team-visible decision ledger
+#   (Local Storage always; mirrored to <syncRepo>/repos/<repoKey>/decisions.yaml when the sync repo is on; §4)
 schema_version: 1
 
 # Append-only decision EVENTS. The reader folds them to current state: the latest decided_at per
@@ -171,10 +177,10 @@ Deriving the STABLE, team-shared SID from the git remote (falling back to the lo
 ### 3.2 `path` + `fingerprint` — identity that survives absence and change
 
 * **`path`** (repo-relative) is the **primary key within the storage** and the field a teammate who lacks
-  the bytes can still reason about — it is present in the committed manifest and the ledger regardless of
+  the bytes can still reason about — it is present in the `manifest.yaml` and the ledger regardless of
   local presence.
-* **`fingerprint`** (the cheap content hash already kept in `.lfbridge/files.yaml`,
-  [storage_repo.mdx](./storage_repo.mdx)) is recorded when known so a decision can be **matched to the
+* **`fingerprint`** (the cheap content hash already kept in the Local-Storage `files.yaml`,
+  [repo_tracking_scheme.mdx §3.1](./repo_tracking_scheme.mdx)) is recorded when known so a decision can be **matched to the
   same content across a rename or a compress/convert** ([the perceptual-fingerprint goal in the
   charter](../CLAUDE.md)). It is advisory: **`path` is the fold key** (§5); the fingerprint is a secondary
   signal for "is this still the same file the decision was about" and the hook the lifecycle rules (§12)
@@ -192,50 +198,62 @@ Recording the deciding user from the authenticated request is handled in code:
 
 ---
 
-## 4. Where it lives — the SHARED, team-visible ledger (LOCKED)
+## 4. Where it lives — Local Storage always, shared via the sync repo (LOCKED)
 
-Decisions are **repo-level and shared**, not per-user and local. They live in the repo's committed SDL:
+Decisions are **repo-level and shared**, not per-user and local. But `decisions.yaml` is **Category-B
+tracking state** ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)) — LFB's own bookkeeping
+about the two axes — so it **never enters the working repo**. It lives in two homes:
 
 ```
-<repo>/.lfbridge/decisions.yaml      # committed to Git — travels to every teammate + every computer
+ALWAYS  →  ~/T/_large_files_bridge/repos/<repoKey>/decisions.yaml     # Local Storage — the authoritative copy on each machine
+ALSO    →  <syncRepo>/repos/<repoKey>/decisions.yaml                  # the travelling MIRROR, when the owning company/Personal
+           IFF a sync repo is configured AND the per-repo toggle is ON  storage has a sync repo configured and the toggle is ON
 ```
 
-This is the load-bearing change. Until now, per-file decisions were written **only** to the machine-local
-`~/T/_large_files_bridge/pin/r/<repo>/config.yaml → decisions:` map, which **never leaves the computer** —
-so a teammate never saw them and got re-asked about files someone already triaged
-([storage_local.mdx §6.2](./storage_local.mdx)). Putting the ledger in `.lfbridge/` — beside the manifest,
-the device registry, and the mapped-directory list, all of which already travel and union-merge across
-users ([git_backbone.mdx §4.2](./git_backbone.mdx)) — makes decisions **team-shared by construction**:
+This is the load-bearing change, in two parts. **First**, per-file decisions used to be written **only** to
+the machine-local `~/T/_large_files_bridge/pin/r/<repo>/config.yaml → decisions:` map, which **never leaves
+the computer** — so a teammate never saw them and got re-asked about files someone already triaged
+([storage_local.mdx §6.2](./storage_local.mdx)). **Second**, an earlier design fixed that by committing
+`decisions.yaml` into the working repo's `.lfbridge/` — but that put churny tracking state in the working
+repo, where it produced **merge conflicts** and polluted a repo the user never asked LFB to touch. The
+current model resolves both: the ledger lives in **Local Storage** (authoritative, never touching the
+working repo's git, so it can never merge-conflict there) and travels to the team via the owning company/
+Personal **sync repo** — union-merged, exactly as the manifest does ([artifact_placement_policy.mdx §5](./artifact_placement_policy.mdx),
+[git_backbone.mdx §4.2](./git_backbone.mdx)). **Only the travelling vehicle changed — the ledger is still
+team-shared and union-merged:**
 
-* **One team, one set of decisions.** A ten-person team working the same repo shares `decisions.yaml`.
-  When Alice decides on 40 files and pushes, Bob pulls and those 40 files are **already Decided** for him
-  — his "N files need a decision" count drops without him lifting a finger.
+* **One team, one set of decisions.** A ten-person team working the same repo shares `decisions.yaml`
+  through the sync repo. When Alice decides on 40 files and the next sync pass pushes them to the sync repo,
+  Bob's pull + reconcile makes those 40 files **already Decided** for him — his "N files need a decision"
+  count drops without him lifting a finger.
 * **Not per user.** The record's `decided_by` says *who* decided, but the decision **applies to the
   repo**, not to that user. There is no per-user decision state; everyone shares the same folded answer.
   (This is exactly the user's instruction: *"they're not per user, so the other people using the repo are
   also getting the same decisions there."*)
-* **The machine-local map becomes a cache.** `pin/r/<repo>/config.yaml → decisions:` (the frozen
-  `sync`/`ignore`/`undecided` map) is now the **reconciled projection** of the shared ledger's IPFS axis
-  onto this computer (§7) — a cache, not the source of truth. The ledger is authoritative.
+* **The machine-local enum map becomes a cache.** `pin/r/<repo>/config.yaml → decisions:` (the frozen
+  `sync`/`ignore`/`undecided` map) is the **reconciled projection** of the ledger's IPFS axis onto this
+  computer (§7) — a cache, not the source of truth. The Local-Storage ledger is authoritative.
+* **Absent a sync repo, it is honored locally but not shared.** With no sync repo configured (or the toggle
+  off), the ledger is Local-Storage-only: real and enforced on this computer, simply not yet travelling to
+  teammates (§15, [artifact_placement_policy.mdx §7.2](./artifact_placement_policy.mdx)).
 
-The ledger is a normal SDL file: it must **never be git-ignored** (the whole point is that it travels —
-[git_backbone.mdx §4.2.1](./git_backbone.mdx), the "never git-ignore the `.lfbridge/` SDL text" rule), and
-it is added to the **union-merge** attribute set so concurrent team edits fold instead of conflicting
-(§5).
+When the mirror is enabled, `decisions.yaml` is added to the **union-merge** attribute set on the **sync
+repo** so concurrent team edits fold instead of conflicting (§5). It is **never** written into or
+git-ignored within the working repo — it is not there at all.
 
-Reading and writing `<repo>/.lfbridge/decisions.yaml` (deterministic YAML, no volatile timestamp, so Git diffs stay clean) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `readLedger(repoRoot)` / `appendDecision(repoRoot, record)` (bypasses the `updated_at`-stamping `yaml-store`, like `manifest.service.ts`).
+Reading and writing `~/T/_large_files_bridge/repos/<repoKey>/decisions.yaml` (deterministic YAML, no volatile timestamp, so the sync-repo diffs stay clean) and resolving its destination is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `readLedger(repoRoot)` / `appendDecision(repoRoot, record)` (bypasses the `updated_at`-stamping `yaml-store`, like `manifest.service.ts`; both resolve the Local-Storage `repos/<repoKey>/` root via `tracking-root.service.ts` — `resolveTrackingRoot()`, never the working repo).
 
-Marking `.lfbridge/decisions.yaml` as a union-merge path so team edits never conflict is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `UNION_MERGE_PATHS` (add `".lfbridge/decisions.yaml"` alongside `".lfbridge/manifest.yaml"`), applied by `ensureMergeAttributes()`.
+Mirroring the ledger to the sync repo and marking it a union-merge path there so team edits never conflict is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)` / `reconcileFromSyncRepo(repoRoot)` (destination from `tracking-root.service.ts` — `resolveStateSyncRepo()`), with `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `UNION_MERGE_PATHS` (add `"repos/*/decisions.yaml"` alongside `"repos/*/manifest.yaml"`), applied by `ensureMergeAttributes()` **on the sync repo**.
 
 ---
 
 ## 5. Team dynamics — the merge model (LOCKED, think team-of-ten)
 
-Ten people editing decisions on their own machines, pushing and pulling on every pin pass
-([git_backbone.mdx](./git_backbone.mdx)), must converge **without a human ever resolving a conflict**. The
-design that guarantees this:
+Ten people editing decisions on their own machines, pushing and pulling the **sync repo** on every pin pass
+([git_backbone.mdx](./git_backbone.mdx), [artifact_placement_policy.mdx §5](./artifact_placement_policy.mdx)),
+must converge **without a human ever resolving a conflict**. The design that guarantees this:
 
 1. **Append-only events, folded on read.** `decisions.yaml` is an **append log** of events (§3), not a
    keyed map that gets rewritten in place. A new decision **appends** an event; it never edits an existing
@@ -252,8 +270,8 @@ design that guarantees this:
    > file would land in different buckets and never last-writer-win. The SID rides along for provenance and
    > portability; it plays **no** part in identity within a single ledger.
 
-2. **Union-merge, not manual merge.** `.lfbridge/decisions.yaml` is in `UNION_MERGE_PATHS` (§4), so
-   `git merge` concatenates both sides of a divergent history rather than raising conflict markers. If a
+2. **Union-merge, not manual merge.** `decisions.yaml` is in the **sync repo's** `UNION_MERGE_PATHS` (§4),
+   so `git merge` concatenates both sides of a divergent history rather than raising conflict markers. If a
    conflict marker ever *does* appear (a malformed hand-edit), the reader **quarantines** the file
    (`decisions.conflicted.yaml`) and logs it, exactly as the manifest reader does — it never crashes and
    never loses data.
@@ -281,27 +299,32 @@ Folding the merged event log to current per-file state (latest `decided_at` per 
 
 ---
 
-## 6. Consent — the ledger only exists when this computer keeps `.lfbridge/` (LOCKED)
+## 6. The ledger always writes to Local Storage; the sync repo governs sharing (LOCKED)
 
-Writing to the repo's `.lfbridge/` is a machine-local **consent**: the per-storage setting *"Does this
-computer keep the hidden `.lfbridge/` tracking directory for this storage?"*
-([storage_settings.mdx §3](./storage_settings.mdx), `StorageUnitConfig.lfbridge.enabled`, **default on**).
-That toggle is the checkbox the user referred to — *"the hidden directory we're allowed to store in the
-root of the repo as long as that checkbox is turned on."*
+The ledger is **always** written — it is Category-B tracking state that lands in **Local Storage**
+(`~/T/_large_files_bridge/repos/<repoKey>/decisions.yaml`) on **every** decision, unconditionally. There is
+no consent that can stop the *local* record from being written, because it never touches the working repo.
 
-* **Consent ON (default).** LFB writes the shared `decisions.yaml` into `<repo>/.lfbridge/` and it travels
-  to the team. This is the normal, recommended path for a repo storage.
-* **Consent OFF (rare — a read-only or pristine-root machine).** LFB must **not** write into the repo
-  root. It still records the decision **machine-locally** (the `pin/r/<repo>/config.yaml → decisions:`
-  map, §7) so *this* computer never re-asks, but the decision is **not shared** with the team from this
-  machine. A small note in the popup/settings explains the decision won't be shared until `.lfbridge/` is
-  kept here (or relocated per [storage_settings.mdx §3](./storage_settings.mdx)).
-* **Relocated `.lfbridge/`.** If the user relocated the tracking directory, the ledger follows it — LFB
-  resolves the tracking path from the machine-local setting, not always `<root>/.lfbridge/`
-  ([storage_settings.mdx §3](./storage_settings.mdx)).
+* **The keep-`.lfbridge/` consent no longer gates the ledger.** That per-storage setting *"keep the hidden
+  `.lfbridge/` tracking directory for this storage?"* ([storage_settings.mdx §3](./storage_settings.mdx),
+  `StorageUnitConfig.lfbridge.enabled`, **default on**) now governs only the **Category-A** content
+  artifacts — transcripts and AI descriptions that are written **into** the working repo's `.lfbridge/`
+  ([artifact_placement_policy.mdx §1.1](./artifact_placement_policy.mdx)). The decision ledger is Category B
+  and lives in Local Storage regardless of that toggle — it is never in the working repo to consent to.
+* **What actually gates *sharing* is the sync repo.** Whether a decision travels to teammates depends on the
+  owning company/Personal storage having a **sync repo** configured and the per-repo toggle **on**
+  ([repo_settings.mdx §2](./repo_settings.mdx), default OFF):
+  * **Sync repo ON.** Each decision is also mirrored to `<syncRepo>/repos/<repoKey>/decisions.yaml` and
+    travels to the team on the next sync pass (§5).
+  * **Sync repo OFF / none configured.** The decision is recorded in Local Storage and **enforced on this
+    computer**, but **not shared** — the machine-local enum cache (§7) still means *this* computer never
+    re-asks. A quiet note explains it won't reach teammates until a sync repo is configured (§15).
+* **Unwritable sync-repo path.** If the configured sync repo is missing/unmounted, the Local-Storage write
+  still succeeds and the mirror is skipped with a WARN, resuming on the next pass — LFB never falls back to
+  writing the working repo ([artifact_placement_policy.mdx §7.1](./artifact_placement_policy.mdx)).
 
-Gating the shared-ledger write on the machine-local keep-`.lfbridge/` consent (and falling back to a local-only record when off) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `recordDecision()` checks `resolveTrackingDir()` / the storage `lfbridge.enabled` flag before appending to the shared ledger; always updates the local `config.yaml` cache.
+Writing the ledger to Local Storage unconditionally, and mirroring to the sync repo only when it is enabled, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `recordDecision()` always appends to the Local-Storage ledger via `resolveTrackingRoot()`, then calls `tracking-sync.service.ts` — `mirrorToSyncRepo()` when `resolveStateSyncRepo()` is non-null; the local `config.yaml` enum cache is always updated.
 
 ---
 
@@ -374,9 +397,10 @@ time forever is the failure mode a good default prevents, and it is why the orig
   * Each kind's default is one of: **auto-decide** (apply these two axes automatically on discovery and
     record it, `decided_by: <policy>`, so the file is born Decided and never enters the triage queue) or
     **ask** (leave Undecided and surface the warning).
-* **It is shared, not per-user.** The policy lives in the SDL alongside the ledger
-  (`<repo>/.lfbridge/decisions.yaml → policy:` block, or a sibling `decisions_policy.yaml`) so the whole
-  team inherits the same rule; changing it is itself an audited decision (`decided_by`, `decided_at`).
+* **It is shared, not per-user.** The policy lives in Local Storage alongside the ledger
+  (`~/T/_large_files_bridge/repos/<repoKey>/decisions.yaml → policy:` block, or a sibling
+  `decisions_policy.yaml`) and travels via the sync repo, so the whole team inherits the same rule; changing
+  it is itself an audited decision (`decided_by`, `decided_at`).
 * **Auto-decisions are honest records.** An auto-decided file gets a real ledger event with
   `decided_by: "policy:<email who set the policy>"` and `asked: true`, so it is Decided (never re-asked)
   and the audit trail shows it was the policy, not a person, that chose — distinguishable from a hand
@@ -478,7 +502,7 @@ decisions:` frozen enum map, made **before** the shared ledger existed. Upgradin
 suddenly re-ask about everything already triaged:
 
 * **One-time backfill per repo.** On first run after the upgrade, for each repo with a non-empty local
-  `decisions:` map and **no** (or a subset) ledger, LFB **seeds the shared ledger** from that map:
+  `decisions:` map and **no** (or a subset) ledger, LFB **seeds the Local-Storage ledger** from that map:
   `"sync" → {ipfs:true}`, `"ignore" → {ipfs:false}` (git-ignore axis left `false`/unknown — it was never
   separately tracked). Each seeded event is stamped `decided_by: "migrated"`, `decided_at:` the config
   file's mtime (best-known time), `asked: true`.
@@ -486,9 +510,11 @@ suddenly re-ask about everything already triaged:
   `migrate-sync-to-pin.ts`), never overwrites a **newer** ledger event for the same path (the fold's
   last-writer-wins protects hand or teammate decisions made post-upgrade), and is a no-op on a repo that
   already has a ledger.
-* **Consent-aware.** The seed only writes the shared ledger when this computer **keeps `.lfbridge/`**
-  (§6); otherwise the legacy local map simply remains the local cache and nothing is shared — same posture
-  as a fresh local-only decision.
+* **Always writes Local Storage; shares only when the sync repo is on.** The seed always writes the
+  Local-Storage ledger (it never touches the working repo, so there is no consent to gate it — §6); it
+  reaches teammates only once a sync repo is configured and enabled (§15) — same posture as a fresh
+  local-only decision. A repo that migrated an old committed `<repo>/.lfbridge/decisions.yaml` from the
+  retired in-repo design also folds it into the Local-Storage ledger and stops writing the working repo.
 * **The frozen enum is untouched as an input** — migration **reads** it and **writes** the ledger; the
   reconciliation (§7) then keeps that same enum map as the ledger's projection going forward.
 
@@ -499,8 +525,9 @@ The one-time legacy-decisions backfill (seed the ledger from `config.yaml → de
 
 ## 14. Privacy — emails in a committed, possibly PUBLIC, ledger (LOCKED)
 
-`decisions.yaml` records `decided_by` **email addresses** and is **committed to the repo**. For a private
-team repo that is fine and desirable. But LFBridge also serves **open-source / public** repos
+`decisions.yaml` records `decided_by` **email addresses** and is **committed to the sync repo** (never the
+working repo — §4). For a private sync repo that is fine and desirable. But a user may back the sync repo on
+a **public** host, and LFBridge also serves **open-source / public** projects
 ([the open-source JFK repos in the charter](../CLAUDE.md)), where committing teammates' personal emails
 into public git history is a **privacy leak** we must not create by default:
 
@@ -511,37 +538,39 @@ into public git history is a **privacy leak** we must not create by default:
     self-chosen display handle) instead of the raw email; the email↔handle map stays **machine-local**,
     never committed. Attribution is preserved for teammates who share the map, invisible to the public.
   * **`anonymous`** — record `decided_by: null`; only *that* a decision was made, not by whom.
-* **Public-repo default is `handle`.** When LFB can tell the repo's remote is a **public** host/repo, it
-  defaults attribution to **`handle`** and warns before the first commit that raw emails would otherwise
-  be published — the same "warn before you leak" posture as the PNG-alpha and gateway checks.
+* **Public-sync-repo default is `handle`.** When LFB can tell the **sync repo's** remote is a **public**
+  host/repo, it defaults attribution to **`handle`** and warns before the first commit that raw emails would
+  otherwise be published — the same "warn before you leak" posture as the PNG-alpha and gateway checks.
 * **Never a new leak vector.** `decisions.yaml` carries **only** the decision fields (§3) — never a path
   outside the repo, never a local absolute path, never any secret. It is small, auditable text.
 
-The per-repo attribution mode (email/handle/anonymous), the public-remote detection that defaults to `handle`, and the machine-local email↔handle map are to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `attributionFor(folder, email)` (returns the value to stamp per the mode); mode stored in the shared policy block (§9); public-remote heuristic reuses `classifyRemote()` in `git.service.ts`.
+The per-repo attribution mode (email/handle/anonymous), the public-remote detection (of the SYNC repo) that defaults to `handle`, and the machine-local email↔handle map are to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `attributionFor(folder, email)` (returns the value to stamp per the mode); mode stored in the shared policy block (§9); public-remote heuristic reuses `classifyRemote()` in `git.service.ts`, applied to the sync repo's remote resolved via `tracking-root.service.ts` — `resolveStateSyncRepo()`.
 
 ---
 
-## 15. Transport dependency — decisions only reach the team WITH a git backbone (LOCKED)
+## 15. Transport dependency — decisions only reach the team via the SYNC REPO (LOCKED)
 
-The ledger travels by exactly one mechanism: the **git backbone** carries `.lfbridge/decisions.yaml`
-between computers ([git_backbone.mdx](./git_backbone.mdx)). That has an honest precondition the UI must
-not hide:
+The ledger is always recorded in Local Storage (§6), but it **travels** by exactly one mechanism: the
+owning company/Personal **sync repo**, carried by the git backbone
+([git_backbone.mdx](./git_backbone.mdx), [artifact_placement_policy.mdx §4](./artifact_placement_policy.mdx)).
+That has an honest precondition the UI must not hide:
 
-* **No remote ⇒ local team-of-one.** A repo with **no git remote** (or a backbone that is **off**) still
-  gets a committed `decisions.yaml`, but nothing **pushes** it — so it is shared with *this user's other
-  computers only once they clone*, and **not** with teammates at all. The decision is correctly recorded;
-  it just has nowhere to travel.
-* **Surface the truth, don't fake sharing.** When the user makes a decision in a repo with no
-  remote/backbone, the popup (and repo settings) show a quiet inline note: *"Saved for this repo. Connect a
-  git remote to share these decisions with your team."* — with a link to the backbone setting
-  ([storage_settings.mdx §4.1](./storage_settings.mdx)). We never imply team-sharing that cannot happen.
-* **Decisions ride the same pass as the manifest.** They pull/merge/push on the every-15-min pin pass
-  ([pin_process.mdx](./pin_process.mdx)) exactly like the manifest — no separate sync, no separate
-  schedule.
+* **No sync repo ⇒ local team-of-one.** With **no sync repo configured** (or the per-repo toggle **off**,
+  the default) the Local-Storage `decisions.yaml` is written and enforced here, but nothing **mirrors or
+  pushes** it — so it is **not** shared with this user's other computers or teammates. The decision is
+  correctly recorded; it just has nowhere to travel ([artifact_placement_policy.mdx §7.2](./artifact_placement_policy.mdx)).
+* **Surface the truth, don't fake sharing.** When the user makes a decision in a repo with no sync repo,
+  the popup (and repo settings) show a quiet inline note: *"Saved on this computer. Turn on a sync repo to
+  share these decisions with your team."* — with a link to the sync-repo setting
+  ([repo_settings.mdx §2](./repo_settings.mdx), [storage_company.mdx §7](./storage_company.mdx)). We never
+  imply team-sharing that cannot happen.
+* **Decisions ride the same sync pass as the manifest.** When the sync repo is on, they pull/merge/push
+  through it on the every-15-min pin pass ([pin_process.mdx](./pin_process.mdx)) exactly like the manifest —
+  no separate sync, no separate schedule ([artifact_placement_policy.mdx §5](./artifact_placement_policy.mdx)).
 
-Detecting "no remote / backbone off" for a repo and returning the share-status the UI note reads is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `shareStatus(folder)` (`shared` | `local_only_no_remote` | `local_only_consent_off`); consumed by the warning popup + [repo_settings.mdx §2.6](./repo_settings.mdx).
+Detecting "no sync repo configured / toggle off" for a repo and returning the share-status the UI note reads is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `shareStatus(folder)` (`shared` | `local_only_no_sync_repo`), reading `tracking-root.service.ts` — `resolveStateSyncRepo()`; consumed by the warning popup + [repo_settings.mdx §2.6](./repo_settings.mdx).
 
 ---
 
@@ -638,9 +667,9 @@ The situations the model must get right, each with the defined behavior:
 
 | Situation | Behavior |
 | --- | --- |
-| **Merge-conflict markers** land in `decisions.yaml` (a bad hand-edit despite union-merge) | Reader **quarantines** to `decisions.conflicted.yaml`, logs an error, and **refuses to load** — never parses a half-merged file as truth; the previous good state is retained (§5.2). |
-| **Consent off** on this computer (§6) | Decision recorded in the **machine-local enum only**; not shared from here; UI note says so (§15). |
-| **No git remote / backbone off** (§15) | `decisions.yaml` is committed but **not pushed**; UI note: "connect a remote to share with your team." |
+| **Merge-conflict markers** land in the sync repo's `decisions.yaml` (a bad hand-edit despite union-merge) | Reader **quarantines** to `decisions.conflicted.yaml`, logs an error, and **refuses to load** — never parses a half-merged file as truth; the previous good state is retained (§5.2). |
+| **Sync repo path missing / unwritable** (§6) | Local-Storage ledger is written as always; the sync mirror is **skipped** with a WARN and resumes on the next pass; LFB **never** falls back to the working repo ([artifact_placement_policy.mdx §7.1](./artifact_placement_policy.mdx)). |
+| **No sync repo configured / toggle off** (§15) | `decisions.yaml` is written to **Local Storage** and enforced here but **not shared**; UI note: "turn on a sync repo to share with your team." |
 | **Teammate lacks the bytes** for a decided file | Decision still applies (it is keyed by path, not presence); when they fetch, the folded decision already governs it. |
 | **The same file decided by two teammates concurrently** | Union-merge keeps both events; fold picks the **latest `decided_at`**; provenance shows the winner; history keeps the loser until compaction (§5, §11). |
 | **A decision on a Never-IPFS file** that sets IPFS on | **Rejected** at the write path; the checkbox is disabled in the UI (§17). |
@@ -660,9 +689,11 @@ The situations the model must get right, each with the defined behavior:
 2. Applying a decision writes a **record** with `asked: true`, the two axes (`ipfs`, `gitignore`),
    `decided_by` (the authenticated allow-listed email), `decided_at` (ISO-8601 UTC), and `sid` (the
    Storage ID) — every field in §3.
-3. Records are written to the **repo-level, team-shared** `<repo>/.lfbridge/decisions.yaml`, which
-   **travels via the git backbone**, is **union-merged**, and is **never git-ignored**. A teammate who
-   pulls sees the decisions and is **not re-asked** about files already decided.
+3. Records are written to the **repo-level, team-shared** Local-Storage ledger
+   `~/T/_large_files_bridge/repos/<repoKey>/decisions.yaml` — **never** the working repo — and travel to
+   the team via the company/Personal **sync repo** (`<syncRepo>/repos/<repoKey>/decisions.yaml`), where
+   they are **union-merged**. A teammate who pulls + reconciles the sync repo sees the decisions and is
+   **not re-asked** about files already decided.
 4. Decisions are **not per-user**: `decided_by` records who decided, but the folded decision applies to
    the **repo** and everyone shares it.
 5. The ledger is an **append log folded on read** — latest `decided_at` per **`path`** wins (the fold key
@@ -671,16 +702,18 @@ The situations the model must get right, each with the defined behavior:
    full pass.
 6. A file with **no record is Undecided** (surfaced, in the triage queue); **any record makes it Decided**
    (never re-asked), **including both-off** — which is exactly what makes the warning leave and stay gone.
-7. The shared write is **gated on the machine-local keep-`.lfbridge/` consent** (default on); with consent
-   off, the decision is recorded **machine-locally only** and not shared from that computer.
+7. The ledger is **always written to Local Storage** regardless of the keep-`.lfbridge/` consent (which now
+   governs only the Category-A content artifacts, §6); it is **shared** with the team only when the owning
+   storage has a **sync repo** configured and the per-repo toggle is on (default OFF) — otherwise it is
+   honored locally but not yet shared.
 8. The machine-local `pin/r/<repo>/config.yaml → decisions:` map is a **reconciled projection** of the
    ledger's IPFS axis onto the **frozen** `sync`/`ignore`/`undecided` enum (never renamed); the git-ignore
    axis is applied through the existing [git_ignore.mdx](./git_ignore.mdx) engine.
 9. All decision surfaces (popup, per-row control, bulk menu, file kebab, Git-ignore action) write the
    **same** ledger through the one backend write path (§19).
-10. The **`sid` is stable across the whole team** (derived from the shared git remote, not the per-machine
-    path), so teammates' events for the same file fold together; a repo with no remote falls back to the
-    local id and the decision is recorded but not shared (§3.1, §15).
+10. The **`sid` is stable across the whole team** (derived from the shared working-repo git remote, not the
+    per-machine path), so teammates' events for the same file fold together; a repo with no remote falls
+    back to the local id. Sharing is governed separately by the sync repo (§15), not by the SID (§3.1).
 11. A shared, per-repo **default-decision policy** (§9) can auto-decide newly-discovered files by kind
     (default OFF = surface as Undecided); auto-decisions are honest, attributed (`decided_by:"policy:…"`),
     reported in the pass summary, and respect the Never-IPFS flag.
@@ -693,9 +726,9 @@ The situations the model must get right, each with the defined behavior:
     are **retained then compacted** when a file is deleted — never a surprise re-ask or re-pin (§12).
 15. Legacy machine-local decisions are **backfilled once** into the ledger (`decided_by:"migrated"`),
     idempotently and without clobbering newer events (§13).
-16. **Privacy**: attribution mode is per-repo (`email`/`handle`/`anonymous`); a **public** remote defaults
-    to `handle` and warns before publishing raw emails; the ledger carries only decision fields, never
-    secrets or out-of-repo paths (§14).
+16. **Privacy**: attribution mode is per-repo (`email`/`handle`/`anonymous`); a **public sync repo** remote
+    defaults to `handle` and warns before publishing raw emails; the ledger carries only decision fields,
+    never secrets or out-of-repo paths (§14).
 17. **Never-IPFS forbids the IPFS axis**: the checkbox is disabled and an `ipfs:true` write is rejected;
     the git-ignore axis is unaffected (§17).
 18. Repo/file **counts and the "needs a decision" warning derive from the folded ledger** (via the
@@ -705,22 +738,31 @@ The situations the model must get right, each with the defined behavior:
 
 <!--
   Decisions = TWO INDEPENDENT AXES (Add-to-IPFS + Add-to-git-ignore), two CHECKBOXES not radios; both-off
-  is a valid sticky decision (fixes "the warning came back"). Written to the REPO-LEVEL SHARED ledger
-  <repo>/.lfbridge/decisions.yaml (committed, union-merged, team-visible) — not the machine-local
-  config.yaml, which becomes a reconciled cache of the IPFS axis (frozen sync/ignore/undecided enum — NEVER
-  rename `sync`). Record fields: sid (Storage ID), path (+fingerprint), asked, ipfs, gitignore, decided_by
-  (allow-listed email), decided_at (ISO UTC). FOLD KEY IS `path` ALONE (not (sid,path)) — the ledger is
-  one-per-storage; sid is per-team-STABLE provenance (remote-derived, NOT the per-machine path). Append-only
-  then folded (latest decided_at per path) so a team-of-ten union-merges with zero manual conflicts; owning
-  device compacts on a full pass. Shared write gated on the machine-local keep-.lfbridge consent
-  (storage_settings §3) AND needs a git remote/backbone to actually reach teammates (§15). Also specs:
-  default-decision policy (§9), UI provenance (§10), override/audit (§11), lifecycle rename/compress/delete
-  (§12), legacy backfill (§13), email privacy for public repos (§14), authority (§16), Never-IPFS
-  interaction (§17), counts from folded ledger (§18), the one write API (§19), edge cases (§20). Siblings:
-  one_repo (per-file UI + the LOCKED IPFS-axis enum), warnings §10.2.7 (the popup — now two checkboxes),
-  git_ignore (the gitignore axis engine), storage_repo/storage_local (on-disk), git_backbone (union-merge
-  transport), repo_settings/storage_settings (policy + consent). Keep the frozen `sync` wire value and the
-  three-state IPFS enum intact — this spec LAYERS a second axis and a shared ledger on top; it does not
-  replace them.
+  is a valid sticky decision (fixes "the warning came back"). decisions.yaml is CATEGORY B
+  (artifact_placement_policy.mdx): it lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/
+  decisions.yaml ALWAYS (never the working repo → can't merge-conflict there) and TRAVELS to the team via
+  the company/Personal SYNC REPO <syncRepo>/repos/<repoKey>/decisions.yaml (union-merged) — NOT via the
+  working repo. Still REPO-LEVEL, TEAM-SHARED, union-merged — only the travelling vehicle changed. Absent a
+  sync repo it is honored locally but not shared. RETIRED: the earlier committed-in-repo
+  <repo>/.lfbridge/decisions.yaml design. The machine-local config.yaml is a reconciled cache of the IPFS
+  axis (frozen sync/ignore/undecided enum — NEVER rename `sync`). Record fields: sid (Storage ID), path
+  (+fingerprint), asked, ipfs, gitignore, decided_by (allow-listed email), decided_at (ISO UTC). FOLD KEY IS
+  `path` ALONE (not (sid,path)) — the ledger is one-per-storage; sid is per-team-STABLE provenance
+  (working-repo-remote-derived, NOT the per-machine path/repoKey). Append-only then folded (latest
+  decided_at per path) so a team-of-ten union-merges with zero manual conflicts; owning device compacts on a
+  full pass. The keep-.lfbridge consent (storage_settings §3) now governs only the CATEGORY-A content
+  artifacts; the ledger writes to Local Storage REGARDLESS (§6). Sharing needs a configured SYNC REPO +
+  per-repo toggle ON (default OFF) to actually reach teammates (§15). Code: readLedger/appendDecision/
+  recordDecision (decisions.service.ts) via resolveTrackingRoot (tracking-root.service.ts); mirror +
+  reconcile via mirrorToSyncRepo/reconcileFromSyncRepo (tracking-sync.service.ts); UNION_MERGE_PATHS applied
+  to the SYNC REPO (git.service.ts). Also specs: default-decision policy (§9), UI provenance (§10),
+  override/audit (§11), lifecycle rename/compress/delete (§12), legacy backfill (§13), email privacy for
+  public sync repos (§14), authority (§16), Never-IPFS interaction (§17), counts from folded ledger (§18),
+  the one write API (§19), edge cases (§20). Siblings: one_repo (per-file UI + the LOCKED IPFS-axis enum),
+  warnings §10.2.7 (the popup — now two checkboxes), git_ignore (the gitignore axis engine),
+  repo_tracking_scheme/storage_local (on-disk), artifact_placement_policy (placement), git_backbone
+  (union-merge transport the sync repo rides), repo_settings/storage_company/storage_personal (sync-repo
+  config + per-repo toggle). Keep the frozen `sync` wire value and the three-state IPFS enum intact — this
+  spec LAYERS a second axis and a shared ledger on top; it does not replace them.
 -->
 

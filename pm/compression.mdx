@@ -319,16 +319,23 @@ brew tools transcode to a **new file**, so the flow per file is:
    path. When the format changes (PNG → JPEG), the final path takes the new extension; when it stays the
    same format, the path is unchanged.
 6. **Capture the AFTER state** (exact hash + size, and the post perceptual fingerprint), then record the
-   result in **three** places:
-   * the file's tracking entry — the **compressed** and **uncompressed** hashes + sizes
-     ([charter per-file tracking](../CLAUDE.md); [storages.mdx §4.1](./storages.mdx));
-   * a **compression record** in the storage's Syncable Data Location —
-     `.lfbridge/analysis/<relpath>/compression.yaml` — capturing the **original filename + extension**
-     and the **size before / after**
-     ([syncable_data_location.mdx §4.3](./syncable_data_location.mdx#43-compression-records--original-identity--beforeafter)).
-     Because this record lives in the SDL, it **travels**: every other computer that carries the storage
-     learns the file was compressed, from what, and by how much, and never re-compresses it.
-   * a **`compress` event** appended to the file's per-file sidecar
+   result in **three** places. **All three are Category-B tracking state** — LFB's compression bookkeeping,
+   which **never enters the working repo**. They are written to **Local Storage** at
+   `~/T/_large_files_bridge/repos/<repoKey>/…` **always**, and — when the owning company/Personal storage
+   has a **sync repo** configured and the per-repo toggle is on — additionally mirrored to
+   `<syncRepo>/repos/<repoKey>/…` so they travel ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx),
+   the data-category split):
+   * the file's tracking entry in `files.yaml` — the **compressed** and **uncompressed** hashes + sizes
+     ([charter per-file tracking](../CLAUDE.md); [repo_tracking_scheme.mdx §3.1](./repo_tracking_scheme.mdx));
+   * a **compression record** in Local Storage —
+     `~/T/_large_files_bridge/repos/<repoKey>/analysis/<relpath>/compression.yaml` — capturing the
+     **original filename + extension** and the **size before / after**
+     ([artifact_placement_policy.mdx §3](./artifact_placement_policy.mdx)). It lives in Local Storage
+     always; when the sync repo is enabled it also travels there, so every other computer that carries the
+     storage learns the file was compressed, from what, and by how much, and never re-compresses it — but
+     it is **never** written into the working repo.
+   * a **`compress` event** appended to the file's per-file sidecar under
+     `~/T/_large_files_bridge/repos/<repoKey>/files/<relpath>.yaml`
      ([repo_tracking_scheme.mdx §3.2](./repo_tracking_scheme.mdx)) — `before{hash,size}` /
      `after{hash,size}` / `fingerprint_before` / `fingerprint_after` / `codec` / `on_device` / `by` — the
      human-legible per-file history of exactly what this compression did.
@@ -357,7 +364,7 @@ Capturing the pre-compression hash/size/fingerprint before the transcode and the
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile` (calls `perceptual.service.ts` `fingerprintImage`/`fingerprintVideo` before + after, and `file-sidecar.service.ts` `appendFileEvent`).
 
 Running the tool to a temp file, verifying, and doing the recoverable replace is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile` (single) / `compressBatch` (many); the travelling compression record is written via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/analysis.service.ts` — `writeCompressionRecord()` (new).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile` (single) / `compressBatch` (many); the compression record is written via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/analysis.service.ts` — `writeCompressionRecord()` (new), which resolves its `analysis/<relpath>/compression.yaml` destination through `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveTrackingRoot()` (the Local-Storage `repos/<repoKey>/` root, never the working repo) and mirrors it to the sync repo (when enabled) via `tracking-sync.service.ts` — `mirrorToSyncRepo()`.
 
 ### 8.1 Forced-codec convert (browser/upload compatibility)
 
@@ -447,8 +454,9 @@ or JPG files that are unused and we are allowed to use."* Its whole virtue is th
 file's bytes**: when the compressed file is pinned to another computer over IPFS
 ([ipfs.mdx](../knowledge/ipfs.mdx)) the marker arrives **inside** it, so **every** machine — regardless of
 storage type — reads the same "already compressed" truth from the file itself. It does **not** depend on any
-sidecar travel, which is why it works even for `repo` storages whose `.lfbridge/` is git-ignored and never
-travels ([storage_local.mdx](./storage_local.mdx), `repo` storages).
+tracking-state travel, which is why it works even when a repo has **no sync repo** configured — the
+Category-B compression record ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)) is
+Local-Storage-only and does not travel in that case, but the in-file marker rides with the bytes regardless.
 
 * **No new tool — written inline by the encoder we already run (LOCKED).** Because every compress already
   re-encodes the file, the marker is set **in that same pass**, for free: **video** via
@@ -480,9 +488,10 @@ travels ([storage_local.mdx](./storage_local.mdx), `repo` storages).
 cases the extension can't — a **video** (an `.mp4` always *looks* compressible by extension) and a **PNG
 kept as PNG** — on re-runs and on peers.
 
-**The travelling `.lfbridge` record (fast local cache) — future optimization.** The record already written
-today, `.lfbridge/analysis/<relpath>/compression.yaml` (`writeCompressionRecord`, §8), is still **written
-but not yet read**. Wiring a `readCompressionRecord()` into `walkCompressible()` (keyed by relpath +
+**The Local-Storage compression record (fast local cache) — future optimization.** The record already
+written today, `~/T/_large_files_bridge/repos/<repoKey>/analysis/<relpath>/compression.yaml`
+(`writeCompressionRecord`, §8), is still **written but not yet read**. Wiring a `readCompressionRecord()`
+into `walkCompressible()` (keyed by relpath +
 [fingerprint](./storage_local.mdx#93-repo-manifests-travel-via-git-the-elegant-part)) would let a bulk run
 **drop known-compressed files from the batch entirely** — skipping even the per-file probe on a same-machine
 re-run — but it is a **speed optimization on top of** the authoritative in-file marker, not a correctness
@@ -538,14 +547,16 @@ Surfacing the codec + compressed-state and the Compress action per file is handl
 6. Tools run via a **temp file**; the original is moved to the **LFBridge trash** (recoverable). **Before
    the transcode, for every file, the BEFORE hash + size (and, for video/image, the perceptual content
    fingerprint) are captured first** (§8.0); the AFTER values are captured after. Tracking records the
-   compressed + uncompressed hashes/sizes, **a travelling compression record**
-   (`.lfbridge/analysis/<relpath>/compression.yaml`, original name/extension + size before/after),
-   **and a per-file sidecar `compress` event** ([repo_tracking_scheme.mdx §3.2](./repo_tracking_scheme.mdx))
-   carrying `before`/`after` hash+size and `fingerprint_before`/`fingerprint_after` (which match within
-   the perceptual threshold as proof the content was preserved). The authoritative **in-file marker**
-   (§8.4, implemented) is what makes other computers never re-compress; reading these records as a local
-   cache to prune the batch up-front is a tracked follow-up
-   ([syncable_data_location.mdx §4.3](./syncable_data_location.mdx)).
+   compressed + uncompressed hashes/sizes, **a compression record**
+   (`~/T/_large_files_bridge/repos/<repoKey>/analysis/<relpath>/compression.yaml`, original name/extension
+   + size before/after), **and a per-file sidecar `compress` event**
+   ([repo_tracking_scheme.mdx §3.2](./repo_tracking_scheme.mdx)) carrying `before`/`after` hash+size and
+   `fingerprint_before`/`fingerprint_after` (which match within the perceptual threshold as proof the
+   content was preserved). **All three are Category-B tracking state** — written to **Local Storage**
+   always, additionally mirrored to the company/Personal **sync repo** when enabled, and **never** into
+   the working repo ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)). The authoritative
+   **in-file marker** (§8.4, implemented) is what makes other computers never re-compress; reading these
+   records as a local cache to prune the batch up-front is a tracked follow-up.
 7. The **View-one-file** page shows the file's **codec** and **compressed/uncompressed** state.
 8. **Parallelism (§8.3, LOCKED):** the engine compresses **one file at a time** and takes an optional
    **`CompressFileOpts.threads`** cap. A **one-off** compress **omits** it (the tool uses its all-core
@@ -562,8 +573,9 @@ Surfacing the codec + compressed-state and the Compress action per file is handl
    **both** one-off and bulk runs. Because the marker **rides in the file's bytes over IPFS**, a peer that
    already holds the compressed file skips it too. The cheap **extension heuristic** still runs first, and
    the version tag (`v1`) lets a re-tuned engine invalidate old marks. Verified end-to-end: compress →
-   111,360→28,253 bytes; a second pass on the output → `skipped (marker)`, no re-encode. (Reading the local
-   `.lfbridge` record to prune the batch up-front is a tracked speed follow-up, not required for this.)
+   111,360→28,253 bytes; a second pass on the output → `skipped (marker)`, no re-encode. (Reading the
+   Local-Storage compression record to prune the batch up-front is a tracked speed follow-up, not required
+   for this.)
 
 ## 11. The Compress status icon & the Compress tab (LOCKED)
 
@@ -601,6 +613,13 @@ The Compress status icon is rendered in code:
   in badges.ts compressInfo/compressBadge (was "already done"). Temp-file → verify → recoverable replace
   (original to trash). View-one-file shows
   codec + compressed state. Code: /api/compress (compression.service.ts + compression.router.ts).
+  WHERE COMPRESSION DATA IS WRITTEN (§8, artifact_placement_policy.mdx): the compression record
+  analysis/<rel>/compression.yaml, the per-file sidecar `compress` event, and the files.yaml variant hashes
+  are ALL Category B — LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/... ALWAYS (via
+  resolveTrackingRoot in tracking-root.service.ts), additionally mirrored to <syncRepo>/repos/<repoKey>/...
+  when the owning company/Personal storage has a sync repo configured AND the per-repo toggle is on (default
+  OFF), NEVER the working repo. (Old model wrote the record into the repo's committed .lfbridge/analysis/ SDL
+  — RETIRED.) writeCompressionRecord (analysis.service.ts) resolves via resolveTrackingRoot + mirrorToSyncRepo.
   ALREADY-COMPRESSED MARKER (§8.4, LOCKED, IMPLEMENTED): skip already-compressed files BEFORE any transcode, on
   re-runs AND on every peer in the mesh. Mechanism = an IN-FILE marker in the `comment` container tag
   ("LFBcompressed;v1;<codec>"), written INLINE by the encoder we already run — ffmpeg -metadata comment= (video)
@@ -609,9 +628,10 @@ The Compress status icon is rendered in code:
   returns skipped("already compressed (marker)") for one-off AND batch. Rides in the bytes over IPFS → peers honor
   it. Extension heuristic (compressInfo) still runs first; v1 lets a re-tuned engine invalidate old marks. Code:
   compression.service.ts markerPayload()/readMarker()/isAlreadyCompressed(), folded into the ffmpeg args + into
-  imageCommand()'s magick args. FOLLOW-UP (optimization, not required): read .lfbridge/analysis/<rel>/compression.yaml
-  in walkCompressible() to drop known-compressed files from the batch up-front (avoids the per-file probe on a
-  same-machine re-run). Verified E2E: 111360→28253 bytes, second pass skipped (marker).
+  imageCommand()'s magick args. FOLLOW-UP (optimization, not required): read
+  ~/T/_large_files_bridge/repos/<repoKey>/analysis/<rel>/compression.yaml in walkCompressible() to drop
+  known-compressed files from the batch up-front (avoids the per-file probe on a same-machine re-run).
+  Verified E2E: 111360→28253 bytes, second pass skipped (marker).
   BULK (§8.2, compress_inside.mdx): the Compress Inside dialog drives compressFile file-by-file with a
   per-run `deleteOriginal: "hard"|"trash"` override (CompressFileOpts) that WINS over the global
   replace_original_to_trash default (bulk DEFAULTS to hard delete; one-off stays recoverable-trash). Heavy

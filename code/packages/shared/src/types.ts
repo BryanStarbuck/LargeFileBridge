@@ -613,6 +613,10 @@ export interface RepoSettings {
   transcription: { placement: PlacementChoice };
   // Where AI descriptions land (repo_settings.mdx §5) — the mirror of transcription. Default "lfbridge".
   aiDescription: { placement: PlacementChoice };
+  // Whether this repo additionally mirrors its Category-B tracking state to the owner's SYNC REPO so it
+  // travels (repo_settings.mdx §2.9 / artifact_placement_policy.mdx §4). Default off; enabled only when the
+  // owner has a sync repo configured.
+  syncRepo: { enabled: boolean };
 }
 
 // ── Scheduled workers — the transparency contract (scan.mdx §7, storage.mdx §13)

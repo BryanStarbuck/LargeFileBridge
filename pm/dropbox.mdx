@@ -19,8 +19,9 @@ This file is a **sibling** of the other two backbone specs and a child of the hu
   are all defined there and are **not** restated here.
 * [Google Drive](./google_drive.mdx) — the sibling whole-computer file backbone (same shape as this
   one, different vendor).
-* [Repo (git)](./repo__list_syns.mdx) — the sibling backbone that carries each **per-repo** list
-  inside the repo over git.
+* [Repo (git)](./repo__list_syns.mdx) — the sibling backbone that carries each **per-repo** list across
+  the user's computers over git (via the company sync repo, not the working repo —
+  [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
 * [storage_local.mdx](./storage_local.mdx) — the on-disk state model (state root, per-unit `config.yaml` +
   `manifest.yaml`, `peers.yaml`). Dropbox is the **file-based alternative to
   [storage_local.mdx §9.3](./storage_local.mdx#93-computer-manifests-travel-via-ipns)'s IPNS transport** for the
@@ -47,9 +48,10 @@ every non-repo `directories:` entry.
 Walking the whole-computer roots — every managed repo unit plus the non-repo computer unit that the computer-scope list covers — is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()`
 
-It does **not** carry per-repo lists — those ride the repo over git
-([repo__list_syns.mdx](./repo__list_syns.mdx)). When a repo appears both in the Dropbox-carried
-computer list and in its own in-repo list, the **in-repo (git) list is authoritative for that repo's
+It does **not** carry per-repo lists — those ride the **company sync repo** over git (not the working
+repo — [artifact_placement_policy.mdx](./artifact_placement_policy.mdx),
+[repo__list_syns.mdx](./repo__list_syns.mdx)). When a repo appears both in the Dropbox-carried
+computer list and in its own sync-repo list, the **sync-repo (git) list is authoritative for that repo's
 files** ([hub §5.4](./sync_list.mdx#54-when-the-same-repo-arrives-on-two-backbones)); the Dropbox
 copy is a convenience mirror.
 
@@ -362,8 +364,8 @@ Dropbox as a backbone is correct when **all** of the following hold:
 
 1. **Only the YAML Sync List is written to Dropbox — never a large file.** No code path ever places a
    bridged large file (or its bytes) into the Dropbox tree (LOCKED).
-2. Dropbox carries the **computer-scope** list only (`scope: computer`); per-repo lists ride git
-   ([repo__list_syns.mdx](./repo__list_syns.mdx)), not Dropbox.
+2. Dropbox carries the **computer-scope** list only (`scope: computer`); per-repo lists ride the
+   company sync repo's git ([repo__list_syns.mdx](./repo__list_syns.mdx)), not Dropbox and not the working repo.
 3. Each computer writes to **its own subfolder only** —
    `~/Dropbox/LargeFileBridge/<computer_label>/LargeFilesBridge_SyncList.yaml` (label sanitized) —
    and **reads every peer subfolder**, so two machines never clobber one shared file.

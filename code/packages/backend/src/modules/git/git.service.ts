@@ -29,6 +29,15 @@ const UNION_MERGE_PATHS = [
   ".lfbridge/decisions.yaml", // the shared per-file decision ledger (decisions.mdx §4/§5) — union-merged
 ];
 
+/** True for any `repo_storage.yaml` path a Git-backed working tree might carry — the top-level legacy shape
+ *  (`.lfbridge/repo_storage.yaml`, pre-redesign) and the current sync-repo mirror
+ *  (`repos/<repoKey>/repo_storage.yaml`, repo_tracking_scheme.mdx §1.1) alike. Both are machine-generated
+ *  Category-B tracking state whose authoritative copy is always Local Storage, so a merge conflict on either
+ *  shape is safe to auto-resolve by dropping the file (see `autoResolveRepoStorageConflicts`). */
+function isRepoStorageYamlPath(p: string): boolean {
+  return /(^|\/)repo_storage\.yaml$/.test(p);
+}
+
 export type RemoteKind = "local" | "url";
 
 /** The outcome of one Git cycle — enough for the caller to surface a problem or report what happened. */
@@ -286,8 +295,32 @@ export class GitBackbone {
       const after = await this.git.revparse(["HEAD"]).catch(() => "");
       result.merged = before !== after;
     } catch (e) {
-      // A merge conflict simple-git could not auto-resolve — abort and surface (never clobber).
+      // A merge conflict simple-git could not auto-resolve. When EVERY conflicted path is a `repo_storage.yaml`
+      // — machine-generated Category-B tracking state that must never live in a git working tree in the first
+      // place (repo_tracking_scheme.mdx §1/§2: Local Storage is always the authoritative copy, which is exactly
+      // why it "can never merge-conflict" once it's out of git) — auto-resolve deterministically by dropping the
+      // file from the merge rather than keeping either side's stale content; Local Storage (or the next
+      // mirrorToSyncRepo() pass) regenerates it. This is the "regenerate" strategy: no side's committed value is
+      // worth preserving, so there is nothing to actually reconcile. Any OTHER conflicted path still aborts +
+      // surfaces, never a clobber (git_backbone.mdx §4.3).
       const conflicts = await this.conflictedPaths();
+      if (conflicts.length > 0 && conflicts.every(isRepoStorageYamlPath)) {
+        const resolved = await this.autoResolveRepoStorageConflicts(conflicts);
+        if (resolved.length === conflicts.length) {
+          try {
+            await this.git.commit("LFB: auto-resolved repo_storage.yaml merge conflict (regenerated from Local Storage)");
+            result.merged = true;
+            log.warn(
+              "git",
+              `${this.dir}: auto-resolved merge conflict by dropping regeneratable ${resolved.join(", ")} — Category-B tracking state never belongs in a git working tree (repo_tracking_scheme.mdx §1)`,
+            );
+            return;
+          } catch (e2) {
+            log.warn("git", `${this.dir}: failed to finalize auto-resolved repo_storage.yaml conflict: ${(e2 as Error).message}`);
+            // fall through to the abort-and-surface path below
+          }
+        }
+      }
       await this.git.merge(["--abort"]).catch(() => {});
       result.conflicts = conflicts;
       result.problem = `Git merge conflict on ${conflicts.length || "several"} file(s) — resolve with your Git tools. (${(e as Error).message})`;
@@ -301,6 +334,26 @@ export class GitBackbone {
     } catch {
       return [];
     }
+  }
+
+  /**
+   * Auto-resolve a merge conflict on one or more `repo_storage.yaml` paths (any depth — the top-level legacy
+   * shape and the `repos/<repoKey>/repo_storage.yaml` sync-repo mirror alike) by dropping the file from the
+   * merge (`git rm -f`) instead of keeping either side's content. Best-effort per path so one failure doesn't
+   * block resolving the rest; returns the subset actually resolved so the caller can tell whether ALL
+   * conflicts were handled (safe to finish the merge) or some remain (must still abort + surface).
+   */
+  private async autoResolveRepoStorageConflicts(conflicted: string[]): Promise<string[]> {
+    const resolved: string[] = [];
+    for (const p of conflicted) {
+      try {
+        await this.git.rm(p);
+        resolved.push(p);
+      } catch (e) {
+        log.warn("git", `${this.dir}: failed to auto-resolve conflict on ${p}: ${(e as Error).message}`);
+      }
+    }
+    return resolved;
   }
 
   /**

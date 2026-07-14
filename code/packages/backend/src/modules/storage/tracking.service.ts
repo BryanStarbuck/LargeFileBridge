@@ -162,7 +162,13 @@ export function readStorageIndex(root: string): StorageFileRow[] {
   let doc: { files?: Record<string, Record<string, unknown>> };
   try {
     doc = YAML.parse(fs.readFileSync(p, "utf8")) ?? {};
-  } catch {
+  } catch (e) {
+    // A missing index (ENOENT) is the ordinary "never indexed yet" state — silent. But a file that EXISTS
+    // and won't parse (truncated/corrupt write, permissions) must reach error.err: otherwise a broken index
+    // masquerades as an empty one and the Storages page / fingerprint lookups silently lose data.
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+      log.warn("storage", `files.yaml unreadable/corrupt for ${root}: ${(e as Error).message}`);
+    }
     return [];
   }
   const files = doc.files ?? {};

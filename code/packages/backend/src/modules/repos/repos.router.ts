@@ -22,6 +22,8 @@ import {
   shareStatus,
 } from "../storage/decisions.service.js";
 import { effectiveFlags } from "../store-model/config.service.js";
+import { setSyncRepoMarker } from "../storage/tracking-sync.service.js";
+import { resolveOwnerDedicatedRepo } from "../storage/artifact-placement.service.js";
 import { deriveOwnerForRemote } from "../git/git.service.js";
 import { track } from "../progress/progress.registry.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
@@ -338,8 +340,18 @@ reposRouter.patch("/:repoId/settings", async (req, res) => {
       };
     if (p.transcription?.placement) c.artifacts = { ...c.artifacts, transcription_placement: p.transcription.placement };
     if (p.aiDescription?.placement) c.artifacts = { ...c.artifacts, ai_description_placement: p.aiDescription.placement };
+    if (p.syncRepo?.enabled !== undefined) c.sync_repo = { ...c.sync_repo, enabled: p.syncRepo.enabled };
     return c;
   });
+    // Reflect the sync-repo toggle onto the Local-Storage marker that resolveStateSyncRepo/mirrorToSyncRepo
+    // read: ON → point it at the owning storage's dedicated sync repo (null if none configured, which leaves
+    // it Local-Storage-only); OFF → remove the marker (artifact_placement_policy.mdx §4).
+    if (p.syncRepo?.enabled !== undefined) {
+      const repoPath = getRepoConfig(folder).repo.path;
+      if (repoPath) {
+        setSyncRepoMarker(repoPath, p.syncRepo.enabled ? resolveOwnerDedicatedRepo(repoPath) : null);
+      }
+    }
     res.json({ ok: true, data: toRepoSettings(req.params.repoId, folder) });
   } catch (e) {
     log.error("repos", `${folder}: update settings failed: ${(e as Error).message}`);
@@ -421,6 +433,8 @@ const RepoSettingsPatch = z.object({
   // Transcription / AI-description placement radios (repo_settings.mdx §4-5, placement_radios.mdx).
   transcription: z.object({ placement: z.enum(["lfbridge", "beside", "sync_repo"]) }).partial().optional(),
   aiDescription: z.object({ placement: z.enum(["lfbridge", "beside", "sync_repo"]) }).partial().optional(),
+  // Sync-tracking-state-to-the-company-sync-repo toggle (repo_settings.mdx §2.9).
+  syncRepo: z.object({ enabled: z.boolean() }).partial().optional(),
 });
 
 function toRepoSettings(repoId: string, folder: string): RepoSettings {
@@ -452,5 +466,7 @@ function toRepoSettings(repoId: string, folder: string): RepoSettings {
     // Transcription / AI-description placement (repo_settings.mdx §4-5, placement_radios.mdx).
     transcription: { placement: c.artifacts.transcription_placement },
     aiDescription: { placement: c.artifacts.ai_description_placement },
+    // Whether this repo mirrors its tracking state to the owner's sync repo (repo_settings.mdx §2.9).
+    syncRepo: { enabled: c.sync_repo.enabled },
   };
 }

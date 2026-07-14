@@ -496,7 +496,10 @@ semantics are owned by [decision_toggles.mdx](./decision_toggles.mdx) and are **
 
 * **Two axes, one per toggle.** Each row shows an **Add-to-IPFS (pin)** toggle and an
   **Add-to-git-ignore (⊘)** toggle — the editable mirror of the `P` and `I` badges. A click writes
-  **one** axis to the team-shared `.lfbridge/decisions.yaml` and performs that axis's effect (pin/unpin,
+  **one** axis to the `decisions.yaml` ledger — in **Local Storage** at
+  `~/T/_large_files_bridge/repos/<repoKey>/` (shared across the user's computers via the company sync repo
+  when enabled, never in the working repo — [artifact_placement_policy.mdx](./artifact_placement_policy.mdx))
+  — and performs that axis's effect (pin/unpin,
   or a `.gitignore` write); it **never deletes local bytes**
   ([decision_toggles.mdx](./decision_toggles.mdx#click-semantics)).
 * **One grammar, four states.** Each toggle renders as **OFF** (white fill, thin medium-grey edge),
@@ -677,8 +680,9 @@ a missing `selection` path is dropped — restoring is **never** an error (§1.3
     editable form of the `P` (pin) and `I` (git-ignored) badges. The **pin** toggle renders for any large
     file; the **⊘ git-ignore** toggle renders **only under a repo** (`repoRootFor()`) and is **N/A
     (blank, width-reserved)** otherwise. Each renders in one of the four states (OFF / ON / RECOMMENDED
-    dashed / N/A, [decision_toggles.mdx](./decision_toggles.mdx)); a click writes **one** axis to
-    `.lfbridge/decisions.yaml`, performs that axis's effect, **never deletes local bytes**, and **stops
+    dashed / N/A, [decision_toggles.mdx](./decision_toggles.mdx)); a click writes **one** axis to the
+    Local-Storage `decisions.yaml` (`~/T/_large_files_bridge/repos/<repoKey>/`, never the working repo),
+    performs that axis's effect, **never deletes local bytes**, and **stops
     propagation** (never navigates). Turning the ⊘ toggle ON for a **directory** under a repo opens the
     [git-ignore pop-over](./git_ignore.mdx) instead of writing silently.
 
@@ -895,7 +899,7 @@ Writing the directory-scoped sticky flags — and clearing `sync` decisions belo
   a slot to the §3.5 order. §3.6 adds the EDITABLE decision toggles (writable form of the P/I badges):
   a pin toggle (any large file) + a repo-scoped ⊘ git-ignore toggle (renders only under a repo via
   git.service.ts repoRootFor(), else N/A); four states OFF/ON/RECOMMENDED(dashed, from
-  to_do_batch_calc_engine.mdx)/N/A; a click writes ONE axis to .lfbridge/decisions.yaml, never deletes
+  to_do_batch_calc_engine.mdx)/N/A; a click writes ONE axis to the Local-Storage decisions.yaml (repos/<repoKey>/, never the working repo), never deletes
   bytes, stops propagation (never navigates); a directory ⊘-ON opens the git_ignore.mdx pop-over. Grammar
   + states owned by decision_toggles.mdx (DecisionToggles.tsx); §5 rows now also carry pin/ignore decision
   state + under-repo flag so the toggle renders in the right state. (This file merges the former directory.mdx — the File System browser — into

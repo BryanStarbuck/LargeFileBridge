@@ -17,6 +17,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { log } from "../../shared/logging.js";
+import { toolEnv } from "./audio-prep.js";
 
 // Video / container formats whose audio track must be demuxed to MP3 before Whisper can read it.
 const VIDEO_EXTENSIONS = [".mp4", ".m4v", ".mov", ".mkv", ".avi", ".webm", ".mpg", ".mpeg", ".wmv", ".flv"];
@@ -75,11 +76,14 @@ export class Transcriber {
     const ext = path.extname(inputFile).toLowerCase();
     const tools = this.toolStatus();
 
-    // Whisper is always required; ffmpeg only for video demux. Report the missing tool clearly.
+    // Whisper is always required; ffmpeg only for video demux. Report the missing tool clearly, and log it
+    // so a "why didn't this transcribe" investigation finds the reason in error.err (no silent no-op).
     if (!tools.whisper) {
+      log.warn("transcribe", `${inputFile}: whisper not installed — pipx install openai-whisper`);
       return { status: "tool_missing", outputPath: null, words: null, reason: "whisper not installed — `pipx install openai-whisper`" };
     }
     if (VIDEO_EXTENSIONS.includes(ext) && !tools.ffmpeg) {
+      log.warn("transcribe", `${inputFile}: ffmpeg not installed — brew install ffmpeg`);
       return { status: "tool_missing", outputPath: null, words: null, reason: "ffmpeg not installed — `brew install ffmpeg`" };
     }
 
@@ -102,6 +106,7 @@ export class Transcriber {
         tempAudio = await this.demuxToMp3(inputFile);
         audioFile = tempAudio;
       } catch (e) {
+        log.error("transcribe", `${inputFile}: ffmpeg demux failed: ${(e as Error).message}`);
         return { status: "failed", outputPath: null, words: null, reason: `ffmpeg demux failed: ${(e as Error).message}` };
       }
     }
@@ -308,7 +313,7 @@ export class Transcriber {
     opts: { allowFail?: boolean; onLine?: (line: string) => void } = {},
   ): Promise<{ status: number | null; stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
-      const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], env: toolEnv() });
       let stdout = "";
       let stderr = "";
       let pending = ""; // partial trailing line between chunks (for onLine)
@@ -339,7 +344,10 @@ export class Transcriber {
 
   private commandExists(command: string): boolean {
     try {
-      return spawnSync(this.isWindows ? "where" : "which", [command], { stdio: "ignore" }).status === 0;
+      // Widened PATH (audio-prep.ts toolEnv()) so a pipx (`~/.local/bin`) or Homebrew tool is never
+      // reported missing just because this process's PATH is thinner than an interactive shell's —
+      // e.g. a launchd-started background process (transcribe_engine.mdx §2 robustness note).
+      return spawnSync(this.isWindows ? "where" : "which", [command], { stdio: "ignore", env: toolEnv() }).status === 0;
     } catch {
       return false;
     }

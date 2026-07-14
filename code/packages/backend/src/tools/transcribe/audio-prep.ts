@@ -13,10 +13,35 @@ export const AUDIO_EXTENSIONS = [".mp3", ".wav", ".flac", ".ogg", ".oga", ".aac"
 
 const isWindows = os.platform() === "win32";
 
-/** Is a CLI on PATH? (`which`/`where`, never a shell alias.) */
+/**
+ * The interactive dev shell's PATH commonly carries directories a restricted/background process does not:
+ * pipx installs `whisper` and `mlx-qwen3-asr` shims into `~/.local/bin`, and Homebrew lives at
+ * `/opt/homebrew/bin` (Apple Silicon) or `/usr/local/bin` (Intel). A tool can be genuinely installed and
+ * still be invisible to `which`/`spawn` if the process's PATH doesn't include these — e.g. a launchd agent
+ * with no `EnvironmentVariables` block, or any future supervisor that starts the backend with a minimal
+ * environment. We therefore always search the CURRENT PATH plus these well-known install locations
+ * (de-duplicated, current PATH wins on order) rather than trusting `process.env.PATH` alone. This is
+ * additive only — an already-correct interactive PATH is unaffected.
+ */
+export function toolSearchPath(): string {
+  const home = process.env.HOME || os.homedir();
+  const extra = [path.join(home, ".local", "bin"), "/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/local/sbin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+  const current = (process.env.PATH || "").split(path.delimiter).filter(Boolean);
+  const merged = [...current, ...extra].filter((p, i, arr) => arr.indexOf(p) === i);
+  return merged.join(path.delimiter);
+}
+
+/** The current process env with PATH widened by {@link toolSearchPath} — pass to `spawn`/`spawnSync` so
+ *  detection AND execution agree on where a tool lives (transcribe_engine.mdx §2 robustness note). */
+export function toolEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, PATH: toolSearchPath() };
+}
+
+/** Is a CLI on PATH? (`which`/`where`, never a shell alias.) Searches the widened tool PATH so a genuinely
+ *  installed pipx/Homebrew tool is never reported missing just because the caller process's PATH is thin. */
 export function commandExists(command: string): boolean {
   try {
-    return spawnSync(isWindows ? "where" : "which", [command], { stdio: "ignore" }).status === 0;
+    return spawnSync(isWindows ? "where" : "which", [command], { stdio: "ignore", env: toolEnv() }).status === 0;
   } catch {
     return false;
   }
@@ -26,7 +51,8 @@ export function commandExists(command: string): boolean {
  * Async, non-blocking spawn (transcribe_engine.mdx §4.1 — NEVER spawnSync, which freezes the event loop for
  * the whole run). Buffers stdout/stderr and optionally streams complete stdout lines to `onLine`. Rejects on
  * a non-zero exit unless `allowFail`. There is deliberately NO wall-clock timeout — a 1–2h+ file may run for
- * hours and must not be reaped mid-file.
+ * hours and must not be reaped mid-file. Runs with the widened tool PATH (above) so a bare command name
+ * (`"whisper"`, `"mlx-qwen3-asr"`, `"ffmpeg"`) resolves the same way `commandExists()` detected it.
  */
 export function spawnAsync(
   bin: string,
@@ -34,7 +60,7 @@ export function spawnAsync(
   opts: { allowFail?: boolean; onLine?: (line: string) => void } = {},
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], env: toolEnv() });
     let stdout = "";
     let stderr = "";
     let pending = "";

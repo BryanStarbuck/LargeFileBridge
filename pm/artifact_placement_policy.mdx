@@ -1,174 +1,120 @@
 ---
-title: LargeFileBridge — Artifact & Tracking-State Placement Policy (the content-threshold churn rule)
-description: The authoritative, cross-cutting policy for WHERE LargeFileBridge writes its noisy per-repo tracking state — above all `repo_storage.yaml`, which re-stamps a fresh `last_scan.at` on EVERY scan — so that a repo the user never asked to transcribe or describe NEVER sees `.lfbridge/` churn or a surprise check-in. Defines the CONTENT THRESHOLD (LFB writes nothing into a repo's `.lfbridge/` tracking area until the repo has produced at least one DURABLE USER ARTIFACT — a transcript OR an AI description), the NEW per-repo state-root directory `~/T/_large_files_bridge/repos/<repoKey>/` (repoKey = the 12-hex shortHash of the resolved absolute path, the same scheme storageSid() already uses) where ALL tracking state lives before the threshold, the company/personal LFB STATE-SYNC REPO override that (highest priority) relocates the noisy files to `<syncRepo>/repos/<repoKey>/` so they travel across the user's computers via a purpose-built repo, and the three-tier DECISION ORDER (state-sync repo → post-threshold `.lfbridge/` when repo settings allow → state-root fallback) that resolves the destination for repo_storage.yaml, per-file sidecars, history logs, files.yaml, and the rolled-up counts. Also documents the interaction with the scan-timestamp churn (refreshCounts / last_scan), how the committed travellers decisions.yaml / manifest.yaml relate to the threshold, the deliberate NO-AUTOMATIC-MIGRATION rule (the threshold governs FUTURE writes only) plus the opt-in "promote" path, a decision-flow diagram, worked examples, and a large catalogue of non-default and error cases (missing/unwritable sync-repo path, a deleted threshold artifact, repoKey collision, a path with no git, a cloud-mounted repo, permission errors, two computers disagreeing on the threshold, `.lfbridge/` consent off, a relocated `.lfbridge/`). Sibling of storage_local.mdx (the state root that hosts `repos/<repoKey>/`), repo_tracking_scheme.mdx (the files this policy places), repo_settings.mdx (the per-repo placement radios), storage_company.mdx / storage_personal.mdx (the owning storage that configures the state-sync repo), Transcribe.mdx / ai_description.mdx (the two durable artifacts that cross the threshold), and scan.mdx (the scan that re-stamps the timestamp this policy protects against).
+title: LargeFileBridge — Artifact & Tracking-State Placement Policy (the data-category split)
+description: The authoritative, cross-cutting policy for WHERE LargeFileBridge writes its per-repo state. The split is by DATA CATEGORY, not by a content threshold. Category A — the user's derived CONTENT (transcripts .transcription + AI descriptions .ai_description) — lives in the working repo's committed .lfbridge/, path-mirrored, and travels with the repo. Category B — LFB's noisy COMPRESSION / BIG-FILE / GIT-IGNORE tracking state (repo_storage.yaml with its per-scan last_scan + counts, files.yaml, per-file <name>.yaml sidecars, history/<device>.txt, decisions.yaml, manifest.yaml, compression records) — NEVER enters the working repo. Category B lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ (repoKey = shortHash of the resolved absolute repo path) ALWAYS — machine-local, never touching git, so it can never merge-conflict — and is ADDITIONALLY mirrored to the owning company/Personal storage's SYNC REPO at <syncRepo>/repos/<repoKey>/ when that sync repo is configured and the per-repo toggle is on (default OFF), so the state can travel across the user's computers without polluting the working repo. This supersedes the earlier content-threshold three-tier model: there is no tier that writes tracking state into the working repo. Logs (launcher.log / log.log / error.err) live ONLY in Local Storage and are NEVER committed or mirrored anywhere. Documents the per-scan refreshCounts churn, the decisions.yaml/manifest.yaml traveller reconciliation, the sync-repo reconcile (append-only merge + union-merge), repoKey derivation and collision guard, and a catalogue of non-default and error cases. Sibling of storage_local.mdx (the state root that hosts repos/<repoKey>/), repo_tracking_scheme.mdx (the Category-B files this policy places), repo_settings.mdx (the per-repo sync-repo toggle), storage_company.mdx / storage_personal.mdx (the owning storage that configures the sync repo), Transcribe.mdx / ai_description.mdx (the two Category-A artifacts), placement_radios.mdx (the artifact placement radio), and scan.mdx.
 ---
 
 # LargeFileBridge — Artifact & Tracking-State Placement Policy
 
-LargeFileBridge (LFB) writes a small pile of **per-repo tracking files** as it works — the repo-wide
-`repo_storage.yaml`, the per-file `<name>.yaml` sidecars, the `history/<device>.txt` logs, the fast
-`files.yaml` index, and the rolled-up `counts:` ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)).
-The natural home for those is the repo's hidden **`.lfbridge/`** directory at the repo root. But that
-home has a cost the product owner will not pay by default:
+LargeFileBridge (LFB) writes two very different kinds of per-repo file, and the rule for **where each
+goes** is a hard split by **data category** — not by any threshold or timing:
 
-* **`repo_storage.yaml` re-stamps `last_scan.at` on EVERY scan.** The 15-minute and 4-hour
-  scheduleTasks ([scan.mdx §2](./scan.mdx#2-cadence--the-two-scheduletasks-4-hour-discovery--15-minute-pinset))
-  each call `refreshCounts()`, which rewrites `repo_storage.counts` **and** stamps a fresh `last_scan`.
-  In a **storage repo** whose `.lfbridge/` is a **committed traveller**
-  ([git_backbone.mdx](./git_backbone.mdx) "never git-ignore the `.lfbridge/` SDL text"), that is a new
-  dirty file — and a real commit — **every scan, forever**, on a repo the user may never have asked LFB
-  to do anything with.
-* Even where `.lfbridge/` is git-ignored, dropping tracking files into a user's working tree the moment
-  a repo is *discovered* violates the charter's zero-surprise posture: *a user who never asked for
-  transcription or description must never see LFB touch their repo.*
+* **Category A — the user's derived CONTENT.** Transcripts (`<rel>.transcription`) and AI descriptions
+  (`<rel>.ai_description`). Stable, content-derived, valuable; the user asked LFB to *produce* them. These
+  live in the **working repo's committed `.lfbridge/`**, path-mirrored, and **travel with the repo** via
+  its own git.
+* **Category B — LFB's noisy tracking state.** `repo_storage.yaml` (which re-stamps `last_scan.at` and
+  recomputes `counts:` on **every** scan), `files.yaml`, the per-file `<name>.yaml` sidecars,
+  `history/<device>.txt`, `decisions.yaml`, `manifest.yaml`, and compression records. This is LFB's private
+  bookkeeping about **compression, big files, and git-ignore decisions**. It **NEVER** enters the working
+  repo.
 
-**This spec is the authoritative rule for where those noisy tracking files go.** It introduces a
-**content threshold** — LFB writes nothing into a repo's `.lfbridge/` until the repo has produced a
-**durable user artifact** — and a **three-tier decision order** that, until the threshold is crossed,
-keeps every tracking file **out of the repo** and under the state root (or a purpose-built state-sync
-repo). It sits **above** the placement resolver that already exists for the artifacts themselves
-([Transcribe.mdx §3.4](./Transcribe.mdx#34-resolving-where-the-parallel-hierarchy-lives--the-ordered-rule-locked),
-`artifact-placement.service.ts`) and governs a **different** set of files: the *tracking state*, not the
-*transcript/description output*.
-
-> **Two things easy to confuse.** A **durable user artifact** is a transcript or an AI description — the
-> thing the user explicitly asked LFB to *produce*. The **tracking state** is LFB's own bookkeeping
-> about the repo. This policy uses the *existence* of the former as the gate that decides *where the
-> latter* is allowed to live. `artifact-placement.service.ts` places the artifact; **this** policy
-> places the tracking state and reads "does a durable artifact exist yet?" as its threshold.
+> **Why the split.** Category B re-stamps a per-scan timestamp and per-machine counts. When it was
+> committed into the working repo's `.lfbridge/`, two computers scanning the same repo produced a fresh
+> **merge conflict every scan** (`repo_storage.yaml` was the reported offender). The fix is categorical:
+> the repo carries the *content* (A); LFB's *bookkeeping* (B) stays out of git entirely.
 
 This spec builds on, and does not restate, its siblings:
 
-* [storage_local.mdx §2.2b](./storage_local.mdx) — the **state root** and the new
-  `repos/<repoKey>/` per-repo directory this policy writes into before the threshold.
-* [repo_tracking_scheme.mdx §6](./repo_tracking_scheme.mdx) — the **files** this policy places
+* [storage_local.mdx §2.2b](./storage_local.mdx) — **Local Storage**, the state root, and the
+  `repos/<repoKey>/` per-repo directory this policy writes Category B into.
+* [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx) — the **Category-B files** this policy places
   (`repo_storage.yaml`, sidecars, history) and their locked shapes.
-* [repo_settings.mdx §2](./repo_settings.mdx#2-the-settings-on-this-page) — the per-repo **placement
-  radios** that decide whether the *post-threshold* home is the hidden `.lfbridge/`, beside the media,
-  or the state-sync repo.
-* [storage_company.mdx](./storage_company.mdx) / [storage_personal.mdx](./storage_personal.mdx) — the
-  **owning storage** that may configure a **state-sync repo**, the highest-priority destination.
-* [Transcribe.mdx §3](./Transcribe.mdx#3-where-transcripts-are-stored--inside-the-repostorage-lfbridge-path-mirrored-extension-appended-locked)
-  and [ai_description.mdx §2](./ai_description.mdx#2-where-the-description-is-stored--inside-the-repostorage-lfbridge-path-mirrored-extension-appended-locked)
-  — the **two durable artifacts** whose existence crosses the threshold.
-* [scan.mdx §2](./scan.mdx#2-cadence--the-two-scheduletasks-4-hour-discovery--15-minute-pinset) — the
-  scan whose per-pass `last_scan` re-stamp is the churn this policy contains.
-* [decisions.mdx §4](./decisions.mdx#4-where-it-lives--the-shared-team-visible-ledger-locked) — the
-  committed traveller `decisions.yaml`, whose relationship to the threshold is documented in §7.
+* [repo_settings.mdx §2](./repo_settings.mdx) — the per-repo **sync-repo toggle** that turns on the
+  additional company/Personal mirror.
+* [storage_company.mdx §7](./storage_company.mdx) / [storage_personal.mdx §14](./storage_personal.mdx) —
+  the **owning storage** that configures a **sync repo** ("a Company repo only for the LFB webapp to sync
+  changes").
+* [placement_radios.mdx](./placement_radios.mdx) — the shared 3-way radio that places the **Category-A**
+  artifacts (`lfbridge` | `beside` | `sync_repo`).
+* [Transcribe.mdx §3](./Transcribe.mdx) / [ai_description.mdx §2](./ai_description.mdx) — the **two
+  Category-A artifacts**.
+* [scan.mdx §2](./scan.mdx) — the scan whose per-pass `last_scan` re-stamp is the churn this policy keeps
+  out of git.
+* [decisions.mdx §4](./decisions.mdx) — the `decisions.yaml` ledger, whose travelling vehicle this policy
+  moves from the working repo to the sync repo (§5).
 
 ---
 
-## 1. The content threshold — a durable user artifact gates repo writes (LOCKED)
+## 1. The two categories (LOCKED)
 
-**Rule.** LFB MUST NOT create or write **any** file inside a repo's `.lfbridge/` tracking area until
-that repo has produced **at least one durable user artifact**. A durable user artifact is exactly one of:
+### 1.1 Category A — content that travels with the repo
 
-* a **transcript** — a `.transcription` file for any media in the repo
-  ([Transcribe.mdx §3.1](./Transcribe.mdx#31-the-layout--under-lfbridge-mirror-the-path-append-transcription-locked)); or
-* an **AI description** — a `.ai_description` file for any media in the repo
-  ([ai_description.mdx §2](./ai_description.mdx#2-where-the-description-is-stored--inside-the-repostorage-lfbridge-path-mirrored-extension-appended-locked)).
+The two **durable user artifacts**:
 
-Until then the repo has **crossed no threshold**, and **every** tracking file (§3's list) lives outside
-the repo — under the state root, or the state-sync repo if one is configured (§4, §5).
+* a **transcript** — a `.transcription` file ([Transcribe.mdx §3](./Transcribe.mdx)); and
+* an **AI description** — a `.ai_description` file ([ai_description.mdx §2](./ai_description.mdx))
+  (the visuals-and-action-by-time YAML rides with the AI-description analysis family).
 
-* **Why a *durable user artifact* and not "the user opened the repo" or "a scan ran".** Discovery and
-  scanning are things LFB does **to** a repo automatically; they are not a request. Producing a
-  transcript or a description is something the user **explicitly asks for** ([Transcribe.mdx §2](./Transcribe.mdx#2-entry-points-every-scale),
-  [ai_description.mdx §1](./ai_description.mdx#1-the-two-tab-analysis-panel--the-default-tab-rule)). The
-  first such request is the first moment the user has signalled *"I want LFB to keep work here,"* and
-  therefore the first moment LFB has earned the right to keep bookkeeping in the repo.
-* **The threshold is a one-way latch, evaluated per computer.** Once a repo has produced a durable
-  artifact **on this computer**, it stays "over threshold" for this computer even if the artifact is
-  later deleted (§8, §11.2). Two computers may hold different threshold states for the same repo; that is
-  correct and harmless because the pre-threshold location is per-computer and never travels (§11.7).
-* **A transcript/description is itself a `.lfbridge/` write.** The artifact is written INSIDE the
-  owning root's committed `.lfbridge/` (Transcribe.mdx §3, ai_description.mdx §2). So the act that
-  crosses the threshold and the first *allowed* `.lfbridge/` write are the **same event** — there is no
-  window where tracking files exist in `.lfbridge/` but no artifact does.
+These are written INSIDE the working repo's committed `.lfbridge/`, path-mirrored, extension **appended**,
+and **travel with the repo**. Their placement offers a per-repo choice — `lfbridge` (default), `beside`, or
+the company `sync_repo` — via the [placement radios](./placement_radios.mdx). Writing them into the repo is
+gated only by the machine-local **keep-`.lfbridge/`** consent ([storage_settings.mdx §3](./storage_settings.mdx),
+default on).
 
-Detecting whether a repo has crossed the content threshold (any `.transcription` / `.ai_description`
-present under the owning root's `.lfbridge/`, cached per scan) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `hasDurableArtifact(repoRoot)` (walks `analysisOutputs()` from `tracking.service.ts` for any transcript/description leaf; memoized alongside the owner index).
+### 1.2 Category B — tracking state that never enters the repo
 
----
-
-## 2. What this policy governs — the noisy tracking files (LOCKED)
-
-The decision order in §3 applies to **exactly** these per-repo tracking files — the ones LFB writes and
-re-writes as a side effect of scanning and of the user's actions:
+Everything LFB writes as a side effect of scanning and of the user's compression / pin / git-ignore
+actions:
 
 | File | Spec | Churn profile |
 | --- | --- | --- |
-| `repo_storage.yaml` | [repo_tracking_scheme.mdx §2](./repo_tracking_scheme.mdx#2-repo_storageyaml--the-repo-wide-settings-and-state-file-locked) | **High** — `last_scan.at` + `counts:` re-stamped every scan (§6). |
-| `files.yaml` | [storages.mdx §4.1](./storages.mdx) | Medium — per-file fingerprint index, rewritten when files change. |
+| `repo_storage.yaml` | [repo_tracking_scheme.mdx §2](./repo_tracking_scheme.mdx#2-repo_storageyaml--the-repo-wide-settings-and-state-file-locked) | **High** — `last_scan.at` + `counts:` re-stamped every scan. |
+| `files.yaml` | [storages.mdx §4.1](./storages.mdx) | Medium — per-file fingerprint index. |
 | `files/<path>.yaml` sidecars | [repo_tracking_scheme.mdx §3](./repo_tracking_scheme.mdx#3-per-file-nameyaml-sidecars--identity--the-files-event-history-locked) | Low — append-only per-file events. |
 | `history/<device>.txt` | [repo_tracking_scheme.mdx §4](./repo_tracking_scheme.mdx#4-historydevicetxt--the-per-computer-audit-log-locked) | Low — append-only per-computer log. |
+| `decisions.yaml` | [decisions.mdx §4](./decisions.mdx) | Low — union-merged two-axis decision ledger. |
+| `manifest.yaml` | [storage_local.mdx §9](./storage_local.mdx) | Medium — large-file → CID + pin state. |
+| `analysis/<rel>/compression.yaml` | [compression.mdx §8](./compression.mdx) | Low — compression records. |
 | the rolled-up `counts:` block | repo_tracking_scheme.mdx §2.2 | **High** — recomputed every scan. |
 
-It does **NOT** govern:
-
-* **The durable artifacts themselves** — the `.transcription` / `.ai_description` files. Those are
-  placed by [Transcribe.mdx §3.4](./Transcribe.mdx#34-resolving-where-the-parallel-hierarchy-lives--the-ordered-rule-locked)
-  / `resolveArtifactPlacement()`, INSIDE the owning root's `.lfbridge/`. (Producing one is what *crosses*
-  this threshold — §1.)
-* **The committed travellers** `decisions.yaml` and `manifest.yaml`. They are committed-and-shared by
-  design ([decisions.mdx §4](./decisions.mdx#4-where-it-lives--the-shared-team-visible-ledger-locked),
-  [storage_local.mdx §9.2](./storage_local.mdx)). Their *interaction* with the threshold is a special
-  case documented in §7 — they are held in the state root until the threshold, but keep their
-  committed-traveller nature once they land in a git-backed location.
+**None of Category B is ever placed in the working repo.** It goes to the two homes in §2.
 
 ---
 
-## 3. The three-tier decision order (LOCKED)
+## 2. Where Category B lives — Local Storage always, sync repo also (LOCKED)
 
-For every file in §2's list, LFB resolves the destination root by trying three tiers **in order** and
-taking the **first** that applies:
+For **every** Category-B file, the destination is resolved by two rules that both apply:
 
 ```
-TIER 1 — STATE-SYNC REPO (highest priority; ignores the threshold)
-  IF the repo's owning company/personal storage has a dedicated LFB state-sync repo configured
-     → write under  <syncRepo>/repos/<repoKey>/
-     (the noise travels across the user's computers via a PURPOSE-BUILT repo — §5)
+ALWAYS  →  ~/T/_large_files_bridge/repos/<repoKey>/          (Local Storage — the authoritative working copy)
 
-TIER 2 — THE REPO'S .lfbridge/  (only AFTER the threshold, only if settings allow)
-  ELSE IF the content threshold is crossed  (§1)
-       AND the per-repo placement setting permits .lfbridge/  (repo_settings.mdx §2)
-       AND the keep-.lfbridge/ consent is ON  (storage_settings.mdx §3)
-     → write under  <repoRoot>/.lfbridge/            (honoring any relocated .lfbridge/ path)
-
-TIER 3 — STATE-ROOT FALLBACK  (the zero-churn default before the threshold)
-  ELSE
-     → write under  ~/T/_large_files_bridge/repos/<repoKey>/   (never touches git — §4)
+ALSO    →  <syncRepo>/repos/<repoKey>/                        (when the owning company/Personal storage has a
+           IFF the sync repo is configured AND the per-repo    sync repo configured and the per-repo toggle is
+           "sync tracking state" toggle is ON (default OFF)    ON — the travelling MIRROR, written IN ADDITION)
 ```
 
-* **`repoKey`** is the **12-hex `shortHash` of the resolved absolute repo path** — the same key
-  `storageSid()` already derives for repo/personal storages (`shortHash(resolve(path))`). Deriving the
-  key from the *absolute path* means the same repo on the same machine always resolves to the same
-  `repos/<repoKey>/` directory across restarts and re-scans, with no name-collision games (§11.4).
-* **Tier 1 wins even before the threshold.** A configured state-sync repo is the user *deliberately*
-  standing up a place for exactly this noise; there is no reason to withhold it. Its churn is acceptable
-  because it is a repo whose **only** job is to absorb tracking state (§5), unlike a product/storage repo
-  where a per-scan commit is unwelcome.
-* **Tier 2 requires all three conditions.** Threshold crossed **and** the placement radio permits
-  `.lfbridge/` **and** the machine-local keep-`.lfbridge/` consent is on. If the placement radio is set
-  to **beside the media**, tracking files still use `.lfbridge/` for the *repo-wide* file — the radio
-  governs the **artifact** layout, not the repo-wide tracking file; see §9 for the exact interaction. If
-  consent is off, LFB never writes into the repo at all and falls straight to Tier 3
-  ([decisions.mdx §6](./decisions.mdx#6-consent--the-ledger-only-exists-when-this-computer-keeps-lfbridge-locked)).
-* **Tier 3 is the default a fresh repo lands in.** A newly discovered repo with no state-sync repo and
-  no durable artifact keeps **100% of its tracking state** under the state root. The repo's working tree
-  is untouched: no `.lfbridge/`, no `.gitignore` edit, no commit, no churn.
+* **Local Storage is written on every operation.** `repo_storage.yaml`, sidecars, and history are read
+  and written here first; this is the source the app operates on. It is under the state root
+  ([storage_local.mdx §1](./storage_local.mdx)), so it **never touches git** and **never merge-conflicts**.
+* **The sync repo is an ADDITIVE mirror, not a replacement.** When enabled, the same files are also
+  written/committed to `<syncRepo>/repos/<repoKey>/` so they travel to the user's other computers. Local
+  Storage stays authoritative; a **sync pass** reconciles the two (§5). Turning the mirror off never loses
+  the Local-Storage copy.
+* **`repoKey` = `shortHash(resolve(repoPath))`** — the 12-hex `storageSid()` scheme. The same repo on the
+  same machine always resolves to the same directory, across restarts and re-scans (collision guard §7.4).
+* **There is no tier that writes Category B into the working repo.** This supersedes the earlier
+  content-threshold three-tier model: crossing a "durable artifact" threshold no longer redirects tracking
+  state into `<repoRoot>/.lfbridge/`. Category B is Local Storage (+ optional sync mirror), full stop.
 
-Resolving the tracking-state root for a repo by this ordered rule (Tier 1 → Tier 2 → Tier 3) is handled
-in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `resolveTrackingRoot(repoRoot)` (returns `{ root, tier, gitBacked }`; consulted by `repo-storage.service.ts`, `file-sidecar.service.ts`, and `history-log.service.ts` in place of the old unconditional `trackingDir()`).
+Resolving the Local-Storage tracking root for a repo, and the optional company sync-repo mirror root, is
+handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveTrackingRoot(repoRoot)` (returns the Local-Storage `repos/<repoKey>/` root) and `resolveStateSyncRepo(repoRoot)` (returns `<syncRepo>/repos/<repoKey>/` or `null`), consumed by `repo-storage.service.ts`, `file-sidecar.service.ts`, and `history-log.service.ts`.
 
 ---
 
-## 4. The state-root per-repo directory `repos/<repoKey>/` (LOCKED)
+## 3. The state-root per-repo directory `repos/<repoKey>/` (LOCKED)
 
-Before the threshold — Tier 3 — every tracking file lives under a **new per-repo directory under the
-state root**:
+Category B's always-home is a per-repo directory under the state root:
 
 ```
 ~/T/_large_files_bridge/repos/<repoKey>/
@@ -178,378 +124,228 @@ state root**:
 │   └── videos/trees.mov.yaml
 ├── history/                   # per-computer audit logs (repo_tracking_scheme §4)
 │   └── studio-tower.txt
-├── decisions.yaml             # held here PRE-threshold when no sync repo exists (§7)
-├── manifest.yaml              # held here PRE-threshold when no sync repo exists (§7)
-└── origin.txt                 # one line: the absolute repo path this <repoKey> maps to (collision guard, §11.4)
+├── decisions.yaml             # the two-axis decision ledger (decisions.mdx)
+├── manifest.yaml              # large-file → IPFS CID + pin state
+├── analysis/<rel>/compression.yaml   # compression records (compression.mdx §8)
+└── origin.txt                 # one line: the absolute repo path this <repoKey> maps to (collision guard §7.4)
 ```
 
-* **`<repoKey>` = `shortHash(resolve(repoPath))`** — 12 hex chars, the `storageSid()` scheme.
-* **The layout mirrors the in-repo `.lfbridge/` exactly**, so promotion (§8) — or crossing the threshold
-  and starting to write into `.lfbridge/` — is a directory move of an already-correct shape, not a
-  reformat.
-* **This directory never touches git.** It is under the state root, which is the code/runtime boundary
-  ([storage_local.mdx §1](./storage_local.mdx#1-the-state-root)). Nothing here is ever committed,
-  git-ignored, or visible in the user's working tree.
-* **`origin.txt`** records the absolute path the key was derived from, so a (vanishingly unlikely) 48-bit
-  `shortHash` collision between two different repo paths is **detected**, not silently merged (§11.4).
-* **Lifecycle & cleanup** are defined in [storage_local.mdx §2.2b](./storage_local.mdx): the directory is
-  created lazily on the first tracking write, and removed when the repo is de-listed (with the same
-  "retain on a temporarily-missing drive" caution the pin units use, storage_local §7).
+* **This directory never touches git.** Nothing here is ever committed, git-ignored, or visible in the
+  user's working tree.
+* **The layout is exactly the subtree that mirrors into the sync repo** (§5): the sync mirror is
+  `<syncRepo>/repos/<repoKey>/` with the **same** shape.
+* **`origin.txt`** records the absolute path the key was minted from, so a (vanishingly unlikely) 48-bit
+  `shortHash` collision is **detected**, not silently merged (§7.4).
+* **Lifecycle & cleanup** are defined in [storage_local.mdx §2.2b](./storage_local.mdx): created lazily on
+  the first tracking write, removed when the repo is de-listed (retained on a temporarily-missing drive).
 
-The per-repo state-root directory path is resolved by a new helper beside `resolveStateDir()` /
-`resolveTodoBatchesDir()` in code:
+The per-repo state-root directory path is resolved in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveRepoStateDir(repoKey)` → `<stateDir>/repos/<repoKey>/` (honors `LFB_STATE_DIR`; created on demand). The `repoKey` is computed by `shortHash()` / `storageSid()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts`.
 
 ---
 
-## 5. The company/personal state-sync repo override (Tier 1) (LOCKED)
+## 4. The company/Personal sync repo (the additive mirror) (LOCKED)
 
-A user who wants their tracking state to **travel** — the same `repo_storage.yaml`, sidecars, and
-history visible on the tower and the laptop — configures a **state-sync repo** on the **owning storage**
-(their company or personal storage). When one exists, it is **Tier 1**: the noisy files for **every**
-repo owned by that storage go under `<syncRepo>/repos/<repoKey>/`, **regardless of the threshold**.
+A user who wants their tracking state to **travel** configures a **sync repo** on the **owning** company or
+Personal storage — *"a Company repo only for the Large File Bridge webapp to sync changes."* When one
+exists and the per-repo toggle is on, Category B is **also** written to `<syncRepo>/repos/<repoKey>/`, in
+addition to Local Storage.
 
-* **Why it overrides the threshold.** The threshold exists to protect a user's **product/storage repos**
-  from surprise churn. A **state-sync repo** is the opposite: a repo whose entire reason to exist is to
-  carry this noise between computers. Writing to it is never a surprise — the user built it for this.
-  So the zero-churn concern does not apply and Tier 1 skips the threshold gate.
-* **Where it is configured.** On the owning company/personal storage's settings, as a **dedicated
-  backing repo** ([repo_settings.mdx §2](./repo_settings.mdx#2-the-settings-on-this-page),
-  [storage_company.mdx §1](./storage_company.mdx#1-anatomy-of-a-company-storage),
-  [storage_personal.mdx §5](./storage_personal.mdx#5-turning-the-git-backbone-on--local-path-vs-https-url)).
-  It reuses the same "dedicated Git repo" backing machinery the artifact placer already reads
-  ([storage_settings.mdx §4.1](./storage_settings.mdx#41-dedicated-git-repo-preferred-when-available)),
-  so a storage that has a dedicated repo for its **artifacts** can designate it (or a sibling) as the
-  **state-sync** repo for tracking files too.
+* **It never surprises the user.** A sync repo is a repo whose entire reason to exist is to carry this
+  noise between computers. Committing per-scan churn there is the intended, purpose-built behavior — unlike
+  a product/working repo, where such a commit is unwelcome. This is exactly why Category B may live there
+  but never in the working repo.
+* **Where it is configured.** On the owning company/Personal storage's settings, as a dedicated backing
+  repo ([storage_company.mdx §7](./storage_company.mdx), [storage_personal.mdx §14](./storage_personal.mdx),
+  [storage_settings.mdx §4b](./storage_settings.mdx)); the **per-repo opt-in** toggle lives in
+  [repo_settings.mdx §2](./repo_settings.mdx). Default **OFF**.
 * **Per-`repoKey` isolation inside the sync repo.** Each owned repo gets its own
   `<syncRepo>/repos/<repoKey>/` subtree, so many repos' tracking state coexist without collision, and a
   teammate pulling the sync repo sees one subtree per repo.
-* **Ownership resolution reuses the artifact placer's owner index.** Which company/personal storage owns
-  a given repo — and whether it has a state-sync repo configured — is resolved through the same
-  mapped-source-dir / dedicated-repo index the artifact placer builds
-  (`resolveOwningStorage()` / `buildOwnerIndex()` in `artifact-placement.service.ts`), so the two never
-  drift on "who owns this file."
+* **Ownership resolution reuses the owner index.** Which company/Personal storage owns a given repo — and
+  whether it has a sync repo configured — is resolved through the same owner index the artifact placer
+  builds ([repo_company_mapping.mdx](./repo_company_mapping.mdx)), so the two never drift.
 
-Resolving the owning storage's state-sync repo for a given repo (via the shared owner index; null when
-none is configured) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveStateSyncRepo(repoRoot)` (reads `resolveBackingLocations()` from `storage-settings.service.ts`; returns the dedicated state-sync repo path or null), consumed by `resolveTrackingRoot()` in `tracking.service.ts`.
+Resolving the owning storage's sync repo for a given repo (null when none is configured or the toggle is
+off) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)` (reads the per-repo toggle + the owning storage's backing locations from `storage-settings.service.ts`; returns the sync-repo `repos/<repoKey>/` root or null), consumed by the Category-B writers.
+
+---
+
+## 5. The sync pass — reconciling Local Storage ↔ the sync repo (LOCKED)
+
+Because Local Storage is authoritative and the sync repo is an additive mirror, keeping them together is a
+**reconcile**, not a hand-off:
+
+* **Push.** After a Category-B write, the changed files under `repos/<repoKey>/` are mirrored into
+  `<syncRepo>/repos/<repoKey>/` and committed + pushed by the storage's git backbone
+  ([backbone_resilience.mdx](./backbone_resilience.mdx)). The per-scan `repo_storage.yaml` re-stamp does
+  produce commits there — in the purpose-built repo, which the auto-commit/auto-push loop already carries.
+* **Pull + merge.** On another computer, pulling the sync repo brings that machine's siblings'
+  `repos/<repoKey>/` subtrees. The reconcile folds them into local state:
+  * **`history/<device>.txt`** — self-owned per computer; no merge needed, each machine reads the others.
+  * **per-file sidecars** — append-only `events:`; merged by union of events (dedup by `at`+`kind`+`on_device`).
+  * **`decisions.yaml` / `manifest.yaml`** — union-merge exactly as [decisions.mdx](./decisions.mdx) /
+    [git_backbone.mdx](./git_backbone.mdx) already specify.
+  * **`repo_storage.yaml`** — the counts/last_scan are per-machine rollups; the local machine's is
+    authoritative for itself, and a re-scan rebuilds it, so no cross-machine merge is attempted.
+* **Logs are excluded.** `launcher.log`, `log.log`, and `error.err` (Local Storage, [CLAUDE.md](../CLAUDE.md))
+  are **never** mirrored into the sync repo — they are machine-local logs, not tracking state (§8).
+
+Mirroring the changed `repos/<repoKey>/` subtree into the sync repo and reconciling a pulled subtree back
+into Local Storage is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)` / `reconcileFromSyncRepo(repoRoot)` (invoked after Category-B writes and on the storage's git-backbone pull).
 
 ---
 
 ## 6. Interaction with the scan-timestamp churn (LOCKED)
 
 The single loudest source of churn is `refreshCounts()` re-stamping `repo_storage.counts` **and**
-`last_scan.at` on **every** scan. That call is **unconditional today** — the scanner calls it after each
-pass ([scan.mdx §2](./scan.mdx#2-cadence--the-two-scheduletasks-4-hour-discovery--15-minute-pinset)).
-Under this policy it changes in two ways:
+`last_scan.at` on **every** scan ([scan.mdx §2](./scan.mdx)). Under this policy:
 
-1. **It writes to the resolved tracking root, not to `<repoRoot>/.lfbridge/`.** `refreshCounts()` (and
-   the `readRepoStorage()` / `writeRepoStorage()` it calls) route through `resolveTrackingRoot()` (§3), so
-   before the threshold the per-scan re-stamp lands under `~/T/_large_files_bridge/repos/<repoKey>/` and
-   **never dirties the repo**. The high-churn file becomes high-churn **in the state root**, where churn
-   is free.
-2. **In a state-sync repo (Tier 1) the churn is expected and acceptable.** There the per-scan re-stamp
-   does produce commits — in the **purpose-built** repo, which the [backbone_resilience.mdx](./backbone_resilience.mdx)
-   auto-commit/auto-push loop already carries. That is the trade the user opted into by configuring a
-   state-sync repo (§5).
+1. **It writes to Local Storage, never to `<repoRoot>/.lfbridge/`.** `refreshCounts()` (and the
+   `readRepoStorage()` / `writeRepoStorage()` it calls) route through `resolveTrackingRoot()` (§2), which
+   always returns `~/T/_large_files_bridge/repos/<repoKey>/`. The per-scan re-stamp lands there and
+   **never dirties any working repo** — a repo the user never asked LFB to do anything with stays pristine.
+2. **In the sync repo (when enabled) the churn is expected.** There the re-stamp produces commits in the
+   purpose-built repo, carried by the backbone auto-push loop — the trade the user opted into (§4).
 
-Because a scan may run on a repo that has **not** crossed the threshold, `refreshCounts()` must resolve
-its destination **every call** (the threshold can flip mid-session the moment the user runs a transcript)
-and must never assume the repo's `.lfbridge/` exists.
-
-Routing `refreshCounts()` / `writeRepoStorage()` through `resolveTrackingRoot()` (so the per-scan
-`last_scan` re-stamp lands in the resolved root, not unconditionally in `<repoRoot>/.lfbridge/`) is
-handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` — `refreshCounts()` / `writeRepoStorage()` / `repoStoragePath()` (each derives its directory from `resolveTrackingRoot()` instead of the local `trackingDir()`), driven by the sole recurring caller `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()`.
+Routing `refreshCounts()` / `writeRepoStorage()` through `resolveTrackingRoot()` (so the per-scan re-stamp
+lands in Local Storage, never in a working repo) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` — `refreshCounts()` / `writeRepoStorage()` / `repoStoragePath()`, driven by the sole recurring caller `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()`.
 
 ---
 
-## 7. Committed travellers vs. the threshold — `decisions.yaml` / `manifest.yaml` (LOCKED)
+## 7. Non-default & error cases (LOCKED)
 
-`decisions.yaml` (the shared decision ledger, [decisions.mdx §4](./decisions.mdx#4-where-it-lives--the-shared-team-visible-ledger-locked))
-and `manifest.yaml` (large-file → CID, [storage_local.mdx §9.2](./storage_local.mdx)) are **committed
-travellers** by design in storage repos — they are *meant* to be committed and to move between the
-user's and teammates' computers via git. This policy **keeps that design** but reconciles it with the
-zero-churn threshold:
+### 7.1 Sync-repo path missing or unwritable
+The configured sync-repo path does not exist, or is on an unmounted/read-only volume. LFB does **not** fail
+the write and does **not** fall back to the working repo (that would reintroduce churn). Local Storage is
+written as always; the **sync mirror is skipped**, logs a WARN to `error.err` with the storage id + path,
+and surfaces a storage-settings warning ([repo_settings.mdx §2](./repo_settings.mdx)). When the path
+returns, the next sync pass resumes and reconciles the backlog.
 
-* **With a state-sync repo (Tier 1):** they live at `<syncRepo>/repos/<repoKey>/{decisions,manifest}.yaml`
-  and travel via that repo. Committed-traveller nature intact; the travelling vehicle is the sync repo.
-* **After the threshold, no sync repo (Tier 2):** they live in the repo's committed `.lfbridge/`
-  exactly as decisions.mdx §4 / storage_local §9.2 specify, and travel with the repo's own git history.
-  Nothing about those specs changes once the threshold is crossed.
-* **Before the threshold, no sync repo (Tier 3):** to honor zero-churn, they are held under
-  `~/T/_large_files_bridge/repos/<repoKey>/{decisions,manifest}.yaml`. A user who declines/pins a file in
-  a repo they have not transcribed still gets their decision **recorded and durable** — it simply lives in
-  the state root instead of in a repo commit, until the repo crosses the threshold (or a sync repo is
-  configured), at which point the ledger is **promoted** into its committed home (§8) and resumes
-  travelling. Until then the decision is real and honored locally; it just has not yet been *shared*,
-  which is consistent with decisions.mdx §15 (decisions only reach the team **with** a git backbone).
+### 7.2 No sync repo configured / toggle off
+Category B is **Local-Storage-only**. `decisions.yaml` and `manifest.yaml` are real and honored locally;
+they are simply **not yet shared** — consistent with [decisions.mdx §15](./decisions.mdx) (decisions reach
+the team only **with** a git backbone). Turning the toggle on later starts mirroring **future** writes and
+the next sync pass pushes the accumulated state.
 
-This is the one place the threshold touches a *committed* file. Everywhere else (§2) the threshold only
-moves *local working artifacts*.
+### 7.3 Two computers, one repo, no sync repo
+Each computer keeps its own Local-Storage `repos/<repoKey>/`. They do not share tracking state (by design),
+and neither dirties the working repo. If the user wants both to share it, that is exactly what the **sync
+repo** is for (§4).
 
----
+### 7.4 `repoKey` collision
+`repoKey = shortHash(resolve(path))` is a 48-bit hash of the **absolute** path. A genuine collision between
+two different absolute paths is astronomically unlikely; `repos/<repoKey>/origin.txt` (§3) records the path
+the key was minted from. On a write, if `origin.txt` exists and does **not** match the current repo's
+absolute path, LFB treats it as a collision, appends `-2`/`-3` to the directory name (the pin-unit
+disambiguation, [storage_local.mdx §6.1](./storage_local.mdx)), and records the resolved name so re-scans
+stay stable.
 
-## 8. Migration — no automatic move; the threshold governs FUTURE writes only (LOCKED)
+### 7.5 Cloud-mounted repo (Dropbox / Google Drive / network volume)
+A working tree on a cloud-synced mount is exactly where surprise `.lfbridge/` churn would be most expensive
+(every re-stamp triggers a cloud upload). This policy avoids it entirely: Category B is under the **local**
+state root, off the cloud mount. Only Category-A content artifacts (which the user explicitly generated) may
+sit in the repo's `.lfbridge/`.
 
-When a repo crosses the threshold (or a state-sync repo is first configured), LFB does **NOT**
-automatically move the existing state-root `repos/<repoKey>/` files into `.lfbridge/` (or into the sync
-repo). The threshold governs **where new writes go**, not a retroactive relocation.
+### 7.6 Permission errors writing Local Storage
+The state root is guaranteed writable-or-`/tmp`-fallback ([state-dir.ts](./storage_local.mdx#1-the-state-root)).
+A tracking write **never** crashes a scan or a user action (the store layer's never-throw discipline,
+[storage_local.mdx §15](./storage_local.mdx)).
 
-* **Why no automatic move.** An automatic move would (a) create the very surprise `.lfbridge/` +
-  `.gitignore` churn the policy exists to prevent — now bundled with the user's first transcript, which
-  is the worst moment to spring it; (b) risk a partial move if the process dies mid-copy; and (c) make
-  the *first* durable artifact silently rewrite unrelated tracking history. The safe, predictable rule is:
-  **the threshold flips the destination of the next write; old files stay put.**
-* **What actually happens at the crossing.** The transcript/description is written into `.lfbridge/`
-  (that IS the crossing, §1). From that point, `resolveTrackingRoot()` returns Tier 2 for this repo, so
-  the **next** `repo_storage.yaml` write, the **next** sidecar append, and the **next** history line go to
-  `.lfbridge/`. The state-root copies become stale-but-harmless; a scan reconciles them forward as it
-  rewrites into the new home. No data is lost — the sidecars and history are append-only and the
-  repo-wide file is rebuilt from the scan.
-* **The opt-in "promote" path.** For a user who *wants* their accumulated pre-threshold history moved
-  into the repo (e.g. to share it with a teammate via the committed `.lfbridge/`), LFB offers an explicit
-  **"Promote tracking state into this repo"** action (surfaced in
-  [repo_settings.mdx §2](./repo_settings.mdx#2-the-settings-on-this-page)). It copies
-  `repos/<repoKey>/` into the resolved Tier-1/Tier-2 root, verifies the copy, then removes the state-root
-  originals. This is **user-initiated**, atomic per file, and idempotent (re-running merges the
-  append-only files rather than duplicating events).
+### 7.7 Relocated `.lfbridge/`
+The keep-`.lfbridge/` relocation ([storage_settings.mdx §3](./storage_settings.mdx)) governs only
+**Category-A** artifacts (where transcripts/descriptions land in the repo). Category B ignores it — it is
+never in the repo to relocate.
 
-Copying the state-root `repos/<repoKey>/` tree into the resolved git-backed root on explicit promote
-(verify-then-remove; append-only files merged, not duplicated) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `promoteTrackingState(repoRoot)` (reads `resolveTrackingRoot()` for the destination; no-op when already Tier 2/Tier 1-resident).
-
----
-
-## 9. Interaction with the placement radios (LOCKED)
-
-[repo_settings.mdx §2](./repo_settings.mdx#2-the-settings-on-this-page) gives each repo two 3-way
-placement radios — one for **Transcription**, one for **AI descriptions** — with options (a) the hidden
-`.lfbridge/`, (b) **beside the media** (the deliberately-reintroduced beside-media layout), and (c) the
-company's state-sync repo. Those radios govern where the **durable artifact** lands. This policy governs
-where the **tracking state** lands. They interact as follows:
-
-* **The radios do not change the threshold.** Whichever radio option produced the artifact, producing it
-  is what crosses the threshold (§1). A transcript written **beside the media** still counts as a durable
-  user artifact and still flips this repo to Tier 2 for its tracking state.
-* **The repo-wide tracking file always prefers `.lfbridge/` (never beside-media).** `repo_storage.yaml`,
-  `files.yaml`, `history/`, and the sidecars are **repo-wide or path-indexed bookkeeping** — there is no
-  single media file to sit "beside." So Tier 2 always resolves them to `<repoRoot>/.lfbridge/` (or the
-  relocated `.lfbridge/` path, storage_settings §3), even when the *artifact* radio is set to
-  beside-media. The beside-media option is honored for the **artifact** by `resolveArtifactPlacement()`;
-  it does not scatter tracking files next to media.
-* **Radio (c) — the state-sync repo — and Tier 1 agree.** When the artifact radio points at the
-  state-sync repo, that same repo is the tracking-state Tier-1 destination, so artifact and tracking
-  state travel together in one place. This is the fully-synced configuration.
-* **Default posture** (repo_settings.mdx): with a sync repo present, **artifacts default to `.lfbridge/`
-  hidden** while **tracking state defaults to the sync repo** (Tier 1). Without a sync repo, both default
-  to `.lfbridge/` — but tracking state only **after** the threshold (Tier 2), else the state root
-  (Tier 3).
-
----
-
-## 10. Decision-flow diagram & worked examples
-
-### 10.1 The flow
-
-```
-                       ┌─────────────────────────────────────────────┐
-   write a tracking →  │  resolveTrackingRoot(repoRoot)              │
-   file (§2)           └─────────────────────────────────────────────┘
-                                        │
-             ┌──────────────────────────┼───────────────────────────┐
-             ▼                                                        │
-   Owning storage has a                                              │
-   state-sync repo configured? ──yes──▶  TIER 1                      │
-             │                           <syncRepo>/repos/<repoKey>/ │
-             no                          (ignores threshold)         │
-             ▼                                                        │
-   Content threshold crossed (§1)                                    │
-   AND settings allow .lfbridge/ (radio + consent)? ──yes──▶ TIER 2  │
-             │                                     <repoRoot>/.lfbridge/
-             no                                                       │
-             ▼                                                        │
-   TIER 3  ~/T/_large_files_bridge/repos/<repoKey>/  ◀───────────────┘
-   (zero-churn default; never touches git)
-```
-
-### 10.2 Worked examples
-
-* **A) Fresh product repo, never transcribed.** `~/BGit/charlie-kirk`, no state-sync repo, no durable
-  artifact. Every scan re-stamps `last_scan` → all of it lands in
-  `~/T/_large_files_bridge/repos/9f2c8b…/`. The working tree is pristine: no `.lfbridge/`, no `.gitignore`
-  change, no commit. **This is the case the policy is built for.**
-* **B) Same repo, user runs one transcription.** The `.transcription` is written into
-  `~/BGit/charlie-kirk/.lfbridge/videos/trees.mov.transcription` (Transcribe.mdx §3) — threshold crossed.
-  The **next** scan's `repo_storage.yaml` write now goes to `~/BGit/charlie-kirk/.lfbridge/repo_storage.yaml`
-  (Tier 2). The state-root copy is left in place, reconciled forward, not force-moved (§8).
-* **C) Personal storage with a state-sync repo.** The user configured
-  `~/BGit/Bryan_git/personal_lfb_state` as Personal's state-sync repo. For **every** repo Personal owns —
-  transcribed or not — tracking files land in `personal_lfb_state/repos/<repoKey>/` and travel to the
-  laptop via that repo's git backbone. The product repos stay pristine; the noise lives where it belongs.
-* **D) Storage repo whose `.lfbridge/` is committed, before this policy.** Previously, each scan committed
-  a new `last_scan.at` into the storage repo — real churn. After this policy: with no sync repo and no
-  durable artifact, the file moves to Tier 3 and the storage repo stops churning; if the storage repo is
-  *itself* meant to hold tracking state, the user designates it the state-sync repo and the churn becomes
-  the intended, purpose-built kind (§6).
-* **E) Consent off.** The user turned off keep-`.lfbridge/` for this repo
-  ([storage_settings.mdx §3](./storage_settings.mdx#3-the-hidden-lfbridge-tracking-directory--keep-it-and-where)).
-  Tier 2 is disqualified regardless of threshold; everything stays Tier 3 (or Tier 1 if a sync repo
-  exists) — LFB writes nothing into the repo root, ever.
-
----
-
-## 11. Non-default & error cases (LOCKED)
-
-### 11.1 State-sync repo path missing or unwritable
-Tier 1's configured path does not exist, or is on an unmounted/read-only volume. LFB does **not** fail the
-write and does **not** silently fall to `.lfbridge/` (that would reintroduce churn). It **falls to Tier 3**
-(state root), logs a WARN to `error.err` with the storage id + configured path, and surfaces a
-storage-settings warning ([repo_settings.mdx §2](./repo_settings.mdx#2-the-settings-on-this-page)). When
-the path returns, the next write resumes Tier 1; the user may **promote** (§8) to backfill.
-
-### 11.2 The threshold artifact is deleted later
-The user deletes the only `.transcription`/`.ai_description`. The threshold is a **one-way latch per
-computer** (§1): the repo stays Tier 2 on this computer. Rationale — the `.lfbridge/` directory and its
-tracking files already exist here; reverting to Tier 3 would strand them and re-introduce a move. If the
-user wants to fully revert, that is a manual "reset tracking" action, not an automatic consequence of a
-delete.
-
-### 11.3 Repo path with no `.git` (a bare directory, or a storage root that is not a git repo)
-`resolveArtifactPlacement()` already treats a non-git storage root as an owner (owner `storage-root`,
-`gitIgnore:false`). For tracking state, a non-git containing root is still a valid Tier-2 destination once
-the threshold is crossed, but with **no git backbone** there is nothing to churn — so the whole motivation
-softens. Pre-threshold it is still Tier 3. Post-threshold it writes into the storage root's `.lfbridge/`
-like any other; the "committed traveller" language in §7 simply has no git to travel through until a
-backbone is added (storage_personal §5).
-
-### 11.4 `repoKey` collision
-`repoKey = shortHash(resolve(path))` is a 48-bit hash of the **absolute** path. The same repo on the same
-machine always maps to one key (desired). A genuine collision between two **different** absolute paths is
-astronomically unlikely but not impossible; `repos/<repoKey>/origin.txt` (§4) records the path the key was
-minted from. On a write, if `origin.txt` exists and does **not** match the current repo's absolute path,
-LFB treats it as a collision, appends `-2`/`-3` to the directory name (the same disambiguation the pin
-units use, storage_local §6.1), and records the resolved name so re-scans stay stable. Different computers
-resolving the same absolute path to the same key is **not** a collision — their state roots are separate.
-
-### 11.5 Cloud-mounted repo (Dropbox / Google Drive / network volume)
-A repo whose working tree lives on a cloud-synced or network mount is exactly where surprise `.lfbridge/`
-churn is most expensive (every re-stamp triggers a cloud upload). The policy helps here by default: with
-no durable artifact, tracking state is Tier 3 under the **local** state root, off the cloud mount
-entirely. Placement resolution must also tolerate slow `stat`s on such mounts — the owner-index cache
-(2 s TTL) and the `hasDurableArtifact()` memoization keep per-file resolution from re-walking a cloud tree
-each time ([entity-menu rollup perf](./repos.mdx) is the analogous concern).
-
-### 11.6 Permission errors writing the resolved root
-If the resolved Tier-2 `.lfbridge/` (or Tier-1 sync repo) is not writable — e.g. a read-only checkout —
-LFB falls to Tier 3, logs the failure with the path, and continues; a tracking write **never** crashes a
-scan or a user action (mirrors the store layer's never-throw discipline, storage_local §15). Tier 3 is
-under the state root, which the app already guarantees writable-or-`/tmp`-fallback
-([state-dir.ts](./storage_local.mdx#1-the-state-root)).
-
-### 11.7 Two computers disagree on the threshold
-The tower has transcribed the repo (Tier 2 there); the laptop has not (Tier 3 there). This is **fine and
-by design**: the pre-threshold Tier-3 location is per-computer and never travels, and the tower's
-`.lfbridge/` tracking files are git-ignored working artifacts (repo_tracking_scheme §1) that do not push
-the laptop into a different state. If the user wants both computers to share tracking state regardless of
-per-machine threshold, that is exactly what a **state-sync repo** (Tier 1) is for — it makes the location
-uniform and threshold-independent across machines (§5).
-
-### 11.8 Threshold flips mid-scan
-A user runs a transcription while a background scan is mid-pass. Because `resolveTrackingRoot()` is
-evaluated **per write** (§6), the scan may write an early `repo_storage.yaml` to Tier 3 and a later one to
-Tier 2 within the same pass. That is harmless: both writes are internally consistent, the Tier-3 copy is
-reconciled forward on the next pass, and no write is lost. The resolver must not cache the tier across a
-whole scan.
-
-### 11.9 Relocated `.lfbridge/`
-When the user has relocated a repo's `.lfbridge/` to a custom path
-([storage_settings.mdx §3](./storage_settings.mdx#3-the-hidden-lfbridge-tracking-directory--keep-it-and-where)),
-Tier 2 resolves to the **relocated** path, not `<repoRoot>/.lfbridge/`. `resolveTrackingRoot()` reads the
-relocation exactly as the existing `trackingDir()` does (`readStorageSettings(...).lfbridge.path`), so the
-two never disagree.
-
-### 11.10 De-listing a repo
+### 7.8 De-listing a repo
 When the user removes a repo from LFB, its `repos/<repoKey>/` state-root directory is cleaned up
-([storage_local.mdx §2.2b](./storage_local.mdx) lifecycle). A repo that merely went **missing** (unmounted
-drive) retains its directory so configuration is not lost on remount — same caution as the pin units
-(storage_local §7).
+([storage_local.mdx §2.2b](./storage_local.mdx)); a repo that merely went **missing** (unmounted drive)
+retains its directory so configuration is not lost on remount.
 
 ---
 
-## 12. Reconciliation with existing specs (LOCKED)
+## 8. Logs never leave Local Storage (LOCKED)
 
-* **[repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)** defines the *shapes* of
-  `repo_storage.yaml`, the sidecars, and history, and originally rooted them at `<repoRoot>/.lfbridge/`.
-  Its new §6 (added by this work) points the *location* question at this spec: those files follow the
-  three-tier order here, and `<repoRoot>/.lfbridge/` is now the **post-threshold Tier-2** home, not the
-  unconditional home. The locked *shapes* are unchanged.
-* **[storage_local.mdx](./storage_local.mdx)** gains §2.2b defining the `repos/<repoKey>/` directory and
-  `resolveRepoStateDir()`. This spec owns the *policy*; storage_local owns the *directory under the state
-  root* it writes to.
-* **[repo_settings.mdx](./repo_settings.mdx)** owns the placement radios and the "Promote tracking
-  state" action; this spec references them (§8, §9) but does not define the UI.
-* **[Transcribe.mdx](./Transcribe.mdx) / [ai_description.mdx](./ai_description.mdx)** own artifact
-  placement (`resolveArtifactPlacement()`); this spec reads their *output existence* as the threshold and
-  does not change where artifacts go.
-* **[decisions.mdx](./decisions.mdx)** owns the ledger; §7 here documents only its pre-threshold holding
-  location, preserving its committed-traveller semantics once it lands in a git-backed root.
+LFB's log files — **`launcher.log`**, **`log.log`**, **`error.err`** ([CLAUDE.md](../CLAUDE.md), Local
+storage & logging) — live **only** under the state root `~/T/_large_files_bridge/` (`resolveLogDir()`).
+They are:
+
+* **Never committed** into any working repo, and never written into a repo's `.lfbridge/`.
+* **Never mirrored** into the company/Personal sync repo — they are machine-local logs, not tracking state,
+  so §5's reconcile explicitly excludes them.
+
+This is the second half of the reported failure: `launcher.log` must not merge-conflict because it must
+never be in a git tree at all.
 
 ---
 
-## 13. Acceptance criteria
+## 9. Reconciliation with existing specs (LOCKED)
 
-1. LFB writes **nothing** into a repo's `.lfbridge/` tracking area until the repo has produced at least
-   one **durable user artifact** — a `.transcription` or a `.ai_description` — on this computer (the
-   **content threshold**, §1).
-2. Before the threshold (and absent a state-sync repo), **all** noisy tracking files — `repo_storage.yaml`,
-   `files.yaml`, per-file sidecars, `history/<device>.txt`, and the rolled-up `counts:` — live under
-   `~/T/_large_files_bridge/repos/<repoKey>/`, where `repoKey = shortHash(resolve(repoPath))` (the
-   `storageSid()` scheme); the repo working tree is untouched (no `.lfbridge/`, no `.gitignore` edit, no
-   commit) (§4).
-3. Destination is resolved by the **three-tier order** (§3), first match wins: (1) the owning
-   company/personal storage's **state-sync repo** → `<syncRepo>/repos/<repoKey>/` (ignores the threshold);
-   (2) else, **threshold crossed AND** the repo settings/consent permit `.lfbridge/` →
-   `<repoRoot>/.lfbridge/` (relocation-aware); (3) else the state-root `repos/<repoKey>/`.
-4. The per-scan `refreshCounts()` re-stamp of `last_scan.at` / `counts:` routes through the resolver, so
-   it lands in the resolved root — never unconditionally in `<repoRoot>/.lfbridge/` — and never dirties a
-   repo that has not crossed the threshold (§6).
-5. `decisions.yaml` and `manifest.yaml` remain **committed travellers** in their git-backed home
-   (Tier 1 or post-threshold Tier 2), but are held under the state-root `repos/<repoKey>/` before the
-   threshold when no state-sync repo exists — honoring zero-churn while keeping the decision durable and
-   locally honored (§7).
-6. Crossing the threshold triggers **no automatic move**; it only redirects **future** writes. An explicit,
-   user-initiated **Promote** action copies the state-root tracking state into the git-backed root
-   (verify-then-remove, append-only files merged) (§8).
-7. The placement radios govern **artifact** layout only; the repo-wide tracking files always prefer
-   `.lfbridge/` (never beside-media) once at Tier 2 (§9).
-8. Every non-default/error case in §11 holds: unwritable sync-repo path → Tier 3 + WARN (never silent
-   `.lfbridge/`); deleted threshold artifact → stays Tier 2 (one-way latch); `repoKey` collision detected
-   via `origin.txt` and disambiguated; non-git root, cloud mount, permission error, mid-scan flip,
-   relocated `.lfbridge/`, and de-listing all behave as specified — and a tracking write **never** crashes
-   a scan or user action.
-9. New code exists and is cited: `resolveRepoStateDir(repoKey)` (state-dir.ts), `resolveTrackingRoot()` /
-   `promoteTrackingState()` (tracking.service.ts), `hasDurableArtifact()` / `resolveStateSyncRepo()`
-   (artifact-placement.service.ts), and the routed `refreshCounts()`/`writeRepoStorage()`
-   (repo-storage.service.ts).
+* **[repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)** defines the *shapes* of the Category-B files
+  and now roots them in Local Storage; this spec owns the *placement policy*.
+* **[storage_local.mdx](./storage_local.mdx)** owns the `repos/<repoKey>/` directory and
+  `resolveRepoStateDir()`; this spec owns the *policy* that writes there.
+* **[repo_settings.mdx](./repo_settings.mdx)** owns the per-repo sync-repo toggle; this spec references it.
+* **[placement_radios.mdx](./placement_radios.mdx)** owns the Category-A artifact placement radio;
+  Category A is content that travels with the repo, distinct from Category B here.
+* **[Transcribe.mdx](./Transcribe.mdx) / [ai_description.mdx](./ai_description.mdx)** own Category-A
+  artifact placement; this spec does not change where those artifacts go.
+* **[decisions.mdx](./decisions.mdx)** owns the ledger; this spec moves its travelling vehicle from the
+  working repo to the sync repo and its always-home to Local Storage.
+
+---
+
+## 10. Acceptance criteria
+
+1. LFB splits per-repo files by **data category**: **Category A** (transcripts + AI descriptions) lives in
+   the working repo's committed `.lfbridge/` and travels with the repo; **Category B** (`repo_storage.yaml`,
+   `files.yaml`, per-file sidecars, `history/<device>.txt`, `decisions.yaml`, `manifest.yaml`, compression
+   records) **never** enters a working repo.
+2. Category B lives in **Local Storage always** at `~/T/_large_files_bridge/repos/<repoKey>/`
+   (`repoKey = shortHash(resolve(repoPath))`), which never touches git and never merge-conflicts; the repo
+   working tree is untouched (no `.lfbridge/` tracking files, no `.gitignore` edit, no commit).
+3. When the owning **company/Personal storage has a sync repo configured** and the per-repo toggle is
+   **on**, Category B is **additionally** mirrored to `<syncRepo>/repos/<repoKey>/` so it travels — in
+   addition to Local Storage, not instead of it. Default **off**.
+4. There is **no tier that writes Category B into the working repo** — the earlier content-threshold
+   three-tier model is superseded; producing a transcript no longer redirects tracking state into the repo.
+5. The per-scan `refreshCounts()` re-stamp of `last_scan.at` / `counts:` routes through the resolver, so it
+   lands in Local Storage and **never dirties a working repo** (§6).
+6. `decisions.yaml` and `manifest.yaml` are **Local-Storage-always** and travel via the **sync repo**
+   (union-merge) when it is enabled; absent a sync repo they are honored locally but not yet shared (§7.2).
+7. The sync pass mirrors the changed `repos/<repoKey>/` subtree into the sync repo and reconciles a pulled
+   subtree back (append-only merge for sidecars/history, union-merge for decisions/manifest) (§5).
+8. LFB's logs (`launcher.log` / `log.log` / `error.err`) live **only** under the state root and are
+   **never** committed into a working repo nor mirrored into the sync repo (§8).
+9. Every non-default/error case in §7 holds: unwritable sync path → Local-Storage-only + WARN (never the
+   working repo); no sync repo → Local-Storage-only; `repoKey` collision detected via `origin.txt`; cloud
+   mount, permission error, relocated `.lfbridge/`, and de-listing all behave as specified — and a tracking
+   write **never** crashes a scan or user action.
+10. New/updated code exists and is cited: `resolveRepoStateDir(repoKey)` (state-dir.ts),
+    `resolveTrackingRoot()` / `resolveStateSyncRepo()` (tracking-root.service.ts), `mirrorToSyncRepo()` /
+    `reconcileFromSyncRepo()` (tracking-sync.service.ts), and the routed `refreshCounts()` /
+    `writeRepoStorage()` (repo-storage.service.ts).
 
 <!--
-  AUTHORITATIVE churn/placement policy for LFB's NOISY per-repo tracking files (repo_storage.yaml — which
-  re-stamps last_scan.at EVERY scan — + files.yaml, per-file sidecars, history/<device>.txt, counts).
-  CONTENT THRESHOLD (§1): write NOTHING into a repo's .lfbridge/ until the repo produced a durable USER
-  artifact (a .transcription OR a .ai_description); pre-threshold everything lives under the NEW state-root
-  dir ~/T/_large_files_bridge/repos/<repoKey>/ (repoKey = shortHash(resolve(path)), the storageSid scheme),
-  never touching git. THREE-TIER DECISION ORDER (§3): (1) owning company/personal STATE-SYNC repo →
-  <syncRepo>/repos/<repoKey>/ (ignores threshold; purpose-built to absorb churn); (2) else threshold
-  crossed AND settings/consent allow → <repoRoot>/.lfbridge/; (3) else state-root repos/<repoKey>/.
-  refreshCounts routes through resolveTrackingRoot so the per-scan re-stamp stops dirtying the repo (§6).
-  decisions.yaml/manifest.yaml stay committed travellers but are HELD in the state root pre-threshold w/ no
-  sync repo (§7). NO automatic migration — threshold governs FUTURE writes only; explicit Promote action
-  moves state in (§8). Radios (repo_settings) govern ARTIFACT layout only; repo-wide tracking files always
-  prefer .lfbridge/, never beside-media (§9). BIG error/edge catalogue (§11): unwritable sync path→Tier3+WARN,
-  deleted artifact→one-way latch, repoKey collision via origin.txt, non-git root, cloud mount, perms,
-  mid-scan flip, relocated .lfbridge/, de-list cleanup. Code: resolveRepoStateDir (state-dir.ts),
-  resolveTrackingRoot/promoteTrackingState (tracking.service.ts), hasDurableArtifact/resolveStateSyncRepo
-  (artifact-placement.service.ts), refreshCounts/writeRepoStorage (repo-storage.service.ts). This spec owns
-  the POLICY; storage_local §2.2b owns the state-root dir; repo_tracking_scheme §6 defers location here.
+  AUTHORITATIVE placement policy. SPLIT BY DATA CATEGORY (not a content threshold):
+  - Category A = user CONTENT (transcripts + AI descriptions) → working repo's committed .lfbridge/, travels
+    with the repo (placement radio lfbridge|beside|sync_repo, placement_radios.mdx).
+  - Category B = LFB's noisy tracking state (repo_storage.yaml w/ per-scan last_scan+counts, files.yaml,
+    per-file sidecars, history/<device>.txt, decisions.yaml, manifest.yaml, compression records) → NEVER the
+    working repo. Category B lives in LOCAL STORAGE ALWAYS at ~/T/_large_files_bridge/repos/<repoKey>/
+    (repoKey=shortHash(resolve(path)), never touches git → never merge-conflicts) and is ADDITIONALLY
+    mirrored to <syncRepo>/repos/<repoKey>/ when the owning company/Personal storage has a sync repo
+    configured AND the per-repo toggle is on (default OFF) — additive, not instead of. SUPERSEDES the earlier
+    content-threshold three-tier model: NO tier writes tracking into the working repo. refreshCounts routes
+    through resolveTrackingRoot → Local Storage (§6). decisions.yaml/manifest.yaml are Local-Storage-always,
+    travel via the sync repo (union-merge). Sync pass = mirrorToSyncRepo + reconcileFromSyncRepo (append-only
+    merge for sidecars/history). LOGS (launcher.log/log.log/error.err) live ONLY in the state root, NEVER
+    committed to a repo nor mirrored to the sync repo (§8) — the second half of the reported merge-conflict.
+    Code: resolveRepoStateDir (state-dir.ts), resolveTrackingRoot/resolveStateSyncRepo (tracking-root.service),
+    mirrorToSyncRepo/reconcileFromSyncRepo (tracking-sync.service), refreshCounts/writeRepoStorage
+    (repo-storage.service). This spec owns the POLICY; storage_local §2.2b owns the state-root dir;
+    repo_tracking_scheme owns the file shapes; placement_radios owns the Category-A radio.
 -->

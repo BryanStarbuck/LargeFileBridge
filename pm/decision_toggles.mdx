@@ -92,10 +92,12 @@ file, never selects the row. This mirrors the existing rule for the inline **Dec
 A click is **optimistic** and **immediate**:
 
 1. The toggle flips to the new state instantly (ON⇄OFF; a RECOMMENDED toggle flips straight to ON).
-2. LFBridge appends **one decision event** for **that axis only** to the repo's team-shared
-   `.lfbridge/decisions.yaml` ledger — with `decided_by` (the signed-in email), `decided_at`, the
-   Storage ID, the path, and the fingerprint ([decisions.mdx §3](./decisions.mdx#3-the-decision-record--every-field-and-why-locked)).
-   The other axis is untouched.
+2. LFBridge appends **one decision event** for **that axis only** to the repo's team-shared decision ledger
+   in Local Storage — `~/T/_large_files_bridge/repos/<repoKey>/decisions.yaml`
+   ([decisions.mdx §4](./decisions.mdx#4-where-it-lives--local-storage-always-shared-via-the-sync-repo-locked)) —
+   with `decided_by` (the signed-in email), `decided_at`, the Storage ID, the path, and the fingerprint
+   ([decisions.mdx §3](./decisions.mdx#3-the-decision-record--every-field-and-why-locked)). It never touches
+   the working repo, and travels to teammates via the sync repo when enabled. The other axis is untouched.
 3. The axis's **effect** is carried out by that axis's engine:
    * **Add-to-IPFS ON** → the file is added to the manifest, its CID recorded, pinned, and queued to
      peers ([one_repo.mdx §4.5](./one_repo.mdx), [pin_process.mdx](./pin_process.mdx)). OFF → removed
@@ -258,8 +260,10 @@ with the third **Compress** action axis.
    **ON** (medium-dark-orange fill, no edge, white glyph), **RECOMMENDED** (white fill, **dashed** orange
    edge), and **N/A** (not rendered).
 3. Clicking a toggle writes **one axis** of the **team-shared** decision immediately (optimistic, with
-   rollback on error), appending a `decided_by`/`decided_at`/SID event to `.lfbridge/decisions.yaml`, and
-   carries out that axis's effect (pin/unpin or `.gitignore` write) — never deleting local bytes.
+   rollback on error), appending a `decided_by`/`decided_at`/SID event to the Local-Storage ledger
+   `~/T/_large_files_bridge/repos/<repoKey>/decisions.yaml` (never the working repo; travels via the sync
+   repo when enabled), and carries out that axis's effect (pin/unpin or `.gitignore` write) — never
+   deleting local bytes.
 4. The **git-ignore** toggle renders **only** for files/dirs **under a repo**; it is a blank (aligned)
    N/A slot otherwise. The **pin** toggle renders for any large file.
 5. A **directory** ignore toggle and a **multi-row** flip open the confirm surface (Git-ignore pop-over /
@@ -279,8 +283,8 @@ with the third **Compress** action axis.
 The per-repo screen's **task tabs** ([task_tabs.mdx](./task_tabs.mdx)) add two per-row **status icons** — a
 **Transcribe** icon (on the Transcribe tab) and a **Compress** icon (on the Compress tab) — that **reuse this
 spec's 16×16 box grammar** (§1) so the user recognizes them instantly. They are **not** decision toggles,
-though: they show a *task's status*, not one axis of the two-axis decision, so they do **not** write to
-`.lfbridge/decisions.yaml`. Two differences from the decision toggles:
+though: they show a *task's status*, not one axis of the two-axis decision, so they do **not** write to the
+`decisions.yaml` ledger. Two differences from the decision toggles:
 
 * **The "done" fill is not orange.** A finished action reads in its own color — **blue** for a completed
   transcript, **green** for a completed compression — reserving solid orange for a decision that is *on*.
@@ -302,8 +306,10 @@ and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/Comp
   These are the inline UI for the two-axis decision (decisions.mdx). TWO toggles per row: Add-to-IPFS
   (pin) + Add-to-git-ignore (⊘). ONE visual grammar, FOUR states — OFF white/grey-edge · ON
   solid-orange/no-edge · RECOMMENDED white/dashed-orange (calc-engine suggestion, still Undecided) · N/A
-  not-rendered. A click = one single-axis decision EVENT into the shared .lfbridge/decisions.yaml +
-  that axis's effect; never deletes local bytes; optimistic w/ rollback. Git-ignore toggle is
+  not-rendered. A click = one single-axis decision EVENT into the shared Local-Storage ledger
+  ~/T/_large_files_bridge/repos/<repoKey>/decisions.yaml (Category B — never the working repo; travels via
+  the sync repo when enabled; decisions.mdx §4) + that axis's effect; never deletes local bytes; optimistic
+  w/ rollback. Git-ignore toggle is
   REPO-SCOPED (renders only under a repo); pin toggle is not. Directory ignore + multi-row flips open the
   git-ignore pop-over / bulk menu (never silent). Component: DecisionToggles.tsx. Keep aligned with
   decisions.mdx (ledger), git_ignore.mdx (engine), one_repo.mdx §4/§5 (table), directories.mdx §3 (badges),

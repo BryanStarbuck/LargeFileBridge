@@ -1,8 +1,9 @@
 // Transcription service (Transcribe.mdx). Wraps the in-process Transcribe engine (tools/transcribe) with
-// LFBridge's storage-aware placement: a transcript is written as a SIDECAR BESIDE the media — the media's
-// own base name with its extension replaced by `.transcription` (§3), mirrored under the owning storage's
-// placement root (no .transcribe/ directory). Also drives the "Transcribe all files" walks over a
-// directory / repo / storage. Explicit-user-action only (§7); reports truthfully per file (§6).
+// LFBridge's storage-aware placement: the transcript is written INSIDE the owning repo/storage's committed
+// `.lfbridge/` directory, path-mirrored, under the media's FULL filename with `.transcription` APPENDED as a
+// second extension (§3 — a/b/talk.mp3 → <root>/.lfbridge/a/b/talk.mp3.transcription; no .transcribe/ dir).
+// Also drives the "Transcribe all files" walks over a directory / repo / storage. Explicit-user-action
+// only (§7); reports truthfully per file (§6), and every non-success reaches error.err.
 import fs from "node:fs";
 import path from "node:path";
 import type { TranscribeResult, TranscribeBatchResult, TranscribeTools, TranscriptView, EnqueuePlan } from "@lfb/shared";
@@ -118,6 +119,13 @@ export async function transcribeOne(input: string, overwrite = false): Promise<T
     // user artifact, so its `.lfbridge/` tracking placement is justified from here on (a one-way latch).
     markDurableArtifact(root);
     log.info("transcribe", `${abs} → ${transcriptPath} (${r.words ?? 0} words, ${r.engineUsed})`);
+  } else if (status === "tool_missing" || status === "failed") {
+    // Report truthfully to the durable fault trail (Transcribe.mdx §1 "report truthfully" + charter logging):
+    // a non-success is a WARN/ERROR that must reach error.err, not a silent skip. tool_missing is a
+    // recoverable setup gap (WARN); a genuine failure is an ERROR.
+    const line = `${abs}: ${status} — ${r.reason ?? "no reason given"} (engine ${r.engineUsed})`;
+    if (status === "tool_missing") log.warn("transcribe", `not transcribed: ${line}`);
+    else log.error("transcribe", `transcription failed: ${line}`);
   }
   return result(abs, status, r.outputPath, r.words, r.reason);
 }
@@ -129,6 +137,9 @@ export async function transcribeMany(inputs: string[], overwrite = false): Promi
     try {
       results.push(await transcribeOne(p, overwrite));
     } catch (e) {
+      // An unexpected throw from transcribeOne (placement/config/engine crash) must hit the durable fault
+      // trail — otherwise a whole batch can "fail" with nothing in error.err (the reported symptom).
+      log.error("transcribe", `transcribeOne threw for ${p}: ${(e as Error).stack ?? (e as Error).message}`);
       results.push(result(p, "failed", null, null, (e as Error).message));
     }
   }

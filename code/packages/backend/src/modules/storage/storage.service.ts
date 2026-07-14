@@ -150,8 +150,9 @@ function omit(o: Record<string, any>, keys: string[]): Record<string, unknown> {
 export function ensureStorage(root: string, type: StorageType, extras?: Partial<StorageDescriptor>): StorageDescriptor {
   if (!safeIsDir(root)) throw new Error(`not a directory: ${root}`);
   fs.mkdirSync(path.join(root, LFBRIDGE_DIR), { recursive: true });
-  // A repo storage ignores .lfbridge/; an SDL repo (personal/company/community) must COMMIT it so the
-  // device registry travels between computers (storage_personal.mdx §1).
+  // `.lfbridge/` is NEVER git-ignored now — it holds only committed content (repo: transcripts / AI
+  // descriptions) or device text (SDL); the noisy tracking state moved to Local Storage. Heal any repo a
+  // prior build wrongly ignored so those files can travel (artifact_placement_policy.mdx §1).
   if (exists(path.join(root, ".git"))) reconcileLfbridgeIgnore(root, type);
   // Record THIS computer in the storage's travelling device registry (devices.mdx §2). Self-owned write,
   // best-effort — a device-file failure must never block initializing the storage.
@@ -180,60 +181,30 @@ export function ensureStorage(root: string, type: StorageType, extras?: Partial<
 
 /**
  * Register a Git repo as a repo storage (storage_repo.mdx §2): place `storage.yaml` (name = repo folder
- * name, type: repo, repo_root) and the hidden `.lfbridge/` at the repo root, and add `.lfbridge/` to the
- * repo's `.gitignore` so tracking never bloats commits. Idempotent — an existing descriptor is returned
- * unchanged. Thin, repo-typed wrapper over `ensureStorage`; the entry point the repos module calls when a
- * repo is registered/discovered.
+ * name, type: repo, repo_root) at the repo root. The repo's own `.lfbridge/` now holds ONLY the user's
+ * committed CONTENT artifacts (transcripts / AI descriptions) and is NO LONGER git-ignored — LFB's noisy
+ * tracking state lives in Local Storage (`repos/<repoKey>/`, artifact_placement_policy.mdx §2). Idempotent —
+ * an existing descriptor is returned unchanged. Thin, repo-typed wrapper over `ensureStorage`.
  */
 export function ensureRepoStorage(repoRoot: string): StorageDescriptor {
   const desc = ensureStorage(repoRoot, "repo", { repo: { repoRoot } });
-  // repo_tracking_scheme.mdx §1/§2: on enlist also seed the repo-WIDE `repo_storage.yaml` and create the
-  // `history/` + `files/` subdirs (`.lfbridge/` itself is created by ensureStorage and added to .gitignore
-  // by reconcileLfbridgeIgnore above). All gated on the keep-`.lfbridge/` consent, best-effort so a seeding
-  // failure never blocks enlisting the repo. Lazy require to avoid a module-eval cycle (repo-storage.service
-  // imports storageSid from here) — same pattern as the storage-settings / devices imports above.
+  // repo_tracking_scheme.mdx §1/§2: on enlist seed the repo-WIDE `repo_storage.yaml` in LOCAL STORAGE
+  // (repos/<repoKey>/ — never the working repo). Best-effort so a seeding failure never blocks enlisting.
   try {
-    if (keepsLfbridgeFor(repoRoot)) {
-      fs.mkdirSync(path.join(repoRoot, LFBRIDGE_DIR, "history"), { recursive: true });
-      fs.mkdirSync(path.join(repoRoot, LFBRIDGE_DIR, "files"), { recursive: true });
-      ensureRepoStorageDoc(repoRoot);
-    }
+    ensureRepoStorageDoc(repoRoot);
   } catch (e) {
-    log.warn("storage", `seed repo_storage artifacts at ${repoRoot} failed: ${(e as Error).message}`);
+    log.warn("storage", `seed repo_storage doc for ${repoRoot} failed: ${(e as Error).message}`);
   }
   return desc;
 }
 
-/** Whether THIS computer keeps `.lfbridge/` for this repo (decisions.mdx §6 consent). Default ON. */
-function keepsLfbridgeFor(repoRoot: string): boolean {
-  try {
-    return readStorageSettings(storageSid(repoRoot)).lfbridge.enabled;
-  } catch {
-    return true;
-  }
-}
-
-// A REPO storage is the user's own *code* repo — keep the `.lfbridge/` tracking area OUT of their commits
-// (storage_repo.mdx §2). This is the ONLY storage type that ignores `.lfbridge/`.
-function ignoreLfbridge(root: string): void {
-  const gi = path.join(root, ".gitignore");
-  let body = "";
-  try {
-    body = fs.readFileSync(gi, "utf8");
-  } catch {
-    /* no .gitignore yet */
-  }
-  if (/^\.lfbridge\/?\s*$/m.test(body)) return;
-  const prefix = body && !body.endsWith("\n") ? `${body}\n` : body;
-  fs.writeFileSync(gi, `${prefix}.lfbridge/\n`, "utf8");
-}
-
-// For an SDL-repo storage (personal / company / community backed by a dedicated Git repo), the `.lfbridge/`
-// text — the device registry, the manifest — IS the payload that must travel between the user's computers
-// (storage_personal.mdx §1). It must NOT be git-ignored. Heal a repo that a prior build (or the user)
-// wrongly ignored by REMOVING a bare `.lfbridge/` line from `.gitignore`, so device files can be committed
-// and pushed. Without this, two computers never see each other's device YAML. Idempotent; leaves the
-// big-file byte ignores untouched (and those bytes live outside the SDL repo anyway).
+// The `.lfbridge/` at a git-backed storage root now holds ONLY files that are MEANT to be committed:
+// for a repo storage the user's CONTENT artifacts (transcripts / AI descriptions,
+// artifact_placement_policy.mdx §1), and for an SDL storage the device registry (storage_personal.mdx §1).
+// LFB's noisy tracking state no longer lives here — it is in Local Storage — so `.lfbridge/` must NOT be
+// git-ignored for ANY storage type. Heal a repo that a prior build (or the user) wrongly ignored by REMOVING
+// a bare `.lfbridge/` line from `.gitignore`, so committed content/device files can travel. Idempotent;
+// leaves the big-file byte ignores (`*.mp4`, …) untouched.
 function unignoreLfbridge(root: string): void {
   const gi = path.join(root, ".gitignore");
   let body: string;
@@ -249,11 +220,11 @@ function unignoreLfbridge(root: string): void {
   log.info("storage", `removed '.lfbridge/' from .gitignore at ${root} — SDL text must be committed for a Git backbone`);
 }
 
-// Keep a git-backed storage's `.gitignore` correct for its type: a plain code repo ignores `.lfbridge/`;
-// an SDL repo (personal/company/community) must commit it so the device registry travels.
-function reconcileLfbridgeIgnore(root: string, type: StorageType): void {
-  if (type === "repo") ignoreLfbridge(root);
-  else unignoreLfbridge(root);
+// Keep a git-backed storage's `.gitignore` correct: `.lfbridge/` is NEVER git-ignored anymore (it holds only
+// committed content / device text; the noisy tracking state moved to Local Storage). Heal any storage a
+// prior build wrongly ignored, regardless of type.
+function reconcileLfbridgeIgnore(root: string, _type: StorageType): void {
+  unignoreLfbridge(root);
 }
 
 // ── discovery ─────────────────────────────────────────────────────────────────

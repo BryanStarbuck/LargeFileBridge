@@ -102,7 +102,7 @@ export function RepoSettingsPage() {
       <Section title="Pinning / fetch policy">
         <Toggle label="Pin locally" checked={s.pin.pinLocally} onChange={(v) => patch.mutate({ pin: { ...s.pin, pinLocally: v } })} />
         <Toggle label="Fetch missing from peers" checked={s.pin.fetchMissing} onChange={(v) => patch.mutate({ pin: { ...s.pin, fetchMissing: v } })} />
-        <Toggle label="Publish committed manifest (git carries the list)" checked={s.pin.publishManifest} onChange={(v) => patch.mutate({ pin: { ...s.pin, publishManifest: v } })} />
+        <Toggle label="Publish manifest (kept in Local Storage; travels via the sync repo)" checked={s.pin.publishManifest} onChange={(v) => patch.mutate({ pin: { ...s.pin, publishManifest: v } })} />
       </Section>
 
       {s.transcription && (
@@ -121,6 +121,21 @@ export function RepoSettingsPage() {
           value={s.aiDescription.placement}
           onChange={(v) => patch.mutate({ aiDescription: { placement: v } })}
         />
+      )}
+
+      {s.syncRepo && (
+        <Section title="Company sync repo">
+          <Toggle
+            label="Sync this repo's tracking state to the company sync repo"
+            checked={s.syncRepo.enabled}
+            onChange={(v) => patch.mutate({ syncRepo: { enabled: v } })}
+          />
+          <p style={{ margin: "4px 0 0", fontSize: 12, opacity: 0.7 }}>
+            Off by default — Large File Bridge keeps this repo's compression, big-file, and git-ignore
+            tracking in Local Storage, never in the working repo. Turn this on to also mirror it to the
+            owning company or Personal storage's sync repo so it travels to your other computers.
+          </p>
+        </Section>
       )}
 
       <Section title="Sharing">

@@ -1,17 +1,18 @@
-// `repo_storage.yaml` — the repo-WIDE settings-and-state file (repo_tracking_scheme.mdx §2). Lives at
-// `<repo>/.lfbridge/repo_storage.yaml`, a git-ignored WORKING artifact (not a committed traveller). HARD
-// SCHEMA RULE: the ONLY level-one key is `repo_storage:` — everything else nests below it. Written
-// automatically on enlist, then updated by every scan and user action; serialized DETERMINISTICALLY
-// (stable key order, no volatile timestamps beyond the recorded ones) so git-ignored diffs stay legible,
-// and ATOMICALLY (temp → fsync → rename) like the decision ledger (decisions.service.ts writeLedger).
+// `repo_storage.yaml` — the repo-WIDE settings-and-state file (repo_tracking_scheme.mdx §2). It is
+// Category-B tracking state, so it lives in LOCAL STORAGE at `~/T/_large_files_bridge/repos/<repoKey>/
+// repo_storage.yaml` (resolved by `resolveTrackingRoot()`), NEVER inside a working repo — which is exactly
+// why it can no longer merge-conflict (it re-stamps `last_scan.at` + `counts:` on EVERY scan). When the
+// owning company/Personal storage has a sync repo configured and the per-repo toggle is on, it is
+// ADDITIONALLY mirrored to `<syncRepo>/repos/<repoKey>/` (mirrorToSyncRepo). HARD SCHEMA RULE: the ONLY
+// level-one key is `repo_storage:`. Written automatically on enlist, then updated by every scan and user
+// action; serialized DETERMINISTICALLY (stable key order) and ATOMICALLY (temp → fsync → rename).
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { RepoStorageDocSchema, type RepoStorageDoc } from "@lfb/shared";
 import { readStorageIndex, analysisOutputs } from "./tracking.service.js";
 import { resolveTrackingRoot } from "./tracking-root.service.js";
-import { storageSid } from "./storage.service.js";
-import { readStorageSettings } from "./storage-settings.service.js";
+import { mirrorToSyncRepo } from "./tracking-sync.service.js";
 import { selfDeviceName } from "./devices.service.js";
 import { getAppConfig } from "../store-model/config.service.js";
 import {
@@ -23,64 +24,77 @@ import { log } from "../../shared/logging.js";
 
 // ── paths + consent (same pattern as decisions.service.ts) ─────────────────────
 
-/** WHERE this repo's tracking files live (artifact_placement_policy.mdx §3). Pre-threshold (the repo has
- *  never been transcribed/described) this is the machine-local state root — NOT `<repo>/.lfbridge/` — so
- *  `repo_storage.yaml` never churns a git working tree the user didn't opt into. Honors a relocated
- *  `.lfbridge/` and the keep-`.lfbridge/` consent (both read from the owning storage's settings). */
+/** WHERE this repo's tracking files live (artifact_placement_policy.mdx §2): always the Local-Storage
+ *  `~/T/_large_files_bridge/repos/<repoKey>/` dir — NEVER a working repo — so `repo_storage.yaml` never
+ *  churns or merge-conflicts a git working tree. */
 function trackingDir(repoRoot: string): string {
-  let relocated: string | null | undefined;
-  let keeps = true;
-  try {
-    const lf = readStorageSettings(storageSid(repoRoot)).lfbridge;
-    relocated = lf.path;
-    keeps = lf.enabled;
-  } catch {
-    /* no per-storage settings yet → defaults (keep .lfbridge/, no relocation) */
-  }
-  return resolveTrackingRoot(repoRoot, { relocated, keepsLfbridge: keeps });
+  return resolveTrackingRoot(repoRoot);
 }
 
 function repoStoragePath(repoRoot: string): string {
   return path.join(trackingDir(repoRoot), "repo_storage.yaml");
 }
 
-/** Whether THIS computer keeps `.lfbridge/` for this repo (decisions.mdx §6 consent). Default ON. */
-function keepsLfbridge(repoRoot: string): boolean {
-  try {
-    return readStorageSettings(storageSid(repoRoot)).lfbridge.enabled;
-  } catch {
-    return true; // documented default: keep .lfbridge/
-  }
-}
 
 // ── read / write ───────────────────────────────────────────────────────────────
 
-/** Read `<repo>/.lfbridge/repo_storage.yaml` (missing/corrupt → schema defaults). */
+// Dedupe the "schema mismatch" WARN so a repeatedly-read bad file logs it ONCE per process, not on every
+// read (a scan/refreshCounts pass reads this file constantly). Keyed by absolute file path; cleared
+// implicitly on process restart. A file that later parses cleanly (e.g. the next writeRepoStorage()
+// overwrites it) simply never re-adds to the set.
+const warnedSchemaMismatch = new Set<string>();
+
+/** Read `repo_storage.yaml` from Local Storage (`resolveTrackingRoot()`); missing/corrupt → schema defaults. */
 export function readRepoStorage(repoRoot: string): RepoStorageDoc {
   const file = repoStoragePath(repoRoot);
-  let parsed: unknown;
+  let raw: string;
   try {
-    parsed = YAML.parse(fs.readFileSync(file, "utf8")) ?? {};
+    raw = fs.readFileSync(file, "utf8");
   } catch (e) {
+    // ENOENT is the NORMAL, expected case for a repo that hasn't been seeded/enlisted yet (or is mid-seed) —
+    // refreshCounts() calls readRepoStorage() unconditionally, so this fires constantly and must stay
+    // silent. Only a genuine I/O error (permissions, etc.) is worth a WARN.
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
       log.warn("storage", `repo_storage read failed (using defaults): ${file}: ${(e as Error).message}`);
     }
-    parsed = {};
-  }
-  const result = RepoStorageDocSchema.safeParse(parsed);
-  if (!result.success) {
-    log.warn("storage", `repo_storage schema mismatch (using defaults): ${file}: ${result.error.message}`);
     return RepoStorageDocSchema.parse({ repo_storage: {} });
   }
-  return result.data;
+
+  let parsed: unknown;
+  try {
+    parsed = YAML.parse(raw) ?? {};
+  } catch (e) {
+    log.warn("storage", `repo_storage parse failed (using defaults): ${file}: ${(e as Error).message}`);
+    return RepoStorageDocSchema.parse({ repo_storage: {} });
+  }
+
+  const result = RepoStorageDocSchema.safeParse(parsed);
+  if (result.success) return result.data;
+
+  // Tolerant migration: a pre-redesign file whose content is flat (no `repo_storage:` wrapper key) — lift it
+  // under the root key and re-validate rather than discarding it. Covers a legacy/foreign-shaped file that
+  // wandered in (e.g. via an older build, or a sync-repo mirror written before the wrapper rule existed).
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && !("repo_storage" in parsed)) {
+    const lifted = RepoStorageDocSchema.safeParse({ repo_storage: parsed });
+    if (lifted.success) return lifted.data;
+  }
+
+  // A genuine, unmigratable mismatch — warn ONCE per file per process, not on every read.
+  if (!warnedSchemaMismatch.has(file)) {
+    warnedSchemaMismatch.add(file);
+    log.warn("storage", `repo_storage schema mismatch (using defaults): ${file}: ${result.error.message}`);
+  }
+  return RepoStorageDocSchema.parse({ repo_storage: {} });
 }
 
 /**
- * Write `repo_storage.yaml` deterministically + atomically (single `repo_storage:` root key). Gated on the
- * keep-`.lfbridge/` consent — with consent OFF, writes NOTHING into the repo root (decisions.mdx §6).
+ * Write `repo_storage.yaml` deterministically + atomically (single `repo_storage:` root key) to LOCAL STORAGE
+ * (`repos/<repoKey>/`). Not gated on the keep-`.lfbridge/` consent — that consent governs only the in-repo
+ * Category-A artifacts; tracking state always lands in Local Storage, which never touches the working repo.
+ * After a successful write, best-effort mirrors the repo's tracking subtree into the owning storage's sync
+ * repo when one is configured (additive; no-op by default) — artifact_placement_policy.mdx §2/§4.
  */
 export function writeRepoStorage(repoRoot: string, doc: RepoStorageDoc): void {
-  if (!keepsLfbridge(repoRoot)) return; // consent off → never touch the repo root
   const normalized = RepoStorageDocSchema.parse(doc); // fill defaults + fix key set
   const dir = trackingDir(repoRoot);
   try {
@@ -99,6 +113,7 @@ export function writeRepoStorage(repoRoot: string, doc: RepoStorageDoc): void {
     fs.fsyncSync(fd);
     fs.closeSync(fd);
     fs.renameSync(tmp, file);
+    warnedSchemaMismatch.delete(file); // a fresh, schema-conforming write — re-arm the mismatch warning
   } catch (e) {
     try {
       fs.unlinkSync(tmp);
@@ -108,6 +123,9 @@ export function writeRepoStorage(repoRoot: string, doc: RepoStorageDoc): void {
     log.error("storage", `repo_storage write failed: ${file}: ${(e as Error).message}`);
     throw e;
   }
+  // Additive: carry this repo's tracking state to the company/Personal sync repo when configured (default
+  // off → no-op). Local Storage stays authoritative; the mirror is the travel vehicle.
+  mirrorToSyncRepo(repoRoot);
 }
 
 /**

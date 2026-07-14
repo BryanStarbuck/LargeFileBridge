@@ -22,8 +22,9 @@ Siblings this builds on and does not repeat:
 * [menus.mdx §5](./menus.mdx) — the per-entity **"Git ignore"** catalog items (repo / directory / file)
   that open this same dialog.
 * [git_backbone.mdx](./git_backbone.mdx) — the **Git backbone engine**: which git operations LFB may run, and the
-  `.gitattributes`/`.gitignore` rules a git-backbone tree already lives under. The content rules in §5 honor it
-  (never git-ignore the `.lfbridge/` SDL text, [git_backbone.mdx §4.2.1](./git_backbone.mdx)).
+  `.gitattributes`/`.gitignore` rules a git-backbone (sync) tree already lives under. The content rules in §5
+  honor it (never git-ignore a committed `.lfbridge/` path — the sync repo's tracking payload or a working
+  repo's Category-A content, [git_backbone.mdx §4.2.1](./git_backbone.mdx)).
 * [directories.mdx §3](./directories.mdx) — the code-badge vocabulary; applying an ignore lights up the new
   **`I` git-ignored badge** ([directories.mdx §3.4a](./directories.mdx)).
 * [file_system.mdx §5.1](./file_system.mdx) — the deepest-column scope rule this **generalizes** into
@@ -214,9 +215,13 @@ un-anchored name for a specific path.
   repo's own `.gitignore`**, one grouped block per repo — never a single shared file.
 * A path in **no git repo** cannot be git-ignored (git-ignore only means something inside a repo). Such
   paths are **excluded** with the §3 "not in a git repo" note; they are never written anywhere.
-* The `.lfbridge/` SDL text is **never** git-ignored ([git_backbone.mdx §4.2.1](./git_backbone.mdx)) — the engine
-  refuses to emit any line that would ignore a `.lfbridge/` path, as defense-in-depth against the historical
-  defect.
+* A `.lfbridge/` path is **never** git-ignored — the engine refuses to emit any line that would ignore one,
+  as defense-in-depth. In a **working repo**, `.lfbridge/` holds only the committed **Category-A** content
+  (transcripts + AI descriptions) that is *meant* to travel with the repo
+  ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)); in a dedicated **SDL / sync repo** it
+  holds the committed tracking payload ([git_backbone.mdx §4.2.1](./git_backbone.mdx)). Either way, ignoring
+  it would break travel — so the refusal stands. (LFB's noisy Category-B tracking state was moved out of the
+  working repo entirely, so there is nothing churny under `.lfbridge/` to worry about.)
 
 ### 5.4 Idempotent, skip-already-ignored, append-only (LOCKED)
 

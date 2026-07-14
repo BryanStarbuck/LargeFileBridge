@@ -55,14 +55,22 @@ export async function transcribeWithEngine(
   if (id === "qwen") {
     try {
       const r = await qwen.transcribeToFile(inputFile, outputPath, opts.onProgress);
-      // A clean result (or a genuine no-audio) is authoritative. tool_missing / failed fall through to
-      // Whisper when the fallback is allowed.
-      if (r.status === "transcribed" || r.status === "no_audio" || !allowFallback) {
+      // A clean result (or a genuine no-audio) is authoritative.
+      if (r.status === "transcribed" || r.status === "no_audio") {
+        return { ...r, engineUsed: "qwen" };
+      }
+      // tool_missing / failed: fall through to Whisper when allowed; otherwise this IS the final outcome —
+      // log it here so a pinned-`qwen`, no-fallback failure is never silent (transcribe_engine.mdx §2.1).
+      if (!allowFallback) {
+        log.error("transcribe", `qwen ${r.status} for ${inputFile} (${r.reason ?? "no reason given"}) — fallback disabled (engine pinned to qwen)`);
         return { ...r, engineUsed: "qwen" };
       }
       log.warn("transcribe", `qwen returned ${r.status} (${r.reason ?? ""}) — falling back to whisper for ${inputFile}`);
     } catch (e) {
-      if (!allowFallback) throw e;
+      if (!allowFallback) {
+        log.error("transcribe", `qwen threw for ${inputFile} (${(e as Error).message}) — fallback disabled (engine pinned to qwen)`);
+        throw e;
+      }
       log.warn("transcribe", `qwen threw (${(e as Error).message}) — falling back to whisper for ${inputFile}`);
     }
     const r2 = await whisper.transcribeToFile(inputFile, outputPath, opts.onProgress);

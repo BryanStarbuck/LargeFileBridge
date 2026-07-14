@@ -1,21 +1,20 @@
 ---
-title: LargeFileBridge — Use-Case Tour — a churn-free code repo (media enlisted, scanned for weeks, never described/transcribed)
-description: The end-to-end scenario tour that proves the CHURN POLICY — LargeFileBridge must NOT write a repo's committed .lfbridge/ tracking files (repo_storage.yaml re-stamped every scan, the per-file sidecars, the history log) until that repo has produced a DURABLE USER ARTIFACT — a transcript OR an AI description ("the content threshold"). A developer adds a plain code repo full of big ProRes renders to Large File Bridge, scans it over six weeks, pins and git-ignores files, decides on things, and NEVER transcribes or describes any file — and across all of it the repo's working tree stays pristine: no .lfbridge/ directory, no untracked noise, zero git churn. All per-repo tracking sits in the state root at ~/T/_large_files_bridge/repos/<repoKey>/ (never touches git). Repeated scans re-stamp the counts THERE and only there. Then the developer transcribes ONE clip — the content threshold is crossed — and the tour shows exactly what migrates into the now-justified committed .lfbridge/ and what stays in the state root. Covers the awkward branches: repeated scans re-stamping in the state root only, removing the repo cleaning up its state-root directory, the AI-description-first variant (threshold crossed with no transcript), and the company/personal STATE-SYNC REPO override that routes pre-threshold tracking to <syncRepo>/repos/<repoKey>/ instead. Each week states what the user does, what LargeFileBridge does automatically, exactly what it writes and WHERE, and what we DOUBLE-CHECK. Sibling of artifact_placement_policy.mdx (the churn policy this tour proves), repo_tracking_scheme.mdx (the .lfbridge/ scheme whose auto-on-enlist behavior the policy defers), storage_local.mdx (the state root that holds repos/<repoKey>/), Transcribe.mdx + ai_description.mdx (the two durable artifacts that cross the threshold), decisions.mdx (the pin/ignore decisions that do NOT cross it), and use_case_two_computers.mdx (the tour whose enlist-writes-.lfbridge behavior this one qualifies).
+title: LargeFileBridge — Use-Case Tour — a churn-free code repo (media enlisted, scanned for weeks, tracking state never enters the working tree)
+description: The end-to-end scenario tour that proves the CHURN POLICY under the data-category split — LargeFileBridge must NEVER write a repo's compression / big-file / git-ignore TRACKING STATE (repo_storage.yaml re-stamped every scan, files.yaml, the per-file sidecars, history/<device>.txt, decisions.yaml, manifest.yaml, compression records) into the working repo. A developer adds a plain code repo full of big ProRes renders to Large File Bridge, scans it over six weeks, pins and git-ignores files, decides on things, compresses clips, and NEVER transcribes or describes any file — and across all of it the repo's working tree stays pristine of tracking state: no tracking files under .lfbridge/, no untracked noise, zero scan-driven git churn. ALL tracking state (Category B) lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ (repoKey = shortHash of the resolved absolute repo path) — machine-local, never touching git, so it can never merge-conflict. Repeated scans re-stamp the counts THERE and only there. Then the developer transcribes ONE clip — a durable CONTENT artifact (Category A) — and the tour shows that the transcript lands in the repo's committed .lfbridge/ while the tracking state STAYS in Local Storage and does NOT migrate into the repo. Covers the awkward branches: repeated scans re-stamping in Local Storage only, removing the repo cleaning up its Local-Storage directory, the AI-description-first variant (content artifact with no transcript), and the company/personal SYNC REPO that ADDITIONALLY mirrors the always-in-Local-Storage tracking to <syncRepo>/repos/<repoKey>/. Each week states what the user does, what LargeFileBridge does automatically, exactly what it writes and WHERE, and what we DOUBLE-CHECK. Sibling of artifact_placement_policy.mdx (the data-category placement policy this tour proves), repo_tracking_scheme.mdx (the Category-B tracking files and where they live), storage_local.mdx (the state root that holds repos/<repoKey>/), Transcribe.mdx + ai_description.mdx (the two Category-A content artifacts), decisions.mdx (the pin/ignore decision ledger, itself Category B), and use_case_two_computers.mdx (the two-computer tour whose enlist behavior this one complements).
 ---
 
 # LargeFileBridge — Churn-Free Repo Tour (a code repo full of media that is never described or transcribed)
 
-This is a **chronological scenario tour**. Where [use_case_two_computers.mdx](./use_case_two_computers.mdx)
-walks a repo whose enlist **immediately** writes `.lfbridge/`, this document walks the **opposite, and now
-default, case**: a repo that fills up with big media, is scanned week after week, and is **never** given a
-transcript or an AI description — so it **never earns** the right to have LargeFileBridge write committed
-tracking files into it. It answers *"what actually happens, week by week, when a repo stays below the
-content threshold — and exactly what changes the moment it crosses."* In doing so it exercises **every**
-branch of the [artifact placement / churn policy](./artifact_placement_policy.mdx): the deferred
-`.lfbridge/`, the state-root home, the re-stamp-in-place, the threshold crossing, the cleanup on removal,
-and the state-sync-repo override.
+This is a **chronological scenario tour**. It walks a repo that fills up with big media, is scanned week
+after week, and is **never** given a transcript or an AI description — proving that a repo can be enlisted,
+scanned, pinned, git-ignored, decided-on, and compressed and **still** never accrue a single LFB tracking
+file in its working tree. It answers *"what actually happens, week by week, and exactly where each write
+lands"* under the [data-category placement policy](./artifact_placement_policy.mdx): the **working repo
+carries only content** (transcripts / AI descriptions), while **all of LFB's tracking state lives in Local
+Storage** and never enters git.
 
-The through-line, in one sentence: **a scan must never dirty a customer's git working tree.**
+The through-line, in one sentence: **a scan must never dirty a customer's git working tree — LFB's
+bookkeeping stays out of the repo entirely.**
 
 One computer, one repo, six weeks and one day:
 
@@ -27,53 +26,59 @@ One computer, one repo, six weeks and one day:
 
 This spec builds on the siblings and does not repeat them:
 
-* [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) — **the churn policy this tour proves**:
-  the content threshold (transcript **or** AI description), the deferred committed `.lfbridge/`, the
-  `~/T/_large_files_bridge/repos/<repoKey>/` state-root home, and the state-sync-repo override.
-* [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx) — the `.lfbridge/` files (`repo_storage.yaml`, the
-  per-file sidecars, `history/<device>.txt`). This tour shows their **auto-on-enlist** creation
-  ([repo_tracking_scheme.mdx §2](./repo_tracking_scheme.mdx)) being **deferred** by the churn policy until
-  the threshold is crossed.
-* [storage_local.mdx](./storage_local.mdx) — the **state root** (`~/T/_large_files_bridge/`) whose new
-  `repos/<repoKey>/` subtree holds the pre-threshold per-repo tracking.
-* [Transcribe.mdx](./Transcribe.mdx) / [ai_description.mdx](./ai_description.mdx) — the **two durable
-  artifacts** that cross the threshold (a `.transcription` or a `.ai_description` under `.lfbridge/`).
-* [decisions.mdx](./decisions.mdx) — the pin / git-ignore decisions the developer **does** make, which are
-  team-shared but do **not** by themselves cross the threshold.
+* [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) — **the placement policy this tour
+  proves**: the data-category split (Category A content vs. Category B tracking state), the
+  `~/T/_large_files_bridge/repos/<repoKey>/` Local-Storage home, the re-stamp-in-place, and the additive
+  company sync-repo mirror.
+* [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx) — the Category-B tracking files (`repo_storage.yaml`,
+  the per-file sidecars, `history/<device>.txt`, `decisions.yaml`, `manifest.yaml`) and their locked shapes.
+  This tour shows them written **only** to Local Storage.
+* [storage_local.mdx](./storage_local.mdx) — the **state root** (`~/T/_large_files_bridge/`) whose
+  `repos/<repoKey>/` subtree is the always-home for per-repo tracking.
+* [Transcribe.mdx](./Transcribe.mdx) / [ai_description.mdx](./ai_description.mdx) — the **two durable content
+  artifacts** (Category A) that are the *only* things LFB ever writes into the working repo's `.lfbridge/`.
+* [decisions.mdx](./decisions.mdx) — the pin / git-ignore decision ledger the developer **does** produce; it
+  is Category-B tracking state, so it lives in Local Storage (and the sync repo, if enabled), not the repo.
 
 ---
 
-## 0. The setup — what the content threshold is, and why enlist no longer writes `.lfbridge/`
+## 0. The setup — the data-category split, and why enlist never writes tracking into the repo
 
 A **repo storage** is enlisted the moment LFB knows about it, but under the
-[churn policy](./artifact_placement_policy.mdx) enlist **no longer writes anything into the repo's working
-tree**. The rule, stated once:
+[placement policy](./artifact_placement_policy.mdx) enlist **writes no tracking state into the repo's working
+tree** — not on enlist, not ever. The rule, stated once as a split by **data category**:
 
-> **LargeFileBridge does not write the repo's committed `.lfbridge/` tracking files** — `repo_storage.yaml`
-> (which is **re-stamped every scan**, so it is the worst churn offender), the per-file `files/…` sidecars,
-> and `history/<device>.txt` — **until the repo has produced a durable user artifact**: a **transcript** or
-> an **AI description**. That event is **the content threshold**. Before it, all per-repo tracking lives in
-> the **state root** at **`~/T/_large_files_bridge/repos/<repoKey>/`**, which is never git.
+> **Category A — content.** Transcripts (`.transcription`) and AI descriptions (`.ai_description`) are stable,
+> content-derived artifacts the user asked LFB to *produce*. These are written into the **working repo's
+> committed `.lfbridge/`**, path-mirrored, and travel with the repo via its own git.
+>
+> **Category B — tracking state.** `repo_storage.yaml` (which **re-stamps `last_scan.at` and recomputes
+> `counts:` on every scan**), `files.yaml`, the per-file `files/…` sidecars, `history/<device>.txt`,
+> `decisions.yaml`, `manifest.yaml`, and compression records are LFB's private bookkeeping about compression,
+> big files, and git-ignore decisions. **None of it ever enters the working repo.** It lives in **Local
+> Storage** at **`~/T/_large_files_bridge/repos/<repoKey>/`** (`repoKey = shortHash(resolve(repoPath))`),
+> which never touches git.
 
 The reasoning is a direct reading of the charter: LFB's whole job is to keep a user's git **clean**, so it
 must not be the thing that fills a code repo with churny bookkeeping the user never asked for. A
 `repo_storage.yaml` whose `counts:` and `last_scan:` change on **every** scan would produce a git-status
-change (or, if `.lfbridge/` is git-ignored, an untracked directory) on a cadence the user did not initiate.
-So we **wait for a signal that the user actually wants LFB deeply involved in this repo** — and the honest
-signal is that they generated a **durable artifact** (a transcript / description) that *itself* belongs in
-the committed `.lfbridge/` and *itself* travels with the repo. Once such an artifact exists, the tracking
-files ride alongside it and their churn is justified; before it, they stay out.
+change (or, if `.lfbridge/` were git-ignored, an untracked directory) on a cadence the user did not initiate.
+That is exactly the merge conflict this policy exists to prevent — so **all** of Category B goes to Local
+Storage, categorically, and the working repo carries **only** the content the user deliberately generated.
 
-**What crosses the threshold (durable artifacts):** producing a **transcript** ([Transcribe.mdx](./Transcribe.mdx))
-or an **AI description** ([ai_description.mdx](./ai_description.mdx)) for any file in the repo.
+**What goes into the working repo (Category A content):** a **transcript** ([Transcribe.mdx](./Transcribe.mdx))
+or an **AI description** ([ai_description.mdx](./ai_description.mdx)) for a file in the repo. Producing one is
+the *only* thing that ever creates a `.lfbridge/` directory in the working tree.
 
-**What does NOT cross it (everyday tracking):** scanning, classifying, pinning, git-ignoring, deciding
-(Add-to-IPFS / Add-to-git-ignore), compressing, computing perceptual fingerprints. All of these are
-recorded — but **in the state root**, not the repo — until a durable artifact exists.
+**What NEVER goes into the working repo (Category B tracking):** scanning, classifying, pinning,
+git-ignoring, deciding (Add-to-IPFS / Add-to-git-ignore), compressing, computing perceptual fingerprints.
+All of these are recorded — but **in Local Storage**, never the repo, regardless of whether a transcript ever
+exists. (Git-ignoring a big file does edit the repo's own **`.gitignore`** — that is the user-requested
+working-tree action itself, not tracking state.)
 
-Deferring the repo's `.lfbridge/` writes until the threshold, and routing pre-threshold tracking to the
-state root, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `repoHasDurableArtifact(repoRoot)` / `trackingRootFor(repoKey)` (returns `~/T/_large_files_bridge/repos/<repoKey>/` until `repoHasDurableArtifact` is true, then the repo's `.lfbridge/`).
+Resolving the always-in-Local-Storage tracking root for a repo (and the optional additive company sync-repo
+mirror) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveTrackingRoot(repoRoot)` (always returns `~/T/_large_files_bridge/repos/<repoKey>/`, never the working repo) and `resolveStateSyncRepo(repoRoot)` (returns `<syncRepo>/repos/<repoKey>/` or `null`).
 
 ---
 
@@ -81,13 +86,13 @@ state root, is handled in code:
 
 | Week | What the developer does | What LFB does automatically | New LFB writes — and **where** |
 | --- | --- | --- | --- |
-| **1** | Adds `render-farm` to Large File Bridge. 8 ProRes clips present. | Enlists; classifies; **does not** touch the working tree. | **State root** `repos/<repoKey>/repo_storage.yaml` + `status.yaml`. **Repo working tree: untouched.** |
-| **2** | Nothing (a scheduled scan runs). | Re-scans; 4 new clips arrive → counts change. | **Re-stamps** `repos/<repoKey>/repo_storage.yaml` **in place** in the state root. **Repo: still untouched.** |
-| **3** | Pins 6 clips + git-ignores them via the inline toggles. | Writes the decisions to the **committed** `decisions.yaml` + `manifest.yaml`; pins; writes `.gitignore` lines. | `decisions.yaml`/`manifest.yaml` (these are the SDL travellers, allowed) + `.gitignore`. **No `repo_storage.yaml`, no sidecars, no history in the repo** — those stay in the state root. |
-| **4** | Compresses 3 clips. | Captures before/after hash + perceptual fingerprint. | `compress` facts recorded as **state-root sidecars** under `repos/<repoKey>/files/…`. **Repo `.lfbridge/`: still does not exist.** |
-| **5** | Nothing (two scheduled scans run). | Re-scans twice. | Two more **in-place re-stamps** in the state root. **Repo: pristine — `git status` clean, no untracked `.lfbridge/`.** |
-| **6** | Removes `render-farm` from Large File Bridge. | Forgets the repo. | **Deletes** `~/T/_large_files_bridge/repos/<repoKey>/`. Repo working tree unchanged (it never had LFB files). |
-| **+1 day** *(a re-add + the crossing)* | Re-adds the repo, then **transcribes ONE clip**. | Produces the transcript → **content threshold crossed**. | The transcript lands in the repo's **committed `.lfbridge/`**; the tracking files (`repo_storage.yaml`, sidecars, history) **migrate** from the state root into `.lfbridge/` from now on. |
+| **1** | Adds `render-farm` to Large File Bridge. 8 ProRes clips present. | Enlists; classifies; **does not** touch the working tree. | **Local Storage** `repos/<repoKey>/repo_storage.yaml`. **Repo working tree: untouched — no `.lfbridge/`.** |
+| **2** | Nothing (a scheduled scan runs). | Re-scans; 4 new clips arrive → counts change. | **Re-stamps** `repos/<repoKey>/repo_storage.yaml` **in place** in Local Storage. **Repo: still untouched.** |
+| **3** | Pins 6 clips + git-ignores them via the inline toggles. | Records the decisions + manifest CIDs in Local Storage; pins; writes `.gitignore` lines. | `decisions.yaml`/`manifest.yaml` + sidecars in **Local Storage**; only `.gitignore` changes in the repo. **No tracking files in the repo.** |
+| **4** | Compresses 3 clips. | Captures before/after hash + perceptual fingerprint. | `compress` facts recorded as **Local-Storage sidecars** under `repos/<repoKey>/files/…`. **Repo `.lfbridge/`: still does not exist.** |
+| **5** | Nothing (two scheduled scans run). | Re-scans twice. | Two more **in-place re-stamps** in Local Storage. **Repo: pristine — `git status` clean, no `.lfbridge/`.** |
+| **6** | Removes `render-farm` from Large File Bridge. | Forgets the repo. | **Deletes** `~/T/_large_files_bridge/repos/<repoKey>/`. Repo working tree unchanged (it never had LFB tracking files). |
+| **+1 day** *(a re-add + a transcript)* | Re-adds the repo, then **transcribes ONE clip**. | Produces the transcript → a **Category-A content artifact**. | The transcript lands in the repo's **committed `.lfbridge/`**; the tracking files (`repo_storage.yaml`, sidecars, history) **stay in Local Storage** — they do **not** migrate into the repo. |
 
 ---
 
@@ -99,29 +104,25 @@ and a **`renders/`** folder with **8 ProRes `.mov` clips** (each ~2–4 GB). The
 the renders just happen to live there.
 
 **What LFB does automatically — enlist, classify, and stop at the working tree.** LFB registers the repo
-and derives a stable **`<repoKey>`** for it (a slug of the repo's identity — the remote + root path — so
-the same repo always maps to the same state-root folder). It scans, and the classifier
-([special_files.mdx](./special_files.mdx)) marks the 8 clips `large` + `video` + `compressible` +
-`transcribable`. **But — and this is the whole point — it writes none of that into the repo.** Because the
-repo has **no durable artifact** yet, the [churn policy](./artifact_placement_policy.mdx) sends every
-tracking write to the **state root**:
+and derives a stable **`<repoKey>` = `shortHash(resolve(repoPath))`** for it (the 12-hex `storageSid()`
+scheme — so the same repo on the same machine always maps to the same Local-Storage folder). It scans, and
+the classifier ([special_files.mdx](./special_files.mdx)) marks the 8 clips `large` + `video` +
+`compressible` + `transcribable`. **But — and this is the whole point — it writes none of that into the
+repo.** Category B always goes to **Local Storage**:
 
 ```
 ~/T/_large_files_bridge/
 └── repos/
-    └── render-farm-a1b2c3/                     ← <repoKey> (slug of remote + root path)
-        ├── repo_storage.yaml                   ← the repo-WIDE state file — IN THE STATE ROOT, not the repo
-        └── status.yaml                         ← last-scan stamp, effective threshold
+    └── a1b2c3d4e5f6/                       ← <repoKey> = shortHash(resolve("~/BGit/act3/render-farm"))
+        ├── repo_storage.yaml               ← the repo-WIDE state file — IN LOCAL STORAGE, not the repo
+        └── origin.txt                      ← one line: the absolute repo path this <repoKey> maps to
 ```
 
 ```yaml
-# ~/T/_large_files_bridge/repos/render-farm-a1b2c3/repo_storage.yaml
-repo_storage:                          # same single level-one key as repo_tracking_scheme.mdx §2 — just relocated
+# ~/T/_large_files_bridge/repos/a1b2c3d4e5f6/repo_storage.yaml
+repo_storage:                          # same single level-one key as repo_tracking_scheme.mdx §2
   schema_version: 1
   name: render-farm
-  repo_root: ~/BGit/act3/render-farm
-  placement: state_root                # ← the churn-policy flag: tracking is NOT in the repo yet
-  content_threshold_crossed: false     # ← no transcript or AI description exists yet
   enlisted: { at: 2026-02-02T09:00:00Z, by: bryan@act3ai.com, on_device: studio-tower }
   counts: { special: 8, large: 8, videos: 8, compressible: 8, transcribable: 8, transcribed: 0, described: 0 }
   last_scan: { at: 2026-02-02T09:01:12Z, on_device: studio-tower, headless: false }
@@ -139,130 +140,138 @@ And the repo itself, right after enlist:
 #  NO .lfbridge/ HERE. `git status` is clean. Nothing untracked.
 ```
 
-The **only** level-one key is still `repo_storage:` ([repo_tracking_scheme.mdx §2.1](./repo_tracking_scheme.mdx)) —
-the file is byte-for-byte the same shape it would have inside the repo; it just lives in the state root and
-carries the two churn-policy flags (`placement`, `content_threshold_crossed`).
+The **only** level-one key is `repo_storage:` ([repo_tracking_scheme.mdx §2.1](./repo_tracking_scheme.mdx)) —
+the file is byte-for-byte the same shape it always has; it simply lives in Local Storage, where its per-scan
+churn is free and private to the machine.
+
+Seeding a repo's Local-Storage `repos/<repoKey>/` directory and its `repo_storage.yaml` on enlist (and never
+touching the working tree) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureRepoStorage(repoRoot)` (seeds under the Local-Storage root from `tracking-root.service.ts` — `resolveTrackingRoot()`; it no longer git-ignores anything, since nothing churny is written into the working repo).
 
 **What we double-check (Week 1):**
 * `~/BGit/act3/render-farm/` has **no `.lfbridge/` directory** and `git status` is **clean** — enlist wrote
   nothing to the working tree.
-* `~/T/_large_files_bridge/repos/render-farm-a1b2c3/repo_storage.yaml` exists, with `placement: state_root`
-  and `content_threshold_crossed: false`, and the 8-clip `counts:`.
-* The `<repoKey>` is derived deterministically (same repo → same key) so a re-scan reuses the same folder.
+* `~/T/_large_files_bridge/repos/<repoKey>/repo_storage.yaml` exists with the 8-clip `counts:`.
+* The `<repoKey>` is `shortHash(resolve(repoPath))` (same repo → same key) so a re-scan reuses the same
+  folder; `origin.txt` records the absolute path it was minted from.
 
 ---
 
-## 3. WEEK 2 — a scheduled scan; new clips arrive; re-stamp the STATE ROOT in place
+## 3. WEEK 2 — a scheduled scan; new clips arrive; re-stamp LOCAL STORAGE in place
 
 **What the developer does.** Nothing. Four more clips (`shot_09.mov`…`shot_12.mov`) land in `renders/`
 during the week, and the **every-4h scheduled scan** ([scan.mdx](./scan.mdx)) runs headless.
 
-**What LFB does automatically — recompute and re-stamp, but only in the state root.** The scan re-walks the
+**What LFB does automatically — recompute and re-stamp, but only in Local Storage.** The scan re-walks the
 repo, finds 12 clips now, and updates the rolled-up `counts:` and `last_scan:`. This is exactly the write
-the churn policy exists to contain: `repo_storage.yaml`'s `counts.special` goes `8 → 12` and `last_scan.at`
-advances — a change on **every** scan. Because the threshold is still uncrossed, that re-stamp happens **in
-the state-root copy**, and the repo stays pristine:
+the policy exists to contain: `repo_storage.yaml`'s `counts.special` goes `8 → 12` and `last_scan.at`
+advances — a change on **every** scan. That re-stamp happens **in the Local-Storage copy**, and the repo
+stays pristine:
 
 ```yaml
-# ~/T/_large_files_bridge/repos/render-farm-a1b2c3/repo_storage.yaml  (re-stamped in place)
+# ~/T/_large_files_bridge/repos/a1b2c3d4e5f6/repo_storage.yaml  (re-stamped in place)
 repo_storage:
   …
-  content_threshold_crossed: false
   counts: { special: 12, large: 12, videos: 12, compressible: 12, transcribable: 12, transcribed: 0, described: 0 }
   last_scan: { at: 2026-02-09T04:00:07Z, on_device: studio-tower, headless: true }   # ← advanced by the headless scan
 ```
 
-> **This is the churn we are hiding from git.** Had `repo_storage.yaml` lived in the repo, this scheduled,
+> **This is the churn we keep out of git.** Had `repo_storage.yaml` lived in the repo, this scheduled,
 > user-un-initiated scan would have produced a git working-tree change (or untracked-dir noise) every four
-> hours. In the state root it is invisible to the customer's repo — no diff, no `git status` line, nothing.
+> hours — and, on a second machine, a merge conflict. In Local Storage it is invisible to the customer's
+> repo — no diff, no `git status` line, nothing.
 
-Re-stamping the state-root `repo_storage.yaml` on each scan (and never touching the repo while
-`content_threshold_crossed` is false) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` — `refreshCounts(repoKey)` (writes under `trackingRootFor(repoKey)`, which is the state root until the threshold flips).
+Re-stamping the Local-Storage `repo_storage.yaml` on each scan (never touching the working repo) is handled
+in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` — `refreshCounts(repoRoot)` (writes under `resolveTrackingRoot()`, which always returns the Local-Storage root).
 
 **What we double-check (Week 2):**
-* The state-root `repo_storage.yaml` re-stamped `counts` and `last_scan` **in place** — same file, new
+* The Local-Storage `repo_storage.yaml` re-stamped `counts` and `last_scan` **in place** — same file, new
   values, not a new file.
 * `~/BGit/act3/render-farm/` is **still** free of any `.lfbridge/`; `git status` still clean after a
   headless scan mutated tracking state.
 
 ---
 
-## 4. WEEK 3 — pin & git-ignore six clips — decisions travel, tracking still doesn't
+## 4. WEEK 3 — pin & git-ignore six clips — the decision ledger stays in Local Storage; only `.gitignore` changes
 
 **What the developer does.** The renders are big and shouldn't be checked in, so the developer opens the
 repo's file table ([one_repo.mdx](./one_repo.mdx)) and flips the **Pin** and **Ignore** inline toggles ON
 for **6** of the 12 clips ([decision_toggles.mdx §5](./decision_toggles.mdx)).
 
-**What LFB does automatically — the SDL travellers are allowed; the tracking files are not.** This is the
-subtle boundary the churn policy draws. A **decision** and a **manifest CID** are **committed, team-shared
-travellers** — they are the *point* of LFB and must travel via git ([repo_tracking_scheme.mdx §5](./repo_tracking_scheme.mdx),
-the "committed travellers" row). So flipping the toggles **does** write into the repo — but only the
-travellers, and only the ones the user's own action created:
+**What LFB does automatically — the decision ledger and manifest are Category B; only the `.gitignore` edit
+touches the repo.** A pin/ignore **decision** and a **manifest CID** are tracking state — LFB's record of
+*what it was asked to do with a file* — so under the data-category split they go to **Local Storage**, not
+the working repo. The one thing that legitimately lands in the working tree is the repo's own **`.gitignore`**
+edit, because git-ignoring a file *is* an edit to that file, requested by the user:
 
-* `.lfbridge/decisions.yaml` — one `sync` + one `git_ignore` decision event per clip (the committed ledger,
-  [decisions.mdx](./decisions.mdx)).
-* `.lfbridge/manifest.yaml` — each pinned clip's CID.
-* `.gitignore` — an anchored ignore line per clip ([git_ignore.mdx](./git_ignore.mdx)).
+* `repos/<repoKey>/decisions.yaml` — one `sync` + one `git_ignore` decision event per clip (the ledger,
+  [decisions.mdx](./decisions.mdx)) — **in Local Storage**.
+* `repos/<repoKey>/manifest.yaml` — each pinned clip's CID — **in Local Storage**.
+* `repos/<repoKey>/files/renders/…` — a sidecar per clip carrying the `decision` and `ipfs_pin` events —
+  **in Local Storage**.
+* `.gitignore` — an anchored ignore line per clip ([git_ignore.mdx](./git_ignore.mdx)) — **in the repo**
+  (the user's requested working-tree change).
 
-> **Wait — doesn't writing `decisions.yaml` mean `.lfbridge/` now exists in the repo?** Yes — and that is
-> deliberate and consistent. The churn policy defers the **churny, machine-local tracking files**
-> (`repo_storage.yaml` re-stamped every scan, the per-file sidecars, `history/<device>.txt`) — **not** the
-> committed SDL travellers a user's **explicit decision** creates. A `decisions.yaml` changes only when the
-> user makes a decision (not on a scan), so it is not churn. The clean test is: **does this file change on
-> a scan the user didn't ask for?** `repo_storage.yaml` does (deferred); `decisions.yaml` does not
-> (allowed). The still-deferred files remain in the state root:
+> **Doesn't writing `decisions.yaml` mean `.lfbridge/` now exists in the repo?** No. Under the data-category
+> split, `decisions.yaml` and `manifest.yaml` are **Category-B tracking state** — they live in Local Storage
+> and, when the user enables it, travel via the **company sync repo** (§9.2), never via the working repo.
+> The working repo's `.lfbridge/` still does **not** exist — nothing has produced a transcript or a
+> description. The only working-tree change is the `.gitignore` lines the developer's own git-ignore action
+> created:
 
 ```
-~/BGit/act3/render-farm/.lfbridge/       ← now exists, but holds ONLY user-created travellers
-├── decisions.yaml                       ← 6 clips × 2 axes (committed)
-└── manifest.yaml                        ← 6 CIDs (committed)
-#  NO repo_storage.yaml, NO files/ sidecars, NO history/ — still in the state root (churn policy)
+~/BGit/act3/render-farm/
+├── .gitignore                          ← 6 anchored ignore lines added (the user's git-ignore action)
+├── src/…
+└── renders/…
+#  STILL NO .lfbridge/ in the repo. `git status` shows only the .gitignore edit.
 
-~/T/_large_files_bridge/repos/render-farm-a1b2c3/
-├── repo_storage.yaml                    ← still here; counts.ipfs_pinned now 6
-└── status.yaml
+~/T/_large_files_bridge/repos/a1b2c3d4e5f6/
+├── repo_storage.yaml                   ← counts.ipfs_pinned now 6
+├── decisions.yaml                      ← 6 clips × 2 axes (the ledger)
+├── manifest.yaml                       ← 6 CIDs
+└── files/renders/{…}.mov.yaml          ← per-clip decision + ipfs_pin sidecars
 ```
 
-(If the developer had turned the keep-`.lfbridge/` consent **off** entirely
-([storage_settings.mdx §3](./storage_settings.mdx)), even the decisions would be recorded machine-local only
-and `.lfbridge/` would still not appear — a stricter, separate switch. The churn policy is the *default*
-posture; that consent is the *hard* posture.)
+Appending the decision/pin events to a per-file sidecar (and re-stamping the Local-Storage `repo_storage`
+counts) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/file-sidecar.service.ts` — `appendFileEvent(repoRoot, relPath, event)` (path resolved via `tracking-root.service.ts` — `resolveTrackingRoot()`, always the Local-Storage root).
 
 **What we double-check (Week 3):**
-* The repo's `.lfbridge/` contains **only** `decisions.yaml` + `manifest.yaml` (user-created travellers) —
-  **no** `repo_storage.yaml`, **no** `files/` sidecars, **no** `history/`.
-* Those churny tracking files are **still** in `~/T/_large_files_bridge/repos/render-farm-a1b2c3/`.
-* The state-root `repo_storage.yaml`'s `counts.ipfs_pinned` updated to 6 — recorded, but in the state root.
+* The repo's working tree gains **only** the `.gitignore` edit — **no** `.lfbridge/`, **no**
+  `repo_storage.yaml`, **no** `decisions.yaml`/`manifest.yaml`, **no** `files/` sidecars.
+* `decisions.yaml`, `manifest.yaml`, and the per-clip sidecars are all in
+  `~/T/_large_files_bridge/repos/<repoKey>/`.
+* The Local-Storage `repo_storage.yaml`'s `counts.ipfs_pinned` updated to 6 — recorded, in Local Storage.
 
 ---
 
-## 5. WEEK 4 — compress three clips — before/after fingerprints go to STATE-ROOT sidecars
+## 5. WEEK 4 — compress three clips — before/after fingerprints go to LOCAL-STORAGE sidecars
 
 **What the developer does.** Three of the ProRes clips are wildly oversized; the developer selects them and
 **Compress** ([compression.mdx](./compression.mdx)).
 
-**What LFB does automatically — capture the rich per-file history, in the state root.** Compression is
+**What LFB does automatically — capture the rich per-file history, in Local Storage.** Compression is
 exactly the kind of event `repo_tracking_scheme.mdx` records in a **per-file sidecar** (`before`/`after`
-`{hash,size}`, `fingerprint_before`/`fingerprint_after`, `codec`). But a `compress` event is **not** a
-durable *user artifact* in the threshold sense — it does not create a transcript or a description — so it
-does **not** cross the threshold. The sidecar it needs is therefore written to the **state-root** mirror,
-not the repo:
+`{hash,size}`, `fingerprint_before`/`fingerprint_after`, `codec`). A `compress` event is Category-B tracking
+state, so the sidecar it needs is written to **Local Storage**, not the repo:
 
 ```
-~/T/_large_files_bridge/repos/render-farm-a1b2c3/
+~/T/_large_files_bridge/repos/a1b2c3d4e5f6/
 ├── repo_storage.yaml
-├── status.yaml
-└── files/                               ← per-file sidecars — in the STATE ROOT (path-mirrored)
+├── decisions.yaml
+├── manifest.yaml
+└── files/                              ← per-file sidecars — in LOCAL STORAGE (path-mirrored)
     └── renders/
-        ├── shot_01.mov.yaml             ← carries the compress event (before/after hash+size, perceptual fp)
+        ├── shot_01.mov.yaml            ← carries the compress event (before/after hash+size, perceptual fp)
         ├── shot_04.mov.yaml
         └── shot_07.mov.yaml
 ```
 
 ```yaml
-# ~/T/_large_files_bridge/repos/render-farm-a1b2c3/files/renders/shot_01.mov.yaml
-file:                                    # same single level-one key as repo_tracking_scheme.mdx §3 — relocated
+# ~/T/_large_files_bridge/repos/a1b2c3d4e5f6/files/renders/shot_01.mov.yaml
+file:                                    # same single level-one key as repo_tracking_scheme.mdx §3
   path: renders/shot_01.mov
   events:
     - kind: compress
@@ -277,14 +286,14 @@ file:                                    # same single level-one key as repo_tra
 ```
 
 The perceptual fingerprint is computed **entirely locally** ([perceptual_fingerprint.mdx](./perceptual_fingerprint.mdx)) —
-compression, unlike transcription/description, involves **no network** and produces **no durable artifact
-that belongs in the repo**, so it correctly leaves the repo working tree alone.
+compression involves **no network** and produces **no content artifact that belongs in the repo**, so it
+correctly leaves the repo working tree alone.
 
 **What we double-check (Week 4):**
-* The three `compress` events are recorded as **state-root** sidecars under
-  `repos/render-farm-a1b2c3/files/renders/…` — the repo's working tree still has **no** `files/` sidecars.
+* The three `compress` events are recorded as **Local-Storage** sidecars under
+  `repos/<repoKey>/files/renders/…` — the repo's working tree still has **no** `files/` sidecars and **no**
+  `.lfbridge/`.
 * Compression captured `before`/`after` `{hash,size}` + perceptual fingerprint and made **no** network call.
-* `content_threshold_crossed` is **still `false`** — a compress is not a durable artifact.
 
 ---
 
@@ -292,8 +301,8 @@ that belongs in the repo**, so it correctly leaves the repo working tree alone.
 
 **What the developer does.** Nothing. Two headless scheduled scans run during the week.
 
-**What LFB does automatically — re-stamp twice, in the state root, and that's all.** Each scan advances
-`last_scan.at` and re-confirms `counts:` in the **state-root** `repo_storage.yaml`. After five weeks of
+**What LFB does automatically — re-stamp twice, in Local Storage, and that's all.** Each scan advances
+`last_scan.at` and re-confirms `counts:` in the **Local-Storage** `repo_storage.yaml`. After five weeks of
 enlist, scans, decisions, and compression, here is the full picture of the customer's repo — the artifact
 this whole tour exists to protect:
 
@@ -302,254 +311,265 @@ this whole tour exists to protect:
 ├── .git/
 ├── .gitignore                           ← the developer's + the 6 anchored ignore lines they chose (Week 3)
 ├── src/…
-├── renders/  (12 clips, 3 now compressed)
-└── .lfbridge/
-    ├── decisions.yaml                   ← ONLY the user-created travellers
-    └── manifest.yaml
-#  git status: clean (only the files the developer's OWN decisions created).
-#  NO repo_storage.yaml. NO files/ sidecars. NO history/. After 6 headless scans, ZERO scan-driven churn.
+└── renders/  (12 clips, 3 now compressed)
+#  git status: clean (only the .gitignore edit the developer's OWN git-ignore action created).
+#  NO .lfbridge/ AT ALL. NO repo_storage.yaml. NO files/ sidecars. NO history/. After 6 headless scans,
+#  ZERO scan-driven churn — nothing to merge-conflict.
 ```
 
-Every scan-driven, un-user-initiated write went to the state root:
+Every scan-driven, un-user-initiated write went to Local Storage:
 
 ```
-~/T/_large_files_bridge/repos/render-farm-a1b2c3/
+~/T/_large_files_bridge/repos/a1b2c3d4e5f6/
 ├── repo_storage.yaml                    ← re-stamped 6 times total (enlist + 5 scans), all in place here
-├── status.yaml
+├── decisions.yaml
+├── manifest.yaml
 └── files/renders/{shot_01,shot_04,shot_07}.mov.yaml
 ```
 
 **What we double-check (Week 5):**
 * After **six** total scans, the repo's `git status` is **clean of any scan-driven change** — no
-  `repo_storage.yaml` diff, no untracked `.lfbridge/history/`, no untracked `files/` sidecars.
-* Every re-stamp landed in the **same** state-root `repo_storage.yaml` (re-stamped in place, not accreting
+  `.lfbridge/` at all, no `repo_storage.yaml` diff, no untracked `files/` sidecars.
+* Every re-stamp landed in the **same** Local-Storage `repo_storage.yaml` (re-stamped in place, not accreting
   new files).
 
 ---
 
-## 7. WEEK 6 — remove the repo — the state-root directory is cleaned up
+## 7. WEEK 6 — remove the repo — the Local-Storage directory is cleaned up
 
 **What the developer does.** They decide `render-farm` shouldn't be bridged after all and **remove it** from
 Large File Bridge ([repos.mdx](./repos.mdx) — remove/forget).
 
-**What LFB does automatically — forget it, and delete its state-root home.** Because all pre-threshold
-tracking lived in one place — `~/T/_large_files_bridge/repos/<repoKey>/` — removal is a clean, total
-cleanup: LFB **deletes that whole directory**. There is nothing to clean up **inside the repo** for the
-deferred files (they were never there). The only things that remain in the repo are the ones the
-developer's **own explicit decisions** created (the `.gitignore` lines and, if `.lfbridge/decisions.yaml`
-was committed, that ledger) — LFB does **not** reach into the working tree to rip out user-committed
-travellers on a remove; those are the user's to keep or delete.
+**What LFB does automatically — forget it, and delete its Local-Storage home.** Because all tracking lived in
+one place — `~/T/_large_files_bridge/repos/<repoKey>/` — removal is a clean, total cleanup: LFB **deletes
+that whole directory**. There is nothing to clean up **inside the repo** — no tracking files were ever there.
+The only thing that remains in the repo is the `.gitignore` lines the developer's **own git-ignore action**
+created; LFB does **not** reach into the working tree to rip those out on a remove — those are the user's to
+keep or delete.
 
 ```
 # after remove:
-~/T/_large_files_bridge/repos/render-farm-a1b2c3/     ← DELETED (repo_storage.yaml, status.yaml, files/ — all gone)
+~/T/_large_files_bridge/repos/a1b2c3d4e5f6/          ← DELETED (repo_storage.yaml, decisions/manifest, files/ — all gone)
 
-~/BGit/act3/render-farm/                               ← untouched by the removal
-└── .lfbridge/{decisions.yaml, manifest.yaml}          ← the developer's committed travellers remain theirs
+~/BGit/act3/render-farm/                              ← untouched by the removal
+└── .gitignore                                        ← the developer's git-ignore lines remain theirs
 ```
 
-Deleting the state-root `repos/<repoKey>/` tree on repo removal (and never mutating the repo working tree on
-remove) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.service.ts` — `removeRepo(repoId)` (calls `rm -rf` on `trackingRootFor(repoKey)` when placement is `state_root`).
+Deleting the Local-Storage `repos/<repoKey>/` tree on repo removal (and never mutating the repo working tree
+on remove) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.service.ts` — `removeRepo(repoId)` (calls `rm -rf` on the `resolveTrackingRoot()` directory; a repo that merely went **missing**, e.g. an unmounted drive, retains its directory).
 
 **What we double-check (Week 6):**
-* `~/T/_large_files_bridge/repos/render-farm-a1b2c3/` is **gone** after removal — no orphaned state-root
-  tracking lingers.
-* The repo's working tree is **not** mutated by the removal; user-committed travellers are left intact.
+* `~/T/_large_files_bridge/repos/<repoKey>/` is **gone** after removal — no orphaned Local-Storage tracking
+  lingers.
+* The repo's working tree is **not** mutated by the removal; the developer's `.gitignore` edits are left
+  intact.
 
 ---
 
-## 8. WEEK 6 + 1 DAY — re-add, then transcribe ONE clip — the content threshold is crossed
+## 8. WEEK 6 + 1 DAY — re-add, then transcribe ONE clip — content enters the repo; tracking stays in Local Storage
 
 **What the developer does.** A colleague needs a transcript of one interview clip, so the developer re-adds
-`render-farm` (a fresh state-root `repos/<repoKey>/` is created exactly as in Week 1), opens `shot_02.mov`
+`render-farm` (a fresh Local-Storage `repos/<repoKey>/` is created exactly as in Week 1), opens `shot_02.mov`
 in the media viewer, and clicks **Generate transcription** ([Transcribe.mdx](./Transcribe.mdx)).
 
-**What LFB does automatically — the crossing.** Producing the transcript is a **durable user artifact**. Per
-[Transcribe.mdx §3](./Transcribe.mdx) a transcript is written **inside the repo's committed `.lfbridge/`**,
-path-mirrored, filename + `.transcription` appended. That write is the **content threshold crossing**, and
-it flips the repo's placement for **all future tracking**:
+**What LFB does automatically — content into the repo, tracking left in Local Storage.** Producing the
+transcript is a **Category-A content artifact**. Per [Transcribe.mdx §3](./Transcribe.mdx) a transcript is
+written **inside the repo's committed `.lfbridge/`**, path-mirrored, filename + `.transcription` appended.
+This is the *first* time a `.lfbridge/` directory appears in the working tree — and it holds **only** the
+content artifact. Crucially, the tracking state **does not migrate**:
 
 1. **The transcript lands in the repo's committed `.lfbridge/`** —
    `~/BGit/act3/render-farm/.lfbridge/renders/shot_02.mov.transcription`. This is a small text file that
-   *should* be committed and travel with the repo; it is the honest signal that the user wants LFB deeply
-   involved here.
-2. **`content_threshold_crossed` flips to `true`**, and the churn-policy `placement` for this repo becomes
-   `repo`. From now on `trackingRootFor(repoKey)` returns the repo's `.lfbridge/`, not the state root.
-3. **The deferred tracking migrates.** The state-root `repo_storage.yaml`, the per-file sidecars under
-   `files/…`, and (going forward) `history/<device>.txt` are moved into the repo's `.lfbridge/` — one
-   migration, at the crossing, so the repo now looks exactly like a
-   [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx) repo. The state-root `repos/<repoKey>/` is emptied
-   of the migrated files (it may retain a small pointer/marker).
+   *should* be committed and travel with the repo — Category-A content.
+2. **The tracking state stays in Local Storage.** `repo_storage.yaml`, the per-file sidecars under
+   `files/…`, `decisions.yaml`, `manifest.yaml`, and `history/<device>.txt` remain at
+   `~/T/_large_files_bridge/repos/<repoKey>/`. There is **no migration** into the repo — producing content
+   never redirects tracking state. `counts.transcribed` ticks to `1` **in the Local-Storage
+   `repo_storage.yaml`**.
 
 ```
-# BEFORE the crossing (re-added, pre-transcribe):
-~/BGit/act3/render-farm/.lfbridge/{decisions.yaml, manifest.yaml}          # user travellers only
-~/T/_large_files_bridge/repos/render-farm-a1b2c3/{repo_storage.yaml, status.yaml, files/…}
+# BEFORE the transcript (re-added):
+~/BGit/act3/render-farm/                                        # .gitignore only; NO .lfbridge/
+~/T/_large_files_bridge/repos/a1b2c3d4e5f6/{repo_storage.yaml, decisions.yaml, manifest.yaml, files/…}
 
-# AFTER transcribing shot_02.mov (threshold crossed):
+# AFTER transcribing shot_02.mov (content artifact written):
 ~/BGit/act3/render-farm/.lfbridge/
-├── decisions.yaml
-├── manifest.yaml
-├── repo_storage.yaml                    ← MIGRATED IN (content_threshold_crossed: true, placement: repo)
-├── files/renders/…                      ← the compress sidecars, migrated in
-├── history/studio-tower.txt             ← now written here going forward
 └── renders/
-    └── shot_02.mov.transcription        ← THE DURABLE ARTIFACT that crossed the threshold
+    └── shot_02.mov.transcription        ← THE ONLY thing in the repo's .lfbridge/ — Category-A content
+
+~/T/_large_files_bridge/repos/a1b2c3d4e5f6/
+├── repo_storage.yaml                    ← STAYS here (counts.transcribed: 1); did NOT migrate into the repo
+├── decisions.yaml                       ← STAYS here
+├── manifest.yaml                        ← STAYS here
+└── files/renders/…                      ← the compress/decision sidecars STAY here
 ```
 
 ```yaml
-# ~/BGit/act3/render-farm/.lfbridge/repo_storage.yaml  (now in the repo)
+# ~/T/_large_files_bridge/repos/a1b2c3d4e5f6/repo_storage.yaml  (still in Local Storage)
 repo_storage:
   …
-  placement: repo                        # ← flipped
-  content_threshold_crossed: true        # ← flipped by the first transcript
-  counts: { …, transcribed: 1 }
+  counts: { …, transcribed: 1 }          # ← ticked by the transcript; tracking never left Local Storage
 ```
 
-From here, this repo behaves like the [two-computer tour](./use_case_two_computers.mdx): scan re-stamps land
-in the repo's `.lfbridge/repo_storage.yaml` (git-ignored working artifact per that spec), because the repo
-has now *earned* LFB's full involvement.
+From here, a subsequent scan still re-stamps `repo_storage.yaml` **in Local Storage** — producing content
+did nothing to move tracking. The repo's `.lfbridge/` grows only as the user generates more transcripts and
+descriptions; it never accretes scan churn. This is the whole payoff of the data-category split: the repo
+carries **content**, Local Storage carries **bookkeeping**, and the two never mix.
 
-Detecting the first durable artifact, flipping `content_threshold_crossed`, and migrating the deferred
-state-root tracking into the repo's `.lfbridge/` is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `onDurableArtifactWritten(repoKey, repoRoot)` (called by `transcribe.service.ts` and `describe.service.ts` after a successful artifact write; runs `migrateStateRootTrackingIntoRepo()`).
+Writing a Category-A transcript into the repo's committed `.lfbridge/` (via the placement radio) while
+leaving Category-B tracking untouched in Local Storage is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `resolveTranscriptPath()` (delegates to `artifact-placement.service.ts` — `artifactTargetPath()`, the Category-A placement radio); the Category-B writers continue to route through `tracking-root.service.ts` — `resolveTrackingRoot()` (Local Storage), unaffected by the content write.
 
-**What we double-check (crossing):**
-* The transcript is written to the repo's committed `.lfbridge/renders/shot_02.mov.transcription`.
-* `content_threshold_crossed` flips to `true` and the deferred `repo_storage.yaml` + `files/` sidecars
-  **migrate** from the state root into the repo's `.lfbridge/`; `history/<device>.txt` begins there.
-* A subsequent scan now re-stamps `repo_storage.yaml` **inside the repo** — the churn is now justified
-  because the repo carries a durable artifact.
+**What we double-check (the transcript):**
+* The transcript is written to the repo's committed `.lfbridge/renders/shot_02.mov.transcription`, and it is
+  the **only** file in the repo's `.lfbridge/`.
+* `repo_storage.yaml`, `decisions.yaml`, `manifest.yaml`, and the `files/` sidecars **stay in Local
+  Storage** — they do **not** migrate into the repo.
+* A subsequent scan re-stamps `repo_storage.yaml` **in Local Storage**; `counts.transcribed` reads `1`.
 
 ---
 
 ## 9. The awkward branches
 
-### 9.1 AI description crosses it too (no transcript needed)
+### 9.1 An AI description is content too (no transcript needed)
 
 Had the developer instead clicked **Generate AI description** on an *image* in the repo
-([ai_description.mdx §2](./ai_description.mdx)), the outcome is identical: a `.ai_description` artifact under
-the committed `.lfbridge/` is **also a durable user artifact**, so it crosses the threshold and triggers the
-**same** migration. The threshold is *"transcript **OR** AI description"* — either alone flips the repo. A
-code repo of stills that gets one image described becomes a full-tracking repo exactly as a video repo that
-gets one clip transcribed. (See the parity tour, [use_case_ai_description_parity.mdx §7](./use_case_ai_description_parity.mdx).)
+([ai_description.mdx §2](./ai_description.mdx)), the outcome is the same shape: a `.ai_description` artifact
+is a **Category-A content artifact**, so it lands in the committed `.lfbridge/` and travels with the repo —
+while tracking state stays in Local Storage. A code repo of stills that gets one image described gets a
+one-file `.lfbridge/` (the description) exactly as a video repo that gets one clip transcribed. Neither event
+moves any tracking state. (See the parity tour, [use_case_ai_description_parity.mdx §7](./use_case_ai_description_parity.mdx).)
 
-### 9.2 The company / personal STATE-SYNC REPO override
+### 9.2 The company / personal SYNC REPO — an ADDITIONAL travelling home for tracking state
 
-If the user has configured a **state-sync repo** (a dedicated tracking-data git repo for a company or for
-Personal — the same "auto-adopt a tracking repo" mechanism as
-[storage_company.mdx §1](./storage_company.mdx) / [devices.mdx §11.2](./devices.mdx)), the **pre-threshold**
-tracking does **not** go to `~/T/_large_files_bridge/repos/<repoKey>/`. It routes to
-**`<syncRepo>/repos/<repoKey>/`** instead — still **never** touching the media repo's working tree, but now
-committed to the *separate* sync repo so it travels to the user's other computers:
+If the user has configured a **sync repo** on the owning **company** or **Personal** storage (*"a Company
+repo only for the Large File Bridge webapp to sync changes"* — [storage_company.mdx §7](./storage_company.mdx),
+[storage_personal.mdx §14](./storage_personal.mdx)) **and** turned on the per-repo toggle
+([repo_settings.mdx §2](./repo_settings.mdx), default **OFF**), the Category-B tracking is **additionally**
+mirrored to **`<syncRepo>/repos/<repoKey>/`** — **in addition to** Local Storage, not instead of it. Local
+Storage stays the authoritative working copy on each machine; the sync repo is the travel vehicle so a second
+computer sees the same `repo_storage.yaml`, sidecars, `decisions.yaml`, and `manifest.yaml`:
 
 ```
-# with a company state-sync repo ~/BGit/Bryan_git/act3_large_files_bridge/ configured:
-~/BGit/Bryan_git/act3_large_files_bridge/repos/render-farm-a1b2c3/
-├── repo_storage.yaml                    ← pre-threshold tracking, committed to the SYNC repo (travels)
+# with a company sync repo ~/BGit/Bryan_git/act3_large_files_bridge/ configured + the per-repo toggle ON:
+~/T/_large_files_bridge/repos/a1b2c3d4e5f6/           ← ALWAYS written here (authoritative)
+├── repo_storage.yaml
 └── files/renders/…
-#  ~/BGit/act3/render-farm/ (the media repo) is STILL untouched — churn stays out of the code repo.
+
+~/BGit/Bryan_git/act3_large_files_bridge/repos/a1b2c3d4e5f6/   ← ALSO mirrored here (travels to other computers)
+├── repo_storage.yaml
+└── files/renders/…
+
+~/BGit/act3/render-farm/                              ← the media repo is STILL untouched by scan churn
 ```
 
-The invariant is unchanged — **the media repo's working tree is never dirtied by scan churn** — but the
-*home* of the deferred tracking moves from the local-only state root to the shared sync repo, so a second
-computer sees the same pre-threshold counts. When the threshold is later crossed, the durable artifact
-still lands in the **media repo's** committed `.lfbridge/` (that is where a transcript belongs), and the
-tracking migrates there too. The override only relocates the **pre-threshold** home.
+The invariant is unchanged — **the media repo's working tree is never dirtied by tracking state** — and the
+mirror is purely additive. A sync pass reconciles the two (append-only sidecars/history merge; `decisions.yaml`
+/ `manifest.yaml` union-merge). Absent a configured sync repo and the toggle, tracking is Local-Storage-only.
 
-Resolving the pre-threshold tracking root to a configured state-sync repo (`<syncRepo>/repos/<repoKey>/`)
-before falling back to the state root is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `trackingRootFor(repoKey)` (checks `resolveStateSyncRepo()` first, else `~/T/_large_files_bridge/repos/<repoKey>/`).
+Mirroring the always-in-Local-Storage `repos/<repoKey>/` subtree into the company sync repo (and reconciling
+a pulled one back) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)` / `reconcileFromSyncRepo(repoRoot)` (the sync-repo root comes from `tracking-root.service.ts` — `resolveStateSyncRepo()`).
 
-### 9.3 The keep-`.lfbridge/` consent is a *different, stricter* switch
+### 9.3 The keep-`.lfbridge/` consent gates the CONTENT, not the tracking
 
-Turning the keep-`.lfbridge/` consent **off** ([storage_settings.mdx §3](./storage_settings.mdx)) is not the
-churn policy — it is the *harder* posture that stops LFB writing **anything** (even the user's own
-decisions and even the durable artifact) into the repo, recording everything machine-local. The churn policy
-is the **default** middle ground: *scan churn* stays out of the repo, but a *durable artifact* and the
-*decisions a user makes* are allowed in. Do not conflate them.
+Turning the keep-`.lfbridge/` consent **off** ([storage_settings.mdx §3](./storage_settings.mdx)) governs
+whether **Category-A content** (transcripts / AI descriptions) may be written into the repo's `.lfbridge/` at
+all. It has **no effect on tracking state** — that always goes to Local Storage regardless. When the consent
+is off, even a transcript is kept out of the working repo (relocated per that setting), so the working tree
+never gains a `.lfbridge/`. The two are orthogonal: the data-category split decides *tracking vs. content*;
+the keep-`.lfbridge/` consent decides *whether content may sit in the repo*.
 
 **What we double-check (branches):**
-* An **AI description** alone crosses the threshold identically to a transcript.
-* With a state-sync repo configured, pre-threshold tracking is at `<syncRepo>/repos/<repoKey>/` and the
-  **media repo's working tree is still untouched**.
-* The keep-`.lfbridge/` consent (off) is honored as a separate, stricter gate than the churn policy.
+* An **AI description** alone produces a one-file `.lfbridge/` (content only) exactly like a transcript, and
+  moves no tracking state.
+* With a company sync repo configured and the toggle on, tracking is at **both**
+  `~/T/_large_files_bridge/repos/<repoKey>/` **and** `<syncRepo>/repos/<repoKey>/`, and the **media repo's
+  working tree is still untouched**.
+* The keep-`.lfbridge/` consent (off) keeps even content out of the repo; tracking is unaffected (always
+  Local Storage).
 
 ---
 
 ## 10. The cross-cutting invariants this tour proves
 
-1. **A scan never dirties a customer's git working tree.** Until the content threshold, every scan-driven
-   write (`repo_storage.yaml` re-stamps, sidecars, history) lands in the **state root**, so no un-user-
-   initiated change ever appears in `git status`.
-2. **The content threshold is a durable artifact.** A **transcript** or an **AI description** — and nothing
-   else (not a scan, pin, ignore, decision, or compress) — flips the repo into full in-repo tracking.
-3. **User-created travellers are always allowed in.** Decisions (`decisions.yaml`), CIDs (`manifest.yaml`),
-   and `.gitignore` lines a user's explicit action creates travel via git from day one — they are not churn
-   because they change only on a user action, never on a scan.
-4. **Re-stamps happen in place.** Repeated scans overwrite the **same** state-root `repo_storage.yaml`; they
-   do not accrete files.
-5. **Removal is clean.** Removing a pre-threshold repo deletes exactly one directory
+1. **A scan never dirties a customer's git working tree.** Every scan-driven write (`repo_storage.yaml`
+   re-stamps, sidecars, history) lands in **Local Storage**, so no un-user-initiated change ever appears in
+   `git status`.
+2. **Tracking state never enters the working repo.** `repo_storage.yaml`, `files.yaml`, sidecars,
+   `history/<device>.txt`, `decisions.yaml`, `manifest.yaml`, and compression records are Category B and live
+   only in Local Storage (and the sync repo, if enabled) — regardless of whether a transcript ever exists.
+3. **Only content enters the repo.** A **transcript** or an **AI description** (Category A) is the *only*
+   thing LFB ever writes into the working repo's `.lfbridge/`; the developer's git-ignore action edits
+   `.gitignore` but writes no tracking files.
+4. **Re-stamps happen in place.** Repeated scans overwrite the **same** Local-Storage `repo_storage.yaml`;
+   they do not accrete files.
+5. **Removal is clean.** Removing a repo deletes exactly one directory
    (`~/T/_large_files_bridge/repos/<repoKey>/`) and mutates nothing in the repo.
-6. **The crossing migrates, it does not duplicate.** At the threshold the deferred tracking **moves** from
-   the state root into the repo's `.lfbridge/`; there is never a moment with two authoritative copies.
-7. **The state-sync-repo override relocates the pre-threshold home only** — it never puts churn into the
-   media repo's working tree.
+6. **Producing content does not migrate tracking.** Writing the first transcript adds a content file to the
+   repo's `.lfbridge/`; tracking state **stays** in Local Storage — there is never a migration.
+7. **The sync repo is an additive mirror.** When enabled, tracking is written to Local Storage **and** the
+   company sync repo — never into the media repo's working tree.
 
 ---
 
 ## 11. Acceptance criteria
 
-1. **Enlist writes nothing to the repo.** Adding a repo with big media but no durable artifact creates
-   `~/T/_large_files_bridge/repos/<repoKey>/repo_storage.yaml` (single `repo_storage:` key, `placement:
-   state_root`, `content_threshold_crossed: false`) and **no `.lfbridge/` in the repo**; `git status` is
-   clean.
-2. **Scans re-stamp the state root only.** Each scan (including headless) advances `counts:`/`last_scan:` in
-   the **state-root** `repo_storage.yaml` **in place**, and the repo working tree gains **no**
-   scan-driven change — no `repo_storage.yaml`, no `files/` sidecars, no `history/`.
-3. **User decisions are allowed into the repo; churny tracking is not.** Pinning/git-ignoring writes
-   `decisions.yaml` + `manifest.yaml` + `.gitignore` (committed travellers), while `repo_storage.yaml`, the
-   per-file sidecars, and `history/` remain in the state root until the threshold.
-4. **Compression records to state-root sidecars.** A `compress` captures before/after `{hash,size}` +
-   perceptual fingerprint (no network) into `repos/<repoKey>/files/…` and does **not** cross the threshold.
-5. **Removal cleans up.** Removing a pre-threshold repo **deletes** `~/T/_large_files_bridge/repos/<repoKey>/`
-   and does not mutate the repo working tree.
-6. **The threshold crossing.** Producing the first **transcript OR AI description** writes that durable
-   artifact into the repo's committed `.lfbridge/`, flips `content_threshold_crossed` to `true` and
-   `placement` to `repo`, and **migrates** the deferred `repo_storage.yaml` + sidecars into the repo's
-   `.lfbridge/`; subsequent scans re-stamp **in the repo**.
-7. **Branches.** An **AI description** alone crosses the threshold identically; a configured **state-sync
-   repo** routes pre-threshold tracking to `<syncRepo>/repos/<repoKey>/` while still never dirtying the
-   media repo; the keep-`.lfbridge/` consent is honored as a separate, stricter gate.
+1. **Enlist writes nothing to the repo.** Adding a repo with big media creates
+   `~/T/_large_files_bridge/repos/<repoKey>/repo_storage.yaml` (single `repo_storage:` key,
+   `repoKey = shortHash(resolve(repoPath))`) and **no `.lfbridge/` in the repo**; `git status` is clean.
+2. **Scans re-stamp Local Storage only.** Each scan (including headless) advances `counts:`/`last_scan:` in
+   the **Local-Storage** `repo_storage.yaml` **in place**, and the repo working tree gains **no** scan-driven
+   change — no `.lfbridge/`, no `files/` sidecars, no `history/`.
+3. **Decisions and manifest are Category B.** Pinning/git-ignoring writes `decisions.yaml`, `manifest.yaml`,
+   and per-file sidecars to **Local Storage** (and the sync repo when enabled); the only working-tree change
+   is the `.gitignore` edit the git-ignore action itself makes.
+4. **Compression records to Local-Storage sidecars.** A `compress` captures before/after `{hash,size}` +
+   perceptual fingerprint (no network) into `repos/<repoKey>/files/…` and writes nothing into the repo.
+5. **Removal cleans up.** Removing a repo **deletes** `~/T/_large_files_bridge/repos/<repoKey>/` and does not
+   mutate the repo working tree.
+6. **Content into the repo, tracking stays put.** Producing the first **transcript OR AI description** writes
+   that content artifact into the repo's committed `.lfbridge/`; `counts.transcribed`/`counts.described`
+   ticks in the **Local-Storage** `repo_storage.yaml`; the tracking files do **not** migrate into the repo;
+   subsequent scans re-stamp **in Local Storage**.
+7. **Branches.** An **AI description** alone behaves identically to a transcript; a configured **company/
+   Personal sync repo** with the per-repo toggle on **additionally** mirrors tracking to
+   `<syncRepo>/repos/<repoKey>/` (never the media repo); the keep-`.lfbridge/` consent gates whether content
+   sits in the repo and never affects tracking.
 8. Every write matches [artifact_placement_policy.mdx](./artifact_placement_policy.mdx),
    [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx), [storage_local.mdx](./storage_local.mdx),
    [Transcribe.mdx](./Transcribe.mdx), and [ai_description.mdx](./ai_description.mdx).
 
 <!--
-  Chronological tour proving the CHURN POLICY (artifact_placement_policy.mdx): LFB must NOT write a repo's
-  committed .lfbridge/ tracking files (repo_storage.yaml re-stamped EVERY scan = worst churn, per-file
-  sidecars, history/<device>.txt) until the repo produces a DURABLE USER ARTIFACT = transcript OR AI
-  description = the CONTENT THRESHOLD. Before that, per-repo tracking lives in the STATE ROOT at
-  ~/T/_large_files_bridge/repos/<repoKey>/ (never git). ONE computer (studio-tower), ONE plain code repo
-  (render-farm) full of ProRes renders, 6 weeks + 1 day. W1 enlist: writes ONLY state-root
-  repos/<repoKey>/repo_storage.yaml (placement:state_root, content_threshold_crossed:false); repo working
-  tree UNTOUCHED (no .lfbridge/, git clean). W2 scheduled scan: 4 new clips -> re-stamp counts+last_scan IN
-  PLACE in the state root; repo still pristine. W3 pin+git-ignore 6 clips: decisions.yaml + manifest.yaml +
-  .gitignore ARE written into the repo (user-created COMMITTED TRAVELLERS = allowed, not churn) but
-  repo_storage.yaml/sidecars/history STAY in state root. W4 compress 3: before/after hash + LOCAL perceptual
-  fp into STATE-ROOT sidecars files/renders/*.yaml; NOT a durable artifact, threshold NOT crossed. W5 two
-  more scans: prove repo git status has ZERO scan-driven churn after 6 total scans. W6 remove repo: DELETE
+  Chronological tour proving the CHURN POLICY under the DATA-CATEGORY SPLIT (artifact_placement_policy.mdx):
+  LFB NEVER writes Category-B TRACKING STATE (repo_storage.yaml re-stamped EVERY scan, files.yaml, per-file
+  sidecars, history/<device>.txt, decisions.yaml, manifest.yaml, compression records) into the working repo.
+  ALL tracking lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/
+  (repoKey=shortHash(resolve(repoPath)), never git → never merge-conflicts). The working repo's committed
+  .lfbridge/ holds ONLY Category-A CONTENT (transcripts + AI descriptions). RETIRED: the old "content
+  threshold" that migrated tracking into the repo after the first transcript — tracking NEVER migrates,
+  regardless of transcripts. ONE computer (studio-tower), ONE plain code repo (render-farm) full of ProRes
+  renders, 6 weeks + 1 day. W1 enlist: writes ONLY Local-Storage repos/<repoKey>/repo_storage.yaml; repo
+  working tree UNTOUCHED (no .lfbridge/, git clean). W2 scheduled scan: 4 new clips -> re-stamp
+  counts+last_scan IN PLACE in Local Storage; repo still pristine. W3 pin+git-ignore 6 clips: decisions.yaml
+  + manifest.yaml + sidecars go to LOCAL STORAGE (Category B); ONLY the .gitignore edit touches the repo (the
+  git-ignore action itself); NO .lfbridge/ in the repo. W4 compress 3: before/after hash + LOCAL perceptual
+  fp into LOCAL-STORAGE sidecars files/renders/*.yaml. W5 two more scans: prove repo git status has ZERO
+  scan-driven churn + NO .lfbridge/ after 6 total scans. W6 remove repo: DELETE
   ~/T/_large_files_bridge/repos/<repoKey>/, repo working tree untouched. +1day re-add then TRANSCRIBE ONE
-  clip -> DURABLE ARTIFACT -> threshold CROSSED: transcript lands in repo's committed .lfbridge/,
-  content_threshold_crossed flips true, placement->repo, deferred repo_storage.yaml+sidecars MIGRATE into
-  repo's .lfbridge/; scans now re-stamp IN the repo. Branches (§9): AI description alone crosses it too;
-  company/personal STATE-SYNC REPO override routes pre-threshold tracking to <syncRepo>/repos/<repoKey>/
-  (still never dirties media repo); keep-.lfbridge/ consent-off is a SEPARATE stricter gate. Invariants
-  (§10): scan never dirties git; threshold = durable artifact only; user travellers always allowed; re-stamp
-  in place; removal deletes one state-root dir; crossing MIGRATES not duplicates; sync-repo override
-  relocates pre-threshold home only. Code: artifact-placement.service.ts repoHasDurableArtifact /
-  trackingRootFor / onDurableArtifactWritten / migrateStateRootTrackingIntoRepo; repo-storage.service.ts
-  refreshCounts(repoKey); repos.service.ts removeRepo. Reuses artifact_placement_policy, repo_tracking_scheme,
-  storage_local, Transcribe, ai_description, decisions, use_case_two_computers.
+  clip -> Category-A CONTENT: transcript lands in repo's committed .lfbridge/ (the ONLY thing there); tracking
+  (repo_storage.yaml/sidecars/decisions/manifest) STAYS in Local Storage, does NOT migrate;
+  counts.transcribed ticks in the LOCAL-STORAGE repo_storage.yaml; scans still re-stamp in Local Storage.
+  Branches (§9): AI description alone = content, same as transcript; company/Personal SYNC REPO ADDITIONALLY
+  mirrors always-in-Local-Storage tracking to <syncRepo>/repos/<repoKey>/ when configured + per-repo toggle
+  ON (default OFF) — additive, media repo still untouched; keep-.lfbridge/ consent gates CONTENT into the
+  repo, never tracking. Invariants (§10): scan never dirties git; tracking never enters repo; only content
+  enters repo; re-stamp in place; removal deletes one Local-Storage dir; producing content does NOT migrate
+  tracking; sync repo is additive mirror. Code: tracking-root.service.ts resolveTrackingRoot (Local Storage)
+  / resolveStateSyncRepo; repo-storage.service.ts refreshCounts; file-sidecar.service.ts appendFileEvent;
+  tracking-sync.service.ts mirrorToSyncRepo/reconcileFromSyncRepo; storage.service.ts ensureRepoStorage;
+  repos.service.ts removeRepo; transcribe.service.ts resolveTranscriptPath (Category-A radio). Reuses
+  artifact_placement_policy, repo_tracking_scheme, storage_local, Transcribe, ai_description, decisions,
+  use_case_two_computers.
 -->

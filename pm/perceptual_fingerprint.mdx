@@ -137,9 +137,14 @@ The algorithm choice and matcher are isolated behind one module so the fallback�
 ## 5. Storage — per file, in the sidecar (LOCKED)
 
 The fingerprint is stored per file in the `<name>.yaml` sidecar
-([repo_tracking_scheme.mdx §3](./repo_tracking_scheme.mdx)) and referenced from `files.yaml`:
+([repo_tracking_scheme.mdx §3](./repo_tracking_scheme.mdx)) and referenced from `files.yaml`. Both the
+sidecar and the fingerprint are **Category-B tracking state** ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)):
+they live in **Local Storage** at `~/T/_large_files_bridge/repos/<repoKey>/files/<path>.yaml` — always,
+**never** the working repo's `.lfbridge/` — and are additionally mirrored to the company/Personal **sync
+repo** when it is enabled:
 
 ```yaml
+# ~/T/_large_files_bridge/repos/<repoKey>/files/videos/trees.mov.yaml
 file:
   # …identity…
   fingerprint:
@@ -147,7 +152,7 @@ file:
     value: a1b2c3…            # 64-hex (32 bytes) for pdq/blockhash
     quality: 96               # PDQ quality score (image); low quality → excluded from auto-match
   # video variant instead carries a frame list (kept in a sidecar file when large):
-  # fingerprint: { algo: vpdq, frames_ref: .lfbridge/files/videos/trees.mov.vpdq }
+  # fingerprint: { algo: vpdq, frames_ref: ~/T/_large_files_bridge/repos/<repoKey>/files/videos/trees.mov.vpdq }
 ```
 
 * **Complements, never replaces, the exact hash.** The exact content `hash` proves *byte identity*; the
@@ -156,8 +161,9 @@ file:
   same field: `fingerprint_before` should match `fingerprint_after` within threshold, which is how LFB
   **verifies a compression preserved the content**.
 * **Size.** A PDQ/blockhash fingerprint is **32 bytes** — trivial inline in YAML. A per-frame vPDQ list
-  can be large; when it is, store it in a small **`.vpdq` sidecar file** beside the `<name>.yaml` and keep
-  only a reference inline.
+  can be large; when it is, store it in a small **`.vpdq` sidecar file** beside the `<name>.yaml` in Local
+  Storage (`~/T/_large_files_bridge/repos/<repoKey>/files/…`, never the working repo) and keep only a
+  reference inline.
 
 ---
 
@@ -190,8 +196,11 @@ Guaranteeing the perceptual path never performs network I/O (no client imported;
    plus a **quality gate**, and a **shared-frame fraction** for video (§4). A match is a **signal only** —
    LFB never auto-acts on it.
 5. The fingerprint is stored **per file** in the `<name>.yaml` sidecar (32 bytes for pdq/blockhash; a
-   `.vpdq` sidecar reference for large frame lists), **complements** the exact content hash, and is the
-   field the compress/convert **before/after** pair uses to verify content was preserved (§5).
+   `.vpdq` sidecar reference for large frame lists) — Category-B tracking state in **Local Storage** at
+   `~/T/_large_files_bridge/repos/<repoKey>/files/…` (never the working repo; mirrored to the sync repo when
+   enabled — [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)) — **complements** the exact
+   content hash, and is the field the compress/convert **before/after** pair uses to verify content was
+   preserved (§5).
 
 <!--
   Perceptual/content fingerprint = PhotoDNA-style transform-robust hash, but LOCAL-ONLY (charter: no
@@ -200,6 +209,9 @@ Guaranteeing the perceptual path never performs network I/O (no client imported;
   blockhash-core + sharp-phash (MIT, pure JS) shipping a `pdq` field alongside for later swap. PhotoDNA
   DISQUALIFIED (proprietary, gated, network+reporting). Match by Hamming ≤32/256 (strict ≤24) + quality
   gate; video = shared-frame fraction. Signal only — never auto-acts (charter). Stored per file in the
-  <name>.yaml sidecar (repo_tracking_scheme §3); complements the exact hash; is the before/after check for
-  compression.mdx. Siblings: compression, repo_tracking_scheme, files, special_files.
+  <name>.yaml sidecar + the .vpdq sidecar (repo_tracking_scheme §3) — both Category B in LOCAL STORAGE at
+  ~/T/_large_files_bridge/repos/<repoKey>/files/... (NEVER the working repo's .lfbridge/; mirrored to the
+  sync repo when enabled — artifact_placement_policy.mdx); complements the exact hash; is the before/after
+  check for compression.mdx. Siblings: compression, repo_tracking_scheme, artifact_placement_policy, files,
+  special_files.
 -->

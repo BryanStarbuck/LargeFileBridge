@@ -464,6 +464,17 @@ big-file counts, and "N new big files found" badges — all without the scan eve
 Diffing against the previous scan and writing the added/grew/deleted change set to each unit's `status.yaml` happens in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `diffStatus()` (persisted via `writeStatus()`)
 
+> **The per-scan repo-wide counts re-stamp lands in Local Storage, never the working repo (LOCKED).** Beyond
+> each pin unit's `status.yaml`, the scan also re-stamps the repo-wide `repo_storage.yaml` (`counts:` +
+> `last_scan.at`) — **Category B** tracking state. It is written to **Local Storage** at
+> `~/T/_large_files_bridge/repos/<repoKey>/repo_storage.yaml` **always** (and, when the owning
+> company/Personal storage has a **sync repo** configured and the per-repo toggle is on, additionally
+> mirrored to `<syncRepo>/repos/<repoKey>/`) — **never** committed into the working repo, so the per-scan
+> re-stamp can never merge-conflict. This is the exact churn the placement policy keeps out of git.
+
+The per-scan `repo_storage.yaml` counts/`last_scan` re-stamp routing to the Local-Storage tracking root (never a working repo) is defined authoritatively in [artifact_placement_policy.mdx §6](./artifact_placement_policy.mdx) and implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` — `refreshCounts()` / `writeRepoStorage()` (routed through `tracking-root.service.ts` — `resolveTrackingRoot()`), driven by `scanner.service.ts` — `scanAll()`.
+
 ### 6.1 The scan recalc runs the TO DO Batch Calc Engine (LOCKED)
 
 After discovery + classification, the scan runs a **recalc stage**: the

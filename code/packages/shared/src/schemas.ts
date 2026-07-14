@@ -334,6 +334,11 @@ export const RepoUnitConfigSchema = z.object({
       ai_description_placement: z.enum(["lfbridge", "beside", "sync_repo"]).default("lfbridge"),
     })
     .prefault({}),
+  // Whether THIS repo additionally mirrors its Category-B tracking state (repo_storage.yaml, sidecars,
+  // history, decisions.yaml, manifest.yaml) to the owning company/Personal storage's SYNC REPO so it travels
+  // (artifact_placement_policy.mdx §4). Default OFF — Local-Storage-only. Enabled only when the owner has a
+  // sync repo configured; toggled from the per-repo settings page (repo_settings.mdx §2.9).
+  sync_repo: z.object({ enabled: z.boolean().default(false) }).prefault({}),
   // Per-file decisions (one_repo.mdx §1). Keyed by relative path. The "sync" value is a FROZEN wire
   // literal (= add-to-IPFS / pin) that travels between computers — do not rename it.
   decisions: z.record(z.string(), z.enum(["sync", "ignore", "undecided"])).default({}),

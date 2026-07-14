@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Repo Storage
-description: The Repo storage spec. A repo storage is any Git repository on the machine that LFBridge tracks large files for. Its root is the repo root (e.g. ~/BGit/xyz/), and its tracking lives in a hidden .lfbridge/ folder in that same root (~/BGit/xyz/.lfbridge/), git-ignored, holding a storage.yaml descriptor (name + type: repo + repo_root), a per-file fingerprint index (files.yaml), the large-file → IPFS CID manifest, and per-file media-analysis outputs (transcript / description / visuals-by-time). This is the canonical directory-based storage: git carries the small files + a committed manifest, IPFS carries the big git-ignored bytes across the user's computers, and the repo may also clone to Google Drive / Dropbox. Sibling of storage_personal / storage_company / storage_community; shares the storage.yaml schema and .lfbridge/ layout defined in storages.mdx. Links to repos.mdx / one_repo.mdx (the repos list + per-repo screen) which are the UI over this storage.
+description: The Repo storage spec. A repo storage is any Git repository on the machine that LFBridge tracks large files for. Its root is the repo root (e.g. ~/BGit/xyz/). Placement splits by DATA CATEGORY: the working repo's committed .lfbridge/ folder holds ONLY Category-A derived content — the path-mirrored transcript / AI-description artifacts plus the visuals-by-time YAML of the AI-description family — which is committed and travels with the repo. ALL Category-B tracking state (the storage.yaml descriptor, repo_storage.yaml, the per-file fingerprint index files.yaml, per-file sidecars, per-computer history, the large-file → IPFS CID manifest, decisions.yaml, and compression records) lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ ALWAYS — never in the working repo, so it can never merge-conflict — and is additionally mirrored to the owning company/Personal SYNC REPO when the per-repo toggle is on (default off). This is the canonical directory-based storage: git carries the small files + the Category-A content, IPFS carries the big git-ignored bytes across the user's computers, the manifest travels via the sync repo, and the repo may also clone to Google Drive / Dropbox. Sibling of storage_personal / storage_company / storage_community; shares the storage.yaml schema and .lfbridge/ layout defined in storages.mdx, the placement policy in artifact_placement_policy.mdx, and the tracking-file shapes in repo_tracking_scheme.mdx. Links to repos.mdx / one_repo.mdx (the repos list + per-repo screen) which are the UI over this storage.
 ---
 
 # LargeFileBridge — Repo Storage
@@ -22,12 +22,16 @@ Siblings this builds on and does not repeat:
   (stored as the `sync` decision value) per large file.
 * [storage_local.mdx](./storage_local.mdx) — the local index/manifest model and the IPFS pin model this
   reuses; **Local Storage stays settings/config**, the authoritative per-repo tracking is here.
-* [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx) — the **on-disk scheme** of three files this
-  spec's `.lfbridge/` now includes: **`repo_storage.yaml`** (repo-wide settings + special-file counts,
-  single `repo_storage:` key), the per-file **`files/<path>.yaml` sidecars** (identity + append-only event
-  history + perceptual fingerprint), and the per-computer **`history/<device>.txt`** audit log. §5 there
-  draws the ownership boundary between these (working, local) and `manifest.yaml`/`decisions.yaml` (committed,
-  travelling).
+* [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx) — the **on-disk scheme** of three tracking files
+  this repo's **Local-Storage** `repos/<repoKey>/` holds (never the working repo): **`repo_storage.yaml`**
+  (repo-wide settings + special-file counts, single `repo_storage:` key), the per-file
+  **`files/<path>.yaml` sidecars** (identity + append-only event history + perceptual fingerprint), and the
+  per-computer **`history/<device>.txt`** audit log. §5 there draws the ownership boundary: all Category-B
+  tracking state (these plus `manifest.yaml`/`decisions.yaml`) is Local-Storage-always and travels via the
+  sync repo, while only the Category-A transcripts / AI descriptions live committed in the working repo.
+* [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) — the authoritative **data-category
+  placement policy** governing *where* every file above lives (Local Storage always; the sync repo also,
+  when enabled; the working repo never — except the two Category-A content artifacts).
 * [special_files.mdx](./special_files.mdx) — the classifier (large · already-pinned · video/image/audio,
   plus compressible/transcribable) that decides which files earn a sidecar and fill `repo_storage.yaml`'s
   counts.
@@ -40,34 +44,50 @@ Siblings this builds on and does not repeat:
 
 ```
 ~/BGit/xyz/                 ← the repo root = the storage root ("XYZ")
-├── .git/                   ← Git (small files + the committed manifest travel here)
-├── .gitignore             ← lists .lfbridge/ AND the large files (they pin via IPFS, not Git)
-├── .lfbridge/              ← hidden per-storage tracking area (storages.mdx §4) — git-ignored
-│   ├── storage.yaml        ← descriptor: name + type: repo + repo_root (storages.mdx §3)
-│   ├── repo_storage.yaml   ← repo-WIDE settings + special-file counts (single key: repo_storage) — repo_tracking_scheme.mdx §2
-│   ├── files.yaml          ← per-file fingerprint index (storages.mdx §4.1)
-│   ├── files/<path>.yaml   ← per-file <name>.yaml sidecars: identity + append-only event history — repo_tracking_scheme.mdx §3
-│   ├── history/<device>.txt ← one UTC-timestamped audit log PER COMPUTER — repo_tracking_scheme.mdx §4
-│   ├── manifest.yaml       ← large-file → IPFS CID + pin state (storage_local.mdx §9) — committed, travels
-│   ├── decisions.yaml      ← the team-SHARED per-file decision ledger (decisions.mdx) — committed, travels
+├── .git/                   ← Git (small files + the Category-A content travel here)
+├── .gitignore             ← lists the large files only (they pin via IPFS, not Git); .lfbridge/ is COMMITTED
+├── .lfbridge/              ← COMMITTED per-storage content area — holds ONLY Category-A derived content
 │   ├── <rel-dir>/<name.ext>.transcription   ← transcript — path-mirrored, ext APPENDED (storages.mdx §6)
 │   ├── <rel-dir>/<name.ext>.ai_description  ← AI description — path-mirrored, ext APPENDED (storages.mdx §6)
-│   └── analysis/           ← visuals-by-time + compression record only (storages.mdx §6)
+│   └── analysis/<relpath>/visuals_by_time.yaml   ← visuals-by-time — the AI-description family (storages.mdx §6)
 └── …the repo's tracked + git-ignored files…
+
+~/T/_large_files_bridge/repos/<repoKey>/   ← LOCAL STORAGE — Category-B tracking state, NEVER in the repo
+│                                             (repoKey = shortHash(resolve(repoPath)); + sync-repo mirror when enabled)
+├── storage.yaml           ← descriptor: name + type: repo + repo_root (storages.mdx §3) — §2
+├── repo_storage.yaml      ← repo-WIDE settings + special-file counts (single key: repo_storage) — repo_tracking_scheme.mdx §2
+├── files.yaml             ← per-file fingerprint index (storages.mdx §4.1)
+├── files/<path>.yaml      ← per-file <name>.yaml sidecars: identity + append-only event history — repo_tracking_scheme.mdx §3
+├── history/<device>.txt   ← one UTC-timestamped audit log PER COMPUTER — repo_tracking_scheme.mdx §4
+├── manifest.yaml          ← large-file → IPFS CID + pin state (storage_local.mdx §9) — Local-Storage-always; travels via sync repo
+├── decisions.yaml         ← the team-SHARED per-file decision ledger (decisions.mdx) — Local-Storage-always; travels via sync repo
+└── analysis/<rel>/compression.yaml   ← compression records (compression.mdx §8)
 ```
 
 * The **storage root is the repo root** — there is no separate directory; a repo *is* the storage.
-* The tracking area is **`~/BGit/xyz/.lfbridge/`** — inside the repo, hidden, and **git-ignored** so it
-  never bloats commits. (Contrast: the small **committed** manifest of [storage_local.mdx §9.2](./storage_local.mdx)
-  still lives in-repo and travels via Git; `.lfbridge/` is the *local* working tracking area.)
+* The working repo's **`~/BGit/xyz/.lfbridge/`** is **committed and travels with the repo**, but holds
+  **only Category-A derived content** (transcripts / AI descriptions / visuals-by-time) — the two content
+  artifacts the user asked LFB to produce. Only the multi-GB media files themselves are git-ignored (they
+  ride IPFS); `.lfbridge/` is **not**. This is the working repo's whole LFB footprint.
+* **All Category-B tracking state** — the churny `repo_storage.yaml` / `files.yaml` / sidecars / history,
+  and the union-mergeable `manifest.yaml` / `decisions.yaml` / compression records — lives in **Local
+  Storage** at `~/T/_large_files_bridge/repos/<repoKey>/` **always** (never the working repo, so it can
+  never merge-conflict), and is **additionally** mirrored to the owning company/Personal **sync repo**
+  when the per-repo toggle is on ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx),
+  [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)).
 * `storage.yaml` here is minimal — see §2.
 
 ---
 
 ## 2. `storage.yaml` for a repo
 
+The repo's `storage.yaml` descriptor is **Category-B tracking state** (stable, reconstructable identity),
+so it lives in **Local Storage** at `~/T/_large_files_bridge/repos/<repoKey>/storage.yaml` — **never** in
+the working repo — alongside the rest of the tracking state (§1), and is mirrored to the sync repo when
+enabled:
+
 ```yaml
-# ~/BGit/xyz/.lfbridge/storage.yaml
+# ~/T/_large_files_bridge/repos/<repoKey>/storage.yaml
 name: "XYZ"                 # defaults to the repo folder name; user-editable
 type: repo
 created: 2026-05-01T10:12:00Z
@@ -83,8 +103,11 @@ clones:
 * **`type: repo`** with a **`repo`** block naming the `repo_root`. A repo storage never carries a
   `company`/`community`/`personal` block.
 
-Placing `storage.yaml` (and `.lfbridge/`) at the repo root when a repo is registered, and adding `.lfbridge/` to the repo `.gitignore`, is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureRepoStorage(repoRoot)`.
+Seeding the repo's Local-Storage `repos/<repoKey>/` tracking directory and its `storage.yaml` /
+`repo_storage.yaml` when a repo is registered — and creating the working repo's committed `.lfbridge/`
+for its Category-A content (it **no longer** adds `.lfbridge/` to the repo `.gitignore`, since nothing
+churny is written there) — is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureRepoStorage(repoRoot)` (resolving the tracking root via `tracking-root.service.ts` — `resolveTrackingRoot()`).
 
 ---
 
@@ -95,18 +118,20 @@ A repo storage is the on-disk backing for everything the [One repo](./one_repo.m
 * **Discovery** — the scanner finds every Git repo under the configured roots
   ([storage_local.mdx §7](./storage_local.mdx), [scan.mdx](./scan.mdx)); each becomes a repo storage.
 * **Per-file decision** — the **two-axis** decision (Add to IPFS *and/or* Add to git ignore) per large
-  file, recorded in the **team-shared** `.lfbridge/decisions.yaml` ledger with who/when/SID
-  ([decisions.mdx](./decisions.mdx)); its IPFS axis projects onto the frozen `sync`/`ignore`/`undecided`
-  enum ([one_repo.mdx §1](./one_repo.mdx#1-the-decision-model-locked)). Because the ledger is committed and
-  union-merged, the whole team shares one set of decisions and no teammate is re-asked about a file another
-  already triaged. The machine-local `pin/r/<repo>/config.yaml → decisions:` map is now a reconciled cache
-  of that ledger's IPFS axis, not the source of truth.
-* **Per-file fingerprints** — `.lfbridge/files.yaml` records hash + size + created + modified, and the
-  compressed/uncompressed variant hashes for media ([storages.mdx §4.1](./storages.mdx)), so LFB knows what
-  changed since last pin.
+  file, recorded in the **team-shared** `decisions.yaml` ledger with who/when/SID
+  ([decisions.mdx](./decisions.mdx)) — Local-Storage-always at `repos/<repoKey>/decisions.yaml`, never the
+  working repo; its IPFS axis projects onto the frozen `sync`/`ignore`/`undecided` enum
+  ([one_repo.mdx §1](./one_repo.mdx#1-the-decision-model-locked)). Because the ledger is union-merged and
+  travels via the **sync repo** when enabled, the whole team shares one set of decisions and no teammate is
+  re-asked about a file another already triaged. The machine-local `pin/r/<repo>/config.yaml → decisions:`
+  map is now a reconciled cache of that ledger's IPFS axis, not the source of truth.
+* **Per-file fingerprints** — the Local-Storage `repos/<repoKey>/files.yaml` records hash + size + created +
+  modified, and the compressed/uncompressed variant hashes for media ([storages.mdx §4.1](./storages.mdx)),
+  so LFB knows what changed since last pin.
 * **IPFS bytes** — files marked **Add to IPFS (pin)** (the `sync` decision value) are pinned and moved between the user's computers over IPFS
-  ([storage_local.mdx §9](./storage_local.mdx)); the small committed manifest travels via Git so a fresh
-  clone knows what to fetch.
+  ([storage_local.mdx §9](./storage_local.mdx)); the small `manifest.yaml` lives in Local Storage and travels
+  via the sync repo (not the working repo, [storage_local.mdx §9.2](./storage_local.mdx)) so another computer
+  knows what to fetch.
 
 The repos list and per-repo UI over this storage are rendered in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (served by `repos.router.ts`).
@@ -120,10 +145,15 @@ The repos list and per-repo UI over this storage are rendered in code:
   **description** (`.lfbridge/<rel-dir>/<name.ext>.ai_description`) live **inside the repo's `.lfbridge/`,
   path-mirrored, with the media's full filename and the extension APPENDED**, while
   **visuals-and-action-by-time** (`visuals_by_time.yaml`, time × visual × story) stays under
-  `~/BGit/xyz/.lfbridge/analysis/<relpath>/`. They are artifacts that ride along with the storage —
-  because `.lfbridge/` is **committed and travels with the repo**, the transcript/description are committed
-  and synced by git (no `*.transcription` / `*.ai_description` git-ignore nudge — retired), while the
-  multi-GB media stays git-ignored and rides IPFS.
+  `~/BGit/xyz/.lfbridge/analysis/<relpath>/`. These are **Category-A** content artifacts that ride along
+  with the storage — because `.lfbridge/` is **committed and travels with the repo**, the
+  transcript/description are committed and synced by git (no `*.transcription` / `*.ai_description`
+  git-ignore nudge — retired), while the multi-GB media stays git-ignored and rides IPFS.
+* The **compression record** is **Category-B tracking state**, so — unlike the content artifacts above —
+  it does **not** go in the working repo's `.lfbridge/analysis/`. It lives in Local Storage at
+  `~/T/_large_files_bridge/repos/<repoKey>/analysis/<relpath>/compression.yaml` (+ the sync-repo mirror
+  when enabled), per [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) /
+  [compression.mdx §8](./compression.mdx).
 * A repo storage **may also clone** to Google Drive / Dropbox ([storages.mdx §5](./storages.mdx)) — the
   same repo hierarchy mirrored to a cloud drive as a second, human-reachable copy — recorded in the
   `clones` block.
@@ -148,8 +178,8 @@ actions** — there is exactly **one** batch per repo, persisted as hierarchical
 **`~/T/_large_files_bridge/_do_batches/repo_<repo-slug>_2_do.yaml`** (the `<repo-slug>` derived from the
 repo root). Like every batch it is **local, disposable, and uncommitted** — it lives only in the
 machine-local state root, is **never** written into the repo's `.lfbridge/`, and is **never** team-shared.
-(Contrast the **committed, travelling** `decisions.yaml` ledger of §1: the batch *reads* that ledger; it is
-not part of it.)
+(Contrast the durable `decisions.yaml` ledger of §1 — Local-Storage-always and sync-repo-travelling: the
+batch *reads* that ledger; it is not part of it.)
 
 * **This is the richest batch — all five categories apply.** A repo is the **only** storage where
   **`git_ignore`** ("big files that aren't a good idea to check in") is meaningful, so a repo batch can
@@ -186,14 +216,22 @@ Producing the repo batch during scan recalc, and naming/replacing its YAML, is h
 
 ## 7. Acceptance criteria
 
-1. Any Git repo LFB tracks is a **repo storage** whose **root is the repo root** (`~/BGit/xyz/`) and whose
-   tracking lives in a hidden, **git-ignored** **`~/BGit/xyz/.lfbridge/`**.
-2. Its `.lfbridge/storage.yaml` has **`name`** (default = repo folder name), **`type: repo`**, and a
-   **`repo`** block with `repo_root`; no other type block.
-3. `.lfbridge/` holds the per-file fingerprint index (hash + size + dates; compressed/uncompressed variant
-   hashes for media), the IPFS manifest, and the `analysis/` outputs — matching [storages.mdx §4](./storages.mdx).
-4. Files marked **Add to IPFS (pin)** (the `sync` decision value) move between the user's computers over **IPFS**; the small committed manifest travels via
-   **Git**; the repo may also mirror to **Google Drive / Dropbox** per its `clones` block.
+1. Any Git repo LFB tracks is a **repo storage** whose **root is the repo root** (`~/BGit/xyz/`); its
+   **committed** **`~/BGit/xyz/.lfbridge/`** holds **only Category-A derived content** (transcripts / AI
+   descriptions / visuals-by-time) and travels with the repo, while **all Category-B tracking state** lives
+   in **Local Storage** at `~/T/_large_files_bridge/repos/<repoKey>/` (never the working repo, so it can
+   never merge-conflict), additionally mirrored to the owning storage's **sync repo** when the per-repo
+   toggle is on (default off) — per [artifact_placement_policy.mdx](./artifact_placement_policy.mdx).
+2. The repo's `storage.yaml` (Category B, in Local Storage `repos/<repoKey>/`) has **`name`** (default =
+   repo folder name), **`type: repo`**, and a **`repo`** block with `repo_root`; no other type block.
+3. The Local-Storage `repos/<repoKey>/` holds the per-file fingerprint index (hash + size + dates;
+   compressed/uncompressed variant hashes for media), `repo_storage.yaml`, sidecars, history, the IPFS
+   manifest, `decisions.yaml`, and the compression records; the working repo's `.lfbridge/` holds only the
+   Category-A content — matching [storages.mdx §4](./storages.mdx) / [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx).
+4. Files marked **Add to IPFS (pin)** (the `sync` decision value) move between the user's computers over
+   **IPFS**; the small `manifest.yaml` lives in Local Storage and travels via the owning storage's **sync
+   repo** (not the working repo's git, §1/§3); the repo may also mirror to **Google Drive / Dropbox** per
+   its `clones` block.
 5. The repo storage is surfaced through the **Repos** tab (long list + per-repo screen) and the **Repos**
    child of the Storages tab; it is **not** individually listed inside the Storages tab.
 6. Each repo owns exactly **one TO DO Batch**, persisted local/disposable/uncommitted at
@@ -204,9 +242,17 @@ Producing the repo batch during scan recalc, and naming/replacing its YAML, is h
    banner and the To-Do page slug (§6).
 
 <!--
-  Repo storage = any Git repo. Storage root = repo root (~/BGit/xyz/); tracking = ~/BGit/xyz/.lfbridge/
-  (git-ignored): storage.yaml (name + type: repo + repo_root), files.yaml fingerprints, manifest.yaml,
-  analysis/. Reuses the shared model from storages.mdx (don't restate it). UI = repos.mdx + one_repo.mdx.
+  Repo storage = any Git repo. Storage root = repo root (~/BGit/xyz/). SPLIT BY DATA CATEGORY (LOCKED,
+  authoritative in artifact_placement_policy.mdx / repo_tracking_scheme.mdx): the working repo's COMMITTED
+  .lfbridge/ holds ONLY Category-A derived content (path-mirrored <name.ext>.transcription /
+  .ai_description with ext APPENDED + analysis/<rel>/visuals_by_time.yaml) and travels with the repo. ALL
+  Category-B tracking state (storage.yaml, repo_storage.yaml, files.yaml fingerprints, files/<path>.yaml
+  sidecars, history/<device>.txt, manifest.yaml, decisions.yaml, analysis/<rel>/compression.yaml) lives in
+  LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ ALWAYS (repoKey=shortHash(resolve(path)), never
+  the working repo → never merge-conflicts) and is ADDITIONALLY mirrored to the owning company/Personal
+  SYNC REPO when the per-repo toggle is on (default off). ensureRepoStorage no longer git-ignores .lfbridge/
+  (nothing churny is written there). Reuses the shared model from storages.mdx (don't restate it).
+  UI = repos.mdx + one_repo.mdx.
   The Storages tab represents all repos with ONE "Repos" child that links to the Repos tab.
   §6 TO DO Batch: each repo owns ONE local/disposable/uncommitted batch repo_<slug>_2_do.yaml under
   ~/T/_large_files_bridge/_do_batches/, recalc-and-replace each scan from classified special files +

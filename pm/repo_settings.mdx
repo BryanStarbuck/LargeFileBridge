@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Repo Settings (Per-Repo)
-description: The per-repo settings page. Reached by the GEAR ICON shown on a single repo's page (the "one repo" view) — clicking the gear opens this settings page scoped to that one repo. It holds the settings that can differ per repo: the big-file threshold override (a checkbox that is OFF by default = inherit the global setting from settings.mdx; ON reveals a value + MB/GB/TB unit dropdown that overrides just this repo), the pinned on/off master toggle, the large-file selection rules (follow .gitignore, include/exclude globs), the pinning/fetch policy, and sharing (private to your own computers vs. shared with allow-listed participants). It ALSO holds three organized sections added on top of those: a Transcription section and an IDENTICAL AI-descriptions section, each mounting the shared 3-way placement radio (placement_radios.mdx) that chooses where the repo's `.transcription` / `.ai_description` artifacts are written — (a) the repo's hidden `.lfbridge/` folder (default, committed, travels by git), (b) beside the media file (a deliberate opt-in reintroduction of the previously-superseded beside-media layout, now with the extension APPENDED not replaced), or (c) the owning company/Personal storage's LFB state-sync repo (only enabled when that storage has one configured, else disabled with a setup hint); switching a radio affects only FUTURE artifacts and a "move existing" action migrates the rest — plus an Ownership section showing the repo's derived company/Personal owner (auto from git remote vs. manual) with a reassign control. Everything on this page writes to that repo's pin/r/<repo_name>/config.yaml (new fields transcription.placement, aiDescription.placement, and ownership on RepoSettings). Settings not overridden here fall back to the global values.
+description: The per-repo settings page. Reached by the GEAR ICON shown on a single repo's page (the "one repo" view) — clicking the gear opens this settings page scoped to that one repo. It holds the settings that can differ per repo: the big-file threshold override (a checkbox that is OFF by default = inherit the global setting from settings.mdx; ON reveals a value + MB/GB/TB unit dropdown that overrides just this repo), the pinned on/off master toggle, the large-file selection rules (follow .gitignore, include/exclude globs), the pinning/fetch policy, and sharing (private to your own computers vs. shared with allow-listed participants). It ALSO holds three organized sections added on top of those: a Transcription section and an IDENTICAL AI-descriptions section, each mounting the shared 3-way placement radio (placement_radios.mdx) that chooses where the repo's `.transcription` / `.ai_description` artifacts are written — (a) the repo's hidden `.lfbridge/` folder (default, committed, travels by git), (b) beside the media file (a deliberate opt-in reintroduction of the previously-superseded beside-media layout, now with the extension APPENDED not replaced), or (c) the owning company/Personal storage's LFB sync repo (only enabled when that storage has one configured, else disabled with a setup hint); switching a radio affects only FUTURE artifacts and a "move existing" action migrates the rest — plus an Ownership section showing the repo's derived company/Personal owner (auto from git remote vs. manual) with a reassign control, and a per-repo "Sync this repo's tracking state to the company sync repo" toggle (default OFF, enabled only when the owner has a sync repo) that ADDITIONALLY mirrors this repo's Category-B tracking state to <syncRepo>/repos/<repoKey>/ on top of Local Storage. Both config.yaml (this computer's participation) and the repo-wide repo_storage.yaml (repo-wide tracking state) are machine-local under Local Storage ~/T/_large_files_bridge/repos/<repoKey>/ — neither lives in the working repo. Everything on this page writes to that repo's pin/r/<repo_name>/config.yaml (new fields transcription.placement, aiDescription.placement, ownership, and sync_repo.enabled on RepoSettings). Settings not overridden here fall back to the global values.
 ---
 
 # LargeFileBridge — Repo Settings (Per-Repo)
@@ -104,9 +104,12 @@ How this computer participates for this repo (`config.yaml → pin`):
 
 * **Pin locally** (default on) — this computer pins the repo's big files.
 * **Fetch missing** (default on) — this computer fetches from peers any manifest CID it lacks.
-* **Publish manifest** (default on) — write the committed in-repo manifest
-  (`<repo>/.lfbridge/manifest.yaml`) so Git carries it to your other computers
-  ([storage_local.mdx §9.2](./storage_local.mdx#92-repo-manifests-travel-via-git-the-elegant-part)).
+* **Publish manifest** (default on) — include this repo's `manifest.yaml` (large-file → IPFS CID + pin
+  state) in the tracking state mirrored to the owner's sync repo when the §2.9 sync toggle is on, so your
+  other computers learn its CIDs. The manifest lives in **Local Storage**
+  (`~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml`), **never** the working repo — it travels via the
+  sync repo, not a committed in-repo file
+  ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
 
 ### 2.5 Sharing — "some repos need users, some don't"
 
@@ -120,14 +123,16 @@ Who participates in this repo (`config.yaml → access`,
 ### 2.6 Per-file decisions are team-shared (not configured here, but noted)
 
 The per-file **decisions** users make (Add to IPFS / Add to git ignore) are **not** stored in this
-machine-local repo config — they are written to the repo's **committed, team-shared**
-`.lfbridge/decisions.yaml` ledger so the whole team shares one set of decisions
-([decisions.mdx](./decisions.mdx)). The only setting that governs whether *this computer* writes that
-shared ledger is the machine-local **keep-`.lfbridge/`** consent
-([storage_settings.mdx §3](./storage_settings.mdx)); with it off, decisions are recorded locally only and
-not shared from this machine ([decisions.mdx §6](./decisions.mdx)). The machine-local
-`config.yaml → decisions:` map below is a **reconciled cache** of that ledger's IPFS axis, not an
-independently editable setting.
+machine-local repo config, and they are **no longer committed into the working repo**. They are written to
+the repo's `decisions.yaml` ledger which — like the rest of this repo's LFB tracking state — lives in
+**Local Storage always** at `~/T/_large_files_bridge/repos/<repoKey>/decisions.yaml`, machine-local and
+never in the working tree, and **travels to the team via the owning storage's sync repo** when this repo's
+sync toggle (§2.9) is on ([decisions.mdx](./decisions.mdx),
+[artifact_placement_policy.mdx](./artifact_placement_policy.mdx),
+[repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)). What governs whether decisions **travel** from this
+machine is that per-repo sync toggle plus a configured sync repo; absent them, decisions are honored locally
+but not yet shared ([decisions.mdx §6](./decisions.mdx)). The machine-local `config.yaml → decisions:` map
+below is a **reconciled cache** of that ledger's IPFS axis, not an independently editable setting.
 
 ### 2.7 Default-decision policy for new files (shared)
 
@@ -159,6 +164,35 @@ what identity is written ([decisions.mdx §14](./decisions.mdx)):
 LFB **warns before the first commit** if raw emails would be published to a public remote. The mode is
 resolved in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `attributionFor(folder, email)` (public-remote heuristic via `classifyRemote()`).
+
+### 2.9 Sync this repo's tracking state to the company sync repo
+
+The one control that governs whether this repo's LFB **tracking state** travels between your computers. By
+default that state — `repo_storage.yaml`, `files.yaml`, the per-file sidecars, `history/<device>.txt`,
+`decisions.yaml`, and `manifest.yaml` — lives in **Local Storage only**
+(`~/T/_large_files_bridge/repos/<repoKey>/`), machine-local and **never** in the working repo
+([artifact_placement_policy.mdx](./artifact_placement_policy.mdx),
+[repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)).
+
+* A **toggle: "Sync this repo's tracking state to the company sync repo."**
+* **Default: OFF** — tracking state stays in Local Storage only.
+* **Enabled only when the owning company/Personal storage has a sync repo configured**
+  ([storage_settings.mdx §4b](./storage_settings.mdx#4b-the-sync-repo--an-additive-mirror-of-owned-repos-tracking-state),
+  owner resolved per §6); otherwise the toggle is **disabled with a hint** — *"No sync repo is configured for
+  &lt;Owner&gt;. Set one up in Storage settings → Sync repo."* — matching the placement radio's disabled
+  state ([placement_radios.mdx §5.1](./placement_radios.mdx#51-sync_repo-disabled-when-no-sync-repo-exists)).
+* **When ON**, this repo's Category-B tracking state is **additionally mirrored** to
+  `<syncRepo>/repos/<repoKey>/` — in addition to Local Storage, never instead of it — so it commits + pushes
+  over the owning storage's git backbone to your other computers. Logs never travel there.
+
+It persists on the machine-local `config.yaml` as `sync_repo.enabled` (§3); the sync repo it targets is
+derived from the repo's **owner** (§6), not stored here — so the same repo resolves the right sync repo on
+another computer that has the owner's sync repo configured. This toggle governs only the **tracking-state**
+mirror; it is distinct from the §4/§5 placement radios, which the transcript/AI-description **content**
+artifacts use (those default to `lfbridge` regardless).
+
+Reading whether a sync repo exists for the owner, and persisting this per-repo toggle, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)` (returns `<syncRepo>/repos/<repoKey>/` or `null` when none configured or the toggle is off) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `PATCH /api/repos/:repoId/settings` (writes `sync_repo.enabled`).
 
 ---
 
@@ -197,6 +231,9 @@ pin:                           # §2.4 pinning / fetch policy
 access:                        # §2.5 sharing
   shared: false
   participants: []
+
+sync_repo:                     # §2.9 mirror this repo's tracking state to the owner's sync repo
+  enabled: false               # OFF = Local Storage only; ON = ALSO mirror to <syncRepo>/repos/<repoKey>/
 ```
 
 * Repo **identity** (`repo:`) is written by the [scanner](./scan.mdx) and shown read-only here — the
@@ -208,22 +245,27 @@ access:                        # §2.5 sharing
 Writing every field on this page to the repo's `config.yaml` (and mapping it back for the UI) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `PATCH /api/repos/:repoId/settings` (via `updateRepoConfig` / `toRepoSettings`)
 
-### 3.1 Two repo files, two scopes — `config.yaml` (this computer) vs. `repo_storage.yaml` (the repo)
+### 3.1 Two repo files, two scopes — both machine-local (Local Storage)
 
-There are **two** per-repo files and they must not be confused:
+There are **two** per-repo files and they must not be confused — but note **both are machine-local; neither
+lives in the working repo**:
 
-* **`pin/r/<repo_name>/config.yaml`** (this page, machine-local) holds **this computer's participation** in
-  the repo — its `pinned` master toggle, threshold override, pin/fetch policy, and sharing. It **never
+* **`pin/r/<repo_name>/config.yaml`** (this page) holds **this computer's participation** in the repo — its
+  `pinned` master toggle, threshold override, pin/fetch policy, sharing, and the §2.9 sync toggle. It **never
   travels**; each computer has its own.
-* **`.lfbridge/repo_storage.yaml`** ([repo_tracking_scheme.mdx §2](./repo_tracking_scheme.mdx)) holds the
-  repo-**wide** facts that belong *with the repo* — its LFB display name, enlist provenance, the rolled-up
+* **`repo_storage.yaml`** ([repo_tracking_scheme.mdx §2](./repo_tracking_scheme.mdx)) holds the repo-**wide**
+  tracking facts that belong *with the repo* — its LFB display name, enlist provenance, the rolled-up
   **special-file counts** ([special_files.mdx](./special_files.mdx)), repo-wide recommendation policy, and
-  the last-scan stamp. Its **only** level-one key is `repo_storage:`. It is auto-written on enlist and is
-  **not** edited from this settings page.
+  the last-scan stamp. Its **only** level-one key is `repo_storage:`. It is **not** in the working repo
+  either: it lives in **Local Storage** at `~/T/_large_files_bridge/repos/<repoKey>/repo_storage.yaml`
+  (`repoKey = shortHash(resolve(repoPath))`), is auto-written on enlist, and is **not** edited from this
+  settings page. It travels only when this repo's §2.9 sync toggle mirrors it to the owning storage's sync
+  repo.
 
 Rule of thumb: **`config.yaml` is about *this computer's* participation; `repo_storage.yaml` is about *the
-repo*.** They never duplicate a field. (Per-file **decisions** are a third thing again — the committed,
-team-shared `.lfbridge/decisions.yaml` ledger, §2.6.)
+repo* — and both are machine-local (Local Storage), never committed into the working repo.** They never
+duplicate a field. (Per-file **decisions** are a third thing again — the `decisions.yaml` ledger, also in
+Local Storage and travelling via the sync repo, §2.6.)
 
 ---
 
@@ -247,7 +289,7 @@ the placement radio with the transcript-flavored copy:
   supported user choice with **appended** (not replaced) extensions — see the reconciliation in
   [placement_radios.mdx §4](./placement_radios.mdx#4-the-beside-media-reintroduction-reconciliation--locked).
 * **(c) In this storage's LFB sync repo** — `<syncRepo>/repos/<repoKey>/…`, **only offered (enabled)** when
-  the owning company/Personal storage has a state-sync repo configured
+  the owning company/Personal storage has a sync repo configured
   ([storage_company.mdx](./storage_company.mdx)); otherwise **disabled with a hint** on how to set one up
   ([placement_radios.mdx §5.1](./placement_radios.mdx#51-sync_repo-disabled-when-no-sync-repo-exists)).
 
@@ -269,13 +311,14 @@ When transcripts exist in a tier other than the selected one, the section shows
 
 ### 4.4 Default
 
-* **When the owning storage has a company state-sync repo:** the **noisy tracking state** (`repo_storage.yaml`
-  and per-file sidecars) defaults into that sync repo per
-  [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) — **but transcripts default to `lfbridge`
-  (the repo's hidden `.lfbridge/`)**, because a transcript is content *about the media in this repo* and users
-  expect it to travel *with* that repo, not with the tracking-data repo.
-* **When there is no sync repo:** default is **`lfbridge`** as well. In both cases the default is `lfbridge`;
-  the sync repo only changes where *tracking* data goes, never the transcript default.
+* **Regardless of whether the owning storage has a sync repo**, transcripts default to **`lfbridge`** (the
+  repo's hidden `.lfbridge/`), because a transcript is content *about the media in this repo* and users
+  expect it to travel *with* that repo.
+* The sync repo carries this repo's **tracking state** — a **separate data category** (Category B: Local
+  Storage always, plus the sync-repo mirror when the §2.9 toggle is on), never these content artifacts. So
+  turning the §2.9 sync toggle on never changes this transcript default
+  ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx),
+  [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)).
 
 ### 4.5 Persistence
 
@@ -297,7 +340,7 @@ swapped to "AI descriptions" and the extension to `.ai_description`:
 * **(a)** `<repo>/.lfbridge/<relDir>/<name.ext>.ai_description` *(recommended)*.
 * **(b)** `<mediaDir>/<name.ext>.ai_description` — the reintroduced, opt-in beside-media layout
   ([placement_radios.mdx §4](./placement_radios.mdx#4-the-beside-media-reintroduction-reconciliation--locked)).
-* **(c)** `<syncRepo>/repos/<repoKey>/…` — enabled only with a configured state-sync repo, else disabled with
+* **(c)** `<syncRepo>/repos/<repoKey>/…` — enabled only with a configured sync repo, else disabled with
   the setup hint.
 
 ### 5.2 Switching affects only FUTURE descriptions
@@ -311,8 +354,9 @@ Same as §4.3, with the action labeled **"Move N existing AI descriptions here"*
 
 ### 5.4 Default
 
-Same defaults as §4.4: AI descriptions default to **`lfbridge`** whether or not a company state-sync repo
-exists — only the *noisy tracking state* follows a sync repo when present.
+Same defaults as §4.4: AI descriptions default to **`lfbridge`** whether or not the owning storage has a
+sync repo — the sync repo only carries the separate *tracking-state* data category (Category B, §2.9), never
+the AI-description content default.
 
 ### 5.5 Persistence
 
@@ -332,13 +376,15 @@ mapping is normally automatic) with one control to override it.
 ### 6.1 What it shows
 
 * **Owner** — the resolved **company name** or **Personal**. This is the same owner that decides whether the
-  §4/§5 `sync_repo` option is enabled (a company with a state-sync repo makes it available).
+  §4/§5 `sync_repo` option — and the §2.9 tracking-state sync toggle — is enabled (a company with a sync repo
+  makes them available).
 * **Derivation source** — how the owner was determined:
   * **Auto (from git remote)** — inferred from the git remote's org/host
     ([repo_company_mapping.mdx](./repo_company_mapping.mdx)); shows the remote it matched on.
   * **Manual** — the user reassigned it (§6.2); shows *"set by you"* and when.
-* **State-sync repo** — whether the owner has one configured (drives §4/§5 option (c)); if not, a link to set
-  one up ([storage_company.mdx](./storage_company.mdx) / [storage_settings.mdx](./storage_settings.mdx)).
+* **Sync repo** — whether the owner has one configured (drives §4/§5 option (c) and the §2.9 toggle); if not,
+  a link to set one up ([storage_company.mdx](./storage_company.mdx) /
+  [storage_settings.mdx §4b](./storage_settings.mdx#4b-the-sync-repo--an-additive-mirror-of-owned-repos-tracking-state)).
 
 ### 6.2 Reassign control
 
@@ -371,17 +417,23 @@ ai_description:
 ownership:
   owner: null              # §6 — company id or "personal"; null = use derived
   source: auto             # auto | manual
+sync_repo:
+  enabled: false           # §2.9 — mirror this repo's tracking state to the owner's sync repo (default off)
 ```
 
 * `transcription.placement` and `ai_description.placement` are **machine-local intents**; the `sync_repo`
-  *availability* is derived from the owner, not stored, so the setting resolves correctly on another computer
-  that has the sync repo configured (§6.1, [placement_radios.mdx §6](./placement_radios.mdx#6-persistence)).
+  placement-radio *availability* — and the §2.9 tracking-state toggle's availability — is derived from the
+  owner, not stored, so the setting resolves correctly on another computer that has the sync repo configured
+  (§6.1, [placement_radios.mdx §6](./placement_radios.mdx#6-persistence)).
 * `ownership.owner` is the **manual override**; when null, the owner is the git-remote derivation
   ([repo_company_mapping.mdx](./repo_company_mapping.mdx)). `source` records which of the two applied.
+* `sync_repo.enabled` is the **§2.9 per-repo tracking-state mirror toggle** (default off); when on, this
+  repo's Category-B tracking state is additionally mirrored to `<syncRepo>/repos/<repoKey>/`
+  ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
 
-The two placement enums and the ownership override are added to the shared type and mapped by the settings
-router in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `RepoSettings` gains `transcription: { placement }`, `aiDescription: { placement }`, and `ownership: { owner, source }` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `toRepoSettings()` maps `config.yaml` → these fields and `PATCH /api/repos/:repoId/settings` writes them back.
+The two placement enums, the ownership override, and the sync-repo toggle are added to the shared type and
+mapped by the settings router in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `RepoSettings` gains `transcription: { placement }`, `aiDescription: { placement }`, `ownership: { owner, source }`, and `syncRepo: { enabled }` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `toRepoSettings()` maps `config.yaml` → these fields and `PATCH /api/repos/:repoId/settings` writes them back; the mirror itself is driven by `tracking-sync.service.ts` — `mirrorToSyncRepo()`.
 
 The placement enums are consumed when an artifact is written by
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveArtifactPlacement()` (honors the per-repo `placement` before its own fallback order).
@@ -405,35 +457,57 @@ The placement enums are consumed when an artifact is written by
 6. Repo identity (`repo:` name/path/remote) is written by the scanner and shown read-only here.
 7. A **Transcription** section (§4) offers the shared 3-way placement radio
    ([placement_radios.mdx](./placement_radios.mdx)) for `.transcription` artifacts: `lfbridge` (default,
-   recommended), `beside`, and `sync_repo` (enabled only when a state-sync repo exists, else disabled with a
+   recommended), `beside`, and `sync_repo` (enabled only when a sync repo exists, else disabled with a
    setup hint). Switching affects only future transcripts; a **"Move N existing transcripts here"** action
    migrates the rest.
 8. An **AI descriptions** section (§5) offers the **identical** radio for `.ai_description` artifacts, with
    the same defaults, disabled states, and move action; the two radios are independent.
-9. In both §4 and §5, the default is **`lfbridge`** whether or not a company state-sync repo exists — only
-   the noisy tracking state follows a sync repo per
-   [artifact_placement_policy.mdx](./artifact_placement_policy.mdx).
+9. In both §4 and §5, the default is **`lfbridge`** whether or not the owning storage has a sync repo — the
+   transcript/AI-description **content** (Category A) always defaults to the repo's `.lfbridge/`, while the
+   separate **tracking-state** data category (Category B) lives in Local Storage always and mirrors to the
+   sync repo only when the §2.9 toggle is on
+   ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx),
+   [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)).
 10. The `beside` option is documented as a **deliberate, opt-in reintroduction** of the previously-superseded
     beside-media layout (appended, not replaced, extension), reconciled with Transcribe.mdx / ai_description.mdx.
 11. An **Ownership** section (§6) shows the repo's company/**Personal** owner, its derivation source
-    (auto from git remote / manual), and whether a state-sync repo exists, with a **"Reassign owner…"** control
+    (auto from git remote / manual), and whether a sync repo exists, with a **"Reassign owner…"** control
     (and reset-to-auto) that re-evaluates `sync_repo` availability without moving artifacts.
 12. Persistence (§7) adds `RepoSettings.transcription.placement`, `RepoSettings.aiDescription.placement`
-    (enum `lfbridge` | `beside` | `sync_repo`), and `RepoSettings.ownership { owner, source }`, all saved via
-    the existing `PATCH /api/repos/:repoId/settings`; the placement enums are consumed by
-    `resolveArtifactPlacement()`.
+    (enum `lfbridge` | `beside` | `sync_repo`), `RepoSettings.ownership { owner, source }`, and
+    `RepoSettings.syncRepo { enabled }` (§2.9), all saved via the existing `PATCH /api/repos/:repoId/settings`;
+    the placement enums are consumed by `resolveArtifactPlacement()`.
+13. A **"Sync this repo's tracking state to the company sync repo"** toggle (§2.9) exists, **default OFF**,
+    **enabled only** when the owning company/Personal storage has a sync repo configured (else disabled with a
+    setup hint). It persists on the machine-local `config.yaml` as `sync_repo.enabled`; when ON, this repo's
+    Category-B tracking state (`repo_storage.yaml`, `files.yaml`, sidecars, `history/<device>.txt`,
+    `decisions.yaml`, `manifest.yaml`) is **additionally mirrored** to `<syncRepo>/repos/<repoKey>/` — in
+    addition to Local Storage `~/T/_large_files_bridge/repos/<repoKey>/`, never instead of it, and never in the
+    working repo ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)); logs never travel there.
 
 <!-- summary -->
 The per-repo Settings page (gear icon on a single repo) holding settings that differ per repo. Locked
 sections: big-file threshold override (checkbox off = inherit global 100 MB), pinned master toggle,
-large-file selection rules, pinning/fetch policy, sharing, and the noted team-shared per-file decisions.
-Added: a **Transcription** section (§4) and an **identical AI descriptions** section (§5), each mounting the
-shared 3-way placement radio ([placement_radios.mdx](./placement_radios.mdx)) — `lfbridge` (default) |
-`beside` (the deliberately reintroduced, opt-in, appended-extension beside-media layout) | `sync_repo`
-(enabled only with a company/Personal state-sync repo, else disabled with a setup hint) — where switching
-affects only future artifacts and a "move existing" action migrates the rest; plus an **Ownership** section
-(§6) showing the derived company/Personal owner + source with a reassign control. New RepoSettings fields
-`transcription.placement`, `aiDescription.placement`, and `ownership { owner, source }` persist via the
-existing settings PATCH.
+large-file selection rules, pinning/fetch policy, sharing, and the noted per-file decisions (§2.6 — the
+decisions.yaml ledger is NO LONGER committed in the working repo; it lives in Local Storage always and
+travels to the team via the owner's SYNC REPO when the §2.9 toggle is on). §2.9 NEW: a per-repo "Sync this
+repo's tracking state to the company sync repo" toggle (default OFF, enabled only when the owner has a sync
+repo configured, else disabled with a setup hint); ON = this repo's Category-B tracking state
+(repo_storage.yaml/files.yaml/sidecars/history/decisions.yaml/manifest.yaml) is ADDITIVELY mirrored to
+<syncRepo>/repos/<repoKey>/ on top of Local Storage ~/T/_large_files_bridge/repos/<repoKey>/ (never the
+working repo; logs never travel); persists as sync_repo.enabled. §3.1: BOTH config.yaml (this computer's
+participation) and repo_storage.yaml (repo-wide tracking state) are machine-local under Local Storage —
+neither in the working repo. Added: a **Transcription** section (§4) and an **identical AI descriptions**
+section (§5), each mounting the shared 3-way placement radio ([placement_radios.mdx](./placement_radios.mdx))
+— `lfbridge` (default) | `beside` (the deliberately reintroduced, opt-in, appended-extension beside-media
+layout) | `sync_repo` (enabled only with a company/Personal sync repo, else disabled with a setup hint) —
+where switching affects only future artifacts and a "move existing" action migrates the rest; those Category-A
+CONTENT artifacts default to `lfbridge` regardless of the sync repo. Plus an **Ownership** section (§6)
+showing the derived company/Personal owner + source with a reassign control. New RepoSettings fields
+`transcription.placement`, `aiDescription.placement`, `ownership { owner, source }`, and
+`syncRepo { enabled }` persist via the existing settings PATCH. Code: tracking-root.service
+resolveStateSyncRepo, tracking-sync.service mirrorToSyncRepo, resolveArtifactPlacement (Category-A radio).
+Keep aligned with artifact_placement_policy.mdx + repo_tracking_scheme.mdx (the placement policy + file
+shapes), placement_radios.mdx, storage_settings.mdx §4b, repo_company_mapping.mdx (owner).
 -->
 

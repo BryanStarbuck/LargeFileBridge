@@ -60,7 +60,10 @@ function freeDiskBytes(): number {
   try {
     const st = fs.statfsSync(process.env.HOME || os.homedir());
     return st.bavail * st.bsize;
-  } catch {
+  } catch (e) {
+    // Falls back to 0 (the consent dialog just omits the "X free" line) but this is a real failure worth a
+    // trail — a broken statfs means the free-disk warning in the permission popup silently disappears.
+    log.warn("transcribe", `freeDiskBytes: statfsSync failed — free-disk check disabled for this request: ${(e as Error).message}`);
     return 0;
   }
 }
@@ -230,8 +233,14 @@ export function removeModel(): { removed: boolean; freedBytes: number } {
 
 /** Persist the user's consent decision from the popup (§3.2) so it does not nag again. */
 export async function recordConsent(decision: "approved" | "declined" | "use_fallback"): Promise<void> {
-  await updateAppConfig((c) => {
-    c.transcribe.model_consent = decision;
-    return c;
-  });
+  try {
+    await updateAppConfig((c) => {
+      c.transcribe.model_consent = decision;
+      return c;
+    });
+  } catch (e) {
+    // A failure here means the popup will nag again next time — not silent data loss, but worth a trail.
+    log.error("transcribe", `recordConsent(${decision}) failed to persist: ${(e as Error).message}`);
+    throw e;
+  }
 }

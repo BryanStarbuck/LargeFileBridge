@@ -92,6 +92,12 @@ pulls the storage sees the full set of devices, their schedules, and their graft
 machine knows which *other* computers carry a file (redundancy) and how the UI can show "this storage
 is on your 4 computers."
 
+The SDL that carries the registry is the storage's **Category-B sync repo** — a dedicated
+`*_large_files_bridge` company/Personal tracking repo whose purpose is exactly to travel this kind of
+state ([artifact_placement_policy.mdx §4](./artifact_placement_policy.mdx), [git_backbone.mdx](./git_backbone.mdx)).
+LFB commits the registry there, **never** into a working **code** repo (a `repo`-type storage): a code repo's
+Category-B state goes to Local Storage + the sync repo instead, keeping the working tree clean.
+
 The filename is the device's **nice name**, sanitized the same way repo/user folder keys are
 ([storage_local.mdx §6.1](./storage_local.mdx#61-keying--folder-name)). The authoritative identity
 inside the file is the **`id`**, not the filename (a rename moves the file but keeps the id).
@@ -510,21 +516,25 @@ whose **root is already a git checkout** did not qualify, so no git ran against 
 
 **The rule.** A **company** or **personal** `*_large_files_bridge` storage whose **own root is a git
 working tree** (`<root>/.git` exists) is, by definition, a **purpose-built tracking-data repo the user
-created for LFB** — the `*_large_files_bridge` naming convention plus the `storage.yaml` descriptor **is**
-the configuration. LFB therefore **auto-adopts that root as the storage's Git backbone**, with **no**
-manual setting required. The moment this device's `devices/<self>.yaml` is **first written** — and on
-**every later update** to it — the write-back **commits it and pushes it** to that repo (fetch → auto-merge →
-write self device → `git add` → `git commit` → `git push`, §11.3). *"These are the ones where it's a Git
-dedicated to our tracking data — the Act3 company repo — so we are allowed to check in and git push on
-that."*
+created for LFB** — this is exactly the **sync repo** that carries LFB's **Category-B** tracking state
+across the user's computers ([artifact_placement_policy.mdx §4](./artifact_placement_policy.mdx)). The
+`*_large_files_bridge` naming convention plus the `storage.yaml` descriptor **is** the configuration. LFB
+therefore **auto-adopts that root as the storage's Git backbone**, with **no** manual setting required. The
+moment this device's `devices/<self>.yaml` is **first written** — and on **every later update** to it — the
+write-back **commits it and pushes it** to that repo (fetch → auto-merge → write self device → `git add` →
+`git commit` → `git push`, §11.3). *"These are the ones where it's a Git dedicated to our tracking data —
+the Act3 company repo — so we are allowed to check in and git push on that."*
 
 * An **explicit** dedicated-repo backing (a path the user set) still **wins** when present; the auto-adopt
   is the **fallback** so the common case — a company/personal tracking repo that is its own git checkout —
   "just works" without a settings trip.
 * This is **not** a widening of the [charter's no-relay / git compliance boundary](./git_backbone.mdx#7-compliance-boundary--the-charters-no-relay-posture-in-git-terms).
-  A plain **code** repo (storage type `repo`) is **never** adopted — those get `.lfbridge/` **git-ignored**
-  and are explicitly excluded. LFB only ever commits **our own** device registry into **our own**
-  dedicated tracking repo, which is exactly "our own content between our own machines".
+  A plain **code** repo (storage type `repo`) is **never** adopted as a tracking backbone — LFB never commits
+  its device registry (or any Category-B tracking state) into a working code repo. That state routes to
+  **Local Storage** (+ the company/Personal **sync repo** when configured), never the code repo; the code
+  repo's committed `.lfbridge/` holds only **Category-A** content (transcripts / AI descriptions). LFB only
+  ever commits **our own** device registry into **our own** dedicated tracking (sync) repo, which is exactly
+  "our own content between our own machines".
 * If the tracking repo has **no `origin`** yet, the write-back still **commits locally** (the file is
   checked in), and pushes as soon as an `origin` exists — so "it did the git add + git commit" holds even
   before a remote is wired up.
@@ -609,12 +619,13 @@ The pass itself — for every Git-backed storage, pull → write self device →
     has no outward footprint), runs the strict **fetch → auto-merge → write self device → commit → push**
     order — **always pulling first, even with nothing to change**, so another computer's edits land here —
     and is **serialized per storage** so it never races the 15-minute Transfer pass on the same repo (§11).
-12. A **company** or **personal** `*_large_files_bridge` **tracking repo whose own root is a git working
-    tree auto-adopts that root as its Git backbone** — no manual dedicated-repo setting required — so the
-    first write of `devices/<self>.yaml` **and every later update** is **committed and pushed** to it
-    (§11.2.1). An explicit dedicated-repo backing still takes precedence; a plain **code** repo (type
-    `repo`) is **never** adopted (its `.lfbridge/` stays git-ignored), keeping the charter's git
-    compliance boundary intact.
+12. A **company** or **personal** `*_large_files_bridge` **tracking repo (the Category-B sync repo) whose
+    own root is a git working tree auto-adopts that root as its Git backbone** — no manual dedicated-repo
+    setting required — so the first write of `devices/<self>.yaml` **and every later update** is
+    **committed and pushed** to it (§11.2.1). An explicit dedicated-repo backing still takes precedence; a
+    plain **code** repo (type `repo`) is **never** adopted — its Category-B tracking state routes to Local
+    Storage (+ the sync repo), never the code repo (whose committed `.lfbridge/` holds only Category-A
+    content) — keeping the charter's git compliance boundary intact.
 
 <!--
   The DEVICE / PEERS model. §1 identity: a MINTED stable UUID (distinct from the IPFS PeerID) + a
@@ -652,11 +663,13 @@ The pass itself — for every Git-backed storage, pull → write self device →
   POST /run/device; pin.service pushDeviceBackbone()/ensureDeviceRegistered() + the same decoupling in
   pinStorageUnit (git cycle + writeSelfDevice run regardless of pinned; only byte work gated); ScansPage
   "Device registration" WorkerCard. Keep in sync with git_backbone.mdx §6, pin_process.mdx §1/§5, storage_personal.mdx §7.
-  §11.2.1 AUTO-ADOPT (learned from a defect): a company/personal *_large_files_bridge tracking repo whose OWN
-  root is a git checkout auto-adopts that root as its Git backbone — no manual dedicated-repo setting — so the
-  self device file is committed+pushed on first write and every update (fixed: the Act3 company repo wrote
-  devices/<self>.yaml but never git add/commit/pushed it). Explicit dedicated-repo backing still wins; a plain
-  code repo (type `repo`) is never adopted (.lfbridge/ stays git-ignored) so git_backbone.mdx §7 holds. Code:
+  §11.2.1 AUTO-ADOPT (learned from a defect): a company/personal *_large_files_bridge tracking repo (= the
+  Category-B SYNC REPO, artifact_placement_policy.mdx §4) whose OWN root is a git checkout auto-adopts that
+  root as its Git backbone — no manual dedicated-repo setting — so the self device file is committed+pushed on
+  first write and every update (fixed: the Act3 company repo wrote devices/<self>.yaml but never git
+  add/commit/pushed it). Explicit dedicated-repo backing still wins; a plain code repo (type `repo`) is never
+  adopted as a tracking backbone — its Category-B state routes to Local Storage (+ sync repo), never the code
+  repo (whose committed .lfbridge/ holds only Category-A content) so git_backbone.mdx §7 holds. Code:
   storage-settings.service getGitBackboneRemote() (explicit-then-root fallback) consumed by pin.service
   pinStorageUnitInner()/ensureDeviceRegisteredInner(). Keep in sync with git_backbone.mdx §1/§7, storage_company.mdx.
 -->

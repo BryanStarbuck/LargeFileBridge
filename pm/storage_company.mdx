@@ -132,10 +132,10 @@ and **auto-creates this storage** to hold the grouping ([repo_company_mapping.md
   in the Storages disclosure and the Repos list ([repo_company_mapping.mdx §7.1](./repo_company_mapping.mdx#71-grouping-in-the-left-bar-and-repos-list-locked)).
   The mapping is derived offline from the remote URL — **no** forge network call.
 * An **auto-created** company is a **lightweight** entry at first: it exists to group repos and to be **renamed**
-  (§6). It has no mapped source directories (§1.1), no allow-list, and no state-sync repo (§7) until the user adds
+  (§6). It has no mapped source directories (§1.1), no allow-list, and no sync repo (§7) until the user adds
   them. **A repo-group company and a shared-media-pile company are the same storage kind** at different levels of
-  configuration — filling in §1.1 / the allow-list / §7 promotes the same storage from "just a group" to a full
-  shared pile.
+  configuration — filling in §1.1 / the allow-list / the sync repo (§7) promotes the same storage from "just a
+  group" to a full shared pile.
 * The company's **`id`** is the stable id `resolveRepoOwner` stamps on each owned repo's `owner.companyId`
   ([repo_company_mapping.mdx §1.1](./repo_company_mapping.mdx#11-the-repo-owner-field-locked-shape)), so grouping and the
   company row agree.
@@ -171,35 +171,40 @@ Reading and writing the company's friendly `company_name` (the display name) is 
 
 ---
 
-## 7. The company LFB state-sync repo
+## 7. The company sync repo
 
-A company can optionally configure a **dedicated LFB state-sync repo** — a git repo the company sets up **for LFB
-state** (not for the big media bytes) — and, when it is set, a member's repos owned by this company route their
-**noisy per-repo tracking** into it so teammates share it.
+A company can optionally configure a **dedicated sync repo** — a git repo the company sets up *"only for the
+Large File Bridge webapp to sync changes"* (not for the big media bytes) — and, when it is set, a member's
+repos owned by this company **additionally mirror** their **LFB tracking state** into it so teammates share it.
 
 * **What it is.** A git repo (the company's own — e.g. `git@github.com:ACT3ai/act3_lfb_state.git`) whose only job
   is to carry LFB's small tracking text between the company's members. It is the **company** analogue of the
-  Personal state-sync repo ([storage_personal.mdx §14](./storage_personal.mdx#14-personals-optional-state-sync-repo)) and
+  Personal sync repo ([storage_personal.mdx §14](./storage_personal.mdx#14-personals-optional-sync-repo)) and
   of this company storage's own SDL Git backbone (§1) — but scoped to **member repos' tracking**, not this
   storage's media pile.
-* **What travels there.** Per the churn policy ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)),
-  a repo's `repo_storage.yaml` and its **noisy** per-file sidecars normally stay in the machine-local state root
-  `~/T/_large_files_bridge/repos/<repoKey>/` until a transcript / AI-description exists. **When the repo's owner is
-  this company and this company has a state-sync repo configured, that override kicks in**: the tracking is written
-  under **`<syncRepo>/repos/<repoKey>/`** instead, so it commits + pushes to the company repo and every teammate on
-  the same company sees it. Path-mirrored by `<repoKey>` so two members never collide.
-* **How the user configures it.** From the company's [storage settings](./storage_settings.mdx#4-backing-locations--dedicated-repo--google-drive--dropbox)
-  the user enables a **Company state-sync repo** backing location and supplies it as a **local file path** or an
+* **What travels there.** Per the placement policy ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx),
+  [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)), an owned repo's tracking state — `repo_storage.yaml`,
+  `files.yaml`, the per-file sidecars, `history/<device>.txt`, `decisions.yaml`, and `manifest.yaml` — lives in
+  **Local Storage always** at `~/T/_large_files_bridge/repos/<repoKey>/`. **When the repo's owner is this company,
+  this company has a sync repo configured, AND the repo's per-repo toggle is on**
+  ([repo_settings.mdx §2.9](./repo_settings.mdx)), that same state is **also** written under
+  **`<syncRepo>/repos/<repoKey>/`** — **in addition to** Local Storage, not instead of it — so it commits + pushes
+  to the company repo and every teammate on the same company sees it. Path-mirrored by `<repoKey>` so two members
+  never collide. Logs never travel here ([artifact_placement_policy.mdx §8](./artifact_placement_policy.mdx)).
+* **How the user configures it.** From the company's [storage settings §4b](./storage_settings.mdx#4b-the-sync-repo--an-additive-mirror-of-owned-repos-tracking-state)
+  the user picks a **sync repo** and supplies it as a **local file path** or an
   **HTTP(S) URL** — the same two remote shapes and OS-credential-helper rules as the Personal Git backbone
   ([storage_personal.mdx §5](./storage_personal.mdx#5-turning-the-git-backbone-on--local-path-vs-https-url),
   [git_backbone.mdx](./git_backbone.mdx)). LFB runs the same fetch → auto-merge → commit → push cycle against it.
-* **Default: OFF.** Absent a configured state-sync repo, member repos keep their tracking in the state root per the
-  default policy — nothing changes. Turning it on is an explicit opt-in that the company makes once.
+* **Default: OFF.** Absent a configured sync repo (or with the per-repo toggle off), member repos keep their
+  tracking in **Local Storage only** — real and honored locally, simply not yet shared. Turning it on is an
+  explicit, per-repo opt-in.
 * **Precedence.** A repo manually reassigned to this company ([repo_company_mapping.mdx §5](./repo_company_mapping.mdx#5-manual-reassignment--the-user-always-wins-locked))
-  routes to this state-sync repo just like an auto-owned one — ownership (not how it was derived) decides.
+  mirrors to this sync repo just like an auto-owned one — ownership (not how it was derived) decides which sync
+  repo a repo can mirror to.
 
-Resolving the company's state-sync repo and routing an owned repo's tracking to `<syncRepo>/repos/<repoKey>/` is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `readStorageSettings()` (the company's `backing.state_sync_repo` block) consumed by the placement resolver in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` — `resolveTrackingRoot(repoKey, owner)`.
+Resolving the company's sync repo and the additive mirror root for an owned repo (`<syncRepo>/repos/<repoKey>/` or null) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `readStorageSettings()` (the company's `sync_repo` block) consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)`, whose mirror is written by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)`.
 
 ---
 
@@ -224,15 +229,16 @@ Resolving the company's state-sync repo and routing an owned repo's tracking to 
 6. A company is created **explicitly** or **automatically** from a repo whose remote names a forge **org**; every
    repo mapped to it **groups under this company** ([repo_company_mapping.mdx §7.1](./repo_company_mapping.mdx#71-grouping-in-the-left-bar-and-repos-list-locked)),
    and an auto-created company is a **lightweight** entry (same storage kind, less configuration) that is promoted
-   to a full shared pile only when the user fills in mapped dirs / allow-list / state-sync repo (§5).
+   to a full shared pile only when the user fills in mapped dirs / allow-list / sync repo (§5).
 7. The company's **friendly display name** is its descriptor **`company_name`** (§6, §2) — seeded to the cryptic
    org slug on auto-creation, overwritten by the user's rename, shown **everywhere**, never blank (falls back to
    the slug), and **travels** to teammates via the committed `storage.yaml`.
-8. A company may configure a **state-sync repo** (local path or HTTP(S) URL, same shapes/credentials as the Git
-   backbone); when set, member repos **owned by this company** route their noisy per-repo tracking to
-   **`<syncRepo>/repos/<repoKey>/`** instead of the machine-local state root (§7,
+8. A company may configure a **sync repo** (local path or HTTP(S) URL, same shapes/credentials as the Git
+   backbone); when set, member repos **owned by this company** with the per-repo toggle on **additionally mirror**
+   their LFB tracking state to **`<syncRepo>/repos/<repoKey>/`** — in addition to Local Storage
+   (`~/T/_large_files_bridge/repos/<repoKey>/`), never instead of it (§7,
    [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)); default **OFF**, and **ownership** (auto or
-   manual) — not how it was derived — decides.
+   manual) — not how it was derived — decides which sync repo a repo can mirror to.
 
 <!--
   Company storage = a company's SHARED big files, one per company. The root (e.g.
@@ -246,12 +252,15 @@ Resolving the company's state-sync repo and routing an owned repo's tracking to 
   See storages.mdx, syncable_data_location.mdx (SDL + mapped dirs), devices.mdx (graft), storage_settings.mdx.
   §5 (repo_company_mapping.mdx): a company is created EXPLICITLY or AUTO from a repo's forge-org remote; owned
   repos group under it; auto company = lightweight, same storage kind, promoted by adding mapped dirs/allow-list/
-  state-sync. §6 friendly DISPLAY NAME = descriptor company_name (single source of truth): seeded to cryptic slug,
+  sync repo. §6 friendly DISPLAY NAME = descriptor company_name (single source of truth): seeded to cryptic slug,
   rename overwrites it, shown everywhere, never blank (falls back to slug), travels via committed storage.yaml;
-  read/writeDescriptor. §7 optional COMPANY STATE-SYNC REPO (git repo for LFB state, local path or URL, same shapes/
-  creds as git_backbone): when set, member repos OWNED by this company route noisy per-repo tracking to
-  <syncRepo>/repos/<repoKey>/ (overrides the state-root default in artifact_placement_policy.mdx); default OFF;
-  ownership (auto|manual) decides. Code: ensureCompanyForOwner, storage-settings.service state_sync_repo,
-  repo-storage.service resolveTrackingRoot. Keep aligned with repo_company_mapping.mdx (the mapping),
-  storage_personal.mdx (personal-accounts + personal state-sync), artifact_placement_policy.mdx (churn policy).
+  read/writeDescriptor. §7 optional COMPANY SYNC REPO (== "Company repo only for the LFB webapp to sync changes";
+  git repo for LFB state, local path or URL, same shapes/creds as git_backbone): when set AND the per-repo toggle
+  is on, member repos OWNED by this company ADDITIVELY MIRROR their Local-Storage tracking state to
+  <syncRepo>/repos/<repoKey>/ (in ADDITION to ~/T/_large_files_bridge/repos/<repoKey>/, never instead of it;
+  artifact_placement_policy.mdx); default OFF; ownership (auto|manual) decides; logs never travel. RETIRED: the
+  content-threshold "state-root until a transcript exists, then override" framing. Code: ensureCompanyForOwner,
+  storage-settings.service sync_repo, tracking-root.service resolveStateSyncRepo, tracking-sync.service
+  mirrorToSyncRepo. Keep aligned with repo_company_mapping.mdx (the mapping), storage_personal.mdx
+  (personal-accounts + personal sync repo), artifact_placement_policy.mdx + repo_tracking_scheme.mdx (placement).
 -->

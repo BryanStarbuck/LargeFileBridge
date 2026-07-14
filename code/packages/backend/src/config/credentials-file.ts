@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import { log } from "../shared/logging.js";
 
 export interface GoogleCreds {
@@ -86,36 +87,111 @@ export function credentialsFileInfo(): {
   };
 }
 
+// loadGoogleCreds() runs on (or near) every request through identify.ts, so re-reading and
+// re-JSON.parse'ing the file on each call is both a perf cost and — for a file that is persistently
+// unparsable — a way to emit the SAME warning hundreds of times into error.err. We cache the
+// file-derived id/secret keyed by the file's (mtimeMs, size); a cache hit skips the read+parse
+// entirely. On top of that, the two warn() calls are separately deduped by a hash of the exact raw
+// bytes that provoked them, so even if the cache is bypassed (or the mtime granularity is coarser
+// than a rapid edit-save-edit cycle) the identical problem is never logged twice in a row.
+interface FileDerivedCreds {
+  mtimeMs: number;
+  size: number;
+  clientId: string;
+  clientSecret: string;
+}
+let fileCredsCache: FileDerivedCreds | null = null;
+let lastWarnedRepairedHash: string | null = null;
+let lastWarnedFailureHash: string | null = null;
+
+function hashOf(s: string): string {
+  return crypto.createHash("sha256").update(s, "utf8").digest("hex");
+}
+
+/** Test-only: drop the cached file read + dedupe state so a test can simulate a fresh process. */
+export function _resetCredsCacheForTests(): void {
+  fileCredsCache = null;
+  lastWarnedRepairedHash = null;
+  lastWarnedFailureHash = null;
+}
+
 export function loadGoogleCreds(): GoogleCreds {
   // env wins
   let clientId = process.env.GOOGLE_CLIENT_ID || "";
   let clientSecret = process.env.GOOGLE_CLIENT_SECRET || "";
   if (clientId && clientSecret) return { clientId, clientSecret };
 
+  const p = credsFilePath();
+  let stat: fs.Stats | null = null;
   try {
-    const raw = fs.readFileSync(credsFilePath(), "utf8");
+    stat = fs.statSync(p);
+  } catch {
+    stat = null;
+  }
+
+  // File absent: nothing to read/parse/log (expected in local dev). Drop any stale cache so a file
+  // that reappears later gets a fresh read instead of serving a previous mtime's cached result.
+  if (!stat) {
+    fileCredsCache = null;
+    return { clientId, clientSecret };
+  }
+
+  if (
+    fileCredsCache &&
+    fileCredsCache.mtimeMs === stat.mtimeMs &&
+    fileCredsCache.size === stat.size
+  ) {
+    clientId = clientId || fileCredsCache.clientId;
+    clientSecret = clientSecret || fileCredsCache.clientSecret;
+    return { clientId, clientSecret };
+  }
+
+  let fileClientId = "";
+  let fileClientSecret = "";
+  try {
+    const raw = fs.readFileSync(p, "utf8");
     const { data, repaired } = parseCredsJson(raw);
     if (repaired) {
-      log.warn(
-        "auth",
-        `Google creds at ${credsFilePath()} contained invalid invisible whitespace (e.g. non-breaking ` +
-          `spaces) — parsed after normalizing. Re-save the file with plain ASCII spaces to silence this.`,
-      );
+      const h = hashOf(raw);
+      if (lastWarnedRepairedHash !== h) {
+        lastWarnedRepairedHash = h;
+        log.warn(
+          "auth",
+          `Google creds at ${p} contained invalid invisible whitespace (e.g. non-breaking ` +
+            `spaces) — parsed after normalizing. Re-save the file with plain ASCII spaces to silence this.`,
+        );
+      }
     }
     const json = data as {
       large_files_bridge?: { google?: { clientId?: string; clientSecret?: string } };
       google?: { clientId?: string; clientSecret?: string };
     };
     const g = json.large_files_bridge?.google ?? json.google ?? {};
-    clientId = clientId || g.clientId || "";
-    clientSecret = clientSecret || g.clientSecret || "";
+    fileClientId = g.clientId || "";
+    fileClientSecret = g.clientSecret || "";
   } catch (e) {
     // Absence is expected in local dev — not an error. But a file that EXISTS yet fails to read or
-    // parse (bad JSON / permissions) is a real misconfiguration the user should be told about.
+    // parse (bad JSON / permissions) is a real misconfiguration the user should be told about. Dedupe
+    // by a hash of the failure message + path so an unchanged, persistently-broken file logs once,
+    // not on every request.
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
-      log.warn("auth", `Failed to read/parse Google creds at ${credsFilePath()}: ${(e as Error).message}`);
+      const message = (e as Error).message;
+      const h = hashOf(`${p}:${message}`);
+      if (lastWarnedFailureHash !== h) {
+        lastWarnedFailureHash = h;
+        log.warn("auth", `Failed to read/parse Google creds at ${p}: ${message}`);
+      }
     }
   }
+
+  fileCredsCache = {
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    clientId: fileClientId,
+    clientSecret: fileClientSecret,
+  };
+  clientId = clientId || fileClientId;
+  clientSecret = clientSecret || fileClientSecret;
   return { clientId, clientSecret };
 }
 

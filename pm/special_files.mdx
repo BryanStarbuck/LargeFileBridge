@@ -113,19 +113,24 @@ For **video** and **audio** LFB asks: **could this be turned into text?**
 
 Being special is the gate for the rest of the product's per-file machinery:
 
-* **A per-file sidecar.** Only special files get a `.lfbridge/files/<path>/<name>.yaml` sidecar
+* **A per-file sidecar.** Only special files get a per-file `<name>.yaml` sidecar
   ([repo_tracking_scheme.mdx §3](./repo_tracking_scheme.mdx)) with identity, the perceptual fingerprint
-  (media only — [perceptual_fingerprint.mdx](./perceptual_fingerprint.mdx)), and the event history.
+  (media only — [perceptual_fingerprint.mdx](./perceptual_fingerprint.mdx)), and the event history. It is
+  **Category-B tracking state**, so it lives in **Local Storage** at
+  `~/T/_large_files_bridge/repos/<repoKey>/files/<path>.yaml` — always, never the working repo, and
+  additionally mirrored to the company/Personal **sync repo** when enabled
+  ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
 * **The repo rollup.** Every category and sub-flag increments the `repo_storage.yaml → counts:` block
-  ([repo_tracking_scheme.mdx §2.2](./repo_tracking_scheme.mdx)) and the [Repos](./repos.mdx) table's
-  per-repo counts, and drives the four category-rollup rows ([storage_repo.mdx](./storage_repo.mdx), the
-  charter category table).
+  ([repo_tracking_scheme.mdx §2.2](./repo_tracking_scheme.mdx)) — itself Category B in **Local Storage**
+  (`~/T/_large_files_bridge/repos/<repoKey>/repo_storage.yaml`), not the working repo — and the
+  [Repos](./repos.mdx) table's per-repo counts, and drives the four category-rollup rows
+  ([storage_repo.mdx](./storage_repo.mdx), the charter category table).
 * **The warnings/offers.** `compressible` → the "can be compressed" offers; `large` + not-git-ignored →
   the "big files aren't git-ignored" offer; `ipfs_pinned` but untracked → the Import offer;
   `transcribable` → the transcription action ([warnings.mdx §10](./warnings.mdx)).
 
 Filling `repo_storage.yaml → counts:` and the Repos-table counts from `classifySpecial` over the repo's files is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` — `refreshCounts(repoRoot)` (folds `classifySpecial` results into the rollup).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` — `refreshCounts(repoRoot)` (folds `classifySpecial` results into the rollup; writes to the Local-Storage `repos/<repoKey>/` root resolved by `tracking-root.service.ts` — `resolveTrackingRoot()`, never the working repo).
 
 ---
 
@@ -154,7 +159,10 @@ Filling `repo_storage.yaml → counts:` and the Repos-table counts from `classif
   audio sometimes) and transcribable (video has audio; audio optional; images NOT — they get AI
   descriptions). CONSOLIDATES existing scattered signals (isMediaFile, mediaKindForName, VIDEO_EXT,
   compressInfo, pinset read, payload rule) into one enum + classifySpecial() — reuse, don't re-derive.
-  Special ⇒ earns a sidecar, counts into repo_storage.yaml, drives the warnings/offers. Offers never act.
+  Special ⇒ earns a per-file <name>.yaml sidecar + counts into repo_storage.yaml → counts:, drives the
+  warnings/offers. Offers never act. Both the sidecar and repo_storage.yaml are Category B — they live in
+  LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ (files/<path>.yaml + repo_storage.yaml), NOT the
+  working repo's .lfbridge/; additionally mirrored to the sync repo when enabled (artifact_placement_policy.mdx).
   Siblings: scan (large), compression (compressible), Transcribe (transcribable), ipfs (already-pinned),
-  repo_tracking_scheme (sidecar+counts), use_case_two_computers (the tour).
+  repo_tracking_scheme (sidecar+counts), artifact_placement_policy (placement), use_case_two_computers (the tour).
 -->

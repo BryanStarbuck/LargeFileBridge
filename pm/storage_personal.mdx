@@ -438,30 +438,33 @@ Persisting and matching the personal-accounts list is to be implemented in code:
 
 ---
 
-## 14. Personal's optional state-sync repo
+## 14. Personal's optional sync repo
 
-Just like a company ([storage_company.mdx §7](./storage_company.mdx#7-the-company-lfb-state-sync-repo)), **Personal
-can also have a state-sync repo** — indeed it is the **canonical** one: the Personal Git backbone described in §5
-**is** Personal's state-sync repo (conventionally `~/BGit/Bryan_git/personal_large_files_bridge/`).
+Just like a company ([storage_company.mdx §7](./storage_company.mdx#7-the-company-sync-repo)), **Personal
+can also have a sync repo** — indeed it is the **canonical** one: the Personal Git backbone described in §5
+**is** Personal's sync repo (conventionally `~/BGit/Bryan_git/personal_large_files_bridge/`).
 
-* **What routes there.** Per the churn policy ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)), a
-  **Personal-owned repo's** noisy per-repo tracking (`repo_storage.yaml` + noisy sidecars) normally stays in the
-  machine-local state root `~/T/_large_files_bridge/repos/<repoKey>/` until a transcript / AI-description exists.
-  **When Personal has a state-sync repo configured, that override routes the tracking to
-  `<syncRepo>/repos/<repoKey>/`** — so it commits + pushes over the §5 backbone to your **other computers**,
-  path-mirrored by `<repoKey>`.
+* **What travels there.** Per the placement policy ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx),
+  [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)), a **Personal-owned repo's** tracking state
+  (`repo_storage.yaml`, `files.yaml`, per-file sidecars, `history/<device>.txt`, `decisions.yaml`, `manifest.yaml`)
+  lives in **Local Storage always** at `~/T/_large_files_bridge/repos/<repoKey>/`. **When Personal has a sync repo
+  configured and the repo's per-repo toggle is on** ([repo_settings.mdx §2.9](./repo_settings.mdx)), that same state
+  is **also** written under `<syncRepo>/repos/<repoKey>/` — **in addition to** Local Storage, not instead of it — so
+  it commits + pushes over the §5 backbone to your **other computers**, path-mirrored by `<repoKey>`. Logs never
+  travel here.
 * **Same mechanism as §5.** There is nothing new to install: the Personal dedicated Git repo (§5, turned on from
-  [storage settings](./storage_settings.mdx#41-dedicated-git-repo-preferred-when-available)) is the state-sync
-  repo, and the same fetch → auto-merge → commit → push cycle (§7) carries the routed repo tracking alongside the
+  [storage settings](./storage_settings.mdx#41-dedicated-git-repo-preferred-when-available)) is the sync
+  repo, and the same fetch → auto-merge → commit → push cycle (§7) carries the mirrored repo tracking alongside the
   Personal SDL.
-* **Default: the state root.** With no Personal dedicated repo configured, a Personal-owned repo keeps its tracking
-  in the state root per the default policy — nothing changes until you turn the Personal backbone on.
-* **Ownership decides.** A repo routes to **Personal's** state-sync repo only while its owner is **Personal**
+* **Default: Local Storage only.** With no Personal dedicated repo configured (or the per-repo toggle off), a
+  Personal-owned repo keeps its tracking in Local Storage only — real and honored locally, simply not yet shared,
+  and never in the working repo. Nothing changes until you turn the Personal backbone on and opt the repo in.
+* **Ownership decides.** A repo mirrors to **Personal's** sync repo only while its owner is **Personal**
   (default or a manual reassignment, [repo_company_mapping.mdx §7.2](./repo_company_mapping.mdx#72-artifact-placement-follows-the-owner));
-  reassign it to a company and its tracking follows that company's state-sync repo instead.
+  reassign it to a company and its tracking mirrors to that company's sync repo instead.
 
-Routing a Personal-owned repo's tracking to `<syncRepo>/repos/<repoKey>/` when Personal has a dedicated repo is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` — `resolveTrackingRoot(repoKey, owner)` (Personal branch resolves the Personal dedicated repo from `storage-settings.service.ts`).
+Resolving the Personal sync-repo mirror root for a Personal-owned repo (`<syncRepo>/repos/<repoKey>/` or null) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)` (Personal branch resolves the Personal dedicated repo from `storage-settings.service.ts`), whose additive mirror is written by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)`.
 
 ---
 
@@ -507,10 +510,11 @@ Routing a Personal-owned repo's tracking to `<syncRepo>/repos/<repoKey>/` when P
     ([repo_company_mapping.mdx §3](./repo_company_mapping.mdx#3-the-heuristic--which-parse-becomes-a-company-locked)).
     The **"my personal accounts"** list is owned here, stored in app config (`personal_accounts`; `host` optional =
     wildcard), re-derives `auto` owners on edit, leaves `manual` overrides alone, and starts empty (§13).
-12. Personal **can also have a state-sync repo** — the §5 Personal Git backbone **is** it (§14): when configured, a
-    **Personal-owned** repo's noisy per-repo tracking routes to **`<syncRepo>/repos/<repoKey>/`** instead of the
-    machine-local state root ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)), carried to the
-    user's other computers over the same backbone; default is the state root, and **ownership** decides.
+12. Personal **can also have a sync repo** — the §5 Personal Git backbone **is** it (§14): when configured and the
+    repo's per-repo toggle is on, a **Personal-owned** repo's LFB tracking state is **additionally mirrored** to
+    **`<syncRepo>/repos/<repoKey>/`** — in addition to Local Storage `~/T/_large_files_bridge/repos/<repoKey>/`,
+    never instead of it ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)) — and carried to the
+    user's other computers over the same backbone; default is Local-Storage-only, and **ownership** decides.
 
 <!--
   Personal storage = the user's OWN private big files, and the CANONICAL Git-backbone use case: one user,
@@ -536,11 +540,14 @@ Routing a Personal-owned repo's tracking to `<syncRepo>/repos/<repoKey>/` when P
   §13 Personal = DEFAULT OWNER OF REPOS too (repo_company_mapping.mdx): no/local/unknown remote or a known-forge
   owner on the "my personal accounts" list → Personal. The personal-accounts list is OWNED HERE (app config
   personal_accounts, host optional=wildcard, re-derives auto owners on edit, leaves manual alone, starts empty;
-  config.service getAppConfig().personalAccounts / isPersonalAccount). §14 Personal's optional STATE-SYNC REPO = the
-  §5 Personal Git backbone itself: when configured, a Personal-owned repo's noisy tracking routes to
-  <syncRepo>/repos/<repoKey>/ (overrides state-root default in artifact_placement_policy.mdx); default = state root;
-  ownership decides; repo-storage.service resolveTrackingRoot. Keep aligned with repo_company_mapping.mdx (mapping),
-  storage_company.mdx (company state-sync + rename), artifact_placement_policy.mdx (churn policy).
+  config.service getAppConfig().personalAccounts / isPersonalAccount). §14 Personal's optional SYNC REPO = the
+  §5 Personal Git backbone itself: when configured AND the per-repo toggle is on, a Personal-owned repo's LFB
+  tracking state is ADDITIVELY MIRRORED to <syncRepo>/repos/<repoKey>/ (in ADDITION to Local Storage
+  ~/T/_large_files_bridge/repos/<repoKey>/, never instead of it; artifact_placement_policy.mdx); default =
+  Local-Storage-only; ownership decides; logs never travel. RETIRED: content-threshold "state-root until a
+  transcript exists" framing. Code: tracking-root.service resolveStateSyncRepo, tracking-sync.service
+  mirrorToSyncRepo. Keep aligned with repo_company_mapping.mdx (mapping), storage_company.mdx (company sync repo +
+  rename), artifact_placement_policy.mdx + repo_tracking_scheme.mdx (placement policy).
   §12 TO DO Batch: Personal owns ONE local/disposable/uncommitted batch personal_2_do.yaml under
   ~/T/_large_files_bridge/_do_batches/, recalc-and-replace each scan (to_do_batch_calc_engine.mdx,
   recommends-only, skips folded decisions); categories = compress_video/compress_image/pin/pull_down

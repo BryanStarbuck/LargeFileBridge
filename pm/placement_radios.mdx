@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Artifact placement radios (the shared 3-way "where do derived artifacts go" control)
-description: The SHARED 3-way radio component that chooses WHERE a repo's derived artifacts (transcripts `<rel>.transcription` and AI descriptions `<rel>.ai_description`) are written on disk. Used by both the Transcription section and the AI-descriptions section of the per-repo Settings page (repo_settings.mdx §5 and §6), and referenceable anywhere else a placement choice is offered. The three options are: (a) LFBRIDGE — the repo's own hidden `.lfbridge/` directory, path-mirrored, with the artifact extension APPENDED (the default, committed, travels with the repo by git); (b) BESIDE — next to the media file itself, which DELIBERATELY REINTRODUCES the beside-media layout that Transcribe.mdx and ai_description.mdx had marked "superseded", now offered as a user choice with the reconciliation documented; (c) SYNC_REPO — inside the owning company/personal storage's LFB state-sync repo under `<syncRepo>/repos/<repoKey>/…`, ONLY offered (enabled) when that storage actually has a state-sync repo configured, otherwise shown DISABLED with a hint on how to set one up. The enum wire values are `lfbridge` | `beside` | `sync_repo`. This file owns the radio's labels, helper text, disabled/hint states, how a choice RESOLVES to an on-disk path (delegating the real resolution to artifact_placement_policy.mdx), how it interacts with the content threshold and the beside-media reintroduction, and the "move existing artifacts" migration flow (switching only affects FUTURE artifacts; existing ones stay put unless the user runs the explicit move action). Persisted as `transcription.placement` / `aiDescription.placement` on RepoSettings. Sibling of repo_settings.mdx (the page that hosts two instances of this radio), artifact_placement_policy.mdx (the resolver + tracking-file tiers), repo_company_mapping.mdx (company/personal ownership), storage_company.mdx (the state-sync repo), Transcribe.mdx and ai_description.mdx (the two artifacts this places).
+description: The SHARED 3-way radio component that chooses WHERE a repo's derived artifacts (transcripts `<rel>.transcription` and AI descriptions `<rel>.ai_description`) are written on disk. Used by both the Transcription section and the AI-descriptions section of the per-repo Settings page (repo_settings.mdx §5 and §6), and referenceable anywhere else a placement choice is offered. The three options are: (a) LFBRIDGE — the repo's own hidden `.lfbridge/` directory, path-mirrored, with the artifact extension APPENDED (the default, committed, travels with the repo by git); (b) BESIDE — next to the media file itself, which DELIBERATELY REINTRODUCES the beside-media layout that Transcribe.mdx and ai_description.mdx had marked "superseded", now offered as a user choice with the reconciliation documented; (c) SYNC_REPO — inside the owning company/personal storage's LFB sync repo under `<syncRepo>/repos/<repoKey>/…`, ONLY offered (enabled) when that storage actually has a sync repo configured, otherwise shown DISABLED with a hint on how to set one up. The enum wire values are `lfbridge` | `beside` | `sync_repo`. This file owns the radio's labels, helper text, disabled/hint states, how a choice RESOLVES to an on-disk path (delegating the real resolution to artifact_placement_policy.mdx), how it relates to the separate tracking-state placement (Category B — Local Storage always plus the owner's sync repo when the per-repo toggle is on; NOT gated by any content threshold, which is retired) and the beside-media reintroduction, and the "move existing artifacts" migration flow (switching only affects FUTURE artifacts; existing ones stay put unless the user runs the explicit move action). Persisted as `transcription.placement` / `aiDescription.placement` on RepoSettings. Sibling of repo_settings.mdx (the page that hosts two instances of this radio), artifact_placement_policy.mdx (the resolver + the data-category placement policy), repo_tracking_scheme.mdx (the Category-B tracking-state file shapes), repo_company_mapping.mdx (company/personal ownership), storage_company.mdx (the sync repo), Transcribe.mdx and ai_description.mdx (the two artifacts this places).
 ---
 
 # LargeFileBridge — Artifact placement radios
@@ -22,12 +22,15 @@ Siblings this builds on and does not repeat:
 
 * [repo_settings.mdx](./repo_settings.mdx) — the **host page**. It mounts two instances of this radio
   (Transcription §5, AI descriptions §6) and persists their values on `RepoSettings`.
-* [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) — the **resolver** and the content
-  threshold + 3-tier decision order. This radio picks the tier; that spec turns the tier into an absolute
-  path (`root` + `rel` + `gitIgnore`). Authoritative for path math.
+* [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) — the **resolver** and the
+  **data-category placement policy**. This radio picks the tier for the Category-A **content** artifacts;
+  that spec turns the tier into an absolute path (`root` + `rel` + `gitIgnore`) and owns where the separate
+  Category-B tracking state goes. Authoritative for path math.
+* [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx) — the **Category-B tracking-state** files
+  (`repo_storage.yaml`, sidecars, history) that are placed by the policy, **not** by this radio.
 * [repo_company_mapping.mdx](./repo_company_mapping.mdx) — the repo→company/Personal owner, which decides
-  **whether a state-sync repo exists** (and therefore whether option **(c)** is enabled).
-* [storage_company.mdx](./storage_company.mdx) — the company/personal **state-sync repo** that option
+  **whether a sync repo exists** (and therefore whether option **(c)** is enabled).
+* [storage_company.mdx](./storage_company.mdx) — the company/personal **sync repo** that option
   **(c)** targets (`<syncRepo>/repos/<repoKey>/…`).
 * [Transcribe.mdx §3](./Transcribe.mdx#3-where-transcripts-are-stored--inside-the-repostorage-lfbridge-path-mirrored-extension-appended-locked--supersedes-the-earlier-beside-media-layout)
   and [ai_description.mdx §2](./ai_description.mdx) — the **two artifacts** placed here, and the source of
@@ -47,7 +50,7 @@ strings are read by the placement resolver and any migration.
 | --- | --- | --- |
 | `lfbridge` | **In this repo's hidden `.lfbridge/` folder** *(recommended)* | `<repo>/.lfbridge/<relDir>/<name.ext><artifactExt>` — path-mirrored, extension **appended**, committed, travels with the repo by git. |
 | `beside` | **Next to the media file** | `<mediaDir>/<name.ext><artifactExt>` — a sibling of the media in the same working-tree directory. |
-| `sync_repo` | **In this storage's LFB sync repo** | `<syncRepo>/repos/<repoKey>/<relDir>/<name.ext><artifactExt>` — inside the owning company/personal state-sync repo. |
+| `sync_repo` | **In this storage's LFB sync repo** | `<syncRepo>/repos/<repoKey>/<relDir>/<name.ext><artifactExt>` — inside the owning company/personal sync repo. |
 
 `<artifactExt>` is `.transcription` for the Transcription instance and `.ai_description` for the AI
 descriptions instance ([Transcribe.mdx §3.1](./Transcribe.mdx), [ai_description.mdx §2](./ai_description.mdx)) —
@@ -79,7 +82,7 @@ Where should transcripts be stored?
      Keeps transcripts out of THIS repo entirely, in the company/Personal sync
      repo that already carries LFB's tracking data.
      └─ hint when disabled: "No sync repo is configured for <Owner>. Set one up
-        in Storage settings → State-sync repo."
+        in Storage settings → Sync repo."
 ```
 
 * **Exactly one** row is selected at all times (radios, not checkboxes). There is no "off" state.
@@ -140,16 +143,16 @@ don't act) — we never add a `.gitignore` entry automatically.
 
 ### 5.1 `sync_repo` disabled when no sync repo exists
 
-Option **(c)** is **only enabled when the owning company/Personal storage has a state-sync repo
+Option **(c)** is **only enabled when the owning company/Personal storage has a sync repo
 configured** ([storage_company.mdx](./storage_company.mdx), owner derived per
 [repo_company_mapping.mdx](./repo_company_mapping.mdx)). Otherwise:
 
 * The row renders **greyed out and unselectable** (the radio is disabled, not hidden — so the user learns
   the capability exists).
 * A **hint** appears beneath it: *"No sync repo is configured for **&lt;Owner&gt;**. Set one up in Storage
-  settings → State-sync repo."* — where **&lt;Owner&gt;** is the resolved company name or **Personal**, and the
+  settings → Sync repo."* — where **&lt;Owner&gt;** is the resolved company name or **Personal**, and the
   phrase links to the owning storage's settings ([storage_company.mdx](./storage_company.mdx) /
-  [storage_settings.mdx](./storage_settings.mdx)).
+  [storage_settings.mdx §4b](./storage_settings.mdx#4b-the-sync-repo--an-additive-mirror-of-owned-repos-tracking-state)).
 * If the user had previously chosen `sync_repo` and the sync repo is **later removed**, the stored value is
   **retained** but treated as **unresolvable**: the resolver falls back to `lfbridge` for new writes and the
   UI shows the `sync_repo` row selected-but-warned (*"Sync repo no longer available — new files use
@@ -252,22 +255,27 @@ Detecting stray artifacts and relocating them to the selected tier is handled in
 
 ---
 
-## 9. Interaction with the content threshold & tracking-file tiers
+## 9. Relationship to the separate tracking-state placement (LOCKED)
 
-The placement radio governs **derived artifacts** (transcripts, AI descriptions) — **small text files** that
-are essentially always below the big-file threshold. It is **separate** from the tracking-file placement that
-[artifact_placement_policy.mdx](./artifact_placement_policy.mdx) governs (the noisy `repo_storage.yaml` and
-per-file sidecars):
+The placement radio governs **Category-A content artifacts** — transcripts and AI descriptions. It is
+**separate** from the **Category-B tracking-state** placement that
+[artifact_placement_policy.mdx](./artifact_placement_policy.mdx) governs (the noisy `repo_storage.yaml`,
+`files.yaml`, per-file sidecars, `history/<device>.txt`, `decisions.yaml`, `manifest.yaml`):
 
-* **Tracking files** default to the **company state-sync repo** when one exists (to keep churn out of the
-  product repo), per artifact_placement_policy.mdx.
-* **Transcripts & AI descriptions** default to the repo's **hidden `.lfbridge/`** even when a sync repo
-  exists — because they are content *about the media in this repo* and users expect them to travel *with*
-  that repo. See [repo_settings.mdx §5.4 / §6.4](./repo_settings.mdx) for the default table.
+* **Tracking state (Category B)** lives in **Local Storage always** at
+  `~/T/_large_files_bridge/repos/<repoKey>/`, and is **additionally mirrored** to the owner's sync repo at
+  `<syncRepo>/repos/<repoKey>/` when the per-repo sync toggle is on
+  ([repo_settings.mdx §2.9](./repo_settings.mdx)). It **never** enters the working repo, and it is **not**
+  gated by any content threshold — the old content-threshold "write tracking into the repo `.lfbridge/`
+  after the first transcript" tier is **retired** ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)).
+* **Transcripts & AI descriptions (Category A)** default to the repo's **hidden `.lfbridge/`** even when a
+  sync repo exists — because they are content *about the media in this repo* and users expect them to travel
+  *with* that repo. This radio pins their tier (`lfbridge` | `beside` | `sync_repo`). See
+  [repo_settings.mdx §4.4 / §5.4](./repo_settings.mdx) for the default table.
 
-Both, however, resolve through the **same** `resolveArtifactPlacement()` and honor the **content threshold**
-described in artifact_placement_policy.mdx — this radio simply pins the **tier** for these two artifact kinds
-rather than letting the resolver's default order choose.
+There is **no content threshold** in either path. This radio simply pins the **tier** for the two Category-A
+artifact kinds via `resolveArtifactPlacement()`; the Category-B tracking state follows the fixed two-home
+rule ([artifact_placement_policy.mdx §2](./artifact_placement_policy.mdx)) independently.
 
 ---
 
@@ -293,15 +301,16 @@ rather than letting the resolver's default order choose.
 1. A **single shared 3-way radio** exists, used by both the Transcription and AI-descriptions sections of
    [repo_settings.mdx](./repo_settings.mdx), with identical behavior save the artifact extension.
 2. The three options are `lfbridge` (default, hidden `.lfbridge/`, committed), `beside` (next to the media),
-   and `sync_repo` (the owning storage's state-sync repo). The enum tokens are frozen wire literals.
-3. `sync_repo` is **enabled only** when the owning company/Personal storage has a state-sync repo; otherwise
+   and `sync_repo` (the owning storage's sync repo). The enum tokens are frozen wire literals.
+3. `sync_repo` is **enabled only** when the owning company/Personal storage has a sync repo; otherwise
    it is **disabled with a hint** on how to set one up, and a previously-chosen-but-now-missing sync repo
    falls back to `lfbridge` for new writes without rewriting the stored value.
 4. `beside` **deliberately reintroduces** the previously-superseded beside-media layout as an **opt-in choice**
    with **appended** (not replaced) extensions; the reconciliation with Transcribe.mdx / ai_description.mdx is
    documented and those specs stay authoritative that `.lfbridge/` is the default.
 5. Each option resolves to an on-disk path **via** `resolveArtifactPlacement()` / `lfbridgeArtifactPath()` —
-   this radio picks the tier; artifact_placement_policy.mdx owns the path math and the content threshold.
+   this radio picks the tier for the Category-A content artifacts; artifact_placement_policy.mdx owns the path
+   math and the separate Category-B tracking-state placement (no content threshold — that model is retired).
 6. Changing the radio affects **only future artifacts**; existing artifacts stay put and are still read from
    wherever they are.
 7. A **"move existing artifacts" action** is offered when artifacts exist outside the selected tier; it is
@@ -312,10 +321,14 @@ rather than letting the resolver's default order choose.
 
 <!-- summary -->
 The shared 3-way artifact placement radio (`lfbridge` | `beside` | `sync_repo`) used by both the
-Transcription and AI-descriptions sections of the per-repo Settings page. Owns the labels, helper text,
-disabled/hint states (sync_repo disabled without a state-sync repo; keep-`.lfbridge/` info note), the
-deliberate — and reconciled — reintroduction of beside-media as an opt-in with appended extensions, the
-rule that switching affects only FUTURE artifacts, and the explicit non-destructive "move existing
-artifacts" migration. Path resolution is delegated to artifact_placement_policy.mdx via
-`resolveArtifactPlacement()`; both choices persist on RepoSettings through the existing settings PATCH.
+Transcription and AI-descriptions sections of the per-repo Settings page. It places the Category-A CONTENT
+artifacts (transcripts / AI descriptions) only; the separate Category-B tracking state (repo_storage.yaml,
+sidecars, history, decisions.yaml, manifest.yaml) is placed by artifact_placement_policy.mdx — Local Storage
+always plus the owner's sync repo when the per-repo §2.9 toggle is on, NOT gated by any content threshold
+(retired). Owns the labels, helper text, disabled/hint states (sync_repo disabled without a sync repo;
+keep-`.lfbridge/` info note), the deliberate — and reconciled — reintroduction of beside-media as an opt-in
+with appended extensions, the rule that switching affects only FUTURE artifacts, and the explicit
+non-destructive "move existing artifacts" migration. Path resolution is delegated to
+artifact_placement_policy.mdx via `resolveArtifactPlacement()`; both choices persist on RepoSettings through
+the existing settings PATCH.
 -->

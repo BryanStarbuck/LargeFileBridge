@@ -157,6 +157,19 @@ function resolveOwningStorage(abs: string, index: OwnerStorage[]): { storage: Ow
 }
 
 /**
+ * The absolute path of the SYNC REPO for a repo — the owning company/Personal storage's dedicated repo when
+ * one is configured, else null (artifact_placement_policy.mdx §4). Used by the per-repo "sync tracking state"
+ * toggle to decide what to write into the sync-repo marker (tracking-sync.service.ts). This COMPUTES the
+ * owner's dedicated repo (unlike `resolveStateSyncRepo`, which just reads the already-written marker).
+ */
+export function resolveOwnerDedicatedRepo(repoRoot: string): string | null {
+  const abs = path.resolve(expandHome(repoRoot));
+  const { index } = ownerIndex();
+  const owned = resolveOwningStorage(abs, index);
+  return owned?.storage.dedicatedRepoPath ?? null;
+}
+
+/**
  * Resolve where a media file's derived-artifact hierarchy lives, by the ordered rule (Transcribe.mdx §3.4).
  * `input` may be a `~/…` or absolute path — it is home-expanded and resolved first (§3.6).
  */

@@ -10,6 +10,7 @@
 // Budget) is passed in — snapshotted once by the queue's admission pass — mirroring capFor()'s discipline.
 import os from "node:os";
 import { getAppConfig } from "../store-model/config.service.js";
+import { log } from "../../shared/logging.js";
 
 /** How much resident RAM one transcription job needs, by model/engine (transcribe_engine.mdx §5.1).
  *  Conservative defaults until §3.1 stores a real measurement. `qwen` (Qwen3-ASR-1.7B via MLX) holds the
@@ -32,8 +33,10 @@ export function activeTranscribeModelKey(): string {
   if (now - cachedAt > 5000) {
     try {
       cachedModelKey = getAppConfig().transcribe.engine === "mac" ? "base" : "qwen";
-    } catch {
-      /* keep the last value on a transient read failure */
+    } catch (e) {
+      // Keep the last value on a transient read failure — the admission loop must never throw — but a
+      // config read that keeps failing is a real problem worth a trail (the RAM clamp silently goes stale).
+      log.warn("transcribe", `activeTranscribeModelKey: config read failed, keeping last value (${cachedModelKey}): ${(e as Error).message}`);
     }
     cachedAt = now;
   }

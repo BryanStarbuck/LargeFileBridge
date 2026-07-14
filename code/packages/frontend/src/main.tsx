@@ -42,13 +42,37 @@ function isTranslationDomError(err: unknown): boolean {
   return isNotFound && /removeChild|insertBefore/.test(msg) && /not a child of this node/.test(msg);
 }
 
-// Rate-limit: log the 1st occurrence and then every 100th, so the signal stays visible without spam.
+// Axios raises a plain "Network Error" (or ECONNABORTED/ERR_CANCELED) whenever a request can't
+// complete for a reason that isn't an app bug: the backend is mid-restart (`just run` reload, an
+// IPFS daemon (re)install bouncing the API), a request got aborted by navigation/unmount, or the
+// dev server itself is cycling. None of those are exceptions in OUR code, but every one of them
+// surfaces as an unhandled promise rejection wherever a query/call site doesn't attach onError. A
+// request that DID reach the backend and got a real HTTP response (4xx/5xx) is a genuine failure —
+// only the no-response/aborted shape is treated as transient here.
+function isTransientNetworkError(err: unknown): boolean {
+  const e = err as { isAxiosError?: boolean; code?: string; message?: string; response?: unknown } | null;
+  if (!e || typeof e !== "object") return false;
+  const isAxios = e.isAxiosError === true || (err instanceof Error && err.name === "AxiosError");
+  if (!isAxios || e.response) return false;
+  const transientCodes = new Set(["ERR_NETWORK", "ECONNABORTED", "ERR_CANCELED"]);
+  return (e.code !== undefined && transientCodes.has(e.code)) || e.message === "Network Error";
+}
+
+// Rate-limit: log the 1st occurrence and then every Nth, so the signal stays visible without spam.
 let translationDomHits = 0;
+let networkErrorHits = 0;
 function reportGlobal(context: string, err: unknown): void {
   if (isTranslationDomError(err)) {
     translationDomHits += 1;
     if (translationDomHits === 1 || translationDomHits % 100 === 0) {
       clientLog.warn(context, `[translation-extension DOM mutation, non-fatal, x${translationDomHits}] ${errMessage(err)}`);
+    }
+    return;
+  }
+  if (isTransientNetworkError(err)) {
+    networkErrorHits += 1;
+    if (networkErrorHits === 1 || networkErrorHits % 20 === 0) {
+      clientLog.warn(context, `[transient network error, non-fatal, x${networkErrorHits}] ${errMessage(err)}`);
     }
     return;
   }

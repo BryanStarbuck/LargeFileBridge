@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Local Storage, Config & Pin State
-description: How LargeFileBridge persists state on disk — the no-database state root at ~/T/_large_files_bridge/, the computer-wide app-level config.yaml, the per-logged-in-user config under users/<email>/config.yaml (no anonymous account — every key is a verified allow-listed Google email), and the heart of the app: the two kinds of pin unit stored OUTSIDE user dirs because they are computer-wide — pin/computer/ (everything on the filesystem OUTSIDE registered repos, with repo sub-hierarchies masked out) and pin/r/<repo_name>/ (one folder per discovered Git repo, the PRIMARY pin unit). Each pin unit carries its own config.yaml (pinned on/off + all per-unit settings) and a manifest of large git-ignored files mapped to their IPFS CIDs and pin state across the user's computers. Also covers the filesystem scanner that discovers repos, the committed in-repo manifest that travels via the git backbone while IPFS carries the bytes, the background pin process (launchd, every 15 min — installed vs on/off, toggled from the web app), the OpenAuthFederated session store, the two log files, and the store module that fronts all of it. Works identically on a laptop and on a server; only the resolved state root and the logged-in user change.
+description: How LargeFileBridge persists state on disk — the no-database state root at ~/T/_large_files_bridge/, the computer-wide app-level config.yaml, the per-logged-in-user config under users/<email>/config.yaml (no anonymous account — every key is a verified allow-listed Google email), and the heart of the app: the two kinds of pin unit stored OUTSIDE user dirs because they are computer-wide — pin/computer/ (everything on the filesystem OUTSIDE registered repos, with repo sub-hierarchies masked out) and pin/r/<repo_name>/ (one folder per discovered Git repo, the PRIMARY pin unit). Each pin unit carries its own config.yaml (pinned on/off + all per-unit settings) and a manifest of large git-ignored files mapped to their IPFS CIDs and pin state across the user's computers. Also covers the filesystem scanner that discovers repos, the per-repo tracking directory repos/<repoKey>/ that is the ALWAYS-home for every repo's Category-B tracking state (repo_storage.yaml, files.yaml, sidecars, history, decisions.yaml, manifest.yaml, compression records) — never committed to a working repo, additionally mirrored to a configured company/Personal sync repo — the manifest that travels via the sync repo's git backbone while IPFS carries the bytes, the background pin process (launchd, every 15 min — installed vs on/off, toggled from the web app), the OpenAuthFederated session store, the two log files, and the store module that fronts all of it. Works identically on a laptop and on a server; only the resolved state root and the logged-in user change.
 ---
 
 # LargeFileBridge — Local Storage, Config & Pin State
@@ -68,11 +68,14 @@ LFBridge has **several kinds of storage**, and this spec is only the first — *
   schema, and the per-file **media-analysis** outputs (transcription / description / visuals-by-time) — is
   [storages.mdx](./storages.mdx).
 
-**Division of labor.** Local Storage (this file) owns *settings + this machine's bookkeeping*. The
-directory-based storages own *the shared files themselves* and their per-file tracking. Where this spec
-still describes per-repo pin units under the state root (§5–§9), read it as the **local index** of what
-lives in each directory-based storage; the **authoritative** per-storage tracking is the `storage.yaml` +
-hidden `.lfbridge/` in that storage's own root ([storage_repo.mdx](./storage_repo.mdx)).
+**Division of labor.** Local Storage (this file) owns *settings + this machine's bookkeeping* — and, under
+the [data-category placement policy](./artifact_placement_policy.mdx), it is also the **always-home for
+every repo's Category-B tracking state** (`repo_storage.yaml`, `files.yaml`, sidecars, history,
+`decisions.yaml`, `manifest.yaml`, compression records), under `repos/<repoKey>/` (§2.2b) — which never
+enters a working repo. The directory-based storages own *the shared files themselves*; only the
+**Category-A derived content** (transcripts / AI descriptions) lives in a storage's committed `.lfbridge/`
+and travels with it ([storage_repo.mdx](./storage_repo.mdx)). Where this spec describes per-repo pin units
+under the state root (§5–§9), read it as the machine-local participation + index layer.
 
 ---
 
@@ -102,9 +105,12 @@ stateDir =
   ?? "/tmp/_large_files_bridge"                          // last resort if homedir() throws
 ```
 
-Nothing under the state root is ever committed to the repo — it is the boundary between code and
-runtime data. (The one thing that *is* committed lives inside each **watched repo**, not here: the
-portable in-repo manifest of §9.)
+Nothing under the state root is ever committed to a working repo — it is the boundary between code and
+runtime data. (The only thing that lives *committed inside a working repo* is the **Category-A derived
+content** — transcripts / AI descriptions in that repo's `.lfbridge/` ([storage_repo.mdx](./storage_repo.mdx)).
+The `manifest.yaml` and the rest of the Category-B tracking state are **not** committed to the working
+repo; they live here under `repos/<repoKey>/` (§2.2b) and travel — when enabled — via the company/Personal
+**sync repo**, not the working repo's git (§9.2).)
 
 Resolving the state root and the `LFB_STATE_DIR` / `LFB_LOG_DIR` overrides is handled in code:
 
@@ -129,7 +135,7 @@ Resolving the state root and the `LFB_STATE_DIR` / `LFB_LOG_DIR` overrides is ha
 │   └── r/                      #   (b) one folder PER DISCOVERED GIT REPO — the PRIMARY unit (§6)
 │       └── <repo_name>/
 │           ├── config.yaml     #       this repo's settings: pinned on/off + all per-repo settings
-│           ├── manifest.yaml   #       local cache of the repo's committed manifest (§9) + pin state
+│           ├── manifest.yaml   #       local pin-state cache; authoritative is repos/<repoKey>/manifest.yaml (§9)
 │           └── status.yaml     #       machine-written last-scan / last-pin operational cache
 ├── peers.yaml                  # the user's OTHER computers that pin alongside this one (§11)
 ├── _do_batches/                # THE TO-DO BATCHES — per-storage recommendation bundles (§2.1)
@@ -138,15 +144,18 @@ Resolving the state root and the `LFB_STATE_DIR` / `LFB_LOG_DIR` overrides is ha
 │   ├── gdrive_<account>_2_do.yaml  # one per Google Drive account
 │   ├── repo_<name>_2_do.yaml   #   one per repo WITH WORK (clean repos have none)
 │   └── <scope>_<name>_transcribe_2_do.yaml  # transcribe batches (transcribe_calc_engine.mdx)
-├── repos/                      # PRE-THRESHOLD per-repo TRACKING STATE — one dir per repo (§2.2b)
+├── repos/                      # per-repo CATEGORY-B TRACKING STATE — one dir per repo, ALWAYS (§2.2b)
 │   └── <repoKey>/              #   repoKey = shortHash(resolve(repoPath)) — the storageSid() scheme
-│       ├── repo_storage.yaml   #     repo-wide file, re-stamped freely here (no git churn)
+│       ├── repo_storage.yaml   #     repo-wide file, re-stamped freely here (never touches git)
 │       ├── files.yaml          #     fast per-file fingerprint index
 │       ├── files/              #     per-file <name>.yaml sidecars, path-mirrored
 │       ├── history/            #     per-computer audit logs (<device>.txt)
-│       ├── decisions.yaml      #     HELD here pre-threshold when no state-sync repo (artifact_placement_policy §7)
-│       ├── manifest.yaml       #     HELD here pre-threshold when no state-sync repo
+│       ├── decisions.yaml      #     the two-axis decision ledger (Local-Storage-always; travels via sync repo)
+│       ├── manifest.yaml       #     large-file → IPFS CID + pin state (Local-Storage-always; travels via sync repo)
+│       ├── analysis/<rel>/compression.yaml  #  compression records (compression.mdx §8)
 │       └── origin.txt          #     the absolute repo path this <repoKey> maps to (collision guard)
+│   #   ↑ ALL of the above is additionally mirrored to <syncRepo>/repos/<repoKey>/ when the owning
+│   #     company/Personal storage has a sync repo configured AND the per-repo toggle is on (default off)
 ├── .auth_session_secret        # stable HS256 signing secret (auto-created; never in .env) (§10)
 ├── log.log                     # INFO/DEBUG/VERBOSE — the normal event trail (§12)
 └── error.err                   # WARN/ERROR/FATAL — the fault trail (§12)
@@ -177,23 +186,25 @@ There are three tiers, and one of them is unusual on purpose:
   `pin/` state, not of whoever is signed in.
 * **Machine-local, disposable, uncommitted** — regenerated by the [TO DO Batch Calc Engine](./to_do_batch_calc_engine.mdx)
   on every scan (**recalculate-and-replace**, [to_do_batches.mdx §5](./to_do_batches.mdx#5-recalculate-and-replace-locked)),
-  so it is safe to delete; contrast the **shared, committed** decisions ledger in each repo's `.lfbridge/`
-  ([decisions.mdx](./decisions.mdx)).
+  so it is safe to delete; contrast the durable **decisions ledger** `repos/<repoKey>/decisions.yaml`
+  (Local-Storage-always, and — when a sync repo is enabled — union-merged as it travels via that sync repo,
+  [decisions.mdx](./decisions.mdx), [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
 * Only storages **with work** keep a file; clean storages have none (their To-Do slug does not show).
 
 The `_do_batches/` path under the state root is resolved by `resolveTodoBatchesDir()` (honoring `LFB_STATE_DIR`) in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — beside `resolveStateDir()` / `resolveLogDir()`; read/written by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts`.
 
-### 2.2b `repos/<repoKey>/` — the pre-threshold per-repo tracking directory (LOCKED)
+### 2.2b `repos/<repoKey>/` — the per-repo tracking directory, the ALWAYS-home (LOCKED)
 
-`repos/` holds **one directory per repo** for that repo's **noisy tracking state** — the repo-wide
-`repo_storage.yaml`, the `files.yaml` index, the per-file `files/…` sidecars, and the `history/…` logs
-([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)) — **while the repo is below the content
-threshold** (it has produced no durable transcript or AI description yet) and has no state-sync repo
-configured. It is the **Tier-3 fallback** of the
-[Artifact & Tracking-State Placement Policy](./artifact_placement_policy.mdx#3-the-three-tier-decision-order-locked),
-and it is the piece that keeps a never-transcribed repo's working tree **pristine** — no `.lfbridge/`,
-no `.gitignore` edit, no per-scan commit.
+`repos/` holds **one directory per repo** for that repo's **Category-B tracking state** — the repo-wide
+`repo_storage.yaml`, the `files.yaml` index, the per-file `files/…` sidecars, the `history/…` logs, the
+`decisions.yaml` ledger, the `manifest.yaml` CID list, and the compression records
+([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)). This is its **permanent, always-home** — the
+authoritative per-machine working copy the app reads and writes on every scan and every action. It is the
+Local-Storage half of the [Artifact & Tracking-State Placement Policy](./artifact_placement_policy.mdx),
+and it is the piece that keeps **every** repo's working tree **pristine** — no Category-B files in the
+repo, no `.gitignore` edit for tracking, no per-scan commit. (Only **Category-A** derived content —
+transcripts / AI descriptions — ever lives committed in the working repo's own `.lfbridge/`.)
 
 * **Keying.** `<repoKey> = shortHash(resolve(repoPath))` — the 12-hex hash `storageSid()` already
   derives for repo/personal storages (`shortHash(resolved)`). Deriving it from the **absolute** path
@@ -201,29 +212,30 @@ no `.gitignore` edit, no per-scan commit.
   re-scans, with no name-collision games. `origin.txt` records the path the key was minted from so a
   (vanishingly unlikely) 48-bit collision between two different paths is **detected**, not silently
   merged (append `-2`/`-3`, the pin-unit disambiguation of §6.1).
-* **What lives here.** The **same locked shapes** as the in-repo `.lfbridge/` (repo_tracking_scheme
-  §2–§4), laid out identically so that crossing the threshold — or running **Promote**
-  ([artifact_placement_policy.mdx §8](./artifact_placement_policy.mdx#8-migration--no-automatic-move-the-threshold-governs-future-writes-only-locked))
-  — is a move of an already-correct tree, not a reformat. The committed travellers `decisions.yaml` /
-  `manifest.yaml` are **held here too** before the threshold when no state-sync repo exists, keeping the
-  decision durable and locally honored while it waits for a git-backed home
-  ([artifact_placement_policy.mdx §7](./artifact_placement_policy.mdx#7-committed-travellers-vs-the-threshold--decisionsyaml--manifestyaml-locked)).
-* **Computer-wide, never committed, never travels.** Like the `pin/` state and `_do_batches/`, this is a
+* **What lives here.** All of Category B ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx) §2–§4):
+  `repo_storage.yaml`, `files.yaml`, the `files/…` sidecars, the `history/…` logs, and the union-mergeable
+  travellers `decisions.yaml` / `manifest.yaml` plus `analysis/<rel>/compression.yaml`. Nothing here is
+  ever redirected into the working repo — the content-threshold three-tier model is **retired**
+  ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
+* **Machine-local, never committed to a working repo.** Like the `pin/` state and `_do_batches/`, this is a
   property of **this machine's** view of the repo. It is under the state root — the code/runtime boundary
-  (§1) — so nothing here is ever committed or visible in a working tree. A different computer keeps its
-  own `repos/<repoKey>/` and the two never contend.
-* **Lifecycle.** Created **lazily** on the first tracking write for a repo. When the repo **crosses the
-  threshold** (or a state-sync repo is configured), the resolver stops writing here and future writes go
-  to `.lfbridge/` or the sync repo; the files here become stale-but-harmless and are reconciled forward
-  (no automatic move — [artifact_placement_policy.mdx §8](./artifact_placement_policy.mdx#8-migration--no-automatic-move-the-threshold-governs-future-writes-only-locked)).
+  (§1) — so nothing here is ever committed to, or visible in, a working tree. A different computer keeps
+  its own `repos/<repoKey>/` and the two never contend, so this state can **never merge-conflict**.
+* **Travelling copy — the additive sync-repo mirror.** Local Storage does not itself travel. When the
+  owning company/Personal storage has a **sync repo** configured and the per-repo toggle is on (default
+  off), the same `repos/<repoKey>/` subtree is **additionally** mirrored to `<syncRepo>/repos/<repoKey>/`
+  so it travels across the user's computers — in addition to Local Storage, not instead of it
+  ([artifact_placement_policy.mdx §2/§5](./artifact_placement_policy.mdx)).
+* **Lifecycle.** Created **lazily** on the first tracking write for a repo, and written on every scan/action
+  thereafter. There is no "promote/migrate" step — this is where the state always lives.
 * **Cleanup.** When the user **de-lists** a repo, its `repos/<repoKey>/` directory is removed. A repo that
   merely went **missing** (unmounted drive) **retains** its directory so configuration is not lost on
   remount — the same caution the pin units use (§7). A stray `repos/<repoKey>/` whose `origin.txt` points
   at a path no longer registered is safe to garbage-collect on a later full scan.
 
-The per-repo state-root directory is resolved by a new helper beside `resolveStateDir()` /
+The per-repo state-root directory is resolved by a helper beside `resolveStateDir()` /
 `resolveTodoBatchesDir()` in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveRepoStateDir(repoKey)` → `<stateDir>/repos/<repoKey>/` (honors `LFB_STATE_DIR`; created on demand). The `repoKey` is computed by `shortHash()` / `storageSid()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts`, and this directory is chosen as the Tier-3 destination by `resolveTrackingRoot()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveRepoStateDir(repoKey)` → `<stateDir>/repos/<repoKey>/` (honors `LFB_STATE_DIR`; created on demand). The `repoKey` is computed by `shortHash()` / `storageSid()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts`; this directory is returned as the always-home by `resolveTrackingRoot()`, and the optional additive mirror root by `resolveStateSyncRepo()`, in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` (the mirror performed by `tracking-sync.service.ts` — `mirrorToSyncRepo()` / `reconcileFromSyncRepo()`).
 
 ### Why YAML for config + manifests
 
@@ -430,8 +442,9 @@ both live under `pin/` (computer-wide, outside `users/`):
 
 1. **Repos** — every **Git repository** discovered on the filesystem. A repo is mapped to a
    sub-hierarchy of the filesystem (its working tree). It is the **PRIMARY** pin unit: most of a
-   user's large files live inside repos, Git already carries the repo's code + committed manifest
-   between computers, and IPFS carries the git-ignored bytes. One folder per repo at
+   user's large files live inside repos, Git carries the repo's code (and its Category-A transcripts /
+   AI descriptions) between computers while the manifest travels via the sync repo (§9.2), and IPFS
+   carries the git-ignored bytes. One folder per repo at
    `pin/r/<repo_name>/` (§6).
 
 2. **The computer** — **everything else on the filesystem, OUTSIDE every registered repo.** The
@@ -507,7 +520,7 @@ large_files:
 pin:
   pin_locally: true          # this computer pins the repo's large files
   fetch_missing: true        # this computer fetches (from peers) any manifest CID it lacks
-  publish_manifest: true     # write the committed in-repo manifest (§9) so Git carries it to peers
+  publish_manifest: true     # mirror the manifest to the sync repo (§9.2) so its git carries it to peers
 
 # ── "Some repos need users, some don't." Which allow-listed people participate in THIS repo. ──
 access:
@@ -658,26 +671,32 @@ files:
   **cache of claims, not truth**: only *this* computer's own entry is locally verifiable, and it is
   verified/refreshed against the real IPFS pinset on every pin (§9.5).
 
-### 9.2 Repo manifests travel via Git (the elegant part)
+### 9.2 Repo manifests travel via the sync repo, not the working repo (LOCKED)
 
-For a repo unit, the manifest is **also written into the repo working tree** as a committed file:
+The `manifest.yaml` is **Category-B tracking state**, so it is **never committed into the working repo**.
+Its always-home is Local Storage:
 
 ```
-<repo>/.lfbridge/manifest.yaml     # committed to Git — small text, travels with every push/pull
+~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml   # the authoritative per-machine copy (§2.2b)
 ```
 
-The big files stay git-ignored (`.gitignore`); the tiny manifest is committed. When another computer
-pulls the repo, LFB reads `<repo>/.lfbridge/manifest.yaml`, sees which CIDs it lacks, and fetches +
-pins them from IPFS. The state-root `pin/r/<repo_name>/manifest.yaml` is the **local cache** of that
-committed file plus this computer's live pin state. (`publish_manifest` in §6.2 controls writing the
-committed copy.)
+The big files stay git-ignored (`.gitignore`); the tiny manifest lives in Local Storage. When the owning
+company/Personal storage has a **sync repo** configured and the per-repo toggle is on, that manifest is
+**additionally** mirrored to `<syncRepo>/repos/<repoKey>/manifest.yaml` and travels via that sync repo's
+git backbone — union-merged across computers ([artifact_placement_policy.mdx §5](./artifact_placement_policy.mdx),
+[git_backbone.mdx](./git_backbone.mdx)). Another computer that pulls the sync repo reads the mirrored
+manifest, sees which CIDs it lacks, and fetches + pins them from IPFS. Absent a sync repo the manifest is
+Local-Storage-only — real and honored locally, simply not yet shared. (`publish_manifest` in §6.2 controls
+whether the mirror is written.)
 
-The **per-file decision ledger** `<repo>/.lfbridge/decisions.yaml` travels the **same way** — committed,
-union-merged, carried by Git to the user's other computers **and their teammates**
-([decisions.mdx §4/§5](./decisions.mdx)). It is the **source of truth** for decisions; the machine-local
-`pin/r/<repo_name>/config.yaml → decisions:` frozen `sync`/`ignore`/`undecided` map is a **reconciled
-projection** of the ledger's IPFS axis onto this computer ([decisions.mdx §7](./decisions.mdx)), not an
-independent store. The pin engine still reads that enum; only its *feed* changed.
+The **per-file decision ledger** `repos/<repoKey>/decisions.yaml` travels the **same way** —
+Local-Storage-always, union-merged, and carried to the user's other computers **and their teammates** via
+the **sync repo** (not the working repo) when one is enabled ([decisions.mdx §4/§5](./decisions.mdx),
+[artifact_placement_policy.mdx §6](./artifact_placement_policy.mdx)). It is the **source of truth** for
+decisions; the machine-local `pin/r/<repo_name>/config.yaml → decisions:` frozen `sync`/`ignore`/`undecided`
+map is a **reconciled projection** of the ledger's IPFS axis onto this computer
+([decisions.mdx §7](./decisions.mdx)), not an independent store. The pin engine still reads that enum; only
+its *feed* changed.
 
 ### 9.3 Computer manifests travel via IPNS
 
@@ -688,8 +707,9 @@ loose (non-repo) large files pinned across your computers without any repository
 
 ### 9.4 Write / retention rules
 
-* Manifests are rewritten **atomically** (§11) after each scan/pin; they are the app's own files (a
-  repo's committed copy is the portable source of truth, the state-root copy is the cache).
+* Manifests are rewritten **atomically** (§11) after each scan/pin; they are the app's own files (the
+  Local-Storage `repos/<repoKey>/manifest.yaml` is authoritative, the `pin/r/<repo_name>/` copy is the
+  pin-state cache, and the sync-repo mirror is the travelling copy — §9.2).
 * Unpinning of superseded CIDs follows a retention window (keep the previous CID for a grace period so
   a mid-pin peer can still fetch it), recorded in `status.yaml`.
 
@@ -996,12 +1016,12 @@ persisted file or key requires a row here.
 | **Remembered table sort/filter** | `users/<email>/config.yaml → tables.views` | **per-user** |
 | **Per-repo: pinned on/off + all settings** | `pin/r/<repo_name>/config.yaml` | pin unit (computer-wide) |
 | **Per-repo: which users participate** (shared repos) | `pin/r/<repo_name>/config.yaml → access` | pin unit |
-| **Per-repo: large-file manifest (path → CID + pin state)** | `pin/r/<repo_name>/manifest.yaml` (+ committed `<repo>/.lfbridge/manifest.yaml`) | pin unit |
+| **Per-repo: large-file manifest (path → CID + pin state)** | `pin/r/<repo_name>/manifest.yaml` (local cache) + the authoritative `repos/<repoKey>/manifest.yaml` (§2.2b; mirrored to `<syncRepo>/repos/<repoKey>/` when enabled — **never** the working repo) | pin unit |
 | Per-repo scan/pin cache (last scan, last pin, counts, errors, missing) | `pin/r/<repo_name>/status.yaml` | pin unit |
 | **Computer unit: pinned on/off + roots + excludes** | `pin/computer/config.yaml` | pin unit |
 | **Computer unit: large-file manifest** | `pin/computer/manifest.yaml` (published via IPNS) | pin unit |
 | Computer unit scan/pin cache | `pin/computer/status.yaml` | pin unit |
-| **Pre-threshold per-repo tracking state** (repo_storage.yaml, files.yaml, sidecars, history; held decisions/manifest) | `repos/<repoKey>/…` (Tier-3 of [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)) | pin unit (computer-wide) |
+| **Per-repo Category-B tracking state** (repo_storage.yaml, files.yaml, sidecars, history, decisions.yaml, manifest.yaml, compression records) | `repos/<repoKey>/…` — **always-home** ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx); + sync-repo mirror when enabled; never the working repo) | pin unit (computer-wide) |
 | The user's other computers (peers) | `peers.yaml` | app |
 | Auth session records (revocation tombstones on sign-out) | `users/<email>/sessions/<sid>.json` | runtime |
 | Auth signing secret | `.auth_session_secret` | runtime |
@@ -1060,8 +1080,10 @@ Storage is correct when **all** of the following hold:
 7. The scanner discovers Git repos under `scanner.roots`, registers each as `pin/r/<repo_name>/`
    (sanitized, collision-disambiguated), seeds `large_files` from the repo `.gitignore`, and **masks
    out** every registered repo subtree so the computer unit attributes each file to exactly one unit.
-8. A repo's manifest is **committed into the repo** at `<repo>/.lfbridge/manifest.yaml` so Git carries
-   it between computers; the computer unit's manifest is published over **IPNS**. The big bytes stay
+8. A repo's manifest is **Category-B tracking state**: its always-home is `repos/<repoKey>/manifest.yaml`
+   in Local Storage (**never** committed into the working repo), and it travels — when a sync repo is
+   configured and toggled on — via the company/Personal **sync repo**'s git (union-merged), not the
+   working repo's git (§9.2). The computer unit's manifest is published over **IPNS**. The big bytes stay
    git-ignored and move over IPFS; the manifest is the small text list that travels.
 9. **"Some repos need users, some don't":** a repo defaults to `access.shared: false` (private to the
    owner's own computers, no user list); a shared repo lists `access.participants` (allow-listed
@@ -1080,11 +1102,14 @@ Storage is correct when **all** of the following hold:
 14. The layout, formats, and code are **identical** in local and server mode — only the resolved state
     root and the logged-in user differ; a state dir copies between machines unchanged.
 15. Every persisted file/key appears in the §14 inventory — never a silent store.
-16. Pre-threshold per-repo **tracking state** lives under `repos/<repoKey>/` (§2.2b,
-    `repoKey = shortHash(resolve(repoPath))`), resolved by `resolveRepoStateDir()`; a repo that has
-    produced no durable transcript/description and has no state-sync repo keeps **all** of its tracking
-    files here, so its working tree stays pristine (no `.lfbridge/`, no `.gitignore` edit, no per-scan
-    commit), per [artifact_placement_policy.mdx](./artifact_placement_policy.mdx).
+16. Per-repo Category-B **tracking state** lives under `repos/<repoKey>/` (§2.2b,
+    `repoKey = shortHash(resolve(repoPath))`), resolved by `resolveRepoStateDir()`, as its **permanent
+    always-home** — `repo_storage.yaml`, `files.yaml`, sidecars, history, `decisions.yaml`, `manifest.yaml`,
+    and compression records — so **every** repo's working tree stays pristine (no Category-B files in the
+    repo, no `.gitignore` edit for tracking, no per-scan commit). It is additionally mirrored to a
+    configured company/Personal **sync repo** when the per-repo toggle is on (default off); the
+    content-threshold three-tier model is retired, per
+    [artifact_placement_policy.mdx](./artifact_placement_policy.mdx).
 
 ---
 
@@ -1095,9 +1120,9 @@ worth revisiting once implementation starts:
 
 * **Repo default `pinned`.** Spec'd **off** until the user opts in (§7), so a scan never bridges data
   without consent. Confirm this is the desired default (vs. on-with-easy-off).
-* **Manifest transport.** Repos via committed `<repo>/.lfbridge/manifest.yaml` + Git (§9.2); the
-  computer unit via IPNS (§9.3). Validate IPNS latency/reliability for the computer unit, or replace
-  with a small peer-shared pubsub record.
+* **Manifest transport.** Repos via `repos/<repoKey>/manifest.yaml` in Local Storage, mirrored to the
+  company/Personal sync repo's git when enabled (§9.2); the computer unit via IPNS (§9.3). Validate IPNS
+  latency/reliability for the computer unit, or replace with a small peer-shared pubsub record.
 * **CID keying vs. path.** Manifest is keyed by relative path with CID as the value (§9.1); a rename
   is a new path with the same CID. Confirm rename handling (keep pin, update path) matches intent.
 * **Collision disambiguation for `<repo_name>`.** Folder-name `-2`/`-3` suffixes (§6.1) with identity

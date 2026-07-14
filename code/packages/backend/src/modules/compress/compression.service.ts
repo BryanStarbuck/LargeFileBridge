@@ -457,6 +457,13 @@ function trashOriginal(abs: string): void {
 }
 
 function fail(pathOut: string, reason: string, status: CompressResult["status"] = "failed", beforeBytes: number | null = null): CompressResult {
+  // Every real compress fault must reach error.err (charter logging), not just the in-memory recentFailures
+  // list that a background "Compress inside" run prunes after 30 min / loses on restart. A genuine failure
+  // (tool crash, missing binary, a replace that left the original in trash) is an ERROR; a safety-guard
+  // refusal ("blocked" — alpha-unsafe, resolution changed) is a WARN. A routine "skipped" (not media, no
+  // gain, already compressed) is normal and stays unlogged.
+  if (status === "failed") log.error("compress", `${pathOut}: ${reason}`);
+  else if (status === "blocked") log.warn("compress", `${pathOut}: ${reason}`);
   return { path: pathOut, status, reason, beforeBytes, afterBytes: null, codec: null };
 }
 

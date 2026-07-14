@@ -281,6 +281,15 @@ export function workerUtilization(): { busy: number; budget: number } {
  * logged, and the worker moves on — one bad file never stalls the queue. The runners themselves already
  * return a truthful status (and register their own progress card) rather than throwing for expected outcomes.
  */
+/** Queue-level durable record of a NON-thrown task failure (the runner returned a "failed"/"tool_missing"/
+ *  "blocked"/… status rather than throwing). The `catch` below already logs thrown errors; this makes the
+ *  queue self-sufficient — a job that fails silently is invisible — so a background run's failures always
+ *  reach error.err even if a future op's runner forgets to self-log. Duplicate lines (a runner that also
+ *  logs) are harmless; a missing line is not. */
+function queueFailureLog(op: JobOp, filePath: string, reason: string): void {
+  log.warn("jobqueue", `${op} reported failure for ${filePath}: ${reason}`);
+}
+
 async function runTask(t: QueueTask): Promise<void> {
   try {
     if (t.op === "transcribe") {
@@ -289,6 +298,7 @@ async function runTask(t: QueueTask): Promise<void> {
       const tr = await transcribeOne(t.path, t.overwrite);
       if (tr.status === "failed" || tr.status === "tool_missing") {
         recordFailure({ op: "transcribe", path: t.path, reason: tr.reason ?? tr.status });
+        queueFailureLog("transcribe", t.path, tr.reason ?? tr.status);
       }
     } else if (t.op === "describe") {
       const dr = await describeOne(t.path, {
@@ -297,6 +307,7 @@ async function runTask(t: QueueTask): Promise<void> {
       });
       if (dr.status === "failed" || dr.status === "no_provider" || dr.status === "unsupported") {
         recordFailure({ op: "describe", path: t.path, reason: dr.reason ?? dr.status });
+        queueFailureLog("describe", t.path, dr.reason ?? dr.status);
       }
     } else {
       // compress — wrap in a track("compress", …) so the file shows a live dock card while it runs.
@@ -317,7 +328,10 @@ async function runTask(t: QueueTask): Promise<void> {
       // present. "blocked" / "failed" are errors surfaced in the batch's final error list.
       const ok = r.status === "compressed" || r.status === "skipped";
       recordBatchResult(t.batchId, { ok, path: t.path, reason: r.reason ?? undefined });
-      if (!ok) recordFailure({ op: "compress", path: t.path, reason: r.reason ?? r.status });
+      if (!ok) {
+        recordFailure({ op: "compress", path: t.path, reason: r.reason ?? r.status });
+        queueFailureLog("compress", t.path, r.reason ?? r.status);
+      }
     }
   } catch (e) {
     // A thrown compress task must still be counted against its batch, else the batch never finishes.

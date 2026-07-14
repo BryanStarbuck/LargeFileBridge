@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Storages (the umbrella)
-description: The umbrella spec for LargeFileBridge "storages". A storage is a place LFBridge tracks and pins large files. There are five kinds — Local (this computer's settings/config, the database replacement), Repo (any Git repo, tracked in a hidden .lfbridge/ folder in the repo root), Personal (the user's own personal_large_files_bridge directory), Company (one directory per company), and Community (one per community the user chooses to help / download / share). Every directory-based storage is a real directory hierarchy with a storage.yaml at its root declaring its name + type (and type-specific properties like company_name or community), plus a hidden .lfbridge/ tracking area holding the per-file fingerprint index and per-file media-analysis outputs (transcription, description, visuals-and-action-by-time YAML for video; content description for images). Storages are pinned between the user's computers over IPFS and often also keep a clone in Google Drive and Dropbox. This spec defines the storage family, the Storages left-bar tab and its children, the shared storage.yaml schema, the .lfbridge/ tracking layout, the media-analysis outputs, and how a user belongs to many storages at once. Sibling specs: storage_local.mdx, storage_repo.mdx, storage_personal.mdx, storage_company.mdx, storage_community.mdx.
+description: The umbrella spec for LargeFileBridge "storages". A storage is a place LFBridge tracks and pins large files. There are five kinds — Local (this computer's settings/config, the database replacement), Repo (any Git repo, whose committed .lfbridge/ folder in the repo root carries ONLY derived content), Personal (the user's own personal_large_files_bridge directory), Company (one directory per company), and Community (one per community the user chooses to help / download / share). Every directory-based storage is a real directory hierarchy with a storage.yaml at its root declaring its name + type (and type-specific properties like company_name or community), plus a hidden .lfbridge/ tracking area. Placement splits by DATA CATEGORY: the working repo's committed .lfbridge/ holds ONLY Category-A derived content (the path-mirrored transcript + AI-description artifacts, plus the visuals-and-action-by-time YAML of the AI-description family), which travels with the repo; all Category-B tracking state (the per-file fingerprint index files.yaml, the IPFS manifest.yaml, repo_storage.yaml, per-file sidecars, history, decisions.yaml, compression records) lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ ALWAYS — never in a working repo, so it can never merge-conflict — and is ADDITIONALLY mirrored to a configured company/Personal SYNC REPO when the per-repo toggle is on (default off). Storages are pinned between the user's computers over IPFS and often also keep a clone in Google Drive and Dropbox. This spec defines the storage family, the Storages left-bar tab and its children, the shared storage.yaml schema, the .lfbridge/ (Category-A content) layout, the media-analysis outputs, the sync repo (the additive tracking-state mirror), and how a user belongs to many storages at once. Sibling specs: storage_local.mdx, storage_repo.mdx, storage_personal.mdx, storage_company.mdx, storage_community.mdx, artifact_placement_policy.mdx, repo_tracking_scheme.mdx.
 ---
 
 # LargeFileBridge — Storages (the umbrella)
@@ -55,8 +55,10 @@ Two categories, and they play different roles:
 * **Directory-based storages** (`repo` · `personal` · `company` · `community`) are **real directory
   hierarchies that hold the shared large files**. They:
   1. carry a **`storage.yaml`** at their root (§3) declaring name + type + type-specific properties,
-  2. carry a hidden **`.lfbridge/`** tracking area at their root (§4) — the per-file fingerprint index and
-     the per-file media-analysis outputs,
+  2. carry a hidden **`.lfbridge/`** at their root (§4) holding the **Category-A derived content**
+     (transcript / AI-description / visuals-by-time), while their **Category-B tracking state** (the
+     per-file fingerprint index, the IPFS manifest, and the rest) lives in **Local Storage**, never in a
+     working repo (§4),
   3. **pin their large files between the user's computers over IPFS** (git for the small files +
      manifest; IPFS for the bytes — charter), and
   4. **often also have a clone in Google Drive and/or Dropbox** (§5) — the same hierarchy mirrored to a
@@ -138,40 +140,60 @@ Reading and writing `storage.yaml` (atomic, YAML, per-storage) is handled in cod
 
 ---
 
-## 4. `.lfbridge/` — the hidden per-storage tracking area
+## 4. Where a storage's state lives — Category A in `.lfbridge/`, Category B in Local Storage (LOCKED)
 
 Alongside `storage.yaml`, each directory-based storage keeps a hidden **`.lfbridge/`** folder at its root
-(for a **repo**, that is `~/BGit/xyz/.lfbridge/`). It holds everything LFB knows about the files in *this*
-storage. **`.lfbridge/` is COMMITTED and travels with the repo** ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx),
-[syncable_data_location.mdx](./syncable_data_location.mdx); the working tree's own `git status` shows
-`.lfbridge/repo_storage.yaml` tracked). It is small text — the storage descriptor, the per-file fingerprint
-index, the IPFS manifest/CID list, the device registry, and the derived **transcript / AI-description**
-artifacts (Transcribe.mdx §3) — all of which are cheap to commit and *should* travel so every computer and
-teammate reuses them. **Only the multi-GB media files themselves are git-ignored** (they ride IPFS); the
-tracking area is **not**. (This supersedes any earlier "add `.lfbridge/` to `.gitignore`" wording — that
-would have prevented the manifest and transcripts from traveling, which is the opposite of what we want.)
+(for a **repo**, that is `~/BGit/xyz/.lfbridge/`). What goes in it is a hard split by **data category** —
+the authoritative policy is [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) and the file
+shapes are [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx):
+
+* **Category A — derived content (in the committed `.lfbridge/`).** Only two artifact kinds: the
+  path-mirrored **`<name.ext>.transcription`** and **`<name.ext>.ai_description`** files
+  ([Transcribe.mdx §3](./Transcribe.mdx), [ai_description.mdx §2](./ai_description.mdx)), plus the
+  **visuals-and-action-by-time** YAML that rides with the AI-description family (§6). These are stable,
+  content-derived, cheap to commit, and *should* travel so every computer and teammate reuses them — so the
+  working repo's `.lfbridge/` is **committed** and carries them. **Only the multi-GB media files themselves
+  are git-ignored** (they ride IPFS); these two content artifacts are **not**.
+* **Category B — LFB's noisy tracking state (NEVER in a working repo).** The per-file fingerprint index
+  (`files.yaml`), the IPFS manifest (`manifest.yaml`), the repo-wide `repo_storage.yaml`, the per-file
+  sidecars, the per-computer history logs, the decision ledger, and the compression records. This
+  bookkeeping re-stamps a per-scan timestamp + counts on every scan, so committing it into a working repo
+  produced a fresh **merge conflict every scan**. It therefore lives in [Local Storage](./storage_local.mdx)
+  at **`~/T/_large_files_bridge/repos/<repoKey>/`** ALWAYS (`repoKey = shortHash(resolve(repoPath))`), which
+  never touches git, and is **additionally** mirrored to a configured company/Personal **sync repo** (§8)
+  when the per-repo toggle is on. (This supersedes any earlier "`.lfbridge/` is COMMITTED and holds the
+  manifest/index/`repo_storage.yaml`" wording — that churny state now stays out of git entirely.)
 
 ```
 <storage root>/
 ├── storage.yaml                 # §3 descriptor
-├── .lfbridge/
-│   ├── files.yaml               # per-file fingerprint index (§4.1)
-│   ├── manifest.yaml            # large-file → IPFS CID + pin state (storage_local.mdx §9)
+├── .lfbridge/                   # COMMITTED — holds ONLY Category-A derived content
 │   ├── <rel-dir>/<name.ext>.transcription    # transcript — path-mirrored, ext APPENDED (§6)
 │   ├── <rel-dir>/<name.ext>.ai_description   # AI description — path-mirrored, ext APPENDED (§6)
-│   └── analysis/                # visuals-by-time + compression record only (§6)
+│   └── analysis/                # visuals-by-time — the AI-description family (§6)
 │       └── <relpath>/
-│           ├── visuals_by_time.yaml
-│           └── compression.yaml
+│           └── visuals_by_time.yaml
 └── …the storage's actual files (media untouched; transcript/description live under .lfbridge/ above)…
+
+~/T/_large_files_bridge/repos/<repoKey>/   # LOCAL STORAGE — Category-B tracking state, NEVER in the repo
+├── repo_storage.yaml            # repo-wide settings + special-file counts (repo_tracking_scheme.mdx §2)
+├── files.yaml                   # per-file fingerprint index (§4.1)
+├── files/<path>.yaml            # per-file sidecars (repo_tracking_scheme.mdx §3)
+├── history/<device>.txt         # per-computer audit logs (repo_tracking_scheme.mdx §4)
+├── decisions.yaml               # the two-axis decision ledger (decisions.mdx)
+├── manifest.yaml                # large-file → IPFS CID + pin state (storage_local.mdx §9)
+└── analysis/<rel>/compression.yaml   # compression records (compression.mdx §8)
+    #   ↑ additionally mirrored to <syncRepo>/repos/<repoKey>/ when the sync repo is enabled (§8)
 ```
 
 ### 4.1 Per-file tracking metadata (charter)
 
-`.lfbridge/files.yaml` records, per file, enough to tell whether it changed since last seen — a **hash**
-(fingerprint), **size**, **created**, and **modified**. Compressible media (video/image) carry **two**
-hashes, **compressed** and **uncompressed**, nested under the file entry (charter — see the CLAUDE.md
-"Per-file tracking metadata" example). This is the same shape whatever the storage type:
+The per-file fingerprint index **`files.yaml`** — Category B, so it lives in Local Storage at
+`~/T/_large_files_bridge/repos/<repoKey>/files.yaml`, never in the working repo — records, per file, enough
+to tell whether it changed since last seen: a **hash** (fingerprint), **size**, **created**, and
+**modified**. Compressible media (video/image) carry **two** hashes, **compressed** and **uncompressed**,
+nested under the file entry (charter — see the CLAUDE.md "Per-file tracking metadata" example). This is the
+same shape whatever the storage type:
 
 ```yaml
 files:
@@ -198,8 +220,8 @@ the app. This is exactly the **responsive**, **wide-over-files** shape
 fingerprinting is stat/IO + hashing, so it fans wide over independent files (not the capped-thread
 fan-out reserved for the internally-multi-threaded compress/transcode jobs). **Indexing multiple
 storages parallelizes across storages too** — each storage's index is independent and writes only its
-own `.lfbridge/files.yaml`, so a re-index that spans several storages runs them concurrently under the
-same budget rather than one storage after another.
+own Local-Storage `repos/<repoKey>/files.yaml`, so a re-index that spans several storages runs them
+concurrently under the same budget rather than one storage after another.
 
 Parallelizing the per-file fingerprint (head+tail read + sha256) across files under the responsive budget, and parallelizing across storages when several are indexed, is to be implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `indexStorageFiles` (the walk collects the large-file paths, then `mapLimit(paths, responsiveBudget(), fingerprint)`), drawing `responsiveBudget()` + `mapLimit()` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts`.
@@ -229,7 +251,10 @@ automatic on bytes — charter §6.1 spirit). **Transcript and description are w
 `.lfbridge/`, path-mirrored, with the media's full filename and the extension APPENDED**
 ([Transcribe.mdx §3](./Transcribe.mdx), [ai_description.mdx §2](./ai_description.mdx) are
 authoritative — **no** extension replacement, **no** `.lfbridge/analysis/` directory for these two);
-**visuals-by-time and the compression record** remain **YAML under `.lfbridge/analysis/<relpath>/`**.
+**visuals-by-time** stays as **YAML under `.lfbridge/analysis/<relpath>/`** (Category-A, part of the
+AI-description family). The **compression record** is **Category-B tracking state**, so it lives in Local
+Storage at `~/T/_large_files_bridge/repos/<repoKey>/analysis/<relpath>/compression.yaml` (+ the sync-repo
+mirror when enabled) — **never** in the working repo's `.lfbridge/` (§4, [compression.mdx §8](./compression.mdx)).
 
 The passes:
 
@@ -265,8 +290,9 @@ segments:
   unchanged.
 
 Running the analysis passes and writing the per-file outputs — transcript/description as path-mirrored
-`<name.ext>.transcription` / `<name.ext>.ai_description` files directly under `.lfbridge/`, and
-visuals-by-time / compression records as YAML under `.lfbridge/analysis/` — is to be implemented in code:
+`<name.ext>.transcription` / `<name.ext>.ai_description` files directly under the committed `.lfbridge/`,
+visuals-by-time as YAML under `.lfbridge/analysis/`, and the Category-B compression record under Local
+Storage `repos/<repoKey>/analysis/` (never the repo) — is to be implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/analysis.service.ts` — `analyzeFile` (dispatches transcript / description / visuals-by-time by media kind).
 
 ---
@@ -296,7 +322,7 @@ single-storage screen (the entity companion to the umbrella above). It is where 
 
 * **Descriptor summary grid** — a compact read-out of the `storage.yaml` descriptor (§3): **name**,
   **type**, the type-specific block (e.g. `company_name`, or which `community` + role), the **clones**
-  posture (§5), and the rolled-up **file / tracked** counts from `.lfbridge/files.yaml` (§4.1).
+  posture (§5), and the rolled-up **file / tracked** counts from the Local-Storage `repos/<repoKey>/files.yaml` (§4.1).
 * **Files table** — a [TanStack `DataTable`](../CLAUDE.md) (house style, [repos.mdx §3](./repos.mdx)),
   one row per file in the storage, each carrying which §6 analysis outputs exist (transcript / description
   / visuals-by-time) and a per-row **Analyze** action.
@@ -327,47 +353,47 @@ implemented in code:
 
 ---
 
-## 8. The state-sync repo — a storage's optional home for noisy tracking state
+## 8. The sync repo — a storage's additive mirror for tracking state
 
-A **company** or **Personal** storage may configure a **state-sync repo**: a dedicated Git repo,
-purpose-built to **carry LFB's per-repo tracking state** across the user's computers, instead of letting
-that noisy text live inside each working repo's own `.lfbridge/`. It is the storages-family glue that
-makes the **churn policy** below work. The two ideas it rests on are owned by sibling specs and only
-cross-linked here:
+A **company** or **Personal** storage may configure a **sync repo**: a dedicated Git repo, purpose-built
+to **carry LFB's per-repo Category-B tracking state** across the user's computers — *"a Company repo only
+for the Large File Bridge webapp to sync changes."* It is an **additive mirror** of the always-present
+Local-Storage copy, not a replacement, and not a place that state moves *into* instead of the working repo
+(Category B is never in the working repo regardless). This is the storages-family glue that makes tracking
+state **travel** without polluting any working repo. The ideas it rests on are owned by sibling specs and
+only cross-linked here:
 
-* [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) — the authoritative **churn policy** and
-  the **content threshold** (when tracking state may enter a repo's own `.lfbridge/` vs. stay out of it).
+* [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) — the authoritative **data-category
+  placement policy**: Category B lives in Local Storage always, and in the sync repo also when enabled;
+  it never enters a working repo (the earlier content-threshold three-tier model is retired).
 * [repo_company_mapping.mdx](./repo_company_mapping.mdx) — the authoritative **owner mapping** (every repo
-  maps to a company or Personal owner). The owner is **which** storage a repo's state-sync repo comes from
-  (§9).
+  maps to a company or Personal owner). The owner is **which** storage a repo's sync repo comes from (§9).
 * [placement_radios.mdx](./placement_radios.mdx) / [repo_settings.mdx](./repo_settings.mdx) — the per-repo
   **placement radios** that let a repo's transcripts / AI descriptions go to `.lfbridge/`, **beside the
-  file**, or **into the state-sync repo** (§8.2).
+  file**, or **into the sync repo** (§8.2), and the per-repo **sync-repo toggle** (default off).
 
-### 8.1 The churn problem, and the three homes for a repo's tracking state (LOCKED)
+### 8.1 The churn problem, and the two homes for a repo's tracking state (LOCKED)
 
-A working code repo usually should **not** carry LFB's churny tracking files — `repo_storage.yaml`,
-`files.yaml`, and the per-file sidecars re-write on **every scan** and would pollute that repo's Git
-history with noise unrelated to its actual source. But that state still has to **travel** between the
-user's computers. The **content threshold** (artifact_placement_policy.mdx) resolves the tension: a
-repo's tracking state stays out of its own `.lfbridge/` **until the repo produces real derived content** —
-a **transcript** ([Transcribe.mdx §3](./Transcribe.mdx)) or an **AI description**
-([ai_description.mdx §2](./ai_description.mdx)) — at which point that repo has earned a committed
-`.lfbridge/` worth carrying. So a repo's tracking state can live in **one of three homes**:
+A working code repo must **not** carry LFB's churny tracking files — `repo_storage.yaml`, `files.yaml`,
+and the per-file sidecars re-write on **every scan** and would pollute that repo's Git history with noise
+unrelated to its actual source (`repo_storage.yaml` was the reported merge-conflict offender). So they
+never go there. But that state still has to **travel** between the user's computers. The resolution is
+categorical, by **data category** (artifact_placement_policy.mdx), not by any content threshold: Category-B
+tracking state lives in **two homes** (additive), and a working repo is never one of them:
 
 | Home | Path | Travels? | When |
 | --- | --- | --- | --- |
-| **State root** (machine-local) | `~/T/_large_files_bridge/repos/<repoKey>/` | **No** — rebuilt by rescan | Default, **below** the content threshold — no transcript/description yet |
-| **The repo's own `.lfbridge/`** | `<repoRoot>/.lfbridge/` (committed, §4) | **Yes**, with the repo | **At/above** the content threshold — the repo produced a transcript or AI description |
-| **The owning storage's state-sync repo** | `<syncRepo>/repos/<repoKey>/` | **Yes**, via that repo's git backbone | When the owning company/Personal storage has **configured a state-sync repo** — noisy state travels **without** touching the working repo |
+| **Local Storage** (machine-local) | `~/T/_large_files_bridge/repos/<repoKey>/` | **No** — the authoritative per-machine working copy | **Always** — every scan/action reads & writes here first |
+| **The owning storage's sync repo** | `<syncRepo>/repos/<repoKey>/` | **Yes**, via that repo's git backbone | **Also**, when the owning company/Personal storage has **configured a sync repo** AND the per-repo toggle is on (default off) — the travelling mirror, written IN ADDITION to Local Storage |
 
-The state-sync repo is the **third** option: it gives a repo's tracking state a **travelling** home even
-while the churn policy keeps it **out of** the working repo's own `.lfbridge/`. One state-sync repo
-gathers the tracking state of **every repo its owning storage owns**, each under
-`<syncRepo>/repos/<repoKey>/`, keyed by the same stable **`repoKey`** the state root uses.
+The sync repo is the **additive** second home: it gives a repo's tracking state a **travelling** copy while
+Local Storage stays the authoritative working copy and the working repo stays pristine. One sync repo
+gathers the tracking state of **every repo its owning storage owns**, each under `<syncRepo>/repos/<repoKey>/`,
+keyed by the same stable **`repoKey`** Local Storage uses. Only the **Category-A** content artifacts
+(transcripts / AI descriptions) ever live in the working repo's own committed `.lfbridge/` (§4).
 
 ```
-~/BGit/Bryan_git/act3_state_sync/          ← ACT3 company storage's STATE-SYNC repo (a dedicated git repo)
+~/BGit/Bryan_git/act3_state_sync/          ← ACT3 company storage's SYNC repo (a dedicated git repo)
 ├── storage.yaml                            ← type: company (this repo can itself be the company SDL, or a sibling)
 └── repos/
     ├── act3-webapp/                         ← one <repoKey> dir per repo this storage OWNS (§9)
@@ -378,17 +404,17 @@ gathers the tracking state of **every repo its owning storage owns**, each under
         └── repo_storage.yaml
 ```
 
-Choosing the effective tracking-state home for a repo — state root below the content threshold, the repo's own committed `.lfbridge/` once a transcript/description exists, or the owning storage's `<syncRepo>/repos/<repoKey>/` when one is configured — is resolved in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `resolveTrackingHome(repoKey)` (new; reads the owner mapping + the content-threshold state, drawing the state root from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveStateDir()`).
+Resolving the always-present Local-Storage tracking root and the optional additive sync-repo mirror root for a repo is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveTrackingRoot(repoRoot)` (returns the Local-Storage `repos/<repoKey>/` root, drawn from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveRepoStateDir()`) and `resolveStateSyncRepo(repoRoot)` (returns `<syncRepo>/repos/<repoKey>/` or `null`); the mirror is performed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo()` / `reconcileFromSyncRepo()`.
 
-### 8.2 Placement radios can target the state-sync repo
+### 8.2 Placement radios can target the sync repo
 
-A repo's transcripts and AI descriptions are placed by the per-repo **placement radios**
+A repo's transcripts and AI descriptions (Category A) are placed by the per-repo **placement radios**
 ([repo_settings.mdx](./repo_settings.mdx), [placement_radios.mdx](./placement_radios.mdx)): they may go
-**in `.lfbridge/`**, **beside the media file**, or **into the state-sync repo**. When the radio is set to
-the state-sync repo, an artifact for `<repoRoot>/<rel-dir>/<name.ext>` is written path-mirrored to
+**in `.lfbridge/`**, **beside the media file**, or **into the sync repo**. When the radio is set to the
+sync repo, an artifact for `<repoRoot>/<rel-dir>/<name.ext>` is written path-mirrored to
 `<syncRepo>/repos/<repoKey>/<rel-dir>/<name.ext>.transcription` (extension **appended**, matching §6) and
-travels with that repo rather than with the working repo. This is the storages-family reading of the
+travels with that sync repo rather than with the working repo. This is the storages-family reading of the
 placement policy; the radio semantics themselves are authoritative in placement_radios.mdx.
 
 ---
@@ -399,35 +425,35 @@ Every repo **maps to a company or Personal owner** — default **Personal**, aut
 remote carries a forge **ORG**, renamable + reassignable by the user. That mapping is owned end-to-end by
 [repo_company_mapping.mdx](./repo_company_mapping.mdx) and **not** redefined here. What the **storages
 model** adds is the consequence: the owner is **which** directory-based storage a repo belongs to, and
-therefore **whose** state-sync repo (§8) its tracking state routes to.
+therefore **whose** sync repo (§8) its tracking state mirrors to.
 
-* **Personal-owned repos** route their tracking state (when a state-sync repo is configured) to the
-  **[Personal storage](./storage_personal.mdx)**'s state-sync repo; unowned/unmapped repos default to
+* **Personal-owned repos** mirror their tracking state (when a sync repo is configured and the toggle is
+  on) to the **[Personal storage](./storage_personal.mdx)**'s sync repo; unowned/unmapped repos default to
   Personal.
-* **Company-owned repos** route to that **[company storage](./storage_company.mdx)**'s state-sync repo —
-  so all of a company's repos share one travelling tracking-state repo under the company allow-list.
+* **Company-owned repos** mirror to that **[company storage](./storage_company.mdx)**'s sync repo — so all
+  of a company's repos share one travelling tracking-state repo under the company allow-list.
 * The owner shows in the storages UI: a company storage's detail page can surface **the repos it owns**
   (a filtered view of the [Repos](./repos.mdx) list), and each `StorageRow` already carries
   `companyName` for the label.
 
-The owner→storage resolution the storages model consumes (already setting `companyName` per row from the remote's forge org, defaulting to Personal) lives in code:
+The owner→storage resolution the storages model consumes (already setting `companyName` per row from the remote's forge org, defaulting to Personal) — which the sync-repo resolver `resolveStateSyncRepo()` reuses to find whose sync repo a repo mirrors to — lives in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `classifyByConvention()` and `buildRow()` (sets `companyName`); the repo→owner mapping it reads is owned by [repo_company_mapping.mdx](./repo_company_mapping.mdx).
 
 ---
 
 ## 10. Storages-page data additions — the per-storage `stateSyncRepo` descriptor
 
-For the Storages tab (§2) and each storage's detail page (§7) to show and manage the state-sync repo, the
-Storages-page payload gains a per-storage **`stateSyncRepo`** descriptor. It is present only for
-directory-based storages that can own one — **company** and **Personal** — and is `null` when none is
-configured:
+For the Storages tab (§2) and each storage's detail page (§7) to show and manage the sync repo (the
+additive tracking-state mirror, §8), the Storages-page payload gains a per-storage **`stateSyncRepo`**
+descriptor (the code symbol keeps its name). It is present only for directory-based storages that can own
+one — **company** and **Personal** — and is `null` when none is configured:
 
 ```yaml
 # added to each company / Personal StorageRow in the Storages page payload
 stateSyncRepo:
-  configured: true                       # false / null = this storage has no state-sync repo yet
-  root: ~/BGit/Bryan_git/act3_state_sync # the dedicated git repo that carries owned repos' tracking state
-  ownedRepoCount: 12                      # how many repos route their tracking state here (§9)
+  configured: true                       # false / null = this storage has no sync repo yet
+  root: ~/BGit/Bryan_git/act3_state_sync # the dedicated git repo that MIRRORS owned repos' tracking state
+  ownedRepoCount: 12                      # how many repos mirror their tracking state here (§9)
   remote: https://github.com/ACT3ai/act3_state_sync.git   # or a local path (git_backbone.mdx §3)
 ```
 
@@ -454,10 +480,13 @@ Populating the per-storage `stateSyncRepo` descriptor when it splits the page in
    and **exactly one** type-specific block; **company** carries `company_name`, **community** carries which
    `community` (+ child props), each with type-scoped properties.
 3. Every directory-based storage has a hidden **`.lfbridge/`** at its root (for a repo, `~/BGit/xyz/.lfbridge/`)
-   holding the per-file fingerprint index (hash + size + dates; compressed/uncompressed variant hashes for
-   media), the IPFS manifest, the `analysis/` outputs, and the path-mirrored transcript / AI-description
-   artifacts — **`.lfbridge/` is committed and travels with the repo** (§4); only the multi-GB media files
-   themselves are git-ignored.
+   that is **committed and travels with the repo** but holds **only Category-A derived content** — the
+   path-mirrored transcript / AI-description artifacts plus the visuals-by-time YAML of the AI-description
+   family (§4); only the multi-GB media files themselves are git-ignored. **All Category-B tracking state**
+   — the per-file fingerprint index (hash + size + dates; compressed/uncompressed variant hashes for
+   media), the IPFS manifest, `repo_storage.yaml`, sidecars, history, decisions, and compression records —
+   lives in **Local Storage** at `~/T/_large_files_bridge/repos/<repoKey>/`, **never** in a working repo,
+   and is additionally mirrored to a configured sync repo (§8, §11.8).
 4. A user can belong to **many** storages at once (multiple communities + companies + personal + every
    repo). The **Storages** left-bar tab shows them: **Personal**, one child **per company**, a **Repos**
    child that routes to the Repos tab (not a long list), and the opted-in **Communities**.
@@ -472,18 +501,18 @@ Populating the per-storage `stateSyncRepo` descriptor when it splits the page in
    **across files** under the **responsive budget** (`cores − 2`) via `mapLimit()`, and **across
    storages** when a re-index spans several — so a large storage indexes quickly without pinning the app,
    leaving 2 cores for the HTTP loop + IPFS (§4.1, [parallelization.mdx §3](./parallelization.mdx)).
-8. A **company** or **Personal** storage may configure an optional **state-sync repo** (§8) — a dedicated
-   Git repo that carries **owned repos'** noisy per-repo tracking state under `<syncRepo>/repos/<repoKey>/`.
-   A repo's tracking state lives in **one of three homes** (§8.1): the machine-local **state root**
-   `~/T/_large_files_bridge/repos/<repoKey>/` (below the **content threshold**, does not travel), the
-   repo's **own committed `.lfbridge/`** (once it produces a transcript or AI description), or the owning
-   storage's **state-sync repo** (travels without touching the working repo). The churn policy + content
-   threshold are authoritative in [artifact_placement_policy.mdx](./artifact_placement_policy.mdx).
+8. A **company** or **Personal** storage may configure an optional **sync repo** (§8) — a dedicated Git
+   repo that **mirrors owned repos'** noisy per-repo tracking state under `<syncRepo>/repos/<repoKey>/`.
+   A repo's Category-B tracking state lives in **two homes** (§8.1), never in a working repo: **Local
+   Storage** `~/T/_large_files_bridge/repos/<repoKey>/` **always** (the authoritative per-machine copy),
+   and the owning storage's **sync repo** **also**, when configured and the per-repo toggle is on (the
+   additive travelling mirror, default off). The earlier content-threshold three-tier model is retired;
+   the placement policy is authoritative in [artifact_placement_policy.mdx](./artifact_placement_policy.mdx).
 9. Every repo **maps to a company or Personal owner** (default Personal; forge ORG → company) per
    [repo_company_mapping.mdx](./repo_company_mapping.mdx); the storages model consumes that only to decide
-   **whose** state-sync repo a repo routes to (§9) — Personal-owned → the Personal storage's, company-owned
+   **whose** sync repo a repo mirrors to (§9) — Personal-owned → the Personal storage's, company-owned
    → that company storage's. Placement radios ([repo_settings.mdx](./repo_settings.mdx)) may target the
-   state-sync repo for transcripts / AI descriptions (§8.2).
+   sync repo for transcripts / AI descriptions (§8.2).
 10. The Storages-page payload gains a per-storage **`stateSyncRepo`** descriptor (§10) — `configured`,
     `root`, `ownedRepoCount`, `remote` — non-null only for **company** and **Personal** storages, `null`
     for `local` and `community`; it extends `StorageRow` / `StoragesPageData` and is populated by
@@ -491,28 +520,33 @@ Populating the per-storage `stateSyncRepo` descriptor when it splits the page in
 
 <!--
   Umbrella for the storage family. Local = settings/config (DB replacement, storage_local.mdx). The four
-  directory-based storages (repo/personal/company/community) each carry storage.yaml (name + type + type
-  block) + a hidden .lfbridge/ (files.yaml fingerprints, manifest.yaml, analysis/). Building files.yaml
-  PARALLELIZES per-file fingerprinting (head+tail read + sha256) across files AND across storages under
-  the RESPONSIVE budget (cores−2) via mapLimit — responsive/wide-over-files (parallelization.mdx §3;
-  tracking.service.ts indexStorageFiles). They pin over IPFS
-  and may also mirror to Google Drive / Dropbox. The Storages left-bar tab groups Personal + Companies +
-  a Repos link + opted-in Communities. Media analysis writes transcript/description as path-mirrored
-  <name.ext>.transcription / .ai_description directly under .lfbridge/ (ext APPENDED, committed & travels
-  with the repo — NOT under analysis/), and visuals_by_time/compression YAML under .lfbridge/analysis/.
-  NEW §8–§10 (storages-family glue for the state-sync + owner-mapping concepts): (§8) a company/Personal
-  storage may configure an optional STATE-SYNC REPO — a dedicated git repo carrying OWNED repos' noisy
-  tracking state under <syncRepo>/repos/<repoKey>/. §8.1 THREE HOMES for a repo's tracking state (LOCKED):
-  state root ~/T/_large_files_bridge/repos/<repoKey>/ (machine-local, below the CONTENT THRESHOLD) → the
-  repo's own committed .lfbridge/ (once it produces a transcript/AI description) → the owning storage's
-  state-sync repo (travels without touching the working repo). Churn policy + content threshold are OWNED
-  by artifact_placement_policy.mdx (cross-link, don't redefine). §8.2 placement radios (repo_settings/
-  placement_radios) may target the state-sync repo. (§9) every repo maps to a company/Personal OWNER
-  (repo_company_mapping.mdx owns the mapping; classifyByConvention/buildRow set companyName) — the storages
-  model consumes it only to route which state-sync repo a repo uses. (§10) Storages-page payload gains a
-  per-storage stateSyncRepo descriptor (configured/root/ownedRepoCount/remote; company+Personal only) →
-  extends StorageRow/StoragesPageData, populated by listStoragesPage(); new resolveTrackingHome(repoKey) in
-  storage.service. Acceptance §8–§10 added. Sibling detail specs: storage_local, storage_repo,
-  storage_personal, storage_company, storage_community; cross-links artifact_placement_policy,
+  directory-based storages (repo/personal/company/community) each carry storage.yaml (name + type + type block) +
+  a hidden committed .lfbridge/. SPLIT BY DATA CATEGORY (§4, LOCKED; authoritative in
+  artifact_placement_policy.mdx / repo_tracking_scheme.mdx): the working repo's committed .lfbridge/ holds
+  ONLY Category-A derived content (path-mirrored <name.ext>.transcription / .ai_description with ext
+  APPENDED + visuals_by_time.yaml under .lfbridge/analysis/); ALL Category-B tracking state (files.yaml
+  fingerprints, manifest.yaml, repo_storage.yaml, sidecars, history, decisions.yaml, compression records)
+  lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ ALWAYS (never a working repo → never
+  merge-conflicts) and is ADDITIONALLY mirrored to a configured sync repo when the per-repo toggle is on.
+  files.yaml now lives in Local Storage; building it PARALLELIZES per-file fingerprinting (head+tail read +
+  sha256) across files AND across storages under the RESPONSIVE budget (cores−2) via mapLimit
+  (parallelization.mdx §3; tracking.service.ts indexStorageFiles). They pin over IPFS and may also mirror
+  to Google Drive / Dropbox. The Storages left-bar tab groups Personal + Companies + a Repos link +
+  opted-in Communities. §8–§10 (storages-family glue for the SYNC-REPO + owner-mapping concepts): (§8) a
+  company/Personal storage may configure an optional SYNC REPO — a dedicated git repo that MIRRORS OWNED
+  repos' Category-B tracking state under <syncRepo>/repos/<repoKey>/. §8.1 TWO HOMES (LOCKED): Local
+  Storage ALWAYS + the owning storage's sync repo ALSO when configured and toggled on (additive mirror,
+  default off) — NO working-repo home for Category B; the content-threshold three-tier model is RETIRED.
+  Policy OWNED by artifact_placement_policy.mdx (cross-link, don't redefine). §8.2 placement radios
+  (repo_settings/placement_radios) may target the sync repo for Category-A artifacts. (§9) every repo maps
+  to a company/Personal OWNER (repo_company_mapping.mdx owns the mapping; classifyByConvention/buildRow set
+  companyName) — the storages model consumes it only to route which sync repo a repo mirrors to. (§10)
+  Storages-page payload gains a per-storage stateSyncRepo descriptor (code symbol kept; configured/root/
+  ownedRepoCount/remote; company+Personal only) → extends StorageRow/StoragesPageData, populated by
+  listStoragesPage(). Code seams: tracking-root.service.ts resolveTrackingRoot()/resolveStateSyncRepo(),
+  tracking-sync.service.ts mirrorToSyncRepo()/reconcileFromSyncRepo(), state-dir.ts resolveRepoStateDir().
+  Acceptance §8–§10 updated. Sibling detail specs: storage_local, storage_repo, storage_personal,
+  storage_company, storage_community; cross-links artifact_placement_policy, repo_tracking_scheme,
   repo_company_mapping, placement_radios, repo_settings.
 -->
+

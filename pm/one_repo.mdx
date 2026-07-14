@@ -372,8 +372,10 @@ to set each axis; the full visual grammar (four render states — OFF white/grey
   table is under **this** repo ([decision_toggles.mdx §4](./decision_toggles.mdx#4-the-git-ignore-toggle-is-repo-scoped-locked)).
 * A **RECOMMENDED** (dashed) toggle marks an **Undecided** file the [To-Do Batch Calc Engine](./to_do_batch_calc_engine.mdx)
   thinks should be pinned / ignored — one click confirms it.
-* Clicking a toggle writes **that axis only** to the team-shared `.lfbridge/decisions.yaml`
-  ([decisions.mdx §3](./decisions.mdx)) via the same `setDecision` mutation the inline **Decision** select
+* Clicking a toggle writes **that axis only** to the `decisions.yaml` ledger — which lives in **Local
+  Storage** at `~/T/_large_files_bridge/repos/<repoKey>/` (and travels via the company sync repo when
+  enabled), **never** in the working repo ([decisions.mdx §3](./decisions.mdx),
+  [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)) — via the same `setDecision` mutation the inline **Decision** select
   uses (§4.5), and carries out that axis's effect (pin/unpin; `.gitignore` write via [git_ignore.mdx](./git_ignore.mdx)).
   It never deletes local bytes and it stops click propagation (never navigates).
 

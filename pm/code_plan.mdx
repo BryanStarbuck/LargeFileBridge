@@ -158,7 +158,7 @@ packages/backend/src/
 │   │
 │   ├── pin/                    # storage_local.mdx §13 — the 15-minute byte-mover
 │   │   ├── pin.service.ts      #   per pinned unit: add→CID→pin→update manifest→fetch missing→status.yaml
-│   │   ├── manifest.service.ts  #   read/write manifest.yaml + committed <repo>/.lfbridge/manifest.yaml (§9.2)
+│   │   ├── manifest.service.ts  #   read/write manifest.yaml in Local Storage repos/<repoKey>/ (+ sync-repo mirror, never the working repo) (§9.2)
 │   │   └── synclist.service.ts  #   LargeFilesBridge_SyncList.yaml publish + RECONCILE (sync_list.mdx §5 trust model)
 │   │
 │   ├── schedule/                # the transparency contract (installed vs on/off) for BOTH workers
@@ -223,8 +223,10 @@ BE and FE agree on shape. `big_file.threshold_bytes` (settings.mdx) supersedes t
 * **Repo unit (PRIMARY)** — one per discovered git repo. Identity `{name, path, remote}` written by
   the scanner; `pinned` master toggle (default **off**); `large_files.follow_gitignore` seeds the
   bridge set from the repo's `.gitignore`; per-repo `big_file_override`; `pin` pin/fetch/publish
-  policy; `access.shared/participants`. Manifest is **also committed** to
-  `<repo>/.lfbridge/manifest.yaml` so git carries the list; IPFS carries the bytes.
+  policy; `access.shared/participants`. The manifest lives in **Local Storage** at
+  `~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml` (never the working repo) and travels across the
+  user's computers via the **company sync repo** when enabled, not the working repo
+  ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)); IPFS carries the bytes.
 * **Computer unit** — everything **outside** every registered repo, with repo subtrees **masked
   out** (`mask.ts`). Its manifest travels over **IPNS** (no repo to carry it), or a peer-shared record.
 

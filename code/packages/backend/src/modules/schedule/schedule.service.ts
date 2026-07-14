@@ -192,18 +192,37 @@ export async function control(
   return workerState(kind);
 }
 
+// Outcome of reconciling one worker's schedule — what the watchdog (watchdog.service.ts tick()) uses to
+// decide whether an overdue worker's repair actually landed or whether launchd genuinely won't take it
+// (the case that deserves a WARN, vs. the routine self-heal that doesn't).
+export interface ScheduleReconcileResult {
+  kind: WorkerKind;
+  /** Config says this worker should be running (installed + enabled). */
+  wantsOn: boolean;
+  /** Real OS state AFTER the reconcile attempt — null when wantsOn is false (nothing to check). */
+  osEnabledAfter: boolean | null;
+}
+
 // Re-render an already-installed worker plist when its baked-in StartInterval no longer matches the
-// configured interval. Case in point: the scan cadence default dropped 4h → 2h — config.service.ts heals
-// the stored value on load, but the on-disk LaunchAgent still fires on the OLD schedule until the plist is
-// re-written and reloaded. Called once at boot (main.ts bootstrapState). Only touches workers that are
+// configured interval, when its trigger-script path has drifted, OR when launchd simply doesn't have the
+// job loaded even though it's configured on (a bootstrap that failed or got booted out and never
+// reloaded — backbone_resilience.mdx §3/F1). Case in point for the first: the scan cadence default
+// dropped 4h → 2h — config.service.ts heals the stored value on load, but the on-disk LaunchAgent still
+// fires on the OLD schedule until the plist is re-written and reloaded. Called once at boot (main.ts
+// bootstrapState) and after every watchdog-detected overdue worker. Only touches workers that are
 // ALREADY installed — it never installs or enables a worker the user hasn't opted into. Best-effort: a
 // launchctl/OS hiccup is logged, not fatal to boot.
-export async function reconcileWorkerSchedules(): Promise<void> {
+export async function reconcileWorkerSchedules(): Promise<ScheduleReconcileResult[]> {
+  const results: ScheduleReconcileResult[] = [];
   for (const kind of ["scan", "pin", "device"] as WorkerKind[]) {
     const inst = installer();
     const label = labelFor(kind);
+    const block = processBlock(getAppConfig(), kind);
     try {
-      if (!inst.isInstalled(label)) continue;
+      if (!inst.isInstalled(label)) {
+        results.push({ kind, wantsOn: false, osEnabledAfter: null });
+        continue;
+      }
       const want = intervalFor(kind);
       const have = inst.installedIntervalSeconds(label);
       // Also heal a drifted/broken TRIGGER SCRIPT path. An already-installed plist can point at a stale or
@@ -215,23 +234,47 @@ export async function reconcileWorkerSchedules(): Promise<void> {
       const haveScript = inst.installedTriggerScript(label);
       const scriptDrift = haveScript !== null && haveScript !== wantScript;
       const scriptMissing = haveScript !== null && !fs.existsSync(haveScript);
-      if (have === want && !scriptDrift && !scriptMissing) continue; // already correct — nothing to do
-      const wasEnabled = await inst.isEnabled(label);
+      // The other, previously-unhandled way the OS trigger goes dead: the plist on disk is byte-for-byte
+      // correct (no interval/script drift) but launchd never actually has the job loaded — a `bootstrap`
+      // that failed (permissions, a transient launchd hiccup) or a job that got booted out and never
+      // reloaded. Config still says `enabled: true` (control() sets that once the user asks, and never
+      // un-sets it just because the OS call had trouble — see launchd.ts's launchctl() which logs and
+      // swallows rather than throws). Without this check, a worker stuck in that state stayed "overdue"
+      // FOREVER: `have === want` short-circuited the whole function before it ever looked at whether
+      // launchd had the job loaded, so the repair path was never even attempted again.
+      const shouldBeEnabled = block.enabled;
+      const osEnabledNow = await inst.isEnabled(label);
+      const notActuallyLoaded = shouldBeEnabled && !osEnabledNow;
+      if (have === want && !scriptDrift && !scriptMissing && !notActuallyLoaded) {
+        // already correct — nothing to do
+        results.push({ kind, wantsOn: shouldBeEnabled, osEnabledAfter: shouldBeEnabled ? osEnabledNow : null });
+        continue;
+      }
       await inst.install(buildInstallOpts(kind)); // rewrite the plist with the current interval + trigger path
-      if (wasEnabled) {
-        // launchd only picks up plist changes on reload: bootout the stale job, bootstrap the new.
+      if (shouldBeEnabled) {
+        // launchd only picks up plist changes on reload: bootout the stale job, bootstrap the new. Also
+        // exactly what re-attempts a bootstrap that never took in the first place (notActuallyLoaded).
         await inst.disable(label);
         await inst.enable(label);
       }
-      const why =
-        scriptDrift || scriptMissing
-          ? `trigger script ${haveScript ?? "?"} → ${wantScript}`
+      const osEnabledAfter = shouldBeEnabled ? await inst.isEnabled(label) : null;
+      const why = scriptDrift || scriptMissing
+        ? `trigger script ${haveScript ?? "?"} → ${wantScript}`
+        : notActuallyLoaded
+          ? `launchd didn't actually have the job loaded — re-bootstrapped`
           : `interval ${have ?? "?"}s → ${want}s`;
-      log.info("schedule", `${kind}: reconciled schedule (${why})`);
+      if (shouldBeEnabled && !osEnabledAfter) {
+        log.warn("schedule", `${kind}: schedule repair did not take — launchd still won't load the job (${why})`);
+      } else {
+        log.info("schedule", `${kind}: reconciled schedule (${why})`);
+      }
+      results.push({ kind, wantsOn: shouldBeEnabled, osEnabledAfter });
     } catch (e) {
       log.warn("schedule", `${kind}: schedule reconcile failed: ${(e as Error).message}`);
+      results.push({ kind, wantsOn: block.enabled, osEnabledAfter: null });
     }
   }
+  return results;
 }
 
 /**

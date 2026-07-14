@@ -48,6 +48,18 @@ export default defineConfig(async () => {
     },
     resolve: {
       alias: { "@": path.resolve(__dirname, "src") },
+      // Force every dependency (react-query, react-router, react-table, sonner, …) onto the SAME
+      // react/react-dom instance instead of whatever copy their own resolution would pick. Without
+      // this, a version bump (e.g. the React 18→19 upgrade) can leave a stale pre-bump copy resolvable
+      // in the store for a moment, and two live React copies means a hook call sees a null dispatcher
+      // ("Cannot read properties of null (reading 'useEffect')" inside QueryClientProvider).
+      dedupe: ["react", "react-dom"],
+    },
+    optimizeDeps: {
+      // Pre-bundle these explicitly so Vite's dep-optimizer always resolves them from one place and
+      // re-optimizes them together (same reasoning as the dedupe above) instead of discovering them
+      // piecemeal across different importers.
+      include: ["react", "react-dom", "react-dom/client"],
     },
     build: {
       rollupOptions: {

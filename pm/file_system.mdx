@@ -479,8 +479,10 @@ only notes that they ride on the rows it hubs.
   **repo-scoped** — it renders only for files/dirs **under a Git repo** (`repoRootFor()`), else **N/A**.
 * Each renders OFF / ON (`#c2410c`) / **RECOMMENDED** (dashed orange — a calc-engine suggestion from
   [to_do_batch_calc_engine.mdx](./to_do_batch_calc_engine.mdx)) / N/A. A click writes **one** axis to
-  the team-shared `.lfbridge/decisions.yaml`, performs that axis's effect (pin/unpin or `.gitignore`
-  write), **never deletes local bytes**, and **stops propagation** so it never navigates.
+  the `decisions.yaml` ledger — in **Local Storage** at `~/T/_large_files_bridge/repos/<repoKey>/` (shared
+  via the company sync repo when enabled, never in the working repo —
+  [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)) — performs that axis's effect (pin/unpin
+  or `.gitignore` write), **never deletes local bytes**, and **stops propagation** so it never navigates.
 * On a **directory** under a repo, turning ⊘ **ON** opens the [git-ignore pop-over](./git_ignore.mdx)
   rather than writing silently. The **cloud-root rows (§4)** are ordinary `dir` rows, so under a repo
   they carry the ⊘ toggle like any other directory.
@@ -546,7 +548,8 @@ Rendering the two inline toggles is owned by
     browser, cloud-root rows, and the Full-paths tab) carries the two inline **decision toggles** — the
     editable form of the `P` (pin) and `I` (git-ignored) badges. The **pin** toggle renders for any large
     file; the **⊘ git-ignore** toggle renders **only under a repo** (`repoRootFor()`), else N/A. A click
-    writes **one** axis to `.lfbridge/decisions.yaml`, performs its effect, **never deletes local bytes**,
+    writes **one** axis to the Local-Storage `decisions.yaml` (`~/T/_large_files_bridge/repos/<repoKey>/`,
+    never the working repo), performs its effect, **never deletes local bytes**,
     and **stops propagation** (never navigates); turning ⊘ ON for a **directory** under a repo opens the
     [git-ignore pop-over](./git_ignore.mdx). Grammar/states owned by
     [decision_toggles.mdx](./decision_toggles.mdx) / [directories.mdx §3.6](./directories.mdx).
@@ -608,7 +611,7 @@ Rendering the two inline toggles is owned by
        toggles = writable form of the P (pin) / I (git-ignored) badges. Pin toggle = any large file; ⊘
        git-ignore toggle = repo-scoped (renders only under a repo via git.service.ts repoRootFor(), else
        N/A). States OFF/ON(#c2410c)/RECOMMENDED(dashed, from to_do_batch_calc_engine.mdx)/N/A; click writes
-       ONE axis to .lfbridge/decisions.yaml, never deletes bytes, stops propagation (never navigates); a
+       ONE axis to the Local-Storage decisions.yaml (repos/<repoKey>/, never the working repo), never deletes bytes, stops propagation (never navigates); a
        directory ⊘-ON opens git_ignore.mdx pop-over. Grammar owned by decision_toggles.mdx / directories.mdx
        §3.6; component DecisionToggles.tsx.
   Does NOT restate: the Miller column browser / badges R-r·P·C-c·i / size+media filters / persisted state

@@ -1,36 +1,38 @@
-// WHERE a repo's noisy per-repo tracking files live (artifact_placement_policy.mdx §3). Historically every
-// per-repo tracking artifact — above all `repo_storage.yaml`, which `refreshCounts()` re-stamps on EVERY
-// scan — was written into `<repo>/.lfbridge/`, polluting the git working tree (and, in committed storage
-// repos, causing real git churn) even for a repo the user never asked to transcribe. This module centralizes
-// the placement decision so that noise is kept OUT of the repo until the repo crosses the "content
-// threshold" — i.e. produces at least one durable user artifact (a transcript or an AI description). Until
-// then the tracking state lives in a machine-local per-repo directory under the state root, which never
-// touches git. This is a leaf module (state-dir + tracking.service only) so the four tracking services can
-// share it without an import cycle.
+// WHERE a repo's noisy per-repo tracking files live (artifact_placement_policy.mdx). The split is by DATA
+// CATEGORY, not a content threshold:
+//   • Category A — the user's derived CONTENT (transcripts / AI descriptions) — lives in the WORKING repo's
+//     committed `.lfbridge/` and travels with the repo (placed by artifact-placement.service.ts).
+//   • Category B — LFB's noisy COMPRESSION / BIG-FILE / GIT-IGNORE tracking state (`repo_storage.yaml`,
+//     `files/<rel>.yaml` sidecars, `history/<device>.txt`, `decisions.yaml`, `manifest.yaml`, compression
+//     records) — NEVER enters a working repo. It lives in LOCAL STORAGE at
+//     `~/T/_large_files_bridge/repos/<repoKey>/` ALWAYS (this module), which never touches git, so it can
+//     never merge-conflict — the failure this redesign fixes. When the owning company/Personal storage has a
+//     SYNC REPO configured and the per-repo toggle is on, that state is ADDITIONALLY mirrored to
+//     `<syncRepo>/repos/<repoKey>/` by tracking-sync.service.ts (additive, not instead of Local Storage).
+// This is a leaf module (state-dir only) so the tracking services share it without an import cycle.
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { resolveRepoStateDir } from "../../config/state-dir.js";
-import { LFBRIDGE_DIR } from "./tracking.service.js";
 
 /** Stable 12-hex key for a repo/root — sha1 of its resolved absolute path (the same scheme storage.service's
- *  `shortHash`/`storageSid` uses). Keys the machine-local per-repo state directory and the artifact latch. */
+ *  `shortHash`/`storageSid` uses). Keys the Local-Storage per-repo state directory and the sync-repo subtree. */
 export function repoKeyFor(root: string): string {
   return crypto.createHash("sha1").update(path.resolve(root)).digest("hex").slice(0, 12);
 }
 
-/** The machine-local per-repo tracking dir: `~/T/_large_files_bridge/repos/<repoKey>/` — the PRE-threshold
- *  home for `repo_storage.yaml`, sidecars, and history. Never touches git (artifact_placement_policy.mdx §3). */
+/** The Local-Storage per-repo tracking dir: `~/T/_large_files_bridge/repos/<repoKey>/` — the ALWAYS home for
+ *  `repo_storage.yaml`, sidecars, history, `decisions.yaml`, and `manifest.yaml`. Never touches git
+ *  (artifact_placement_policy.mdx §2/§3). */
 export function repoStateDir(root: string): string {
   return resolveRepoStateDir(repoKeyFor(root));
 }
 
 const ARTIFACT_LATCH = ".durable-artifact";
 
-/** True once this repo has produced at least one durable user artifact — a transcript OR an AI description
- *  (the "content threshold", artifact_placement_policy.mdx §2). A ONE-WAY latch stored in the machine-local
- *  per-repo state dir: deleting the artifact later does NOT un-cross the threshold (§11 one-way latch), so the
- *  repo's `.lfbridge/` placement never flip-flops mid-life. */
+/** True once this repo has produced at least one durable user artifact — a transcript OR an AI description.
+ *  Retained as a "does this repo have content?" marker; it NO LONGER affects tracking-state placement
+ *  (Category B is always Local Storage). A one-way latch in the Local-Storage per-repo state dir. */
 export function hasDurableArtifact(root: string): boolean {
   try {
     return fs.existsSync(path.join(repoStateDir(root), ARTIFACT_LATCH));
@@ -39,8 +41,9 @@ export function hasDurableArtifact(root: string): boolean {
   }
 }
 
-/** Latch the content threshold for this repo — called the first time a transcript / AI description is
- *  written for a file this repo owns (transcribe.service / describe.service). Idempotent + best-effort. */
+/** Latch that this repo has produced content — called the first time a transcript / AI description is written
+ *  (transcribe.service / describe.service). Idempotent + best-effort. Kept for content-presence checks;
+ *  does not move any tracking state. */
 export function markDurableArtifact(root: string): void {
   try {
     const dir = repoStateDir(root);
@@ -52,31 +55,45 @@ export function markDurableArtifact(root: string): void {
   }
 }
 
-/** [SEAM] The owning storage's dedicated LFB state-sync repo (storage_company.mdx §7 / storages.mdx §8), or
- *  null when none is configured. When set, a repo's noisy tracking routes to `<syncRepo>/repos/<repoKey>/` so
- *  it travels across the user's computers via that purpose-built repo. The per-storage settings surface that
- *  persists this is specced (storage_settings.mdx §4b) but not yet wired, so this returns null today. */
-export function resolveStateSyncRepo(_root: string): string | null {
-  return null;
-}
-
 /**
- * Resolve the directory a repo's noisy per-repo tracking files (`repo_storage.yaml`, `files/<rel>.yaml`
- * sidecars, `history/<device>.txt`) should be written to (artifact_placement_policy.mdx §3). Decision order:
- *   0. a relocated `.lfbridge/` (storage_settings.mdx §3) still wins outright, unchanged;
- *   1. the owning storage's state-sync repo → `<syncRepo>/repos/<repoKey>/` (seam; null today);
- *   2. POST-threshold + keep-`.lfbridge/` consent → the repo's own `<repo>/.lfbridge/` (as before);
- *   3. PRE-threshold (the default for an untranscribed repo) → the machine-local `repos/<repoKey>/` state
- *      dir, which never touches git — this is what stops `repo_storage.yaml` churn.
- * `relocated` / `keepsLfbridge` come from the owning storage's `.lfbridge` settings, read by the caller.
+ * Resolve the directory a repo's Category-B tracking files (`repo_storage.yaml`, `files/<rel>.yaml` sidecars,
+ * `history/<device>.txt`, `decisions.yaml`, `manifest.yaml`) are written to. It is ALWAYS the Local-Storage
+ * `repos/<repoKey>/` dir (artifact_placement_policy.mdx §2) — there is no tier that writes tracking state into
+ * a working repo. The optional company/Personal sync repo is an ADDITIVE mirror handled separately
+ * (tracking-sync.service.ts `mirrorToSyncRepo`), so this resolver stays a simple, leaf, always-Local-Storage
+ * function. The `opts` are accepted for backward compatibility with the tracking services and ignored — the
+ * keep-`.lfbridge/` consent and any relocated `.lfbridge/` govern only the Category-A content artifacts.
  */
 export function resolveTrackingRoot(
   root: string,
-  opts: { relocated?: string | null; keepsLfbridge: boolean },
+  _opts?: { relocated?: string | null; keepsLfbridge?: boolean },
 ): string {
-  if (opts.relocated && opts.relocated.trim()) return path.resolve(opts.relocated);
-  const syncRepo = resolveStateSyncRepo(root);
-  if (syncRepo) return path.join(syncRepo, "repos", repoKeyFor(root));
-  if (opts.keepsLfbridge && hasDurableArtifact(root)) return path.join(root, LFBRIDGE_DIR);
   return repoStateDir(root);
+}
+
+/** The marker file (in the Local-Storage per-repo state dir) whose one line is the absolute path of the
+ *  owning company/Personal storage's SYNC REPO, written when the per-repo "sync tracking state to the
+ *  company repo" toggle is turned on (repo_settings.mdx). Absent → no sync repo → Local-Storage-only. */
+const SYNC_REPO_MARKER = ".sync-repo";
+
+/** The per-repo subtree inside the owning storage's SYNC REPO — `<syncRepo>/repos/<repoKey>/` — or null when
+ *  no sync repo is configured for this repo (the default). Leaf-safe (fs only): the marker is written by
+ *  tracking-sync.service.ts `setSyncRepoMarker()` when the per-repo toggle is enabled. Used both by the
+ *  Category-B additive mirror (tracking-sync.service.ts) and by the Category-A artifact `sync_repo` placement
+ *  option (artifact-placement.service.ts). */
+export function resolveStateSyncRepo(root: string): string | null {
+  try {
+    const marker = path.join(repoStateDir(root), SYNC_REPO_MARKER);
+    const syncRepo = fs.readFileSync(marker, "utf8").trim();
+    if (!syncRepo) return null;
+    return path.join(syncRepo, "repos", repoKeyFor(root));
+  } catch {
+    return null; // no marker → default: Local-Storage-only
+  }
+}
+
+/** The path of the sync-repo marker in this repo's Local-Storage state dir (written/removed by
+ *  tracking-sync.service.ts as the per-repo toggle flips). */
+export function syncRepoMarkerPath(root: string): string {
+  return path.join(repoStateDir(root), SYNC_REPO_MARKER);
 }

@@ -11,7 +11,7 @@
 import type { WorkerKind } from "@lfb/shared";
 import { workerState, reconcileWorkerSchedules, stampRun } from "./schedule.service.js";
 import { pinAll, pushDeviceBackbone } from "../pin/pin.service.js";
-import { startScan } from "../scanner/scan-job.js";
+import { startScan, scanIsRunning } from "../scanner/scan-job.js";
 import { log } from "../../shared/logging.js";
 
 // Re-evaluate every 5 minutes — frequent enough that a dead worker is caught well within its own cadence
@@ -46,7 +46,7 @@ async function tick(): Promise<void> {
   if (ticking) return;
   ticking = true;
   try {
-    let healedAny = false;
+    const overdueKinds: WorkerKind[] = [];
     for (const kind of WATCHED) {
       let st;
       try {
@@ -56,7 +56,24 @@ async function tick(): Promise<void> {
         continue;
       }
       if (!st.installed || !st.enabled || !st.overdue) continue;
-      log.warn(
+
+      // A scan already in flight isn't a dead trigger — scanAll() can legitimately run longer than the
+      // scan interval on a big filesystem, and startScan() is single-flight (scan-job.ts): calling it
+      // again here would only set a rerun-queued flag, not actually start anything. Note it quietly and
+      // leave the in-flight pass to finish and stamp itself — don't alarm as if the OS trigger died.
+      if (kind === "scan" && scanIsRunning()) {
+        log.debug(
+          "watchdog",
+          `scan worker overdue (last ok ${st.lastRunAt ?? "never"}) but a scan is already in flight — leaving it to finish`,
+        );
+        continue;
+      }
+
+      // This is the watchdog doing exactly what it's for (backbone_resilience.mdx §3): covering a missed
+      // OS fire. That is routine, self-healing operation, not a fault — it belongs in log.log at INFO, not
+      // in the error.err fault trail. Only a repair that genuinely can't be fixed (checked below, after
+      // reconcile) escalates to WARN.
+      log.info(
         "watchdog",
         `${kind} worker overdue (last ok ${st.lastRunAt ?? "never"}, every ${Math.round(st.intervalSeconds / 60)} min) — running it in-process and repairing its OS schedule`,
       );
@@ -68,15 +85,28 @@ async function tick(): Promise<void> {
         if (kind === "device" || kind === "pin") await stampRun(kind, false).catch(() => {});
         log.error("watchdog", `${kind} worker in-process run failed: ${(e as Error).message}`);
       }
-      healedAny = true;
+      overdueKinds.push(kind);
     }
     // If any worker was overdue, its launchd job is likely dead/stale — rewrite + reload the plists so the
     // OS cadence resumes and the app stops having to cover for it. Best-effort; the in-process run already
     // moved the flow this cycle regardless.
-    if (healedAny) {
-      await reconcileWorkerSchedules().catch((e) =>
-        log.warn("watchdog", `schedule reconcile after overdue worker failed: ${(e as Error).message}`),
-      );
+    if (overdueKinds.length > 0) {
+      const results = await reconcileWorkerSchedules().catch((e) => {
+        log.warn("watchdog", `schedule reconcile after overdue worker failed: ${(e as Error).message}`);
+        return [];
+      });
+      // The genuine fault this watchdog exists to catch: a worker still configured on whose OS schedule
+      // reconcile just tried to fix and STILL isn't loaded (launchd bootstrap failing outright). The
+      // in-process fallback is covering it this cycle regardless, but an operator should know the OS
+      // cadence itself is not resuming on its own — WARN so it lands in error.err.
+      for (const r of results) {
+        if (overdueKinds.includes(r.kind) && r.wantsOn && r.osEnabledAfter === false) {
+          log.warn(
+            "watchdog",
+            `${r.kind} worker: OS schedule repair did not take — launchd still won't load the job; the in-process fallback will keep covering it every cycle until this is fixed`,
+          );
+        }
+      }
     }
   } finally {
     ticking = false;

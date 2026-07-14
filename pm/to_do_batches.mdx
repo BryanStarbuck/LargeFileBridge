@@ -82,8 +82,10 @@ regenerated every scan. They therefore live under the **local state root**, not 
 * The directory is created on demand under the resolved state root, honoring `LFB_STATE_DIR`
   ([storage_local.mdx §1](./storage_local.mdx#1-the-state-root)).
 * These files are **machine-local and disposable** — they are **not** committed, not travelled to peers,
-  and safe to delete (the next scan rebuilds them). Contrast the **decisions** ledger, which *is* shared
-  and committed ([decisions.mdx §4](./decisions.mdx#4-where-it-lives--the-shared-team-visible-ledger-locked)).
+  and safe to delete (the next scan rebuilds them). Contrast the **decisions** ledger, which is **shared**
+  Category-B tracking state: it lives in Local Storage always and *travels* — not via any working repo, but
+  via the company/Personal **sync repo** ([decisions.mdx §4](./decisions.mdx#4-where-it-lives--the-shared-team-visible-ledger-locked),
+  [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
 * Only storages **with work** need a file; a clean storage's file may be absent or present-and-empty
   (the To-Do page shows neither, [to_do.mdx §4](./to_do.mdx)).
 

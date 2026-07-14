@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Use-Case Tour — AI descriptions behave symmetrically to transcription (tab, metric tile, header primary, folder describe, placement, threshold)
-description: The end-to-end scenario tour that proves AI-DESCRIPTION PARITY — every place transcription appears in Large File Bridge, AI description appears the same way, mirrored point-for-point. It walks a photo/video repo and touches each mirrored surface in turn: the media viewer's two analysis tabs (Transcription · AI description) with their ✓ presence markers and default-tab rule; the per-repo task tab strip's fifth "AI descriptions" tab sitting beside Transcribe with its own describable/described metric tiles; the describable metric tile as this page's only warning surface — clicking it opens the same educate-and-fix popup a transcribable tile opens; the blue "Describe ›" header primary that mirrors "Transcribe ›" (and "Compress ›"); running a bulk describe on a whole folder of images via the "Create AI descriptions" page action (the describe_calc_engine bulk discovery, mirror of the transcribe calc engine) that background-queues jobs on the Processing page; the generated .ai_description artifacts landing exactly where the AI-descriptions placement radio points (hidden .lfbridge/ / next to the file / company state-sync repo), mirroring transcript placement; the three-state Describe status icon (filled blue = described · orange-edge = describable · light-grey = N/A) mirroring the Transcribe status icon; and the content threshold being crossed by an AI description ALONE, with no transcript ever produced. Each step names the transcription surface it mirrors, states what LargeFileBridge does, shows the on-disk artifact, and what we DOUBLE-CHECK. Sibling of ai_description.mdx (the feature), describe_calc_engine.mdx (the bulk-discovery engine mirroring transcribe_calc_engine.mdx), Transcribe.mdx (the mirror feature), task_tabs.mdx (the tab + metric tiles + status icons + header primary), warnings.mdx (the educate-and-fix popup), placement_radios.mdx + artifact_placement_policy.mdx (where the artifact lands and the content threshold), page_actions.mdx + processing.mdx + job_queue.mdx (the folder describe and its background jobs), and media_viewer.mdx (the two-tab analysis panel).
+description: The end-to-end scenario tour that proves AI-DESCRIPTION PARITY — every place transcription appears in Large File Bridge, AI description appears the same way, mirrored point-for-point. It walks a photo/video repo and touches each mirrored surface in turn: the media viewer's two analysis tabs (Transcription · AI description) with their ✓ presence markers and default-tab rule; the per-repo task tab strip's fifth "AI descriptions" tab sitting beside Transcribe with its own describable/described metric tiles; the describable metric tile as this page's only warning surface — clicking it opens the same educate-and-fix popup a transcribable tile opens; the blue "Describe ›" header primary that mirrors "Transcribe ›" (and "Compress ›"); running a bulk describe on a whole folder of images via the "Create AI descriptions" page action (the describe_calc_engine bulk discovery, mirror of the transcribe calc engine) that background-queues jobs on the Processing page; the generated .ai_description artifacts landing exactly where the AI-descriptions placement radio points (hidden .lfbridge/ / next to the file / company sync repo), mirroring transcript placement; the three-state Describe status icon (filled blue = described · orange-edge = describable · light-grey = N/A) mirroring the Transcribe status icon; and an AI description being a first-class durable CONTENT artifact (Category A) — the only Category-A content an image-only repo ever produces, committed into the repo's .lfbridge/ exactly like a transcript, while LFB's tracking state always stays in Local Storage. Each step names the transcription surface it mirrors, states what LargeFileBridge does, shows the on-disk artifact, and what we DOUBLE-CHECK. Sibling of ai_description.mdx (the feature), describe_calc_engine.mdx (the bulk-discovery engine mirroring transcribe_calc_engine.mdx), Transcribe.mdx (the mirror feature), task_tabs.mdx (the tab + metric tiles + status icons + header primary), warnings.mdx (the educate-and-fix popup), placement_radios.mdx + artifact_placement_policy.mdx (where the content artifact lands; tracking state always in Local Storage), page_actions.mdx + processing.mdx + job_queue.mdx (the folder describe and its background jobs), and media_viewer.mdx (the two-tab analysis panel).
 ---
 
 # LargeFileBridge — AI-Description Parity Tour (everything transcription does, description does the same)
@@ -8,7 +8,7 @@ description: The end-to-end scenario tour that proves AI-DESCRIPTION PARITY — 
 This is a **scenario walkthrough** organized as a **mirror**. Its single claim: **wherever transcription
 shows up in Large File Bridge, AI description shows up the same way** — same tab pattern, same metric tile,
 same popup, same blue header primary, same bulk page action and background jobs, same placement radio, same
-status icon, and it crosses the same content threshold. Each step **names the transcription surface it
+status icon, and it is the same first-class Category-A content. Each step **names the transcription surface it
 mirrors** and proves the description surface behaves identically. Together they prove the parity principle
 stated in [ai_description.mdx §1](./ai_description.mdx) and [task_tabs.mdx](./task_tabs.mdx): *"everywhere
 this spec says Transcribe, read 'and Describe' too."*
@@ -35,7 +35,8 @@ This spec builds on the siblings and does not repeat them:
   (§1.1).
 * [warnings.mdx](./warnings.mdx) — the **educate-and-fix popup** a metric tile opens.
 * [placement_radios.mdx](./placement_radios.mdx) / [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)
-  — where the `.ai_description` lands, and the **content threshold** it crosses.
+  — where the `.ai_description` **content** lands (the working repo's committed `.lfbridge/`); LFB's tracking
+  state always stays in Local Storage, never moved by producing content.
 * [page_actions.mdx](./page_actions.mdx) / [processing.mdx](./processing.mdx) / [job_queue.mdx](./job_queue.mdx)
   — the **Create AI descriptions** folder action and its background jobs.
 * [media_viewer.mdx §6](./media_viewer.mdx) — the two-tab analysis panel at the bottom of the viewer.
@@ -56,7 +57,7 @@ Every row below is a surface transcription owns; the tour proves the AI-descript
 | Bulk-discovery engine | transcribe calc engine | describe calc engine | §6 |
 | Artifact placement | `.transcription` per radio | `.ai_description` per radio | §7 |
 | Status icon (3-state) | Transcribe icon (blue/orange/grey) | Describe icon (blue/orange/grey) | §8 |
-| Content threshold | a transcript crosses it | **an AI description alone crosses it** | §9 |
+| Durable content artifact | a transcript is Category-A content in the repo | **an AI description is Category-A content — the only kind an image repo produces** | §9 |
 
 ---
 
@@ -71,7 +72,7 @@ Every row below is a surface transcription owns; the tour proves the AI-descript
 | **6** | **Create AI descriptions** on a folder | Create Transcriptions | Bulk describe of `stills/` background-queues `describe` jobs on Processing. |
 | **7** | `.ai_description` placement | `.transcription` placement | Artifacts land exactly where the AI-descriptions radio points. |
 | **8** | 3-state **Describe** status icon | Transcribe status icon | blue described · orange describable · grey N/A. |
-| **9** | **Content threshold** by description alone | transcript crosses it | Describing one image crosses the threshold with **no** transcript in the repo. |
+| **9** | **Durable content** by description alone | transcript is content | Describing one image writes Category-A content into the repo's `.lfbridge/` with **no** transcript; tracking stays in Local Storage. |
 
 ---
 
@@ -216,7 +217,7 @@ ordered placement rule** as transcripts ([ai_description.mdx §2](./ai_descripti
 Each artifact is a self-contained `done` YAML record (`source`/`status: done`/`engine`/`provider`/`generated`/`kind`/`description`),
 and the Storage table's **`description` indicator** lights up from its presence — the mirror of the
 transcript indicator. Had the user set the AI-descriptions radio to **next to the file** or the **company
-state-sync repo**, the artifacts would land there instead, exactly as transcripts do under their own radio —
+sync repo**, the artifacts would land there instead, exactly as transcripts do under their own radio —
 the two radios are independent ([use_case_placement_switching.mdx §6](./use_case_placement_switching.mdx)).
 
 **What we double-check (Step 7):**
@@ -251,33 +252,38 @@ transcribable) is grey. The two status columns are the same component parameteri
 
 ---
 
-## 9. STEP — the content threshold crossed by an AI description ALONE (mirror: a transcript crosses it)
+## 9. STEP — an AI description is first-class durable CONTENT (mirror: a transcript is content)
 
 **What the user does.** `photo-lib` is a **pure image repo** — there is **nothing to transcribe**, and the
 user never runs a transcription. They simply describe the images (§6).
 
-**What LFB does — a description alone crosses the threshold.** The [churn policy](./artifact_placement_policy.mdx)
-defines the content threshold as *"a transcript **OR** an AI description."* An image repo can never produce a
-transcript, so the **AI description is the thing that crosses it**. The moment the **first** `.ai_description`
-is written into the repo's committed `.lfbridge/`, the repo crosses the threshold identically to a video
-repo crossing it via a transcript ([use_case_churn_free_repo.mdx §9.1](./use_case_churn_free_repo.mdx)):
+**What LFB does — a description is Category-A content, exactly like a transcript.** Under the
+[data-category placement policy](./artifact_placement_policy.mdx), a `.ai_description` is **Category-A
+content** — the same class as a `.transcription`. An image repo can never produce a transcript, so the **AI
+description is the only Category-A content it can ever produce**. The moment the **first** `.ai_description`
+is written into the repo's committed `.lfbridge/`, the repo behaves identically to a video repo that got its
+first transcript ([use_case_churn_free_repo.mdx §9.1](./use_case_churn_free_repo.mdx)):
 
-* `content_threshold_crossed` flips to `true`; `placement` becomes `repo`.
-* The deferred state-root tracking (`repo_storage.yaml`, sidecars) **migrates** into the repo's `.lfbridge/`.
-* Scans now re-stamp `repo_storage.yaml` **in the repo**, its `counts.described` climbing as jobs complete.
+* The `.ai_description` lands in the repo's committed `.lfbridge/` and travels with the repo via its own git.
+* **No tracking state migrates.** `repo_storage.yaml` and the per-file sidecars **stay in Local Storage** at
+  `~/T/_large_files_bridge/repos/<repoKey>/` — producing content never moves Category-B tracking into the
+  repo. `counts.described` climbs in the **Local-Storage** `repo_storage.yaml` as jobs complete.
+* Scans keep re-stamping `repo_storage.yaml` **in Local Storage**, never in the repo.
 
-This is the load-bearing parity claim: **description is a first-class durable artifact**, not a lesser one —
-it earns a repo full in-repo tracking exactly as a transcript does, and it is the *only* way an
-image-only repo ever crosses the threshold.
+This is the load-bearing parity claim: **description is a first-class durable content artifact**, not a
+lesser one — it is committed into the repo's `.lfbridge/` and travels with the repo exactly as a transcript
+does, and it is the *only* Category-A content an image-only repo ever produces. Tracking state stays in Local
+Storage regardless, identical to the transcript case.
 
-Crossing the threshold on the first durable artifact — a **transcript or a description** — is handled in
-code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `onDurableArtifactWritten(repoKey, repoRoot)` (called from **both** `transcribe.service.ts` and `describe.service.ts` after a successful artifact write).
+Writing the first durable **content** artifact — a **transcript or a description** — into the repo's
+committed `.lfbridge/` (while leaving Category-B tracking untouched in Local Storage) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `resolveDescriptionPath()` (the Category-A placement radio, mirror of `transcribe.service.ts` — `resolveTranscriptPath()`); the Category-B writers continue to route through `tracking-root.service.ts` — `resolveTrackingRoot()` (Local Storage), unaffected by the content write.
 
 **What we double-check (Step 9):**
-* Describing the first image in an image-only repo (no transcript anywhere) **crosses the content
-  threshold** — flips `content_threshold_crossed`, migrates deferred tracking into `.lfbridge/`, and lets
-  scans re-stamp in the repo — identically to a transcript crossing it in a video repo.
+* Describing the first image in an image-only repo (no transcript anywhere) writes the `.ai_description` into
+  the repo's committed `.lfbridge/` — the only Category-A content the repo can produce — while
+  `repo_storage.yaml` and sidecars **stay in Local Storage** (no migration), and `counts.described` ticks in
+  the **Local-Storage** `repo_storage.yaml` — identical to a transcript in a video repo.
 
 ---
 
@@ -288,9 +294,10 @@ code:
    description in the same shape it exists for transcription.
 2. **Kind decides which twin applies.** Transcription is for the *audible* (audio+video); description is for
    the *visual* (image+video); a video gets both, and each "N/A" state is the mirror of the other's.
-3. **Description is a first-class durable artifact.** It background-queues like transcription, lands per its
-   own placement radio like transcription, and **crosses the content threshold on its own** — the only path
-   to full tracking for an image-only repo.
+3. **Description is a first-class durable content artifact.** It background-queues like transcription, lands
+   per its own placement radio like transcription, and is **Category-A content committed into the repo's
+   `.lfbridge/` on its own** — the only Category-A content an image-only repo produces — while LFB's tracking
+   state always stays in Local Storage.
 4. **The one network path is honestly surfaced everywhere.** Every description entry point (tab, tile popup,
    header primary, page action) states that generating uploads the file to a provider — the explicit,
    user-initiated posture transcription shares, and separate from the local-only perceptual fingerprint.
@@ -321,9 +328,11 @@ code:
    rule and set independently of the transcription radio.
 7. **Status icon.** The three-state **Describe** status icon (blue described · orange-edge describable ·
    grey N/A) mirrors the **Transcribe** status icon, parameterized by kind.
-8. **Threshold.** An AI description **alone** — with no transcript in the repo — **crosses the content
-   threshold** ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)), the only path to full
-   tracking for an image-only repo, identical to a transcript crossing it.
+8. **Durable content.** An AI description **alone** — with no transcript in the repo — is **Category-A
+   content** committed into the repo's `.lfbridge/`
+   ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)), the only Category-A content an
+   image-only repo produces; LFB's tracking state stays in Local Storage (no migration), identical to a
+   transcript in a video repo.
 9. Every surface matches [ai_description.mdx](./ai_description.mdx), [Transcribe.mdx](./Transcribe.mdx),
    [describe_calc_engine.mdx](./describe_calc_engine.mdx), [task_tabs.mdx](./task_tabs.mdx),
    [placement_radios.mdx](./placement_radios.mdx), and [artifact_placement_policy.mdx](./artifact_placement_policy.mdx).
@@ -332,7 +341,7 @@ code:
   Scenario tour proving AI-DESCRIPTION PARITY: everywhere transcription appears, AI description appears the
   same, point-for-point. Repo photo-lib (image-heavy: dozens of PNG/JPG + a few mp4) on studio-tower. Parity
   map (§0): viewer tab / task tab / metric tile+popup / blue header primary / bulk page action / calc engine
-  / placement / status icon / content threshold. S2 VIEWER TABS (mirror Transcription tab): image shows ONLY
+  / placement / status icon / durable content artifact. S2 VIEWER TABS (mirror Transcription tab): image shows ONLY
   AI description tab, video shows BOTH, ✓ = content exists, default-tab prefers Transcription. S3 per-repo AI
   DESCRIPTIONS task tab (5th, beside Transcribe, task_tabs §11) re-tunes strip/columns/sort/filter to
   image+video. S4 DESCRIBABLE metric tile (mirror Transcribable) IS the warning surface -> opens same
@@ -345,14 +354,18 @@ code:
   path-mirrored, ext appended, self-contained done YAML, lights Storage description indicator) — mirror of
   transcript placement, independent radio. S8 three-state DESCRIBE status icon (blue described / orange-edge
   describable / grey N/A) mirrors Transcribe icon (audio=N/A for describe like image=N/A for transcribe). S9
-  CONTENT THRESHOLD crossed by AI description ALONE (image-only repo, no transcript ever) -> flips
-  content_threshold_crossed, migrates deferred tracking into .lfbridge/, scans re-stamp in repo — identical
-  to a transcript crossing it; onDurableArtifactWritten called from BOTH transcribe.service.ts and
-  describe.service.ts. Invariants (§10): every transcription surface has a description twin; kind decides
-  which applies (audible vs visual); description is first-class durable artifact crossing threshold alone;
-  one network path honestly surfaced; parity of shape + independence of state. Code: describe.service.ts
-  planDescribe/enqueueDescribe/resolveDescriptionPath, pageActions.ts createDescriptions,
-  artifact-placement.service.ts onDurableArtifactWritten, MediaViewer MediaAnalysis, task_tabs Describe
+  DURABLE CONTENT: AI description ALONE (image-only repo, no transcript ever) is Category-A CONTENT committed
+  into the repo's .lfbridge/ (the only Category-A content an image repo produces); tracking state STAYS in
+  Local Storage (NO migration — RETIRED content threshold), counts.described ticks in the LOCAL-STORAGE
+  repo_storage.yaml — identical to a transcript in a video repo. Content written via
+  describe.service.ts resolveDescriptionPath (Category-A radio, mirror of transcribe.service.ts
+  resolveTranscriptPath); Category-B writers unaffected (resolveTrackingRoot → Local Storage). Invariants
+  (§10): every transcription surface has a description twin; kind decides which applies (audible vs visual);
+  description is a first-class durable CONTENT artifact committed into the repo alone (tracking always Local
+  Storage); one network path honestly surfaced; parity of shape + independence of state. Code: describe.service.ts
+  planDescribe/enqueueDescribe/resolveDescriptionPath (Category-A radio), pageActions.ts createDescriptions,
+  artifact-placement.service.ts artifactTargetPath (content), tracking-root.service.ts resolveTrackingRoot
+  (Category-B tracking → Local Storage), MediaViewer MediaAnalysis, task_tabs Describe
   tile+icon. Reuses ai_description, describe_calc_engine, transcribe_calc_engine, Transcribe, task_tabs,
   warnings, placement_radios, artifact_placement_policy, page_actions, processing, job_queue, media_viewer,
   use_case_churn_free_repo, use_case_placement_switching.

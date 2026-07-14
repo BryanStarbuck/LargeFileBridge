@@ -1,8 +1,11 @@
 // The per-file DECISION LEDGER (decisions.mdx) — the SHARED, team-visible record of what LFBridge should
 // do with each large file, on TWO INDEPENDENT AXES: `ipfs` (Add to IPFS / pin) and `gitignore` (Add to
-// git ignore). It lives in the repo's committed SDL at `<repo>/.lfbridge/decisions.yaml`, travels via the
-// git backbone, and is UNION-MERGED so a whole team shares one set of decisions and no teammate is
-// re-asked about a file another already triaged (decisions.mdx §4/§5).
+// git ignore). It is Category-B tracking state, so it lives in LOCAL STORAGE at
+// `~/T/_large_files_bridge/repos/<repoKey>/decisions.yaml` (resolveTrackingRoot) — NEVER inside a working
+// repo, so it can no longer merge-conflict there. It still travels to the team and is UNION-MERGED, but the
+// travelling vehicle is now the owning company/Personal SYNC REPO (`<syncRepo>/repos/<repoKey>/
+// decisions.yaml`), mirrored additively when one is configured — not the working repo's git
+// (artifact_placement_policy.mdx §4/§5). Absent a sync repo it is honored locally, simply not yet shared.
 //
 // Like the committed manifest (manifest.service.ts), this file is TRACKED BY GIT, so it is NOT written
 // through the `updated_at`-stamping yaml-store: it is serialized DETERMINISTICALLY (sorted, stable key
@@ -23,7 +26,9 @@ import {
   type DecisionEvent,
   type DecisionPolicyDoc,
 } from "@lfb/shared";
-import { LFBRIDGE_DIR, readStorageIndex } from "./tracking.service.js";
+import { readStorageIndex } from "./tracking.service.js";
+import { resolveTrackingRoot } from "./tracking-root.service.js";
+import { mirrorToSyncRepo } from "./tracking-sync.service.js";
 import { storageSid } from "./storage.service.js";
 import { readStorageSettings } from "./storage-settings.service.js";
 import { applyGitIgnore } from "../git/gitignore.service.js";
@@ -53,16 +58,10 @@ export interface FoldedDecision {
 
 // ── paths ────────────────────────────────────────────────────────────────────
 
-/** The absolute path to a repo's `.lfbridge/` tracking dir, honoring a relocated `.lfbridge/`
- *  (storage_settings.mdx §3) and falling back to `<root>/.lfbridge/`. */
+/** The Local-Storage tracking dir for this repo (`~/T/_large_files_bridge/repos/<repoKey>/`) where the
+ *  decision ledger lives — never a working repo (artifact_placement_policy.mdx §2). */
 function trackingDir(repoRoot: string): string {
-  try {
-    const relocated = readStorageSettings(storageSid(repoRoot)).lfbridge.path;
-    if (relocated && relocated.trim()) return path.resolve(relocated);
-  } catch {
-    /* no per-storage settings yet → default location */
-  }
-  return path.join(repoRoot, LFBRIDGE_DIR);
+  return resolveTrackingRoot(repoRoot);
 }
 
 function ledgerPath(repoRoot: string): string {
@@ -202,6 +201,8 @@ function writeLedger(repoRoot: string, events: DecisionEvent[]): void {
     log.error("decisions", `write failed: ${file}: ${(e as Error).message}`);
     throw e;
   }
+  // Additive: carry the ledger to the company/Personal sync repo when configured (default off → no-op).
+  mirrorToSyncRepo(repoRoot);
 }
 
 /** Append events to the shared ledger (read → concat → deterministic write). */
