@@ -409,7 +409,14 @@ Git ignore · Track / Pin this directory**
 
 * The links render in **one measured row** that keeps what fits inline and rolls the rest into a
   right-pinned **`More ▾`** menu ([page_actions.mdx §3.1](./page_actions.mdx)) — never a second row.
-* The producing pair (Create Transcriptions / Create AI descriptions) is present on every file-list page.
+* **The producing pair opens the batch confirm popup (LOCKED — [dialogs.mdx §5–§6](./dialogs.mdx)).**
+  **Create Transcriptions** / **Create AI descriptions** do **not** enqueue-on-click or fire a
+  `window.confirm`; each opens the **same** "great pop-up" the `Transcribable` / `Describable` metric tile
+  opens on the View-one-repo page ([task_tabs.mdx §5.1](./task_tabs.mdx)) — the candidate list **checked by
+  default**, uncheck anything, then a solid-blue **"Transcribe N files"** / **"Describe N files"** confirm
+  that runs the model/provider gate, background-enqueues, and shows the Processing surface. The popup is
+  scoped by the **deepest open column** (§5.1) — the frontend fetches its candidate list from the
+  plan/preview endpoint over that scope. This is present on every file-list page.
 * Compress / Git ignore links are **red-tinted explicit offers with a confirm modal** ([page_actions.mdx
   §3](./page_actions.mdx), [menus.mdx §6.1](./menus.mdx)) — never a one-click mutation. **Compress videos /
   Compress images** open the **Compress Inside** dialog ([compress_inside.mdx](./compress_inside.mdx));
@@ -492,6 +499,36 @@ only notes that they ride on the rows it hubs.
 Rendering the two inline toggles is owned by
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/decision/DecisionToggles.tsx` — `DecisionToggles`; the under-a-repo test that gates the ⊘ toggle is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitService.repoRootFor()`.
 
+### 5.3 Create Transcriptions / AI descriptions on a selected sub-directory or file (LOCKED)
+
+The producing pair is reachable from the browser two ways beyond the page action-links row (§5), and **all
+of them open the one batch popup** ([dialogs.mdx §5–§6](./dialogs.mdx)):
+
+1. **A selected sub-directory in a column — the action-links row.** As the user walks the columns
+   (`Home → _Mirror → Politics → Charlie_Kirk_Mi`) and clicks **Create Transcriptions** with nothing
+   checked, the popup is scoped to the **deepest (rightmost) open column** and walked **downward only** —
+   `~/_Mirror/Politics/Charlie_Kirk_Mi/` and its descendants, **never** a parent column or a sibling
+   (§5.1). Selecting (highlighting) a **file** inside that column does not change the directory scope; the
+   scope stays the containing directory.
+
+2. **Right-click / ⋮ kebab on a row — the entity menu.** Right-clicking (or opening the ⋮ kebab of) a
+   **sub-directory row** in any column opens the **directory** entity catalog
+   ([menus.mdx §5.2](./menus.mdx)), whose **Create Transcriptions** / **Create AI descriptions** items open
+   the popup scoped to **that row's** subtree (`{ root: <that dir> }`). Right-clicking a **file** row opens
+   the **file** catalog ([menus.mdx §5.3](./menus.mdx)) whose same two items open the popup with **that one
+   file** as the sole checked candidate — the user still gets the education + the explicit **"Transcribe 1
+   file"** confirm, never a bare `window.confirm`. The **cloud-root rows (§4)** are ordinary `dir` rows, so
+   they carry these items like any directory.
+
+So whether the user acts from the action-links row, a right-click, or the ⋮ kebab — on the deepest column,
+a highlighted sub-directory, or a single file — the surface is **identical**: the great batch popup, scoped
+to exactly the entity acted on, downward only. The producing items are the same catalog items the
+sibling pages carry ([menus.mdx §5.2/§5.3](./menus.mdx)); this file only notes they ride on the browser's
+rows and honor the deepest-column scope-containment guarantee (§5.1).
+
+The directory/file entity menu's producing items opening the scoped batch popup are built in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the `create-transcriptions` / `create-descriptions` items call `openTranscribeBatch` / `openDescribeBatch` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts`); the action-links row's producing pair is built in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `producingActions()`.
+
 ---
 
 ## 6. Acceptance criteria
@@ -553,6 +590,13 @@ Rendering the two inline toggles is owned by
     and **stops propagation** (never navigates); turning ⊘ ON for a **directory** under a repo opens the
     [git-ignore pop-over](./git_ignore.mdx). Grammar/states owned by
     [decision_toggles.mdx](./decision_toggles.mdx) / [directories.mdx §3.6](./directories.mdx).
+14. **Producing pair opens the batch popup (§5 / §5.3):** **Create Transcriptions** / **Create AI
+    descriptions** — from the action-links row, a right-click, or the ⋮ kebab — open the **same** batch
+    confirm popup the `Transcribable` / `Describable` metric tile opens ([dialogs.mdx §5–§6](./dialogs.mdx)):
+    candidate list checked by default, uncheck, a solid-blue **"Transcribe/Describe N files"** confirm,
+    model/provider gate on Apply, background enqueue, Processing surface. **Never** a fire-and-forget toast
+    and **never** a `window.confirm`. The scope follows the **deepest open column** (row action) or the
+    **selected row's subtree / single file** (kebab/right-click), downward only (§5.1).
 
 <!--
   HUB spec for the "File System" left-bar item (/fs). OWNS three things not owned elsewhere:
@@ -594,7 +638,13 @@ Rendering the two inline toggles is owned by
        entry.cloud branch draws <Cloud> (FileSystemPage.tsx). Growth backlog (§4.9): settings toggle,
        per-mount rollup, Windows/Linux discovery, server-mode via vendor APIs.
    (3) ACTION-LINKS ROW (§5): delegates ALL behavior to page_actions.mdx (visible links row under the title,
-       NOT the old Actions ▾ dropdown). Catalog: Create Transcriptions · Create AI descriptions · Compress
+       NOT the old Actions ▾ dropdown). PRODUCING PAIR (Create Transcriptions / Create AI descriptions) opens
+       the UNIFIED BATCH POPUP (dialogs.mdx §5-§6 — the same WarningPopup the Transcribable/Describable metric
+       tile opens), NOT a fire-and-forget toast / window.confirm; scoped to the deepest open column (§5.1).
+       §5.3: right-click / ⋮ kebab on a sub-dir row opens the popup over that row's subtree (dir catalog,
+       menus §5.2); on a file row, over that one file (file catalog, menus §5.3). All via EntityMenu
+       buildActions() → openTranscribeBatch/openDescribeBatch (lib/batchPopup.ts). Catalog: Create
+       Transcriptions · Create AI descriptions · Compress
        videos · Compress images · Git ignore · Track / Pin this directory. Labels are the SHORT forms;
        the row is ONE measured line with a right-pinned "More ▾" overflow (page_actions.mdx §3.1). Compress
        links → compress_inside.mdx dialog; Git ignore → git_ignore.mdx dialog (target = the rightmost column

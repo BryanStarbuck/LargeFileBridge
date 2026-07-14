@@ -1,0 +1,381 @@
+---
+title: LargeFileBridge — Dialogs (in-app HTML modals only, and the one unified batch-confirm popup)
+description: The cross-cutting spec that owns TWO product-wide rules this whole app obeys. (1) NO NATIVE BROWSER DIALOGS — Large File Bridge never calls window.confirm / window.alert / window.prompt. Every confirmation, every warning, and every text prompt is one of OUR in-app HTML modals: ConfirmDialog for a yes/no confirm, PromptDialog for a single text input (e.g. a move-file destination path), a toast for a passive notice, and the pop-over configuration dialogs (Compress Inside, Git Ignore) where the dialog IS the confirm. The imperative call sites that used to `if (!window.confirm(...))` now `await confirmModal(...)` / `await promptModal(...)` — thin promise-returning helpers backed by ONE ModalHost mounted at the app root, so a click handler can await a real HTML modal without threading React state. This file catalogs every conversion site so none is missed. (2) THE UNIFIED BATCH-CONFIRM POPUP — the "great pop-up" the Transcribable / Describable metric tile opens on the View-one-repo page is the SINGLE surface every "Create Transcriptions" / "Create AI descriptions" entry point opens, everywhere: the metric tile, the blue Transcribe ›/Describe › header primary, the page action-links row on EVERY file-list page (File System, one repo, a directory, Full paths, Storage detail), and the directory/file ⋮ kebab / right-click menu item. It is WarningPopup fed a transcribe/describe WarningDef — a checked-by-default candidate list, a live "Transcribe N files" / "Describe N files" solid-blue confirm, the model/provider consent gate on Apply, background enqueue, and the Processing surface. No producing action is ever a fire-and-forget toast or a window.confirm again. Sibling of page_actions.mdx (the action-links row that opens the popup), menus.mdx (the ⋮ catalogs + the old §6.1 confirm rule), task_tabs.mdx §5.1/§5.2.1 (the metric → popup confirm flow this generalizes), warnings.mdx (the WarningPopup component + WarningDef model), transcribe_calc_engine.mdx §4 / describe_calc_engine.mdx §4 (the ~80% popup shape), compress_inside.mdx / git_ignore.mdx (the two pop-over configuration dialogs), and file_system.mdx (the FS hub that carries both).
+---
+
+# LargeFileBridge — Dialogs (in-app HTML modals only, and the one unified batch-confirm popup)
+
+Two product-wide rules live here, both drawn straight from the product owner's instruction:
+
+> *"We never want browser pop-ups (browser app operating-system hard dialog pop-ups). We want our
+> HTML-based ones. Our WebApp uses those sometimes and we need to switch to the well-done pop-ups in our
+> WebApp instead. Get 100% of those converted."*
+>
+> *"We want the 'Create Transcriptions' action to bring up the pop-up window that the 'Transcribable'
+> metric panel being clicked pops up on the View-one-repo page. Also make Right-click or Triple-dot menu →
+> 'Create Transcription' open the great Transcriptions pop-up. We want 'Create AI descriptions' to also use
+> the great pop-up."*
+
+So this file owns:
+
+1. **§1–§4 — NO NATIVE BROWSER DIALOGS.** Every confirm / prompt / alert is one of **our** in-app HTML
+   modals; `window.confirm` / `window.alert` / `window.prompt` are **banned** app-wide, with a lint-style
+   catalog (§3) of every site converted.
+2. **§5–§8 — THE ONE UNIFIED BATCH-CONFIRM POPUP.** The "great pop-up" is the **single** surface every
+   **Create Transcriptions** / **Create AI descriptions** entry point opens — the metric tile, the header
+   primary, the page action-links row, and the ⋮ / right-click menu — never a fire-and-forget toast, never
+   a `window.confirm`.
+
+Siblings this builds on and does not restate:
+
+* [page_actions.mdx](./page_actions.mdx) — the action-links row whose producing links now open the popup
+  (§6). This file owns the *popup contract*; that file owns the *row*.
+* [menus.mdx](./menus.mdx) — the ⋮ kebab / right-click catalogs (§6.4 here adds the producing items) and the
+  old §6.1 "explicit-click offer" rule this generalizes.
+* [task_tabs.mdx §5.1 / §5.2.1](./task_tabs.mdx) — the metric-tile → popup → Confirm → Processing flow this
+  file **generalizes to every entry point** (§5).
+* [warnings.mdx](./warnings.mdx) — the **WarningPopup** component and the **WarningDef** data model the batch
+  popup is built on (§4.5 there = the two-pane checked list).
+* [transcribe_calc_engine.mdx §4](./transcribe_calc_engine.mdx) / [describe_calc_engine.mdx §4](./describe_calc_engine.mdx)
+  — the ~80%-of-screen popup shape the batch popup uses.
+* [compress_inside.mdx](./compress_inside.mdx) / [git_ignore.mdx](./git_ignore.mdx) — the two **pop-over
+  configuration dialogs** that already replace bare confirms for compress / git-ignore.
+
+---
+
+## 1. The rule — Large File Bridge never opens a native browser dialog (LOCKED)
+
+`window.confirm`, `window.alert`, and `window.prompt` are **forbidden** anywhere in the frontend. They are
+the operating-system "hard" dialogs the product owner rejected: they look nothing like the app, block the
+whole tab, can't be styled or themed, can't carry a file preview or a checklist, and on some platforms are
+suppressed entirely. **Every** decision the app asks the user to make is expressed in one of **our** HTML
+surfaces instead:
+
+| The user is asked to… | Use this in-app surface | Owner |
+| --- | --- | --- |
+| **Confirm a yes/no action** (Compress this? Move to trash? Stop pinning? Remove repo/peer/pin?) | **`ConfirmDialog`** — a fixed-overlay modal, backdrop + `Esc` cancel, **Cancel focused by default** so a destructive confirm is never one stray `Enter` away, red button for destructive. | §2.1 |
+| **Type one value** (the move-file destination path) | **`PromptDialog`** — the same modal shell with a single labelled text input, **Confirm disabled until non-empty**, `Enter` submits, `Esc` cancels. | §2.2 |
+| **Configure + confirm a batch** (compress videos/images inside; git-ignore) | the **pop-over configuration dialog** — [Compress Inside](./compress_inside.mdx) / [Git Ignore](./git_ignore.mdx); the dialog **is** the confirm. | those specs |
+| **Confirm + adjust a producing batch** (Create Transcriptions / Create AI descriptions) | the **unified batch-confirm popup** (§5) — the checked-by-default candidate list. | §5 |
+| **Be passively told an outcome** ("28 files will have their Transcriptions created") | a **toast** ([sonner](./page_actions.mdx#2-the-notification-locked-wording)) — never `window.alert`. | page_actions.mdx §2 |
+
+There is **no** exception. A quick "are you sure?" is a `ConfirmDialog`; a one-line text ask is a
+`PromptDialog`; a batch is a pop-over. The bar is: **if the user reads it as a dialog, it is one of ours,
+rendered in the app's own chrome and theme.**
+
+---
+
+## 2. The two primitive modals (LOCKED)
+
+### 2.1 `ConfirmDialog` — the yes/no confirm
+
+Already exists and is the house confirm modal (used by the page action-links row for its red-tinted
+offers). It is a fixed overlay + centered card: a title, an optional body (React node — so it can list what
+will happen, show counts, or warn about data loss), a **Cancel** (focused) and a **Confirm** button, with
+the Confirm button **red** (`--lfb-bad`) when `danger` and **blue** (`--lfb-primary`) otherwise. Backdrop
+click, `Esc`, and Cancel all dismiss without acting.
+
+Rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/ConfirmDialog.tsx` — `ConfirmDialog`.
+
+### 2.2 `PromptDialog` — the single-text-input ask (NEW)
+
+The **one** thing `ConfirmDialog` can't do is collect a value, which is why the codebase still had a
+`window.prompt` for "Move file to (absolute path):". Add a **`PromptDialog`** — the same modal shell with a
+single labelled `<input>` (pre-filled with an optional default, e.g. the file's current path), **Confirm
+disabled while the field is empty**, `Enter` submits, `Esc`/backdrop/Cancel returns `null`. It resolves the
+typed string or `null`.
+
+Rendered in code (NEW):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/PromptDialog.tsx` — `PromptDialog`.
+
+### 2.3 The imperative bridge — `confirmModal()` / `promptModal()` + one `ModalHost` (NEW, LOCKED)
+
+Almost every native-dialog site is **imperative** — it lives inside a click handler and reads like
+`if (!window.confirm(msg)) return;` or `const dest = window.prompt(msg, def);`. Rewriting each into a piece
+of render-time React state would be invasive and error-prone across ~15 files. Instead we provide **two
+promise-returning helpers** that any handler can **`await`**, backed by **one** `ModalHost` mounted once at
+the app root (the exact single-slot bus pattern the app already uses for the setup wizard and the
+transcribe-model consent dialog — [transcribe.ts](./transcribe_engine.mdx) `requestModelConsent`,
+`setupWizard.ts` `requestStorageSetup`):
+
+```ts
+// lib/modals.ts
+confirmModal(opts: {
+  title: string; body?: ReactNode; confirmLabel?: string; cancelLabel?: string; danger?: boolean;
+}): Promise<boolean>;                     // resolves true = confirmed, false = cancelled/Esc/backdrop
+
+promptModal(opts: {
+  title: string; label?: string; defaultValue?: string; placeholder?: string;
+  confirmLabel?: string; validate?: (v: string) => string | null;   // return an error string to block Confirm
+}): Promise<string | null>;               // resolves the typed value, or null on cancel
+```
+
+* A call **pushes a request onto the single-slot bus**; the mounted `ModalHost` renders the matching
+  `ConfirmDialog` / `PromptDialog` and resolves the promise on the user's choice, then clears the slot.
+* Handlers convert **mechanically**: `if (!window.confirm(m)) return;` → `if (!(await confirmModal({ title: m }))) return;`
+  and `const d = window.prompt(m, def);` → `const d = await promptModal({ title: m, defaultValue: def });`.
+* The host lives at the app root so a modal shows regardless of which page fired it; only **one** modal is
+  ever on screen (a second request replaces/queues — single-slot).
+
+Implemented in code (NEW):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/modals.ts` — `confirmModal()` / `promptModal()` / `onModalRequested()` (the bus) · the provider `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/ModalHost.tsx` — `ModalHost` (mounted once in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/App.tsx`).
+
+---
+
+## 3. The conversion catalog — every native-dialog site (LOCKED, must reach zero)
+
+The end state is **zero** `window.confirm` / `window.alert` / `window.prompt` occurrences in
+`packages/frontend/src` (a grep is the acceptance test, §9). Each site below is converted to the surface in
+its right column. (Line numbers are indicative — match on the message text.)
+
+| Site (file · what it asks) | Converts to |
+| --- | --- |
+| `components/menu/EntityMenu.tsx` — "Compress {name}? …" | `confirmModal` (danger) |
+| `components/menu/EntityMenu.tsx` — "Move file to (absolute path):" | `promptModal` (default = current path) |
+| `components/menu/EntityMenu.tsx` — "Move {name} to LFBridge trash?" | `confirmModal` (danger) |
+| `components/menu/EntityMenu.tsx` — "Stop pinning this file? …" | `confirmModal` (danger) |
+| `components/menu/RowKebabs.tsx` ×3 — Remove repo / Remove peer / Unpin CID confirms | `confirmModal` (danger) |
+| `lib/transcribe.ts` — "Transcribe all audio & video under …?" (tree) | **the batch popup (§5)** — no confirm at all; the popup **is** the confirm |
+| `lib/transcribe.ts` — "Transcribe all audio & video in …?" (storage) | **the batch popup (§5)** |
+| `pages/repos/OneRepoPage.tsx` — "Compress {n} files? …" (batch) | `confirmModal` (danger) — or the compress popup where one exists |
+| `pages/repos/OneRepoPage.tsx` — "Transcribe {path}? …" (per-file) | `confirmModal` (or the single-file row-icon path, task_tabs.mdx §5) |
+| `pages/repos/OneRepoPage.tsx` — "Compress {path}? …" (per-file) | `confirmModal` (danger) |
+| `pages/entity/ViewOneDirectoryPage.tsx` — "Compress media inside {name}?" | the [Compress Inside](./compress_inside.mdx) dialog (already the pattern) or `confirmModal` |
+| `pages/entity/MediaViewer.tsx` — "Compress {name}? …" | `confirmModal` (danger) |
+| `pages/entity/MediaViewer.tsx` — "Move file to (absolute path):" | `promptModal` |
+| `pages/entity/MediaViewer.tsx` — "Move {name} to LFBridge trash?" | `confirmModal` (danger) |
+| `pages/entity/MediaViewer.tsx` — "Convert {name} to H.264 MP4?" | `confirmModal` (danger) |
+| `pages/devices/ViewOneDevicePage.tsx` — device confirm | `confirmModal` (danger) |
+
+> **The two `lib/transcribe.ts` "Transcribe all …" confirms are special.** They are **not** replaced by a
+> `confirmModal` — they are **deleted entirely** and their call sites route through the **batch popup**
+> (§5): `runTranscribeTree` / `runTranscribeStorage` open the unified popup (candidate list, uncheck,
+> "Transcribe N files") instead of a bare "are you sure?". This is the product owner's second ask (the
+> "great pop-up") and it subsumes the old confirm.
+
+Converting each site is verified in code by the empty grep (§9) and the per-file edits under
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/` listed above.
+
+---
+
+## 4. Why a modal, not a toast, for a decision (rationale, non-normative)
+
+A **toast** is a passive receipt — it tells the user what already happened and vanishes. A **modal** is an
+active gate — it stops and asks. A destructive or irreversible action (compress-with-trash, move, unpin,
+remove) needs the **gate**, so it is a `ConfirmDialog`; the *result* of that action, once taken, is the
+**receipt**, so it is a toast. Never invert them: never use a toast to ask a question the user must answer,
+and never use a modal to announce a routine success.
+
+---
+
+## 5. The unified batch-confirm popup — the "great pop-up" (LOCKED)
+
+The product owner's model: on the **View-one-repo** page, clicking the **Transcribable** metric tile opens
+a large, well-made popup — the candidate audio/video list, checked by default, a **Continue** into the
+checklist, uncheck anything, then a solid-blue **"Transcribe N files"** confirm that runs the work in the
+background and shows the **Processing** surface ([task_tabs.mdx §5.1](./task_tabs.mdx)). *"That works
+great."* The rule of this section: **that exact popup is the ONE surface every producing entry point
+opens** — nothing produces transcripts or AI descriptions any other way.
+
+### 5.1 What the popup is (LOCKED)
+
+It is the **`WarningPopup`** ([warnings.mdx §4](./warnings.mdx)) fed a **transcribe** or **describe**
+`WarningDef` whose `targets` are the candidate files:
+
+* **Two-pane, ~80% of screen** ([warnings.mdx §4.0](./warnings.mdx), [transcribe_calc_engine.mdx §4](./transcribe_calc_engine.mdx)):
+  left = the "what this is / why it matters" education + the media preview on row hover; right = the
+  **candidate checklist, every row checked at open**.
+* **Live count in the confirm button.** The solid-blue button reads **"Transcribe N files"** /
+  **"Describe N files"** where **N is the live checked count** (`actionLabel` "Transcribe" + the popup's
+  appended `— N files`); unchecking a row decrements it. Confirm is **disabled at zero checked**.
+* **Apply = model/provider gate, then background enqueue.** Confirm runs the transcribe/describe **consent
+  gate** ([transcribe_engine.mdx §3](./transcribe_engine.mdx) `withModelReady` for transcribe; the AI
+  provider-key check for describe) — which may interpose the one-time model-download or the credentials
+  dialog and then **resume** — and then **enqueues the checked paths as background jobs**
+  (`api.transcribeEnqueue({ paths })` / `api.describeEnqueue({ paths })`), never an inline blocking run.
+* **Processing surface + toast.** The popup closes; the [Processing](./processing.mdx) surface shows the
+  jobs draining; the LOCKED toast fires with the queued count ([page_actions.mdx §2](./page_actions.mdx) —
+  *"N files will have their Transcriptions created"*).
+
+The transcribe / describe `WarningDef` builders (checked-by-default targets, "Transcribe/Describe N files"
+button, gated background enqueue) already exist for the repo-scoped tiles in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildTranscribeWarning()` / `buildDescribeWarning()`.
+
+### 5.2 The candidate list comes from a plan/preview, not the enqueue count (LOCKED)
+
+The repo tiles build their `targets` from `RepoDetail.files` (already loaded, filtered to
+`transcribe === "could"` / `describe === "could"`). The **other** entry points — a **directory**, a **File
+System column**, a **storage** — have no `RepoDetail`; they have a **scope** (a root path, or a checked
+subset). For those, the frontend fetches a **preview plan** that returns the eligible candidate **file
+list** (paths + sizes) under the scope — Rules 1 (scope) + 2 (skip-already-done) applied **on the server**,
+exactly as enqueue does, but **without queuing anything** — and builds the same `WarningDef` from it.
+
+* **New endpoints** (plan-only, no enqueue), mirroring the enqueue routes:
+  * `POST /api/transcribe/plan` — body `{ paths?: string[]; root?: string }` → `{ files: {path, sizeBytes}[]; considered; alreadyDone; unsupported }`.
+  * `POST /api/describe/plan` — same shape.
+* Both walk-or-take the set with the **same `walkMedia()` / skip-already-done** logic the enqueue planners
+  use ([page_actions.mdx §1.1/§1.2](./page_actions.mdx)), so the preview list and a later enqueue never
+  disagree.
+* **Empty preview** → the popup opens in its **all-clear** state ("Nothing to transcribe here — all N files
+  already have transcripts") rather than a silent no-op, honoring the honest-outcome rule
+  ([page_actions.mdx §2](./page_actions.mdx)).
+
+The plan endpoints (walk the scope, drop already-done + unsupported, return the candidate list without
+queuing) are implemented in code (NEW):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `previewTranscribe()` (reuses `resolveCandidates()` + the already-transcribed filter, returns the list) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `previewDescribe()`; routes `POST /plan` on `transcribe.router.ts` / `describe.router.ts`; client methods `api.transcribePlan` / `api.describePlan` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts`.
+
+The scope→WarningDef builders that fetch the plan and construct the popup for a directory/FS/storage scope
+are implemented in code (NEW):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `openTranscribeBatch(scope)` / `openDescribeBatch(scope)` (fetch the plan, build the transcribe/describe `WarningDef` with the previewed files as checked targets, and open it via the popup host §5.3).
+
+### 5.3 One global popup host so any launcher can open it (NEW, LOCKED)
+
+The metric tile opens the popup because `MetricsStrip` **mounts its own** `WarningPopup`
+([task_tabs.mdx §2.4](./task_tabs.mdx)). The **page action-links row** and the **⋮ / right-click menu** are
+**not** inside `MetricsStrip`, so they need a **global** popup host — the same single-slot bus pattern as
+§2.3. A `requestBatchPopup(warning)` call opens the app-root-mounted `WarningPopup`; `openTranscribeBatch` /
+`openDescribeBatch` (§5.2) call it after building the def.
+
+Implemented in code (NEW):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `requestBatchPopup()` / `onBatchPopupRequested()` (bus) · the provider `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/BatchPopupHost.tsx` — `BatchPopupHost` (mounted once in `App.tsx`, renders `WarningPopup` for the requested def and refetches on apply).
+
+---
+
+## 6. Every producing entry point opens this one popup (LOCKED)
+
+The producing actions — **Create Transcriptions** and **Create AI descriptions** — are reachable from four
+places. **All four now open the §5 popup.** None is a `window.confirm`, and none is a fire-and-forget
+enqueue+toast anymore.
+
+| Entry point | Where | Opens |
+| --- | --- | --- |
+| **Metric tile** — `Transcribable` / `Describable` | View-one-repo page, metrics strip | the popup (already — [task_tabs.mdx §2.4.1/§5.1](./task_tabs.mdx)) |
+| **Header primary** — blue **Transcribe ›** / **Describe ›** | View-one-repo header | the popup (already — [task_tabs.mdx §2.7](./task_tabs.mdx)) |
+| **Page action-link** — **Create Transcriptions** / **Create AI descriptions** | the action-links row on **every** file-list page (File System, one repo, a directory, Full paths, Storage detail — [page_actions.mdx §4](./page_actions.mdx)) | **the popup (NEW — §6.1)** |
+| **⋮ kebab / right-click menu** — **Create Transcriptions** / **Create AI descriptions** | a directory or file entity menu ([menus.mdx §5.2/§5.3](./menus.mdx)) | **the popup (NEW — §6.4)** |
+
+### 6.1 The page action-link opens the popup, not a toast (LOCKED — supersedes the old enqueue-on-click)
+
+Clicking **Create Transcriptions** / **Create AI descriptions** in the action-links row no longer calls the
+enqueue endpoint and toasts. It now:
+
+1. resolves the scope (checked `paths`, else the page's recursive `root` — [page_actions.mdx §1.1](./page_actions.mdx));
+2. calls `openTranscribeBatch(scope)` / `openDescribeBatch(scope)` (§5.2), which fetches the **plan
+   preview** and opens the **§5 popup** with the candidates checked by default;
+3. the popup's **"Transcribe N files"** / **"Describe N files"** confirm is where the **model/provider gate,
+   the background enqueue, the Processing surface, and the LOCKED toast** happen — the *same* apply the
+   metric tile uses.
+
+So the **only** behavioral change to [page_actions.mdx](./page_actions.mdx) is **where the enqueue happens**:
+it moves from the link's click to the popup's Confirm. Rules 1 (scope), 2 (skip-already-done), and 3
+(background queue, return immediately) are **unchanged** — they now run at the popup's Apply. The
+first-time-storage-setup gate ([page_actions.mdx §1.2](./page_actions.mdx)) still interposes (from the
+enqueue the popup's Apply calls).
+
+Wired in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createTranscriptions()` / `createDescriptions()` (rewritten to call `openTranscribeBatch` / `openDescribeBatch` instead of enqueue-then-toast), still mounted through `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `producingActions()`.
+
+### 6.4 The ⋮ kebab / right-click menu item opens the popup (LOCKED)
+
+The **directory** and **file** entity catalogs ([menus.mdx §5.2/§5.3](./menus.mdx)) gain a **Create
+Transcriptions** and a **Create AI descriptions** item (the producing pair, grouped under **Create**, above
+the compress/git-ignore work items). Selecting it opens the **§5 popup** scoped to that entity:
+
+* **On a directory** (including a File-System column-browser sub-directory and a cloud-root row) → the popup
+  over that directory's transcribable/describable subtree (`{ root: dirPath }`).
+* **On a single file** → the popup with that one file as the sole (checked) candidate — the user still gets
+  the education + the explicit **"Transcribe 1 file"** confirm rather than a bare `window.confirm`.
+
+This is the product owner's ask: *"Right-click or triple-dot menu → Create Transcription also opens the
+great Transcriptions pop-up,"* and the same for **Create AI descriptions**.
+
+Wired in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the new `create-transcriptions` / `create-descriptions` items in the directory + file groups call `openTranscribeBatch` / `openDescribeBatch`).
+
+---
+
+## 7. The File-System hub — where a sub-directory is selected (LOCKED reference)
+
+On the **File System** column browser ([file_system.mdx](./file_system.mdx)), the popup's scope follows the
+**deepest (rightmost) open column** — the same [scope-containment rule (§5.1)](./file_system.mdx) the
+action-links row already obeys: **downward-only**, never a parent or sibling. So:
+
+* Clicking **Create Transcriptions** in the action-links row with a sub-directory open as the deepest column
+  opens the popup over **that directory's subtree only**.
+* Right-clicking (or ⋮-ing) a **selected sub-directory row** in a column opens the popup over **that
+  row's** subtree (§6.4).
+* Selecting a **file** row in the deepest column and choosing **Create Transcriptions** opens the popup with
+  that one file checked (§6.4).
+
+Nothing about the popup differs by entry point — same list, same confirm, same gate, same Processing. Only
+the **scope** the plan preview walks changes. [file_system.mdx](./file_system.mdx) owns the column-browser
+mechanics; this file owns what the popup does once opened.
+
+---
+
+## 8. Acceptance criteria
+
+1. **No native dialogs (§1–§3).** A grep of `packages/frontend/src` for `window.confirm`, `window.alert`,
+   and `window.prompt` returns **zero** matches. Every former site opens a `ConfirmDialog` / `PromptDialog`
+   / pop-over / batch popup per the §3 catalog.
+2. **`PromptDialog` exists (§2.2)** and replaces the move-file `window.prompt` in both `EntityMenu` and
+   `MediaViewer` — a themed modal with one text input, Confirm disabled while empty, `Enter` submits,
+   `Esc`/backdrop cancels (returns `null`).
+3. **`confirmModal()` / `promptModal()` + `ModalHost` (§2.3)** back the imperative conversions: a click
+   handler `await`s a real HTML modal; exactly one modal shows at a time; the host is mounted once at the
+   app root.
+4. **The unified batch popup (§5)** is `WarningPopup` fed a transcribe/describe `WarningDef` — candidates
+   checked by default, a live **"Transcribe N files"** / **"Describe N files"** solid-blue confirm (disabled
+   at zero), the model/provider consent gate on Apply, background enqueue, the Processing surface, and the
+   LOCKED toast.
+5. **The plan/preview endpoints (§5.2)** `POST /api/transcribe/plan` and `POST /api/describe/plan` return
+   the eligible candidate file list under a scope (Rules 1+2 applied, nothing queued); the scope→popup
+   builders in `lib/batchPopup.ts` build the popup from that list, so preview and later enqueue never
+   disagree.
+6. **A global popup host (§5.3)** lets the action-links row and the ⋮ / right-click menu open the same
+   popup the metric tile opens.
+7. **All four entry points open the one popup (§6):** the metric tile, the header primary (already), and —
+   NEW — the **Create Transcriptions** / **Create AI descriptions** page action-link and ⋮ / right-click
+   menu item. No producing action is a fire-and-forget toast or a `window.confirm`.
+8. **The page action-link change is scope-preserving (§6.1):** the only change is that the enqueue+toast
+   move from the link's click to the popup's Confirm; Rules 1–3 and the first-time-storage gate are
+   unchanged.
+9. **File-System scope containment (§7):** the popup opened from the FS action-links row / a selected
+   sub-directory / a selected file is scoped to the deepest open column / the selected row — downward only,
+   never a parent or sibling.
+
+<!--
+  HUB spec for TWO product-wide rules from the "file_system.mdx / repos.mdx" prompt.
+  (1) NO NATIVE BROWSER DIALOGS (§1-§4): window.confirm/alert/prompt are BANNED in packages/frontend/src
+      (grep must return 0 — §8.1). Replacements: ConfirmDialog (yes/no, Cancel-focused, red for danger),
+      NEW PromptDialog (one text input, Confirm-disabled-until-nonempty), pop-over config dialogs
+      (compress_inside.mdx / git_ignore.mdx = the confirm), and the batch popup (§5). Imperative bridge:
+      NEW lib/modals.ts confirmModal()/promptModal() promise helpers backed by ONE app-root ModalHost
+      (single-slot bus like setupWizard.requestStorageSetup / transcribe.requestModelConsent) so handlers
+      `await confirmModal(...)`. §3 catalogs every site (EntityMenu ×4, RowKebabs ×3, OneRepoPage ×3,
+      MediaViewer ×4, ViewOneDirectoryPage, ViewOneDevicePage, lib/transcribe.ts ×2). The two
+      lib/transcribe.ts "Transcribe all…" confirms are DELETED, not modal-ized — they route to the §5 popup.
+  (2) THE UNIFIED BATCH-CONFIRM POPUP (§5-§7) = the "great pop-up": WarningPopup fed a transcribe/describe
+      WarningDef (buildTranscribeWarning/buildDescribeWarning in metricWarningDefs.tsx). Candidate list
+      checked-by-default, live "Transcribe N files"/"Describe N files" solid-blue confirm (disabled at 0),
+      model/provider consent gate on Apply (withModelReady / provider-key), background enqueue
+      (transcribeEnqueue/describeEnqueue {paths}), Processing surface + LOCKED toast (page_actions §2).
+      SCOPE PREVIEW (§5.2): repo tiles build targets from RepoDetail.files; dir/FS/storage scopes fetch a
+      NEW plan-only endpoint POST /api/transcribe/plan + /api/describe/plan ({paths?|root?} → {files[],
+      considered, alreadyDone, unsupported}, Rules 1+2 on the server, NOTHING queued) via
+      previewTranscribe()/previewDescribe(), then lib/batchPopup.ts openTranscribeBatch/openDescribeBatch
+      build the def from the previewed files. GLOBAL HOST (§5.3): NEW lib/batchPopup.ts requestBatchPopup()
+      bus + BatchPopupHost.tsx mounted once in App.tsx (metric tile keeps its own MetricsStrip WarningPopup).
+      ALL FOUR ENTRY POINTS open it (§6): metric tile + header primary (already), page action-link (NEW,
+      §6.1 — pageActions.ts createTranscriptions/createDescriptions rewritten to open the popup, enqueue
+      moves from click to Confirm; Rules 1-3 + storage-setup gate unchanged), ⋮/right-click menu item (NEW,
+      §6.4 — EntityMenu buildActions() new create-transcriptions/create-descriptions items in dir+file
+      groups). FS (§7): popup scope = deepest open column / selected row, downward-only (file_system §5.1).
+  Keep in sync with page_actions.mdx (the row — enqueue moves to Confirm), menus.mdx (§5.2/§5.3 catalogs +
+  §6.1 confirm rule now points here), task_tabs.mdx §5.1/§5.2.1 (the flow generalized), warnings.mdx
+  (WarningPopup/WarningDef), transcribe_calc_engine.mdx §4 / describe_calc_engine.mdx §4 (~80% popup),
+  compress_inside.mdx / git_ignore.mdx (the config dialogs), file_system.mdx (the FS hub).
+-->
+</content>
+</invoke>

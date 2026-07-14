@@ -207,11 +207,16 @@ Three regions stacked in the content column: the **header** (repo identity + the
   **page-action** menu that operates on this repo's **files** (the whole working tree, or the checked
   subset), as opposed to the `⋮` more menu which operates on the **repo entity**. It carries **Create
   Transcriptions · Create AI descriptions · Compress videos · Compress images · Git ignore · Pin now ·
-  Rescan** ([page_actions.mdx §4](./page_actions.mdx)) — Pin now moved here from the header primary. The two producing actions obey the LOCKED
-  scope / skip-already-done / background-queue rules ([page_actions.mdx §1](./page_actions.mdx)): with no
-  rows checked they run over **all files recursively**, skipping files that already have the output, and
-  the eligible remainder is background-queued with a "{N} files will have their Transcriptions created"
-  toast. Rendered by `PageActions` ([page_actions.mdx §3](./page_actions.mdx)).
+  Rescan** ([page_actions.mdx §4](./page_actions.mdx)) — Pin now moved here from the header primary. The two
+  producing actions (**Create Transcriptions** / **Create AI descriptions**) **open the unified batch-confirm
+  popup** — the **same** "great pop-up" the `Transcribable` / `Describable` metric tile opens
+  ([dialogs.mdx §5–§6](./dialogs.mdx), [task_tabs.mdx §5.1](./task_tabs.mdx)): a candidate list checked by
+  default, uncheck, then a solid-blue **"Transcribe/Describe N files"** confirm. They still obey the LOCKED
+  scope / skip-already-done / background-queue rules ([page_actions.mdx §1](./page_actions.mdx)) — with no
+  rows checked they cover **all files recursively**, skipping already-done files — but the enqueue and the
+  "{N} files will have their Transcriptions created" toast fire on the popup's **Confirm**
+  ([page_actions.mdx §0.1](./page_actions.mdx)), never on the link's click and never as a `window.confirm`.
+  Rendered by `PageActions` ([page_actions.mdx §3](./page_actions.mdx)).
 * **`⋮` "more" menu** (top-right, next to the header primary) — because this page **is one repo**, it carries the
   **repo entity menu**: the same catalog as a Repos-table row's kebab
   ([menus.mdx §4 / §5.1](./menus.mdx#4-the-entity--more-menu--single-entity-pages)) — Open in File

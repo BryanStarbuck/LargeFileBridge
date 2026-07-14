@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import type { DescribeKind, DescribeResult, DescribeBatchResult, DescribeView, DescribeProvidersStatus, DescribeAiConfig, DescribeAiConfigPatch, AiCredentialsInfo, EnqueuePlan } from "@lfb/shared";
+import type { DescribeKind, DescribeResult, DescribeBatchResult, DescribeView, DescribeProvidersStatus, DescribeAiConfig, DescribeAiConfigPatch, AiCredentialsInfo, EnqueuePlan, PreviewPlan } from "@lfb/shared";
 import { mediaKindForName } from "@lfb/shared";
 import { HARD_SKIP } from "../../shared/scan-filters.js";
 import { expandHome } from "../fs/badges.js";
@@ -299,6 +299,39 @@ export function enqueueDescribe(opts: {
   const { queued } = enqueue(eligible.map((p) => ({ op: "describe", path: p, overwrite, provider: opts.provider })));
   log.info("describe", `enqueue [${scopeLabel(opts)}]: ${candidates.length} considered → ${queued} queued (${alreadyDone} already done, ${unsupported} unsupported)`);
   return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued, willProcess: queued, needsSetup: false, setupPath: null };
+}
+
+/**
+ * PREVIEW the eligible AI-description candidates for a scope WITHOUT queuing anything (dialogs.mdx §5.2).
+ * Same narrowing as `enqueueDescribe` (scope, drop unsupported + already-described) but returns the eligible
+ * candidate FILE LIST (path + size) for the unified batch-confirm popup. Nothing is written or queued.
+ */
+export function previewDescribe(opts: { paths?: string[]; root?: string; overwrite?: boolean }): PreviewPlan {
+  const overwrite = opts.overwrite ?? false;
+  const candidates = describeCandidates(opts);
+  let alreadyDone = 0;
+  let unsupported = 0;
+  const files: PreviewPlan["files"] = [];
+  for (const abs of candidates) {
+    if (!describeKindFor(path.basename(abs))) {
+      unsupported++;
+      continue;
+    }
+    const dp = resolveDescriptionPath(abs);
+    if (!overwrite && !dp.needsSetup && readDescription(abs)) {
+      alreadyDone++;
+      continue;
+    }
+    let sizeBytes = 0;
+    try {
+      sizeBytes = fs.statSync(abs).size;
+    } catch {
+      /* size unknown — leave 0 */
+    }
+    files.push({ path: abs, sizeBytes });
+  }
+  log.info("describe", `preview [${scopeLabel(opts)}]: ${candidates.length} considered → ${files.length} candidates (${alreadyDone} already done, ${unsupported} unsupported)`);
+  return { files, considered: candidates.length, alreadyDone, unsupported };
 }
 
 /** Checked `paths` used as-is, else the recursive `root` walked for image/video (page_actions.mdx §1.1). */

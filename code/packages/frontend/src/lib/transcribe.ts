@@ -3,7 +3,7 @@
 // page. Each wraps api.* in a toast.promise so the slow, local Whisper run shows a spinner and then an
 // honest result. Confirm-gated for the "all files" variants (they can run for a while).
 import { toast } from "sonner";
-import type { TranscribeResult, TranscribeBatchResult } from "@lfb/shared";
+import type { TranscribeResult } from "@lfb/shared";
 import { api } from "@/api/client";
 import { clientLog } from "./clientLog.js";
 import { requestStorageSetup } from "./setupWizard.js";
@@ -95,12 +95,6 @@ export function transcribeMsgOne(r: TranscribeResult): string {
   }
 }
 
-/** Tree/batch/storage outcome → honest counts (Transcribe.mdx §6). */
-function msgBatch(r: TranscribeBatchResult): string {
-  if (r.results.length === 0) return "No audio or video files found";
-  return `Transcribed ${r.transcribed} · skipped ${r.skipped}${r.failed ? ` · failed ${r.failed}` : ""}`;
-}
-
 function errMsg(ctx: string) {
   return (e: unknown) => {
     clientLog.error(ctx, e);
@@ -136,28 +130,7 @@ export function runTranscribeFile(
   });
 }
 
-/** Transcribe ALL audio/video under a directory or repo working tree ("Transcribe all files…"). */
-export function runTranscribeTree(path: string, label: string, onDone?: () => void): void {
-  if (!window.confirm(`Transcribe all audio & video under "${label}"?\n\nThis runs Whisper locally and can take a while. Existing transcripts are skipped.`)) return;
-  toast.promise(api.transcribeTree(path), {
-    loading: `Transcribing everything under ${label}…`,
-    success: (r) => {
-      onDone?.();
-      return msgBatch(r);
-    },
-    error: errMsg("transcribe.tree"),
-  });
-}
-
-/** Transcribe ALL audio/video in a storage ("Transcribe all" on the storage detail page). */
-export function runTranscribeStorage(id: string, label: string, onDone?: () => void): void {
-  if (!window.confirm(`Transcribe all audio & video in "${label}"?\n\nThis runs Whisper locally and can take a while. Existing transcripts are skipped.`)) return;
-  toast.promise(api.transcribeStorage(id), {
-    loading: `Transcribing everything in ${label}…`,
-    success: (r) => {
-      onDone?.();
-      return msgBatch(r);
-    },
-    error: errMsg("transcribe.storage"),
-  });
-}
+// runTranscribeTree / runTranscribeStorage were REMOVED (dialogs.mdx §3): the "Transcribe all …" bare
+// window.confirm launchers are superseded by the unified batch-confirm popup — callers now open it via
+// openTranscribeBatch({ root }) in lib/batchPopup.ts (a candidate list + a "Transcribe N files" confirm),
+// which subsumes both the confirm and the tree/storage walk.

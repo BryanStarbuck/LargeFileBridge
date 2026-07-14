@@ -23,6 +23,7 @@ import { PageHeader } from "../../components/ui/PageHeader.js";
 import { StatusBanner } from "../../components/ui/StatusBanner.js";
 import { type Health } from "../../components/ui/health.js";
 import { relativeTime, absoluteTime } from "../../lib/format.js";
+import { confirmModal } from "../../lib/modals.js";
 import { clientLog } from "../../lib/clientLog.js";
 
 function seenHealth(iso: string | null): Health {
@@ -129,9 +130,11 @@ export function ViewOneDevicePage() {
   const descriptor = deviceDescriptor(hw);
   const removePeer = async () => {
     if (
-      !window.confirm(
-        `Forget ${device.name}?\n\nLargeFileBridge stops expecting this computer. It removes nothing on that machine and no files here.`,
-      )
+      !(await confirmModal({
+        title: `Forget ${device.name}?`,
+        body: "Large File Bridge stops expecting this computer. It removes nothing on that machine and no files here.",
+        confirmLabel: "Remove peer",
+      }))
     )
       return;
     try {

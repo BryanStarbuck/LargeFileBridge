@@ -212,6 +212,8 @@ The repo action catalog (Open / Work / Config / Copy, and Remove-repo that unreg
 | Open | **View directory** | navigate | → the **View one directory** page ([directories.mdx](./directories.mdx)). (Omitted on that page itself.) |
 | Open | **Open in File System** | navigate | Drill into this directory in the [browser](./directories.mdx). |
 | Open | **View pinned on IPFS** | navigate | → [IPFS](./ipfs.mdx) filtered to files under this directory. |
+| Create | **Create Transcriptions** | mutate | Opens the **unified batch-confirm popup** ([dialogs.mdx §5/§6.4](./dialogs.mdx)) scoped to this directory's subtree (`{ root: <dir> }`) — the candidate audio/video list checked by default, uncheck anything, a solid-blue **"Transcribe N files"** confirm that model-gates + background-enqueues. The **same** "great pop-up" the Transcribable metric tile opens ([task_tabs.mdx §5.1](./task_tabs.mdx)). **Never** a `window.confirm` or a fire-and-forget toast (§6.1). |
+| Create | **Create AI descriptions** | mutate | Same popup, for describable images/videos under this directory ([dialogs.mdx §5/§6.4](./dialogs.mdx)) — a **"Describe N files"** confirm, provider/model-gated. |
 | Work | **Rescan** | mutate | Discovery scan of this directory now (`scan` op). |
 | Work | **Track / Pin this directory** | mutate | Add it to the computer pin unit ([storage §8](./storage_local.mdx#8-pincomputer--the-whole-computer-pin-unit)); the files inside become triage-able. |
 | Work | **Compress videos/images inside…** | mutate | Opens the **Compress Inside pop-over dialog** ([compress_inside.mdx](./compress_inside.mdx)) — a darkened-backdrop modal (Images / Videos / "also recursive" checkboxes, a **red** PNG→JPEG warning shown while Images is checked, and an **Originals** radio [Hard delete default / LargeFileBridge trash]) whose **Continue** background-queues a per-file-safe batch. The batch **fans the eligible files out across the machine's cores (≈90%)** via the **media-aware** background queue — image files wide (1 thread each), video files thread-capped — so a big folder pins the box near 90% until done, not two-at-a-time ([parallelization.mdx §5](./parallelization.mdx), [compress_inside.mdx](./compress_inside.mdx)). **Not** a `window.confirm`. Offer only, **explicit click only** (charter: video 1st, image 2nd; §6.1). |
@@ -233,6 +235,8 @@ The directory action catalog (its Open / Work / Flag groups and the Never IPFS /
 | IPFS | **Remove from IPFS** | mutate ⚠ | Sets the decision to `ignore`: remove from the manifest and unpin **on this machine**. **Never deletes the local bytes** (§6.2). Shown when the file is currently an Add-to-IPFS (pin) file. |
 | Decision | **Set decision ▸ Add to IPFS (pin) / Ignore / Undecided** | mutate | The full three-state submenu ([decision model](./one_repo.mdx#1-the-decision-model-locked)) — the frozen `sync` / `ignore` / `undecided` values; "Add to IPFS" / "Remove from IPFS" above are the two one-click shortcuts. Changing it **never deletes** the local file. |
 | Work | **Pin now** | mutate | Queue this one file's transfer (`pin` op). Only meaningful when its decision is `sync` (Add to IPFS (pin)). |
+| Create | **Create Transcription** | mutate | Audio/video only. Opens the **unified batch-confirm popup** ([dialogs.mdx §5/§6.4](./dialogs.mdx)) with **this one file** as the sole checked candidate — the education + an explicit **"Transcribe 1 file"** confirm, model-gated + background-enqueued. The **same** popup the directory item and the Transcribable tile open, never a bare `window.confirm` (§6.1). |
+| Create | **Create AI description** | mutate | Image/video only. Same popup for this one file ([dialogs.mdx §5/§6.4](./dialogs.mdx)) — a **"Describe 1 file"** confirm, provider/model-gated. |
 | Work | **Compress…** | mutate | Video/image only, **explicit click** (charter §6.1); `compress` op. Hidden when **Do not compress** is on. |
 | Work | **Convert to compressible…** | mutate | PNG→JPEG etc., **after the alpha/functionality safety checks** (charter; warn before converting, §6.1). |
 | Work | **Git ignore** | mutate | Shown only when the file is big and **not** already git-ignored. Opens the **Git Ignore pop-over dialog** ([git_ignore.mdx](./git_ignore.mdx)) for this one file (no Recursive checkbox — files have no subtree); Apply writes one anchored line `/​<repo-rel path>` (§6.1). |
@@ -332,7 +336,7 @@ The inline toggles and their menu twins share the one decision-write path in cod
 
 These are charter rules the menus must honor — they are **why** several actions are confirm-gated.
 
-### 6.1 Never act on files without an explicit click
+### 6.1 Never act on files without an explicit click — and NEVER via a native browser dialog (LOCKED)
 **Compress, convert (PNG→compressible), and git-ignore are OFFERS, not automatic.** They exist in the
 menu, but selecting one **opens a pop-over configuration dialog** that *is* the confirm step — the
 [Compress Inside dialog](./compress_inside.mdx) for compress, the [Git Ignore dialog](./git_ignore.mdx)
@@ -341,13 +345,23 @@ converts, or writes a `.gitignore` entry on its own (charter: "Never compress or
 user explicitly asks"; "Never add a `.gitignore` entry automatically"). Once applied, the work runs
 through the progress dock as its `compress` / `ignore` op ([webapp.mdx §11](./webapp.mdx#11-what-shows-up-in-the-dock--the-lfbridge-operation-taxonomy)).
 
-The explicit-click Compress OFFER with its `window.confirm` step (never compresses a file on its own) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` `compress` handler.
+> **The confirm is ALWAYS one of our HTML modals — never `window.confirm` / `window.alert` / `window.prompt`
+> (LOCKED — [dialogs.mdx](./dialogs.mdx)).** Every menu action that asks "are you sure?" opens a
+> **`ConfirmDialog`** (or, for a value the user must type — the **Move…** destination path — a
+> **`PromptDialog`**), never an operating-system browser dialog. The imperative handlers `await
+> confirmModal(...)` / `await promptModal(...)` ([dialogs.mdx §2.3](./dialogs.mdx)). This applies to **every**
+> destructive item in every catalog (§5): **Remove repo**, **Stop pinning / Unpin**, **Remove peer**,
+> **Delete… (to trash)**, **Move…**, single-file **Compress… / Convert…** — all HTML modals, zero native
+> dialogs ([dialogs.mdx §3](./dialogs.mdx) catalogs every converted site).
 
-> **Directory compress is no longer a `window.confirm` (§5.2).** The old bare browser confirm for
+The explicit-click Compress OFFER with its `confirmModal` step (never compresses a file on its own, never a native `window.confirm`) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` `compress` handler (uses `confirmModal()` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/modals.ts`); the **Move…** destination uses `promptModal()` from the same module.
+
+> **Directory compress is no longer a native confirm (§5.2).** The old bare browser confirm for
 > **Compress videos/images inside…** is **superseded** by the pop-over configuration dialog in
 > [compress_inside.mdx](./compress_inside.mdx) (four inputs + a per-file-safe background batch). The
-> single-file **Compress…** offer (§5.3) is unchanged — it stays the confirm-gated per-file offer above.
+> single-file **Compress…** offer (§5.3) is unchanged in intent — it stays a confirm-gated per-file offer,
+> but its confirm is now a **`ConfirmDialog`** ([dialogs.mdx](./dialogs.mdx)), not a `window.confirm`.
 
 > **Git ignore is no longer a bare confirm (§5.1–§5.3).** The old **Git-ignore…** items fired a generic
 > ConfirmDialog (or a not-yet-wired stub). They are **superseded** by the pop-over **Git Ignore dialog**
@@ -438,6 +452,15 @@ Whether a file earns the pin **`P`** badge (and Never IPFS suppressing it) is co
    bulk menu, and a **To-Do batch's** recommendations all write the **same** single-axis decision; the
    **Git-ignore ⊘** toggle is repo-scoped like the menu's Git-ignore item; a directory ignore or multi-row
    flip defers to the **Git-ignore pop-over**; and **Never IPFS / Do not compress** stay menu-only policies.
+9. **Producing menu items (§5.2/§5.3):** the **directory** and **file** catalogs each carry **Create
+   Transcriptions** and **Create AI descriptions** — selecting one opens the **unified batch-confirm popup**
+   ([dialogs.mdx §5/§6.4](./dialogs.mdx)) scoped to that entity (a directory's subtree, or the single file as
+   the sole checked candidate), the **same** popup the metric tile and the page action-links row open. Never
+   a fire-and-forget toast.
+10. **No native browser dialogs (§6.1, [dialogs.mdx](./dialogs.mdx)):** every menu confirm is a
+    **`ConfirmDialog`** and every value prompt (Move…) a **`PromptDialog`** — `window.confirm` /
+    `window.alert` / `window.prompt` appear **nowhere**; imperative handlers `await confirmModal(...)` /
+    `await promptModal(...)`.
 
 <!--
   HUB spec for three shared interactions: (1) cell navigation (data cells are deep links), (2) the row
@@ -450,6 +473,14 @@ Whether a file earns the pin **`P`** badge (and Never IPFS suppressing it) is co
   never deletes local bytes on remove/untrack; local-only fingerprinting; hidden (not disabled) gated
   items; only-our-content IPFS. When adding a table, give it a cell-link map (link back to §2) and the
   ⋮ kebab; when adding an entity, add a catalog to §5 and both surfaces get it for free.
+  §5.2/§5.3 add a "Create" group: Create Transcriptions + Create AI descriptions on the DIRECTORY and FILE
+  catalogs — both open the UNIFIED BATCH-CONFIRM POPUP (dialogs.mdx §5/§6.4), scoped to the dir subtree or
+  the single file (as the sole checked candidate); the SAME popup the Transcribable/Describable metric tile
+  + the page action-links row open, never a fire-and-forget toast. Built via EntityMenu buildActions() →
+  openTranscribeBatch/openDescribeBatch (lib/batchPopup.ts).
+  §6.1 NO NATIVE BROWSER DIALOGS (dialogs.mdx): every menu confirm = ConfirmDialog, every value prompt
+  (Move…) = PromptDialog; window.confirm/alert/prompt banned; handlers await confirmModal()/promptModal()
+  (lib/modals.ts). Fixed the old code-pointer notes that said "window.confirm".
   §5.6 (LOCKED): the inline DECISION TOGGLES (decision_toggles.mdx — Add-to-IPFS pin + Add-to-git-ignore ⊘)
   are the FAST PATH for the menu's Add/Remove-IPFS + Git-ignore actions; row toggle + entity menu + bulk menu
   + a To-Do batch's RECOMMENDED toggles all write the SAME single-axis decision (setDecision). Git-ignore ⊘

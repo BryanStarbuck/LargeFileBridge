@@ -6,7 +6,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { requireAllowListed } from "../auth/identify.js";
 import { log } from "../../shared/logging.js";
-import { describeProviders, readDescription, describeOne, describeMany, describeTree, enqueueDescribe, getAiConfig, setAiConfig, aiCredentialsInfo } from "./describe.service.js";
+import { describeProviders, readDescription, describeOne, describeMany, describeTree, enqueueDescribe, previewDescribe, getAiConfig, setAiConfig, aiCredentialsInfo } from "./describe.service.js";
 import { promptView, customizePrompt, savePrompt, resetPrompt } from "./prompts.js";
 
 export const describeRouter = Router();
@@ -110,6 +110,21 @@ describeRouter.post("/enqueue", (req, res) => {
   if (!body.success) return res.status(400).json({ ok: false, error: "paths[] or root required" });
   try {
     res.json({ ok: true, data: enqueueDescribe(body.data) });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/describe/plan — PREVIEW the eligible candidates for the "Create AI descriptions" batch popup
+// (dialogs.mdx §5.2). Same narrowing as /enqueue but QUEUES NOTHING — returns the candidate file list so
+// the popup can list them checked-by-default. The popup's Confirm calls /enqueue.
+describeRouter.post("/plan", (req, res) => {
+  const body = z
+    .object({ paths: z.array(z.string().min(1)).optional(), root: z.string().min(1).optional(), overwrite: z.boolean().optional() })
+    .safeParse(req.body);
+  if (!body.success) return res.status(400).json({ ok: false, error: "paths[] or root required" });
+  try {
+    res.json({ ok: true, data: previewDescribe(body.data) });
   } catch (e) {
     res.status(400).json({ ok: false, error: (e as Error).message });
   }

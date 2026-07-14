@@ -13,6 +13,7 @@ import {
   transcribeTree,
   transcribeStorageById,
   enqueueTranscribe,
+  previewTranscribe,
 } from "./transcribe.service.js";
 import { describeReadiness, provision, repair, removeModel, recordConsent, setEngineChoice } from "./model-provision.service.js";
 
@@ -149,6 +150,21 @@ transcribeRouter.post("/enqueue", (req, res) => {
   if (!body.success) return res.status(400).json({ ok: false, error: "paths[] or root required" });
   try {
     res.json({ ok: true, data: enqueueTranscribe(body.data) });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/transcribe/plan — PREVIEW the eligible candidates for the "Create Transcriptions" batch popup
+// (dialogs.mdx §5.2). Same scope + skip-already-done narrowing as /enqueue but QUEUES NOTHING — returns the
+// candidate file list so the popup can list them checked-by-default. The popup's Confirm calls /enqueue.
+transcribeRouter.post("/plan", (req, res) => {
+  const body = z
+    .object({ paths: z.array(z.string().min(1)).optional(), root: z.string().min(1).optional(), overwrite: z.boolean().optional() })
+    .safeParse(req.body);
+  if (!body.success) return res.status(400).json({ ok: false, error: "paths[] or root required" });
+  try {
+    res.json({ ok: true, data: previewTranscribe(body.data) });
   } catch (e) {
     res.status(400).json({ ok: false, error: (e as Error).message });
   }

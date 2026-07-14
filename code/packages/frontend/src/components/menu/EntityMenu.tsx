@@ -23,12 +23,14 @@ import {
   Move,
   Trash2,
   Captions,
+  Sparkles,
 } from "lucide-react";
 import type { EntityView, Decision } from "@lfb/shared";
 import { mediaKindForName, viewerRouteForName } from "@lfb/shared";
 import { api } from "@/api/client";
 import { patchEntityBadges } from "@/lib/patchEntityBadges";
-import { runTranscribeFile, runTranscribeTree } from "@/lib/transcribe";
+import { openTranscribeBatch, openDescribeBatch } from "@/lib/batchPopup";
+import { confirmModal, promptModal } from "@/lib/modals";
 import { openCompressInside } from "@/lib/compressInside";
 import { clientLog } from "../../lib/clientLog.js";
 
@@ -251,8 +253,8 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
     navigator.clipboard?.writeText(text).catch((e) => clientLog.warn("EntityMenu.copy", e));
     toast.success(`${label} copied`);
   };
-  const compress = () => {
-    if (!window.confirm(`Compress ${v.name}? Medium quality, same resolution — the original moves to LFBridge trash (recoverable).`)) return;
+  const compress = async () => {
+    if (!(await confirmModal({ title: `Compress ${v.name}?`, body: "Medium quality, same resolution — the original moves to LFBridge trash (recoverable).", confirmLabel: "Compress" }))) return;
     api.compressFile(v.path)
       .then((r) => {
         if (r.status === "compressed") toast.success(`Compressed → ${r.codec ?? "smaller"}`);
@@ -269,8 +271,8 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
     ctx.qc.invalidateQueries({ queryKey: ["repo"] });
   };
   // Move… (menus.mdx §5.3 Work) — guarded rename; on success re-point to the file's viewer at its new path.
-  const move = () => {
-    const dest = window.prompt("Move file to (absolute path):", v.path);
+  const move = async () => {
+    const dest = await promptModal({ title: "Move file", label: "New absolute path:", defaultValue: v.path, confirmLabel: "Move" });
     if (!dest || dest.trim() === v.path) return;
     api.moveEntity(v.path, dest.trim()).then((r) => {
       toast.success("File moved");
@@ -280,8 +282,8 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
     }).catch((e) => { clientLog.error("EntityMenu.move", e); toast.error(e.message); });
   };
   // Delete… (menus.mdx §5.3 Danger) — RECOVERABLE: moves to LFBridge trash, never unlinks.
-  const del = () => {
-    if (!window.confirm(`Move ${v.name} to LFBridge trash?\nThis is recoverable — the file is moved to the trash folder, not erased.`)) return;
+  const del = async () => {
+    if (!(await confirmModal({ title: `Move ${v.name} to LFBridge trash?`, body: "This is recoverable — the file is moved to the trash folder, not erased.", confirmLabel: "Move to trash" }))) return;
     api.deleteEntity(v.path).then(() => {
       toast.success("Moved to LFBridge trash");
       refreshLists();
@@ -335,10 +337,17 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
     if (v.compressible && v.compressState !== "done" && !v.flags.noCompress) {
       a.push({ id: "compress", label: "Compress…", group: "Work", icon: <Zap className="h-4 w-4" />, onSelect: compress });
     }
-    // Transcribe… — audio/video only (Transcribe.mdx §2.2). Writes the <rel-without-ext>.transcription sidecar beside the media.
+    // Create Transcription — audio/video only. Opens the UNIFIED batch popup (dialogs.mdx §5/§6.4) with this
+    // one file as the sole checked candidate — the education + an explicit "Transcribe 1 file" confirm, never
+    // a bare window.confirm. The SAME popup the Transcribable metric tile + the page action-links row open.
     if (mkind === "audio" || mkind === "video") {
-      a.push({ id: "transcribe", label: "Transcribe…", group: "Work", icon: <Captions className="h-4 w-4" />,
-        onSelect: () => runTranscribeFile(v.path, v.name, { onDone: refreshLists }) });
+      a.push({ id: "create-transcription", label: "Create Transcription", group: "Create", icon: <Captions className="h-4 w-4" />,
+        onSelect: () => openTranscribeBatch({ paths: [v.path] }) });
+    }
+    // Create AI description — image/video only. Same popup, provider/model-gated (dialogs.mdx §5/§6.4).
+    if (mkind === "image" || mkind === "video") {
+      a.push({ id: "create-description", label: "Create AI description", group: "Create", icon: <Sparkles className="h-4 w-4" />,
+        onSelect: () => openDescribeBatch({ paths: [v.path] }) });
     }
     // Move… — guarded rename of the file (media_viewer.mdx §4.4). Explicit; relocates real bytes.
     a.push({ id: "move", label: "Move…", group: "Work", icon: <Move className="h-4 w-4" />, onSelect: move });
@@ -355,9 +364,13 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
       a.push({ id: "compress-dir", label: "Compress videos/images inside…", group: "Work", icon: <Zap className="h-4 w-4" />,
         onSelect: () => openCompressInside(v.path, { images: true, videos: true }) });
     }
-    // Transcribe all audio/video under this directory (Transcribe.mdx §2.4).
-    a.push({ id: "transcribe-dir", label: "Transcribe all files…", group: "Work", icon: <Captions className="h-4 w-4" />,
-      onSelect: () => runTranscribeTree(v.path, v.name, refreshLists) });
+    // Create Transcriptions / Create AI descriptions over this directory's subtree — the UNIFIED batch popup
+    // (dialogs.mdx §5/§6.4, menus.mdx §5.2), scoped downward-only to `{ root: <dir> }`. The SAME "great
+    // pop-up" the metric tile + the page action-links row open; never a window.confirm / fire-and-forget.
+    a.push({ id: "create-transcriptions", label: "Create Transcriptions", group: "Create", icon: <Captions className="h-4 w-4" />,
+      onSelect: () => openTranscribeBatch({ root: v.path }) });
+    a.push({ id: "create-descriptions", label: "Create AI descriptions", group: "Create", icon: <Sparkles className="h-4 w-4" />,
+      onSelect: () => openDescribeBatch({ root: v.path }) });
   }
 
   // Sticky flags (menus.mdx §6.6) — same on file and directory.
@@ -390,8 +403,8 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
       group: "Danger",
       danger: true,
       icon: <RefreshCw className="h-4 w-4" />,
-      onSelect: () => {
-        if (window.confirm("Stop pinning this file? It stays on disk — only LFB's tracking is removed.")) {
+      onSelect: async () => {
+        if (await confirmModal({ title: "Stop pinning this file?", body: "It stays on disk — only Large File Bridge's tracking is removed.", confirmLabel: "Stop pinning" })) {
           ctx.decide.mutate("ignore");
         }
       },

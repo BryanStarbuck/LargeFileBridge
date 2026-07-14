@@ -19,6 +19,7 @@ import { PageActions, producingActions } from "../../components/menu/PageActions
 import { compressAllVideos, compressAllImages, gitIgnoreBig } from "../../components/menu/domainActions.js";
 import type { ActionScope } from "../../lib/pageActions.js";
 import { withModelReady } from "../../lib/transcribe.js";
+import { confirmModal } from "../../lib/modals.js";
 import { PinToggle } from "../../components/PinToggle.js";
 import { DecisionToggle } from "../../components/decision/DecisionToggles.js";
 import { TranscribeStatusIcon } from "../../components/TranscribeStatusIcon.js";
@@ -168,11 +169,11 @@ export function OneRepoPage() {
     },
     onError: (e: Error) => { clientLog.error("OneRepoPage.compressBatch", e); toast.error(e.message); },
   });
-  const compressSelected = () => {
+  const compressSelected = async () => {
     if (!detail?.path) return;
     const paths = detail.files.filter((f) => selected.has(f.fileId)).map((f) => `${detail.path}/${f.path}`);
     if (!paths.length) return;
-    if (!window.confirm(`Compress ${paths.length} file${paths.length === 1 ? "" : "s"}? Medium quality, same resolution — originals move to LFBridge trash (recoverable).`)) return;
+    if (!(await confirmModal({ title: `Compress ${paths.length} file${paths.length === 1 ? "" : "s"}?`, body: "Medium quality, same resolution — originals move to LFBridge trash (recoverable).", confirmLabel: "Compress" }))) return;
     compressBatch.mutate(paths);
   };
 
@@ -190,12 +191,12 @@ export function OneRepoPage() {
 
   // The Transcribe status icon's click (task_tabs.mdx §5): "could" queues a transcription; "done" opens
   // the file's viewer to read the transcript; "na" is inert.
-  const onTranscribeActivate = (f: FileRow) => {
+  const onTranscribeActivate = async (f: FileRow) => {
     if (!detail?.path || f.transcribe === "na") return;
     const abs = `${detail.path}/${f.path}`;
     if (f.transcribe === "could") {
       // Gate behind the heavyweight-model provisioning flow (transcribe_engine.mdx §3), then run.
-      if (window.confirm(`Transcribe ${f.path}? Runs locally in the background.`)) {
+      if (await confirmModal({ title: `Transcribe ${f.path}?`, body: "Runs locally in the background.", danger: false, confirmLabel: "Transcribe" })) {
         void withModelReady({ label: `transcribe ${f.path}`, run: () => transcribeOne.mutate(abs) });
       }
     } else {
@@ -206,11 +207,11 @@ export function OneRepoPage() {
 
   // The Compress status icon's click (task_tabs.mdx §6): "could" offers compression (confirm → background
   // job); "done" opens the file's viewer; "na" is inert.
-  const onCompressActivate = (f: FileRow) => {
+  const onCompressActivate = async (f: FileRow) => {
     if (!detail?.path || f.compress === "na") return;
     const abs = `${detail.path}/${f.path}`;
     if (f.compress === "could") {
-      if (window.confirm(`Compress ${f.path}? Medium quality, same resolution — the original moves to LFBridge trash (recoverable).`)) compressBatch.mutate([abs]);
+      if (await confirmModal({ title: `Compress ${f.path}?`, body: "Medium quality, same resolution — the original moves to LFBridge trash (recoverable).", confirmLabel: "Compress" })) compressBatch.mutate([abs]);
     } else {
       const name = f.path.slice(f.path.lastIndexOf("/") + 1);
       navigate({ to: viewerRouteForName(name), search: { path: abs } });

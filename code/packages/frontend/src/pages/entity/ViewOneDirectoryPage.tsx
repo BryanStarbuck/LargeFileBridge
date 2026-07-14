@@ -13,6 +13,7 @@ import { DataTable } from "@/components/table/DataTable";
 import type { LfbColumn } from "@/components/table/types";
 import { FlagSwitches, EntityHeaderMissing } from "./entityShared";
 import { relativeTime } from "@/lib/format";
+import { confirmModal } from "@/lib/modals";
 import { clientLog, errMessage } from "@/lib/clientLog";
 
 interface RollupRow {
@@ -49,8 +50,8 @@ export function ViewOneDirectoryPage() {
       ]
     : [];
 
-  const compressDir = () => {
-    if (!window.confirm(`Compress media inside ${v.name}? This is an offer — nothing changes until it runs.`)) return;
+  const compressDir = async () => {
+    if (!(await confirmModal({ title: `Compress media inside ${v.name}?`, body: "This is an offer — nothing changes until it runs.", confirmLabel: "Compress" }))) return;
     api.compressEntity(v.path).then(() => toast.success("Compression queued")).catch((e) => { clientLog.error("ViewOneDirectoryPage.compress", e); toast.error(errMessage(e)); });
   };
 

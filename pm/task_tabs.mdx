@@ -544,6 +544,16 @@ and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/Met
 `transcribable` panel's `onOpen` (opens the same popup, gated by `withModelReady()` from
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/transcribe.ts`).
 
+> **The `Create Transcriptions` page action-link opens this SAME popup (LOCKED — [dialogs.mdx §6.1](./dialogs.mdx)).**
+> On the One-repo page the **Create Transcriptions** / **Create AI descriptions** links in the action-links
+> row ([page_actions.mdx §0.1](./page_actions.mdx)) are **not** a separate fire-and-forget enqueue — clicking
+> either opens the **exact popup** the `Transcribable` / `Describable` metric tile opens (this §5.1 flow),
+> scoped to the checked rows else the whole repo. The metric tile and the action-link are two triggers for
+> **one** popup, so the user gets the same checked-by-default list, the same **"Transcribe N files"**
+> confirm, and the same model-gated background enqueue whichever they click. (The tile builds its targets
+> from the loaded `RepoDetail.files`; the action-link fetches the identical candidate set from the
+> `/plan` preview endpoint over the same scope — [dialogs.mdx §5.2](./dialogs.mdx).)
+
 ### 5.2 The Describe status icon — three states, mirrors the Transcribe icon (LOCKED)
 
 The **AI descriptions** tab (§4.5) shows a per-row **Describe status icon** built on the **same

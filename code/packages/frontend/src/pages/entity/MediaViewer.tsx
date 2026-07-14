@@ -31,6 +31,7 @@ import { TranscribeSetupCard } from "@/components/TranscribeSetupCard";
 import { runDescribeFile } from "@/lib/describe";
 import { CredentialsMissingDialog } from "@/components/describe/CredentialsMissingDialog";
 import { runOsOpen } from "@/lib/os";
+import { confirmModal, promptModal } from "@/lib/modals";
 import { patchEntityBadges } from "@/lib/patchEntityBadges";
 import { EntityHeaderMissing } from "./entityShared";
 import { relativeTime, absoluteTime } from "@/lib/format";
@@ -250,17 +251,17 @@ function ActionBar({
     },
     onError: (e: Error) => { clientLog.error("MediaViewer.compress", e); toast.error(e.message); },
   });
-  const onCompress = () => {
-    if (!window.confirm(`Compress ${v.name}? Medium quality, same resolution — the original moves to LFBridge trash (recoverable).`)) return;
+  const onCompress = async () => {
+    if (!(await confirmModal({ title: `Compress ${v.name}?`, body: "Medium quality, same resolution — the original moves to LFBridge trash (recoverable).", confirmLabel: "Compress" }))) return;
     compress.mutate();
   };
-  const onMove = () => {
-    const dest = window.prompt("Move file to (absolute path):", v.path);
+  const onMove = async () => {
+    const dest = await promptModal({ title: "Move file", label: "New absolute path:", defaultValue: v.path, confirmLabel: "Move" });
     if (!dest || dest.trim() === v.path) return;
     move.mutate(dest.trim());
   };
-  const onDelete = () => {
-    if (!window.confirm(`Move ${v.name} to LFBridge trash?\nThis is recoverable — the file is moved to the trash folder, not erased.`)) return;
+  const onDelete = async () => {
+    if (!(await confirmModal({ title: `Move ${v.name} to LFBridge trash?`, body: "This is recoverable — the file is moved to the trash folder, not erased.", confirmLabel: "Move to trash" }))) return;
     del.mutate();
   };
   const copyPath = () => {
@@ -870,8 +871,8 @@ function reportCompress(r: CompressResult): void {
 /** Convert a browser-incompatible video to the universal-safe H.264 MP4 target (codecs.mdx §5). Forces
  *  the H.264 codec regardless of the user's default video-compression preference, so the result plays in
  *  every browser and uploads to TikTok/X/YouTube/Instagram. Explicit-click + confirm (charter §6.1). */
-function runConvertOffer(v: EntityView): void {
-  if (!window.confirm(`Convert ${v.name} to H.264 MP4?\nThis re-encodes to a browser- and upload-friendly copy (same resolution); the original moves to LFBridge trash (recoverable).`)) return;
+async function runConvertOffer(v: EntityView): Promise<void> {
+  if (!(await confirmModal({ title: `Convert ${v.name} to H.264 MP4?`, body: "This re-encodes to a browser- and upload-friendly copy (same resolution); the original moves to LFBridge trash (recoverable).", confirmLabel: "Convert" }))) return;
   api.compressFile(v.path, { videoCodec: "h264" })
     .then(reportCompress)
     .catch((e: Error) => { clientLog.error("MediaViewer.convertFile", e); toast.error(e.message); });

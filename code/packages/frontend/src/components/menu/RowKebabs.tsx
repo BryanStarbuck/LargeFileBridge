@@ -25,7 +25,8 @@ import { HardDrive } from "lucide-react";
 import type { RepoRow, PeerRow, IpfsPinRow, StorageRow } from "@lfb/shared";
 import { api } from "@/api/client";
 import { ActionsKebab, type Action } from "./EntityMenu";
-import { runTranscribeTree } from "@/lib/transcribe";
+import { openTranscribeBatch } from "@/lib/batchPopup";
+import { confirmModal } from "@/lib/modals";
 import { clientLog } from "../../lib/clientLog.js";
 
 // Copy to clipboard with a toast — the shared "copy" action body.
@@ -140,11 +141,12 @@ export function RepoKebab({ repo }: { repo: RepoRow }) {
       },
     },
     {
-      id: "transcribe",
-      label: "Transcribe all files…",
-      group: "Work",
+      id: "create-transcriptions",
+      label: "Create Transcriptions",
+      group: "Create",
       icon: <Captions className="h-4 w-4" />,
-      onSelect: () => runTranscribeTree(repo.path, repo.name),
+      // Opens the unified batch popup (dialogs.mdx §5/§6) over the repo's working tree, scoped downward-only.
+      onSelect: () => openTranscribeBatch({ root: repo.path }),
     },
     {
       id: "toggle-pin",
@@ -201,9 +203,11 @@ export function RepoKebab({ repo }: { repo: RepoRow }) {
       icon: <Trash2 className="h-4 w-4" />,
       onSelect: async () => {
         if (
-          !window.confirm(
-            `Remove ${repo.name} from LargeFileBridge?\n\nThis unregisters the repo only. Your folder and every file on disk stay exactly where they are.`,
-          )
+          !(await confirmModal({
+            title: `Remove ${repo.name} from Large File Bridge?`,
+            body: "This unregisters the repo only. Your folder and every file on disk stay exactly where they are.",
+            confirmLabel: "Remove repo",
+          }))
         )
           return;
         try {
@@ -281,9 +285,11 @@ export function PeerKebab({ peer }: { peer: PeerRow }) {
       icon: <Trash2 className="h-4 w-4" />,
       onSelect: async () => {
         if (
-          !window.confirm(
-            `Forget ${peer.label}?\n\nLargeFileBridge stops expecting this computer. It removes nothing on that machine and no files here.`,
-          )
+          !(await confirmModal({
+            title: `Forget ${peer.label}?`,
+            body: "Large File Bridge stops expecting this computer. It removes nothing on that machine and no files here.",
+            confirmLabel: "Remove peer",
+          }))
         )
           return;
         try {
@@ -340,9 +346,11 @@ export function PinKebab({ pin }: { pin: IpfsPinRow }) {
     icon: <Ban className="h-4 w-4" />,
     onSelect: async () => {
       if (
-        !window.confirm(
-          "Unpin this CID from this computer?\n\nThis stops THIS machine serving it. It deletes no local file. Other computers that pin it are unaffected.",
-        )
+        !(await confirmModal({
+          title: "Unpin this CID from this computer?",
+          body: "This stops THIS machine serving it. It deletes no local file. Other computers that pin it are unaffected.",
+          confirmLabel: "Unpin",
+        }))
       )
         return;
       try {

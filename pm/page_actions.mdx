@@ -37,7 +37,30 @@ We adopt that exact look across **every page of this web app** so the action aff
 everywhere. The one difference from the sister page: that page identifies itself with tabs; **ours always
 shows the page title**, and the action-links row sits **immediately below it**.
 
+## 0.1 Second reversal — producing actions open the batch confirm popup (LOCKED)
+
+An earlier version of this spec had the two **producing** links — **Create Transcriptions** and **Create AI
+descriptions** — enqueue the work **on click** and show only a toast (Rules 1–3 ran silently on the server,
+[§1.3](#13-rule-3--background-queue-return-immediately) / [§2](#2-the-notification-locked-wording)). **That
+is superseded.** Per the product owner:
+
+> *"We want the 'Create Transcriptions' action to bring up the pop-up window that the 'Transcribable' metric
+> panel being clicked pops up on the View-one-repo page. We want 'Create AI descriptions' to also use the
+> great pop-up."*
+
+So clicking **Create Transcriptions** / **Create AI descriptions** now **opens the unified batch-confirm
+popup** ([dialogs.mdx §5](./dialogs.mdx)) — the **same** `WarningPopup` the `Transcribable` / `Describable`
+metric tile opens on the View-one-repo page ([task_tabs.mdx §5.1](./task_tabs.mdx)): the candidate list
+**checked by default**, a **Continue** into the checklist, uncheck anything, then a solid-blue **"Transcribe
+N files"** / **"Describe N files"** confirm. **This changes only WHERE the enqueue happens** — it moves from
+the link's click to the popup's Confirm. The three LOCKED rules below are otherwise **unchanged**: they now
+run at the popup's Apply. [dialogs.mdx](./dialogs.mdx) owns the popup contract and the scope→popup builders;
+this file owns the *row* that opens it.
+
 Siblings this builds on and does not repeat:
+
+* [dialogs.mdx](./dialogs.mdx) — **the unified batch-confirm popup** the producing links now open (§0.1),
+  and the app-wide "no native browser dialogs" rule the row's confirm modal already obeys (§3).
 
 * [menus.mdx](./menus.mdx) — the per-row and per-entity menus (the other two surfaces). The page
   action-links row is **not** a per-entity catalog; it never appears on a single-entity page.
@@ -134,7 +157,14 @@ Add-to-IPFS-all. (Transcribe/Describe are not gated by those flags — they don'
 Because a page action can add **many** items (a big repo can hold hundreds of media files), it **must not**
 run them inline in the request. The narrowed eligible set is handed to the **server-side background job
 queue** ([job_queue.mdx](./job_queue.mdx)); the endpoint **returns immediately** with the count that was
-enqueued, and the queue **drains in the background** with bounded concurrency. Each item, as it starts,
+enqueued, and the queue **drains in the background** with bounded concurrency.
+
+> **When the enqueue fires (§0.1).** For the two **producing** actions the enqueue is now triggered by the
+> **batch popup's Confirm** ([dialogs.mdx §5](./dialogs.mdx)), not by the link's click — the click opens the
+> popup (a plan/preview of the eligible files, [§5](#5-the-enqueue-rest-surface-plan-then-queue)), and the
+> popup's **"Transcribe/Describe N files"** button is where the eligible **checked** set is handed to this
+> queue. Everything below (return-immediately, background drain, one shared core-budgeted media-aware pool)
+> is identical — only the trigger moved from the click to the Confirm. Each item, as it starts,
 registers a progress-dock job (kind `transcribe` / `describe`, [webapp.mdx §11](./webapp.mdx)) so the user
 watches the batch drain live — even after navigating away, and even in another tab.
 
@@ -155,8 +185,10 @@ open for the single run; a **page action** never does — it **enqueues and retu
 
 ## 2. The notification (LOCKED wording)
 
-The instant a producing page action is clicked, LFBridge shows **one toast** stating how many files were
-queued — computed **after** Rules 1 + 2 (the eligible remainder), never the raw page count:
+The instant a producing page action's **batch popup is confirmed** (§0.1 — the popup opens on click; this
+toast fires on its **"Transcribe/Describe N files"** Confirm), LFBridge shows **one toast** stating how many
+files were queued — computed **after** Rules 1 + 2 (the eligible remainder = the checked set the user
+confirmed), never the raw page count:
 
 * **Create Transcriptions** → **"{N} files will have their Transcriptions created"**
   (equivalently phrased for one file: "1 file will have its Transcription created").
@@ -310,8 +342,10 @@ bar ([media_viewer.mdx](./media_viewer.mdx)), not this page row. (View-one-file'
 > confirm-gated offer** (§3, [menus.mdx §6.1](./menus.mdx)): the dialog *is* the confirm step
 > (charter: "Never add a `.gitignore` entry automatically").
 
-The producing actions are wired to the enqueue endpoints and toast the returned count in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createTranscriptions()` / `createDescriptions()` (call `api.transcribeEnqueue` / `api.describeEnqueue`, toast `willProcess`).
+The producing actions **open the batch popup** (§0.1, [dialogs.mdx §5–§6](./dialogs.mdx)) — they no longer
+enqueue-then-toast on click. The click resolves the scope and opens the popup; the popup's Confirm enqueues
+and toasts. Wired in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createTranscriptions()` / `createDescriptions()` (now call `openTranscribeBatch` / `openDescribeBatch` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts`, which fetch the `/plan` preview and open the popup whose Apply calls `api.transcribeEnqueue` / `api.describeEnqueue` and toasts `willProcess`).
 
 ### 4.1 "Show what could be transcribed" — a calc-engine action (LOCKED)
 
@@ -351,7 +385,9 @@ the queue (Rule 3):
 
 | Method + path | Body | What |
 | --- | --- | --- |
-| `POST /api/transcribe/enqueue` | `{ paths?: string[], root?: string, overwrite?: boolean }` | Plan + queue transcriptions. `paths` = the checked set; `root` = a directory/repo to walk recursively when nothing is checked. Returns the **plan**, not the results. |
+| `POST /api/transcribe/plan` | `{ paths?: string[], root?: string }` | **Preview only, nothing queued** ([dialogs.mdx §5.2](./dialogs.mdx)). Applies Rules 1+2 on the server and returns the eligible **candidate file list** (`{ files: {path, sizeBytes}[], considered, alreadyDone, unsupported }`) so the batch popup (§0.1) can list them checked-by-default. |
+| `POST /api/describe/plan` | `{ paths?: string[], root?: string, provider? }` | Same preview for AI descriptions. |
+| `POST /api/transcribe/enqueue` | `{ paths?: string[], root?: string, overwrite?: boolean }` | Plan + queue transcriptions — called by the **popup's Confirm** with the **checked** `paths`. `root` = a directory/repo to walk recursively when nothing is checked. Returns the **plan**, not the results. |
 | `POST /api/describe/enqueue` | `{ paths?: string[], root?: string, overwrite?: boolean, provider? }` | Same for AI descriptions. |
 
 Both return the **plan** immediately (no waiting for the work):
@@ -374,6 +410,9 @@ export interface EnqueuePlan {
 
 The enqueue planners (walk-or-take the set, drop already-done + unsupported, push the remainder onto the queue, return the plan) are implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `planTranscribe()` / `enqueueTranscribe()` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `planDescribe()` / `enqueueDescribe()`; both push through `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()`.
+
+The **plan/preview** endpoints (same Rules 1+2 walk, but return the candidate list instead of queuing — the batch popup's data source, [dialogs.mdx §5.2](./dialogs.mdx)) are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `previewTranscribe()` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `previewDescribe()`; routes `POST /plan` on `transcribe.router.ts` / `describe.router.ts`; client methods `api.transcribePlan` / `api.describePlan`.
 
 The routes are mounted on the existing feature routers:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.router.ts` — `POST /enqueue` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.router.ts` — `POST /enqueue`; API client methods `api.transcribeEnqueue` / `api.describeEnqueue` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts`.
@@ -410,7 +449,14 @@ The routes are mounted on the existing feature routers:
    git-ignores, or deletes without the user's explicit confirm in a small web modal.
 9. The visual matches the sister-app reference (`~/BGit/all/marketing/ai/code/ui/Q/page_processing_queue.js`
    `.q-actions`): blue links, leading icon, `·` separators, hover underline, red tint for destructive.
-10. **Show what could be transcribed (§4.1):** the **Storage detail** and **File System / directory** pages
+10a. **Producing actions open the batch popup (§0.1):** clicking **Create Transcriptions** / **Create AI
+    descriptions** opens the **same** unified batch-confirm popup the `Transcribable` / `Describable` metric
+    tile opens ([dialogs.mdx §5–§6](./dialogs.mdx)) — candidates checked by default, uncheck, a solid-blue
+    **"Transcribe/Describe N files"** confirm — **not** a fire-and-forget enqueue+toast and **never** a
+    `window.confirm`. The enqueue and the LOCKED toast (§2) fire on the popup's Confirm; Rules 1–3 and the
+    first-time-storage gate are unchanged (they run at Apply). The link fetches its candidate list from the
+    plan/preview endpoint (§5).
+11. **Show what could be transcribed (§4.1):** the **Storage detail** and **File System / directory** pages
     carry a **Show what could be transcribed** action-link that is a **calc-engine action, not a producing
     one** — it runs the [What-Can-Be-Transcribed Calc Engine](./transcribe_calc_engine.mdx) over the page's
     scope (opt-in, read-only, `HARD_SKIP`-walked, cancelable, no `willProcess` toast), writing a **transcribe
@@ -420,6 +466,15 @@ The routes are mounted on the existing feature routers:
   HUB spec for the THIRD action surface: the page action-links ROW rendered directly UNDER the page title
   (whole-page/checked-subset), distinct from menus.mdx's row ⋮ kebab (one row) and entity ⋮ more-menu (one
   entity) and the selection ⋮ bulk menu (decision on checked rows).
+
+  SECOND REVERSAL (§0.1, LOCKED): the two PRODUCING links (Create Transcriptions / Create AI descriptions)
+  no longer enqueue-on-click+toast — they now OPEN THE UNIFIED BATCH-CONFIRM POPUP (dialogs.mdx §5-§6), the
+  SAME WarningPopup the Transcribable/Describable metric tile opens (task_tabs §5.1). Only WHERE the enqueue
+  fires changed (link click → popup Confirm); Rules 1-3 + the storage-setup gate are unchanged (they run at
+  Apply). pageActions.ts createTranscriptions/createDescriptions call openTranscribeBatch/openDescribeBatch
+  (lib/batchPopup.ts), which fetch the NEW /plan preview endpoint and open the popup. NEW endpoints POST
+  /api/transcribe/plan + /api/describe/plan ({paths?|root?} → {files[],considered,alreadyDone,unsupported},
+  Rules 1+2, NOTHING queued) = previewTranscribe()/previewDescribe(). Toast fires on Confirm.
 
   DESIGN REVERSAL (§0, LOCKED): this REPLACES the earlier "Actions ▾" DROPDOWN. Page actions are now VISIBLE
   inline blue hyperlinks with a leading icon, matching the sister-app processing-queue .q-actions row

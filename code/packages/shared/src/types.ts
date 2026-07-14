@@ -818,6 +818,23 @@ export interface EnqueuePlan {
   setupPath: string | null;
 }
 
+// One eligible candidate file in a producing-action PREVIEW (dialogs.mdx §5.2 / page_actions.mdx §5).
+export interface PreviewPlanFile {
+  path: string; // absolute path
+  sizeBytes: number; // 0 when the file can't be stat-ed
+}
+
+// The PREVIEW plan a producing PAGE ACTION returns (dialogs.mdx §5.2): the same Rule-1 (scope) + Rule-2
+// (skip-already-done) narrowing as EnqueuePlan, but it QUEUES NOTHING — it returns the eligible candidate
+// FILE LIST so the unified batch-confirm popup can list them checked-by-default. `files` are the eligible
+// remainder (unsupported + already-done are dropped, only counted).
+export interface PreviewPlan {
+  files: PreviewPlanFile[]; // the eligible candidates (checked by default in the popup)
+  considered: number; // set size after Rule 1 (checked set, or the recursive walk)
+  alreadyDone: number; // dropped because the output already exists
+  unsupported: number; // dropped because not the right media kind
+}
+
 // ── Web session activity ping (sessions.mdx) ────────────────────────────────
 // Response to POST /api/sessions/activity. `newSession` is true when this ping STARTED a fresh web
 // session (a return after the 4h idle window); `autoPinTriggered` is true when that start was on a

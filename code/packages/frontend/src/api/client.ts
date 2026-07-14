@@ -85,6 +85,7 @@ import type {
   DescribeAiConfigPatch,
   AiCredentialsInfo,
   EnqueuePlan,
+  PreviewPlan,
   DecisionPolicyDoc,
   TodoBatchSummary,
   TodoBatchDetail,
@@ -300,6 +301,9 @@ export const api = {
   // or the recursive `root`; returns the plan immediately (willProcess = the toast count).
   transcribeEnqueue: (body: { paths?: string[]; root?: string; overwrite?: boolean }) =>
     unwrap<EnqueuePlan>(http.post("/transcribe/enqueue", body)),
+  // Preview-only (dialogs.mdx §5.2): the eligible candidate list under a scope, nothing queued — the batch popup's data source.
+  transcribePlan: (body: { paths?: string[]; root?: string; overwrite?: boolean }) =>
+    unwrap<PreviewPlan>(http.post("/transcribe/plan", body)),
   // Transcription ENGINE + heavyweight-model provisioning (transcribe_engine.mdx §3/§6).
   transcribeEngine: () => unwrap<TranscribeEngineStatus>(http.get("/transcribe/engine")),
   transcribeProvision: () => unwrap<TranscribeProvisionResult>(http.post("/transcribe/engine/provision", { approve: true })),
@@ -326,6 +330,9 @@ export const api = {
   // "Create AI descriptions" page action (page_actions.mdx §5): plan + background-queue; returns the plan.
   describeEnqueue: (body: { paths?: string[]; root?: string; overwrite?: boolean; provider?: "auto" | "gemini" | "grok" | "openai" }) =>
     unwrap<EnqueuePlan>(http.post("/describe/enqueue", body)),
+  // Preview-only (dialogs.mdx §5.2): the eligible candidate list under a scope, nothing queued.
+  describePlan: (body: { paths?: string[]; root?: string; overwrite?: boolean }) =>
+    unwrap<PreviewPlan>(http.post("/describe/plan", body)),
   describePrompt: (kind: DescribeKind) => unwrap<DescribePromptView>(http.get("/describe/prompt", { params: { kind } })),
   customizeDescribePrompt: (kind: DescribeKind) =>
     unwrap<DescribePromptView>(http.post("/describe/prompt/customize", { kind })),

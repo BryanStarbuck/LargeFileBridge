@@ -6,7 +6,7 @@
 // only (§7); reports truthfully per file (§6), and every non-success reaches error.err.
 import fs from "node:fs";
 import path from "node:path";
-import type { TranscribeResult, TranscribeBatchResult, TranscribeTools, TranscriptView, EnqueuePlan } from "@lfb/shared";
+import type { TranscribeResult, TranscribeBatchResult, TranscribeTools, TranscriptView, EnqueuePlan, PreviewPlan } from "@lfb/shared";
 import { mediaKindForName } from "@lfb/shared";
 import { Transcriber } from "../../tools/transcribe/Transcribe.js";
 import { transcribeWithEngine, canTranscribe as engineCanTranscribe } from "../../tools/transcribe/engine.js";
@@ -202,6 +202,42 @@ export function enqueueTranscribe(opts: { paths?: string[]; root?: string; overw
   const { queued } = enqueue(eligible.map((p) => ({ op: "transcribe", path: p, overwrite })));
   log.info("transcribe", `enqueue [${scopeLabel(opts)}]: ${candidates.length} considered → ${queued} queued (${alreadyDone} already done, ${unsupported} unsupported)`);
   return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued, willProcess: queued, needsSetup: false, setupPath: null };
+}
+
+/**
+ * PREVIEW the eligible transcription candidates for a scope WITHOUT queuing anything (dialogs.mdx §5.2).
+ * Same Rule-1 (scope) + Rule-2 (skip-already-done, drop unsupported) narrowing as `enqueueTranscribe`, but
+ * it returns the eligible candidate FILE LIST (path + size) so the unified batch-confirm popup can list them
+ * checked-by-default. First-time-setup files stay in the list (their wizard fires later, at the popup's
+ * Apply → enqueue). Nothing is ever written or queued here.
+ */
+export function previewTranscribe(opts: { paths?: string[]; root?: string; overwrite?: boolean }): PreviewPlan {
+  const overwrite = opts.overwrite ?? false;
+  const candidates = resolveCandidates(opts);
+  let alreadyDone = 0;
+  let unsupported = 0;
+  const files: PreviewPlan["files"] = [];
+  for (const abs of candidates) {
+    const name = path.basename(abs);
+    if (!mediaKindForName(name) || !engine.canTranscribe(name)) {
+      unsupported++;
+      continue;
+    }
+    const tp = resolveTranscriptPath(abs);
+    if (!overwrite && !tp.needsSetup && exists(tp.transcriptPath)) {
+      alreadyDone++;
+      continue;
+    }
+    let sizeBytes = 0;
+    try {
+      sizeBytes = fs.statSync(abs).size;
+    } catch {
+      /* size unknown — leave 0 */
+    }
+    files.push({ path: abs, sizeBytes });
+  }
+  log.info("transcribe", `preview [${scopeLabel(opts)}]: ${candidates.length} considered → ${files.length} candidates (${alreadyDone} already done, ${unsupported} unsupported)`);
+  return { files, considered: candidates.length, alreadyDone, unsupported };
 }
 
 /**
