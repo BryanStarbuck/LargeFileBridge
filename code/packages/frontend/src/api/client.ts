@@ -6,6 +6,8 @@ import type {
   FileRow,
   RepoSettings,
   GlobalSettings,
+  PersonalAccount,
+  PendingCompanyMapping,
   JobsPageData,
   PeerRow,
   DeviceRow,
@@ -161,9 +163,12 @@ export const api = {
   patchSettings: (patch: {
     bigFile?: { value: number; unit: SizeUnit };
     scannerRoots?: string[];
+    personalAccounts?: PersonalAccount[];
     ipfs?: Record<string, unknown>;
     performance?: { maxCoreFraction: number };
   }) => unwrap<GlobalSettings>(http.patch("/settings", patch)),
+  // Pending cross-member company-ownership mappings awaiting this member's review (repo_owner_propagation.mdx §4).
+  companyMappingsPending: () => unwrap<PendingCompanyMapping[]>(http.get("/company-mappings/pending")),
   allowList: () => unwrap<string[]>(http.get("/settings/allow-list")),
   setAllowList: (emails: string[]) =>
     unwrap<string[]>(http.patch("/settings/allow-list", { emails })),
@@ -302,6 +307,9 @@ export const api = {
   transcribeRemoveModel: () => unwrap<{ removed: boolean; freedBytes: number }>(http.post("/transcribe/engine/remove", {})),
   transcribeConsent: (decision: "approved" | "declined" | "use_fallback") =>
     unwrap<TranscribeEngineStatus>(http.post("/transcribe/engine/consent", { decision })),
+  // Set the preferred engine (transcribe_engine.mdx §6): auto (best available) or pin speech/mac/qwen.
+  transcribeSetEngine: (engine: "auto" | "speech" | "qwen" | "mac") =>
+    unwrap<TranscribeEngineStatus>(http.post("/transcribe/engine/choice", { engine })),
   // AI description (ai_description.mdx). Provider status, read an existing description, generate one (the
   // external vision call), and read/customize/save/reset the per-kind prompt files.
   describeProviders: () => unwrap<DescribeProvidersStatus>(http.get("/describe/providers")),
@@ -387,7 +395,12 @@ export const api = {
         ...(perRow ? { perRow } : {}),
       }),
     ),
-  transcribeScan: () => unwrap<TranscribeScanResult>(http.post("/todo/transcribe-scan", {})),
+  // No `scope` scans every storage; a `scope` (storage id or repo id) scans just that one storage
+  // (transcribe_calc_engine.mdx §1 — the storage-detail "Show what could be transcribed" action).
+  transcribeScan: (scope?: string) =>
+    unwrap<TranscribeScanResult>(
+      http.post(`/todo/transcribe-scan${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`, {}),
+    ),
 
   // Media viewer (media_viewer.mdx §2). grant → a short-lived same-origin URL the <img>/<video>
   // element loads (Range-capable); probe → best-effort container/codec/dimensions.

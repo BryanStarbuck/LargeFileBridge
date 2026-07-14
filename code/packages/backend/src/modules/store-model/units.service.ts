@@ -44,7 +44,7 @@ import {
 import { ensureDir } from "../../config/state-dir.js";
 import { getPeers } from "./peers.service.js";
 import { readLedger, foldLedger, type FoldedDecision } from "../storage/decisions.service.js";
-import { effectiveFlags } from "./config.service.js";
+import { effectiveFlags, getAppConfig } from "./config.service.js";
 import { log } from "../../shared/logging.js";
 
 export function repoIdFromPath(absPath: string): string {
@@ -190,7 +190,9 @@ export function unregisterRepo(folder: string): void {
  * single owner-composition seam used by computeRepoRow/computeRepoDetail and the repo-settings row.
  */
 export function ownerForRepoConfig(cfg: RepoUnitConfig): RepoOwner {
-  const owner = resolveRepoOwner(cfg);
+  // Thread the user's own forge accounts (repo_company_mapping.mdx §4) so a repo whose remote owner is one of
+  // them derives to Personal, not a company. Empty list ⇒ every known-forge owner still derives to a company.
+  const owner = resolveRepoOwner(cfg, getAppConfig().personal_accounts);
   if (owner.kind === "company" && owner.source === "manual" && owner.companyId) {
     try {
       const row = getStorageRow(owner.companyId);
@@ -234,8 +236,8 @@ export function computeRepoRow(folder: string): RepoRow {
     status: rollupStatus(cfg.pinned, counts, status, files),
     pinned: cfg.pinned,
     // Company/personal owner: honor the local owner_override (manual) else derive from the git remote (auto)
-    // (repo_company_mapping.mdx §5.2). No personal-accounts list is wired yet, so an unknown auto owner errs
-    // toward Personal per the conservative heuristic.
+    // (repo_company_mapping.mdx §5.2). ownerForRepoConfig threads the user's personal-accounts list so an
+    // owner that IS a personal account derives to Personal instead of a company (§4).
     owner: ownerForRepoConfig(cfg),
   };
 }

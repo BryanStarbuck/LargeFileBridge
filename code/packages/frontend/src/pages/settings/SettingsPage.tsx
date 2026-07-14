@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
-import type { GlobalSettings, SizeUnit, CompressMediaPrefs, CompressQuality, DescribeAiProviderConfig } from "@lfb/shared";
+import type { GlobalSettings, SizeUnit, PersonalAccount, CompressMediaPrefs, CompressQuality, DescribeAiProviderConfig } from "@lfb/shared";
 import { SIZE_UNITS, toBytes } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { CredentialsSetupCard } from "../../components/CredentialsSetupCard.js";
@@ -24,6 +24,7 @@ export function SettingsPage() {
   const [value, setValue] = useState(100);
   const [unit, setUnit] = useState<SizeUnit>("MB");
   const [roots, setRoots] = useState("");
+  const [personalAccts, setPersonalAccts] = useState(""); // one per line: "host/owner" or bare "owner"
   const [corePct, setCorePct] = useState(90); // parallelism knob (parallelization.mdx §4)
 
   useEffect(() => {
@@ -31,9 +32,25 @@ export function SettingsPage() {
       setValue(data.bigFile.display.value);
       setUnit(data.bigFile.display.unit);
       setRoots(data.scannerRoots.join("\n"));
+      setPersonalAccts(data.personalAccounts.map((a) => (a.host ? `${a.host}/${a.owner}` : a.owner)).join("\n"));
       setCorePct(Math.round(data.performance.maxCoreFraction * 100));
     }
   }, [data]);
+
+  // Parse the textarea into PersonalAccount[] (repo_company_mapping.mdx §4). A line "github.com/you" pins the
+  // host; a bare line "you" matches that owner on any known forge host.
+  const parsePersonalAccounts = (text: string): PersonalAccount[] =>
+    text
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((l) => {
+        const slash = l.indexOf("/");
+        return slash > 0
+          ? { host: l.slice(0, slash).trim(), owner: l.slice(slash + 1).trim() }
+          : { owner: l };
+      })
+      .filter((a) => a.owner.length > 0);
 
   const save = useMutation({
     mutationFn: (p: Parameters<typeof api.patchSettings>[0]) => api.patchSettings(p),
@@ -82,6 +99,17 @@ export function SettingsPage() {
           className="w-full rounded border border-[var(--lfb-border)] px-2 py-1.5 font-mono text-xs" />
         <button onClick={() => save.mutate({ scannerRoots: roots.split("\n").map((s) => s.trim()).filter(Boolean) })}
           className="mt-2 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white">Save roots</button>
+      </Section>
+
+      <Section
+        title="My forge accounts"
+        subtitle="Your own GitHub / GitLab / Bitbucket accounts. A repo whose remote is owned by one of these is treated as Personal — so your own repos aren't mislabeled as a company. One per line: “github.com/yourname” pins the host, or a bare “yourname” matches any forge."
+      >
+        <textarea value={personalAccts} onChange={(e) => setPersonalAccts(e.target.value)} rows={4}
+          placeholder={"github.com/BryanStarbuck\nmyusername"}
+          className="w-full rounded border border-[var(--lfb-border)] px-2 py-1.5 font-mono text-xs" />
+        <button onClick={() => save.mutate({ personalAccounts: parsePersonalAccounts(personalAccts) })}
+          className="mt-2 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white">Save accounts</button>
       </Section>
 
       <Section

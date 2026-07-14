@@ -67,6 +67,13 @@ export function TranscriptionSettingsSection() {
     },
     onError: (e: Error) => { clientLog.error("Transcription.remove", e); toast.error(e.message); },
   });
+  // Persist the engine choice (transcribe_engine.mdx §6). Re-reads engine state so "Active engine" reflects
+  // what `auto` resolved to (or the pinned engine) right away.
+  const setEngine = useMutation({
+    mutationFn: (engine: "auto" | "speech" | "qwen" | "mac") => api.transcribeSetEngine(engine),
+    onSuccess: () => { invalidate(); toast.success("Transcription engine updated."); },
+    onError: (e: Error) => { clientLog.error("Transcription.setEngine", e); toast.error(e.message); },
+  });
 
   if (!data) return <Section title="Transcription"><p className="text-sm text-black/50">Loading…</p></Section>;
 
@@ -164,16 +171,23 @@ export function TranscriptionSettingsSection() {
         </button>
       </div>
 
-      {/* Engine choice — READ-ONLY. There is no generic AppConfig save path here: api.patchSettings only
-          accepts bigFile/scannerRoots/ipfs/performance, so persisting `transcribe.engine` is a follow-up
-          (backend needs a PATCH endpoint for it — do NOT invent one). We only display the current setting. */}
+      {/* Engine choice (transcribe_engine.mdx §6): Auto (recommended) picks the best available for this
+          machine; the others pin a specific engine. Persisted via POST /api/transcribe/engine/choice →
+          transcribe.engine. "Active engine" above reflects what Auto resolved to (or the pinned engine). */}
       <div className="mt-3 text-sm text-black/70">
-        Engine choice:{" "}
-        <b>
-          {s.configured === "auto"
-            ? "Auto (picks the best available for this machine)"
-            : ENGINE_LABEL[s.configured]}
-        </b>
+        <label htmlFor="lfb-transcribe-engine" className="mr-2">Engine choice:</label>
+        <select
+          id="lfb-transcribe-engine"
+          value={s.configured}
+          disabled={setEngine.isPending}
+          onChange={(e) => setEngine.mutate(e.target.value as "auto" | "speech" | "qwen" | "mac")}
+          className="rounded-md border border-[var(--lfb-border)] px-2 py-1 text-sm disabled:opacity-50"
+        >
+          <option value="auto">Auto (recommended — best available for this machine)</option>
+          <option value="speech">Apple SpeechAnalyzer</option>
+          <option value="mac">Whisper Small</option>
+          <option value="qwen">Qwen3-ASR</option>
+        </select>
       </div>
 
       {/* Parallelism note (read-only) — batch transcription concurrency is auto-calibrated (§5); the knob

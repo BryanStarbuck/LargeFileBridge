@@ -34,6 +34,20 @@ export function StorageDetailPage() {
     onSuccess: (r) => { toast.success(`Analysis queued: ${r.outputs.join(", ")}`); qc.invalidateQueries({ queryKey: ["storage", storageId] }); },
     onError: (e: Error) => { clientLog.error("StorageDetail.analyze", e); toast.error(e.message); },
   });
+  // Scoped "Show what could be transcribed" (transcribe_calc_engine.mdx §1) — scans just THIS storage for
+  // transcribable-not-yet-transcribed media and writes its transcribe batch, surfaced on the To Do page.
+  const transcribeScan = useMutation({
+    mutationFn: () => api.transcribeScan(storageId),
+    onSuccess: (r) => {
+      toast.success(
+        r.candidates > 0
+          ? `Found ${r.candidates} file${r.candidates === 1 ? "" : "s"} to transcribe — see the To Do page`
+          : "Nothing left to transcribe in this storage — everything has a transcript",
+      );
+      qc.invalidateQueries({ queryKey: ["todo", "batches"] });
+    },
+    onError: (e: Error) => { clientLog.error("StorageDetail.transcribeScan", e); toast.error(e.message); },
+  });
 
   const s = data?.storage;
   const d = data?.descriptor;
@@ -43,6 +57,14 @@ export function StorageDetailPage() {
   const storageActions: Action[] = [
     ...producingActions(() => (s ? { root: s.root } : {})),
     compressAllVideos(s?.root),
+    {
+      id: "transcribe-scan",
+      label: transcribeScan.isPending ? "Looking…" : "Show what could be transcribed",
+      icon: <Captions className="h-3.5 w-3.5" />,
+      group: "Work",
+      disabled: transcribeScan.isPending,
+      onSelect: () => transcribeScan.mutate(),
+    },
     {
       id: "reindex",
       label: "Re-index files",

@@ -26,6 +26,7 @@ async function toGlobalSettings(): Promise<GlobalSettings> {
     },
     scannerRoots: c.scanner.roots,
     ignoreGlobs: c.scanner.ignore_globs,
+    personalAccounts: c.personal_accounts,
     ipfs: {
       apiAddr: c.ipfs.api_addr,
       gatewayAddr: c.ipfs.gateway_addr,
@@ -56,6 +57,8 @@ const SettingsPatch = z.object({
     .optional(),
   scannerRoots: z.array(z.string()).optional(),
   ignoreGlobs: z.array(z.string()).optional(),
+  // The user's own forge accounts (repo_company_mapping.mdx §4) — repos owned by these derive to Personal.
+  personalAccounts: z.array(z.object({ host: z.string().optional(), owner: z.string().min(1) })).optional(),
   // Parallelism knob (parallelization.mdx §4) — the mass-compute core fraction (0.01–1, default 0.9).
   performance: z.object({ maxCoreFraction: z.number().min(0.01).max(1) }).optional(),
   ipfs: z
@@ -81,6 +84,19 @@ settingsRouter.patch("/", async (req, res) => {
       }
       if (p.scannerRoots) c.scanner.roots = p.scannerRoots;
       if (p.ignoreGlobs) c.scanner.ignore_globs = p.ignoreGlobs;
+      if (p.personalAccounts) {
+        // Normalize: lowercase host, trim owner, drop blank owners, de-dup on host+owner.
+        const seen = new Set<string>();
+        c.personal_accounts = p.personalAccounts
+          .map((a) => ({ host: a.host?.trim().toLowerCase() || undefined, owner: a.owner.trim() }))
+          .filter((a) => a.owner.length > 0)
+          .filter((a) => {
+            const k = `${a.host ?? "*"}/${a.owner.toLowerCase()}`;
+            if (seen.has(k)) return false;
+            seen.add(k);
+            return true;
+          });
+      }
       if (p.performance) c.performance.max_core_fraction = p.performance.maxCoreFraction;
       if (p.ipfs) {
         if (p.ipfs.apiAddr !== undefined) c.ipfs.api_addr = p.ipfs.apiAddr;

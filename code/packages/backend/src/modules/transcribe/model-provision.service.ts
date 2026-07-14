@@ -239,6 +239,19 @@ export function removeModel(): { removed: boolean; freedBytes: number } {
   return { removed: true, freedBytes: freed };
 }
 
+/** Persist the user's engine choice from Settings → Transcription (transcribe_engine.mdx §6). `auto` lets
+ *  pickEngine resolve the best available for this machine; the others pin a specific engine. Returns fresh
+ *  readiness so the panel's "active engine" reflects the new selection immediately. */
+export async function setEngineChoice(
+  engine: "auto" | "speech" | "qwen" | "mac",
+): Promise<TranscribeEngineStatus> {
+  await updateAppConfig((c) => {
+    c.transcribe.engine = engine;
+    return c;
+  });
+  return describeReadiness();
+}
+
 /** Persist the user's consent decision from the popup (§3.2) so it does not nag again. */
 export async function recordConsent(decision: "approved" | "declined" | "use_fallback"): Promise<void> {
   try {

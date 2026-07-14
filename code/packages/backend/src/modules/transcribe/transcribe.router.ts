@@ -14,7 +14,7 @@ import {
   transcribeStorageById,
   enqueueTranscribe,
 } from "./transcribe.service.js";
-import { describeReadiness, provision, repair, removeModel, recordConsent } from "./model-provision.service.js";
+import { describeReadiness, provision, repair, removeModel, recordConsent, setEngineChoice } from "./model-provision.service.js";
 
 export const transcribeRouter = Router();
 transcribeRouter.use(requireAllowListed);
@@ -73,6 +73,19 @@ transcribeRouter.post("/engine/consent", async (req, res) => {
   try {
     await recordConsent(body.data.decision);
     res.json({ ok: true, data: describeReadiness() });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/transcribe/engine/choice — set the preferred engine (transcribe_engine.mdx §6). Persists
+// transcribe.engine (auto/speech/mac/qwen) and returns fresh readiness so the panel reflects the new active
+// engine. `auto` picks the best available for this machine; the others pin a specific engine.
+transcribeRouter.post("/engine/choice", async (req, res) => {
+  const body = z.object({ engine: z.enum(["auto", "speech", "qwen", "mac"]) }).safeParse(req.body ?? {});
+  if (!body.success) return res.status(400).json({ ok: false, error: "engine must be one of auto|speech|mac|qwen" });
+  try {
+    res.json({ ok: true, data: await setEngineChoice(body.data.engine) });
   } catch (e) {
     res.status(400).json({ ok: false, error: (e as Error).message });
   }

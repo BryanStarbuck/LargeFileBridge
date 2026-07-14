@@ -549,6 +549,14 @@ export interface ThresholdDisplay {
 }
 
 // ── Global settings surface (settings.mdx) ──────────────────────────────────
+// One of the user's own forge accounts (repo_company_mapping.mdx §4). `host` optional: absent ⇒ the owner
+// matches on any known forge host; present ⇒ only on that host. A repo whose remote owner matches derives to
+// Personal instead of a company.
+export interface PersonalAccount {
+  host?: string;
+  owner: string;
+}
+
 export interface GlobalSettings {
   bigFile: {
     thresholdBytes: number;
@@ -556,6 +564,8 @@ export interface GlobalSettings {
   };
   scannerRoots: string[];
   ignoreGlobs: string[];
+  // The user's own forge accounts (repo_company_mapping.mdx §4) — repos owned by these derive to Personal.
+  personalAccounts: PersonalAccount[];
   ipfs: {
     apiAddr: string;
     gatewayAddr: string;

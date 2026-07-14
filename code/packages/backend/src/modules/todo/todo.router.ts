@@ -10,7 +10,7 @@ import { currentUser } from "../auth/current-user.js";
 import { log } from "../../shared/logging.js";
 import { readAllBatches, readBatchById, dismissBatch } from "./todo-batches.store.js";
 import { recalcAll, importanceScore } from "./todo-batch.engine.js";
-import { scanAll as transcribeScanAll } from "./transcribe-scan.engine.js";
+import { scanAll as transcribeScanAll, scanStorage as transcribeScanStorage } from "./transcribe-scan.engine.js";
 import { folderForRepoId } from "../store-model/units.service.js";
 import { recordDecision } from "../storage/decisions.service.js";
 import { pullMissing } from "../pin/pin.service.js";
@@ -183,8 +183,15 @@ todoRouter.post("/batches/:id/apply", async (req, res) => {
   }
 });
 
-// POST /api/todo/transcribe-scan — the "Show what could be transcribed" action (to_do.mdx §7). Walks the
-// storages for untranscribed media and writes the transcribe batches, then returns the counts.
-todoRouter.post("/transcribe-scan", (_req, res) => {
-  res.json({ ok: true, data: transcribeScanAll() });
+// POST /api/todo/transcribe-scan[?scope=<id>] — the "Show what could be transcribed" action
+// (transcribe_calc_engine.mdx §1). With no `scope` it walks EVERY storage (recalc-and-replace); with a
+// `scope` (a storage id or repo id, from a storage-detail page) it scans only that one storage. Writes the
+// transcribe batches, then returns the counts. Async: silent-video probing (ffprobe) is awaited.
+todoRouter.post("/transcribe-scan", async (req, res) => {
+  const scope = typeof req.query.scope === "string" && req.query.scope.trim() ? req.query.scope.trim() : null;
+  try {
+    res.json({ ok: true, data: scope ? await transcribeScanStorage(scope) : await transcribeScanAll() });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
 });

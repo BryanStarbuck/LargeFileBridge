@@ -248,6 +248,12 @@ export const AppConfigSchema = z.object({
       follow_symlinks: z.boolean().default(false),
     })
     .prefault({}),
+  // The user's own forge accounts (repo_company_mapping.mdx §4). A repo whose git-remote owner matches one of
+  // these derives to PERSONAL, not a company — so your own github.com/<you>/<repo> isn't mislabeled as company
+  // "<you>". `host` is optional: when omitted the owner matches on any known forge host, else only on that host.
+  personal_accounts: z
+    .array(z.object({ host: z.string().optional(), owner: z.string() }))
+    .default([]),
   defaults: z
     .object({
       theme: z.enum(["system", "light", "dark"]).default("system"),

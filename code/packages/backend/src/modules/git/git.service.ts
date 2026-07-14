@@ -12,7 +12,7 @@
 // The engine never force-pushes and never touches a repo the user did not configure as a backbone
 // (git_backbone.mdx §7). An unresolvable merge or an auth failure is SURFACED (returned as a problem), never
 // clobbered — the caller keeps pinning over IPFS regardless. Node fs + simple-git only (charter).
-import type { RepoOwner } from "@lfb/shared";
+import type { RepoOwner, PersonalAccount } from "@lfb/shared";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -114,14 +114,21 @@ export function parseRemoteOwner(
  * `github.com/<owner>/<repo>` can't be told org-vs-user from the URL alone and we never call a forge API, so
  * this errs toward Personal and lets the user promote to a company.
  */
+/** Is `owner` on `host` one of the user's own forge accounts (repo_company_mapping.mdx §4)? Case-insensitive
+ *  owner match; an entry with no `host` matches any host, one with a `host` matches only that host. */
+export function isPersonalAccount(accounts: PersonalAccount[], host: string, owner: string): boolean {
+  const o = owner.toLowerCase();
+  const h = host.toLowerCase();
+  return accounts.some((a) => a.owner.toLowerCase() === o && (!a.host || a.host.toLowerCase() === h));
+}
+
 export function deriveOwnerForRemote(
   remote: string | null,
-  personalAccounts: string[] = [],
+  personalAccounts: PersonalAccount[] = [],
 ): RepoOwner {
   const parsed = parseRemoteOwner(remote);
-  const personalSet = new Set(personalAccounts.map((a) => a.toLowerCase()));
   const isCompany =
-    !!parsed && parsed.knownForge && !personalSet.has(parsed.owner.toLowerCase());
+    !!parsed && parsed.knownForge && !isPersonalAccount(personalAccounts, parsed.host, parsed.owner);
   if (isCompany && parsed) {
     return {
       kind: "company",
@@ -174,7 +181,7 @@ export function resolveRepoOwner(
     repo?: { remote?: string | null } | null;
     owner_override?: { kind: "personal" | "company"; company_id: string | null } | null;
   },
-  personalAccounts: string[] = [],
+  personalAccounts: PersonalAccount[] = [],
 ): RepoOwner {
   const remote = cfg.repo?.remote ?? null;
   const override = cfg.owner_override ?? null;
