@@ -21,9 +21,23 @@ export interface BatchScope {
   paths?: string[];
 }
 
-// ── The global popup bus (dialogs.mdx §5.3) ─────────────────────────────────────────────────────────
-type Listener = (def: WarningDef) => void;
+// ── The global popup bus (dialogs.mdx §5.3 + §5.4) ──────────────────────────────────────────────────
+// The bus carries THREE states so the ONE app-root host can show a spinner while a slow plan walk runs and
+// then swap to the real popup (dialogs.mdx §5.4 — the "Opening window…" spinner):
+//   • { kind: "loading" } — an animated-spinner "Opening window…" modal shown SYNCHRONOUSLY, before the
+//     /plan request is even awaited, so a multi-minute tree walk (~2 min for ~2k files) never looks hung.
+//   • { kind: "popup" }   — the real batch WarningPopup once the plan resolves.
+//   • null                — nothing on screen (closed / cancelled / errored).
+export type BatchPopupState =
+  | { kind: "loading"; headline: string; sub?: string; onCancel: () => void }
+  | { kind: "popup"; def: WarningDef }
+  | null;
+type Listener = (state: BatchPopupState) => void;
 let listener: Listener | null = null;
+// A monotonically-increasing generation token. Every scope-walking open takes the NEXT gen; if the user
+// cancels the spinner (or a newer open starts) the gen advances, so a stale in-flight plan result that
+// arrives afterwards is a NO-OP and never pops a window the user already dismissed (dialogs.mdx §5.4).
+let openGen = 0;
 
 /** BatchPopupHost registers here; returns an unsubscribe for its effect cleanup. */
 export function onBatchPopupRequested(cb: Listener): () => void {
@@ -33,9 +47,39 @@ export function onBatchPopupRequested(cb: Listener): () => void {
   };
 }
 
-/** Open the app-root batch popup with a built WarningDef. No-op if the host isn't mounted (shouldn't happen). */
-export function requestBatchPopup(def: WarningDef): void {
-  listener?.(def);
+/** Show the "Opening window…" spinner and claim a fresh generation token for this open (dialogs.mdx §5.4). */
+function beginBatchOpen(headline: string, sub: string): number {
+  const gen = ++openGen;
+  listener?.({
+    kind: "loading",
+    headline,
+    sub,
+    // Cancel/Esc/backdrop: advance the gen so the pending plan result becomes a no-op, and clear the host.
+    onCancel: () => {
+      openGen++;
+      listener?.(null);
+    },
+  });
+  return gen;
+}
+
+/** True once a newer open started or the user cancelled — the caller must then abandon its result. */
+function isStale(gen: number): boolean {
+  return gen !== openGen;
+}
+
+/** Open the app-root batch popup with a built WarningDef. Ignored if this open was superseded/cancelled
+ *  (stale gen). Passing no gen (e.g. a caller that didn't walk a tree) always opens. */
+export function requestBatchPopup(def: WarningDef, gen?: number): void {
+  if (gen != null && isStale(gen)) return;
+  listener?.({ kind: "popup", def });
+}
+
+/** Close whatever the batch host is showing (spinner or popup). Ignored if superseded (stale gen). */
+export function closeBatchPopup(gen?: number): void {
+  if (gen != null && isStale(gen)) return;
+  openGen++;
+  listener?.(null);
 }
 
 function plural(n: number): string {
@@ -53,6 +97,14 @@ function basename(p: string): string {
   return p.split("/").pop() || p;
 }
 
+/** The one-line sub under "Opening window…" (dialogs.mdx §5.4). A recursive `root` walk is the slow case
+ *  (it traverses the whole subtree), so it says so; a checked `paths` set is already resolved, so it's brief. */
+function openingSub(scope: BatchScope, noun: string): string {
+  return scope.root
+    ? `Scanning this folder for ${noun} — large folders can take a moment.`
+    : `Preparing ${noun}…`;
+}
+
 // ── Transcribe ──────────────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -62,11 +114,15 @@ function basename(p: string): string {
  * checked paths (the SAME apply the metric tile uses). An empty preview opens the all-clear popup.
  */
 export async function openTranscribeBatch(scope: BatchScope): Promise<void> {
+  // dialogs.mdx §5.4 — show the "Opening window…" spinner SYNCHRONOUSLY before awaiting the (possibly
+  // multi-minute) tree walk, so the app never looks hung; the gen guards a cancel/supersede.
+  const gen = beginBatchOpen("Opening window…", openingSub(scope, "audio & video files"));
   let plan: PreviewPlan;
   try {
     plan = await api.transcribePlan(scope);
   } catch (e) {
     clientLog.error("batchPopup.transcribePlan", e);
+    closeBatchPopup(gen);
     toast.error(e instanceof Error ? e.message : "Could not scan for transcribable files");
     return;
   }
@@ -136,7 +192,7 @@ export async function openTranscribeBatch(scope: BatchScope): Promise<void> {
       },
     },
   };
-  requestBatchPopup(def);
+  requestBatchPopup(def, gen);
 }
 
 // ── Describe ──────────────────────────────────────────────────────────────────────────────────────
@@ -146,11 +202,14 @@ export async function openTranscribeBatch(scope: BatchScope): Promise<void> {
  * provider/model gate is enforced by the enqueue path itself; a missing key surfaces its own toast/dialog.
  */
 export async function openDescribeBatch(scope: BatchScope): Promise<void> {
+  // dialogs.mdx §5.4 — spinner first, then the walk (mirror of openTranscribeBatch).
+  const gen = beginBatchOpen("Opening window…", openingSub(scope, "images & videos"));
   let plan: PreviewPlan;
   try {
     plan = await api.describePlan(scope);
   } catch (e) {
     clientLog.error("batchPopup.describePlan", e);
+    closeBatchPopup(gen);
     toast.error(e instanceof Error ? e.message : "Could not scan for describable files");
     return;
   }
@@ -212,5 +271,5 @@ export async function openDescribeBatch(scope: BatchScope): Promise<void> {
       },
     },
   };
-  requestBatchPopup(def);
+  requestBatchPopup(def, gen);
 }

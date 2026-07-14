@@ -445,8 +445,8 @@ page-action rules, mirroring **Create Transcriptions** ([Transcribe.mdx §2.5](.
 * **Skip-already-done** — files that **already have a `done` description** (§2.1) and non-image/-video
   files are dropped **before** queuing ([page_actions.mdx §1.2](./page_actions.mdx)).
 * **Background queue** — the eligible remainder is pushed onto the server-side queue
-  ([job_queue.mdx](./job_queue.mdx), op `describe`, cap 3) and the request **returns immediately**; each
-  file surfaces a `describe` dock card as it runs.
+  ([job_queue.mdx](./job_queue.mdx), op `describe`, **generously parallel** — see §12.5) and the request
+  **returns immediately**; each file surfaces a `describe` dock card as it runs.
 
 One toast states the eligible count: **"{N} files will have their AI descriptions created"** (or **"All
 {M} files already have descriptions — nothing to do"**). `N` is the `willProcess` figure the enqueue
@@ -773,8 +773,11 @@ lists are long:
    user **confirmed**, the flow **resumes into the descriptions** once a key is added (§10.1 replay). If a
    key is already present the gate is skipped.
 5. **Async + Processing.** The descriptions run as **background `describe` jobs**
-   ([job_queue.mdx](./job_queue.mdx), cap 3) watchable on the **[Processing](./processing.mdx)** page — which
-   run in parallel, which are pending, which failed. The popup can be closed immediately.
+   ([job_queue.mdx](./job_queue.mdx), **generously parallel** — §12.5) watchable on the
+   **[Processing](./processing.mdx)** page — which run in parallel, which are pending, which failed. The popup
+   can be closed immediately. The Confirm Apply commits by **enqueuing** these jobs and returning at once —
+   **never** by describing the set inline in one request (**§12.4**, LOCKED); an inline Apply would surface
+   **nothing** on Processing.
 6. **Self-clearing.** As each file completes it gains its `.ai_description` (its row icon toggles to solid
    **blue** "done"), and it drops out of the next [describe_calc_engine.mdx](./describe_calc_engine.mdx) run.
 
@@ -798,6 +801,85 @@ the ranking and the button; this file only names the describe entry in it.
 
 The describe recommendation's contribution to the header primary is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — the `describable` entry in `topRecommendation()` (worst-first, alongside the `transcribable` entry), consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (`topRec`).
+
+### 12.4 The popup Apply ENQUEUES — never runs descriptions inline (LOCKED)
+
+Every describe popup Confirm — the **Describable metric tile** (§12.2), the blue **"Describe ›" header
+primary** (§12.3), and the unified batch popup ([dialogs.mdx §5](./dialogs.mdx)) — commits by **enqueuing
+the checked files onto the background queue** (`POST /api/describe/enqueue`, op `describe`,
+[job_queue.mdx](./job_queue.mdx)) and **returning immediately**. It is the exact mirror of the transcribe
+popup's Apply, which enqueues via `/api/transcribe/enqueue`.
+
+**The Apply MUST NOT call the inline batch endpoint (`POST /api/describe/batch`, `api.describeBatch`).**
+That inline path describes **every file inside ONE HTTP request** that stays open for the whole run —
+which on a **long list**:
+
+* **never surfaces on the Processing page** — no per-file `describe` job, no Pending/Running/Failed rows,
+  no dock cards ([processing.mdx](./processing.mdx)), because nothing is ever pushed onto the queue; the
+  user sees **nothing happen** even though a request is grinding in the background; **and**
+* **dies on a network blip or a dev restart**, losing the whole batch, since it is one long-lived request
+  rather than N independent queued jobs.
+
+This is the exact hazard the transcribe Apply calls out in code (*"We must NOT run `api.transcribeBatch`
+here … enqueue plans + queues on the server and returns immediately; each file then surfaces its own
+`describe` job on the Processing page / dock"*). The describe Apply obeys the same rule. `describeEnqueue`
+also returns `needsSetup` when no Personal storage owns the files, which routes to the storage wizard
+rather than silently queuing nothing. The inline `/api/describe/batch` endpoint still exists for a **single
+deliberate** batch call, but **no bulk popup Apply may use it**.
+
+The metric-tile / header-primary describe popup's Apply enqueues (never inline) in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildDescribeWarning()` `apply` (calls `api.describeEnqueue({ paths: checkedPaths })`, mirror of `buildTranscribeWarning()` which calls `api.transcribeEnqueue`); the unified batch popup's Apply in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `openDescribeBatch()` (also `api.describeEnqueue`). The server enqueue is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `enqueueDescribe()` → `jobqueue.service.ts` `enqueue()` (op `describe`).
+
+### 12.5 An already-described file is NEVER re-offered and NEVER re-described (LOCKED)
+
+This is the **"1,953 files" scenario** the product owner called out: in the File System browser the user
+opens a directory's **`⋮` → Create AI descriptions**, and the popup reports a large number of candidates
+(e.g. `1953`). **Every file that already has a `done` `.ai_description` must be dropped before the popup
+ever lists it** — so the candidate list is *only* the not-yet-described files, every listed row is checked
+by default with a clear conscience, and pressing **"Describe N files"** can **never re-run a description
+that already exists**. Confirming the popup a second time on the same tree re-scans and finds **fewer** (or
+zero) candidates, never re-processes the ones already done.
+
+The skip is enforced **on the server, in both the preview and the enqueue**, so the popup's list and the
+later commit can never disagree:
+
+* **The plan/preview drops already-done** ([dialogs.mdx §5.2](./dialogs.mdx)): the walk collects the
+  scope's image/video files, then **drops any file that already reads back a `done` description** (and any
+  non-image/-video file) **before** returning the candidate list — so an already-described file is **never
+  a checked row** in the popup.
+* **The enqueue drops already-done again** (§6 skip-already-done, [page_actions.mdx §1.2](./page_actions.mdx)):
+  even if a description was written **between** the preview and the Confirm (another computer's pull, a
+  concurrent run), the enqueue re-checks and **queues only the still-missing files** — the `alreadyDone`
+  count rises and those files are silently skipped, never re-described.
+* **Overwrite is the only exception.** Re-describing an already-done file happens **only** when the user
+  explicitly asks to overwrite (`overwrite: true`) — never as a side effect of confirming the batch popup.
+
+Both the preview and the enqueue apply the identical drop-already-described filter in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` —
+`previewDescribe()` and `enqueueDescribe()` (the `if (!overwrite && !dp.needsSetup && readDescription(abs)) { alreadyDone++; continue; }` guard in each).
+
+### 12.6 Describe is GENEROUSLY parallel — no hardware bottleneck (LOCKED)
+
+Transcription and compression are **local CPU/GPU** work: Whisper and ffmpeg saturate cores and RAM, so
+their queue caps are **core-budgeted** and deliberately narrow ([parallelization.mdx §3](./parallelization.mdx)).
+**AI description is different.** Its heavy wait is a **vision-API network round-trip**, not local compute —
+the machine sits idle while the provider thinks. So describe is **not** core-bound and **should fan much
+wider** than transcribe/compress: a large batch overlaps **many** in-flight uploads at once instead of
+trickling a few files through a core budget.
+
+* The describe queue bucket runs at a **fixed, generous concurrency** — **default ~24**, tunable via the
+  `LFB_DESCRIBE_CONCURRENCY` env var — **independent of the core budget**, because it is bounded by network
+  latency and the provider's rate limits, not by CPU.
+* This is the one bucket where "use more parallelism" is safe even on a small laptop: overlapping I/O costs
+  nothing in cores. The only real ceiling is the **provider's rate limit** (a burst of `429`s surfaces as
+  failing dock cards the user can retry), which is why the number is generous-but-bounded and env-tunable
+  rather than unbounded.
+* Transcribe and compress keep their narrow core-budgeted caps — **only** describe fans wide.
+
+The per-bucket concurrency (describe = the generous fixed cap, transcribe/compress = core-budgeted) is set in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` —
+`DESCRIBE_CONCURRENCY` (env-overridable) returned by `capFor()` for the `describe` bucket, alongside the
+core-budgeted `transcribe` / `compress:image` / `compress:video` caps. Policy: [parallelization.mdx §3](./parallelization.mdx).
 
 ---
 

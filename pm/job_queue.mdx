@@ -101,7 +101,7 @@ The `compress` op is **media-aware** because the two media kinds have opposite t
 | `compress:image` | **wide** — `budget` (≈ 90% of cores) | **1** | oxipng/cwebp/mozjpeg/magick are ~single-threaded per file — one job per core saturates the box. |
 | `compress:video` | **narrow** — `floor(budget / videoThreads)` (`videoThreads` default 4) | **`videoThreads`** | ffmpeg is internally multi-threaded; a few thread-capped jobs fill the budget without cores² thrash. |
 | `transcribe` | **narrow** — `floor(budget / whisperThreads)` (min 1) | whisper-internal | Whisper is CPU/GPU-heavy and multi-threaded; a couple saturate the machine. |
-| `describe` | fixed **≈ 4–6** (network, not core-bound) | — | The heavy wait is a vision-API round-trip, not local CPU — overlap I/O, don't burn cores. |
+| `describe` | fixed **generous — default ~24** (`LFB_DESCRIBE_CONCURRENCY`; network, not core-bound) | — | The heavy wait is a vision-API round-trip, not local CPU — **no hardware bottleneck**, so describe fans **much wider** than transcribe/compress (overlap many uploads, don't burn cores). Only ceiling is the provider's rate limit ([ai_description.mdx §12.6](./ai_description.mdx)). |
 
 * **Anti-oversubscription (LOCKED, [parallelization.mdx §2](./parallelization.mdx)).** For every bucket
   `concurrentJobs × threadsPerJob ≈ budget`, **never `cores²`**. Image jobs fan wide at 1 thread each; video
@@ -259,8 +259,9 @@ The queue is **in-memory only**, exactly like the job registry ([webapp.mdx §12
    - CORE-BUDGETED, MEDIA-AWARE worker loops (parallelization.mdx): mass-compute budget = round(cores ×
      max_core_fraction), default 0.9 (~90% of cores). compress splits into buckets compress:image (WIDE =
      budget, 1 thread/job) and compress:video (NARROW = floor(budget/videoThreads), threads capped via
-     ffmpeg -threads); transcribe narrow (floor(budget/whisperThreads)); describe network-fixed ~4–6 (not
-     core-bound). Anti-oversubscription: concurrentJobs × threadsPerJob ≈ budget, NEVER cores². One-off
+     ffmpeg -threads); transcribe narrow (floor(budget/whisperThreads)); describe network-fixed GENEROUS
+     default ~24 via LFB_DESCRIBE_CONCURRENCY (not core-bound — no hardware bottleneck, fans WIDE,
+     ai_description.mdx §12.6). Anti-oversubscription: concurrentJobs × threadsPerJob ≈ budget, NEVER cores². One-off
      single-file compress passes NO thread cap (may use all cores). Caps read LIVE at admission (Settings
      knob effective next task, no restart). Task runs by calling transcribeOne/describeOne/compressFile
      (passed the threads cap) — those already track() a registry job => started item = live dock card.

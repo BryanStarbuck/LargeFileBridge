@@ -26,6 +26,12 @@ registerAuthBridge(
   () => authCore.load(),
 );
 
+// Proactively re-mint the 15-min Bearer ~30s before it expires so an open tab never has to discover
+// expiry via a failed request. Without this the SDK only re-mints reactively (axios catches a 401,
+// reloads the session, and retries) — one stuttered call per 15 min, the "lots of timeouts" symptom.
+// The session cookie also rolls forward on each mint, so an actively-used tab keeps its login alive.
+authCore.enableAutoRefresh();
+
 // Kick off the Google sign-in redirect. redirectUrl is the SPA landing that finishes the handshake
 // (/sso-callback); redirectUrlComplete is where we end up afterward. The SDK expands both to ABSOLUTE
 // SPA-origin URLs, which the backend allowlists (allowedRedirectOrigins) so the callback lands back

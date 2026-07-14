@@ -178,6 +178,19 @@ Left_Nav:
         #     route: "/processing"
         #     order: 10   # tail of the list; runtime-injected, not statically rendered
 
+      # EXTERNAL PRODUCT LINKS (pm/left_bar.mdx §4.2). A small set of OUTBOUND links to our other
+      # products, shown in the space BETWEEN the bottom of the top nav list and the account slot, evenly
+      # spaced/centered. Each opens in a NEW browser tab (target=_blank, rel=noopener) — it navigates to an
+      # external site, not an in-app route. These are the ONLY nav entries that leave the app. Add/remove a
+      # product link here (content source of truth); Sidebar.tsx renders them from this list.
+      external_links:
+        - id: jfk_social
+          label: "JFK Social.com"
+          url: "https://JFKSocial.com/"
+        - id: act3_filmmaking
+          label: "ACT 3 Filmmaking"
+          url: "https://ACT3ai.com/"
+
       # Footer: account block (avatar/name/Google email) -> popup menu (expands UP).
       footer:
         - id: account_block

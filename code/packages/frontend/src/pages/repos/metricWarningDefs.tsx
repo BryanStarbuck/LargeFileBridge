@@ -308,8 +308,22 @@ export function buildDescribeWarning(detail: RepoDetail, repoId: string): Warnin
         doneLabel: (_sel, count) => `${count} file${count === 1 ? "" : "s"} queued to describe`,
         invalidate: [["repo", repoId]],
       },
+      // BACKGROUND-ENQUEUED (ai_description.mdx §12.4, mirror of buildTranscribeWarning above). We must NOT
+      // run api.describeBatch here: that describes every file inline inside ONE HTTP request, which stays
+      // open for minutes on a long list, dies on a network blip / dev restart, and NEVER surfaces per-file
+      // rows on the Processing page (the reported "AI descriptions don't appear in Processing" bug).
+      // describeEnqueue plans + queues on the server (op `describe`) and returns immediately; each file then
+      // surfaces its own `describe` job on the Processing page / dock (job_queue.mdx §3, processing.mdx §4).
       apply: async (_sel, checkedPaths) => {
-        await api.describeBatch(checkedPaths);
+        try {
+          const plan = await api.describeEnqueue({ paths: checkedPaths });
+          if (plan.needsSetup) {
+            toast.error("Set up Personal storage first — Settings → Storages");
+          }
+        } catch (e) {
+          clientLog.error("describe.enqueue", e);
+          toast.error(e instanceof Error ? e.message : "Could not queue AI descriptions");
+        }
       },
     },
   };

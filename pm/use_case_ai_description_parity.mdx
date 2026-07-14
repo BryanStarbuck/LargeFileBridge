@@ -132,10 +132,27 @@ vision provider"* — honest about the one network path, [ai_description.mdx §7
 offers the fix (**Create AI descriptions**, §6). A **Described** count of 0 with nothing describable renders
 the reassuring **green-zero** tile, exactly as Transcribe's tiles do.
 
+**What LFB does on Confirm — enqueues, never inline.** Pressing the popup's solid-blue **"Describe N files"**
+**enqueues** the checked files onto the background queue (op `describe`) and returns immediately, so each
+file appears on the [Processing](./processing.mdx) page — the exact mirror of the Transcribable popup's
+Confirm. It must **not** describe the set inline in one HTTP request; an inline Apply surfaces **nothing** on
+Processing and dies on a long list or a network blip ([ai_description.mdx §12.4](./ai_description.mdx)).
+
 **What we double-check (Step 4):**
 * The **Describable** / **Described** tiles mirror **Transcribable** / **Transcribed**; clicking Describable
   opens the **same** educate-and-fix popup surface (no separate banner), health-tinted when > 0 and
   green-zero when 0.
+* The popup's **Confirm enqueues** (op `describe`, background queue) and the files then appear on the
+  **Processing** page — never an inline one-request run ([ai_description.mdx §12.4](./ai_description.mdx)).
+* **Already-described files are never re-offered or re-processed.** Both the plan preview and the enqueue
+  drop any file that already has a `done` description, so a big directory's popup (e.g. the **1,953-file**
+  case) lists **only** the not-yet-described files, and confirming can never re-run an existing description
+  ([ai_description.mdx §12.5](./ai_description.mdx)).
+* **Describe fans wide.** Because describe waits on a network round-trip (no hardware bottleneck), the queue
+  runs it at a **generous** concurrency (default ~24, not core-bound) — far wider than transcribe/compress
+  ([ai_description.mdx §12.6](./ai_description.mdx), [parallelization.mdx §3](./parallelization.mdx)).
+* **A slow open never looks hung.** Opening the popup over a large directory shows an **"Opening window…"**
+  spinner while the tree is walked, then swaps to the candidate list ([dialogs.mdx §5.4](./dialogs.mdx)).
 
 ---
 

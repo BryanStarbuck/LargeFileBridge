@@ -224,6 +224,29 @@ export function Sidebar({ user }: { user: CurrentUser }) {
         )}
       </nav>
 
+      {/* External product links (left_bar.mdx §4.2): outbound links to our other products, in the space
+          between the bottom of the nav list and the account slot, evenly spaced + centered. Each opens in a
+          NEW browser tab (target=_blank, rel=noopener) — the ONLY bar entries that leave the app. Data-driven
+          from left_bar.yaml `external_links`; an empty list renders nothing. Not part of the active-route
+          machinery — they never highlight as active. */}
+      {leftBar.externalLinks.length > 0 && (
+        <div className="border-t px-2 py-1.5" style={{ borderColor: "var(--lfb-border)" }}>
+          {leftBar.externalLinks.map((link) => (
+            <a
+              key={link.id}
+              href={link.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={`${link.label} — opens in a new tab`}
+              className="mx-1 my-0.5 flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm text-black hover:bg-slate-100"
+            >
+              <span>{link.label}</span>
+              <NavIcon name="ExternalLink" className="h-3.5 w-3.5 text-black/40" />
+            </a>
+          ))}
+        </div>
+      )}
+
       {/* Non-intrusive hover-info panel (left_bar.mdx §4.1 / non_intrusive_tooltip.mdx): a FIXED block of
           always-white space (~two nav-item rows tall) reserved between the nav list and the account slot.
           Because nav is flex-1 and this block + the account slot are fixed-height siblings, the space is

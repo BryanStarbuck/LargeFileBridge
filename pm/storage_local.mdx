@@ -840,6 +840,14 @@ Serving the non-secret `credentialsFile` block (`GET /api/health/auth-config`) a
 
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/health/health.router.ts` — the `GET /auth-config` route (via `authConfig()`), rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/CredentialsSetupCard.tsx` — `CredentialsSetupCard` component.
 
+> **Now authoritative in [authentication.mdx](./authentication.mdx).** The full auth flow, the
+> restart/re-login root cause, and the **implemented** fix (the boot gate now shows "Reconnecting…"
+> instead of the sign-in page while the backend is merely restarting, and refreshes the Bearer
+> proactively) live in that dedicated spec. §10 / §10.1 here remain the on-disk-layout reference; read
+> authentication.mdx §5–§6 for the fix. One correction carried there: the **16-port drift band is NOT a
+> cookie-loss cause** — cookies are host-only and not port-scoped, so a port change within `localhost`
+> keeps the cookie; the band only affects the sign-in redirect target.
+
 ### 10.1 Why a restart can STILL force re-login (client-side causes) — and the fixes (LOCKED)
 
 The server-side persistence above is necessary but **not sufficient**. On this install the two "usual

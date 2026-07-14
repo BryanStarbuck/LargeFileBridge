@@ -96,7 +96,7 @@ to the spec that owns the detail.
 | **Compress inside — images** ([compression.mdx §12](./compression.mdx)) | **mass-compute** | **wide**: `budget` jobs, **1 thread each** | oxipng/cwebp/mozjpeg/magick are ~single-threaded per file — one job per core. |
 | **Compress inside — video** ([compression.mdx](./compression.mdx)) | **mass-compute** | **narrow**: `floor(budget / videoThreads)` jobs, **`videoThreads` each** (default 4) | ffmpeg is internally multi-threaded; a few capped jobs fill the budget without cores² thrash. |
 | **Batch transcribe** ([transcribe_engine.mdx §5](./transcribe_engine.mdx)) | **mass-compute** | **narrow + RAM/GPU-clamped**: `clamp(1, floor(budget / whisperThreads), floor(usableRAM / modelRamPerJob), gpuStreams)` | whisper-large is multi-threaded **and** multi-GB per instance; the extra RAM/GPU clamp keeps a low-power box at **1** and a ~24-core/big-RAM box at **several** — never OOM. A machine that can't hold one instance routes to the Mac fallback. |
-| **Batch describe** ([ai_description.mdx](./ai_description.mdx)) | **network** (not core-bound) | fixed small (≈4–6) | The heavy wait is a vision-API round-trip, not local CPU; overlap I/O, don't burn cores. |
+| **Batch describe** ([ai_description.mdx §12.6](./ai_description.mdx)) | **network** (not core-bound) | fixed **generous** (default **~24**, `LFB_DESCRIBE_CONCURRENCY`) | The heavy wait is a vision-API round-trip, not local CPU — describe has **no hardware bottleneck**, so it fans **much wider** than transcribe/compress: overlap many uploads, don't burn cores. The only ceiling is the provider's rate limit, so the number is generous-but-bounded and env-tunable. |
 | **Storage fingerprint / index** ([storages.mdx §4.1](./storages.mdx)) | **responsive** | **wide** over files | head+tail byte reads + hash are I/O-ish; parallelize but keep the app live. |
 | **Scan — repo units** ([scan.mdx](./scan.mdx)) | **responsive** | **wide** over units | independent stat-only walks; run many units at once, leave 2 cores for HTTP. |
 | **Pin pass — units × files** ([pin_process.mdx §4](./pin_process.mdx)) | **responsive** | two levels, one shared limiter | already shipped (P-23); IPFS + the app must stay responsive. |
@@ -168,9 +168,10 @@ The same parallel queue backs the page-level **"Compress videos / Compress image
    `ffmpeg -threads` cap; a **one-off single-file** compress/stream passes **no** cap and may use all cores.
 4. **The map (§3):** the queue's `compress` op is **media-aware** (image vs video budgets); transcribe is
    mass-compute-narrow **and additionally RAM/GPU-clamped** so a low-power box runs **1** and a big box runs
-   **several** ([transcribe_engine.mdx §5](./transcribe_engine.mdx)); describe is network-parallel (not
-   core-bound); fingerprint/scan use the responsive budget; the shipped pin pass is the responsive-budget
-   reference consumer.
+   **several** ([transcribe_engine.mdx §5](./transcribe_engine.mdx)); describe is network-parallel and
+   **fans wide** (a generous fixed cap, default ~24 via `LFB_DESCRIBE_CONCURRENCY`, **not** core-bound — no
+   hardware bottleneck, [ai_description.mdx §12.6](./ai_description.mdx)); fingerprint/scan use the responsive
+   budget; the shipped pin pass is the responsive-budget reference consumer.
 5. **The knob (§4):** `performance.max_core_fraction` (default 0.9) exists in the config schema, is read live
    by `coreBudget()`, and is editable in Settings with the resolved core count shown.
 6. **The flow (§5):** the triple-dot "Compress inside" run enqueues per-media-kind tasks that drain against
@@ -190,7 +191,8 @@ The same parallel queue backs the page-level **"Compress videos / Compress image
      compress-video (mass, narrow, videoThreads≈4) · transcribe (mass, narrow + RAM/GPU-clamped: clamp(1,
      floor(budget/whisperThreads), floor(usableRAM/modelRamPerJob), gpuStreams) — low-power=1, big=several;
      transcribe_engine.mdx §5) · describe (NETWORK, fixed
-     ~4–6, not core-bound) · fingerprint/index (responsive, wide) · scan units (responsive, wide) · pin
+     GENEROUS ~24 via LFB_DESCRIBE_CONCURRENCY, not core-bound — fans WIDE, no hardware bottleneck,
+     ai_description.mdx §12.6) · fingerprint/index (responsive, wide) · scan units (responsive, wide) · pin
      (responsive, two-level, shipped) · one-off stream/compress (no batch, all cores).
   §4 KNOB: performance.max_core_fraction ∈ (0,1], default 0.9, read LIVE by coreBudget() (no restart),
      Settings "Parallelism" control shows resolved N-of-M cores. responsive budget is NOT tunable.

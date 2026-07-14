@@ -1,0 +1,302 @@
+---
+title: LargeFileBridge — Authentication (OpenAuthFederated, Google SSO)
+description: The authoritative spec for HOW Large File Bridge authenticates a user and — the reason this file exists — how a signed-in user STAYS signed in across a web-server rebuild/restart. Large File Bridge uses the OpenAuthFederated library (Google Workspace OIDC, allow-listed emails, no anonymous account). Sign-in mints a durable, HttpOnly session cookie backed by two pieces of on-disk state under the state root — a stable HS256 signing secret (.auth_session_secret) and one durable session record per session (users/<email>/sessions/<sid>.json via FileSessionStore) — plus short-lived (15-minute) Bearer access tokens the SPA mints on demand and now refreshes proactively. Because BOTH durable pieces persist to disk and the signing secret never rotates, a plain server restart does NOT invalidate a session. The long-standing "when we restart the web server we still have to re-login" bug was therefore NEVER lost server state: it was a FRONTEND BOOT-GATE bug. During the restart window the SPA's `/api/auth/me` probe transiently failed and the gate fell straight through to the sign-in page, so the user re-authenticated even though the cookie was still valid. §5 is the root-cause analysis and the fix: the boot gate now consumes the SDK's loadState() and shows a "Reconnecting…" screen (never sign-in) while the backend is merely unreachable, retrying every auth probe until the backend returns — at which point the still-valid cookie rehydrates with no Google round-trip. §6 covers the error handling that makes these failures observable. Distinct from sessions.mdx, which is the lightweight WEB-activity session (page-render pings → stale-return auto-pin), NOT the login session defined here.
+---
+
+# LargeFileBridge — Authentication (OpenAuthFederated, Google SSO)
+
+Large File Bridge (LFB) signs users in with **Google Workspace SSO** through the **OpenAuthFederated**
+library (which LFB owns and shares with its sister apps). Every session belongs to an **allow-listed**
+Google email — there is **no anonymous / no-login account** (charter). This spec is the authoritative
+description of that flow and, above all, of the property the user has repeatedly asked for and that
+this file is written to guarantee:
+
+> **A signed-in user must NOT be forced to re-authenticate when the web server is rebuilt or
+> restarted** (`just build` then `just run`), nor overnight, nor after a week. Sign in once, stay
+> signed in for months — across server restarts, browser restarts, and OS reboots.
+
+This spec draws a hard line against two neighbours and does not restate them:
+
+* [sessions.mdx](./sessions.mdx) — the **web session** (a page-render activity window that drives
+  stale-return auto-pin). That is **not** the login session. §1 below draws the line.
+* [storage_local.mdx §10](./storage_local.mdx#10-auth-session--signing-secret-runtime-not-settings) — the
+  on-disk layout of the auth secret + session records. This file is now the **authoritative** account
+  of the auth session and the restart bug; §10 there points here.
+* [security.mdx](./security.mdx) — the **allow-list** (who may sign in) and the fail-closed posture.
+
+---
+
+## 1. Vocabulary — the login session vs. everything else (LOCKED)
+
+| Term | What it is |
+| --- | --- |
+| **Auth session (login session)** | The thing THIS spec defines: proof that an allow-listed Google user is signed in. Represented by a signed, HttpOnly **session cookie** (`oaf_lfb_session`) backed by a durable **session record** on disk. Lifetime up to **10 months** (§7). Survives server/browser/OS restarts. |
+| **Session record** | One JSON file per auth session on disk: `users/<email>/sessions/<sid>.json` (`FileSessionStore`). Holds `sid`, user identity, `createdAt`, `lastActiveAt`, `expireAt`, `revoked`. The restart-surviving source of truth. |
+| **Signing secret** | The single HS256 key (`.auth_session_secret`) that signs and verifies the session cookie and access tokens. Stable on disk — **must not rotate on restart** (§5). |
+| **Access token (Bearer)** | A short-lived (**15-minute**) JWT the SPA mints from the session cookie and attaches to each `/api` request. Disposable; never stored; re-minted proactively (§4). |
+| **Web session** | UNRELATED to login — a page-render **activity** window ([sessions.mdx](./sessions.mdx)). No cookie, no identity, no security role. One auth session spans many web sessions. Never conflate them. |
+
+---
+
+## 2. What is saved, and where (the durable state) — the user's question, answered
+
+The user asked: *"find out what's being cached and lost in memory… what we need to save, saved in our
+local storage, some `.yaml` file, maybe a `user.yaml`."* The precise answer: **the login is already
+saved on disk in two files (plus the browser cookie), and none of it lives only in memory.** There is
+**no `user.yaml`** for auth — the auth state is deliberately kept **out** of the hand-editable config
+so a config backup never carries live credentials. All three pieces below persist:
+
+| # | What | Where it lives | Survives restart? | Source of truth in code |
+| --- | --- | --- | --- | --- |
+| 1 | **Signing secret** (HS256) | `~/T/_large_files_bridge/.auth_session_secret` — 48 random bytes, base64url, `0600`, created once on first boot and **reused** thereafter. Never in `.env`. | **Yes** — read from disk every boot; only generated when the file is absent. | `loadOrCreateSecret()` in `~/BGit/Bryan_git/OpenAuthFederated/code/packages/auth-backend/src/session-store.ts`; path from `authSecretPath()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/store/scopes.ts` |
+| 2 | **Session records** | `~/T/_large_files_bridge/users/<email>/sessions/<sid>.json` — one `0600` JSON per session; sign-out writes a `revoked:true` tombstone rather than deleting. | **Yes** — plain files under the state root. | `FileSessionStore` in `~/BGit/Bryan_git/OpenAuthFederated/code/packages/auth-backend/src/session-store.ts`; wired in `constructAuthFrontend()` |
+| 3 | **Browser credential** | The `oaf_lfb_session` cookie: `HttpOnly`, `SameSite=Lax`, `Max-Age = 300 days` (persistent, **not** a session cookie), `Secure` in server mode. Host-only (no `Domain`), so it is scoped to `localhost` and — because cookies are **not port-scoped** — is presented to every LFB port. | **Yes** — a persistent cookie held by the browser; a server restart does not touch it. | `setCookie()` in `~/BGit/Bryan_git/OpenAuthFederated/code/packages/auth-backend/src/frontend.ts` |
+
+Only **operational, in-memory** things are lost on restart — the built auth middleware
+(`activeMiddleware`) and the in-memory Bearer cache in the SPA — and **neither is the session**. The
+middleware is rebuilt at boot; the Bearer is re-minted from the cookie. Nothing that identifies the
+signed-in user is memory-only.
+
+The single durable-state root is `resolveStateDir()` — `~/T/_large_files_bridge/` (override
+`LFB_STATE_DIR`) — and it must resolve to the **same writable path every launch**, or #1 and #2 would
+appear to vanish and force a re-login. This is the one hard precondition (§5, cause C).
+
+`resolveStateDir()` lives in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts`
+
+---
+
+## 3. The sign-in flow
+
+1. The SPA boot gate (§6) asks the backend "who am I?" If there is no valid session, it shows the
+   **sign-in screen** ([SignInPage](../code/packages/frontend/src/pages/sign-in/SignInPage.tsx)).
+2. "Sign in with Google" starts the OIDC round-trip: `GET /api/v1/sign_in/sso` →
+   Google → `GET /api/v1/oauth_callback` (on the backend origin, e.g. `:8787`).
+3. The callback verifies the identity, enforces the **hosted-domain (`hd`)** claim and the allow-list,
+   creates a **session record**, sets the `oaf_lfb_session` cookie, and redirects the browser back to
+   the SPA's own origin (`/sso-callback` → `/`).
+4. `/sso-callback` finishes the handshake and the app loads signed-in.
+
+Because Google redirects straight to the backend origin, the post-login `redirect_url` must be an
+**absolute** URL back to the SPA. Only origins on an allow-list are honoured; anything else is stripped
+to a bare path. In local mode this allow-lists the loopback dev-port band; in server mode only the
+configured CORS origins.
+
+The sign-in flow (start, callback, allowed redirect origins) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/auth-frontend.ts` —
+`constructAuthFrontend()` and `allowedRedirectOrigins()`
+
+The browser side of the handshake (start redirect, complete callback) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/authCore.ts` — `startGoogleSignIn()`,
+backed by `RealAuthCore.authenticateWithRedirect()` / `completeRedirectCallback()` in
+`~/BGit/Bryan_git/OpenAuthFederated/code/packages/auth-react/src/core.ts`
+
+---
+
+## 4. Token model — one durable cookie, disposable Bearers
+
+The **session cookie is the long-lived credential**; the **access token (Bearer) is disposable**.
+
+* On load, the SPA re-hydrates the session from the cookie (`GET /api/v1/client`) and learns its
+  active `sid`. It never stores a token — there is no token in `localStorage`.
+* For each `/api` call it mints (or reuses a cached) short-lived **15-minute** Bearer
+  (`POST /api/v1/client/sessions/:id/tokens`) and sends it as `Authorization: Bearer …`. The SDK
+  caches the token until ~10 s before expiry and single-flights concurrent mints.
+* Each mint also **rolls the session cookie forward** (a sliding window up to the 10-month ceiling),
+  so an actively-used tab keeps its login fresh.
+
+**Proactive refresh (fixes "a lot of timeouts").** Previously the Bearer was re-minted only
+*reactively*: a call would 401 on the 15-minute boundary, the axios interceptor would reload the
+session and retry — one stuttered request every 15 minutes, which read as a timeout. The SDK now
+schedules a re-mint **~30 s before** expiry, turning that into a silent renewal. The reactive 401→retry
+path remains as a backstop.
+
+* Proactive scheduling in the shared library:
+  `~/BGit/Bryan_git/OpenAuthFederated/code/packages/auth-react/src/core.ts` —
+  `RealAuthCore.enableAutoRefresh()` / `scheduleRefresh()` / `refresh()` (armed off each mint's own `exp`).
+* Enabled by the app in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/authCore.ts` — the
+  `authCore.enableAutoRefresh()` call after `registerAuthBridge(...)`.
+* The reactive 401 backstop lives in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/axios.ts` — the response interceptor
+  (`reloadSession()` on 401, one retry).
+
+Every `/api` request is attributed to a principal by verifying its Bearer on the in-process HS256 path
+(no JWKS), then re-checking the live allow-list — "identify, don't gate," with route gates layered on
+top.
+
+Principal attribution + allow-list recheck is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/identify.ts` — `identify`
+(via `verifyToken(..., { embedded: true })` and `allowListed`)
+
+---
+
+## 5. Why a restart used to force re-login — root cause and the fix (THE POINT)
+
+This section is the authoritative diagnosis and the implemented fix, so it is captured once and not
+re-diagnosed. **The re-login on restart was never lost server state.** The evidence on this machine:
+
+* `.auth_session_secret` is dated at first boot and **has not changed since** — the secret does **not**
+  rotate on restart (rule out signature invalidation).
+* Multiple durable session records exist with `revoked:false` and 10-month `expireAt`, several with a
+  `lastActiveAt` **hours or days** after `createdAt` — proving the cookie **does** persist and rehydrate
+  correctly most of the time.
+* Yet a few records were created only **8–25 minutes apart** — a brand-new login right after a server
+  restart, even though the previous session's cookie was still valid.
+
+That pattern is the signature of a **client-side boot-gate bug**, not lost state:
+
+| | Cause | Verdict |
+| --- | --- | --- |
+| **A (the bug)** | **The boot gate treated "backend unreachable" as "signed out."** During `just build`/`run`, the SPA reloads and immediately probes the backend. If the backend is still booting (or an IPFS-daemon bounce briefly drops it), the probe fails. The old gate had no notion of "the server is merely down" — any not-yet-authenticated state fell straight through to the **sign-in page**. Seeing it, the user signs in again → a fresh session record, even though the cookie was fine. | **FIXED (this spec).** |
+| **B** | **Reactive-only token refresh** made the first call after each 15-min expiry 401-then-retry — the "lots of timeouts" symptom. | **FIXED** — proactive refresh (§4). |
+| **C** | **State root not stable/writable.** If `resolveStateDir()`/`LFB_STATE_DIR` resolved somewhere ephemeral, or the secret write failed, `loadOrCreateSecret()` would silently fall back to a **per-process** secret that rotates every restart → every cookie fails verification. | **Precondition, verified OK** here (secret stable on disk). Keep it stable (§2). |
+| **D** (ruled out) | The earlier hypothesis that the **16-port dev drift band** loses the cookie. Cookies are **host-only and not port-scoped**, so a port change within `localhost` does **not** drop the cookie. The band only affects the sign-in **redirect** target, not cookie presentation. Not the cookie-loss cause. | **Not a cause.** |
+
+### 5.1 The fix — the boot gate distinguishes "unreachable" from "signed out" (LOCKED)
+
+The shared SDK's `RealAuthCore.load()` was already hardened to **retry a backend-down window** (~15 s of
+backoff) and to record the outcome in `loadState()`:
+
+* `"loaded"` — an **authoritative** answer came back (the user is signed-in **or** genuinely signed-out).
+* `"failed"` / `"degraded"` — the backend was **unreachable**; **do not conclude "signed out."**
+
+The bug was that **the LFB boot gate never consumed `loadState()`** — the hardening was dead code. The
+gate now does, with two rules that together guarantee the restart property:
+
+1. **Never show the sign-in page while the backend is unreachable.** While `loadState()` is
+   `"failed"`/`"degraded"` — or any auth probe is still retrying a transient network error — the gate
+   renders a **"Reconnecting to Large File Bridge…"** screen and keeps polling. When the backend
+   returns, the still-valid cookie rehydrates with **no Google round-trip**.
+2. **Retry transient failures; never retry an authoritative HTTP response.** The `security/config` and
+   `auth/me` probes retry **only** on a no-response network error (backend down), and **not** on a real
+   4xx/5xx. So a restart blip waits for recovery instead of resolving as "signed out." The sign-in page
+   appears **only** on an authoritative signed-out (`auth/me` returns `authenticated:false` from a real
+   200, or `load()` is `"loaded"` with no session).
+
+The gate, the three boot states, and the transient-retry predicate are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/main.tsx` — `Root()`, `BootStatus`, and
+`retryWhileBackendDown` (plus `isTransientNetworkError`).
+
+The `load()` retry/backoff and the `loadState()` it feeds are handled in code:
+`~/BGit/Bryan_git/OpenAuthFederated/code/packages/auth-react/src/core.ts` — `RealAuthCore.loadWithRetry()`.
+
+### 5.2 The restart timeline, after the fix
+
+1. `just run` bounces the backend; the SPA reloads.
+2. `authCore.load()` finds the backend briefly down → retries; `loadState()` is `"failed"`.
+3. The gate shows **Reconnecting…** (not sign-in) and polls every 3 s.
+4. The backend finishes booting; `load()` gets `200` and rehydrates from the **still-valid cookie**;
+   `loadState()` becomes `"loaded"`, `isSignedIn` is true.
+5. `auth/me` returns `authenticated:true`; the app renders. **No sign-in page, no new session record.**
+
+---
+
+## 6. Boot states & error handling (make failures observable)
+
+The boot gate resolves to exactly one of five states, in order — each visually distinct so a failure is
+never silently indistinguishable from "signed out":
+
+| Order | Condition | Screen |
+| --- | --- | --- |
+| 0 | Backend unreachable (`loadState()` non-`"loaded"`, or a probe retrying a transient error) | **Reconnecting…** ("The server is restarting — you stay signed in.") |
+| 1 | A genuine, non-transient probe error (a real 5xx / parse failure) | **Boot-error card** with the message + a **Retry now** button |
+| 2 | Probes still pending (backend reachable, first load) | **Loading…** |
+| 3 | Allow-list not configured on this install | **Security Setup** (first-run) |
+| 4 | Authoritatively signed-out / not allow-listed | **Sign in with Google** |
+| — | Otherwise | The signed-in app |
+
+Error handling and logging that make these debuggable:
+
+* **Transient vs. real is an explicit predicate.** `isTransientNetworkError()` (no HTTP response =
+  transient; any response = real) is what routes state 0 vs. state 1, and it rate-limits transient
+  noise in the fault trail instead of logging one line per retry.
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/main.tsx` — `isTransientNetworkError()`,
+  `reportGlobal()`.
+* **The backend logs every auth decision** through the OpenAuthFederated logger wired into LFB's rolling
+  log, so a rejected cookie, a verify failure, or a missing record is visible in
+  `~/T/_large_files_bridge/log.log` (and faults in `error.err`). The logger is passed in
+  `constructAuthFrontend()` (`auth-frontend.ts`).
+* **A fresh computer with no credentials is guided, not stuck.** `GET /api/health/auth-config` returns a
+  non-secret `credentialsFile` block (path, filename, schema — never values) that the sign-in screen and
+  Settings render, so "can't sign in" states are self-explaining.
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/health/health.router.ts` — the
+  `GET /auth-config` route; rendered by `CredentialsSetupCard`.
+
+---
+
+## 7. Session lifetime policy (10 months, 14-day idle)
+
+LFB sets the lifetime **explicitly** when building the frontend — the library's defaults (7-day max,
+12-hour idle) are far too short and, left unset, force re-login after an overnight gap:
+
+| Option | Value | Why |
+| --- | --- | --- |
+| `sessionTtlSeconds` | `10 * 30 * 24 * 60 * 60` (300 days) | Absolute ceiling, written into each record's `expireAt` at creation. A returning user is never aged out on a normal cadence. |
+| `inactivityTimeoutSeconds` | `14 * 24 * 60 * 60` (14 days) | A real idle timeout so an abandoned/stolen session ages out in weeks, not the full 10 months (revocation via `FileSessionStore` covers offboarding). |
+| `accessTokenTtlSeconds` | `15 * 60` (15 min) | Bearers stay short-lived and refresh silently (§4); limits a captured token's window. |
+
+The `expireAt` ceiling is fixed at **session creation** and is not re-extended on token mint (the cookie
+slides forward, the durable ceiling does not), so a **policy change takes effect on the next sign-in**;
+existing records keep the ceiling they were created with. This matches the sister apps
+(EmailDeliveryHero, the_starbucks, all/app).
+
+The lifetime policy is set in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/auth-frontend.ts` —
+`constructAuthFrontend()` (`sessionTtlSeconds` / `inactivityTimeoutSeconds` / `accessTokenTtlSeconds`).
+
+---
+
+## 8. Credentials & security posture
+
+* **Google OAuth client credentials** come from env (`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`) or the
+  out-of-repo file `~/.credentials/large_files_bridge.json` (override `LFB_CREDENTIALS_FILE`); env wins.
+  The **secret values are never committed** — only the placeholder schema and filename live in code.
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/credentials-file.ts` —
+  `loadGoogleCreds()` / `hasGoogleCreds()`.
+* **Allow-list is authoritative and fail-closed** ([security.mdx](./security.mdx)): a valid Google
+  identity that is not allow-listed is refused; `hd` (hosted-domain) is required so membership is proven
+  cryptographically, not inferred from the email suffix.
+* **Cookie hardening rides with real TLS.** In server mode the cookie is `Secure` and HSTS/hardening
+  headers are on; on plain-http localhost both are off (HSTS over http `localhost` would force-upgrade
+  the OAuth callback to https and break sign-in). `constructAuthFrontend()` computes this from
+  `server.mode`.
+* **No anonymous account** (charter): every session record belongs to an allow-listed email.
+
+---
+
+## 9. Compliance map (where each piece lives)
+
+| Concern | Location |
+| --- | --- |
+| Build/hot-swap the embedded auth middleware; lifetime + cookie policy | `auth-frontend.ts` — `constructAuthFrontend` / `buildAuthFrontend` / `rebuildAuthFrontend` |
+| Allowed sign-in redirect origins | `auth-frontend.ts` — `allowedRedirectOrigins()` |
+| Per-request principal + allow-list gate | `modules/auth/identify.ts` — `identify`, `requireAllowListed`, `requireAdmin` |
+| `GET /api/auth/me` | `modules/auth/auth.router.ts` |
+| Durable session records | `@auth/backend` `FileSessionStore` (`session-store.ts`) → `users/<email>/sessions/<sid>.json` |
+| Stable signing secret | `loadOrCreateSecret()` (`session-store.ts`); path `authSecretPath()` (`shared/store/scopes.ts`) |
+| Session cookie attributes | `@auth/backend` `setCookie()` (`frontend.ts`) → `oaf_lfb_session` |
+| SPA session core (load/retry/loadState, mint, proactive refresh) | `@auth/react` `RealAuthCore` (`core.ts`) |
+| SPA auth wiring (token bridge, auto-refresh, sign-in redirect) | `frontend/src/api/authCore.ts` |
+| Bearer attach + reactive 401 retry | `frontend/src/api/axios.ts` |
+| Boot gate (Reconnecting / boot-error / Loading / SignIn) | `frontend/src/main.tsx` — `Root`, `BootStatus`, `retryWhileBackendDown` |
+| Credentials resolution + setup card | `config/credentials-file.ts`; `health.router.ts` `GET /auth-config`; `CredentialsSetupCard.tsx` |
+
+---
+
+## 10. Invariants (must always hold)
+
+1. **A server restart never forces re-login.** The signing secret and session records persist to the
+   state root; the cookie is a persistent browser cookie. The gate treats "backend down" as
+   **Reconnecting**, never sign-in.
+2. **The sign-in page appears only on an AUTHORITATIVE signed-out** — a real HTTP answer, never a
+   transient network error.
+3. **The signing secret must be stable and disk-backed.** If it ever rotates on restart, every cookie
+   is invalidated — treat that as a P0 regression (§5, cause C).
+4. **Auth state lives under the state root, never in a hand-editable config** (`user.yaml`/settings). A
+   config backup must never carry a live session.
+5. **The Bearer is disposable and short-lived** (15 min), minted from the cookie, refreshed proactively;
+   it is never persisted client-side.
+6. **No anonymous account.** Every session belongs to an allow-listed Google email; `hd` is required.
+7. **The auth session is not the web session** ([sessions.mdx](./sessions.mdx)); never gate access on the
+   web session or derive identity from it.

@@ -240,6 +240,50 @@ The metric tile opens the popup because `MetricsStrip` **mounts its own** `Warni
 Implemented in code (NEW):
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `requestBatchPopup()` / `onBatchPopupRequested()` (bus) · the provider `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/BatchPopupHost.tsx` — `BatchPopupHost` (mounted once in `App.tsx`, renders `WarningPopup` for the requested def and refetches on apply).
 
+### 5.4 The "Opening window…" spinner while the plan walks (NEW, LOCKED)
+
+The plan preview (§5.2) has to **walk the scope's directory tree** to find the candidates — and on a large
+subtree that is **slow**: the product owner opened a directory whose subtree held **~2,000 files** and the
+popup took roughly **two minutes** to appear. During that walk, **nothing was on screen**, so the app
+looked **hung**. That is unacceptable — a long-running open must always show it is doing something.
+
+**The rule:** the instant a producing entry point is invoked (§6 — the metric tile builds its list from
+already-loaded `RepoDetail.files`, but **every scope-walking entry point** — the page action-link, the
+`⋮` / right-click menu on a directory, a File-System column) the app **immediately** shows an **"Opening
+window…" loading modal with an animated spinner**, *before* awaiting the plan. When the plan resolves, that
+loading modal is **replaced in place** by the real §5 batch popup. So the sequence the user sees is:
+
+1. **Click** "Create AI descriptions" (or Create Transcriptions) on a directory.
+2. **At once** — a small centered modal appears: an **animated spinner** + **"Opening window…"** headline
+   + a one-line sub explaining the wait (e.g. *"Scanning this folder for files — large folders can take a
+   moment."*). This appears **synchronously**, before the `POST /api/{describe,transcribe}/plan` request is
+   even awaited, so there is **never** a blank, hung-looking gap.
+3. **When the walk finishes** — the spinner modal is swapped for the full batch popup (the candidate
+   checklist, the "Describe/Transcribe N files" confirm), or, if the scope had no candidates, the popup's
+   all-clear state (§5.2).
+4. **On error** — the spinner modal closes and a toast explains the failure (§5.2's catch).
+
+Additional rules:
+
+* **Cancellable.** The spinner modal has a **Cancel** (and `Esc` / backdrop click) that closes it. Because
+  the walk is a fire-and-forget request the user abandoned, a **generation guard** in the launcher makes the
+  eventual plan result a **no-op** — cancelling the spinner must **not** later pop the real window open.
+* **Only for scope-walking opens.** The metric tile / header primary build their list from data already in
+  memory (no walk), so they need no spinner — they open the popup directly. The spinner is specifically for
+  the **plan-fetch** opens (`openTranscribeBatch` / `openDescribeBatch`), which is exactly where the
+  multi-minute walk lives.
+* **One host, one slot.** The spinner and the popup share the **same single global host** (§5.3): the
+  loading modal and the batch popup are two states of the one `BatchPopupHost` bus, so there is never a
+  spinner *and* a popup on screen at once, and the swap is seamless.
+
+Implemented in code (NEW):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — the bus carries a
+`loading | popup | null` state; `openTranscribeBatch()` / `openDescribeBatch()` emit the **loading** state
+(with a generation token) **before** awaiting `api.{transcribe,describe}Plan`, then emit the **popup** state
+(guarded by the token) when it resolves · the loading modal + swap render in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/BatchPopupHost.tsx` — `BatchPopupHost`
+(renders a spinner "Opening window…" card for the loading state, the `WarningPopup` for the popup state).
+
 ---
 
 ## 6. Every producing entry point opens this one popup (LOCKED)
@@ -344,6 +388,12 @@ mechanics; this file owns what the popup does once opened.
 9. **File-System scope containment (§7):** the popup opened from the FS action-links row / a selected
    sub-directory / a selected file is scoped to the deepest open column / the selected row — downward only,
    never a parent or sibling.
+10. **The "Opening window…" spinner (§5.4):** every scope-walking open (`openTranscribeBatch` /
+    `openDescribeBatch`) shows an animated-spinner **"Opening window…"** modal **synchronously**, before the
+    `/plan` request is awaited, so a slow multi-minute tree walk never looks hung; the spinner is **replaced
+    in place** by the batch popup when the walk resolves (or closed + toasted on error); a **Cancel** on the
+    spinner makes the eventual plan result a **no-op** via a generation guard. The metric-tile / header-primary
+    opens (no walk) skip the spinner.
 
 <!--
   HUB spec for TWO product-wide rules from the "file_system.mdx / repos.mdx" prompt.
@@ -367,6 +417,11 @@ mechanics; this file owns what the popup does once opened.
       previewTranscribe()/previewDescribe(), then lib/batchPopup.ts openTranscribeBatch/openDescribeBatch
       build the def from the previewed files. GLOBAL HOST (§5.3): NEW lib/batchPopup.ts requestBatchPopup()
       bus + BatchPopupHost.tsx mounted once in App.tsx (metric tile keeps its own MetricsStrip WarningPopup).
+      OPENING SPINNER (§5.4, NEW): the /plan walk is SLOW on big trees (~2 min for ~2k files) — so the
+      scope-walking opens emit a "loading" state (spinner "Opening window…") on the SAME BatchPopupHost bus
+      SYNCHRONOUSLY before awaiting /plan, then swap to the "popup" state when it resolves (or close + toast
+      on error). Cancel/Esc on the spinner is honored via a GENERATION guard so an abandoned walk's result is
+      a no-op. Metric-tile/header opens (RepoDetail.files in memory, no walk) → no spinner.
       ALL FOUR ENTRY POINTS open it (§6): metric tile + header primary (already), page action-link (NEW,
       §6.1 — pageActions.ts createTranscriptions/createDescriptions rewritten to open the popup, enqueue
       moves from click to Confirm; Rules 1-3 + storage-setup gate unchanged), ⋮/right-click menu item (NEW,

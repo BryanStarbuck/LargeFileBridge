@@ -202,6 +202,33 @@ explanations that used to float over content: hover a **code badge**, an **inter
 Reserving the fixed white block and mounting the panel between the nav list and the account slot are handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (a fixed-height `<div>` inserted between the closing `</nav>` and the account-slot `div`), rendering `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel`.
 
+### 4.2 External product links — the outbound links above the account slot (LOCKED)
+
+In the space **between the bottom of the top nav list and the account slot** — the same in-between region
+as the hover-info panel (§4.1) — the bar shows a small set of **external product links**. These are the
+**only** entries in the bar that leave the app: each is an **outbound link to one of our other products**
+that **opens in a new browser tab**, not an in-app route.
+
+* **The links (content source of truth = `pm/left_bar.yaml` `external_links`):**
+  * **JFK Social.com** → `https://JFKSocial.com/`
+  * **ACT 3 Filmmaking** → `https://ACT3ai.com/`
+* **New tab, safely.** Each renders as a real `<a target="_blank" rel="noopener noreferrer">` — clicking
+  opens the URL in a **new tab** and never navigates the app itself away.
+* **Placement & spacing.** The block sits **centered/evenly spaced** in the gap between the last nav item
+  and the account slot: the links are laid out with even vertical spacing (and horizontally centered),
+  visually balanced between the top list and the signed-in-user slot at the bottom. It is a normal-flow
+  block above the account slot — it must **not** overlap the account slot and it shares the region with the
+  hover-info panel (§4.1) without crowding it.
+* **Styling.** Black text like the rest of the bar (§2), an outbound/external hint is acceptable (a small
+  `↗` glyph), light-grey hover fill (`hover:bg-slate-100`) matching the nav items. They are **not** part of
+  the active-route machinery (they never highlight as "active" — they are external).
+* **Data-driven, add/remove in the yaml.** Adding or removing a product link is a `pm/left_bar.yaml` edit
+  (`external_links`), never a code change — the same "no code copy of the nav content" rule as the nav items
+  (§AC4). An empty/absent `external_links` list renders nothing (no empty block).
+
+Rendering the external-links block from the yaml (new-tab anchors, centered/evenly-spaced, between the nav list and the account slot) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (an `external_links` block rendered above the account slot), fed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/config/left_bar.ts` — `parse()` (which reads `external_links` into `leftBar.externalLinks`).
+
 ---
 
 ## 5. Layout & behavior
@@ -248,6 +275,11 @@ Resolving a nav item's lucide icon by name (unknown name renders nothing) is han
    belong to a company, the **Storages** item shows a runtime **count badge** of pending company-mapping
    reviews and links to **`/company-mappings/review`** ([repo_owner_propagation.mdx §4](./repo_owner_propagation.mdx));
    it is a reopen affordance and nothing is applied silently.
+10. **External product links (§4.2):** a block of outbound links — **JFK Social.com** (`https://JFKSocial.com/`)
+    and **ACT 3 Filmmaking** (`https://ACT3ai.com/`) — renders **between the bottom of the nav list and the
+    account slot**, evenly spaced/centered; each is an `<a target="_blank" rel="noopener noreferrer">` that
+    opens in a **new tab** (never navigating the app away); the list comes from `pm/left_bar.yaml`
+    `external_links` (add/remove without a code change), and an empty list renders nothing.
 
 <!--
   This file is the styling/behavior spec; pm/left_bar.yaml is the content source of truth the
@@ -261,6 +293,11 @@ Resolving a nav item's lucide icon by name (unknown name renders nothing) is han
   account slot to host the NON-INTRUSIVE hover-info panel (non_intrusive_tooltip.mdx) — blank at rest so the
   account slot never jumps; HoverInfoPanel.tsx mounted by Sidebar.tsx between </nav> and the account div.
   The nav list is therefore NOT a bare flex-1 down to the slot; the panel block is carved out above it.
+  §4.2: EXTERNAL PRODUCT LINKS — a block of OUTBOUND links (JFK Social.com → https://JFKSocial.com/, ACT 3
+  Filmmaking → https://ACT3ai.com/) rendered between the bottom of the nav list and the account slot, evenly
+  spaced/centered, each an <a target="_blank" rel="noopener noreferrer"> (new tab, never navigates the app).
+  Content source of truth = left_bar.yaml `external_links` (add/remove without code, like nav_items — §AC4);
+  parsed by left_bar.ts parse() into leftBar.externalLinks, rendered by Sidebar.tsx above the account slot.
   §3.2 (repo_company_mapping.mdx): each repo GROUPS UNDER ITS OWNER — the Personal child and each Company child are
   themselves expandable to the repos owned by them (route /repos/$repoId), IN ADDITION TO the flat Repos child
   (which still routes to the long list — a repo appears twice). Runtime-injected like the per-Company children (NOT

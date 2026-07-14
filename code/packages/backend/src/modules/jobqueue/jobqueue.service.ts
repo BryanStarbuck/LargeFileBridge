@@ -50,7 +50,11 @@ export interface QueueTask {
 type Bucket = "transcribe" | "describe" | "compress:image" | "compress:video";
 const VIDEO_THREADS = 4; // per-job ffmpeg threads for a BATCHED video compress (a one-off passes no cap)
 const WHISPER_THREADS = 4; // Whisper is multi-threaded; a couple of runs saturate the machine
-const DESCRIBE_CONCURRENCY = 6; // network round-trip, not local CPU — a fixed small overlap, not core-bound
+// Describe waits on a vision-API network ROUND-TRIP, not local CPU — it has NO hardware bottleneck, so it
+// fans MUCH wider than transcribe/compress (parallelization.mdx §3, ai_description.mdx §12.6): overlap many
+// in-flight uploads instead of trickling a few through a core budget. Not core-bound — a generous fixed cap,
+// bounded only by the provider's rate limit, tunable via LFB_DESCRIBE_CONCURRENCY (default 24).
+const DESCRIBE_CONCURRENCY = Math.max(1, Number(process.env.LFB_DESCRIBE_CONCURRENCY) || 24);
 
 /** The admission bucket a task competes in (compress splits by media kind). */
 function bucketOf(t: QueueTask): Bucket {

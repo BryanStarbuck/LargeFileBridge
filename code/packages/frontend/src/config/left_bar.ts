@@ -27,11 +27,19 @@ export interface AccountMenuItem {
   action?: string;
   permissionGate?: string;
 }
+// External product links (left_bar.mdx §4.2): outbound links shown between the nav list and the account
+// slot; each opens in a NEW browser tab. The ONLY bar entries that leave the app.
+export interface ExternalLink {
+  id: string;
+  label: string;
+  url: string;
+}
 export interface LeftBar {
   wordmark: string;
   wordmarkAlt: string;
   clickRoute: string;
   navItems: NavItem[];
+  externalLinks: ExternalLink[];
   accountMenu: AccountMenuItem[];
   sidebarWidth: string;
 }
@@ -49,6 +57,7 @@ interface RawBar {
     description?: string;
     children?: Array<{ id: string; label: string; route: string; description?: string }>;
   }>;
+  external_links?: Array<{ id: string; label: string; url: string }>;
   footer?: Array<{
     menu_items?: Array<{
       id: string;
@@ -68,6 +77,7 @@ const FALLBACK: LeftBar = {
   wordmarkAlt: "Large File Bridge",
   clickRoute: "/",
   navItems: [],
+  externalLinks: [],
   accountMenu: [],
   sidebarWidth: "256px",
 };
@@ -80,6 +90,9 @@ function parse(): LeftBar {
     const navItems = (app.nav_items ?? [])
       .map((n) => ({ ...n }))
       .sort((a, b) => a.order - b.order);
+    const externalLinks = (app.external_links ?? [])
+      .filter((l) => l && l.url && l.label)
+      .map((l) => ({ id: l.id, label: l.label, url: l.url }));
     const accountMenu = (app.footer?.[0]?.menu_items ?? []).map((m) => ({
       id: m.id,
       label: m.label,
@@ -93,6 +106,7 @@ function parse(): LeftBar {
       wordmarkAlt: app.header?.alt_text ?? "Large File Bridge",
       clickRoute: app.header?.click_route ?? "/",
       navItems,
+      externalLinks,
       accountMenu,
       sidebarWidth: app.sidebar_width ?? "256px",
     };

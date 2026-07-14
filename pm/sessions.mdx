@@ -42,7 +42,7 @@ These two are **different things** and must never be conflated.
 | Term | Definition |
 | --- | --- |
 | **Web session** | A window of **activity** on one computer, measured from **page renders**. It **starts** on the first render after a quiet period and is considered **discontinued** once **4 hours** pass with **no render**. It is the thing this spec tracks. It has no cookie, no token, no security role — it is purely a usage window used to decide freshness. |
-| **Auth session** | The **OpenAuthFederated** login ([storage_local.mdx §10](./storage_local.mdx#10-auth-session--signing-secret-runtime-not-settings)): the signed cookie + rotating Bearer that keep the user **signed in** for up to 10 months across restarts. It is bounded by a 10-month ceiling, not by 4 hours. A single auth session spans **many** web sessions. |
+| **Auth session** | The **OpenAuthFederated** login ([authentication.mdx](./authentication.mdx)): the signed cookie + rotating Bearer that keep the user **signed in** for up to 10 months across restarts. It is bounded by a 10-month ceiling, not by 4 hours. A single auth session spans **many** web sessions. |
 | **Render / activity ping** | A signal from the frontend that a page was **rendered** (app opened or route navigated). Each ping is one unit of "the user did something that drew a page." Rolls into the open web session. |
 | **Idle window** | The **4-hour** span of no activity after which an open web session is considered discontinued. |
 | **Stale threshold** | The **48-hour** span since the last successful pin beyond which **starting a new web session** auto-triggers a pin pass. |

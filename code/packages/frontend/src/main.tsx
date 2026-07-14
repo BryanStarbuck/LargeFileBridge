@@ -90,39 +90,105 @@ window.addEventListener("unhandledrejection", (e) => {
   reportGlobal("window.unhandledrejection", e.reason);
 });
 
-// Boot gate order (security.mdx §3): 1) first-run Security Setup (who may sign in — unauthenticated),
-// 2) sign-in (SignInPage handles the Google-creds-missing card), 3) allow-listed → the app.
+// A centered full-height status card — the three non-app boot states (Loading / Reconnecting / a
+// hard boot error) all render through this so they look like one system (authentication.mdx §6).
+function BootStatus({ label, detail, onRetry }: { label: string; detail?: string; onRetry?: () => void }) {
+  return (
+    <div className="grid h-full place-items-center bg-slate-50 text-center">
+      <div className="max-w-sm px-6">
+        <div className="text-sm font-medium text-black/60">{label}</div>
+        {detail && <div className="mt-1 text-xs text-black/40">{detail}</div>}
+        {onRetry && (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="mt-4 rounded-md bg-[var(--lfb-primary)] px-4 py-2 text-sm text-white"
+          >
+            Retry now
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// React-Query retry predicate. Keep retrying WHILE the backend is merely unreachable (a `just run`
+// restart, an IPFS-daemon bounce, a brief offline) — but NEVER retry a real HTTP response, which is
+// authoritative. This is the heart of the "restart → re-login" fix (authentication.mdx §5): the auth
+// probes WAIT for the backend to come back instead of resolving as "signed out" and bouncing a
+// still-valid session to the sign-in page. Transient errors therefore never reach `isError` — so an
+// `isError` below is always a genuine (non-transient) failure worth surfacing, not a restart blip.
+function retryWhileBackendDown(_failureCount: number, error: unknown): boolean {
+  return isTransientNetworkError(error);
+}
+
+// Boot gate order (security.mdx §3, authentication.mdx §5): 0) backend unreachable → Reconnecting
+// (NEVER sign-in); 1) first-run Security Setup (who may sign in); 2) sign-in (SignInPage handles the
+// Google-creds-missing card); 3) allow-listed → the app.
 function Root() {
   // Rehydrate the session from the cookie so getToken() can mint a Bearer for /auth/me and every
-  // other /api call. Without this a completed Google login still reads as unauthenticated.
-  const { data: authReady } = useQuery({
+  // other /api call. authCore.load() NEVER throws — it retries a backend-down window internally
+  // (~15s) and records the outcome in loadState(): "loaded" is an AUTHORITATIVE answer (signed-in OR
+  // signed-out), while "failed"/"degraded" means the backend was unreachable. We surface loadState so
+  // the gate shows "Reconnecting…" during a server restart instead of the sign-in page — the fix for
+  // the long-standing "when we restart the web server we still have to re-login" bug. The session
+  // itself is durable server-side (secret + FileSessionStore), so once the backend is back the cookie
+  // rehydrates with no Google round-trip. See authentication.mdx §5.
+  const auth = useQuery({
     queryKey: ["authInit"],
     queryFn: async () => {
       await authCore.load();
-      return true;
+      return { state: authCore.loadState(), signedIn: authCore.getSnapshot().isSignedIn };
     },
     retry: false,
+    // While the backend is unreachable, poll so a restart auto-recovers WITHOUT a re-login.
+    refetchInterval: (q) => (q.state.data && q.state.data.state !== "loaded" ? 3000 : false),
   });
+  const authLoaded = auth.data?.state === "loaded";
+  const backendUnreachable = auth.data != null && auth.data.state !== "loaded";
 
-  const { data: sec, isLoading: secLoading } = useQuery({
+  const sec = useQuery({
     queryKey: ["securityConfig"],
     queryFn: api.securityConfig,
-    retry: false,
+    retry: retryWhileBackendDown,
   });
-  // Only ask "who am I" once the install's allow-list exists AND the session is rehydrated.
-  const { data: me, isLoading: meLoading } = useQuery({
+  // Only ask "who am I" once the install's allow-list exists AND the session is AUTHORITATIVELY
+  // rehydrated (auth "loaded"). Retried while the backend is down, so a transient miss during a
+  // restart never reads as signed-out.
+  const me = useQuery({
     queryKey: ["me"],
     queryFn: api.me,
-    retry: false,
-    enabled: sec?.configured === true && authReady === true,
+    retry: retryWhileBackendDown,
+    enabled: sec.data?.configured === true && authLoaded,
   });
 
-  if (secLoading) return <div className="grid h-full place-items-center text-black/40">Loading…</div>;
-  if (sec && !sec.configured) return <SecuritySetupPage config={sec} />;
+  // 0) Backend unreachable (mid-restart / briefly offline): Reconnecting, NEVER the sign-in page.
+  //    Transient failures keep the queries in a retrying (pending) state; the authoritative signal is
+  //    auth.loadState() going non-"loaded". Poll-driven recovery re-runs everything automatically.
+  if (backendUnreachable) {
+    return <BootStatus label="Reconnecting to Large File Bridge…" detail="The server is restarting — you stay signed in." />;
+  }
+  // A genuine (non-transient) failure — a 5xx/parse error the retry predicate refused to swallow.
+  // Surface it with a manual retry rather than silently showing the sign-in page.
+  if (sec.isError || me.isError) {
+    const err = (sec.error ?? me.error) as Error | undefined;
+    return (
+      <BootStatus
+        label="Large File Bridge ran into a problem starting up."
+        detail={err?.message}
+        onRetry={() => {
+          void sec.refetch();
+          void me.refetch();
+        }}
+      />
+    );
+  }
 
-  if (!authReady || meLoading)
-    return <div className="grid h-full place-items-center text-black/40">Loading…</div>;
-  if (!me?.authenticated || !me.allowListed) return <SignInPage />;
+  if (sec.isPending) return <BootStatus label="Loading…" />;
+  if (sec.data && !sec.data.configured) return <SecuritySetupPage config={sec.data} />;
+
+  if (!authLoaded || me.isPending) return <BootStatus label="Loading…" />;
+  if (!me.data?.authenticated || !me.data.allowListed) return <SignInPage />;
   // Signed-in app: the progress dock overlays every screen and shares one active-job set with the
   // pages' optimistic run() (webapp.mdx §10/§12). Both live inside QueryClientProvider (from the mount).
   return (
