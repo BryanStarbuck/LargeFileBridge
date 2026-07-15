@@ -399,8 +399,18 @@ function describeStatusFor(relPath: string, repoRootAbs: string | null): TaskSta
 
 // Roll up the per-tab "what could be done" metric counts (task_tabs.mdx §2.5) from the composed rows.
 // `pullDown` is intentionally omitted — it comes from RepoDetail.missingPinned.length (router-computed).
-const BIG_FILE_METRIC_THRESHOLD = 100 * 1024 * 1024; // 100 MB — the charter big-file threshold for the git-ignore nudge count.
+// The git-ignore nudge counts at the CHECKED-IN threshold (50 MB default), not the 100 MB payload
+// threshold — it must agree with the scan predicate that admitted these rows (scan.mdx §4.1 rule 4),
+// or the file shows up in the table but is never counted in the metric that offers to fix it.
+function checkedInThresholdBytes(): number {
+  try {
+    return getAppConfig().big_file.checked_in_threshold_bytes;
+  } catch {
+    return 52428800; // config unreadable → the 50 MB default; never break row composition
+  }
+}
 function computeTaskMetrics(files: FileRow[]): TaskMetrics {
+  const bigFileMetricThreshold = checkedInThresholdBytes();
   const m: TaskMetrics = {
     undecided: 0,
     pending: 0,
@@ -427,7 +437,7 @@ function computeTaskMetrics(files: FileRow[]): TaskMetrics {
     if (f.transcribe === "done") m.transcribed++;
     if (f.describe === "could") m.describable++;
     if (f.describe === "done") m.described++;
-    if (!f.gitignore && f.sizeBytes >= BIG_FILE_METRIC_THRESHOLD) m.bigNotIgnored++;
+    if (!f.gitignore && f.sizeBytes >= bigFileMetricThreshold) m.bigNotIgnored++;
   }
   return m;
 }

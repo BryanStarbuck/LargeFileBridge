@@ -317,11 +317,44 @@ A file is a **candidate** (a large-file-bridge payload the scan records) when **
    git to bridge it over IPFS (README charter). **The big-file size threshold does NOT gate these.**
 2. **Any file at or above the effective big threshold** (§4.2) — the classic "big file" case. For a
    repo with a followed `.gitignore`, this still requires the file to be git-ignored (a big file that
-   is *checked in* is not our payload); the **computer unit** (no gitignore) uses the pure size gate.
+   is *checked in* is not our **payload** — though it may still be surfaced as a *nudge* by rule 4,
+   which never makes it payload); the **computer unit** (no gitignore) uses the pure size gate.
 3. **A forced include-glob match** (`large_files.include_globs`) — an explicit user opt-in.
+4. **A checked-in file at or above the *checked-in* threshold** (§4.2) — the file is **not** git-ignored
+   and is ≥ **50 MB** (default). This is the charter's *"big files that aren't a good idea to check in"*
+   category: we surface it and offer the one-click ⊘ **git-ignore**. Repo units only — the computer unit
+   has no working tree, so "checked in" is meaningless there.
 
-The candidate predicate — git-ignored media at any size, else the size gate, plus forced includes — is implemented in code:
+> **Rule 4 rows are a NUDGE, not payload.** Admitting a checked-in file as a *candidate* does not make it
+> ours to bridge — it stays `undecided` with no CID and is never pinned. It is listed so the user can *see*
+> it and decide. The user's ⊘ click is what turns it into a git-ignored file, and only then does rule 1/2
+> make it payload. This is why rule 4 does not contradict "a big file that is checked in is not our
+> payload" — it is not payload; it is a warning about git hygiene.
+>
+> **Rule 4 rows are EXCLUDED from the default-decision policy (LOCKED — a privacy gate).** The auto-decide
+> policy (decisions.mdx §9) runs over each scan's `added` set. Rule-4 rows are filtered out of that set
+> **before** the policy sees them, because a repo on `mode: auto, ipfs: true` would otherwise **auto-pin a
+> checked-in file to IPFS that the user never chose to bridge** — publishing it. Auto-writing the
+> `.gitignore` entry is separately forbidden by the charter (*"Never add a `.gitignore` entry
+> automatically for anyone"*). Both axes stay **Undecided** until the user clicks. Every row admitted by
+> rule 4 alone is flagged `nudgeOnly` in-memory by the walk (never persisted to `status.yaml`) purely to
+> enforce this. **A future change that admits more non-git-ignored candidates MUST extend this filter** —
+> widening the candidate set silently widens what auto-decide can publish.
+
+The candidate predicate — git-ignored media at any size, else the size gate, plus forced includes and the
+checked-in nudge — is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` (`isCandidate`, using `isMediaFile()` from `shared/scan-filters.ts`)
+
+> #### Why rule 4 exists — the bug it fixes (root-cause note, do not remove)
+>
+> Rules 1–3 made **every** row a git-ignored one, so the `bigNotIgnored` metric — *"Big not git-ignored"*
+> (task_tabs.mdx §2.6) and the charter's category-3 rollup — was **structurally dead code**: it counts
+> `!f.gitignore && size >= threshold`, but a row could only exist if git *did* ignore it, so the count could
+> never rise above **0**. The charter promises we *"point out files that are big but not git-ignored, and
+> give an easy one-click option to git-ignore them"*; the predicate made that unreachable. Found via a real
+> file: `Bryan_git/Personal` held a **56 MB checked-in `Security Cameras.pptx`** that the one-repo search box
+> could not find, because the scan never made it a row. After the fix that repo reports **13** candidates
+> (was 12) and `bigNotIgnored: 1` — verified by rescanning against an isolated `LFB_STATE_DIR`.
 
 > #### Why this rule exists — the bug it fixes (root-cause note, do not remove)
 >
@@ -352,10 +385,32 @@ effective_threshold(file) =
 
 The scan reads the resolved threshold for each unit and flags files whose **size ≥ threshold**.
 The scan does **not** define the threshold or its default — it only applies it (§9 Reconciliation).
-The threshold gates cases 2 and 3 of §4.1 only; git-ignored **media** (case 1) ignores it.
+The threshold gates case 2 of §4.1 only; git-ignored **media** (case 1) ignores it.
 
 Resolving the per-unit effective threshold (repo override else the global default) happens in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `resolveThreshold()`
+
+#### The checked-in threshold — a SECOND, lower gate (LOCKED)
+
+Rule 4 (the checked-in nudge) uses its **own** threshold, **not** the big threshold:
+
+```
+checked_in_threshold = min(global big_file.checked_in_threshold_bytes,  // default 50 MB
+                           effective_threshold(unit))                   // never exceed the payload gate
+```
+
+* **Default 50 MB — GitHub's *warning* line**, deliberately **lower** than the 100 MB payload threshold
+  (GitHub's *hard* limit). The point is to warn **before** GitHub blocks the push, so a 56 MB checked-in
+  `.pptx` is caught while it is still fixable.
+* **It is clamped to the unit's effective threshold.** A per-repo `big_file_override` that drops the big
+  threshold below 50 MB would otherwise nudge on files the same scan already treats as payload; the `min()`
+  makes the nudge gate always ≤ the payload gate.
+* **The `bigNotIgnored` metric MUST count at this same threshold**, never at the 100 MB payload threshold —
+  otherwise a row appears in the table that the metric offering to fix it does not count.
+
+The checked-in gate and its clamp live in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` (`checkedInBig`) and the `checkedInThreshold: Math.min(...)` at the repo call site;
+the matching metric count in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeTaskMetrics()` / `checkedInThresholdBytes()`
 
 ### 4.3 The hard-skip directory set (never descend)
 

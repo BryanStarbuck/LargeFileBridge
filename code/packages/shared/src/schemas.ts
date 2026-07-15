@@ -88,12 +88,23 @@ export const AppConfigSchema = z.object({
       model_consent: z.enum(["approved", "declined", "use_fallback"]).nullable().default(null),
     })
     .prefault({}),
+  // `threshold_bytes` (100 MB = GitHub's hard limit) gates the bridge payload — a git-ignored file the
+  // user already chose to keep out of git. `checked_in_threshold_bytes` (50 MB = GitHub's *warning* line)
+  // is the separate, lower gate for the opposite case: a file that IS checked in and probably shouldn't
+  // be. It must stay <= threshold_bytes; the nudge fires before GitHub blocks the push (scan.mdx §4.2).
   big_file: z
     .object({
       threshold_bytes: z.number().default(104857600),
       threshold_display: z
         .object({
           value: z.number().default(100),
+          unit: z.enum(["MB", "GB", "TB"]).default("MB"),
+        })
+        .prefault({}),
+      checked_in_threshold_bytes: z.number().default(52428800),
+      checked_in_threshold_display: z
+        .object({
+          value: z.number().default(50),
           unit: z.enum(["MB", "GB", "TB"]).default("MB"),
         })
         .prefault({}),

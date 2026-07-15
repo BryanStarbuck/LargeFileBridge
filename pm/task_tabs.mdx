@@ -289,7 +289,11 @@ each `FileRow` against the special-files classifier and the storage index so the
 * `sync` files with `peers.length === 0` → **Not backed up**.
 * per-file `compress` / `transcribe` state (§4.4) rolled up → **Compressible videos / images**,
   **Transcribable**.
-* large-but-not-git-ignored → **Big not git-ignored**.
+* large-but-not-git-ignored → **Big not git-ignored**. Counted at the **checked-in threshold**
+  (50 MB default), **not** the 100 MB payload threshold — it must match the scan predicate that admits
+  these rows (scan.mdx §4.1 rule 4 / §4.2), or a file appears in the table that this metric never counts.
+  These rows are the *only* ones with `gitignore === false`; before rule 4 existed no such row could be
+  produced and this count was **always 0**.
 
 The per-tab metric counts are computed by the backend in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —

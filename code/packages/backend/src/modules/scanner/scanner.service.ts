@@ -38,6 +38,11 @@ interface Candidate {
   path: string; // relative to unit root
   size: number;
   modified_at: string;
+  // TRUE when this row exists ONLY as the checked-in nudge (scan.mdx §4.1 rule 4) — it is not git-ignored
+  // and would not have been a candidate on payload grounds. In-memory only: writeStatus() persists just
+  // path/size/modified_at, so this never reaches status.yaml. It exists to keep the auto-decide policy off
+  // these rows (§4.1 "a nudge, not payload").
+  nudgeOnly?: boolean;
 }
 
 // Progress reporter threaded through the walk so the background job runner (scan-job.ts) can surface
@@ -127,6 +132,9 @@ export async function scanAll(
       includeGlobs: rc.large_files.include_globs,
       excludeGlobs: rc.large_files.exclude_globs,
       maskPaths: [],
+      // Never let the nudge gate exceed the payload gate — a per-repo big_file_override that lowers
+      // `threshold` below the global 50 MB would otherwise nudge on files it also treats as payload.
+      checkedInThreshold: Math.min(cfg.big_file.checked_in_threshold_bytes, threshold),
     });
     const status = writeStatus(folder, "repo", candidates, threshold, source);
 
@@ -187,7 +195,13 @@ export async function scanAll(
     // have no folded decision yet (decisions.mdx §9). The shared policy defaults to OFF, so this is a no-op
     // unless a team deliberately opted into auto-decide. Best-effort.
     try {
-      const added = status.changes_since_last_scan.added;
+      // Nudge-only rows (scan.mdx §4.1 rule 4) are EXCLUDED from the policy. They are checked-in files we
+      // surface as a git-hygiene warning; they are not payload. Letting an `auto` policy decide them would
+      // auto-pin a file to IPFS that the user never chose to bridge (and auto-writing a .gitignore entry is
+      // forbidden outright by the charter). Both axes stay Undecided until the user clicks. Without this
+      // filter, admitting these candidates would have silently widened what auto-decide can publish.
+      const nudgeOnly = new Set(candidates.filter((c) => c.nudgeOnly).map((c) => c.path));
+      const added = status.changes_since_last_scan.added.filter((p) => !nudgeOnly.has(p));
       if (added.length) {
         const { autoDecided } = await applyDefaultPolicy(folder, added);
         if (autoDecided > 0) {
@@ -259,6 +273,9 @@ interface WalkOpts {
   excludeGlobs: string[];
   maskPaths: string[];
   rootLabelAbsolute?: boolean;
+  // The checked-in nudge gate (scan.mdx §4.1 rule 4). Set ONLY for repo units — the computer unit has no
+  // git working tree, so "checked in" is meaningless there and it stays on the pure size gate.
+  checkedInThreshold?: number;
 }
 
 // Yield control back to the event loop so a long, CPU-bound synchronous walk does not FREEZE the whole
@@ -324,13 +341,25 @@ async function walkUnit(root: string, threshold: number, opts: WalkOpts): Promis
       // Non-media git-ignored files (and the computer unit, which has no gitignore) still use
       // the pure size gate, so junk (.env, logs) and generic files aren't swept in.
       const gitIgnoredMedia = gitIgnored && isMediaFile(ent.name);
-      const isCandidate =
+      // THE CHECKED-IN NUDGE (scan.mdx §4.1 rule 4): a file that is NOT git-ignored and is over the
+      // checked-in threshold is a candidate too — the charter's "big files that aren't a good idea to
+      // check in" category. Without this the `bigNotIgnored` metric and the one-click ⊘ offer were dead
+      // code: a row could only exist if git ignored it, so "big AND not ignored" could never be counted.
+      // Deliberately lower than `threshold` (50 MB vs 100 MB) so we warn before GitHub blocks the push.
+      // These rows are a NUDGE, never bridge payload — the user's ⊘ click is what makes them ours.
+      const checkedInBig =
+        opts.checkedInThreshold != null && !gitIgnored && st.size >= opts.checkedInThreshold;
+      // Payload = what this file would have been WITHOUT the nudge rule. A row that is only a candidate
+      // because of `checkedInBig` is nudge-only, and the auto-decide policy must never touch it.
+      const isPayload =
         forced || gitIgnoredMedia || (bigEnough && (followsGitignore ? gitIgnored : true));
+      const isCandidate = isPayload || checkedInBig;
       if (!isCandidate) continue;
       out.push({
         path: opts.rootLabelAbsolute ? abs : rel,
         size: st.size,
         modified_at: st.mtime.toISOString(),
+        ...(isPayload ? {} : { nudgeOnly: true }),
       });
       void relForIgnore;
     }

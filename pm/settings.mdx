@@ -80,9 +80,27 @@ big_file:
   threshold_display:
     value: 100
     unit: MB                    # MB | GB | TB
+  # The SECOND, lower gate: the checked-in nudge (scan.mdx §4.1 rule 4 / §4.2).
+  checked_in_threshold_bytes: 52428800
+  checked_in_threshold_display:
+    value: 50
+    unit: MB
 ```
 
-This `big_file` block is the authoritative home of the threshold. It **supersedes** the older
+**Two thresholds, opposite jobs — do not conflate them:**
+
+| | `threshold_bytes` (100 MB) | `checked_in_threshold_bytes` (50 MB) |
+|---|---|---|
+| Applies to | files the user **git-ignored** | files that are **checked in** |
+| Means | "big enough to be **bridge payload**" | "big enough that checking it in is **a bad idea**" |
+| Mirrors | GitHub's **hard push limit** (blocked) | GitHub's **warning** line (still pushes) |
+| Drives | pin/CID/IPFS decisions | the `bigNotIgnored` count + one-click ⊘ offer |
+
+The checked-in gate is **lower on purpose** — the nudge must fire *before* GitHub blocks the push. It is
+clamped to `min(checked_in_threshold_bytes, effective_threshold(unit))` so it can never exceed the payload
+gate for a repo whose `big_file_override` lowers the big threshold (scan.mdx §4.2).
+
+This `big_file` block is the authoritative home of both thresholds. It **supersedes** the older
 `pin_process.large_file_min_bytes` / per-repo `large_files.min_bytes` defaults in
 [storage_local.mdx §3/§6](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical), which
 should be re-pointed at this value (see [scan.mdx §9](./scan.mdx#9-reconciliation-with-existing-specs)).
