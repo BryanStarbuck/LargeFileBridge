@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Full Paths (flat large-file table under File System)
-description: A second TAB under the File System area (route /fs/paths, tab "Full paths" beside the column-view tab). Where the File System column browser (directories.mdx) walks ONE directory level per column and shows only names, this tab shows a FLAT, recursive TanStack table of the large files under a chosen root — one row per file — with two lead columns the browser can't give you at a glance: the file NAME and its full absolute PATH. Each row has a checkbox. Above the table sits a control row built from three SEGMENTED CONTROLS (a.k.a. segmented buttons) plus the house search box and sort/filter icons: (1) a compressed filter Both · Compressed · Uncompressed (default Both), (2) a sort segmented control Size · Name · Path each with an up/down direction arrow (default Size, biggest on top), and (3) an IPFS-membership filter In IPFS · Not · Both (default Both). Action buttons — Select all, IPFS pin, Unpin — act on the checked rows. The workflow: sort by size (biggest first), flip the IPFS filter to Not to reveal the big files that aren't pinned yet, check the ones worth backing up, and click IPFS pin. It reuses the directories.mdx code badges, the one_repo.mdx pin decision model, and the ipfs.mdx pin semantics. Implemented by GET /api/fs/flat (a recursive, metadata-only, big-file walk) and the FullPathsPage frontend.
+description: A second TAB under the File System area (route /fs/paths, tab "Full paths" beside the column-view tab). Where the File System column browser (directories.mdx) walks ONE directory level per column and shows only names, this tab shows a FLAT, recursive TanStack table of the large files under a chosen root — one row per file — with two lead columns the browser can't give you at a glance: the file NAME and its full absolute PATH. Each row has a checkbox. Above the table sits the house control row (search box, ⛛ filter icon, ⇅ sort icon, active-sort chip run) and, beneath it, the always-visible FACET RAIL (tables.mdx §2.2 — a surface this page pioneered as segmented controls and which is now product-wide law). This page's three RETIRED segmented controls become shared surfaces: (1) the Both·Compressed·Uncompressed filter is now the two-value Compressed facet (☑ Compressed ☑ Uncompressed, both checked — all-checked IS the old "Both"), (2) the Size·Name·Path sort segmented control collapses into the shared multi-level active-sort chip run, and (3) the In IPFS·Not·Both filter becomes the shared four-value Pin (IPFS) facet. This page ALSO gains a Git-ignore facet, because a table that filters the pin axis must never imply anything about the git-ignore axis (tables.mdx §2.4) — rows outside any repo are N/A on that axis and are never hidden by it. Action buttons — Select all, IPFS pin, Unpin — act on the checked rows. The workflow: sort by size (biggest first), uncheck Pinned on the Pin facet to reveal the big files that aren't pinned yet, check the ones worth backing up, and click IPFS pin. It reuses the directories.mdx code badges, the one_repo.mdx pin decision model, and the ipfs.mdx pin semantics. Implemented by GET /api/fs/flat (a recursive, metadata-only, big-file walk) and the FullPathsPage frontend — which should stop hand-rolling its own useReactTable and adopt the shared DataTable (§3.4a).
 ---
 
 # LargeFileBridge — Full Paths
@@ -75,11 +75,13 @@ The standard app frame (256px left bar), then — inside the File System area �
 │  LEFT BAR  ├───────────────────────────────────────────────────────────────────────────┤
 │            │  ⌂ Home   ~/BGit/Bryan_git ………………………………………………………………………………  (root bar) │
 │ Repos      ├───────────────────────────────────────────────────────────────────────────┤
-│ File Sys ◀ │  search…   [Both·Compressed·Uncompressed]  Sort:[Size↓|Name↕|Path↕]        │
-│ Peers      │            [In IPFS·Not·Both]                                   ⇅   ⛛       │ ← control row
-│ IPFS       │  ☑ Select all      ⬆ IPFS pin      ⬇ Unpin           3 selected             │ ← action row
-│ Scans      ├───────────────────────────────────────────────────────────────────────────┤
-│ Settings   │  ☐  Name                 Path                              Size   Changed  ⋮ │
+│ File Sys ◀ │  search…                    Sort: [1 Bookmarked ↓] [2 Size ↓]   ⇅   ⛛       │ ← control row
+│ Peers      │  ☐ Bookmarked only · Compressed ☑ Compressed ☑ Uncompressed                 │
+│ IPFS       │  Pin (IPFS) ☑ Pinned ☑ Not pinned ☑ Recommended ☑ Undecided                 │ ← facet rail
+│ Scans      │  Git-ignore ☑ Git-ignored ☑ Not git-ignored ☑ Recommended                   │
+│ Settings   │  ☑ Select all      ⬆ IPFS pin      ⬇ Unpin           3 selected             │ ← action row
+│            ├───────────────────────────────────────────────────────────────────────────┤
+│            │  ☐  Name                 Path                              Size   Changed  ⋮ │
 │            │  ☑  final_4k.mov         ~/…/Our_Movies/render/final_4k.mov 8.2GB  2h   C P ⋮│
 │            │  ☑  take_07.mov          ~/…/Our_Movies/render/take_07.mov  6.1GB  5m   C   ⋮│
 │  [account] │  ☐  poster.png           ~/…/art/poster.png                220MB  1d   C   ⋮│
@@ -97,75 +99,169 @@ The tab strip that switches Column view (`/fs`) and Full paths (`/fs/paths`) is 
 
 ---
 
-## 3. The control row — segmented controls (LOCKED)
+## 3. The control row — the facet rail (LOCKED)
 
-The control row is built from **segmented controls** (UX term: *segmented control* / *segmented
-buttons* — a single control split into 2–3 mutually-exclusive segments, exactly one selected). There
-are **three**, plus the house search box and the house sort/filter icons, plus an **action row**.
+**This section was rewritten; its LOCKED status is intact but its control changed.** Full paths
+originally specified this row as **three segmented controls** (`Both · Compressed · Uncompressed`,
+`Size · Name · Path`, `In IPFS · Not · Both`) because filters that live inside a dropdown are filters
+nobody uses. That instinct was right and is now **product-wide law**: [tables.mdx §2.2](./tables.mdx#22-the-facet-rail--filtering-without-opening-a-dropdown-locked)
+makes an always-visible **facet rail** the shared filter surface for every table, and it explicitly
+**credits this page** for pioneering it. Only the *control* was wrong — a segmented control is a
+one-of-N radio in different clothes and cannot say *"show me X and Y but not Z"*, so
+[tables.mdx §2.6](./tables.mdx#26-retiring-the-both--x--y-segmented-filters-locked) retires every
+`Both · X · Y` **filter** here into a two-value checkbox facet whose all-checked resting state **is**
+the old **Both**. This is a promotion of the idea, not a repudiation of it.
 
-### 3.1 Compressed filter — `Both · Compressed · Uncompressed` (default **Both**)
+So the control row is now: the house **search box**, the **`⛛`** and **`⇅`** icons, the shared
+**active-sort chip run**, and — directly beneath — the **facet rail** (§3.1/§3.3), plus the **action
+row** (§3.5). Nothing on this page is bespoke any more; the whole row is the shared `DataTable`
+surface. **The model is not restated here** — see [tables.mdx §2](./tables.mdx#2-filtering--the-value-visibility-checkbox-model-locked)
+for the grammar (a facet is its values; every box checked by default; all-checked = inactive;
+checkboxes OR within a facet, facets AND; no `any`/`Both` pseudo-value; the last checked box cannot be
+unchecked). Only what is **page-specific** is below.
 
-Three segments; default **Both**. It filters the rows below by their compression state (derived from
-the **C/c** badge, [directories.mdx §3.3](./directories.mdx)):
+```
+ ┌──────────────────────────────────────────────────────────────────────────────────┐
+ │ [ 🔍 search name + path…    ]        Sort: [1 Bookmarked ↓] [2 Size ↓]    ⇅   ⛛  │ ← control row
+ │ ☐ Bookmarked only  ·  Compressed ☑ Compressed ☑ Uncompressed  ·                  │
+ │ Pin (IPFS) ☑ Pinned ☑ Not pinned ☑ Recommended ☑ Undecided  ·                     │ ← facet rail
+ │ Git-ignore ☑ Git-ignored ☑ Not git-ignored ☑ Recommended                          │
+ └──────────────────────────────────────────────────────────────────────────────────┘
+```
 
-| Segment | Shows |
+### 3.1 The **Compressed** facet — ☑ Compressed ☑ Uncompressed (both checked by default)
+
+The old `Both · Compressed · Uncompressed` segmented control is now a **two-value facet**. Its
+derivation is unchanged — the values read the **C/c** badge
+([directories.mdx §3.3](./directories.mdx)):
+
+| Value (checkbox) | Shows |
 | --- | --- |
-| **Both** (default) | Every large file — compressed, uncompressed, and non-media alike. |
-| **Compressed** | Only files already compressed (the light-yellow **`c`** state). |
-| **Uncompressed** | Only files that **could be compressed but are not** — the bright-yellow **`C`** state (a video/image that looks uncompressed). This is the "offer to compress" backlog. |
+| ☑ **Compressed** | Files already compressed — the light-yellow **`c`** state. |
+| ☑ **Uncompressed** | Files that **could be compressed but are not** — the bright-yellow **`C`** state (a video/image that looks uncompressed). This is the **"offer to compress" backlog**, and unchecking *Compressed* is how the user isolates it. |
 
-### 3.2 Sort — `Size · Name · Path`, each with an up/down arrow (default **Size ↓**)
+* **Both checked is the resting state** and is exactly what the old **Both** segment meant: every large
+  file — compressed, uncompressed, and non-media alike — with no constraint applied
+  ([tables.mdx §2.6](./tables.mdx#26-retiring-the-both--x--y-segmented-filters-locked)).
+* **Non-media files carry neither badge**, so the compress axis does not apply to them; per
+  [tables.mdx §2.4.1](./tables.mdx#241-the-two-facets-fixed-vocabulary-locked) a row whose axis does not
+  exist is **never hidden by that facet** — an `.iso` is not secretly filtered out because the user
+  unchecked *Compressed*. (This is the same rule §3.3 leans on for git-ignore.)
 
-A segmented control whose **label is "Sort:"** and whose segments are the three sort keys. Each segment
-carries a **direction arrow**; clicking the active segment **toggles** its arrow (▲ ascending ⇄ ▼
-descending), clicking a different segment makes it the active sort:
+### 3.2 Sort — the shared chip run, not a segmented control (LOCKED)
 
-* **Size** — the default active segment, defaulting to **▼ (biggest on top)**. Toggling flips to ▲
-  (smallest on top). Sorts on **raw bytes**.
-* **Name** — sort by file name, ▲ A→Z / ▼ Z→A.
-* **Path** — sort by full absolute path, ▲/▼. (Grouping the table by folder, since paths sort
-  lexicographically.)
+**Sort is a genuine one-of-N-per-slot control, not a filter facet**, so §2.6 does not retire it — but
+[tables.mdx §3.5](./tables.mdx#35-sorting-without-opening-the-dropdown--the-active-sort-chips-locked)
+now gives **every** table a live **active-sort chip run** on the control row, which does everything the
+`Size · Name · Path` segmented control did and more. **The two are redundant, and the chip run wins:**
 
-This segmented control and the house **sort icon** (below) are the **same** sort state — changing one
-updates the other. The segment sets the **primary** key of the shared **multi-level** sort
-([tables.mdx §3](./tables.mdx#3-multi-level-sort--primary--secondary--tertiary-locked)); the sort icon
-exposes the full **1st/2nd/3rd** priority slots (e.g. Bookmarked → Size → Name). The **page default**
-is **Bookmarked ↓ first, then Size ↓** — bookmarked files float to the top of the list, biggest-first
-within — applied until the user re-ranks (their choice then persists, §3.4).
+* **Recommendation (LOCKED direction): retire the segmented sort control and adopt the shared chip
+  run.** Keeping both would mean two controls driving one state, and it would leave this page as the
+  only table in the product with a bespoke sort widget — the exact inconsistency §2.6 removed on the
+  filter side. The chip run is strictly more capable: the segmented control could only set the
+  **primary** key from a fixed list of three, while the chip run shows and edits **all** active keys.
+* **It drives the same multi-level state** the segmented control drove
+  ([tables.mdx §3](./tables.mdx#3-multi-level-sort--primary--secondary--tertiary-locked)): chips,
+  headers, and the `⇅` dropdown are **one** state. Click a chip's caret → asc ⇄ desc (what toggling an
+  active segment did). Click a header → promote to primary (what picking a segment did).
+  **Shift**-click a header → append the next key (what the segmented control could never do).
+* **Size · Name · Path do not disappear as sort keys** — they are simply columns, sortable by header
+  click and listed in the `⇅` dropdown like every other. Sorting on **Size** is still on **raw bytes**;
+  **Path** still groups the table by folder because paths sort lexicographically.
+* **The page default is unchanged: Bookmarked ↓ then Size ↓** — bookmarked files float to the top,
+  biggest-first within ([tables.mdx §3.4](./tables.mdx#34-the-default-sort--bookmarks-first-locked-default-user-changeable)).
+  It renders at rest as `Sort: [1 Bookmarked ↓] [2 Size ↓]` and applies until the user re-ranks; their
+  choice then persists (§3.4).
 
-### 3.3 IPFS membership filter — `In IPFS · Not · Both` (default **Both**)
+### 3.3 The **Pin (IPFS)** facet — and why this page also gains a **Git-ignore** facet
 
-Three segments; **In IPFS** left, **Not** middle, **Both** right; default **Both**. "In IPFS" means the
-file is **pinned** — its decision is `sync` and it carries the pink **`P`** badge
-([directories.mdx §3.2](./directories.mdx), [one_repo.mdx §1](./one_repo.mdx)):
+The old `In IPFS · Not · Both` segmented control becomes the shared **Pin (IPFS)** facet, with the
+fixed vocabulary of [tables.mdx §2.4.1](./tables.mdx#241-the-two-facets-fixed-vocabulary-locked) —
+**no page-local wording**:
 
-| Segment | Shows |
+| Value (checkbox) | Shows |
 | --- | --- |
-| **In IPFS** | Only files we already pin (**`P`**). |
-| **Not** | Only files **not** pinned — the candidates the user probably wants to back up. |
-| **Both** (default) | Every large file regardless of IPFS membership. |
+| ☑ **Pinned** (`sync`) | Files we already pin — the pink **`P`** badge ([directories.mdx §3.2](./directories.mdx), [one_repo.mdx §1](./one_repo.mdx)). |
+| ☑ **Not pinned** (`ignore`) | Files **deliberately not pinned** — a real, decided answer, **not** "git-ignored". |
+| ☑ **Recommended** | The calc engine suggests pinning ([to_do_batch_calc_engine.mdx](./to_do_batch_calc_engine.mdx)). |
+| ☑ **Undecided** | Never asked. |
 
-### 3.4 House search + sort/filter icons (charter)
+* The old **Not** segment conflated *"deliberately not pinned"* with *"never asked"*; the four-value
+  facet separates them, which is the whole point of the page's workflow — **Undecided ✓ + Recommended
+  ✓, everything else unchecked** is the precise "big files that aren't backed up yet" list the old
+  three-segment control could only approximate.
+* All four checked = the old **Both** (every large file regardless of IPFS membership).
 
-Per the [Tables charter](../CLAUDE.md) and the shared [tables.mdx](./tables.mdx) behavior, the
-control row also carries:
+**This page must also carry a Git-ignore facet (NEW).** [tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked)
+is unambiguous: a table that filters the pin axis must not imply anything about the git-ignore axis, and
+the two are **always two facets, never one**. Full paths today offers **no** git-ignore filter at all,
+which leaves the user with a pin facet whose `Not pinned` value is the historical source of exactly the
+confusion §2.4 outlaws. So the **Git-ignore** facet (☑ Git-ignored · ☑ Not git-ignored · ☑ Recommended,
+read live from `git check-ignore`) joins the rail.
 
-* a **search box** (left) — case-insensitive substring over **name + path**;
-* a single **sort icon** (`⇅`) — opens the house **multi-level** sort dropdown
-  ([tables.mdx §3](./tables.mdx#3-multi-level-sort--primary--secondary--tertiary-locked)) with
-  **1st/2nd/3rd** priority slots; it is the **same** sort state as the Sort segmented control (§3.2)
-  and header clicks (picking a segment or clicking a header sets the **primary**);
-* a single **filter icon** (`⛛`) — its dropdown **promotes a "Bookmarked only" checkbox** to the top
-  ([tables.mdx §2](./tables.mdx#2-the-promoted-bookmarked-only-filter-locked)), then the finer filters
-  the segments don't cover (a **min size** and a **name/path contains**); colored when active.
+**How it handles files outside any repo — always present, N/A rows exempt (LOCKED).**
+[decision_toggles.mdx §6](./decision_toggles.mdx) scopes the git-ignore axis to rows **under a repo**;
+Full paths walks an arbitrary root (home by default) and therefore lists files **inside** repos and
+**outside** every repo in one table. The answer is **not** to show/hide the facet with the root — that
+would make the vocabulary flicker and re-hide it, the very failure §2.2 exists to prevent. Instead:
 
-The three segmented controls are the **quick filters** (like [one_repo.mdx §4.1](./one_repo.mdx)'s
-summary chips); the icon dropdowns are the fallback for anything finer. This page's **sort + filter
-persist per user** in `users/<email>/config.yaml` `tables.views`
-([tables.mdx §4](./tables.mdx#4-persistence--sort--filter-saved-per-user-per-page-locked)).
+* **The Git-ignore facet is always on the rail**, with its full §2.4.1 vocabulary.
+* **A row outside any repo is N/A on that axis and is never hidden by that facet** — the rule already
+  LOCKED in [tables.mdx §2.4.1](./tables.mdx#241-the-two-facets-fixed-vocabulary-locked) (*"N/A is not a
+  facet value… a row where the axis does not apply is filtered by the axis's own facet only when that
+  axis exists on the row"*). It is the same exemption §3.1 gives non-media files on the Compressed
+  facet, so the page has one rule, not two.
+* **One line of justification:** a permanent facet whose N/A rows opt out keeps the vocabulary readable
+  at every root and matches the row cells — the ⊘ toggle is already rendered N/A-but-width-reserved for
+  those same rows ([directories.mdx §3.6](./directories.mdx)) — whereas a facet that appears and
+  disappears with the root would teach the user that the axis does not exist.
+* **Affordance:** when the current root is **outside** every repo, the facet's label carries a muted
+  **`(repo files only)`** hint so an N/A-heavy result never reads as a broken filter.
 
-The client-side derivation of the three segmented filters (from the C/c and P badges) and the shared sort state is handled in code:
+### 3.4 House search + the `⛛` / `⇅` icons — the new division of labour (charter)
+
+With the facets on the rail, the two icons keep only what a rail chip cannot express
+([tables.mdx §2.3](./tables.mdx#23-what-survives-in-the-filter--popover-locked)):
+
+* a **search box** (left) — case-insensitive substring over **name + path**. Unchanged.
+* **`☐ Bookmarked only`** — **promoted out of the `⛛` dropdown to the head of the facet rail**
+  (leftmost, visually separated). It stays the one **single checkbox** rather than a two-value facet —
+  the single documented exception ([tables.mdx §2.7](./tables.mdx#27-the-promoted-bookmarked-only-filter-locked)).
+* the **`⛛` filter icon** — now **only**: the **min size** threshold, the **name/path contains**
+  free-text, and narrow-width **facet overflow**. No enum facet lives inside it. It stays **colored
+  whenever any filter is active — rail facets included** — so it remains the single honest "something is
+  filtered" indicator.
+* the **`⇅` sort icon** — the **1st/2nd/3rd** priority-slot editor and **Clear sort**
+  ([tables.mdx §3.1](./tables.mdx#31-the-sort-dropdown-ui-locked)); it is the **discovery/overflow**
+  surface for a sortable column that is not currently in the chip run, and shares one state with the
+  chips and the headers (§3.2).
+
+This page's **sort + filter persist per user** in `users/<email>/config.yaml` `tables.views`
+([tables.mdx §4](./tables.mdx#4-persistence--sort--filter-saved-per-user-per-page-locked)); its facets
+persist as `hidden:` — the **unchecked** values — never `shown:`
+([tables.mdx §4.1](./tables.mdx#41-facets-persist-as-the-hidden-values-never-the-shown-ones-locked)).
+The worked `files:` example in that section **is** this page.
+
+The client-side derivation of the facet values (from the C/c and P badges) and the shared sort state is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (the `filtered` memo + `setSort()`).
+
+The facet rail, the active-sort chip run, and multi-level sort are **new** shared surfaces; they are to be implemented in code on the shared table, not on this page:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component ([tables.mdx §2.2 / §3.5](./tables.mdx#22-the-facet-rail--filtering-without-opening-a-dropdown-locked)).
+
+#### 3.4a This page must stop hand-rolling its table (NEW — engineering note)
+
+Full paths does **not** use the shared `DataTable`: `FullPathsPage` builds its **own** `useReactTable`
+instance with a bespoke control row, and its sort state is **single-level only** (one column, one
+direction) — which is why the segmented control and the multi-level model of
+[tables.mdx §3](./tables.mdx#3-multi-level-sort--primary--secondary--tertiary-locked) never reconciled
+here. **The fix is adoption, not another bespoke control:** this page should render the shared
+`DataTable` and inherit the facet rail, the chip run, the priority slots, the `hidden:` persistence, and
+the responsive column priority, rather than growing a second, page-local implementation of each. Every
+behavior §3.1–§3.4 specifies is a *shared* behavior configured with this page's facet definitions
+(Compressed, Pin (IPFS), Git-ignore) — none of it is a reason for a custom row.
+
+to be implemented in code (the migration):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (replace its local `useReactTable` + segmented control row with the shared `DataTable` from `code/packages/frontend/src/components/table/DataTable.tsx`, passing its facet definitions).
 
 ### 3.5 Action row — `Select all · IPFS pin · Unpin`
 
@@ -219,7 +315,7 @@ everywhere ([repos.mdx §3](./repos.mdx)).
 | 1 | **☐ select** | — | — | Row checkbox; header checkbox selects the current page (§3.5). |
 | 2 | **Name** | text | ✓ | The file's base name, bold. Clicking it opens **View one file** ([files.mdx](./files.mdx)). |
 | 3 | **Path** | text | ✓ | The **full absolute path** — the widest column, middle-truncated with the full path on hover/`title`. Clicking opens **View one file**. |
-| 4 | **Size** | bytes | ✓ | Human-readable (`8.2 GB`), right-aligned; sorts on raw bytes. The default **secondary** sort (▼) — after Bookmarked (§3.2). |
+| 4 | **Size** | bytes | ✓ | Human-readable (`8.2 GB`), right-aligned; sorts on raw bytes. The default **secondary** sort (▼) — after Bookmarked (§3.2). Lowest-but-one responsive priority site-wide ([tables.mdx §4a](./tables.mdx)). |
 | 5 | **Changed** | timestamp | ✓ | `modifiedAt`, relative with an absolute tooltip. |
 | — | **badges** | — | — | The right-aligned **code badges** ([directories.mdx §3](./directories.mdx)) — here mostly **C/c** (compress) and **P** (pin/IPFS), plus **r** inside a repo and **i** for list artifacts. |
 | — | **`⋮`** | — | — | The row **kebab** — the **file** action catalog ([menus.mdx §5.3](./menus.mdx)); right-click on the row opens the same menu ([menus.mdx §3.1](./menus.mdx)). Never navigates. |
@@ -227,15 +323,15 @@ everywhere ([repos.mdx §3](./repos.mdx)).
 Pagination **defaults to 500** ([repos.mdx §3.3](./repos.mdx)); the **file count** shows left of the
 pager. The Path column is the widest; Name/Size/Changed stay compact.
 
-**Header-click sort shares the segmented sort control's state.** Clicking a column header sorts by it,
-click-again toggles asc ↔ descending ([repos.mdx §3.1](./repos.mdx)). This is the **same** sort state
-as the **Size · Name · Path** segmented control (§3.2) and the house sort icon (§3.4) — clicking the
-**Size** header is identical to picking **Size** in the segment, and its arrow flips in lock-step. (The
-extra columns **Changed** and any others are sortable by header even though the segment only exposes the
-three primary keys.)
+**Header-click sort shares the chip run's state.** Clicking a column header **promotes it to the
+primary** key, click-again toggles asc ↔ descending, and **shift**-click **appends** it as the next key
+([tables.mdx §3.3/§3.5](./tables.mdx#35-sorting-without-opening-the-dropdown--the-active-sort-chips-locked)).
+The headers, the **active-sort chip run** (§3.2), and the `⇅` dropdown (§3.4) are **one** sort state —
+clicking the **Size** header updates its chip in lock-step. **Every** column here is sortable by header,
+not just the three the retired segmented control exposed.
 
-**Height — fills the page.** This page's table is the **last** element on it — the control row and
-action row (§3) sit **above**, and **nothing** sits below the table. So it takes the site-wide
+**Height — fills the page.** This page's table is the **last** element on it — the control row, the
+**facet rail**, and the action row (§3) all sit **above**, and **nothing** sits below the table. So it takes the site-wide
 **full-page-height** default ([repos.mdx §3.3.1](./repos.mdx)): the body scroll region grows to the
 bottom of the viewport (no dead white space when the window is tall), the page doesn't scroll, only the
 rows do. In code: `fillHeight` (the default) on the `DataTable`, inside a full-height flex-column page.
@@ -265,9 +361,16 @@ interface FlatFileListing {
 
 `files[]` are the **same `FsEntry`** the column browser returns ([directories.mdx §5](./directories.mdx))
 — `name`, absolute `path`, `sizeBytes`, `modifiedAt`, and the ordered `badges[]`. The frontend derives
-the two segmented filters from the badges: **compressed** = badge `compressed`, **uncompressed** =
-badge `compress`; **in IPFS** = badge `pin`. No new per-row shape is needed — Full paths is a
-different *view* of the same file knowledge, not new knowledge.
+the **Compressed** facet from the badges (**Compressed** = badge `compressed`, **Uncompressed** = badge
+`compress`) and the **Pin (IPFS)** facet's `Pinned` value from badge `pin`. No new per-row shape is
+needed for those — Full paths is a different *view* of the same file knowledge, not new knowledge.
+
+**The two four-state axes do need the row's decision state.** The `Pinned / Not pinned / Recommended /
+Undecided` and `Git-ignored / Not git-ignored / Recommended` facets (§3.3) cannot be derived from the
+read-only badges — a badge only says "pinned or not". They read the **same** per-row decision state the
+column browser's rows already carry ([directories.mdx §5](./directories.mdx), the note under `FsEntry`):
+each axis's `on` / `off` / `recommended` / `n/a` value, plus **whether the entry is under a repo** (so
+the git-ignore axis is N/A outside one, §3.3). Full paths inherits that shape; it does not invent one.
 
 Streaming the flat listing into the page as rows arrive (NDJSON from `GET /api/fs/flat`) and windowing the large row set for scroll performance is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/useStreamedFlatListing.ts` — `useStreamedFlatListing` (rows windowed by `useWindowedRows.ts` — `useWindowedRows`).
@@ -278,8 +381,11 @@ Streaming the flat listing into the page as rows arrive (NDJSON from `GET /api/f
 
 * **No large files under this root:** a card — "No files at or above the big-file threshold under
   `<root>`. Lower the threshold in [Settings](./settings.mdx) or pick another folder."
-* **A filter emptied the list:** the table body shows "No files match these filters" with a **Clear
-  filters** affordance that resets the three segmented controls to their defaults.
+* **A filter emptied the list:** the table body shows "No files match these filters" with the rail's
+  **Clear filters** link ([tables.mdx §2.2](./tables.mdx#22-the-facet-rail--filtering-without-opening-a-dropdown-locked)),
+  which re-checks every box on every facet (the all-checked resting state) and clears the `⛛`
+  thresholds/contains. (This state is now **rarer by construction**: the last checked box in a facet
+  cannot be unchecked, so a facet alone can no longer blank the table — [tables.mdx §2.1](./tables.mdx#21-a-facet-is-its-values-each-with-a-checkbox-all-checked-by-default-locked).)
 * **Truncated:** a note above the table — "Showing the first N files (walk capped) — narrow the root
   to see everything." (`truncated: true`, §1.)
 * **Loading:** skeleton rows sized to the columns; no layout shift.
@@ -301,18 +407,37 @@ Streaming the flat listing into the page as rows arrive (NDJSON from `GET /api/f
 3. The walk is **recursive, metadata-only, Node `fs` only** (no `find`/`du`), honors the **big-file
    threshold** (§1) and the **hard-skip** set, hides dotfiles by default, does not follow symlinks, and
    is **bounded** — a hit cap surfaces a **truncated** note (never silent).
-4. **Compressed** segmented control (**Both · Compressed · Uncompressed**, default Both) filters rows by
-   the **C/c** badge; **Uncompressed** narrows to the bright-yellow **C** ("could compress but isn't").
-5. **Sort** segmented control (label **"Sort:"**, segments **Size · Name · Path**, each with an up/down
-   arrow) sets the **primary** key; it shares one **multi-level** sort state with the house **sort
-   icon** (§3.2/§3.4) and header clicks. The house sort dropdown exposes **1st/2nd/3rd** priority slots
-   ([tables.mdx §3](./tables.mdx)); the **page default** is **Bookmarked ↓, then Size ↓**.
+4. **No segmented filter survives on this page** ([tables.mdx §2.6](./tables.mdx#26-retiring-the-both--x--y-segmented-filters-locked)).
+   The **Compressed** facet is **☑ Compressed ☑ Uncompressed**, both checked by default (all-checked =
+   the old **Both**), derived from the **C/c** badge; unchecking **Compressed** isolates the
+   bright-yellow **C** backlog ("could compress but isn't"). Non-media rows have no compress axis and
+   are never hidden by that facet.
+5. **Sort is the shared multi-level model, not a bespoke control** (§3.2). The retired **Size · Name ·
+   Path** segmented control is replaced by the **active-sort chip run** on the control row
+   ([tables.mdx §3.5](./tables.mdx#35-sorting-without-opening-the-dropdown--the-active-sort-chips-locked));
+   chips, header clicks (shift-click appends), and the `⇅` dropdown's **1st/2nd/3rd** priority slots are
+   **one** state. The **page default is unchanged: Bookmarked ↓, then Size ↓**.
 6. The table carries the **shared table behavior** ([tables.mdx](./tables.mdx)): a leading **bookmark**
-   toggle (col 0, stored per file by path + fingerprint in the owning pin unit's `config.yaml`), a
-   **"Bookmarked only"** checkbox promoted to the top of the filter dropdown, and **per-user, per-page
-   persistence** of the sort + filter state in `users/<email>/config.yaml`.
-7. **IPFS** segmented control (**In IPFS · Not · Both**, default Both) filters by pin membership
-   (the **P** badge / decision `sync`); **Not** reveals the un-pinned backup candidates.
+   toggle (col 0, stored per file by path + fingerprint in the owning pin unit's `config.yaml`), the
+   **"Bookmarked only"** checkbox **promoted to the head of the facet rail**
+   ([tables.mdx §2.7](./tables.mdx#27-the-promoted-bookmarked-only-filter-locked)), and **per-user,
+   per-page persistence** of the sort + filter state in `users/<email>/config.yaml` — facets stored as
+   `hidden:` (the **unchecked** values), never `shown:`
+   ([tables.mdx §4.1](./tables.mdx#41-facets-persist-as-the-hidden-values-never-the-shown-ones-locked)).
+7. **Pin (IPFS) and Git-ignore are two separate facets on the rail** — never merged, never nested, and
+   **neither is named "Decision"** ([tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked)).
+   **Pin (IPFS)** (☑ Pinned · ☑ Not pinned · ☑ Recommended · ☑ Undecided, all checked = the old **Both**)
+   replaces the **In IPFS · Not · Both** control; unchecking **Pinned** reveals the un-pinned backup
+   candidates. **Git-ignore** (☑ Git-ignored · ☑ Not git-ignored · ☑ Recommended, read live from
+   `git check-ignore`) is **always present**; a row **outside any repo is N/A** on that axis and is
+   **never hidden** by that facet (§3.3), and the facet's label carries a muted **`(repo files only)`**
+   hint when the root is outside every repo.
+7a. **The `⛛` popover holds only** the **min size** threshold, the **name/path contains** free-text, and
+   narrow-width facet **overflow** — **no enum facet lives inside it** — and it stays **colored whenever
+   any filter is active, rail facets included** (§3.4).
+7b. **The page renders the shared `DataTable`** rather than its own `useReactTable` + control row
+   (§3.4a), so the facet rail, the chip run, the priority slots, `hidden:` persistence, and responsive
+   column priority are all **inherited**, not re-implemented here.
 8. The **action row** — **Select all** (selects the whole filtered set), **IPFS pin** (decision →
    sync), **Unpin** (decision → ignore) — acts on checked rows, shows an **N selected** counter, never
    moves or deletes local bytes, and **reports skipped** files (not in a registered repo, or Never
@@ -330,14 +455,26 @@ Streaming the flat listing into the page as rows arrive (NDJSON from `GET /api/f
   Full paths = a SECOND TAB under File System (route /fs/paths), a FLAT recursive TanStack table of the
   LARGE files (>= big-file threshold) under a chosen root — lead columns Name + full absolute Path,
   per-row checkbox, trailing ⋮ kebab. It is a different VIEW of the same FsEntry knowledge the column
-  browser (directories.mdx) returns — NOT new per-file data. Three SEGMENTED CONTROLS: compressed
-  (Both·Compressed·Uncompressed, default Both, driven by the C/c badge), sort (Size·Name·Path with
-  up/down arrows, default Size ▼, shares state with the house sort icon), IPFS (In IPFS·Not·Both,
-  default Both, driven by the P badge). Actions Select all / IPFS pin / Unpin reuse the one_repo.mdx
+  browser (directories.mdx) returns — NOT new per-file data. §3 WAS three SEGMENTED CONTROLS; they are
+  RETIRED (tables.mdx §2.6, which credits this page for pioneering visible no-dropdown filtering — this
+  is a PROMOTION of the idea, not a repudiation). Now: an always-visible FACET RAIL (tables.mdx §2.2)
+  carrying "Bookmarked only" (promoted, the one single-checkbox exception, §2.7) + the Compressed facet
+  (☑ Compressed ☑ Uncompressed — all-checked IS the old "Both", driven by the C/c badge) + the Pin (IPFS)
+  facet (☑ Pinned ☑ Not pinned ☑ Recommended ☑ Undecided, driven by the P badge / decision) + a NEW
+  Git-ignore facet (§2.4 forbids one table filtering the pin axis while implying anything about the
+  git-ignore axis; rows OUTSIDE a repo are N/A on that axis and are NEVER hidden by it, per §2.4.1 —
+  same exemption non-media rows get on Compressed). The Size·Name·Path sort segmented control collapses
+  into the SHARED active-sort chip run (tables.mdx §3.5) — sort is a genuine one-of-N-per-slot control so
+  §2.6 doesn't retire it, but two controls for one state is bespoke, so the chip run wins; page default
+  Bookmarked ↓ then Size ↓ is UNCHANGED. The ⛛ icon now holds ONLY min-size + name/path contains +
+  overflow (§2.3). ENGINEERING: this page hand-rolls its own useReactTable with single-level sort — it
+  must ADOPT the shared DataTable (§3.4a), never grow another bespoke control row.
+  Actions Select all / IPFS pin / Unpin reuse the one_repo.mdx
   decision model (sync/ignore) via the per-entity decision endpoint — so files outside a registered
   repo, or with Never IPFS on, are REPORTED as skipped, never silently dropped, and no bytes ever move.
   Backend: GET /api/fs/flat (recursive, metadata-only, Node fs, bounded, honors threshold + hard-skip).
-  Reuses badges (directories.mdx §3), control-row + pagination-500 (repos.mdx), pin semantics (ipfs.mdx),
+  Reuses badges (directories.mdx §3), the filter/sort/persistence model (tables.mdx §2–§4 — do NOT
+  restate it here), control-row + pagination-500 (repos.mdx), pin semantics (ipfs.mdx),
   the ⋮ file catalog + sticky flags (menus.mdx). Sibling tab: directories.mdx (column browser). When the
   badge vocabulary or the decision model changes, it changes in those specs and this tab inherits it.
 -->

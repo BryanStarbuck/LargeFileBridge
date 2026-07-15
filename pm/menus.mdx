@@ -290,7 +290,7 @@ The directory action catalog (its Open / Work / Flag groups and the Never IPFS /
 | Open | **Open containing folder** | navigate | → [File System](./directories.mdx) revealing this file. |
 | IPFS | **Add to IPFS** | mutate | Sets the [decision](./one_repo.mdx#1-the-decision-model-locked) to `sync`: add to the manifest, pin, and transfer to peers. Hidden when **Never IPFS** is on (§6.6). Shown when the file is not already an Add-to-IPFS (pin) file. |
 | IPFS | **Remove from IPFS** | mutate ⚠ | Sets the decision to `ignore`: remove from the manifest and unpin **on this machine**. **Never deletes the local bytes** (§6.2). Shown when the file is currently an Add-to-IPFS (pin) file. |
-| Decision | **Set decision ▸ Add to IPFS (pin) / Ignore / Undecided** | mutate | The full three-state submenu ([decision model](./one_repo.mdx#1-the-decision-model-locked)) — the frozen `sync` / `ignore` / `undecided` values; "Add to IPFS" / "Remove from IPFS" above are the two one-click shortcuts. Changing it **never deletes** the local file. |
+| IPFS | **Set pin ▸ Pinned / Not pinned / Undecided** | mutate | The full three-state submenu for the **IPFS axis** ([decision model](./one_repo.mdx#1-the-decision-model-locked)) — writing the frozen `sync` / `ignore` / `undecided` values; "Add to IPFS" / "Remove from IPFS" above are its two one-click shortcuts. **`Not pinned` = the `ignore` value = "deliberately not pinned"** — it does **not** git-ignore anything; that is the **Git ignore** item in the separate **Work** group below. Changing it **never deletes** the local file. |
 | Work | **Pin now** | mutate | Queue this one file's transfer (`pin` op). Only meaningful when its decision is `sync` (Add to IPFS (pin)). |
 | Create | **Create Transcription** | mutate | Audio/video only. Opens the **unified batch-confirm popup** ([dialogs.mdx §5/§6.4](./dialogs.mdx)) with **this one file** as the sole checked candidate — the education + an explicit **"Transcribe 1 file"** confirm, model-gated + background-enqueued. The **same** popup the directory item and the Transcribable tile open, never a bare `window.confirm` (§6.1). |
 | Create | **Create AI description** | mutate | Image/video only. Same popup for this one file ([dialogs.mdx §5/§6.4](./dialogs.mdx)) — a **"Describe 1 file"** confirm, provider/model-gated. |
@@ -306,8 +306,27 @@ The directory action catalog (its Open / Work / Flag groups and the Never IPFS /
 | Danger | **Stop pinning (untrack / unpin)** | mutate ⚠ | Removes from the manifest and unpins **on this machine**. **Never deletes the local bytes** (§6.2); confirm required. |
 | Danger | **Delete…** | mutate ⚠ | **Recoverable delete** — moves the file to LFBridge's trash under the state dir (`<stateDir>/trash/`); it does **not** `unlink`. Explicit click + confirm ("Move to LFBridge trash? — recoverable"). See [media_viewer.mdx §4.4](./media_viewer.mdx). |
 
-The file action catalog (Add/Remove IPFS, the three-state decision submenu, Compress, Stop pinning) is built in code:
+> **Renamed: the `Decision` group is now `IPFS`, and `Set decision ▸` is `Set pin ▸` (§2.4 of
+> [tables.mdx](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked)).**
+> The group was named **Decision** and its item **Set decision ▸ Add to IPFS (pin) / Ignore / Undecided** —
+> but it only ever wrote the **IPFS axis**. A generic *Decision* label over a single-axis control is the
+> exact conflation §2.4 forbids ("no user-facing *Decision* label that spans axes"), and it is worse in a
+> menu than in a filter: the item sat **three rows above** a **Git ignore** item, so *Set decision ▸
+> Ignore* and *Git ignore* read as the same choice while writing **different axes** with **different
+> sources of truth** (the ledger vs. live `git check-ignore`,
+> [decisions.mdx §1.1](./decisions.mdx#11-this-ledger-records-intent--git-records-the-git-ignore-state-locked)).
+> Folding it into the existing **IPFS** group (beside **Add to IPFS** / **Remove from IPFS** — the two
+> shortcuts for its own end values) makes the axis legible from the group heading alone, and leaves
+> **Git ignore** in **Work**, a separate group, per §5.6. **Frozen wire values are untouched**: `Pinned`
+> writes `sync`, `Not pinned` writes `ignore`, `Undecided` writes `undecided`
+> ([decisions.mdx §7](./decisions.mdx#7-reconciliation--folding-the-shared-ledger-onto-this-computer-locked)) —
+> a **label** change only.
+
+The file action catalog (Add/Remove IPFS, the three-state pin submenu, Compress, Stop pinning) is built in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` function.
+
+The **Set pin ▸** submenu's rename (today built as the `Decision` group's `Set decision ▸` item) is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the submenu's group + labels; its `setDecision` payload values are unchanged).
 
 ### 5.4 Peer (a user's other computer)
 
@@ -351,12 +370,23 @@ Two of the catalog's most-used mutations — **Add to IPFS / Remove from IPFS** 
 **Add-to-IPFS pin** toggle and the **Add-to-git-ignore ⊘** toggle) rendered directly on file/dir rows
 wherever files are listed. The relationship is deliberate and **additive**:
 
+* **Pin actions and git-ignore actions are NEVER in one menu group — the menu mirrors the two-facet rule
+  (LOCKED, [tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked)).**
+  Add-to-IPFS and Add-to-git-ignore are **two independent booleans** with **two sources of truth** — the
+  decision ledger's IPFS axis vs. live `git check-ignore`
+  ([decisions.mdx §1.1](./decisions.mdx#11-this-ledger-records-intent--git-records-the-git-ignore-state-locked)) —
+  and a file can be either, both, or neither. So in **every** catalog (§5.1–§5.3): the pin actions live in
+  the **IPFS** group (**Add to IPFS** · **Remove from IPFS** · **Set pin ▸**), **Git ignore** lives in the
+  **Work** group, and **no group is named "Decision"** — a heading that spans both axes is the same
+  conflation §2.4 retires from the facet rail, and it does the same damage here: two adjacent items that
+  read as one choice and write different state. This is the **same split**, expressed three ways — two
+  facets on the rail, two sort keys, two menu groups.
 * **The toggles are the fast path.** On a table row the user flips a decision **in place** — no menu to
   open — and each click writes **one axis** of the team-shared decision immediately
   ([decision_toggles.mdx §2](./decision_toggles.mdx#2-clicking-a-toggle--one-decision-event-locked)). The
   toggle **stops click propagation** and never navigates, exactly like the `⋮` kebab column (§3).
 * **The menu is the complete, discoverable list.** The **`⋮` kebab / right-click / more-menu** still offer
-  the **same actions** in words — **Add to IPFS** / **Remove from IPFS**, the three-state **Set decision**
+  the **same actions** in words — **Add to IPFS** / **Remove from IPFS**, the three-state **Set pin**
   submenu, and **Git ignore** — for users who prefer the labelled catalog, for keyboard/a11y navigation, and
   for the cases the toggle **defers to the menu's dialog**: a **directory** ignore and a **multi-row** flip
   open the **[Git-ignore pop-over](./git_ignore.mdx)** / bulk menu rather than writing silently
@@ -515,6 +545,12 @@ Whether a file earns the pin **`P`** badge (and Never IPFS suppressing it) is co
    bulk menu, and a **To-Do batch's** recommendations all write the **same** single-axis decision; the
    **Git-ignore ⊘** toggle is repo-scoped like the menu's Git-ignore item; a directory ignore or multi-row
    flip defers to the **Git-ignore pop-over**; and **Never IPFS / Do not compress** stay menu-only policies.
+8b. **The two axes are never one menu group (§5.6, [tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked)):**
+   in every catalog the pin actions (**Add to IPFS** · **Remove from IPFS** · **Set pin ▸ Pinned / Not
+   pinned / Undecided**) sit in the **IPFS** group and **Git ignore** sits in **Work** — **no group or item
+   is named "Decision"**, and none spans both axes. `Not pinned` means *deliberately not pinned*, never
+   git-ignored. The submenu's stored values remain the frozen `sync` / `ignore` / `undecided` — a **label**
+   change only ([decisions.mdx §7](./decisions.mdx#7-reconciliation--folding-the-shared-ledger-onto-this-computer-locked)).
 9. **Producing menu items (§5.2/§5.3):** the **directory** and **file** catalogs each carry **Create
    Transcriptions** and **Create AI descriptions** — selecting one opens the **unified batch-confirm popup**
    ([dialogs.mdx §5/§6.4](./dialogs.mdx)) scoped to that entity (a directory's subtree, or the single file as
@@ -550,4 +586,11 @@ Whether a file earns the pin **`P`** badge (and Never IPFS suppressing it) is co
   toggle is repo-scoped (N/A otherwise) like the menu's Git-ignore item; directory-ignore + multi-row flips
   defer to the git_ignore.mdx pop-over; Never IPFS / Do not compress (§6.6) stay MENU-ONLY policies, not row
   toggles. Keep in sync with decision_toggles.mdx, to_do.mdx §6 (batch popup), to_do_batch_calc_engine.mdx.
+  §5.6 + §5.3 AXIS SPLIT (tables.mdx §2.4, LOCKED): pin actions and git-ignore actions are NEVER in one
+  menu group — pin lives in the IPFS group (Add/Remove from IPFS + Set pin ▸), Git ignore lives in Work,
+  and NO group/item is named "Decision". §5.3's old "Decision" group with "Set decision ▸ Add to IPFS
+  (pin) / Ignore / Undecided" was IPFS-axis-only under a both-axes name, sitting rows away from Git ignore
+  — renamed to IPFS group / "Set pin ▸ Pinned / Not pinned / Undecided" ("Not pinned" = deliberately not
+  pinned, NOT git-ignored). Two facets on the rail = two sort keys = two menu groups, one rule three ways.
+  LABELS ONLY — the submenu still writes the FROZEN sync/ignore/undecided wire values (decisions.mdx §7).
 -->

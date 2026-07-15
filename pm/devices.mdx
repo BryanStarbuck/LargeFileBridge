@@ -242,9 +242,11 @@ the app can dial the peer (from `peers.yaml`) to fetch a file the device registr
 
 The **Devices / Peers** left-bar item ([left_bar.mdx §3](./left_bar.mdx#3-the-app-bar-main-navigation),
 route `/devices`) opens a **TanStack table** — one row per computer that carries your files — built to the
-project table contract ([tables.mdx](./tables.mdx), CLAUDE.md → *Tables*): a search box + a single
-filter icon + a single sort icon above it, click-a-header to sort, 500/page, full-page-height (nothing
-renders beneath it). The table answers, at a glance, **"which of my computers hold my files, which one
+project table contract ([tables.mdx](./tables.mdx), CLAUDE.md → *Tables*): a search box, the **facet
+rail** ([tables.mdx §2.2](./tables.mdx#22-the-facet-rail--filtering-without-opening-a-dropdown-locked) —
+§6.1.1 declares this page's one facet) with the `⛛` popover for free text, the sort icon + its
+**active-sort chip run** ([tables.mdx §3.5](./tables.mdx#35-sorting-without-opening-the-dropdown--the-active-sort-chips-locked)),
+click-a-header to sort, 500/page, full-page-height (nothing renders beneath it). The table answers, at a glance, **"which of my computers hold my files, which one
 am I on, and how do I tell the similar ones apart?"**
 
 ### 6.1 Columns (LOCKED)
@@ -270,6 +272,27 @@ crowded the table and forced the page narrow. Their information now lives in the
 never squeezed (Device is the widest to hold the name + descriptor; IPFS Peer ID is narrow because it
 is truncated). The `/devices` route also runs **full-width** (no `max-w-6xl` gutter) so the columns
 have room to breathe.
+
+### 6.1.1 Filtering — the Kind facet (LOCKED)
+
+Filtering follows [tables.mdx §2](./tables.mdx#2-filtering--the-value-visibility-checkbox-model-locked)
+and is not restated. This table has exactly **one** categorical column, so exactly one facet on the
+**rail** ([§2.2](./tables.mdx#22-the-facet-rail--filtering-without-opening-a-dropdown-locked)), its full
+vocabulary declared as [§2.8](./tables.mdx#28-a-facets-values-must-be-declared--an-empty-facet-is-a-bug-locked) requires:
+
+| Facet | Values (each a checkbox, all checked by default) | Source |
+| --- | --- | --- |
+| **Kind** | ☑ **Laptop** · ☑ **Desktop** · ☑ **Server** | `hardware.kind` (§7 — the derived triple; there is no fourth value) |
+
+It renders as a `<select>` today; under §2 it is three value checkboxes, all checked (all-checked =
+inactive), with no `any` option and the last checked box disabled.
+
+**Device · Owner · IPFS Peer ID · Last seen are free text**, so they have no value vocabulary to put on
+a rail — they stay in the `⛛` popover as `contains`
+([tables.mdx §2.3](./tables.mdx#23-what-survives-in-the-filter--popover-locked)).
+
+The Kind column's `filterOptions` (`laptop` / `desktop` / `server`) exist today as a `<select>` in the filter popover; rendering them as rail checkboxes is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` — `DevicesPage` (the `id: "kind"` column), against the new facet-rail region of `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
 
 ### 6.2 The Device cell — name + a rolled-up descriptor (LOCKED)
 
@@ -605,9 +628,13 @@ The pass itself — for every Git-backed storage, pull → write self device →
    pin pass **fetches marked CIDs to the grafted local path**, never to the writer's path (§4).
 5. The travelling **device registry** and the machine-local **`peers.yaml`** are kept distinct and
    cross-reference by **device id** (§5).
-6. The **Devices / Peers** page (`/devices`) renders a **full-width TanStack table** (search + filter +
-   sort icons, header-click sort, 500/page, full-page-height) with **fixed-width** columns — **Device,
-   Kind, Owner, IPFS Peer ID, Last seen** — and marks the self row **"This computer"** (§6.1). The
+6. The **Devices / Peers** page (`/devices`) renders a **full-width TanStack table** (search + facet rail
+   + `⛛` popover + sort, header-click sort, 500/page, full-page-height) with **fixed-width** columns —
+   **Device, Kind, Owner, IPFS Peer ID, Last seen** — and marks the self row **"This computer"** (§6.1).
+   Its one categorical filter, **Kind**, is a **value-checkbox facet on the rail — ☑ Laptop ☑ Desktop
+   ☑ Server, all checked by default** — never a `<select>`; Device / Owner / IPFS Peer ID / Last seen are
+   free-text `contains` in the `⛛` popover (§6.1.1,
+   [tables.mdx §2](./tables.mdx#2-filtering--the-value-visibility-checkbox-model-locked)). The
    Model/Year/Screen/Disk/RAM columns are **removed**; those facts are rolled into the **Device
    descriptor** line (§6.2). **Owner** shows the **logged-in OS username** (§6.3). The **IPFS Peer ID**
    is shown **first-8 `…` last-8** and **copies in full on click** (§6.4). **Clicking a row** opens the
@@ -656,7 +683,10 @@ The pass itself — for every Git-backed storage, pull → write self device →
   vs peers.yaml (machine-local) — cross-ref by device id. §6 the Devices/Peers PAGE = a full-width,
   fixed-width TanStack table with a LEAN column set — Device (name+disambiguation+a rolled-up descriptor
   of model/screen/chip/RAM/disk, §6.2), Kind, Owner (=OS username, §6.3), IPFS Peer ID (8…8 truncated +
-  click-to-copy, §6.4), Last seen; Model/Year/Screen/Disk/RAM columns REMOVED. A row click opens View-
+  click-to-copy, §6.4), Last seen; Model/Year/Screen/Disk/RAM columns REMOVED. §6.1.1 FILTERING (LOCKED,
+  per tables.mdx §2): the ONE categorical column, Kind, is a VALUE-CHECKBOX facet on the RAIL — ☑ Laptop
+  ☑ Desktop ☑ Server, all checked by default — never the <select> it is today; Device/Owner/IPFS Peer ID/
+  Last seen are free text → `contains` in the ⛛ popover. A row click opens View-
   one-device /device/$deviceId (full identity + fingerprint + actions, §6.5, GET /api/devices/:id →
   deviceRow()). Every table in the repo is TanStack (§6.7). deviceRows() unions self+peers+registry. §7 the
   HARDWARE FINGERPRINT collected LOCALLY (no network) via os/fs + guarded sysctl/system_profiler + a

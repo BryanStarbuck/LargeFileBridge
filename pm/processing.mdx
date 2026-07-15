@@ -272,9 +272,53 @@ unambiguous:
 * **Nothing is hidden.** A file that has not started yet is a **Pending row**, not an invisible integer — the
   user can see the whole queue that is pending but not started, the ones underway, and the ones that failed
   out, all at once.
-* **Sort.** Default **Running → Pending → Failed → Done**, so in-flight work is on top, the failures are easy
-  to find, and the queue tail is visible below. The user can re-sort/filter like any table
-  ([tables.mdx](./tables.mdx)); a **"Failed only"** quick filter is offered when any item failed.
+* **Sort.** Default **Running → Pending → Failed → Done**, so in-flight work is on top, the failures are
+  easy to find, and the queue tail is visible below. **This must be a real default sort, not an invisible
+  JS pre-sort.** Today the rows are ordered by a `STATE_ORDER` constant before they ever reach the table,
+  with **no `defaultSort`** — so the state ordering is a fact the user can neither **see** nor **change**:
+  the sort chip run ([tables.mdx §3.5](./tables.mdx#35-sorting-without-opening-the-dropdown--the-active-sort-chips-locked))
+  renders nothing, the Status header shows no caret, and clicking a header silently discards the grouping.
+  The order above is therefore declared as the table's **default sort key (Status, in the state order)**
+  ([tables.mdx §3.4](./tables.mdx#34-the-default-sort--bookmarks-first-locked-default-user-changeable)), so
+  it displays honestly as a chip, is user-changeable, and persists per user like every other sort (§4 there).
+* **Filter.** Per [tables.mdx §2](./tables.mdx#2-filtering--the-value-visibility-checkbox-model-locked) —
+  see §4.3.1a.
+
+### 4.3.1a The facets — Status and Kind (LOCKED)
+
+Filtering follows [tables.mdx §2](./tables.mdx#2-filtering--the-value-visibility-checkbox-model-locked)
+and is not restated. Two facets on the **rail**, vocabularies declared as
+[§2.8](./tables.mdx#28-a-facets-values-must-be-declared--an-empty-facet-is-a-bug-locked) requires:
+
+| Facet | Values (each a checkbox, all checked by default) | Column |
+| --- | --- | --- |
+| **Status** | ☑ **Running** · ☑ **Queued** · ☑ **Failed** | Status (§4.3.2) — the item states that ship as poll slices (§5). **Done** is described in §4.3.1 but is **not yet a slice**, so it is not yet a value; when the fourth slice lands it becomes **☑ Done** and — per [tables.mdx §4.1](./tables.mdx#41-facets-persist-as-the-hidden-values-never-the-shown-ones-locked) — is **visible to existing users by default** because facets persist as `hidden:`. |
+| **Kind** | ☑ **Audio** · ☑ **Video** · ☑ **Image** | Kind (§4.3.2) — the media kind. An item with no media kind (a `pin` / `scan` op) holds no value on this axis; that is not a facet value, mirroring the N/A rule in [tables.mdx §2.4.1](./tables.mdx#241-the-two-facets-fixed-vocabulary-locked). |
+
+**File / Reason are free text** → the `⛛` popover as `contains`; **Size** / **Duration** are numeric
+thresholds ([tables.mdx §2.3](./tables.mdx#23-what-survives-in-the-filter--popover-locked)).
+
+#### "Failed only" is a preset that sets the Status facet — not a second filter (LOCKED)
+
+**"Failed only" is fully expressible in the Status facet**: it is exactly *Running ✗, Queued ✗, Failed ✓*.
+So it does **not** become a promoted checkbox. **Bookmarked only** earns that exception because it is a
+promotion of a **non-column** flag ([tables.mdx §2.7](./tables.mdx#27-the-promoted-bookmarked-only-filter-locked));
+a second control that duplicates a facet's own values would give the same predicate two sources of truth
+and let the rail contradict the checkbox.
+
+Instead it is a **one-click preset** — a small **`Failed only`** link beside the Status facet, offered
+**only when any item failed** — that **sets the Status facet** (unchecks Running and Queued) and nothing
+more. The resulting state is then **visible on the rail** as the facet's own chips, so the user can see
+*why* rows vanished and undo it by re-checking a box or hitting the facet's **All** link. This applies
+[page_actions.mdx §1.2](./page_actions.mdx#12-rule-2--skip-already-done-for-producing-actions-locked)'s
+LOCKED rule to filtering: *"a user … cannot see a filter that left no trace"* — **filtering correctly and
+*showing* that you filtered are two separate requirements**. A preset that quietly applied its own hidden
+predicate would leave exactly that traceless narrowing; one that sets the facet leaves the trace on the
+rail. The facet stays the single source of truth; the preset is just a shortcut to a state the user could
+have clicked themselves.
+
+The Status facet ships its vocabulary today (`filterOptions: ["Running", "Queued", "Failed"]`) but as a `<select>`; the Kind facet's values, the rail rendering, the `Failed only` preset, and the real `defaultSort` (replacing the invisible `STATE_ORDER` pre-sort) are to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingItemsTable.tsx` — `ProcessingItemsTable` (the `id: "status"` / `id: "kind"` columns and the `STATE_ORDER` row sort), against the new facet-rail region of `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
 
 ### 4.3.2 The columns (transcribe example) + responsive priority-drop (LOCKED)
 
@@ -419,6 +463,15 @@ The extended payload is assembled in code:
    lowest-priority columns drop first so the row **never wraps**, and the wider the page the more columns
    show; a failure's **Reason** is never hidden. Fed by `jobs` + `queuedItems` + `recentFailures` + recent
    `done` from the one `GET /api/progress` poll (§5).
+3b. **Facets + an honest default sort (§4.3.1a):** the table's categorical filters are **value-checkbox
+   facets on the rail, all checked by default** ([tables.mdx §2](./tables.mdx#2-filtering--the-value-visibility-checkbox-model-locked)),
+   never a `<select>` — **Status** (☑ Running ☑ Queued ☑ Failed) and **Kind** (☑ Audio ☑ Video ☑ Image);
+   File/Reason are `contains` and Size/Duration are thresholds in the `⛛` popover. **"Failed only" is a
+   one-click preset that sets the Status facet** (unchecks Running + Queued), **not** a second promoted
+   checkbox — so the narrowing is visible on the rail and reversible, and the facet stays the single source
+   of truth ([page_actions.mdx §1.2](./page_actions.mdx#12-rule-2--skip-already-done-for-producing-actions-locked)).
+   The **Running → Pending → Failed → Done** order is a **real default sort** the chip run displays and the
+   user can change — not the invisible `STATE_ORDER` JS pre-sort.
 4. **Worker utilization (§3a):** while jobs run, the Processing page shows a **busy / budget** read atop
    Running now — e.g. **"12 / 14 workers busy (~90% of cores)"** — derived from `workers` on the same
    `GET /api/progress` poll (`busy` = occupied admission slots, `budget` = the live Core Budget,
@@ -492,6 +545,19 @@ The extended payload is assembled in code:
       jobs (the MAIN producer of transcribe jobs). A mixed batch fans out all three kinds into the one queue +
       the one GET /api/progress poll; another tab's / repo-banner-twin's Apply lands in the same process-global
       queue so an idle page wakes (§4.1). Served by todo.router POST /api/todo/batches/:id/apply → jobqueue enqueue().
+   §4.3.1a FACETS + HONEST DEFAULT SORT (LOCKED, per tables.mdx §2) — Status (☑ Running ☑ Queued ☑ Failed —
+      the real ItemState values / poll slices; "Done" is spec'd in §4.3.1 but is NOT yet a slice, so not yet
+      a value; when the 4th slice lands it's visible to existing users automatically because facets persist
+      as `hidden:`, tables §4.1) and Kind (☑ Audio ☑ Video ☑ Image) are VALUE-CHECKBOX facets on the RAIL,
+      all checked; File/Reason → `contains`, Size/Duration → thresholds in the ⛛ popover. "FAILED ONLY" is
+      NOT a promoted checkbox (it is fully expressible as Status with Running+Queued unchecked; duplicating a
+      facet's values = two sources of truth) — it is a ONE-CLICK PRESET that SETS the Status facet, shown only
+      when something failed, so the narrowing is VISIBLE on the rail + reversible (page_actions.mdx §1.2:
+      "filtering correctly and SHOWING that you filtered are two separate requirements"). Bookmarked-only
+      keeps its exception (tables §2.7) only because it promotes a NON-column flag. The Running→Pending→
+      Failed→Done order must become a REAL defaultSort (today it's an invisible STATE_ORDER JS pre-sort with
+      no defaultSort — the user can't see it in the §3.5 chip run or change it). Code seam:
+      ProcessingItemsTable.tsx (id:"status"/id:"kind" columns + the STATE_ORDER sort) + the DataTable rail.
   Keep in sync with webapp.mdx §10–§14 (dock/registry/poll), job_queue.mdx (queue+batches +§3 Core Budget),
   parallelization.mdx (the Core Budget the §3a utilization read reflects), left_bar.mdx + left_bar.yaml (the
   conditional item), compression.mdx §12 (the batch producer + error list), to_do.mdx + to_do_batches.mdx +

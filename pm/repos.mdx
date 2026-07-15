@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Repos
-description: The landing screen (route /) — one TanStack Table listing every git repo on THIS computer that LargeFileBridge manages. One row per repo, with a leading bookmark (favorite) toggle, the repo name, local path, large-file counts (Pinned / Pending / Undecided / Ignored), peer count, last-pin time, and a rolled-up pin status. Above the table sits the standard control row (search box + icon-only filter and sort dropdowns). Clicking a row opens that repo's per-file screen (one_repo.mdx). Defines the table columns, the leading bookmark toggle (persisted per-repo in config.yaml), the RepoRow type, the add-repo action, the row → one_repo navigation, pagination at 500, and empty/loading states.
+description: The landing screen (route /) — one TanStack Table listing every git repo on THIS computer that LargeFileBridge manages. One row per repo, with a leading bookmark (favorite) toggle, the repo name, local path, large-file counts (Pinned / Pending / Undecided / Ignored), peer count, last-pin time, and a rolled-up pin status. Above the table sits the standard control row (search box + icon-only filter and sort dropdowns) and the always-visible facet rail carrying the promoted "Bookmarked only" checkbox and the Status facet (value checkboxes, all checked by default — tables.mdx §2); the filter icon keeps only free-text contains, the numeric ≥ thresholds for the count columns, and rail overflow. Clicking a row opens that repo's per-file screen (one_repo.mdx). Defines the table columns, the leading bookmark toggle (persisted per-repo in config.yaml), the RepoRow type, the add-repo action, the row → one_repo navigation, pagination at 500, and empty/loading states.
 ---
 
 # LargeFileBridge — Repos
@@ -123,12 +123,30 @@ A single control row sits above the table, matching the standard toolbar:
 
 * **Search box** (left) — a free-text input; substring match, case-insensitive, across **Repo name
   + path**. Filters the current data set live.
-* **Filter icon** (right, icon-only `⛛` funnel — **no text label, no button box**) — opens a
-  dropdown listing the filterable columns; each filter row is an **operator select + value input**;
-  multiple filters are **ANDed**; Clear / Apply, `Enter` applies. The icon is **colored** when any
-  filter is active (with an optional count). Applying a filter resets to page 1.
+* **Facet rail** (directly under the control row, always visible) — the categorical filters live
+  **here**, not in a dropdown: each facet is a labelled group of **value checkboxes, all checked by
+  default** (all-checked = inactive), checkboxes within a facet OR and facets AND. The **owning spec is
+  [tables.mdx §2](./tables.mdx#2-filtering--the-value-visibility-checkbox-model-locked)** — this page
+  does not restate the model, it only names its facets (§3.2). **`☐ Bookmarked only`** is **promoted to
+  the head of the rail** ([tables.mdx §2.7](./tables.mdx#27-the-promoted-bookmarked-only-filter-locked)).
+  On this page the rail's one enum facet is **Status** (§3.2, col 9). Changing any facet resets to page 1.
+* **Filter icon** (right, icon-only `⛛` funnel — **no text label, no button box**) — **no longer the
+  place filters live.** It holds only the long tail
+  ([tables.mdx §2.3](./tables.mdx#23-what-survives-in-the-filter--popover-locked)): the free-text
+  **`contains`** filters (**Repo**, **Path**), the **numeric `≥` thresholds** for the count columns
+  (Pinned / Pending / Undecided / Ignored / Peers) and the **Last pin** date bound, plus any facet that
+  **overflows** the rail at narrow widths. There is **no operator select + value input** row and **no
+  `<select>`** anywhere in it. The icon stays **colored when any filter is active — rail facets
+  included** (with an optional count), so it remains the single honest "something is filtered" mark.
 * **Sort icon** (right, icon-only sort glyph — **no text label, no button box**) — opens a dropdown
-  listing the sortable columns, each with asc/desc; the icon is **colored** when a sort is active.
+  listing the sortable columns, each with asc/desc and the **1st/2nd/3rd** priority slots
+  ([tables.mdx §3.1](./tables.mdx#31-the-sort-dropdown-ui-locked)); the icon is **colored** when a sort
+  is active. The dropdown is the **discovery / Clear sort** surface, not the only way to read the sort:
+  the **active sort renders as a live chip run** on the control row beside the icon
+  (`Sort: [1 Bookmarked ↓] [2 Repo ↑]`) whose chips toggle direction, remove a key, and drag to
+  re-rank, and **shift-clicking a header appends** that column as the next key instead of promoting it
+  to primary ([tables.mdx §3.5](./tables.mdx#35-sorting-without-opening-the-dropdown--the-active-sort-chips-locked)).
+  Chips, headers, and dropdown are **one** state.
 * **Header-click sort (LOCKED).** In addition to the sort dropdown, **clicking a column header**
   sorts the table by that column. Clicking the **same** header again **toggles ascending ↔
   descending** (it does not cycle to "unsorted" — the header always leaves a sort applied; clear it
@@ -142,6 +160,12 @@ A single control row sits above the table, matching the standard toolbar:
 `DataTable` toolbar (search left; icon-only sort/filter popovers right; rounded fills reserved for
 the floating popovers, never the data surface).
 
+The control row's search box and the icon-only sort/filter popovers are rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the `showFilter` / `showSort` popovers).
+
+The **facet rail** and the **active-sort chip run** are **new** shared surfaces and are **to be implemented in code** on the same component, driven by the same `columnFilters` / sort state:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (a facet-rail region + chip run above the table body).
+
 ### 3.2 Columns
 
 Column order, left to right. Numeric columns are right-aligned, `tabular-nums`. Each column also carries
@@ -149,18 +173,27 @@ a **responsive priority** that decides which columns hide as the table narrows �
 
 | # | Column | Kind | Sort | Filter | Notes |
 | --- | --- | --- | --- | --- | --- |
-| 0 | **`▮` Bookmark** | toggle | ✓ | ✓ | **Leading** column — a ribbon **favorite** toggle (§8). A **control cell**: clicking it flips `bookmarked` and **never opens the repo**. Solid **yellow** when on, thin **gray outline** (white fill) when off. Sort surfaces bookmarked repos first; filter = Bookmarked yes/no. |
+| 0 | **`▮` Bookmark** | toggle | ✓ | ✓ | **Leading** column — a ribbon **favorite** toggle (§8). A **control cell**: clicking it flips `bookmarked` and **never opens the repo**. Solid **yellow** when on, thin **gray outline** (white fill) when off. Sort surfaces bookmarked repos first. **Filter = the single promoted `☐ Bookmarked only` checkbox at the head of the facet rail — *not* a two-value facet** ([tables.mdx §2.7](./tables.mdx#27-the-promoted-bookmarked-only-filter-locked), the one documented exception to the facet model). There is no "Bookmarked: yes / no" filter. |
 | 1 | **Repo** | text | ✓ | ✓ (contains) | Folder name, bold. |
 | 2 | **Path** | text | ✓ | ✓ (contains) | Absolute local path, muted, middle-truncated with a tooltip of the full path. |
-| 3 | **Pinned** | int | ✓ | ✓ | `counts.pinned`. Green metric. **Counts already-pinned files too:** any large file that was **already IPFS-pinned** on this computer and got **imported** into tracking ([ipfs.mdx §4](./ipfs.mdx#4-import--the-load-bearing-feature)) is present-and-pinned, i.e. **Pinned** — so `Pinned` reflects both LFB-pinned and adopted-already-pinned files. The word is **Pinned** (a state), never "Pin." |
-| 4 | **Pending** | int | ✓ | ✓ | `counts.pending`. Amber when > 0. |
-| 5 | **Undecided** | int | ✓ | ✓ | `counts.undecided`. Accent-highlighted when > 0 (there are decisions to make). |
-| 6 | **Ignored** | int | ✓ | ✓ | `counts.ignored`. Muted. |
-| 7 | **Peers** | int | ✓ | ✓ | `peerCount` — how many of your computers pin this repo. `0` renders red (nothing backing it up). |
-| 8 | **Last pin** | timestamp | ✓ | ✓ | `lastPinAt`, relative (`2h ago`) with an absolute tooltip; `—` if never. |
-| 9 | **Status** | enum | ✓ | ✓ | `status` (§4.2) as a colored pill. `filterOptions` = the `RepoStatus` values. |
+| 3 | **Pinned** | int | ✓ | ✓ (`≥`) | `counts.pinned`. Green metric. **Counts already-pinned files too:** any large file that was **already IPFS-pinned** on this computer and got **imported** into tracking ([ipfs.mdx §4](./ipfs.mdx#4-import--the-load-bearing-feature)) is present-and-pinned, i.e. **Pinned** — so `Pinned` reflects both LFB-pinned and adopted-already-pinned files. The word is **Pinned** (a state), never "Pin." |
+| 4 | **Pending** | int | ✓ | ✓ (`≥`) | `counts.pending`. Amber when > 0. |
+| 5 | **Undecided** | int | ✓ | ✓ (`≥`) | `counts.undecided`. Accent-highlighted when > 0 (there are decisions to make). |
+| 6 | **Ignored** | int | ✓ | ✓ (`≥`) | `counts.ignored`. Muted. |
+| 7 | **Peers** | int | ✓ | ✓ (`≥`) | `peerCount` — how many of your computers pin this repo. `0` renders red (nothing backing it up). |
+| 8 | **Last pin** | timestamp | ✓ | ✓ (bound) | `lastPinAt`, relative (`2h ago`) with an absolute tooltip; `—` if never. A date bound in the `⛛` popover, not a facet. |
+| 9 | **Status** | enum | ✓ | ✓ (facet) | `status` (§4.2) as a colored pill. **The one facet on this page's rail** — see §3.2.2 for its declared vocabulary. |
 | — | *(chevron)* | — | — | — | Trailing **› right chevron** affordance (opens the repo, same as the row click). |
 | — | **`⋮`** | — | — | — | The row **kebab** — the **repo** action catalog ([menus.mdx §3 / §5.1](./menus.mdx#3-the-row--kebab--every-table-has-one)). A control cell: it opens the menu, never the row. Right-click on the row opens the same menu ([menus.mdx §3.1](./menus.mdx#31-right-click-opens-the-same-menu-locked)). |
+
+**The four count columns are not facets, and are not pin/git-ignore axes (LOCKED).** *Pinned · Pending
+· Undecided · Ignored* (cols 3–6) are **integers** — a per-repo tally of that repo's files — not enum
+values a repo holds. They therefore filter with a **numeric `≥` threshold** in the `⛛` popover
+([tables.mdx §2.3](./tables.mdx#23-what-survives-in-the-filter--popover-locked)) — *"show repos with
+Undecided ≥ 1"* — and **never** render as rail facets. In particular **col 6 `Ignored` is a count, not
+the Git-ignore facet**: the **Pin (IPFS)** and **Git-ignore** facets of
+[tables.mdx §2.4.1](./tables.mdx#241-the-two-facets-fixed-vocabulary-locked) are **per-file** facets and
+live on the [one-repo](./one_repo.mdx) files table; a Repos row is a repo, so it carries neither.
 
 ### 3.2.1 Responsive column priority — drop the least-important column as the table narrows (LOCKED)
 
@@ -215,13 +248,53 @@ also always remain (they are not priority columns).
   don't fit, the pinned set may scroll horizontally rather than wrap — pinned identity/verdict beats
   everything.
 * **Sort & filter still reach hidden columns.** A column being responsively hidden from the body does
-  **not** remove it from the **Sort** and **Filter** dropdowns (§3.1) — the user can still sort/filter by
-  Peers even when the Peers column is hidden at the current width. (Hiding is presentation-only.)
+  **not** remove it from the **facet rail**, the **sort chip run**, or the `⛛` / sort dropdowns (§3.1)
+  — the user can still filter by `Peers ≥ 1` even when the Peers column is hidden at the current width.
+  (Hiding is presentation-only.) The rail obeys the same priority order when *it* runs out of width,
+  overflowing its lowest-priority facets into the `⛛` popover
+  ([tables.mdx §2.2](./tables.mdx#22-the-facet-rail--filtering-without-opening-a-dropdown-locked)).
 * **Persistence.** Responsive hiding is derived from **live width**, not a saved preference — it is not
   written to `config.yaml`. The per-user sort/filter persistence ([tables.mdx §4](./tables.mdx)) is
   unaffected.
 * **`minWidth`.** Each column declares a sensible `minWidth` (px) used for the budget; sensible defaults
   by kind — text ≈ 140, timestamp ≈ 96, enum ≈ 100, int ≈ 72, toggle ≈ 40 — overridable per column.
+
+### 3.2.2 The Status facet — declared vocabulary (LOCKED)
+
+Status is the **only enum facet** on this page, so it is the only column that earns a place on the
+facet rail (§3.1). Per [tables.mdx §2.8](./tables.mdx#28-a-facets-values-must-be-declared--an-empty-facet-is-a-bug-locked)
+it **must declare its complete value list** — a facet that ships without one renders as a label with no
+chips and fails review. Its values are exactly the `RepoStatus` members (§1), **each a checkbox, all
+checked by default**; all-checked is the resting, inactive state and there is **no `any` option**:
+
+```
+ Status   ☑ Up to date   ☑ Pinning   ☑ Behind   ☑ Needs review   ☑ Error   ☑ Never
+```
+
+| Checkbox label | `RepoStatus` value | Pill (§4.2) |
+| --- | --- | --- |
+| **Up to date** | `up_to_date` | green |
+| **Pinning** | `pinning` | blue (accent), animated |
+| **Behind** | `behind` | amber |
+| **Needs review** | `needs_review` | accent outline |
+| **Error** | `error` | red |
+| **Never** | `never` | grey |
+
+* The facet's **accessor and the cell read the same field** (`row.status`) — the labels above are the
+  display form of the same values the pill renders, so the rail and the cells speak one vocabulary.
+* Unchecking all six is **disabled**: the last checked box renders disabled with *"At least one value
+  must be shown"* ([tables.mdx §2.1](./tables.mdx#21-a-facet-is-its-values-each-with-a-checkbox-all-checked-by-default-locked)).
+* **Uncheck-to-triage is the point.** *"Show me the repos that aren't fine"* is one click — uncheck
+  **Up to date** — which the retired one-of-N select could not express at all.
+* It persists as the **unchecked** values (`facets: { status: { hidden: [up_to_date] } }`), never the
+  shown ones, so a `RepoStatus` member added later stays visible to existing users
+  ([tables.mdx §4.1](./tables.mdx#41-facets-persist-as-the-hidden-values-never-the-shown-ones-locked)).
+
+The `RepoStatus` enum the facet's values are drawn from is declared in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — the `RepoStatus` union type.
+
+The Status column's filter (today a `<select>` of `STATUS_OPTIONS`, to be rebuilt as this rail facet) is declared in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `ReposPage` (the `status` column's `filterOptions`).
 
 ### 3.3 Pagination — LOCKED
 
@@ -269,6 +342,8 @@ export const repoColumns: ColumnDef<RepoRow>[] = [
   { id: "ignored",   header: "Ignored",   kind: "int",  align: "right", accessor: r => r.counts.ignored, priority: 8, minWidth: 78 },
   { id: "peers",     header: "Peers",     kind: "int",  align: "right", accessor: r => r.peerCount, priority: 10, minWidth: 72 },
   { id: "lastPin",   header: "Last pin",  kind: "timestamp",  accessor: r => r.lastPinAt, priority: 4, minWidth: 96 },
+  // The one rail FACET (§3.2.2): filterOptions is its declared value vocabulary — rendered as six value
+  // checkboxes, all checked by default, never a <select> (tables.mdx §2.1/§2.8).
   { id: "status",    header: "Status",    kind: "enum", filterOptions: STATUS_OPTIONS, accessor: r => r.status }, // pinned (P2)
 ];
 // Peers (10) hides first, then Ignored (8), Path (7), Pinned (6), Pending (5), Last pin (4), Undecided
@@ -332,7 +407,7 @@ user exactly where they meant to go instead of opening the repo and re-filtering
 | **Pinned** | The repo's files table filtered to **transfer = pinned**. |
 | **Pending** | The repo's files table filtered to **Pending**. |
 | **Undecided** | The repo's files table filtered to **Undecided** (the triage queue). |
-| **Ignored** | The repo's files table filtered to **decision = Ignore**. |
+| **Ignored** | The repo's files table with the **Pin (IPFS)** facet showing **only `Not pinned`** — i.e. every other value of that facet unchecked ([tables.mdx §2.4.1](./tables.mdx#241-the-two-facets-fixed-vocabulary-locked)). This is the **IPFS axis** (*deliberately not pinned*, stored decision value `ignore`) — it is **not** git-ignore, and there is no "decision" facet to filter on ([tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked)). The **Git-ignore** facet is left untouched (all-checked). |
 | **Peers** | [Peers](./left_bar.mdx) filtered to this repo (which of your computers pin it). |
 | **Last pin** | The repo page (its status strip / recent activity). |
 | **Status** | The repo page. |
@@ -472,9 +547,17 @@ is its **reference implementation**. In short:
   The **default** here is **Bookmarked descending first, then repo name** — favorites float to the top
   of a 100-repo list. The sort dropdown's **1st/2nd/3rd** priority slots let the user re-rank; the
   choice is **saved per user for this page** and restored next visit.
-* **Filter** — the filter dropdown **promotes a "Bookmarked only" checkbox** to the top
-  ([tables.mdx §2](./tables.mdx#2-the-promoted-bookmarked-only-filter-locked)); the per-column
-  *Bookmarked: yes / no* filter still exists in the standard list (§3.1).
+* **Filter** — **`☐ Bookmarked only` is a single promoted checkbox at the head of the facet rail**
+  ([tables.mdx §2.7](./tables.mdx#27-the-promoted-bookmarked-only-filter-locked)) — on = only
+  bookmarked repos, off = no bookmark constraint. It ANDs with the Status facet (§3.2.2), resets to
+  page 1, and colors the filter icon.
+  * **It is the only bookmark filter.** There is **no** per-column *Bookmarked: yes / no* facet
+    alongside it — the two-value form would cost a chip and buy nothing over the checkbox's obvious
+    off state. Bookmarked-only is the **one documented exception** to the value-checkbox facet model
+    ([tables.mdx §2.1](./tables.mdx#21-a-facet-is-its-values-each-with-a-checkbox-all-checked-by-default-locked)),
+    and this page must not reintroduce the retired `yes / no` select.
+  * **Filter and sort are independent** (§3.4 of tables.mdx): the sort floats bookmarks to the top of
+    the *full* list; this checkbox hides everything *except* bookmarks. Either, both, or neither.
 * Bookmark state is **independent** of `status` — a bookmarked repo still shows its true status pill.
 * **Persistence** — this page's sort + filter are saved in `users/<email>/config.yaml` `tables.views`
   ([tables.mdx §4](./tables.mdx#4-persistence--sort--filter-saved-per-user-per-page-locked)).
@@ -490,7 +573,12 @@ is its **reference implementation**. In short:
    Status (in that order), plus a trailing **›** chevron.
 3. The **control row** above the table has a left **search box** and **icon-only** filter (`⛛`) and
    sort dropdowns on the right — no text labels, no button boxes; the icon colors when active;
-   filters AND together and reset to page 1.
+   filters AND together and reset to page 1. Beneath it an **always-visible facet rail** carries the
+   promoted **`☐ Bookmarked only`** checkbox at its head and the **Status** facet (§3.2.2) — value
+   checkboxes, all checked by default, **no `<select>`** and no `any` option; the `⛛` popover holds
+   only the free-text `contains` (Repo / Path), the numeric `≥` thresholds (the four counts + Peers),
+   the Last-pin bound, and rail overflow (§3.1). The **active sort** reads as a chip run on the control
+   row and **shift-click a header appends** a key ([tables.mdx §3.5](./tables.mdx#35-sorting-without-opening-the-dropdown--the-active-sort-chips-locked)).
 4. **Pagination defaults to 500** items per page; the **repo count** shows to the left of the pager;
    options are 500 / 1000 / All.
 5. Each numeric count renders per §4.1 (Peers = 0 → red; Undecided > 0 → accent; Pending > 0 →
@@ -507,14 +595,23 @@ is its **reference implementation**. In short:
 9. The **leading bookmark toggle** (§8) renders **solid yellow** when `bookmarked`, **thin gray
    outline / white fill** when not; clicking it flips the flag **without opening the repo** (a control
    cell), persists to the repo's `config.yaml` (`bookmarked`, default `false`, survives rescans), and
-   is exposed as a sort (bookmarked first) and a Bookmarked yes/no filter.
+   is exposed as a sort (bookmarked first) and as the **single promoted `☐ Bookmarked only` checkbox**
+   at the head of the facet rail (§8.4) — **not** a `Bookmarked: yes / no` filter, which no longer
+   exists.
 
 <!--
   Keep this page aligned with one_repo.mdx (the per-file screen a row opens) and left_bar.yaml (the
   nav). LOCKED across specs: vocabulary Repo → Large file → Decision (Add to IPFS (pin) / Ignore /
   Undecided; pin decision wire value `sync`); the four per-repo counts (Pinned / Pending / Undecided /
   Ignored); the RepoStatus enum + pill colors + precedence (§4.2); the standard control row (search
-  left; icon-only sort/filter right); the leading bookmark toggle (§8) — solid-yellow/gray-outline
+  left; icon-only sort/filter right) PLUS the always-visible facet rail beneath it — filtering follows
+  tables.mdx §2 (value checkboxes, all checked by default; no <select>; no "Decision" facet). On this
+  page: "Bookmarked only" is a SINGLE promoted checkbox and the ONLY bookmark filter (no yes/no facet,
+  §8.4); Status is the ONLY rail facet and must declare its six RepoStatus values (§3.2.2); the four
+  counts are INTEGERS filtered by a numeric ≥ threshold, never facets, and col 6 "Ignored" is a count —
+  the per-file Pin (IPFS) / Git-ignore facets live on one_repo, not here (§3.2). The Ignored cell deep-
+  links to the Pin (IPFS) facet showing only "Not pinned" (the IPFS axis), NOT git-ignore (§5.1). The
+  leading bookmark toggle (§8) — solid-yellow/gray-outline
   ribbon, control cell, persisted in the repo's config.yaml; pagination default 500 with the item count
   shown. All tables are TanStack tables. The left bar lives in ./left_bar.mdx + pm/left_bar.yaml —
   never redefine it here.

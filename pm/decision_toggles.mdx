@@ -210,14 +210,45 @@ shows the **two axes directly** as toggles:
 * **Pin** column = the **Add-to-IPFS** toggle (solid orange = pinned).
 * **Ignore** column = the **Add-to-git-ignore** toggle (⊘; solid orange = git-ignored; dashed = the calc
   engine recommends ignoring it).
-* Both columns are **sortable and filterable** (they are decision state); the `filterOptions` are
-  on / off / recommended.
-* The existing **Decision** select and the **Status** transfer pill are unchanged — the toggles are the
-  fast, always-visible way to set each axis; the select remains for users who prefer the labelled list.
+* **Each column carries its own axis's facet — two facets, never one** ([tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked)).
+  Both columns are **sortable and filterable**, but they filter through **two separate facets** on the
+  rail, each a set of **value checkboxes, all checked by default** (all-checked = inactive; no `any`
+  pseudo-value), not one shared `on / off / recommended` list
+  ([tables.mdx §2.1 / §2.4.1](./tables.mdx#241-the-two-facets-fixed-vocabulary-locked)):
+
+  | Column | Its facet | Values (each a checkbox, all checked by default) | Reads ON from |
+  | --- | --- | --- | --- |
+  | **Pin** | **Pin (IPFS)** | ☑ **Pinned** (`sync`) · ☑ **Not pinned** (`ignore` — deliberately not pinned) · ☑ **Recommended** · ☑ **Undecided** | the manifest / pin state (§1.0) |
+  | **Ignore** | **Git-ignore** | ☑ **Git-ignored** · ☑ **Not git-ignored** · ☑ **Recommended** | **`git check-ignore`**, live (§1.0, LOCKED) |
+
+  **The four-state toggle grammar (§1) is what the facet values are.** OFF / ON / RECOMMENDED map onto
+  each facet's values one-for-one — the Pin facet splits ON/OFF into the axis's own words (`Pinned` /
+  `Not pinned`, and its OFF-with-no-record case is `Undecided`), the Git-ignore facet into
+  `Git-ignored` / `Not git-ignored`. So a chip on the rail and a box on a row say the same word. **N/A is
+  not a facet value** ([tables.mdx §2.4.1](./tables.mdx#241-the-two-facets-fixed-vocabulary-locked)): a row
+  where the axis does not apply (§4) renders no box and is not a value anyone can filter for.
+* **The two columns can never share a facet or a sort key**, because they read from **two different
+  sources of truth** (§1.0): a merged facet would have to pick one source and lie about the other. Sort
+  obeys the same split — a **Pin** key and an **Ignore** key, no combined "Decision" key, ordered
+  **On → Recommended → Off → N/A** ([tables.mdx §3.6](./tables.mdx#36-sort-obeys-the-axis-split-too-locked)).
+* The **Status** transfer pill is unchanged. The labelled select beside the toggles is **renamed
+  `Decision` → `Pin decision`** and is now **filter-less and sort-less**
+  ([one_repo.mdx §4.3](./one_repo.mdx#43-columns)): a facet named *Decision* offering
+  `sync/ignore/undecided` claimed both axes while covering only the **IPFS** one, so it is retired per
+  [tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked).
+  The select **survives as a per-row editor** — setting one row's pin decision is a genuine one-of-N
+  choice ([tables.mdx §2.5](./tables.mdx#25-checkbox-vs-radio-vs-segmented--pick-by-the-question-locked)) —
+  for users who prefer the labelled list; the toggles remain the fast, always-visible way to set each
+  axis. Its `Ignore` option means *"deliberately not pinned"*, **not** git-ignored. The stored
+  `sync` / `ignore` / `undecided` values are untouched — **frozen wire values**
+  ([decisions.mdx §7](./decisions.mdx#7-reconciliation--folding-the-shared-ledger-onto-this-computer-locked)).
 
 The Pin/Ignore toggle columns, wired to the same `setDecision` mutation the inline select uses, are rendered in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
 (the `pin` and `ignore` `LfbColumn`s mounting `DecisionToggle`).
+
+Splitting these into **two** rail facets with the §2.4.1 vocabulary (today the page filters the IPFS axis through the col-3c `<select>`) is a **new** surface; it is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (`filterOptions` on the `pin` and `ignore` `LfbColumn`s, removed from the `decision` column), rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the facet rail).
 
 ---
 
@@ -300,6 +331,13 @@ with the third **Compress** action axis.
    git-ignore, **and Compress** (`"compress"`, glyph **K**) — using the same component and four-state
    grammar; each column renders only when relevant to the set, axes are **pre-checked where recommended**,
    and the Apply label carries a **per-axis count** (§7). Table rows keep just the two decision axes.
+9. **Each toggle column filters and sorts through its OWN axis** (§5): the **Pin** column carries the
+   **Pin (IPFS)** facet and the **Ignore** column the **Git-ignore** facet — **two facets, never one**,
+   each a value-checkbox set all-checked by default, with the LOCKED
+   [tables.mdx §2.4.1](./tables.mdx#241-the-two-facets-fixed-vocabulary-locked) vocabulary and **no facet
+   named "Decision"**. The four-state grammar maps onto the facet values; **N/A is not a facet value**.
+   Sort splits the same way (a **Pin** key and an **Ignore** key, never a combined one), ordered
+   **On → Recommended → Off → N/A**.
 
 ## 9. Status icons reuse this grammar — Transcribe & Compress (LOCKED)
 
@@ -334,7 +372,15 @@ and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/Comp
   the sync repo when enabled; decisions.mdx §4) + that axis's effect; never deletes local bytes; optimistic
   w/ rollback. Git-ignore toggle is
   REPO-SCOPED (renders only under a repo); pin toggle is not. Directory ignore + multi-row flips open the
-  git-ignore pop-over / bulk menu (never silent). Component: DecisionToggles.tsx. Keep aligned with
+  git-ignore pop-over / bulk menu (never silent). Component: DecisionToggles.tsx.
+  §5 AXIS SPLIT (tables.mdx §2.4, LOCKED): the Pin column carries the PIN (IPFS) facet, the Ignore column
+  the GIT-IGNORE facet — TWO facets, never one, no facet named "Decision"; each is a value-checkbox set,
+  ALL CHECKED by default (NOT the old shared on/off/recommended filterOptions list). Vocabulary is frozen
+  by tables.mdx §2.4.1; the four-state grammar (§1) maps onto those values and N/A is NOT a facet value.
+  They can't merge because they read two sources (manifest vs live `git check-ignore`, §1.0). Same split
+  for sort keys (On → Recommended → Off → N/A). The labelled select is renamed Decision → "Pin decision",
+  IPFS-axis-only, Sort ✗ Filter ✗ — an EDITOR only (one_repo.mdx §4.3). Labels/facets only —
+  sync/ignore/undecided stay FROZEN wire values. Keep aligned with
   decisions.mdx (ledger), git_ignore.mdx (engine), one_repo.mdx §4/§5 (table), directories.mdx §3 (badges),
   warnings.mdx §4.5 + to_do.mdx §6 (popups), to_do_batch_calc_engine.mdx (the RECOMMENDED source).
 -->

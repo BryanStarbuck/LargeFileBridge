@@ -100,6 +100,26 @@ anything. The active tab drives, in one place ([taskTabs.config.ts](./one_repo.m
   filter** persistence ([tables.mdx §4](./tables.mdx)) still applies *within* whatever tab is active.
 * Switching tabs is **instant** (no spinner) — the file set is already loaded; the tab only re-projects it.
 
+#### 1.3.1 A tab's `rowFilter` is scope — it is NOT a facet (LOCKED)
+
+A tab hides rows (§4), and so does a filter facet ([tables.mdx §2](./tables.mdx#2-filtering--the-value-visibility-checkbox-model-locked)).
+They are different things and must never be merged:
+
+* **The tab's `rowFilter` is scope, chosen by the tab.** It never appears on the **facet rail**
+  ([tables.mdx §2.2](./tables.mdx#22-the-facet-rail--filtering-without-opening-a-dropdown-locked)), it has
+  no checkboxes, and the user does not un-set it — they **switch tabs** (or go to **All**, which has no
+  `rowFilter`). It is honest despite being invisible on the rail because **the tab itself is the visible
+  control**: a lit "Compress" tab is a plain statement that you are looking at compressible files.
+* **The two compose by AND.** The tab picks the row scope; the rail's facets then cut within it. A facet
+  never widens a tab's scope — unchecking nothing on the rail still shows only the tab's rows.
+* **The tab's `defaultSort` is a default, not a lock.** It seeds the multi-level sort for that tab; the
+  user's own re-rank persists and wins ([tables.mdx §3.4](./tables.mdx#34-the-default-sort--bookmarks-first-locked-default-user-changeable)),
+  and it displays in the active-sort **chip run** ([tables.mdx §3.5](./tables.mdx#35-sorting-without-opening-the-dropdown--the-active-sort-chips-locked))
+  like any other sort — so a tab's opinion about ordering is always readable, never hidden.
+* **The IPFS tab is the pin axis only.** Its `rowFilter` and its urgency sort concern **Add-to-IPFS**
+  state; they say nothing about git-ignore, and no tab may filter on both axes at once
+  ([tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked)).
+
 ---
 
 ## 2. The metrics panels — the "what could be done" boxes (LOCKED)

@@ -1,18 +1,19 @@
 ---
 title: LargeFileBridge — Tables (bookmarks, filters, multi-level sort & persistence)
-description: The cross-cutting spec for the shared TanStack DataTable control row that every table screen references instead of restating. Three conventions, applied everywhere (Repos, the Full-paths files table, Communities, and every future table). (1) BOOKMARKS — every primary table has a leading ribbon bookmark (favorite) toggle; the flag is a local per-computer preference stored with the entity. (2) PROMOTED "BOOKMARKED" FILTER — the filter dropdown promotes a "Bookmarked only" checkbox to the top; when on, the table shows only bookmarked rows. (3) MULTI-LEVEL SORT — sort is an ordered list of up to three keys (primary / secondary / tertiary); the sort dropdown lists sortable columns on the left with asc/desc, and priority slots (1st / 2nd / 3rd) on the right; assigning a column a priority inserts it there and cascade-demotes the others so no two columns share a priority; the default is Bookmarked first, then the table's natural secondary sort, and it is user-changeable. (4) PERSISTENCE — each page's sort AND filter state is saved per-user, per-page in users/<email>/config.yaml and restored on load. All tables are TanStack tables (charter).
+description: The cross-cutting spec for the shared TanStack DataTable control row that every table screen references instead of restating, applied everywhere (Repos, the one-repo files table, Full-paths, Communities, IPFS, Devices, Storages, Processing, and every future table). (1) BOOKMARKS — every primary table has a leading ribbon bookmark (favorite) toggle; the flag is a local per-computer preference stored with the entity. (2) FILTERING — no filter is ever a <select>. A facet is its VALUES, each with a checkbox, ALL CHECKED BY DEFAULT (all-checked = inactive, no "any" pseudo-value); checkboxes within a facet OR, facets AND. Facets live on an always-visible FACET RAIL above the table so the vocabulary is readable without opening anything; the filter icon keeps only free-text contains, numeric thresholds, and overflow. PIN (IPFS) AND GIT-IGNORE ARE ALWAYS TWO SEPARATE FACETS, NEVER ONE — no facet may be named "Decision" — because they are two independent axes with two sources of truth (the decision ledger vs. live `git check-ignore`); the same split governs sort keys and kebab-menu groups. Checkbox is the default control; radio/segmented only for genuine one-of-N modes; every "Both · X · Y" segmented filter is retired to a two-value facet whose all-checked state IS "Both". "Bookmarked only" stays a single promoted checkbox — the one documented exception. (3) MULTI-LEVEL SORT — an ordered list of up to three keys (primary / secondary / tertiary); the sort dropdown lists sortable columns with asc/desc and priority slots (1st / 2nd / 3rd); assigning a priority inserts and cascade-demotes so no two columns share one; the active sort also renders as a live chip run and shift-click-a-header appends a key; the default is Bookmarked first, then the table's natural secondary, and it is user-changeable. (4) PERSISTENCE — each page's sort AND filter state is saved per-user, per-page in users/<email>/config.yaml and restored on load; facets persist as `hidden:` (the unchecked values), never `shown:`, so newly-added enum values stay visible to existing users. All tables are TanStack tables (charter).
 ---
 
 # LargeFileBridge — Tables (bookmarks, filters, multi-level sort & persistence)
 
-Every screen in LFB is built from the same **TanStack `DataTable`** ([menus.mdx](./menus.mdx) §0).
-The charter locks the shared shape: a search box, one **filter** icon, one **sort** icon above the
-table; 500/page; click-a-header to sort; full-page-height. **This file owns the pieces of that shape
-that are the same on every table** so the per-page specs don't restate them:
+Every screen in LFB is built from the same **TanStack `DataTable`** ([menus.mdx](./menus.mdx) — see its
+preamble). The charter locks the shared shape: a search box, one **filter** icon, one **sort** icon
+above the table; 500/page; click-a-header to sort; full-page-height. **This file owns the pieces of
+that shape that are the same on every table** so the per-page specs don't restate them:
 
 1. The leading **bookmark** toggle (§1).
-2. The promoted **"Bookmarked only"** filter (§2).
-3. The **multi-level sort** model and its dropdown UI (§3).
+2. The **filter model** — value-visibility checkboxes on an always-visible facet rail, and the
+   **one-facet-per-axis** rule that keeps Pin (IPFS) and Git-ignore permanently apart (§2).
+3. The **multi-level sort** model, its dropdown UI, and its chip run (§3).
 4. **Per-user, per-page persistence** of sort + filter (§4).
 
 The shared control row (search box, filter icon, sort icon), 500/page pagination, click-a-header sort, and full-page-height are all implemented in code:
@@ -74,23 +75,194 @@ Persisting a bookmark toggle to the entity's `config.yaml` (the Repos reference 
 
 ---
 
-## 2. The promoted "Bookmarked only" filter (LOCKED)
+## 2. Filtering — the value-visibility checkbox model (LOCKED)
 
-The charter puts a single **filter** icon above every table. On tables that have bookmarks, the
-filter dropdown **promotes a "Bookmarked only" checkbox to the very top**, above the per-column
-filter rows:
+This section replaces the old "each filter row is an operator select + value input" dropdown model
+everywhere. It is the **single filter grammar for every table in the product**.
 
-* **`☐ Bookmarked only`** — a checkbox. When **on**, the table is filtered to **only the bookmarked
-  rows**; when off, no bookmark constraint. It ANDs with any other active filters, and (like all
-  filters) resets to page 1 and colors the filter icon when active.
-* It is **promoted** (pinned at the top of the dropdown, visually separated) because favoriting-then-
-  filtering-to-favorites is the primary way a user carves a big list down to what they care about.
+**The old model and why it is retired.** Until now the shared filter popover offered exactly one
+control for a categorical column: a **`<select>` dropdown** whose options were a hardcoded `any` plus
+one option per value. That control is wrong for this product on three counts:
+
+1. **It hides the vocabulary.** The user cannot see what values exist without opening a dropdown
+   inside a dropdown. A filter you must go spelunking for is a filter nobody uses.
+2. **It only expresses `any` or `exactly one`.** There is no way to say *"show pinned and undecided
+   but not ignored"* — the most common real request — because a select is one-of-N.
+3. **It invites conflation.** A single select labelled "Decision" is the reason pin state and
+   git-ignore state got welded into one facet (§2.4).
+
+### 2.1 A facet is its values, each with a checkbox, all checked by default (LOCKED)
+
+Every categorical (enum / boolean / toggle) filter is a **facet**: the flat list of the values that
+column can hold, **each with its own checkbox**, and **every box starts checked**.
+
+* **All checked = the facet is inactive.** No constraint, every row shows. This is the resting state,
+  and it is what a fresh table looks like.
+* **Unchecking a value hides those rows.** Nothing else. The checkbox means *"show me rows whose value
+  is this"* — a **visibility** switch per value, not a selection of a single value.
+* **Checkboxes within a facet OR together; facets AND together.** *(Pin: Pinned ✓ Undecided ✓,
+  Ignored ✗)* AND *(Git-ignore: all ✓)* → every pinned-or-undecided row regardless of git-ignore.
+* **Never offer an `any` / `all` pseudo-value.** "All" is not a value a row can hold; it is the state
+  of every box being checked. An `any` option in a value list is the select model leaking through.
+
+This is the product owner's rule verbatim: *"one might be yes, one might be no. Those could be two
+[boxes] because sometimes they want to show both, so they leave both checked. They won't only want to
+see one, so they'll turn off the checkbox of the other one."*
+
+```
+ Pin (IPFS)   ☑ Pinned   ☑ Not pinned   ☑ Recommended   ☑ Undecided
+ Git-ignore   ☑ Ignored  ☑ Not ignored  ☑ Recommended
+```
+
+**The last-value rule.** Unchecking the **final** checked box in a facet is **not allowed** — it can
+only ever produce a guaranteed-empty table, which is a dead end, not a filter. The last checked box
+renders **disabled** with the tooltip *"At least one value must be shown."* (Users who want an empty
+result do not exist; users who blank a table by accident and cannot see why do.)
+
+The shared filter surface — today a `<select>`-per-enum popover, to be rebuilt as the facet rail (§2.2) — is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the `showFilter` popover and its generic `filterFn`).
+
+### 2.2 The facet rail — filtering without opening a dropdown (LOCKED)
+
+**A filter the user cannot see is a filter the user does not use.** So the facets do not live inside
+the filter dropdown; they live **on a rail directly above the table**, always visible, always showing
+their current state.
+
+```
+ ┌──────────────────────────────────────────────────────────────────────────────┐
+ │ [ 🔍 search…                    ]                                    ⇅   ⛛   │  ← control row
+ │ Pin (IPFS)  ☑ Pinned ☑ Not pinned ☑ Undecided   ·   Git-ignore  ☑ Ignored ☑ Not ignored │  ← facet rail
+ └──────────────────────────────────────────────────────────────────────────────┘
+ │ ▮ │ File              │ Size  │ Pin │ Ignore │ Status │ …
+```
+
+* **Each facet is a labelled group of checkboxes** on the rail, rendered as **toggle chips** (a chip
+  whose checked state is a filled/outlined pill). Checked = filled. The label sits left of its values.
+* **The rail states the vocabulary.** A user reading the rail learns what values exist and what is
+  currently hidden without a single click. Discovery and control are the same surface.
+* **A facet with an inactive state is quiet, not gone.** All-checked facets render in a muted style so
+  the eye lands on the facets that are actually cutting rows; they never disappear (disappearing
+  facets would re-hide the vocabulary).
+* **Overflow.** Facets whose values do not fit collapse into a `+N more` chip that opens the popover
+  (§2.3) containing only the overflowed facets. Priority order for what stays on the rail follows the
+  same **responsive priority** the columns use (§4a) — the rail narrows the way the table does.
+* **Reset.** Each facet's label carries a **`n of m`** counter and an **All** link when any of its
+  boxes is unchecked; the rail carries one **Clear filters** link when any facet is active.
+
+The facet rail is a **new** shared surface; it is to be implemented in code alongside the existing control row:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (a new facet-rail region above the table body, driven by the same `columnFilters` state as the popover).
+
+### 2.3 What survives in the filter (`⛛`) popover (LOCKED)
+
+The charter's single **filter icon** stays — its job changes from *"the place filters live"* to
+**the overflow and the long tail**:
+
+* **Free-text `contains`** filters (name, path, CID) — a text box has no value vocabulary to show, so
+  a rail chip would be meaningless. These stay in the popover.
+* **Numeric thresholds** (`Size ≥`, `Peers ≥`) — same reason: an open-ended number, not a value set.
+* **Overflowed facets** at narrow widths (§2.2).
+* The icon stays **colored when any filter is active** — *including* rail facets, so the icon remains
+  the single honest "something is filtered" indicator. Applying any filter resets to page 1.
+
+### 2.4 One facet = one axis — Pin and git-ignore are NEVER the same filter (LOCKED)
+
+**Add-to-IPFS (pin) and Add-to-git-ignore are two independent booleans**
+([decisions.mdx §1](./decisions.mdx)) — a file can be pinned *and* git-ignored, either, or neither, and
+*"both-off is a real answer."* Therefore:
+
+* **There are always two facets, never one.** A **Pin (IPFS)** facet and a **Git-ignore** facet. They
+  sit as separate labelled groups on the rail, and are never merged, nested, or interleaved.
+* **No facet may be named "Decision."** The name is what caused the damage: a facet labelled
+  *Decision* offering `sync / ignore / undecided` reads as if it covers both axes when it only ever
+  covered the **IPFS** axis — where `ignore` means *"deliberately not pinned,"* **not** *"git-ignored."*
+  That facet is **retired**; its replacement is the **Pin (IPFS)** facet (§2.4.1). The `sync` string
+  stays a **frozen wire value** on disk ([decisions.mdx §7](./decisions.mdx)) — this is a **label and
+  facet** change, not a data change.
+* **The two facets read from two different sources, and that is why they cannot merge.** The pin axis
+  is the ledger's reconciled projection; the **git-ignore axis is read from `git check-ignore`, never
+  folded out of the decision ledger** ([decisions.mdx §1.1](./decisions.mdx), LOCKED — a ledger-sourced
+  flag *"reports 'not ignored' for files git plainly ignores… a visible falsehood about the user's own
+  filesystem"*). A single facet would have to pick one source and lie about the other.
+* **This applies to sort identically** (§3) and to the `⋮` menus ([menus.mdx §5.6](./menus.mdx)): the
+  IPFS group and the git-ignore group are separate groups, never one "decision" group.
+
+#### 2.4.1 The two facets, fixed vocabulary (LOCKED)
+
+| Facet | Values (each a checkbox, all checked by default) | Source of truth |
+| --- | --- | --- |
+| **Pin (IPFS)** | ☑ **Pinned** (`sync`) · ☑ **Not pinned** (`ignore` — deliberately not pinned) · ☑ **Recommended** (the calc engine suggests pinning) · ☑ **Undecided** (never asked) | the decision ledger's IPFS axis ([decisions.mdx §7](./decisions.mdx)) |
+| **Git-ignore** | ☑ **Git-ignored** · ☑ **Not git-ignored** · ☑ **Recommended** (the calc engine suggests ignoring) | **`git check-ignore`**, live ([decisions.mdx §1.1](./decisions.mdx), LOCKED) |
+
+These match the **four-state toggle grammar** of the Pin and Ignore columns
+([decision_toggles.mdx §1](./decision_toggles.mdx)) — a facet's values are exactly the states its
+column's toggle can show, so the rail and the cells speak one vocabulary. The **N/A** toggle state is
+**not** a facet value (a row where the axis does not apply is filtered by the axis's own facet only
+when that axis exists on the row).
+
+Deriving the git-ignore axis from git itself (never from the ledger), which is what forces these into two facets, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` (via the batched `checkIgnore()`).
+
+### 2.5 Checkbox vs. radio vs. segmented — pick by the question (LOCKED)
+
+| Control | Use it when | Examples |
+| --- | --- | --- |
+| **Checkbox set** (§2.1) — **the default for every filter facet** | The question is *"which values do I want to see?"* and any combination is meaningful. This is nearly always true of a filter, because a filter is a predicate over a value set. | Pin (IPFS), Git-ignore, Status, Kind, Mode, Tracked, Compressed |
+| **Radio set** | The question is genuinely **one-of-N** — the options are *modes*, not row values, and "both" is meaningless. | A view mode; a sort **direction** (asc ⇄ desc) |
+| **Segmented control** | A radio set of **2–3 short options** where the choice is a *mode* and horizontal space is cheap. A segmented control is a radio in different clothes — **it does not qualify as a filter facet.** | (none remaining after §2.6) |
+
+**The rule of thumb:** if the user could ever plausibly want to see **two of the options at once**, it
+is a **checkbox set** — full stop. Every existing "Both · X · Y" segmented *filter* fails this test:
+"Both" is only there because the control could not express "X and Y," which a checkbox set expresses
+natively and more clearly (§2.6).
+
+### 2.6 Retiring the `Both · X · Y` segmented filters (LOCKED)
+
+The Full-paths table ([full_paths.mdx §3](./full_paths.mdx)) pioneered visible, no-dropdown filtering
+with segmented controls — **the instinct was right and this spec generalizes it**; only the control is
+wrong. Each three-segment filter collapses to a two-value checkbox facet, where the old **Both**
+segment *is* the all-checked resting state:
+
+| Old segmented filter | New facet |
+| --- | --- |
+| Compressed: `Both · Compressed · Uncompressed` | **Compressed** — ☑ Compressed ☑ Uncompressed |
+| IPFS: `In IPFS · Not · Both` | **Pin (IPFS)** — the §2.4.1 vocabulary |
+
+This is a strict gain: the two-value facet expresses everything the three-segment control did (both
+boxes = Both; one box = either segment) **and** it stops the value vocabulary from growing a fake
+member. It also removes the inconsistency where one table filtered with segments and every other table
+filtered with selects.
+
+### 2.7 The promoted "Bookmarked only" filter (LOCKED)
+
+Bookmarked-only is the one facet that stays a **single checkbox** rather than a value set, because it
+is a **special-cased promotion**, not a column vocabulary:
+
+* **`☐ Bookmarked only`** — when **on**, the table shows **only bookmarked rows**; when off, no
+  bookmark constraint. It ANDs with every other facet, resets to page 1, and colors the filter icon.
+* It is **promoted to the head of the facet rail** (leftmost, visually separated) — previously the head
+  of the filter dropdown — because favoriting-then-filtering-to-favorites is the primary way a user
+  carves a big list down to what they care about.
+* **It is deliberately not a two-value facet** (☑ Bookmarked ☑ Not bookmarked). "Show me only my
+  favorites" is a single, high-frequency intent with an obvious off state; the two-value form would
+  cost a chip and buy nothing. It is the documented **exception** to §2.1, and the only one.
 * This is the **filter** counterpart to the **sort** default (§3.4): sort floats bookmarks to the top
-  of the *full* list; this filter hides everything *except* bookmarks. They are independent — a user
-  can do either or both.
+  of the *full* list; this filter hides everything *except* bookmarks. Independent — either or both.
 
-The filter icon and the per-column filter dropdown this "Bookmarked only" checkbox is promoted into are rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the `showFilter` popover).
+The "Bookmarked only" promotion (today pinned to the top of the filter popover, to move to the head of the rail) is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the `id === "bookmark"` special case).
+
+### 2.8 A facet's values must be declared — an empty facet is a bug (LOCKED)
+
+A column declared as a filterable enum **must** ship its value vocabulary. A facet with no declared
+values currently renders as a select containing only `any` — a dead control that silently filters
+nothing. Under the rail model it would render as a **label with no chips**, which is more visibly
+broken, but it is a bug either way and **must fail review**:
+
+* Every enum facet declares its complete value list.
+* The facet's **accessor and its cell must read the same field** — a facet that filters on a different
+  value than the column displays is a lie about the row.
+* Known live offenders to fix when the rail lands: the one-repo **Status** facet and the
+  storage-detail **Kind** facet (the latter also has an accessor/cell mismatch).
 
 ---
 
@@ -172,6 +344,41 @@ This is only the **default**. The user can re-rank freely (§3.2) — e.g. drop 
 — and their choice is **saved** (§4) and restored next visit. The default applies only when the user
 has no saved sort for that page.
 
+### 3.5 Sorting without opening the dropdown — the active-sort chips (LOCKED)
+
+The same objection that retires the filter dropdown (§2.2) applies to the sort dropdown: **the active
+sort is state the user should be able to read, not state they must open a panel to discover.** The
+1st/2nd/3rd priority picker (§3.1) is a good *editor* and stays — it just stops being the only way to
+see or change the sort.
+
+* **The active sort renders as an ordered chip run** on the control row, right-aligned, beside the
+  sort icon: `Sort: [1 Bookmarked ↓] [2 Size ↓] [3 Name ↑]`. Only the **active** keys appear (at most
+  three, §3), so the run is short by construction.
+* **Each chip is live.** Click its **caret** → toggles that key's asc ⇄ desc. Click its **`×`** →
+  removes that key and promotes the ones below it. **Drag** a chip → re-ranks it, driving the exact
+  same insert-and-cascade-demote rule as the priority slots (§3.2).
+* **Header click still sets the primary** (§3.3) and now shows its result immediately in the chip run.
+  **Shift-click a header appends** that column as the **next** key (2nd, then 3rd) instead of
+  promoting it to primary — the one-gesture way to build a multi-level sort without any panel.
+* **The chips, the headers, and the dropdown are one state** (§3.3). The dropdown becomes the
+  **overflow/discovery** surface: it is where the user finds a sortable column that is *not* currently
+  in the sort, and where **Clear sort** lives.
+* **The sort icon stays colored when a non-default sort is active**, unchanged.
+
+The active-sort chip run is a **new** shared surface, sharing the sort state that today only the popover and headers drive; it is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (a chip run on the control row, calling the existing `assignPriority()` / `promoteToPrimary()`).
+
+### 3.6 Sort obeys the axis split too (LOCKED)
+
+The §2.4 rule is not filter-only. **Pin and git-ignore are two sortable columns, never one.**
+
+* Sorting "by Pin" orders on the **IPFS axis**; sorting "by Ignore" orders on the **git-ignore axis**
+  read from `git check-ignore`. There is no combined "Decision" sort key, for the same reason there is
+  no combined Decision facet — the two keys have two different sources of truth (§2.4).
+* Both toggle columns are **sortable and filterable** ([decision_toggles.mdx §5](./decision_toggles.mdx)).
+  Their sort order follows the toggle grammar: **On → Recommended → Off → N/A** (the actionable states
+  first), direction-flippable like any key.
+
 ---
 
 ## 4. Persistence — sort + filter saved per user, per page (LOCKED)
@@ -186,6 +393,20 @@ has no saved sort for that page.
   stores the **ordered sort keys** and the **active filters** (including **Bookmarked only**, and the
   search text if we choose to persist it).
 
+#### 4.1 Facets persist as the HIDDEN values, never the shown ones (LOCKED)
+
+A facet is stored as the list of values whose box the user **un**checked — `hidden: [...]` — **not**
+the list of checked values.
+
+**Why this is LOCKED.** The two encodings look interchangeable and are not. Store `shown:` and the
+day we add a new value to any enum — a new `RepoStatus`, a new pin state, a new media kind — every
+user who ever touched that facet has a saved list that does not contain the new value, so the new
+value is **invisible to them forever**, silently, with rows vanishing from their table for no reason
+they can see. Store `hidden:` and a new value is **absent from the hidden list, therefore shown** —
+which is the correct default (§2.1: all checked = inactive) and degrades safely. The same argument is
+why an **empty/omitted facet key means all-checked**, and why an inactive facet writes **no key at
+all** rather than a full list of its values.
+
 ```yaml
 # users/<email>/config.yaml  (excerpt — see storage_local.mdx §4 for the full file)
 schema_version: 1
@@ -197,20 +418,35 @@ tables:
         - { col: name,       dir: asc  }
       filters:
         bookmarked_only: false
+        # no facet keys => every facet all-checked (inactive)
     files:                  # Full-paths (files) table
       sort:
         - { col: bookmarked, dir: desc }
         - { col: size,       dir: desc }
       filters:
         bookmarked_only: true
+        facets:
+          # TWO facets, never one (§2.4). Values listed here are the UNCHECKED (hidden) ones.
+          pin:        { hidden: [ignore] }          # showing Pinned + Recommended + Undecided
+          gitignore:  { hidden: [] }                # all-checked — equivalent to omitting the key
+          compressed: { hidden: [compressed] }      # the "Uncompressed" backlog (old segmented control)
     communities:            # Communities table
       sort:
         - { col: bookmarked, dir: desc }
         - { col: name,       dir: asc  }
       filters:
         bookmarked_only: false
-        mode: recommended
+        facets:
+          mode: { hidden: [block, full] }           # showing only Recommended
 ```
+
+* **Migration.** Existing saved entries use the select model's single-value form
+  (`mode: recommended`). On read, a scalar value `v` for facet `f` is interpreted as
+  *"hidden = every value of `f` except `v`"* — the select's one-of-N semantics — and rewritten to the
+  `hidden:` form on the next write. No user loses their view.
+* **Free-text and numeric filters are unchanged** — they persist as the scalar they always were
+  (`min_size_bytes: 104857600`, `path_contains: "render/"`); the `hidden:` shape is for **facets**
+  only (§2.3).
 
 * **Saved on every change.** Any sort re-rank, direction toggle, or filter change writes that table's
   `tables.views` entry (atomic write, debounced) — the user never has to "save a view."
@@ -247,18 +483,39 @@ Repo / File) and its Status verdict are pinned. Implemented in
 1. **Repos, the Full-paths files table, and Communities** each have a **leading ribbon bookmark
    toggle** (§1) — a control cell that flips `bookmarked` and never navigates, solid-yellow / gray-
    outline, mirrored in the row `⋮` menu, default `false`, stored with the entity per §1.1.
-2. The **filter** dropdown on each of those tables **promotes a "Bookmarked only" checkbox** to the
-   top; turning it on shows only bookmarked rows and ANDs with other filters (§2).
-3. **Sort is multi-level:** an ordered primary/secondary/tertiary list; the sort dropdown shows
+2. **No filter facet anywhere in the product is a `<select>` dropdown.** Every categorical filter is a
+   **set of value checkboxes, all checked by default**, where all-checked = inactive; there is no
+   `any` / `all` pseudo-value; unchecking the last checked box is disabled (§2.1). A grep for a
+   `<select>` in the shared filter surface returns **zero** hits.
+3. **The facets are visible without opening anything** — they render on the **facet rail** above the
+   table, showing their vocabulary and current state at rest; the `⛛` popover holds only free-text
+   `contains`, numeric thresholds, and narrow-width overflow, and stays colored whenever **any**
+   filter (rail included) is active (§2.2–§2.3).
+4. **Pin (IPFS) and Git-ignore are two separate facets on every table that filters either** — never
+   merged, never nested, and **no facet is named "Decision"** (§2.4). Their vocabularies are exactly
+   §2.4.1, the pin axis sourced from the ledger and the git-ignore axis from `git check-ignore`. The
+   same split holds for sort keys (§3.6) and for `⋮` menu groups.
+5. **No `Both · X · Y` segmented filter survives** — each is a two-value checkbox facet whose
+   all-checked state *is* the old **Both** (§2.6). Segmented controls remain legal only for genuine
+   one-of-N **modes**, never for filter facets (§2.5).
+6. **Every filterable enum declares its full value vocabulary**, and its accessor and cell read the
+   same field; an enum facet with no declared values fails review (§2.8).
+7. **Sort is multi-level:** an ordered primary/secondary/tertiary list; the sort dropdown shows
    sortable columns (with asc/desc) on the left and **1st/2nd/3rd priority slots** on the right (§3.1).
-4. **Assigning a priority inserts and cascade-demotes** so no two columns share a priority; a column
+8. **Assigning a priority inserts and cascade-demotes** so no two columns share a priority; a column
    holds only one priority; header-click promotes to primary and shares one state with the dropdown;
    Clear sort falls back to default (§3.2–§3.3).
-5. The **default sort is Bookmarked-descending first, then the table's natural secondary** — applied
-   only when the user has no saved sort; fully user-changeable (§3.4).
-6. **Sort and filter persist per user, per page** in `users/<email>/config.yaml` `tables.views`, saved
-   on every change and restored on load; the default is not written until the user changes something
-   (§4).
+9. **The active sort is readable without opening the dropdown** — an ordered chip run on the control
+   row whose chips toggle direction, remove, and re-rank; **shift-click a header appends** a key;
+   chips, headers, and dropdown are one state (§3.5).
+10. The **default sort is Bookmarked-descending first, then the table's natural secondary** — applied
+    only when the user has no saved sort; fully user-changeable (§3.4).
+11. **Sort and filter persist per user, per page** in `users/<email>/config.yaml` `tables.views`, saved
+    on every change and restored on load; the default is not written until the user changes something
+    (§4).
+12. **Facets persist as `hidden:` (the unchecked values), never `shown:`** — an omitted or empty facet
+    key means all-checked, so a newly-added enum value is visible to existing users by default; legacy
+    scalar values migrate on read (§4.1).
 
 ## 6. Tab-scoped column sets (LOCKED)
 
@@ -281,9 +538,26 @@ Applied in code:
 
 <!--
   LOCKED: Every primary table has a leading bookmark toggle (per-computer, per-entity flag, §1.1).
-  The filter dropdown promotes "Bookmarked only" (§2). Sort is an ordered list of up to 3 keys with a
-  1st/2nd/3rd priority picker; assign = insert + cascade-demote, no duplicate priority (§3). Default
-  = Bookmarked desc first, then natural secondary; user-changeable (§3.4). Sort+filter persist per
-  user, per page in users/<email>/config.yaml tables.views, saved on every change (§4). Repos (§3,§8)
-  is the reference implementation; this file generalizes it. All tables are TanStack (charter).
+  FILTERING (§2) — a facet is its VALUES, each a checkbox, ALL CHECKED BY DEFAULT; all-checked =
+  inactive; no `any` pseudo-value; last checked box can't be unchecked; NO <select> filters anywhere.
+  Facets live on an always-visible FACET RAIL above the table (§2.2); the ⛛ popover keeps only
+  free-text contains, numeric thresholds, and overflow (§2.3). PIN AND GIT-IGNORE ARE ALWAYS TWO
+  FACETS, NEVER ONE, and no facet may be named "Decision" (§2.4) — two axes, two sources of truth
+  (ledger vs `git check-ignore`); same split for sort keys (§3.6) and ⋮ menu groups. Checkbox is the
+  default; radio/segmented only for true one-of-N modes (§2.5); every `Both · X · Y` segmented filter
+  is retired to a two-value facet whose all-checked state IS "Both" (§2.6). "Bookmarked only" stays a
+  single promoted checkbox — the ONE documented exception (§2.7). Enum facets must declare their full
+  vocabulary (§2.8). SORT (§3) is an ordered list of up to 3 keys with a 1st/2nd/3rd priority picker;
+  assign = insert + cascade-demote, no duplicate priority; default = Bookmarked desc first, then
+  natural secondary (§3.4); the active sort also renders as a live chip run so it's readable without
+  opening the dropdown, and shift-click a header appends a key (§3.5). PERSISTENCE (§4) per user, per
+  page in users/<email>/config.yaml tables.views; facets persist as `hidden:` (the UNCHECKED values),
+  NEVER `shown:`, so newly-added enum values stay visible to existing users (§4.1, LOCKED — this is
+  not a stylistic choice). Repos (§3,§8) is the reference implementation; this file generalizes it.
+  All tables are TanStack (charter).
+
+  CHARTER NOTE: CLAUDE.md's Tables rule still says the filter/sort icons "open a dropdown to filter /
+  sort the table." §2.2 and §3.5 move the common path OUT of those dropdowns onto always-visible
+  rails/chips while KEEPING both icons for overflow + discovery. The charter line should be refreshed
+  to match; it was not edited here because this change set is spec-only.
 -->

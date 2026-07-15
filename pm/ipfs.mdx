@@ -238,7 +238,46 @@ height (it does not expand to fill the viewport) so the node details below it st
 | — | **`⋮`** | — | The row kebab (vertical three-dot). When the pin **resolves to a local file** it shows the **file** catalog ([menus.mdx §5.3](./menus.mdx#53-file)). When it does **not** — an **untracked** pin or a **path-less** tracked pin — it shows the **pin** catalog ([menus.mdx §5.5](./menus.mdx#55-ipfs-pin-a-pinned-cid--locked)): Copy CID · View on IPFS · **Import** (promoted, untracked only) · Unpin. **Every** row has it, including untracked/path-less rows. |
 
 Pagination **defaults to 500** ([repos §3.3](./repos.mdx#33-pagination--locked)); the **pinned count**
-shows left of the pager. A quick filter **Untracked only** narrows to the import backlog.
+shows left of the pager. Filtering follows [tables.mdx §2](./tables.mdx#2-filtering--the-value-visibility-checkbox-model-locked) — see §5.1.1.
+
+### 5.1.1 Filtering — the facet rail (LOCKED)
+
+The pinset filters by the shared model ([tables.mdx §2](./tables.mdx#2-filtering--the-value-visibility-checkbox-model-locked)),
+not restated here: a facet is its **values, each a checkbox, all checked by default**; all-checked =
+inactive; no `any` pseudo-value; the last checked box is disabled. Two facets sit on the **facet rail**
+above the table ([§2.2](./tables.mdx#22-the-facet-rail--filtering-without-opening-a-dropdown-locked)),
+their vocabularies declared here as [§2.8](./tables.mdx#28-a-facets-values-must-be-declared--an-empty-facet-is-a-bug-locked) requires:
+
+| Facet | Values (each a checkbox, all checked by default) | Column |
+| --- | --- | --- |
+| **Type** | ☑ **recursive** · ☑ **direct** · ☑ **mfs** | Pin (§5.1 col 3) — indirect blocks are rolled under their root, so `indirect` is **not** a value a row can hold |
+| **Tracked** | ☑ **Pinned** (`pinned`) · ☑ **Import** (`import` — the untracked backlog) · ☑ **Path-less** (`path-less`) | Tracked (§5.1 col 4) — the full vocabulary of §1 |
+
+**`☐ Untracked only`** is a **promoted single checkbox at the head of the facet rail**, in the same
+family as **Bookmarked only** ([tables.mdx §2.7](./tables.mdx#27-the-promoted-bookmarked-only-filter-locked)):
+one high-frequency intent ("show me just the import backlog") with an obvious off state. It ANDs with
+the facets, resets to page 1, colors the `⛛` icon, and is **disabled when the pinset holds no untracked
+pins** (§7). It lives on the **rail**, not in the table's `rightHeader` — a bespoke toggle button beside
+the table is a filter outside the filter surface, which is exactly what the rail exists to end.
+
+**Free-text and thresholds stay in the `⛛` popover** ([tables.mdx §2.3](./tables.mdx#23-what-survives-in-the-filter--popover-locked)):
+File / CID `contains`, `Size ≥`, `Peers ≥`.
+
+**This table is the pure IPFS axis — there is no git-ignore meaning anywhere on it.** A pin row's
+`Type` and `Tracked` describe **only** what the local node holds and whether LFB tracks it; neither
+carries, implies, or may be folded together with the git-ignore axis. **No git-ignore facet is ever
+added to this page**, and neither of these enums may be widened with a git-ignore value —
+[tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked)
+(two axes, two sources of truth: the ledger vs. live `git check-ignore`). `Tracked` is **not** the Pin
+(IPFS) decision facet either — it is a pinset reconciliation verdict (§1), not the ledger's decision.
+
+**The `?repo=` nav filter is deliberately NOT on the rail.** The left-bar repo child filters this table
+through the URL (§2.1, LOCKED) — it is **navigation**, deep-linkable and back-button-steppable, not a
+column predicate the user unchecks. It therefore renders as the page **title suffix** (`IPFS · <RepoName>`)
+and the selected child, never as a rail facet; the two surfaces must not be merged.
+
+The pin facet vocabularies exist today as `<select>` `filterOptions` inside the filter popover, and **Untracked only** as a bespoke `rightHeader` toggle button outside it; moving both onto the rail is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsPage.tsx` — `IpfsPage` (the `PIN_TYPES` / `TRACKED` column `filterOptions`, and the `untrackedOnly` state + its `rightHeader` button), against the new facet-rail region of `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
 
 The row `⋮` **pin** catalog (Copy CID · View on IPFS · Import · Unpin) is rendered in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `PinKebab` component
@@ -287,7 +326,7 @@ of the same Tracked rows, so it stays in lock-step with the table with no second
 * **Node unreachable:** a banner replaces the table; Rescan and imports are disabled, with a tooltip
   and a link to [install/repair the IPFS CLI](./tools.mdx).
 * **No pins:** an empty card — "This node isn't pinning anything yet. Pin a repo to start."
-* **No untracked pins:** the **Untracked only** filter is disabled; the totals show `Untracked 0`.
+* **No untracked pins:** the **Untracked only** rail checkbox (§5.1.1) is disabled; the totals show `Untracked 0`.
 * **Loading:** skeleton rows sized to the columns; no layout shift.
 
 ---
@@ -314,8 +353,14 @@ of the same Tracked rows, so it stays in lock-step with the table with no second
 7. **Cell navigation** and **row/entity menus** follow [menus.mdx](./menus.mdx) (§5.2, §5); the CID cell
    copies rather than navigating; the `⋮` kebab shows the file catalog with **Import** promoted for
    untracked rows.
-8. Pagination **defaults to 500** with the pinned count shown; the **Untracked only** quick filter
-   narrows to the import backlog; empty/loading/node-unreachable states render per §7.
+8. Pagination **defaults to 500** with the pinned count shown; empty/loading/node-unreachable states
+   render per §7. Filtering follows [tables.mdx §2](./tables.mdx#2-filtering--the-value-visibility-checkbox-model-locked):
+   the **Type** (recursive / direct / mfs) and **Tracked** (pinned / import / path-less) facets are
+   **value checkboxes, all checked by default**, on the **facet rail** — no `<select>`, no `any` value —
+   and **Untracked only** is a **promoted single checkbox at the head of the rail** (not a `rightHeader`
+   toggle), disabled when nothing is untracked (§5.1.1). The pinset is the **pure IPFS axis**: no
+   git-ignore facet exists here and neither enum may carry a git-ignore meaning (§2.4 there). The
+   left-bar `?repo=` filter stays **navigation**, never a rail facet (§2.1).
 9. The page requires the **IPFS (Kubo) CLI**; when it is missing the user is routed to the
    [install-tools preflight](./tools.mdx) before the page can populate.
 10. The **IPFS left-bar item is a disclosure parent** (§2.1): while active it lists **only** the repos
@@ -338,4 +383,12 @@ of the same Tracked rows, so it stays in lock-step with the table with no second
   Data comes from the 15-minute scheduleTask reading `ipfs pin ls` (scan.mdx) and reconciling pins↔manifests
   (sync_list.mdx §5.1). Table conventions (control row, 500 pagination, ⋮ kebab, cell nav) come from
   repos.mdx + menus.mdx — never restate them. Needs the ipfs CLI → tools.mdx preflight.
+  §5.1.1 FILTERING (LOCKED, per tables.mdx §2): Type (recursive/direct/mfs — never `indirect`, it's rolled
+  under its root) and Tracked (pinned/import/path-less) are VALUE-CHECKBOX facets on the RAIL, all checked
+  by default; no <select>, no `any`. "Untracked only" is a PROMOTED single checkbox at the HEAD of the rail
+  (tables §2.7 family), NOT the bespoke rightHeader toggle button it is today — disabled when Untracked 0.
+  This page is the PURE IPFS AXIS: never add a git-ignore facet, never widen Type/Tracked with a git-ignore
+  meaning (tables §2.4 — two axes, two sources of truth); `Tracked` is a pinset reconciliation verdict, NOT
+  the ledger's Pin decision facet. The ?repo= left-bar child filter stays NAVIGATION (§2.1, URL-driven,
+  deep-linkable) and is deliberately NOT a rail facet — don't merge the two.
 -->

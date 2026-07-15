@@ -168,6 +168,15 @@ lives in ([storage_local.mdx §4](./storage_local.mdx#4-per-logged-in-user-stora
 [sessions.mdx §4](./sessions.mdx#4-storage--the-five-session-history-in-usersemailconfigyaml)) — under a
 top-level `file_system:` key:
 
+> **Deliberate divergence: this page persists under `file_system:`, not `tables.views` (LOCKED).**
+> [tables.mdx §4](./tables.mdx#4-persistence--sort--filter-saved-per-user-per-page-locked) keys every
+> **flat table's** sort + filter state under `tables.views.<tableId>`. This page is **not** a flat table
+> — it is a **column browser** (§1), so its view state is a *different shape* (an open **column chain**
+> and a **multi-path selection**, neither of which a `tables.views` entry has any field for). Same file,
+> same per-user tier, same debounced atomic write; different key because it is a different thing. Not an
+> oversight — do not fold it into `tables.views`. (The sibling **Full paths** tab *is* a flat table and
+> **does** use `tables.views.files` — [full_paths.mdx §3.4](./full_paths.mdx).)
+
 ```yaml
 # ~/T/_large_files_bridge/users/<email>/config.yaml  (excerpt — File System view state)
 file_system:
@@ -254,6 +263,15 @@ bridging large files. All four default **ON**:
  [x] Only Large Files/Dirs      [x] Videos   [x] Images   [x] Audio
 ```
 
+> **This row is the pattern [tables.mdx §2.1](./tables.mdx#21-a-facet-is-its-values-each-with-a-checkbox-all-checked-by-default-locked)
+> generalizes.** These four checkboxes — **always visible above the content, never inside a dropdown,
+> every box checked by default, all-checked = no constraint** — are the shape the Tables spec now makes
+> product-wide law: a visible **facet rail** of value checkboxes instead of a hidden `<select>`
+> ([tables.mdx §2.2](./tables.mdx#22-the-facet-rail--filtering-without-opening-a-dropdown-locked)). The
+> two designs stay **aligned** on the essentials — all-checked is the resting state, the vocabulary is
+> readable without a click, and nothing here is a one-of-N radio. **Where they differ, §1.4a explains
+> why, deliberately.**
+
 **`[x] Only Large Files/Dirs` — the size cut.** When **ON**, the browser hides the small stuff so only
 large files (and the directories that lead to them) remain:
 
@@ -291,6 +309,41 @@ the way the user left it.
 > holes punched in that gate. A file shows when **(Only-Large is OFF)** OR **(it is big)** OR **(it is
 > in a checked media category)**. A directory shows when at least one file under it shows. The media
 > checkboxes only ever *add* files back; they never hide a big file.
+
+### 1.4a Why these four are NOT §2.1 facets — a deliberate, LOCKED exception
+
+The four checkboxes look like a [tables.mdx §2.1](./tables.mdx#21-a-facet-is-its-values-each-with-a-checkbox-all-checked-by-default-locked)
+facet and they are **not one**. The distinction is easy to miss and expensive to "fix", so it is
+recorded here: **§2.1's grammar does not apply to this row, and must not be imposed on it.**
+
+* **§2.1 is value-visibility over one column.** A facet is the list of values *one column can hold*;
+  each checkbox means *"show me rows whose value is this"*; boxes OR within the facet; unchecking a box
+  only ever **hides** rows. Every checkbox in a facet is the **same kind of thing**.
+* **This row is a size gate plus OR-overrides against it.** The four boxes are **two different kinds of
+  thing**, and neither is a column's value:
+  * **`Only Large Files/Dirs` is a MODE checkbox.** It does not hide the value "small" — it **swaps the
+    predicate**. ON = filter by size at all; OFF = *no filtering whatsoever*, and it also **disables the
+    other three** (they exist only as exceptions to *this* cut). A §2.1 facet has no member that turns
+    the facet off, and no member that changes what the other members mean.
+  * **`Videos` / `Images` / `Audio` are INCLUSION OVERRIDES.** They **punch holes in the size cut** —
+    a checked category **adds back** under-threshold files. They are the **opposite polarity** of a
+    §2.1 checkbox: checking one **shows more** rows than the cut alone would, and unchecking one never
+    hides a **big** file of that kind (it stays, because it is big). A §2.1 checkbox can only ever
+    subtract.
+  * They also are **not mutually exclusive with "big"** — a 400 MB `.mp4` is *both* big *and* video, so
+    the boxes are not a partition of a value set the way `Pinned / Not pinned / …` is.
+* **Therefore the composition is `(OFF) OR (big) OR (checked category)`** — an OR of a mode, a
+  threshold, and a category set — **not** the `facet OR within, AND across` algebra of §2.1. Writing it
+  as facets would require inventing pseudo-values (a "Small" value, an "any" member) — exactly what
+  §2.1 forbids — and would silently change behavior: unchecking **Videos** would start hiding **big**
+  videos, which this spec explicitly forbids.
+
+**Do not change the behavior.** The §2.1 rules this row **does** honor (visible at rest, all-checked
+default, all-checked = the widest result, checkbox not radio, no `any` pseudo-value) are exactly the
+rules the product wants everywhere; the composition rule is where a size gate legitimately differs from
+a value filter. Reference [tables.mdx §2.5](./tables.mdx#25-checkbox-vs-radio-vs-segmented--pick-by-the-question-locked)
+for why these stay **checkboxes** regardless: the user routinely wants two categories at once, so radio
+is wrong here too.
 
 Applying the header filters server-side — the size cut against the settings threshold, the checked-media
 overrides, and hiding directories with no qualifying descendant — is handled in code:
@@ -675,7 +728,12 @@ a missing `selection` path is dropped — restoring is **never** an error (§1.3
     default 100 MB) **or** in a **checked** media category; a directory shows iff it has a qualifying
     file underneath it. A checked category shows its files **even under the threshold**; unchecking
     subjects them to the size cut. **Audio is a visibility filter only — it earns no `C` badge.** With
-    *Only Large* OFF there is no size filtering and the media checkboxes have no effect.
+    *Only Large* OFF there is no size filtering and the media checkboxes have no effect. This row is
+    **checkboxes, all default ON, visible at rest** — the pattern [tables.mdx §2.1](./tables.mdx#21-a-facet-is-its-values-each-with-a-checkbox-all-checked-by-default-locked)
+    generalizes — but it is **not** a §2.1 facet and its `(OFF) OR (big) OR (checked category)`
+    composition is a **deliberate, LOCKED exception** (§1.4a): *Only Large* is a **mode** and the three
+    categories are **inclusion overrides**, not values of one column. It must not be "corrected" into
+    facet algebra.
 13. **Decision-toggle cell (§3.6).** Every file/dir row carries the two inline **decision toggles** — the
     editable form of the `P` (pin) and `I` (git-ignored) badges. The **pin** toggle renders for any large
     file; the **⊘ git-ignore** toggle renders **only under a repo** (`repoRootFor()`) and is **N/A
@@ -772,6 +830,20 @@ plus **header-click sort**: click a column header to sort, click again to toggle
 | 3 | **Big files not git-ignored** | n | **Git-ignore…** (confirm list, never silent) | kebab |
 | 4 | **Big files git-ignored, not tracked** | n | **Track / Pin** (add to a pin unit; triage inside) | kebab |
 
+> **These are ROW ACTIONS, not filter facets — and rows 3 and 4 must stay two rows (LOCKED).**
+> [tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked)
+> forbids ever merging the **pin (IPFS)** axis and the **git-ignore** axis into one control. This rollup
+> already complies and must keep complying: row **3** is purely the **git-ignore** axis (*big files git
+> plainly does not ignore* → the **Git-ignore…** offer) and row **4** is purely the **pin** axis (*files
+> already git-ignored, but nothing pins them* → the **Track / Pin** offer). They read the **two
+> different sources of truth** the split exists to protect — row 3's count from live `git check-ignore`,
+> row 4's "not tracked" from the decision ledger — so **no row may ever be collapsed into a combined
+> "decision" row, and no row action may drive both axes**. The mixed *verbs* down the **Action** column
+> (Compress · Git-ignore… · Track / Pin) are **not** a merged axis: each row is a **category**, not an
+> entity, and its action is that category's one remedy — the union of verbs is exactly what a rollup of
+> unlike categories looks like. The same reasoning governs the row `⋮` contents (§8.1), where the
+> compress, git-ignore, and pin offers likewise never share a row.
+
 Clicking a **count** deep-links into the File System browser (§1) at this directory, pre-filtered to
 that category ([menus.mdx §2](./menus.mdx)). When **Do not compress** is on, rows 1–2 still count but
 their **Compress…** action is hidden (the offer is suppressed); when **Never IPFS** is on, row 4's
@@ -867,6 +939,9 @@ Writing the directory-scoped sticky flags — and clearing `sync` decisions belo
    visible primary; right-clicking the directory entity opens the same menu ([menus.mdx §3.1](./menus.mdx)).
 3. The rollup is a **TanStack `DataTable`** in the house style; clicking a **count** deep-links into the
    File System browser (§1) at this directory filtered to that category ([menus.mdx §2](./menus.mdx)).
+   Its rows are **categories with row actions, not filter facets**, and the **git-ignore-axis row (3)
+   and the pin-axis row (4) stay two separate rows** with two separate actions and two sources of truth
+   — never a combined "decision" row ([tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked), §8).
 4. Both **sticky flags** (**Never IPFS**, **Do not compress**) show as labeled switches (§10), are
    **directory-scoped**, write immediately, stay consistent with the menu toggles, and honor
    [menus.mdx §6.6](./menus.mdx) — Never IPFS hides row-4 **Track / Pin** and forbids pinning below; Do not
@@ -884,15 +959,29 @@ Writing the directory-scoped sticky flags — and clearing `sync` decisions belo
   code_plan.mdx §14 (/api/fs + FileSystemPage) and surfaced by the "File System" item in left_bar.yaml.
   ALSO LOCKED in Part A: §1.3 persisted view state — the open column chain + 1+ selection + filter
   checkboxes persist to the per-user config.yaml `file_system:` block (restored on return, debounced
-  write, stale-path-tolerant); and §1.4 the four header filter checkboxes (all default ON) — "Only
+  write, stale-path-tolerant) — the `file_system:` key, NOT tables.mdx §4's `tables.views`, is a
+  DELIBERATE divergence: this is a COLUMN BROWSER, so its view state is a column chain + multi-path
+  selection, a shape tables.views has no fields for (the sibling Full paths tab IS a flat table and does
+  use tables.views.files); and §1.4 the four header filter checkboxes (all default ON) — "Only
   Large Files/Dirs" (size cut at the settings.mdx big-file threshold, hiding dirs with no qualifying
   descendant) plus per-category inclusion overrides Videos/Images/Audio (shown even under threshold;
   audio is a visibility filter only, no C badge). The rule: a file shows when (onlyLarge OFF) OR (big)
   OR (in a checked media category); a directory shows when a file under it shows. When adding a new
   filter, add its flag to §5.1 FileSystemView.filters and the GET /api/fs query, and a bullet to §1.4.
+  §1.4a (LOCKED) records WHY that row is NOT a tables.mdx §2.1 facet and must never be "fixed" into one:
+  §2.1 is value-visibility over ONE column (checkboxes only ever subtract, OR within / AND across), but
+  here "Only Large" is a MODE checkbox that swaps the predicate (and disables the other three when OFF)
+  and Videos/Images/Audio are INCLUSION OVERRIDES of opposite polarity that ADD under-threshold files
+  back and never hide a big file. It DOES honor the §2.1 essentials (visible at rest, all default ON,
+  all-checked = widest result, checkbox not radio, no "any" pseudo-value) — that's why §2.1 cites this
+  row as the pattern it generalizes. Do not change the behavior.
   PART B (§7–§12) = the View-one-DIRECTORY single-entity page (route /dir?path=). Renders the Directory
   action catalog from menus.mdx §5.2 — never restates it. The category rollup table (§8) is the
-  charter's count+category rollup and is a TanStack table like all others. Data contract = EntityView
+  charter's count+category rollup and is a TanStack table like all others. Its rows are CATEGORIES with
+  ROW ACTIONS, not filter facets — and per tables.mdx §2.4 the git-ignore-axis row (3, "Big files not
+  git-ignored" → Git-ignore…) and the pin-axis row (4, "Big files git-ignored, not tracked" →
+  Track / Pin) MUST stay two separate rows with two sources of truth; never collapse them into a
+  combined "decision" row and never let one row action drive both axes. Data contract = EntityView
   (files.mdx §2) + DirRollup in @lfb/shared, served by GET /api/entity?path=. Two sticky flags Never IPFS
   / Do not compress are DIRECTORY-SCOPED (menus.mdx §6.6). Sibling: files.mdx (View one file). When
   adding a new badge category, add a row to §3's table, a color token to §4, a FsBadge value to §5, and

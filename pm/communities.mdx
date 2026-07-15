@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Communities
-description: The Communities page spec. A community is a publisher of large public files (videos first) that a user can subscribe to. Subscribing has two intents — GET their videos (consume for yourself) or SUPPORT them (rebroadcast/pin to keep their content secure and redundant). LFB analyzes this computer's total disk space and its free space OUTSIDE the IPFS datastore, derives a community storage budget and a per-community recommended amount to keep secure, and lets the user set each community's backup mode to one of three states: Block (pin nothing), Recommended (LFB picks a subset that fits the budget — the default), or Full backup (pin the whole library). Stays inside the charter's only-our-content default: rebroadcasting is an explicit, per-community opt-in that pins a chosen publisher's files, never a general public gateway/relay. All tables are TanStack tables. A future opt-in prompt (out of scope now) will ask whether the user will follow our recommended-subset guidelines.
+description: The Communities page spec. A community is a publisher of large public files (videos first) that a user can subscribe to. Subscribing has two intents — GET their videos (consume for yourself) or SUPPORT them (rebroadcast/pin to keep their content secure and redundant). LFB analyzes this computer's total disk space and its free space OUTSIDE the IPFS datastore, derives a community storage budget and a per-community recommended amount to keep secure, and lets the user set each community's backup mode to one of three states: Block (pin nothing), Recommended (LFB picks a subset that fits the budget — the default), or Full backup (pin the whole library). Stays inside the charter's only-our-content default: rebroadcasting is an explicit, per-community opt-in that pins a chosen publisher's files, never a general public gateway/relay. All tables are TanStack tables; the communities table filters on an always-visible facet rail of value checkboxes (Mode, plus TWO independent intent facets — Get and Support are never one facet — and the promoted "Bookmarked only" / "Subscribed only" checkboxes), while the Backup-mode cell stays a segmented one-of-N editor because an editor is not a filter. A future opt-in prompt (out of scope now) will ask whether the user will follow our recommended-subset guidelines.
 ---
 
 # LargeFileBridge — Communities
@@ -192,44 +192,108 @@ per-community mode/intent controls in the table (§7).
 
 **All tables are TanStack tables** (charter). This one lists every community — subscribed or
 discoverable — one row each. It uses the **shared table behavior** from
-[tables.mdx](./tables.mdx): a leading **bookmark** toggle, the **promoted "Bookmarked only"** filter,
-**multi-level** (primary/secondary/tertiary) sort, and **per-user, per-page persistence** of sort +
-filter.
+[tables.mdx](./tables.mdx): a leading **bookmark** toggle, the **value-checkbox facet rail** with the
+**promoted "Bookmarked only"** checkbox at its head, **multi-level** (primary/secondary/tertiary) sort,
+and **per-user, per-page persistence** of sort + filter.
 
 Control row above the table (charter pattern, matching **SysRaps**):
 
 * A **search** box (by name / publisher / description).
-* One **filter** icon → dropdown. It **promotes "Bookmarked only"** to the top
-  ([tables.mdx §2](./tables.mdx#2-the-promoted-bookmarked-only-filter-locked)), then per-column
-  filters (by mode: Block / Recommended / Full; by intent: Get / Support; by "subscribed only").
+* A **facet rail** directly beneath it — always visible, never a dropdown (§7.1).
+* One **filter** icon → popover. It no longer holds the categorical filters; it keeps only the
+  free-text `contains` filters, the numeric thresholds (`Library ≥`, `Redundancy ≥`), and rail
+  overflow at narrow widths
+  ([tables.mdx §2.3](./tables.mdx#23-what-survives-in-the-filter--popover-locked)). It stays **colored
+  whenever any filter is active — rail facets included**.
 * One **sort** icon → **multi-level** dropdown with **1st/2nd/3rd** priority slots
   ([tables.mdx §3](./tables.mdx#3-multi-level-sort--primary--secondary--tertiary-locked)), driving the
-  **same** state as header clicks. **Default sort: Bookmarked first, then community name.**
+  **same** state as header clicks and the **active-sort chip run** on the control row (shift-click a
+  header appends a key — [tables.mdx §3.5](./tables.mdx#35-sorting-without-opening-the-dropdown--the-active-sort-chips-locked)).
+  **Default sort: Bookmarked first, then community name.**
 
 Columns:
 
 | Column | Shows |
 | --- | --- |
-| **`▮` Bookmark** | **Leading** ribbon favorite toggle ([tables.mdx §1](./tables.mdx#1-the-leading-bookmark-favorite-toggle-locked)) — a control cell; flips `bookmarked` (stored in `pin/c/<community_id>/config.yaml`, §8) and never navigates. |
+| **`▮` Bookmark** | **Leading** ribbon favorite toggle ([tables.mdx §1](./tables.mdx#1-the-leading-bookmark-favorite-toggle-locked)) — a control cell; flips `bookmarked` (stored in `pin/c/<community_id>/config.yaml`, §8) and never navigates. Its filter is the promoted **`☐ Bookmarked only`** checkbox on the rail (§7.1), **not** a `yes / no` facet. |
 | **Community** | Name + publisher + one-line description. |
-| **Library** | Item count and total size (e.g. `142 videos · 88 GB`). |
-| **Intent** | **Get** / **Support** toggles (both allowed) — §3. |
-| **Backup mode** | The 3-way **Block · Recommended · Full** control — §4. |
+| **Library** | Item count and total size (e.g. `142 videos · 88 GB`). A number → a `≥` threshold in the `⛛` popover, not a facet. |
+| **Intent** | **Get** / **Support** toggles (both allowed) — §3. Two independent booleans → **two** rail facets (§7.1). |
+| **Backup mode** | The 3-way **Block · Recommended · Full** segmented **editor** — §4. Its **filter** is the Mode **facet** on the rail; editor ≠ filter (§7.2). |
 | **Keeping secure** | For this community: bytes currently pinned vs. its target (recommended amount, or full-library size). A small meter. |
-| **Redundancy** | How many known pinners already carry it (informs the "most at risk" recommendation). |
+| **Redundancy** | How many known pinners already carry it (informs the "most at risk" recommendation). A number → a `≥` threshold in the `⛛` popover, not a facet. |
 
 Table behavior (all charter defaults):
 
 * **Pagination default 500 / page**; item count shown above pagination.
 * **Click-a-header to sort**; click again toggles asc/desc; a caret `↑`/`↓` marks the active column;
-  the header and the sort dropdown share one sort state.
+  the header, the **active-sort chip run**, and the sort dropdown share one sort state, and
+  **shift-clicking a header appends** a key
+  ([tables.mdx §3.5](./tables.mdx#35-sorting-without-opening-the-dropdown--the-active-sort-chips-locked)).
 * **Full-page-height:** with nothing rendered beneath it, the table body fills to the bottom of the
-  viewport and the **rows** scroll inside it (header/control row + count/pagination footer pinned);
-  the page itself does not scroll. (The storage header in §6 is *above* the table, so it does not
-  trigger the "content below" exception.)
-* **Persistence:** this page's sort + filter (including **Bookmarked only** and the sort priority
-  order) are saved per user in `users/<email>/config.yaml` `tables.views` and restored on load
-  ([tables.mdx §4](./tables.mdx#4-persistence--sort--filter-saved-per-user-per-page-locked)).
+  viewport and the **rows** scroll inside it (header/control row + facet rail + count/pagination footer
+  pinned); the page itself does not scroll. (The storage header in §6 is *above* the table, so it does
+  not trigger the "content below" exception.)
+* **Persistence:** this page's sort + filter (including **Bookmarked only**, **Subscribed only**, and
+  the sort priority order) are saved per user in `users/<email>/config.yaml` `tables.views` and restored
+  on load ([tables.mdx §4](./tables.mdx#4-persistence--sort--filter-saved-per-user-per-page-locked)).
+  Each facet persists as its **unchecked** values (`facets: { mode: { hidden: [block] } }`), never the
+  shown ones, so a mode/intent value added later stays visible to existing users
+  ([tables.mdx §4.1](./tables.mdx#41-facets-persist-as-the-hidden-values-never-the-shown-ones-locked)).
+
+### 7.1 The facet rail — this page's facets (LOCKED)
+
+Filtering follows the value-visibility checkbox model owned by
+[tables.mdx §2](./tables.mdx#2-filtering--the-value-visibility-checkbox-model-locked) — **no facet is a
+`<select>`**, a facet is its **values, each a checkbox, all checked by default** (all-checked =
+inactive, no `any` option), checkboxes within a facet OR and facets AND. This page does not restate the
+model; it declares only which facets it carries and their vocabularies (per
+[tables.mdx §2.8](./tables.mdx#28-a-facets-values-must-be-declared--an-empty-facet-is-a-bug-locked), an
+enum facet with no declared vocabulary is a bug):
+
+```
+ ☐ Subscribed only  ·  ☐ Bookmarked only  │  Mode  ☑ Block ☑ Recommended ☑ Full   ·   Get  ☑ Getting ☑ Not getting   ·   Support  ☑ Supporting ☑ Not supporting
+```
+
+| Rail item | Kind | Values / behavior |
+| --- | --- | --- |
+| **`☐ Bookmarked only`** | promoted single checkbox | **Head of the rail** ([tables.mdx §2.7](./tables.mdx#27-the-promoted-bookmarked-only-filter-locked)) — on = only bookmarked communities. The one documented exception to the facet model; **not** a `Bookmarked: yes / no` facet. |
+| **`☐ Subscribed only`** | promoted single checkbox | Same promoted shape and same reasoning: *"show me only the communities I've subscribed to"* is one high-frequency intent with an obvious off state, and it is **not a column vocabulary** (subscription is the presence/absence of the `subscription` record, §2). Sits beside Bookmarked-only at the head of the rail. |
+| **Mode** | facet | ☑ **Block** (`block`) · ☑ **Recommended** (`recommended`) · ☑ **Full backup** (`full`) — the three backup states of §4, each a checkbox, all checked by default. Unchecking **Recommended** + **Full** is the one-gesture *"what am I not carrying?"* view; the retired one-of-N select could not express *"Recommended **and** Full"* at all. |
+| **Get** | facet | ☑ **Getting** · ☑ **Not getting** — the `get` intent boolean (§3). |
+| **Support** | facet | ☑ **Supporting** · ☑ **Not supporting** — the `support` intent boolean (§3). |
+
+**Why intent is TWO facets, not one (LOCKED).** `get` and `support` are **two independent booleans** —
+a subscription can be **both**, **either**, or **neither** (§3: *"one or both"*). That is structurally
+the same shape as Pin (IPFS) vs. Git-ignore, and it takes the same ruling
+([tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked)):
+**independent booleans never collapse into one one-of-N facet.** A single "Intent" facet offering
+`Get · Support` would have to invent a `Both` member and a `Neither` member — a fake vocabulary that no
+field on the row holds — and it would silently make the two axes look mutually exclusive when they are
+not. Two two-value facets express every combination natively: *(Get: Getting ✓, Not getting ✗)* AND
+*(Support: all ✓)* = *"everything I'm getting, whether or not I support it."* One facet = one axis;
+intent is two axes, so it is two facets.
+
+### 7.2 A one-of-N **editor** is not a one-of-N **filter** (LOCKED)
+
+The **Backup mode** cell renders a **3-way segmented control** (`Block · Recommended · Full`) and it
+**stays segmented**. The rail's **Mode facet** is checkboxes. This is not an inconsistency — they answer
+**two different questions** ([tables.mdx §2.5](./tables.mdx#25-checkbox-vs-radio-vs-segmented--pick-by-the-question-locked)):
+
+| Surface | Question | Control | Why |
+| --- | --- | --- | --- |
+| **The cell** (§4) | *"What mode should **this** community be in?"* | **Segmented — correct, keep it.** | This is an **editor** writing one field. A community sits in **exactly one** of the three modes (§4) — "Block **and** Full" is meaningless. A genuine one-of-N **mode**, which is precisely what §2.5 reserves radio/segmented for. |
+| **The rail** (§7.1) | *"Which modes do I want to **see**?"* | **Checkbox facet.** | This is a **predicate over a value set**. *"Show Recommended **and** Full"* is an obvious, common request, so by §2.5's rule of thumb — *if the user could ever plausibly want two of the options at once, it is a checkbox set* — it cannot be one-of-N. |
+
+The **real** inconsistency this resolves is the old **filter**: `mode` shipped as a `<select>` in the
+filter popover while its own cell was segmented — two different controls for the same field, and
+**neither** could express "Recommended and Full." The filter becomes a facet; the editor does not move.
+
+The Backup-mode **cell** is a segmented one-of-N editor (correct — it stays) in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/communities/CommunitiesPage.tsx` — `CommunitiesPage` (the `mode` column's `cell`, mapping `MODES` to segment buttons that `patch` `backupMode`).
+
+The Mode **filter** is today a `<select>` of `MODES` and the Bookmark filter a `["yes","no"]` select; both are to be rebuilt as rail items per §7.1, and the intent facets do not exist yet (`intent` is `filterable: false`) — **to be implemented in code**:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/communities/CommunitiesPage.tsx` — `CommunitiesPage` (the `mode` / `bookmark` / `intent` column definitions), rendered by the shared facet rail in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
 
 ---
 
@@ -281,9 +345,21 @@ stored **computer-wide** (owned by the machine, not the logged-in user):
    **headroom is never violated**, including under Full.
 5. The community list is a **TanStack table** with the standard control row (search + one filter icon
    + one sort icon), 500/page default, full-page height (rows scroll inside; page does not), and the
-   **shared table behavior** ([tables.mdx](./tables.mdx)): a leading **bookmark** toggle, a promoted
-   **"Bookmarked only"** filter, **multi-level** (1st/2nd/3rd) sort defaulting to **Bookmarked first,
-   then name**, and **per-user, per-page persistence** of sort + filter.
+   **shared table behavior** ([tables.mdx](./tables.mdx)): a leading **bookmark** toggle,
+   **multi-level** (1st/2nd/3rd) sort defaulting to **Bookmarked first, then name**, and **per-user,
+   per-page persistence** of sort + filter.
+   * **Filtering is the facet rail** (§7.1), always visible above the table: the promoted **`☐
+     Bookmarked only`** and **`☐ Subscribed only`** checkboxes at its head, then the **Mode** facet
+     (☑ Block ☑ Recommended ☑ Full), the **Get** facet, and the **Support** facet — every value a
+     checkbox, **all checked by default**, all-checked = inactive, **no `<select>` and no `any`
+     option** anywhere. `get` and `support` are **two facets, never one** (independent booleans). The
+     `⛛` popover keeps only free-text `contains`, the `Library ≥` / `Redundancy ≥` thresholds, and rail
+     overflow, and colors whenever any filter — rail included — is active.
+   * **The Backup mode cell stays a 3-way segmented editor** while its **filter is a checkbox facet**
+     (§7.2) — an editor and a filter are different questions; the mode `<select>` in the filter popover
+     is retired.
+   * The **active sort** reads as a chip run on the control row and **shift-click a header appends** a
+     key ([tables.mdx §3.5](./tables.mdx#35-sorting-without-opening-the-dropdown--the-active-sort-chips-locked)).
 6. Rebroadcasting stays **charter-compliant** (§1): it is a per-community opt-in that pins a chosen
    publisher's public files only — never a general public gateway/relay — and the node's
    only-our-content default is not flipped.
@@ -299,4 +375,12 @@ stored **computer-wide** (owned by the machine, not the logged-in user):
   Block / Recommended / Full. Budget = free-outside-IPFS minus headroom; headroom is never crossed.
   Communities are computer-wide pin units (pin/c/<id>/), mirroring pin/r/<repo>/. The follow-our-
   guidelines prompt (§9) is deferred. All tables are TanStack (charter).
+  TABLE (§7): filtering follows tables.mdx §2 — the always-visible FACET RAIL of value checkboxes, all
+  checked by default; no <select>, no `any` option. Rail = promoted "Bookmarked only" + "Subscribed
+  only" checkboxes, then the Mode facet (Block/Recommended/Full) and TWO intent facets. INTENT IS TWO
+  FACETS, NEVER ONE (§7.1) — `get` and `support` are independent booleans, same ruling as Pin vs.
+  Git-ignore (tables.mdx §2.4); one "Intent" facet would have to invent Both/Neither members. The
+  Backup-mode CELL stays a segmented one-of-N EDITOR; only its FILTER becomes a facet (§7.2) — editor
+  and filter are different questions (tables.mdx §2.5). The ⛛ popover keeps only contains / numeric
+  thresholds / rail overflow.
 -->

@@ -101,6 +101,25 @@ storage's **per-storage settings** ([storage_settings.mdx §1](./storage_setting
 the one-click shortcut to the same place the kebab's **Storage settings…** item reaches, for Company,
 Personal, Repo, or Community storages alike.
 
+### 2.1 The Storages table — the Type facet (LOCKED)
+
+Filtering follows [tables.mdx §2](./tables.mdx#2-filtering--the-value-visibility-checkbox-model-locked)
+and is not restated. The Storages table's one categorical column is **Type**, so it is one facet on the
+**rail**, its full vocabulary declared as
+[§2.8](./tables.mdx#28-a-facets-values-must-be-declared--an-empty-facet-is-a-bug-locked) requires:
+
+| Facet | Values (each a checkbox, all checked by default) | Source |
+| --- | --- | --- |
+| **Type** | ☑ **Personal** · ☑ **Company** · ☑ **Community** | `storage.yaml` `type` (§3). `local` is **not** a value — Local Storage is settings, not a directory-based storage (§1), so it is never a row here; `repo` is not either — the Repos child links to the [Repos](./repos.mdx) tab rather than listing repos (§2). |
+
+It renders as a `<select>` today; under §2 it is three value checkboxes, all checked (all-checked =
+inactive, which is the resting "show every storage" state), with no `any` option and the last checked
+box disabled. **Name** and **Path** are free text → the `⛛` popover as `contains`
+([tables.mdx §2.3](./tables.mdx#23-what-survives-in-the-filter--popover-locked)).
+
+The Type column's `filterOptions` (`personal` / `company` / `community`) exist today as a `<select>` in the filter popover; rendering them as rail checkboxes is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StoragesPage.tsx` — `StoragesPage` (the `id: "type"` column), against the new facet-rail region of `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
+
 Building the Storages tab and its derived children (Personal · Companies · Repos link · Communities) from the discovered `storage.yaml` files is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `listStoragesPage()` · rendered by the frontend `Sidebar` from `pm/left_bar.yaml`.
 
@@ -393,6 +412,42 @@ fingerprint index (§4.1), and the analysis outputs (§6) become visible and act
 * **Primary button — Index files** — (re)builds the per-file fingerprint index (§4.1) for this storage;
   it stays a visible primary button in the header ([page_actions.mdx §3](./page_actions.mdx)).
 
+### 7.0 The files table — the Kind facet (LOCKED, and a §2.8 bug to fix)
+
+The detail page's files table (§7) filters by the shared model
+([tables.mdx §2](./tables.mdx#2-filtering--the-value-visibility-checkbox-model-locked)), not restated.
+Its one categorical column is **Kind** — the media kind the row's cell renders — so it is one facet on
+the **rail**:
+
+| Facet | Values (each a checkbox, all checked by default) | Source |
+| --- | --- | --- |
+| **Kind** | ☑ **Video** · ☑ **Image** · ☑ **Audio** | the media kind derived from the filename — the `MediaKind` triple |
+
+* **These are the only values.** A file the classifier resolves to **no** media kind (a `.pdf`, a
+  `.zip`, a source file) holds **no value on this axis** — its cell already renders `—`. Like the
+  toggle columns' **N/A** state ([tables.mdx §2.4.1](./tables.mdx#241-the-two-facets-fixed-vocabulary-locked)),
+  that is **not a facet value**: the Kind facet constrains only rows that have a kind, and `any` /
+  `other` are never offered.
+* **Name / Path are free text** → the `⛛` popover as `contains`; **Size** is a numeric threshold
+  (`Size ≥`) ([tables.mdx §2.3](./tables.mdx#23-what-survives-in-the-filter--popover-locked)).
+
+**Two live bugs this section fixes** — this column is one of the named offenders in
+[tables.mdx §2.8](./tables.mdx#28-a-facets-values-must-be-declared--an-empty-facet-is-a-bug-locked):
+
+1. **The facet declares no values**, so it renders a **dead dropdown containing only `any`** — a control
+   that silently filters nothing. §2.8: an enum facet with no declared vocabulary **fails review**. The
+   vocabulary above is that declaration.
+2. **The accessor and the cell read different fields.** The accessor reads the row's **compressible**
+   flag while the cell renders the **media kind** — so the filter would predicate on a value the column
+   never displays, which §2.8 calls *a lie about the row*. **The accessor must read the same field the
+   cell renders** (the media kind), full stop. Compressibility is a **different axis**; if it is ever
+   wanted as a filter it is its own facet with its own values, never folded into Kind — the same
+   one-facet-one-axis rule that keeps Pin and Git-ignore apart
+   ([tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked)).
+
+Declaring the Kind vocabulary and pointing the accessor at the media kind the cell renders (today `accessor: (f) => f.compressible ?? ""` against a `mediaKindForName(...)` cell, with no `filterOptions`) is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage` (the `id: "kind"` column), whose vocabulary is the `MediaKind` triple returned by `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/media.ts` — `mediaKindForName()` (`video` / `image` / `audio`, else `null`).
+
 ### 7.1 Page actions — the action-links row
 
 Directly under the page title — with **Index files** staying as the header's primary button — the page
@@ -500,8 +555,13 @@ therefore **whose** sync repo (§8) its tracking state mirrors to.
 * **Company-owned repos** mirror to that **[company storage](./storage_company.mdx)**'s sync repo — so all
   of a company's repos share one travelling tracking-state repo under the company allow-list.
 * The owner shows in the storages UI: a company storage's detail page can surface **the repos it owns**
-  (a filtered view of the [Repos](./repos.mdx) list), and each `StorageRow` already carries
-  `companyName` for the label.
+  — an **owner-scoped** view of the [Repos](./repos.mdx) list — and each `StorageRow` already carries
+  `companyName` for the label. "Filtered view" here means **scoping by navigation**: the storage you are
+  on *is* the predicate, so it is not a rail facet the user unchecks
+  ([tables.mdx §2.2](./tables.mdx#22-the-facet-rail--filtering-without-opening-a-dropdown-locked)) —
+  the same distinction the IPFS page draws for its `?repo=` child filter
+  ([ipfs.mdx §5.1.1](./ipfs.mdx)). Whatever facets that repo list carries still apply **within** the
+  scope, all-checked by default.
 * **A company assignment travels to teammates, consent-gated.** Assigning a repo to a company is not only a
   local grouping choice — because it changes **whose** sync repo the repo's tracking mirrors into (from
   Personal to the *shared* company repo), the decision is committed as an **assertion** into that company's
@@ -600,6 +660,13 @@ Populating the per-storage `stateSyncRepo` descriptor when it splits the page in
    tracking into the **shared** company sync repo, the decision **travels** to teammates as an assertion in
    `<syncRepo>/owner_map.yaml` and is applied on another member's computer **only with that member's consent**
    ([repo_owner_propagation.mdx](./repo_owner_propagation.mdx), §9).
+9a. **Both tables filter by value checkboxes on the facet rail, never a `<select>`**
+    ([tables.mdx §2](./tables.mdx#2-filtering--the-value-visibility-checkbox-model-locked)): the
+    **Storages** table's **Type** facet is ☑ Personal ☑ Company ☑ Community, all checked (§2.1), and the
+    **storage-detail files** table's **Kind** facet is ☑ Video ☑ Image ☑ Audio, all checked (§7.0). The
+    Kind facet **declares its vocabulary** and its **accessor reads the media kind its cell renders** —
+    closing both §2.8 offences (a dead `any`-only dropdown, and an accessor/cell mismatch against
+    `compressible`); a file with no media kind holds no value on the axis and is not a facet value.
 10. The Storages-page payload gains a per-storage **`stateSyncRepo`** descriptor (§10) — `configured`,
     `root`, `ownedRepoCount`, `remote` — non-null only for **company** and **Personal** storages, `null`
     for `local` and `community`; it extends `StorageRow` / `StoragesPageData` and is populated by
@@ -645,7 +712,16 @@ Populating the per-storage `stateSyncRepo` descriptor when it splits the page in
   ownedRepoCount/remote; company+Personal only) → extends StorageRow/StoragesPageData, populated by
   listStoragesPage(). Code seams: tracking-root.service.ts resolveTrackingRoot()/resolveStateSyncRepo(),
   tracking-sync.service.ts mirrorToSyncRepo()/reconcileFromSyncRepo(), state-dir.ts resolveRepoStateDir().
-  Acceptance §8–§10 updated. Sibling detail specs: storage_local, storage_repo, storage_personal,
+  FILTERING (per tables.mdx §2): §2.1 the Storages table's Type facet = VALUE CHECKBOXES on the RAIL —
+  ☑ Personal ☑ Company ☑ Community, all checked (no `local` row — settings, not a directory storage; no
+  `repo` row — the Repos child links to repos.mdx). §7.0 the storage-detail FILES table's Kind facet =
+  ☑ Video ☑ Image ☑ Audio (the MediaKind triple from shared/src/media.ts mediaKindForName) — this is a
+  NAMED tables.mdx §2.8 offender, fixed here on BOTH counts: it declared NO values (dead `any`-only
+  dropdown) AND its accessor read f.compressible while its cell rendered the media kind. The accessor MUST
+  read the field the cell renders; compressible is a DIFFERENT axis and never folds into Kind (§2.4 rule).
+  A file with no media kind holds no value on the axis — not a facet value (N/A rule, §2.4.1). §9's "the
+  repos it owns (a filtered view of the Repos list)" = scoping by NAVIGATION, not a rail facet.
+  Acceptance §8–§10 updated (+ §9a for the two facets). Sibling detail specs: storage_local, storage_repo, storage_personal,
   storage_company, storage_community; cross-links artifact_placement_policy, repo_tracking_scheme,
   repo_company_mapping, placement_radios, repo_settings.
 -->
