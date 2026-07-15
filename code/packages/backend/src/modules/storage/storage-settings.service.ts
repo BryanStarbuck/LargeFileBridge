@@ -12,7 +12,7 @@ import type { StorageSettings, StorageBackingLocation, StorageSettingsPatch, Sto
 import { readYaml, writeYaml, updateYaml } from "../../shared/store/yaml-store.js";
 import { storageUnitDir, unitConfigPath } from "../../shared/store/scopes.js";
 import { expandHome } from "../fs/badges.js";
-import { LFBRIDGE_DIR } from "./tracking.service.js";
+import { trackingBaseDir, legacyTrackingBaseDir, RESERVED_SDL_ROOT_NAMES, usesLfbridgeDir, resolveStorageType } from "./storage-type.service.js";
 // storage.service <-> storage-settings.service form a lazy import cycle (used only inside functions,
 // never at module-eval time), which is safe under NodeNext ESM.
 import { getStorageRow, readDescriptor, writeDescriptor } from "./storage.service.js";
@@ -164,7 +164,9 @@ export function readStorageSettings(storageId: string): StorageSettings {
     lfbridge: {
       enabled: cfg.lfbridge.enabled,
       path: cfg.lfbridge.path,
-      defaultPath: path.join(row.root, LFBRIDGE_DIR),
+      // The kind-correct default (§0): `<root>/.lfbridge` for a working repo, `<root>` for an SDL — which
+      // has none. Showing an SDL user a `.lfbridge` path here would name a folder they will never find.
+      defaultPath: trackingBaseDir(row.root, row.type),
     },
     backing: buildBacking(row, cfg),
   };
@@ -284,11 +286,19 @@ export function getGitBackboneRemote(storageId: string): { remote: string } | nu
 
 // ── mapped source directories (syncable_data_location.mdx §3, storage_settings.mdx §4a) ───────────────
 // The SHARED list of source hierarchies a company/personal storage covers, in the SDL's
-// `<root>/.lfbridge/mapped_dirs.yaml`. Everything recursive under each mapped dir is in scope. The
-// logical list travels; each device re-roots each key to its own absolute path via the graft
-// (devices.mdx §4). This is only the read/write + schema — the scanner integration lives elsewhere.
+// `<root>/mapped_dirs.yaml` — at the ROOT, since an SDL has no `.lfbridge/` (artifact_placement_policy.mdx
+// §0). Everything recursive under each mapped dir is in scope. The logical list travels; each device
+// re-roots each key to its own absolute path via the graft (devices.mdx §4). This is only the read/write +
+// schema — the scanner integration lives elsewhere.
 function mappedDirsPath(root: string): string {
-  return path.join(root, LFBRIDGE_DIR, "mapped_dirs.yaml");
+  return path.join(trackingBaseDir(root), "mapped_dirs.yaml");
+}
+
+/** The pre-migration location — `<root>/.lfbridge/mapped_dirs.yaml` — or null when there is none (§0.3).
+ *  READ-ONLY fallback so a not-yet-migrated SDL keeps its mapped dirs; never a write target. */
+function legacyMappedDirsPath(root: string): string | null {
+  const legacy = legacyTrackingBaseDir(root);
+  return legacy ? path.join(legacy, "mapped_dirs.yaml") : null;
 }
 
 /** A stable key slugged from a label or path: lowercase, non-alnum → `_`, trimmed. */
@@ -300,7 +310,12 @@ function slugKey(seed: string): string {
 
 /** Read the shared mapped-directory list for a storage ROOT (defaults-on-absence). Used by devices too. */
 export function readMappedDirsForRoot(root: string): MappedDirList {
-  const doc = readYaml(mappedDirsPath(root), MappedDirsSchema);
+  // Prefer the current location; fall back to the pre-migration `.lfbridge/` copy for an SDL that has not
+  // been migrated yet (§0.3), so its mapped dirs are not silently lost for one pass.
+  const legacy = legacyMappedDirsPath(root);
+  const current = mappedDirsPath(root);
+  const from = !fs.existsSync(current) && legacy && fs.existsSync(legacy) ? legacy : current;
+  const doc = readYaml(from, MappedDirsSchema);
   return {
     schemaVersion: doc.schema_version,
     mapped: doc.mapped.map((m) => ({ key: m.key, label: m.label, canonical: m.canonical, recursive: m.recursive })),
@@ -314,15 +329,33 @@ export function getMappedDirs(storageId: string): MappedDirList {
 }
 
 /**
+ * Reject a mapped-dir key that would SHADOW an SDL's own metadata (artifact_placement_policy.mdx §0.3,
+ * storage_settings.mdx §4a.1). In an SDL the mirror hangs off the ROOT — `<sdl>/<key>/…` — so a key named
+ * `devices`, `analysis`, `files.yaml`, … would collide with the SDL's own root files. Reserved only for an
+ * SDL: a working repo nests its metadata safely under `.lfbridge/`, so any key is fine there.
+ * Throws with a message naming the reserved word; the router surfaces it on the add/rename.
+ */
+function assertMappedKeyAllowed(root: string, key: string): void {
+  if (usesLfbridgeDir(resolveStorageType(root))) return; // working repo → nothing to shadow
+  if (!RESERVED_SDL_ROOT_NAMES.has(key)) return;
+  throw new Error(
+    `"${key}" is a reserved name at the root of a Large File Bridge storage — it would overwrite the storage's own ${key}. Choose a different key for this mapped directory.`,
+  );
+}
+
+/**
  * Write the shared mapped-directory list for a storage. A row without a `key` gets one slugged from its
  * label/canonical path (uniquified). Everything recursive under each mapped dir is in scope (recursive
  * defaults true). This edits only the SHARED list; per-computer paths are the device graft (devices.mdx).
+ * Rejects a key that would shadow an SDL's root metadata (§0.3) BEFORE writing anything, so a bad key never
+ * lands a half-written list.
  */
 export function setMappedDirs(storageId: string, list: Array<Partial<MappedDir>>): MappedDirList {
   const row = requireRow(storageId);
   const seen = new Set<string>();
   const mapped: MappedDir[] = list.map((m) => {
     let key = (m.key ?? "").trim() || slugKey(m.label || m.canonical || "dir");
+    assertMappedKeyAllowed(row.root, key);
     let candidate = key;
     let n = 2;
     while (seen.has(candidate)) candidate = `${key}_${n++}`;

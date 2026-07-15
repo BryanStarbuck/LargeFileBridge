@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Storage Settings (Per-Storage)
-description: The per-storage settings page. Reached from a SINGLE storage — the gear icon on the storage detail page header, the row ⋮ kebab / right-click on a storage row in the Storages table, and the entity ⋮ "more" menu on the storage detail page — all opening this page scoped to that one storage. It controls the machine-local choices for that storage: whether this computer keeps the hidden .lfbridge/ tracking directory and WHERE it goes, and which BACKING LOCATIONS the storage is materialized into — a dedicated Git repo (preferred when available), a Google Drive location, and a Dropbox directory — each independently ON/OFF with its own path. LFB picks good default directories that the user can change. The settings persist to a machine-local per-storage config file (pin/s/<storage_id>/config.yaml) — the local "settings file" distinct from the SHARED storage.yaml, because where the hidden dir and each mirror live differs per computer. On each pin pass, LFB reads these settings and, for every enabled backing location, CREATES the directory if missing and UPDATES it. For a company/Personal storage it also shows an OWNED REPOS list (§4c) — a TanStack table of the repos currently mapped to this storage (Personal includes the auto-defaulted no-org repos) — each row with a reassign dropdown (Personal | each company | + New company…) that re-files the repo via the same POST /api/repos/:repoId/owner as the per-repo Owner control; reassigning INTO a company with a sync repo records the travelling ownership assertion (repo_owner_propagation.mdx §2), moves NO bytes, and only changes which sync repo the repo's Category-B tracking mirrors to. Sibling of repo_settings.mdx (the per-repo counterpart), storages.mdx (the storage family + storage.yaml + .lfbridge layout), repo_company_mapping.mdx (the owner mapping the list reads), and repo_owner_propagation.mdx (how a company reassignment travels + is consent-gated).
+description: The per-storage settings page. Reached from a SINGLE storage — the gear icon on the storage detail page header, the row ⋮ kebab / right-click on a storage row in the Storages table, and the entity ⋮ "more" menu on the storage detail page — all opening this page scoped to that one storage. It controls the machine-local choices for that storage: for a `repo` storage (a working git repo) whether this computer keeps the hidden .lfbridge/ tracking directory and WHERE it goes — a control that exists ONLY for kind `repo`, because a personal/company/community SDL has NO .lfbridge/ at all (its ROOT is the .lfbridge area, artifact_placement_policy.mdx §0) — and which BACKING LOCATIONS the storage is materialized into — a dedicated Git repo (preferred when available), a Google Drive location, and a Dropbox directory — each independently ON/OFF with its own path. LFB picks good default directories that the user can change. The settings persist to a machine-local per-storage config file (pin/s/<storage_id>/config.yaml) — the local "settings file" distinct from the SHARED storage.yaml, because where the hidden dir and each mirror live differs per computer. On each pin pass, LFB reads these settings and, for every enabled backing location, CREATES the directory if missing and UPDATES it. For a company/Personal storage it also shows an OWNED REPOS list (§4c) — a TanStack table of the repos currently mapped to this storage (Personal includes the auto-defaulted no-org repos) — each row with a reassign dropdown (Personal | each company | + New company…) that re-files the repo via the same POST /api/repos/:repoId/owner as the per-repo Owner control; reassigning INTO a company with a sync repo records the travelling ownership assertion (repo_owner_propagation.mdx §2), moves NO bytes, and only changes which sync repo the repo's Category-B tracking mirrors to. It also OWNS the RESERVED-NAME validator (§4a): because an SDL's mapped-dir mirror hangs off the storage ROOT, a mapped-dir key named devices, analysis, files.yaml, storage.yaml, manifest.yaml, bookmarks.yaml, or mapped_dirs.yaml would shadow the SDL's own metadata, so add/rename rejects it and existing collisions surface as a storage warning (rule owned by artifact_placement_policy.mdx §0.3). Sibling of repo_settings.mdx (the per-repo counterpart), storages.mdx (the storage family + storage.yaml + the working-repo .lfbridge layout), artifact_placement_policy.mdx (§0 the storage-KIND rule that decides whether .lfbridge/ exists at all), repo_company_mapping.mdx (the owner mapping the list reads), and repo_owner_propagation.mdx (how a company reassignment travels + is consent-gated).
 ---
 
 # LargeFileBridge — Storage Settings (Per-Storage)
@@ -12,8 +12,10 @@ opens **this** page, scoped to **one storage**.
 
 It answers two questions the charter leaves per-computer:
 
-1. **Does this computer keep the hidden `.lfbridge/` tracking directory for this storage, and where does
-   it go?**
+1. **Where does this computer keep this storage's tracking area?** For a **`repo`** storage that is
+   "does this computer keep the hidden `.lfbridge/` directory, and where does it go?"; for a
+   **personal / company / community SDL** there **is** no `.lfbridge/` — the storage **root** *is* the
+   tracking area — so the question does not arise (§3).
 2. **Which backing locations is this storage materialized into on this computer** — a **dedicated Git
    repo**, a **Google Drive** location, and/or a **Dropbox** directory — each independently **on/off**
    with its own directory?
@@ -24,8 +26,12 @@ update** the enabled directories (§6).
 
 Siblings this builds on and does not repeat:
 
-* [storages.mdx](./storages.mdx) — the storage family: `storage.yaml` (§3), the hidden `.lfbridge/`
-  layout (§4), and the `clones` block that records Drive/Dropbox mirrors (§5).
+* [storages.mdx](./storages.mdx) — the storage family: `storage.yaml` (§3), the hidden (working-repo)
+  `.lfbridge/` layout (§4), and the `clones` block that records Drive/Dropbox mirrors (§5).
+* [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx) — the **storage-KIND rule** that
+  owns *whether `.lfbridge/` is used at all*: only a working git repo (kind `repo`) has one; an SDL's
+  root **is** the `.lfbridge` area (§0.1), keyed on kind and never on a path or name (§0.2), with the
+  SDL-root **reserved names** (§0.3) this page's mapped-dir validator enforces (§4a).
 * [repo_settings.mdx](./repo_settings.mdx) — the per-repo settings page; a **repo is one kind of
   storage**, so a repo's gear may land on either its repo-settings or (for its storage facet) here — the
   two are kept aligned, never duplicated (§2).
@@ -86,56 +92,98 @@ The one distinction this page turns on. A storage has **two** kinds of configura
   This is [`storage.yaml`](./storages.mdx#3-storageyaml--the-per-storage-descriptor-locked-shape): `name`,
   `type`, the type block, and the **`clones`** block (the canonical relative Drive/Dropbox paths). It
   travels between computers via the git backbone, so every machine agrees on *what* the storage is.
-* **Machine-local / per-computer** — **this computer's** choices for the storage: whether `.lfbridge/`
-  is kept and **where** it goes on this box, and whether each backing location is **enabled** and its
-  **resolved local path** on this box. This is the **`pin/s/<storage_id>/config.yaml`** file under the
+* **Machine-local / per-computer** — **this computer's** choices for the storage: for a **`repo`**
+  storage whether `.lfbridge/` is kept and **where** it goes on this box (§3 — an SDL has no such
+  choice), and whether each backing location is **enabled** and its **resolved local path** on this box.
+  This is the **`pin/s/<storage_id>/config.yaml`** file under the
   Local state root (§5) — the local "settings file" (the `.ini`-style local config) this page writes.
 
 Why split them: a Google Drive folder is at a different absolute path on a laptop than on a work tower;
-a machine may have the dedicated repo cloned but no Dropbox; a server may keep `.lfbridge/` on a
-faster volume. Those are **per-computer** facts and must **not** be forced into the shared descriptor.
+a machine may have the dedicated repo cloned but no Dropbox; a server may keep a working repo's
+`.lfbridge/` on a faster volume. Those are **per-computer** facts and must **not** be forced into the shared descriptor.
 The descriptor says *where the Drive mirror lives relative to the drive*; the machine-local config says
 *is it turned on here, and what is its absolute path here*.
 
 For a **repo** storage, the per-repo settings in [repo_settings.mdx](./repo_settings.mdx) remain the
 home of repo-specific behavior (threshold override, selection rules, pin policy, sharing); this page adds
-only the **storage-facet** controls (`.lfbridge/` placement + backing locations). The two never restate
-each other.
+only the **storage-facet** controls (the `.lfbridge/` placement — a **`repo`**-only control, §3 — plus
+backing locations). The two never restate each other.
 
 ---
 
-## 3. The hidden `.lfbridge/` tracking directory — keep it, and where
+## 3. The tracking area — and the `.lfbridge/` control, which is `repo`-only (LOCKED)
 
-The first control. The hidden **`.lfbridge/`** area holds everything LFB knows about this storage — the
-per-file fingerprint index (`files.yaml`), the IPFS manifest, and the media-analysis outputs — kept out
-of Git ([storages.mdx §4](./storages.mdx#4-lfbridge--the-hidden-per-storage-tracking-area)).
+The first control. This storage's **tracking area** holds everything LFB knows about the storage — the
+per-file fingerprint index (`files.yaml`), the IPFS manifest, and the media-analysis outputs.
 
-* **Checkbox: "Keep a hidden `.lfbridge/` tracking directory for this storage on this computer."**
-  **Default: ON.** ON means this computer tracks the storage's files locally; OFF means this computer
-  carries the storage's bytes but keeps **no** local tracking area (rare — e.g. a read-only mirror
+**What that area *is* depends on the storage's KIND**, and this page is reached from **every** kind, so
+the section renders differently for each. The rule is not this page's to make — it is owned by
+[artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx), keyed on the **resolved storage
+kind** and never on a path or a name (§0.2):
+
+| Storage kind | Tracking area | Does this section show the `.lfbridge/` control? |
+| --- | --- | --- |
+| **`repo`** — a user's working git repo (Git Storage) | **`<root>/.lfbridge/`** — LFB is a **guest**, so it quarantines its files in one hidden corner ([storages.mdx §4](./storages.mdx#4-where-a-storages-state-lives--the-kind-split-then-category-a-vs-category-b-locked)) | **YES** — checkbox + relocate picker below |
+| **`personal` / `company` / `community`** — a dedicated LFB file repo (**SDL**) | **the storage ROOT itself** — an SDL has **no `.lfbridge/` directory at all** | **NO** — read-only root line instead |
+
+**For a `repo` storage — keep the hidden `.lfbridge/`, and where.**
+
+* **Checkbox: "Keep a hidden `.lfbridge/` tracking directory for this repo on this computer."**
+  **Default: ON.** ON means this computer tracks the repo's files locally; OFF means this computer
+  carries the repo's bytes but keeps **no** local tracking area (rare — e.g. a read-only mirror
   machine). This is a **machine-local** choice (§2).
-* **Location.** Default **`<storage root>/.lfbridge/`** — the hidden folder at the storage's own root
-  (for a repo, `~/BGit/xyz/.lfbridge/`). The user may **relocate** it — a **directory picker** pre-filled
-  with the default — for cases where the storage root should stay pristine or is read-only (a Drive
-  folder). When relocated, LFB writes tracking to the chosen directory and maps it back to the storage;
-  the descriptor is still found via the root → `.lfbridge/` fallback already in code.
+* **Location.** Default **`<repo root>/.lfbridge/`** — the hidden folder at the repo's own root
+  (e.g. `~/BGit/xyz/.lfbridge/`). The user may **relocate** it — a **directory picker** pre-filled
+  with the default — for cases where the repo root should stay pristine or is read-only. When
+  relocated, LFB writes tracking to the chosen directory and maps it back to the storage; the
+  descriptor is still found via the root → `.lfbridge/` fallback already in code.
 * Whenever `.lfbridge/` sits **inside a Git repo**, LFB keeps it git-ignored (appends `.lfbridge/` to
-  `.gitignore`) so tracking never bloats commits — charter behavior, already enforced.
+  `.gitignore`) so tracking never bloats commits — charter behavior, already enforced. (This is
+  about a **working repo**'s hidden dir only; an SDL has no `.lfbridge/` to ignore, and its root
+  content is exactly what its git is **for**.)
 
-The `.lfbridge/` constant, the ensure-directory, and the git-ignore-on-init behavior this control drives live in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureStorage()` / `ensureGitignore()` (dir constant `LFBRIDGE_DIR` in `tracking.service.ts`). Honoring a **relocated** `.lfbridge/` path (resolve against the machine-local config, not always `<root>/.lfbridge/`) is a change to `descriptorPath()` / the tracking-path resolvers in the same module.
+**For an SDL (personal / company / community) — there is nothing to toggle or relocate.**
+
+A **dedicated LFB file repo** is a repo whose entire reason to exist is to hold LFB's files, so hiding
+them under a `.lfbridge/` inside a repo that contains nothing else buys no separation and only adds a
+meaningless path segment. **The SDL root *is* the `.lfbridge` area**
+([artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)). Concretely, for an SDL this
+section:
+
+* **Does not offer the "keep a hidden `.lfbridge/`" checkbox** — the storage's tracking text is not
+  optional in the same way: the SDL exists *to hold it*, and turning it off would empty the storage of
+  its only reason to exist.
+* **Does not offer the relocate picker** — there is no `<root>/.lfbridge/` to move. The SDL's metadata
+  (`storage.yaml`, `mapped_dirs.yaml`, `files.yaml`, `manifest.yaml`, `bookmarks.yaml`, `devices/`,
+  `analysis/`) and its path-mirrored artifact tree all sit **at the root**
+  ([artifact_placement_policy.mdx §0.1](./artifact_placement_policy.mdx)). Relocating them would mean
+  relocating the storage, which is what the storage **root** already says.
+* **Shows instead a read-only line** naming the root as the tracking area — *"This storage's root **is**
+  its tracking area — a dedicated Large File Bridge file repo has no hidden `.lfbridge/` directory."* —
+  with the root path and a link to the placement policy. It is informative, not editable.
+
+An SDL root **also** carries a `.git/` (every SDL is a git repo). That never demotes it to a working
+repo: the **kind wins** over the presence of `.git/`
+([artifact_placement_policy.mdx §0.2](./artifact_placement_policy.mdx)).
+
+The kind→base-directory decision this section renders lives in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir(root, type?)` (returns `<root>/.lfbridge` for kind `repo`, and `<root>` itself for an SDL) and its predicate `usesLfbridgeDir(type)`; every LFB writer resolves its base through it and none joins `LFBRIDGE_DIR` directly. The ensure-directory + git-ignore-on-init behavior the `repo`-only checkbox drives is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureStorage()` / `ensureGitignore()`. Honoring a **relocated** `repo` `.lfbridge/` path (resolve against the machine-local config, not always `<root>/.lfbridge/`) is a change to `descriptorPath()` / the tracking-path resolvers in the same module, layered **over** `trackingBaseDir()`.
 
 ### 3.1 The relocated-`.lfbridge/` control vs. the tracking-state placement policy
 
-The relocate control (§3) answers *where does this storage keep its own `.lfbridge/` on this computer*. It
+The relocate control (§3) answers *where does this **working repo** keep its own `.lfbridge/` on this
+computer* — it exists for kind `repo` only; an SDL has no `.lfbridge/` to relocate (§3). It
 is **complemented — not replaced —** by the **data-category placement policy** that governs a **repo**'s
 tracking state, owned by [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) and detailed in
-[repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx). The two operate on different objects and must not be
-confused:
+[repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx). Three rules stack here and must not be confused:
+[§0 of the placement policy](./artifact_placement_policy.mdx) decides **whether `.lfbridge/` exists at
+all** (kind `repo` → yes; SDL → never); §3 then places that hidden folder on **this** machine; the
+data-category rule below decides **which root** each file may live in.
 
-* **§3 relocate** moves **this storage's own** `.lfbridge/` (a company/Personal SDL, or a repo's committed
-  Category-A content area — transcripts / AI descriptions) to a chosen directory on **this machine**. It is
-  a per-computer placement of the hidden folder.
+* **§3 relocate** moves a **working repo's own** `.lfbridge/` — its committed Category-A content area
+  (transcripts / AI descriptions) — to a chosen directory on **this machine**. It is a per-computer
+  placement of the hidden folder, and it has **no SDL counterpart**: for a company/Personal SDL the
+  equivalent area is the storage **root** itself, which the storage's root path already names.
 * **The placement policy** decides where a **repo**'s noisy LFB tracking state (`repo_storage.yaml`,
   `files.yaml`, per-file sidecars, `history/<device>.txt`, `decisions.yaml`, `manifest.yaml`) lives — and
   the answer is fixed: **Local Storage always** at `~/T/_large_files_bridge/repos/<repoKey>/`, and
@@ -187,14 +235,20 @@ the user can change it.
 * **It also becomes the home for this storage's derived artifacts (LOCKED).** Once the dedicated repo is
   ON, transcripts and AI descriptions for any file this storage **owns but that lives out in the wider
   filesystem** (a mapped source directory, or — for Personal — anywhere under `~`) are written **inside the
-  dedicated repo's `.lfbridge/`**, path-mirrored, with the media's **full filename and the extension
-  APPENDED** (`<dedicatedRepo>/.lfbridge/<rel-dir>/<name.ext>.transcription`,
-  `<dedicatedRepo>/.lfbridge/<rel-dir>/<name.ext>.ai_description`). Because `.lfbridge/` is **committed and
-  travels with the repo**, they are committed and carried by git — the dedicated repo exists to **hold and
-  carry** these artifacts. This is the authoritative placement rule B in
-  [Transcribe.mdx §3.4](./Transcribe.mdx); turning the dedicated repo ON is precisely what routes those
-  artifacts into this repo's `.lfbridge/` (mirrored). Turning it OFF returns them to the owning storage
-  root's own `.lfbridge/` (the last-resort a `.lfbridge/` in the media's own directory).
+  dedicated repo**, path-mirrored **off its root**, with the media's **full filename and the extension
+  APPENDED** (`<dedicatedRepo>/<rel-dir>/<name.ext>.transcription`,
+  `<dedicatedRepo>/<rel-dir>/<name.ext>.ai_description`). **There is no `.lfbridge/` segment here:** a
+  company/Personal dedicated repo **is an SDL**, and an SDL's root **is** the `.lfbridge` area
+  ([artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)) — so the mirror hangs off the
+  root, e.g.
+  `~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/Politics/…/Teacher_Lounge_Shooter.mp4.transcription`.
+  Because the SDL repo's contents are **committed and travel with it**, these artifacts are committed and
+  carried by git — the dedicated repo exists to **hold and carry** them. This is the authoritative
+  placement rule B in [Transcribe.mdx §3.4](./Transcribe.mdx); turning the dedicated repo ON is precisely
+  what routes those artifacts into this repo (mirrored). Turning it OFF returns them to the owning
+  storage root's own tracking area — which for a **working repo** is its `.lfbridge/`, and for an SDL is
+  the root itself (the last resort being a `.lfbridge/` in the media's own directory, only ever inside a
+  working repo).
 
 ### 4.2 Google Drive location
 
@@ -244,10 +298,14 @@ this page is where the user **edits** it.
   it is in scope**. A **[ + Add directory ]** button opens a directory picker; each row has a remove
   affordance.
 * **Shared list vs. per-computer path (LOCKED, mirrors §2).** The **logical** list of mapped directories
-  is **shared** — it travels in the SDL's `.lfbridge/mapped_dirs.yaml` so every computer agrees on the
-  set (each row has a stable **key** + label). The **absolute local path** of each mapped directory on
-  **this** computer is the **graft**, stored per-device in `.lfbridge/devices/<device>.yaml`
-  ([devices.mdx §4](./devices.mdx#4-the-graft--machine-independent-hierarchy--local-paths-locked)). So on
+  is **shared** — it travels in the SDL's **`mapped_dirs.yaml` at the storage root** so every computer
+  agrees on the set (each row has a stable **key** + label). The **absolute local path** of each mapped
+  directory on **this** computer is the **graft**, stored per-device in **`devices/<device>.yaml`, also
+  at the storage root**
+  ([devices.mdx §4](./devices.mdx#4-the-graft--machine-independent-hierarchy--local-paths-locked)). Both
+  sit at the **root**, not under a `.lfbridge/`: this section shows only for a company/personal storage,
+  and such a storage **is an SDL**, which has no `.lfbridge/` directory at all — its root **is** the
+  `.lfbridge` area ([artifact_placement_policy.mdx §0.1](./artifact_placement_policy.mdx)). So on
   this page the path field for each row edits **this computer's graft**; adding/removing a row edits the
   **shared** list.
 * **Repo storages have exactly one, implicit mapped directory** — the repo working tree — so this section
@@ -257,8 +315,40 @@ this page is where the user **edits** it.
   ([scan.mdx](./scan.mdx)); nothing is moved — LFB tracks files **in place** and pins the opted-in ones
   over IPFS.
 
-Reading/writing the shared mapped-directory list (add/remove rows → `.lfbridge/mapped_dirs.yaml`) and this computer's per-row graft path (→ `.lfbridge/devices/<device>.yaml`) is to be implemented in code:
+### 4a.1 Reserved mapped-dir keys — the validator this page owns (LOCKED)
+
+Because an SDL's mirror hangs off the **root** (§4a, [artifact_placement_policy.mdx §0.1](./artifact_placement_policy.mdx)),
+a mapped-dir **key** sits as a directory name **beside** the SDL's own metadata — so a key named after
+that metadata would **shadow** it. These names are **reserved at the SDL root**; the rule is declared by
+[artifact_placement_policy.mdx §0.3](./artifact_placement_policy.mdx), which names **this page** as the
+home of the validator that enforces it:
+
+```
+RESERVED at the SDL root — a mapped-dir key may not be any of:
+  devices        analysis        files.yaml      storage.yaml
+  manifest.yaml  bookmarks.yaml  mapped_dirs.yaml
+```
+
+* **Add / rename rejects a colliding key.** The mapped-dir **add** flow and the **rename** of an existing
+  row validate the key against the reserved list and **refuse** a match, with an inline error that
+  **names the reserved word** — *"`devices` is reserved: this storage's root holds Large File Bridge's
+  own `devices/` metadata. Pick a different key."* Save stays disabled until the key changes, exactly
+  like the backing-location and sync-repo validation elsewhere on this page (§4.4, §4b).
+* **Existing mapped dirs are checked on load, never silently honored.** A list written by an older
+  version (or hand-edited, or arriving from a teammate through the shared `mapped_dirs.yaml`) may already
+  carry a colliding key. On load LFB surfaces it as a **storage warning**
+  ([warnings.mdx](./warnings.mdx)) naming the reserved word and the offending row — it does **not**
+  silently overwrite the SDL's metadata, and it does **not** silently drop the row. The user resolves it
+  by renaming the key.
+* **This is a `repo`-storage non-issue.** A working repo's mapped directory is implicit (its working
+  tree, above) and its metadata lives under `.lfbridge/`, one level away from any user directory — the
+  collision only exists because an SDL deliberately has no such segment.
+
+Reading/writing the shared mapped-directory list (add/remove rows → `mapped_dirs.yaml` at the SDL root) and this computer's per-row graft path (→ `devices/<device>.yaml` at the SDL root, both resolved via `trackingBaseDir()` in `storage-type.service.ts`, never by joining `LFBRIDGE_DIR`) is to be implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getMappedDirs()` / `setMappedDirs()`, with the per-device graft written via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`.
+
+Rejecting a mapped-dir key that collides with a **reserved** SDL-root name (§4a.1) on add/rename, and surfacing an already-colliding key from an existing list as a storage warning on load, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `assertMappedDirKeyAllowed(key)` (the add/rename gate called from `setMappedDirs()`, throwing an error naming the reserved word) and `checkReservedMappedDirs(storageId)` (the load-time audit that emits the warning), reading the reserved list from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `RESERVED_SDL_ROOT_NAMES` (the single source the SDL's own writers and this validator share).
 
 ---
 
@@ -417,9 +507,15 @@ storage:                         # identity mirror (written by discovery; read-o
   type: company                  # local | repo | personal | company | community
   root: ~/BGit/Bryan_git/act3_large_files_bridge
 
-lfbridge:                        # §3 the hidden tracking directory
-  enabled: true                  # keep .lfbridge/ on THIS computer
-  path: null                     # null = default <root>/.lfbridge/ ; else an absolute override
+lfbridge: null                   # §3 the hidden tracking directory — kind `repo` ONLY.
+                                 # This example storage is `type: company` — an SDL — so it has NO
+                                 # .lfbridge/ at all: its ROOT is the tracking area. The block is
+                                 # absent (null) and the page shows no checkbox/relocate picker.
+                                 # For a `type: repo` storage the block is present instead:
+                                 #   lfbridge:
+                                 #     enabled: true   # keep .lfbridge/ on THIS computer
+                                 #     path: null      # null = default <root>/.lfbridge/ ;
+                                 #                     # else an absolute override
 
 backing:                         # §4 backing locations — each ON/OFF + this machine's absolute path
   dedicated_repo:
@@ -438,7 +534,11 @@ sync_repo:                       # §4b company/Personal only — additive mirro
 ```
 
 * **`storage:`** identity is written by discovery and shown **read-only** here — the user configures
-  behavior, not identity.
+  behavior, not identity. Its **`type:`** is what decides whether the `lfbridge:` block means anything
+  at all (§3): `repo` → the block is honored; `personal` / `company` / `community` → the storage is an
+  **SDL** with no `.lfbridge/`, the block is `null`, and a stray `lfbridge.path` on an SDL is **ignored**
+  rather than obeyed ([artifact_placement_policy.mdx §0.2](./artifact_placement_policy.mdx) — the kind
+  wins, always).
 * The **canonical** Drive/Dropbox relative paths live in the **shared** descriptor
   (`storage.yaml → clones`, [storages.mdx §3/§5](./storages.mdx#3-storageyaml--the-per-storage-descriptor-locked-shape));
   the **enable flags + absolute local paths** live here (§2). Saving a Drive/Dropbox path updates
@@ -449,7 +549,7 @@ sync_repo:                       # §4b company/Personal only — additive mirro
 Reading and writing this machine-local per-storage config (and mapping it to/from the UI) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `readStorageSettings()` / `writeStorageSettings()` (atomic YAML under `pin/s/<id>/`, via `resolveStateDir()`), exposed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.router.ts` — `storagesRouter` `GET /api/storages/:id/settings` and `PATCH /api/storages/:id/settings`.
 
-The settings form itself (the `.lfbridge/` checkbox + location picker and the three backing-location toggles + path fields) is rendered in code:
+The settings form itself (the `repo`-only `.lfbridge/` checkbox + location picker — replaced by the read-only "this storage's root IS its tracking area" line for an SDL, branched on `usesLfbridgeDir(type)` — and the three backing-location toggles + path fields) is rendered in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageSettingsPage.tsx` — `StorageSettingsPage` component (route registered in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/router.tsx`).
 
 ---
@@ -462,8 +562,10 @@ storage LFB reads its machine-local config (§5) and, **for every enabled backin
 
 1. **Ensure the directory exists** — create it (and `git init` a dedicated repo) if missing; a location
    that is enabled but absent is created on the next pass, never before.
-2. **Ensure `.lfbridge/`** — create/refresh the hidden tracking area at its configured location (§3) and
-   keep it git-ignored inside any repo.
+2. **Ensure the tracking area** — resolve it through `trackingBaseDir()` (§3) and create/refresh it:
+   for a **`repo`** storage that is the hidden `.lfbridge/` at its configured location, kept
+   git-ignored; for an **SDL** it is the storage **root** itself, which needs no hidden dir and no
+   `.gitignore` entry.
 3. **Update the mirror** — reconcile the storage's files + manifest into the location so it holds the
    current hierarchy (the human-reachable copy). Drive/Dropbox mirrors reuse
    [google_drive.mdx](./google_drive.mdx) / [dropbox.mdx](./dropbox.mdx).
@@ -472,7 +574,7 @@ A **disabled** location is **left untouched** — LFB neither creates nor delete
 offer, never act on files unasked). Turning a location **off** stops updating it; it does **not** delete
 the directory that is already there.
 
-Materializing each enabled backing location during the pass (create-if-missing + ensure `.lfbridge/` + update the mirror) is handled in code:
+Materializing each enabled backing location during the pass (create-if-missing + ensure the tracking area resolved via `trackingBaseDir()` — `.lfbridge/` for a `repo`, the root for an SDL + update the mirror) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureBackingLocations(id)` (new; called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinAll()` per known storage, through the same bounded `cores − 2` limiter as repo/computer units).
 
 ---
@@ -486,11 +588,10 @@ The page is a single scrollable settings form (no table beneath it, so it does n
  │  ACT3 Company Files                                          [ ⋮ ]        │
  │  ~/BGit/Bryan_git/act3_large_files_bridge   ·   type: company             │
  ├───────────────────────────────────────────────────────────────────────────┤
- │  Hidden tracking directory                                                │
- │   ☑ Keep a hidden .lfbridge/ directory for this storage on this computer  │
- │     Location  ┌───────────────────────────────────────────┐  [Browse…]   │
- │               │ <default>  <root>/.lfbridge/               │              │
- │               └───────────────────────────────────────────┘              │
+ │  Tracking area                                                            │
+ │   ⓘ This storage's root IS its tracking area — a dedicated Large File     │
+ │     Bridge file repo has no hidden .lfbridge/ directory.  (type: company)  │
+ │     ~/BGit/Bryan_git/act3_large_files_bridge                               │
  │                                                                           │
  │  Backing locations   (each is an extra, human-reachable copy)             │
  │   ☑ Dedicated Git repo   (preferred)                                      │
@@ -528,6 +629,18 @@ The page is a single scrollable settings form (no table beneath it, so it does n
  └───────────────────────────────────────────────────────────────────────────┘
 ```
 
+* The **Tracking area** section is **kind-dependent** (§3). The mockup above is a **company** storage —
+  an **SDL** — so it shows the read-only root line and **no** checkbox or Browse picker. For a **`repo`**
+  storage the same slot renders the editable control instead:
+
+  ```
+   │  Hidden tracking directory                                                │
+   │   ☑ Keep a hidden .lfbridge/ directory for this repo on this computer     │
+   │     Location  ┌───────────────────────────────────────────┐  [Browse…]   │
+   │               │ <default>  <root>/.lfbridge/               │              │
+   │               └───────────────────────────────────────────┘              │
+  ```
+
 * The **Sync repo** row (§4b) shows only for **company / Personal** storages; it is omitted for
   `repo`, `local`, and `community`. **Clear** unsets it without deleting the repo on disk. An invalid pick
   (not a git tree, not writable, or overlapping a mapped source directory) shows an inline error and keeps
@@ -552,8 +665,15 @@ The page is a single scrollable settings form (no table beneath it, so it does n
    Storages table (just left of the row `⋮`), the **gear** on the storage detail header, the storage
    row's **`⋮` kebab / right-click**, and the detail page's **`⋮` more-menu** — all at
    **`/storages/$storageId/settings`**, scoped to that storage and naming it + its root.
-2. It exposes a **"keep `.lfbridge/`" checkbox (default ON)** and a **location** control (default
-   `<root>/.lfbridge/`, relocatable) — a **machine-local** choice.
+2. The **Tracking area** section is **keyed on storage kind** (§3, rule owned by
+   [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)). For a **`repo`** storage it
+   exposes a **"keep `.lfbridge/`" checkbox (default ON)** and a **location** control (default
+   `<root>/.lfbridge/`, relocatable) — a **machine-local** choice. For a **`personal` / `company` /
+   `community` SDL** it exposes **neither**: an SDL has **no `.lfbridge/` at all** — its **root** *is*
+   the tracking area — so the section shows only a **read-only** line naming the root. An SDL's own
+   `.git/` never demotes it to a working repo, and a stray `lfbridge.path` on an SDL is **ignored**, not
+   obeyed. Resolved once via `trackingBaseDir()` / `usesLfbridgeDir()` in `storage-type.service.ts`; no
+   writer joins `LFBRIDGE_DIR` directly.
 3. It exposes **three independent backing locations**, each **ON/OFF with its own directory**: a
    **dedicated Git repo** (preferred; for a repo storage it is the repo itself), a **Google Drive**
    location, and a **Dropbox** directory. LFB pre-fills a **good default directory** for each, which the
@@ -563,17 +683,29 @@ The page is a single scrollable settings form (no table beneath it, so it does n
    relative paths persist to the **shared** `storage.yaml → clones`. Neither restates repo-specific
    settings owned by [repo_settings.mdx](./repo_settings.mdx).
 5. Settings are **inert until a pin pass**: on each pass, for **every enabled** backing location LFB
-   **creates the directory if missing** (and `git init`s a dedicated repo), ensures its `.lfbridge/`,
-   and **updates** the mirror; a **disabled** location is left untouched (never auto-created, never
-   deleted). Nothing is created merely by saving the form.
+   **creates the directory if missing** (and `git init`s a dedicated repo), ensures its **tracking area**
+   as resolved by `trackingBaseDir()` (a `.lfbridge/` for a `repo`; the **root** for an SDL — no hidden
+   dir, no `.gitignore` entry), and **updates** the mirror; a **disabled** location is left untouched
+   (never auto-created, never deleted). Nothing is created merely by saving the form.
 6. Storage **identity** (`storage:` id/name/type/root) is written by discovery and shown **read-only**;
    the user configures behavior, not identity.
 7. For a **company/personal** storage the page edits the **list of mapped source directories** (§4a):
-   add/remove rows edit the **shared** `.lfbridge/mapped_dirs.yaml`; each row's path field edits **this
-   computer's graft** (`.lfbridge/devices/<device>.yaml`). Everything recursive under a mapped directory
-   is in scope; files are tracked **in place** (never relocated). A **repo** storage's single mapped
-   directory (its working tree) is shown read-only.
-8. For a **company/Personal** storage the page **configures the optional sync repo** (§4b): a
+   add/remove rows edit the **shared** `mapped_dirs.yaml` **at the SDL root**; each row's path field
+   edits **this computer's graft** (`devices/<device>.yaml`, **also at the SDL root**) — both at the
+   root because a company/personal storage **is an SDL** and has no `.lfbridge/` segment. Everything
+   recursive under a mapped directory is in scope; files are tracked **in place** (never relocated). A
+   **repo** storage's single mapped directory (its working tree) is shown read-only.
+8. The **reserved-name validator lives here** (§4a.1), enforcing the rule declared by
+   [artifact_placement_policy.mdx §0.3](./artifact_placement_policy.mdx): because the SDL mirror hangs
+   off the **root**, a mapped-dir key of `devices`, `analysis`, `files.yaml`, `storage.yaml`,
+   `manifest.yaml`, `bookmarks.yaml`, or `mapped_dirs.yaml` would **shadow** the SDL's own metadata.
+   **Add/rename REJECTS** such a key with an inline error **naming the reserved word**, and Save stays
+   disabled; **existing** mapped dirs are **checked on load** and a collision is surfaced as a **storage
+   warning** naming the reserved word and the offending row — never silently overwriting the metadata
+   and never silently dropping the row. Enforced by `assertMappedDirKeyAllowed()` /
+   `checkReservedMappedDirs()` in `storage-settings.service.ts` against `RESERVED_SDL_ROOT_NAMES` in
+   `storage-type.service.ts`.
+9. For a **company/Personal** storage the page **configures the optional sync repo** (§4b): a
    **pick** control (local git tree **or** URL remote, default `~/BGit/Bryan_git/<slug>_state_sync/`) and a
    **Clear** control that unsets it **without deleting** the repo. The pick is **validated** (a writable
    git working tree / reachable URL, not overlapping a mapped source directory or a big-file location) and
@@ -583,13 +715,14 @@ The page is a single scrollable settings form (no table beneath it, so it does n
    Concept + placement policy are cross-linked, not redefined
    ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx),
    [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)).
-9. The relocated-`.lfbridge/` control (§3) is **complemented, not replaced,** by the data-category
-   placement policy (§3.1): §3 places **this storage's own** `.lfbridge/` on this computer, while the
-   placement policy fixes a **repo's** tracking-state home to **two homes** — Local Storage always
-   (`~/T/_large_files_bridge/repos/<repoKey>/`) and, when the per-repo toggle is on, this storage's **sync
-   repo** as the additive mirror (§4b). Tracking state **never** enters a working repo, and the old
-   content-threshold "three homes" model is **retired**.
-10. For a **company/Personal** storage the page shows an **Owned repos** list (§4c) — a TanStack table of the
+10. The relocated-`.lfbridge/` control (§3, kind `repo` only) is **complemented, not replaced,** by the
+    data-category placement policy (§3.1): §3 places **a working repo's own** `.lfbridge/` on this
+    computer, while the
+    placement policy fixes a **repo's** tracking-state home to **two homes** — Local Storage always
+    (`~/T/_large_files_bridge/repos/<repoKey>/`) and, when the per-repo toggle is on, this storage's **sync
+    repo** as the additive mirror (§4b). Tracking state **never** enters a working repo, and the old
+    content-threshold "three homes" model is **retired**.
+11. For a **company/Personal** storage the page shows an **Owned repos** list (§4c) — a TanStack table of the
     repos whose owner is this storage (Personal includes the auto-defaulted no-org repos) — each row carrying
     a **reassign dropdown** (Personal · each company · **+ New company…**) that re-files the repo via the same
     **`POST /api/repos/:repoId/owner`** as the per-repo Owner control, writing the local `owner_override`
@@ -602,21 +735,45 @@ The page is a single scrollable settings form (no table beneath it, so it does n
 <!--
   Per-STORAGE settings page (the storage counterpart of repo_settings.mdx). Opened from ONE storage:
   gear on the storage detail header + storage row ⋮ kebab/right-click + detail ⋮ more-menu → route
-  /storages/$storageId/settings. Two controls: (§3) keep .lfbridge/ on this computer + WHERE (default
-  <root>/.lfbridge/, relocatable); (§4) three independent ON/OFF backing locations each with its own
+  /storages/$storageId/settings. Two controls: (§3) the TRACKING AREA, which is KIND-SPLIT (LOCKED, rule
+  owned by artifact_placement_policy.mdx §0) — for kind `repo` ONLY it is "keep .lfbridge/ on this
+  computer + WHERE" (default <root>/.lfbridge/, relocatable, git-ignored inside the repo); for a
+  personal/company/community SDL there is NO .lfbridge/ AT ALL (the SDL ROOT *is* the .lfbridge area), so
+  the page offers NO checkbox and NO relocate picker, just a read-only line naming the root. The SDL's own
+  .git/ never demotes it to a working repo (kind wins, §0.2) and a stray lfbridge.path on an SDL is
+  IGNORED. Choke point = trackingBaseDir(root, type?) / usesLfbridgeDir(type) in storage-type.service.ts
+  (<root>/.lfbridge for `repo`, <root> for an SDL); no writer joins LFBRIDGE_DIR directly. In §5's
+  config.yaml the `lfbridge:` block is `repo`-only (null on the company example).
+  (§4) three independent ON/OFF backing locations each with its own
   directory — dedicated Git repo (preferred; IS the repo for a repo storage), Google Drive, Dropbox —
-  with good default dirs the user can change. LOCKED split (§2): machine-local enable-flags + absolute
+  with good default dirs the user can change. §4.1's derived-artifact home: a company/Personal DEDICATED
+  REPO **is an SDL**, so its artifacts are path-mirrored OFF ITS ROOT —
+  <dedicatedRepo>/<rel-dir>/<name.ext>.transcription — with NO .lfbridge/ segment.
+  LOCKED split (§2): machine-local enable-flags + absolute
   paths live in pin/s/<storage_id>/config.yaml (the local "settings file"); canonical Drive/Dropbox
   relative paths live in the SHARED storage.yaml clones. (§6) Settings are inert until a pin pass — the
-  pass creates-if-missing + ensures .lfbridge/ + updates each ENABLED location; disabled = untouched
+  pass creates-if-missing + ensures the tracking area via trackingBaseDir() (.lfbridge/ for a repo, the
+  root for an SDL) + updates each ENABLED location; disabled = untouched
   (never auto-created/deleted). Code pointers: StorageSettingsPage.tsx, StorageKebab in RowKebabs.tsx,
   storage-settings.service.ts (read/write + resolveBackingLocations), storage.router GET/PATCH
   /:id/settings, storage.service ensureBackingLocations() called by pin.service pinAll(). Keep
   aligned with repo_settings.mdx (per-repo counterpart), storages.mdx (storage.yaml + .lfbridge + clones),
   google_drive.mdx / dropbox.mdx (the mirrors), pin_process.mdx §2/§4 (the pass), menus.mdx (add a
   storage entity catalog whose Config group carries "Storage settings…").
+  §4a.1 (NEW — THIS FILE OWNS THE VALIDATOR; artifact_placement_policy.mdx §0.3 declares the rule and
+  points here): because the SDL mirror hangs off the ROOT, a mapped-dir KEY named devices, analysis,
+  files.yaml, storage.yaml, manifest.yaml, bookmarks.yaml, or mapped_dirs.yaml would SHADOW the SDL's own
+  metadata. RESERVED at the SDL root: add/rename REJECTS a colliding key with an inline error NAMING the
+  reserved word (Save disabled); EXISTING mapped dirs are checked ON LOAD and a collision is surfaced as
+  a STORAGE WARNING (warnings.mdx) naming the reserved word + offending row — never silently overwriting
+  metadata, never silently dropping the row. Non-issue for a `repo` storage (implicit single mapped dir;
+  metadata sits under .lfbridge/). Code: assertMappedDirKeyAllowed(key) (called from setMappedDirs) +
+  checkReservedMappedDirs(storageId) in storage-settings.service.ts, reading RESERVED_SDL_ROOT_NAMES from
+  storage-type.service.ts. §4a's shared list + per-device graft now live at the SDL ROOT
+  (mapped_dirs.yaml, devices/<device>.yaml) — NOT under .lfbridge/ — since this section shows only for
+  company/personal, i.e. only for an SDL. AC renumbered 1-11 (the reserved-name rule is AC 8).
   §3.1 + §4b (glue for the sync-repo / data-category placement concepts): §3.1 clarifies the
-  relocated-.lfbridge/ control (§3, this STORAGE's own .lfbridge/ on this computer) is COMPLEMENTED, not
+  relocated-.lfbridge/ control (§3, a WORKING REPO's own .lfbridge/ on this computer; no SDL counterpart) is COMPLEMENTED, not
   replaced, by the DATA-CATEGORY placement policy (owned by artifact_placement_policy.mdx, detailed in
   repo_tracking_scheme.mdx) that fixes a REPO's tracking-state home to TWO homes — Local Storage always
   (~/T/_large_files_bridge/repos/<repoKey>/) + this storage's SYNC repo as an ADDITIVE mirror when the

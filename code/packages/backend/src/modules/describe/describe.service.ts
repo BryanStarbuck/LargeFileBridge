@@ -52,8 +52,9 @@ export function resolveDescriptionPath(absFile: string): {
 } {
   const p = resolveArtifactPlacement(absFile);
   // Honor the repo's AI-description placement radio (repo_settings.mdx §5) — the mirror of transcription.
+  // `p.owner` carries the already-resolved storage role, so an SDL gets NO `.lfbridge/` segment (§0).
   const placement = repoArtifactPlacement(p.root, "aiDescription");
-  const descriptionPath = artifactPathForPlacement(p.root, p.rel, AI_DESCRIPTION_EXT, placement);
+  const descriptionPath = artifactPathForPlacement(p.root, p.rel, AI_DESCRIPTION_EXT, placement, p.owner);
   return { root: p.root, rel: p.rel, descriptionPath, needsSetup: p.needsSetup };
 }
 

@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Transcribe (audio & video → text)
-description: The transcription feature. LFBridge transcribes AUDIO files (MP3, WAV, FLAC, M4A, AAC, OGG, …) and VIDEO files (MP4, MOV, MKV, WEBM, … — the audio track is demuxed to MP3 with ffmpeg first), turning speech into a plain-text transcript. Entry points span every scale: transcribe ONE file (its ⋮ kebab / right-click "Transcribe…", or the Transcribe button on the open MP3/MP4 in the Media Viewer), a FEW selected files, or ALL audio/video under a DIRECTORY, a REPO, or a whole STORAGE ("Transcribe all files…"). Transcripts are NOT stored in the local state dir and there is NO extra .transcribe/ directory — the transcript is written INSIDE the owning repo/storage's committed .lfbridge/ tracking directory, path-mirrored, under the media's FULL filename (extension kept) with .transcription APPENDED as a second extension (repo file a/b/talk.mp3 → <repo>/.lfbridge/a/b/talk.mp3.transcription). Because .lfbridge/ is committed, transcripts travel with the repo across the user's computers; appending (not replacing) the extension means talk.mp3 and talk.wav no longer collide. The transcription engine is COPIED into this repo's code tools directory (we do NOT reuse the ACT3-internal copy) and is called IN-PROCESS as a class from the web app — never by shelling out to `node Transcribe.js`. It drives the local `whisper` (+ `ffmpeg`) binaries, entirely on-machine (no network). Sibling of storages.mdx (the storage roots + the .lfbridge tracking area), media_viewer.mdx (the open-one-file view whose action bar gains Transcribe), menus.mdx (the ⋮ catalogs that gain Transcribe / Transcribe all files), and compression.mdx (the sibling "drive a local media tool over a file" engine this mirrors).
+description: The transcription feature. LFBridge transcribes AUDIO files (MP3, WAV, FLAC, M4A, AAC, OGG, …) and VIDEO files (MP4, MOV, MKV, WEBM, … — the audio track is demuxed to MP3 with ffmpeg first), turning speech into a plain-text transcript. Entry points span every scale: transcribe ONE file (its ⋮ kebab / right-click "Transcribe…", or the Transcribe button on the open MP3/MP4 in the Media Viewer), a FEW selected files, or ALL audio/video under a DIRECTORY, a REPO, or a whole STORAGE ("Transcribe all files…"). Transcripts are NOT stored in the local state dir and there is NO extra .transcribe/ directory — the transcript is written INSIDE the owning root's committed tracking area, path-mirrored, under the media's FULL filename (extension kept) with .transcription APPENDED as a second extension. WHERE that tracking area sits is keyed on the root's STORAGE KIND (artifact_placement_policy.mdx §0, the owner of the rule): in a WORKING GIT REPO it is the repo's hidden .lfbridge/ (repo file a/b/talk.mp3 → <repo>/.lfbridge/a/b/talk.mp3.transcription), because LFB is a guest there and quarantines its files in one hidden corner; in a DEDICATED LFB FILE REPO (a Personal/Company/Community SDL) there is NO .lfbridge/ AT ALL — the SDL repo root IS the .lfbridge area, so the mirror hangs straight off the root (~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/…/x.mp4.transcription, NOT .lfbridge/_Mirror/…). Because both areas are committed, transcripts travel with the repo across the user's computers; appending (not replacing) the extension means talk.mp3 and talk.wav no longer collide. The transcription engine is COPIED into this repo's code tools directory (we do NOT reuse the ACT3-internal copy) and is called IN-PROCESS as a class from the web app — never by shelling out to `node Transcribe.js`. It drives the local `whisper` (+ `ffmpeg`) binaries, entirely on-machine (no network). Sibling of storages.mdx (the storage roots + the .lfbridge tracking area), media_viewer.mdx (the open-one-file view whose action bar gains Transcribe), menus.mdx (the ⋮ catalogs that gain Transcribe / Transcribe all files), and compression.mdx (the sibling "drive a local media tool over a file" engine this mirrors).
 ---
 
 # LargeFileBridge — Transcribe (audio & video → text)
@@ -70,9 +70,11 @@ For one media file, transcription is:
    `SFSpeechRecognizer` is never used. The engine is spawned **asynchronously** and (for Whisper) its stdout
    is streamed to derive a **determinate percentage** (segment end-timestamp ÷ media duration) — see §5.1.
 4. **Write the transcript** — a plain-text file with a small metadata header (source name, timestamp,
-   engine/model, source duration) — **inside the owning root's `.lfbridge/`**, path-mirrored, under the
-   media's full filename with `.transcription` **appended** (§3): `<repo>/a/b/talk.mp3` →
-   `<repo>/.lfbridge/a/b/talk.mp3.transcription`.
+   engine/model, source duration) — **inside the owning root's tracking area**, path-mirrored, under the
+   media's full filename with `.transcription` **appended** (§3). In a **working repo** that area is the
+   repo's `.lfbridge/`: `<repo>/a/b/talk.mp3` → `<repo>/.lfbridge/a/b/talk.mp3.transcription`. In a
+   **dedicated LFB file repo (SDL)** it is the **root itself** — no `.lfbridge/` segment
+   ([artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)).
 5. **Report truthfully** — word count on success; an honest skip/error otherwise (never a silent
    "done"; the [pin_process.mdx §6](./pin_process.mdx#6-never-a-silent-no-op--report-truthfully-locked-learned-from-a-defect)
    rule applies here too).
@@ -158,12 +160,24 @@ The "Create Transcriptions" page action, its plan/skip/queue, and the toast are 
 
 ---
 
-## 3. Where transcripts are stored — inside the repo/storage `.lfbridge/`, path-mirrored, extension APPENDED (LOCKED — supersedes the earlier beside-media layout)
+## 3. Where transcripts are stored — inside the owning root's tracking area, path-mirrored, extension APPENDED (LOCKED — supersedes the earlier beside-media layout)
 
 Transcripts do **not** go in the Local state dir, and — as of this revision — they do **not** sit loose
-next to the media either. They live **inside the owning repo/storage's own `.lfbridge/` tracking
-directory**, in a **path-mirrored hierarchy**, under the media's **full filename (extension kept)** with
-**`.transcription` appended** as a **second** extension.
+next to the media either. They live **inside the owning root's own tracking area**, in a **path-mirrored
+hierarchy**, under the media's **full filename (extension kept)** with **`.transcription` appended** as a
+**second** extension.
+
+> **Which tracking area — the storage-KIND rule (owned by [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)).**
+> `.lfbridge/` exists **only inside a working git repo**, where LFB is a **guest** and quarantines its files
+> under one hidden directory. A **dedicated LFB file repo** — the Personal / Company / Community **SDL
+> storage** — has **no `.lfbridge/` directory at all**: the SDL repo root **is** the `.lfbridge` area, so the
+> mirror hangs straight off the root. That policy spec is the **owner** of this rule; this spec only applies
+> it and shows the resolved path shape.
+>
+> | Storage kind | Example root | The transcript lands at |
+> | --- | --- | --- |
+> | **`repo`** — a working git repo (Git Storage) | `~/BGit/Bryan_git/charlie-kirk/` | `<root>/.lfbridge/<rel-dir>/<name.ext>.transcription` |
+> | **`personal` / `company` / `community`** — an SDL file repo | `~/BGit/Bryan_git/personal_large_files_bridge/` | `<root>/<rel-dir>/<name.ext>.transcription` (**no** `.lfbridge/`) |
 
 > **This supersedes the previous LOCKED "beside the media, extension replaced" layout.** An earlier
 > revision wrote `render/talk.mp3` → `render/talk.transcription` next to the media. The product owner's
@@ -174,12 +188,13 @@ directory**, in a **path-mirrored hierarchy**, under the media's **full filename
 > there."* So the transcript is a **tracking artifact under `.lfbridge/`**, not a sibling of the media, and
 > its name **appends** `.transcription` rather than **replacing** the original extension.
 
-### 3.1 The layout — under `.lfbridge/`, mirror the path, append `.transcription` (LOCKED)
+### 3.1 The layout — under the kind-resolved base, mirror the path, append `.transcription` (LOCKED)
 
-For a repo file at `<repo>/a/b/talk.mp3`, the transcript is written to
+For a **working-repo** file at `<repo>/a/b/talk.mp3`, the transcript is written to
 `<repo>/.lfbridge/a/b/talk.mp3.transcription`:
 
 ```
+WORKING GIT REPO (LFB is a guest → one hidden .lfbridge/ corner)
 <repo>/
 ├── a/
 │   └── b/
@@ -189,27 +204,37 @@ For a repo file at `<repo>/a/b/talk.mp3`, the transcript is written to
         └── b/
             └── talk.mp3.transcription     ← the transcript: same relative path under .lfbridge/,
                                               full filename (talk.mp3) with .transcription APPENDED
+
+SDL FILE REPO (a repo that exists ONLY for LFB → the root IS the .lfbridge area)
+~/BGit/Bryan_git/personal_large_files_bridge/
+└── _Mirror/
+    └── Politics/
+        └── talk.mp3.transcription         ← NO .lfbridge/ segment — the mirror hangs off the root
 ```
 
 Three rules, together, define the path — **all LOCKED**:
 
-1. **Root = `<owning root>/.lfbridge/`.** The transcript lands under the owning repo/storage's hidden
-   `.lfbridge/` directory — **not** beside the media and **not** in `~/T/_large_files_bridge/`. Note that
-   the working repo's committed `.lfbridge/` now holds **only** the two content artifacts (transcripts and
-   AI descriptions); LFB's tracking state — `repo_storage.yaml`, the per-file sidecars, and `history/` —
-   lives in **Local Storage** at `~/T/_large_files_bridge/repos/<repoKey>/`, never the working repo
-   ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx),
+1. **Root = `trackingBaseDir(<owning root>)`.** The transcript lands under the owning root's tracking base —
+   **not** beside the media and **not** in `~/T/_large_files_bridge/`. That base is keyed on **storage kind**
+   ([artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)): `<root>/.lfbridge/` for a **working
+   repo**, and `<root>` **itself** for a **dedicated LFB file repo (SDL)**, which has no `.lfbridge/` at all.
+   Note that the working repo's committed `.lfbridge/` now holds **only** the two content artifacts
+   (transcripts and AI descriptions); LFB's tracking state — `repo_storage.yaml`, the per-file sidecars, and
+   `history/` — lives in **Local Storage** at `~/T/_large_files_bridge/repos/<repoKey>/`, never the working
+   repo ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx),
    [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
 2. **Mirror the media's relative directory hierarchy.** A file two directories deep (`a/b/talk.mp3`)
-   **creates `a/b/` inside `.lfbridge/`** and writes there. The media's path relative to the root is
-   reproduced verbatim under `.lfbridge/`.
+   **creates `a/b/` inside the tracking base** and writes there. The media's path relative to the root is
+   reproduced verbatim under that base (under `.lfbridge/` in a working repo; under the root itself in an
+   SDL). **The mirroring is unchanged by the storage-kind rule** — only the base it hangs off differs.
 3. **Keep the full filename, APPEND `.transcription`.** The transcript filename is the media's **entire
    filename including its original extension**, with **`.transcription` appended** — `talk.mp3` →
    `talk.mp3.transcription` (**not** `talk.transcription`). The `.transcription` token is a single constant
    — `TRANSCRIPTION_EXT` — **appended**, never substituted.
 
-> **Why `.lfbridge/` (and not beside the media).** The working repo's `.lfbridge/` is **committed and
-> travels with the repo** ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx); the working tree's own
+> **Why the tracking area (and not beside the media).** The working repo's `.lfbridge/` — and, in an SDL,
+> the repo root — is **committed and travels with the repo**
+> ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx); the working tree's own
 > `git status` shows the committed `.lfbridge/…/talk.mp3.transcription` artifact tracked). Putting the
 > transcript there means it is **version-controlled and
 > synced across the user's computers by git** — exactly the *"the transcript is produced on one computer and
@@ -228,19 +253,23 @@ files**. The earlier layout's accepted "`talk.mp3` and `talk.wav` overwrite each
 
 The `.transcription` body is plain text and opens in the ordinary `/file` viewer like any other text file.
 A tool that wants a media file's transcript computes the path deterministically:
-`join(root, ".lfbridge", relDir, mediaFilename + ".transcription")`.
+`join(trackingBaseDir(root), relDir, mediaFilename + ".transcription")` — where `trackingBaseDir()` yields
+`<root>/.lfbridge` for a working repo and `<root>` for an SDL (§3.1 rule 1). It **never** hard-codes
+`".lfbridge"` into the join, which would put a phantom segment into every SDL path.
 
 ### 3.3 Relationship to `.lfbridge/analysis/`
 
 [storages.mdx §6](./storages.mdx#6-per-file-media-analysis-transcription--description--visuals-by-time)
 sketched transcripts as `transcript.yaml` under `.lfbridge/analysis/<relpath>/`. **This spec is
-authoritative for the transcript files.** Transcripts live **inside `.lfbridge/`** (§3.1) — the same hidden
-tracking area storages.mdx §6 pointed at — but as a **path-mirrored, human-openable plain-text
-`<name.ext>.transcription` file placed directly under `.lfbridge/`** (mirroring the media's relative
+authoritative for the transcript files.** Transcripts live **inside the owning root's tracking area** (§3.1)
+— the same area storages.mdx §6 pointed at — but as a **path-mirrored, human-openable plain-text
+`<name.ext>.transcription` file placed directly under that base** (mirroring the media's relative
 directory), **not** as a `transcript.yaml` and **not** under an `analysis/` sub-directory. When the
 storage/repo file table needs to note that a transcript exists (the `analysis: ["transcript"]` indicator),
-it detects the presence of `.lfbridge/<rel-dir>/<name.ext>.transcription`, computed deterministically from
-the media path.
+it detects the presence of `<trackingBase>/<rel-dir>/<name.ext>.transcription`, computed deterministically
+from the media path. In an **SDL**, note that both this transcript mirror **and** the `analysis/` tree hang
+off the **repo root** rather than a `.lfbridge/` — the `analysis/` family is one of the SDL metadata trees
+the storage-kind rule relocates ([artifact_placement_policy.mdx §0.1](./artifact_placement_policy.mdx)).
 
 ### 3.4 Resolving where the parallel hierarchy lives — the ordered rule (LOCKED)
 
@@ -249,12 +278,13 @@ that does **not** always match the media file's nearest storage-carrying ancesto
 lives **out in the user's wider filesystem** (e.g.
 `~/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4`) — not inside a Git repo and not inside a
 storage root. For those files we want the transcript to travel with the storage that owns them (often a
-dedicated Git repo), mirroring the media's relative hierarchy under that root's `.lfbridge/`. Placement is
-therefore resolved by an **ordered rule** — the first case that matches wins. This is the **authoritative**
-resolution for *every* derived-artifact producer (transcription and AI description share it). In every case
-the transcript lands at **`<root>/.lfbridge/<rel-dir>/<name.ext>.transcription`** — the resolved `root`, the
-`.lfbridge/` tracking directory, the media's mirrored relative directory, and the full filename with
-`.transcription` **appended** (§3.1):
+dedicated LFB file repo), mirroring the media's relative hierarchy under that root's tracking base.
+Placement is therefore resolved by an **ordered rule** — the first case that matches wins. This is the
+**authoritative** resolution for *every* derived-artifact producer (transcription and AI description share
+it). In every case the transcript lands at **`<trackingBase>/<rel-dir>/<name.ext>.transcription`** — the
+resolved `root` run through `trackingBaseDir()` (`<root>/.lfbridge` for a **working repo**, `<root>` itself
+for an **SDL** — §3.1 rule 1), the media's mirrored relative directory, and the full filename with
+`.transcription` **appended**:
 
 **A. Containing storage root (walk-up).** Walk **up** from the media file's directory to the filesystem
 root. The **nearest ancestor** carrying a `storage.yaml`, a `.lfbridge/`, or a `.git/` (a repo *is* a
@@ -262,9 +292,14 @@ storage — [storages.mdx](./storages.mdx)) is the containing root. This is the 
 product owner described: we are usually in some subdirectory *under* a repo, so we climb until we find the
 `.git/`. When found:
 * `root` = that ancestor · `rel` = the media file's path **relative to it** · the transcript lands at
-  **`<root>/.lfbridge/<rel-dir>/<name.ext>.transcription`**. This is the **common, primary case** the
+  **`<trackingBase(root)>/<rel-dir>/<name.ext>.transcription`**. This is the **common, primary case** the
   product owner described: *"I'm in the repo and what I'm transcribing is in the repo,"* so the transcript
   is written **inside the repo's `.lfbridge/`**, path-mirrored, extension appended (§3.1).
+* **Classify the found root by KIND before assuming it is a working repo.** Every SDL **also** carries its
+  own `.git/`, so a walk-up that stops at a `.git/` and concludes "working repo → `.lfbridge/`" would put a
+  phantom `.lfbridge/` segment inside an SDL. The **kind wins over the presence of `.git/`**: resolve
+  `resolveStorageType(root)` **first**, and only fall back to "has `.git/` → working `repo`" for a root that
+  resolves to no SDL type ([artifact_placement_policy.mdx §0.2](./artifact_placement_policy.mdx)).
 * **No `*.transcription` git-ignore nudge is needed** anymore. Because the transcript lives **inside
   `.lfbridge/`** — which is **committed and travels with the repo** ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)) —
   it is version-controlled and synced by git across the user's computers on purpose (small text; the
@@ -272,8 +307,8 @@ product owner described: we are usually in some subdirectory *under* a repo, so 
   `*.transcription` line into a plain repo's `.gitignore`. A repo's own per-repo config UI is
   [repo_settings.mdx](./repo_settings.mdx) — reached *because* we detected we are inside a repo.
 
-**B. Owning storage by mapping — routed to the dedicated repo (the fix, LOCKED).** When walk-up finds
-nothing (the file is out in the wider filesystem), the file is still **owned** by a storage:
+**B. Owning storage by mapping — routed to the dedicated SDL file repo (the fix, LOCKED).** When walk-up
+finds nothing (the file is out in the wider filesystem), the file is still **owned** by a storage:
 * **Which storage owns it.** The **most specific** company/personal storage whose **mapped source
   directory** ([syncable_data_location.mdx §3](./syncable_data_location.mdx), storage_settings.mdx §4a)
   contains the file — matched against this computer's **graft** local paths ([devices.mdx §4](./devices.mdx)).
@@ -281,39 +316,56 @@ nothing (the file is out in the wider filesystem), the file is still **owned** b
   anything under the user's home tree ([storage_personal.mdx](./storage_personal.mdx)).
 * **Where the artifact goes.**
   * If the owning storage has its **dedicated Git repo** backing **enabled** (storage_settings.mdx §4.1),
-    the artifact is written **under that dedicated repo's `.lfbridge/`**, mirroring the file's hierarchy —
-    `<dedicatedRepo>/.lfbridge/<rel-dir>/<name.ext>.transcription`. `rel` is the file's path relative to its
-    **mapped-dir root** (prefixed by the mapped-dir key), or relative to **`~`** for the personal default
-    catch-all. The transcript is **committed** (it lives in `.lfbridge/`) — the dedicated repo **exists to
-    hold and back up these artifacts** (the product owner: *"it won't need to add the `.gitignore` if you
-    have a dedicated git repo — it'll just put it in there"*).
+    the artifact is written **under that dedicated repo's ROOT — with NO `.lfbridge/` segment**, mirroring
+    the file's hierarchy — `<dedicatedRepo>/<rel-dir>/<name.ext>.transcription`. That dedicated repo **is an
+    SDL** (Personal / Company / Community), and an SDL has **no `.lfbridge/` at all**: the repo exists only
+    to hold LFB's files, so hiding them under `.lfbridge/` inside a repo containing nothing else buys no
+    separation and only adds a meaningless path segment
+    ([artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)). `rel` is the file's path relative
+    to its **mapped-dir root** (prefixed by the mapped-dir key), or relative to **`~`** for the personal
+    default catch-all. The transcript is **committed** — the dedicated repo **exists to hold and back up
+    these artifacts** (the product owner: *"it won't need to add the `.gitignore` if you have a dedicated git
+    repo — it'll just put it in there"*).
   * If the owning storage has **no** dedicated repo enabled, the artifact goes under the storage's own
-    **root** — `<storageRoot>/.lfbridge/<rel-dir>/<name.ext>.transcription`, where its `.lfbridge/` already
-    lives.
+    **root** — `<storageRoot>/<rel-dir>/<name.ext>.transcription` for an SDL-kind storage (again **no**
+    `.lfbridge/` segment), or `<storageRoot>/.lfbridge/<rel-dir>/…` when the resolved root is a working repo.
 
 **C. First-time experience (no storage yet).** If the file is owned by **no** storage **and** the user has
 **no Personal storage configured at all**, we do **not** silently write beside the media. The action is
 gated by the **first-time setup wizard** (§3.5).
 
 **D. Last resort.** Personal exists but the file is genuinely outside every mapped hierarchy and no
-dedicated repo is enabled → the media file's **own directory** is the placement root, so a `.lfbridge/` is
-created **in that directory** and the transcript lands at `<mediaDir>/.lfbridge/<name.ext>.transcription`.
-This is the narrow fallback, not the common path — the `.lfbridge/` + append-extension invariant (§3.1)
-still holds, so a transcript is **never** written loose beside the media.
+dedicated repo is enabled → the media file's **own directory** is the placement root. That directory is not
+an SDL, so the working-repo branch of the kind rule applies: a `.lfbridge/` is created **in that directory**
+and the transcript lands at `<mediaDir>/.lfbridge/<name.ext>.transcription`. This is the narrow fallback, not
+the common path — the tracking-base + append-extension invariant (§3.1) still holds, so a transcript is
+**never** written loose beside the media.
 
-> **Worked example (the reported case).** With the Personal storage's **dedicated Git repo** turned ON at
+> **Worked example — the two kinds side by side (the reported case).** The contrast *is* the rule
+> ([artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)):
+>
+> **SDL file repo (no `.lfbridge/`).** With the Personal storage's **dedicated Git repo** turned ON at
 > `~/BGit/Bryan_git/personal_large_files_bridge/`, transcribing
 > `~/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4` writes to
-> `~/BGit/Bryan_git/personal_large_files_bridge/.lfbridge/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4.transcription`
-> — mirrored under the dedicated repo's **`.lfbridge/`**, the full filename with **`.transcription`
-> appended**, **committed** (travels with the repo), and **no** `.transcribe/` directory. In-repo, the same
-> file two directories deep at `<repo>/CIA/FINAL_CIA_Drones.mp4` writes to
+> `~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4.transcription`
+> — mirrored straight off the dedicated repo's **root**, with **no `.lfbridge/` segment** (that path was the
+> old, now-**wrong** layout), the full filename with **`.transcription` appended**, **committed** (travels
+> with the repo), and **no** `.transcribe/` directory.
+>
+> **Working git repo (keeps `.lfbridge/`).** Transcribing `~/BGit/Bryan_git/charlie-kirk/videos/_QwGo0LyZ3I.mp4`
+> writes to `~/BGit/Bryan_git/charlie-kirk/.lfbridge/videos/_QwGo0LyZ3I.mp4.transcription` — LFB is a guest
+> in the user's own project, so it quarantines the artifact under the hidden `.lfbridge/`. Likewise, in-repo,
+> a file two directories deep at `<repo>/CIA/FINAL_CIA_Drones.mp4` writes to
 > `<repo>/.lfbridge/CIA/FINAL_CIA_Drones.mp4.transcription`.
 
 The ordered resolution (walk-up → owning-storage/dedicated-repo → first-time signal → last-resort), the
-`.lfbridge/`-rooted path-mirrored placement, the **append**-`.transcription` naming, and the home-`~`
+kind-resolved path-mirrored placement, the **append**-`.transcription` naming, and the home-`~`
 expansion of pasted paths are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveArtifactPlacement()` (transcript path via `lfbridgeArtifactPath(root, relPath)` = `join(root, ".lfbridge", relPath) + TRANSCRIPTION_EXT`, where `TRANSCRIPTION_EXT` is **appended**, not substituted).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveArtifactPlacement()` (transcript path via `lfbridgeArtifactPath(root, rel, ext)` = `join(trackingBaseDir(root), rel) + TRANSCRIPTION_EXT`, where `TRANSCRIPTION_EXT` is **appended**, not substituted) and `artifactPathForPlacement(root, rel, ext, placement)`.
+Deciding the base that path hangs off — `<root>/.lfbridge` for kind `repo`, `<root>` itself for an SDL — is the single choke point every LFB writer resolves through (none joins `LFBRIDGE_DIR` directly), implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir(root, type?)` / `usesLfbridgeDir(type)` / `resolveStorageType(root)`.
+Migrating a pre-existing SDL `.lfbridge/` up to the root (with a read-fallback to the old path until it is migrated, so no transcript is reported missing or regenerated mid-migration) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/migrate-sdl-lfbridge.ts` — `migrateSdlLfbridge()`.
 The transcript path (`<root>/.lfbridge/<rel-dir>/<name.ext>.transcription`) and the owning-root resolution wrap it in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `resolveTranscriptPath()` / `resolveStorageRoot()`. The per-case `gitIgnore` flag is **retired** — transcripts live in the committed `.lfbridge/` area, so no `*.transcription` ignore line is ever injected.
 
@@ -334,10 +386,11 @@ to a **first-time setup wizard** instead of producing a file in a surprising pla
      no-storage case.
   2. **Company vs personal.** If a **company** storage already covers the path, use it. Otherwise
      **default to Personal** — create the one Personal storage.
-  3. **Where the Personal `.lfbridge/` root lives.** Default to creating it under the **home (`~`)
+  3. **Where the Personal storage's artifact root lives.** Default to creating it under the **home (`~`)
      directory** ([storage_personal.mdx §1](./storage_personal.mdx)); or, if the user prefers, point it at
      a **dedicated Git repo** (`~/BGit/Bryan_git/personal_large_files_bridge/`) — in which case artifacts
-     store **under that repo** per rule B.
+     store **under that repo's root** per rule B, with **no `.lfbridge/` segment** (it is an SDL —
+     [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)).
 * **After setup.** The originally-clicked action re-resolves placement (now a storage exists) and runs —
   the user lands back where they were, no reload.
 
@@ -382,7 +435,7 @@ Welcome back to the show. Today we're talking about …
 
 A video with **no audio stream** yields a one-line placeholder (`[No audio stream — nothing to
 transcribe]`) so a re-run over a tree can skip it cheaply. Results are **idempotent by path**: an existing
-transcript at `<root>/.lfbridge/<rel-dir>/<name.ext>.transcription` (§3) is reported as "already
+transcript at `<trackingBase>/<rel-dir>/<name.ext>.transcription` (§3) is reported as "already
 transcribed" unless the caller asks to overwrite (Re-transcribe). A transcript whose header shows
 **`Transcript covers` < `Source duration`** (a truncated run) is treated as **incomplete** and is a
 candidate to re-transcribe, never a silent success ([transcribe_engine.mdx §4](./transcribe_engine.mdx)).
@@ -560,7 +613,7 @@ Allow-list-gated like every data route, mirroring `compression.router.ts`:
 | `GET /api/transcribe/engine` | — | **Engine + model readiness** ([transcribe_engine.mdx §2/§3](./transcribe_engine.mdx)): which engine is **active** (`speech` / `mac` / `qwen`); the **`speech`** readiness block (`available`, `osMajor`, **`needsOsUpdate`** — hardware supports SpeechAnalyzer but OS < 26, §2.2 — and `hardwarePossible`); and, for the heavyweight **`qwen`** third engine, whether its model is `installed` / `partial` / `missing` / `outdated`, its on-disk size, and the disk estimate for a fresh install. Drives the macOS-update notice and the Qwen permission popup. |
 | `POST /api/transcribe/engine/provision` | `{ approve: true }` | **Download → install → configure** the heavyweight model (explicit consent). Registers a `download` then an `install` progress job ([transcribe_engine.mdx §3.3](./transcribe_engine.mdx)); returns immediately, watchable on [Processing](./processing.mdx). |
 | `GET /api/transcribe/file?path=<abs>` | — | The existing transcript for a media file (text + transcript path), or `null`. |
-| `POST /api/transcribe/file` | `{ path, overwrite? }` | Transcribe ONE file → the `.lfbridge/<rel-dir>/<name.ext>.transcription` transcript under the owning root (§3). |
+| `POST /api/transcribe/file` | `{ path, overwrite? }` | Transcribe ONE file → the `<trackingBase>/<rel-dir>/<name.ext>.transcription` transcript under the owning root — `.lfbridge/` in a working repo, the root itself in an SDL (§3). |
 | `POST /api/transcribe/batch` | `{ paths[], overwrite? }` | Transcribe a selected set. |
 | `POST /api/transcribe/tree` | `{ path, overwrite? }` | Transcribe ALL audio/video under a directory or repo. |
 | `POST /api/transcribe/storage/:id` | `{ overwrite? }` | Transcribe ALL audio/video in a storage. |
@@ -589,13 +642,23 @@ The transcription REST surface (tools / read-transcript / file / batch / tree / 
 2. **Entry points at every scale:** the **Media Viewer** Transcribe button on an open audio/video; a
    **Transcribe…** item in the file ⋮ kebab / right-click / more-menu; a selected-set batch; and
    **Transcribe all files…** on a **directory**, a **repo**, and a **storage**.
-3. Transcripts are stored **inside the owning repo/storage's `.lfbridge/` directory** (not the Local state
-   dir, and no `.transcribe/` directory), **mirroring the media file's relative directory path** under
-   `.lfbridge/`, keeping the media's **full filename including its extension** with **`.transcription`
-   appended** (`<repo>/a/b/talk.mp3` → `<repo>/.lfbridge/a/b/talk.mp3.transcription`). Because `.lfbridge/`
-   is **committed**, transcripts are version-controlled and travel with the repo across the user's
-   computers; **no `*.transcription` git-ignore line is injected**. Appending (not replacing) the extension
-   means `talk.mp3` and `talk.wav` no longer collide.
+3. Transcripts are stored **inside the owning root's committed tracking area** (not the Local state
+   dir, and no `.transcribe/` directory), **mirroring the media file's relative directory path** under that
+   base, keeping the media's **full filename including its extension** with **`.transcription`
+   appended**. Because that area is **committed**, transcripts are version-controlled and travel with the
+   repo across the user's computers; **no `*.transcription` git-ignore line is injected**. Appending (not
+   replacing) the extension means `talk.mp3` and `talk.wav` no longer collide.
+3a. **The base is keyed on storage KIND** ([artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx),
+   the owner of the rule), resolved through the single choke point `trackingBaseDir(root)` — **no** code path
+   joins `.lfbridge` directly:
+   * **Working git repo** (kind `repo`, the default) → **keeps** `.lfbridge/`:
+     `<repo>/a/b/talk.mp3` → `<repo>/.lfbridge/a/b/talk.mp3.transcription`.
+   * **Dedicated LFB file repo** (an SDL — kind `personal` / `company` / `community`) → **no `.lfbridge/`
+     at all**, the mirror hangs off the **root**: `~/_Mirror/…/x.mp4` →
+     `~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/…/x.mp4.transcription` (**not**
+     `…/personal_large_files_bridge/.lfbridge/_Mirror/…`).
+   * An SDL's own `.git/` **never** demotes it to a working repo — the walk-up of §3.4 rule A classifies by
+     **type first**, and only then falls back to "has `.git/` → working repo".
 4. The **owning root** is the nearest ancestor with `storage.yaml` / `.lfbridge/` / `.git/`; when none
    exists, a `.lfbridge/` is created in the file's own directory as the base (§3.4 rules A–D).
 5. The engine is **copied into this repo's `tools/` directory** (the ACT3-internal copy is **not**
@@ -671,7 +734,7 @@ When invoked it walks **each storage** — Personal, Dropbox, every Google Drive
   `transcribable` flag defined in [special_files.mdx §3](./special_files.mdx#3-the-transcribable-flag)
   (a silent video is **not** a candidate — it would only ever yield the "no audio" placeholder of §4), and
 * **Not yet transcribed** — they have **no `.transcription` transcript** at the resolved
-  `.lfbridge/<rel-dir>/<name.ext>.transcription` path (§3), **or** an existing transcript whose header shows
+  `<trackingBase>/<rel-dir>/<name.ext>.transcription` path (§3), **or** an existing transcript whose header shows
   it **did not cover the full source duration** (a truncated run, §4 / [transcribe_engine.mdx §4](./transcribe_engine.mdx)).
   This is exactly the **skip-already-done** test the page action uses
   (§2.5 / [page_actions.mdx §1.2](./page_actions.mdx)): *absence of a complete transcript* is the candidate test, so a
@@ -773,11 +836,14 @@ transcribe popup, scoped to the counted candidates, gated by `withModelReady`) i
 Nothing on the Transcribe tab decides **where** a transcript file is written — that is owned by the
 **placement radios** and the **repo settings**, not this feature:
 
-* **Placement radios** — the repo/storage setting that picks the artifact home (inside the repo's committed
-  `.lfbridge/`, a dedicated Git repo, or beside-the-media as a last resort) is specified in
+* **Placement radios** — the repo/storage setting that picks the artifact home (the `lfbridge` choice, a
+  dedicated Git repo, or beside-the-media as a last resort) is specified in
   **[placement_radios.mdx](./placement_radios.mdx)** and surfaced per repo in
   **[repo_settings.mdx](./repo_settings.mdx)**. §3 of this spec describes the resolved *path shape*
-  (`<root>/.lfbridge/<rel-dir>/<name.ext>.transcription`); the **radio that chooses the root** lives there.
+  (`<trackingBase>/<rel-dir>/<name.ext>.transcription`); the **radio that chooses the root** lives there.
+  Note the radio option is still **named `lfbridge`** — a frozen wire literal — even in an **SDL**, where it
+  resolves to the **root** with no `.lfbridge/` segment
+  ([artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)).
 * **AI descriptions share the identical placement.** The `.ai_description` artifact
   ([ai_description.mdx §2](./ai_description.mdx)) resolves through the **same** ordered rule (§3.4) and the
   **same** placement radios — so the Transcribe and AI-descriptions tabs behave identically on *where the
@@ -788,15 +854,28 @@ in one place.
 
 <!--
   Transcribe = audio+video → plain-text transcript. LOCKED:
-  (§3) transcripts live INSIDE the owning repo/storage's committed .lfbridge/ dir — NO .transcribe/ dir,
-       NOT beside the media, NOT the local state dir: <root>/.lfbridge/<rel-dir>/<name.ext>.transcription —
-       mirror the media's relative dir path UNDER .lfbridge/, keep the FULL filename incl. extension and
-       APPEND .transcription as a 2nd ext (a/b/talk.mp3 → <repo>/.lfbridge/a/b/talk.mp3.transcription).
-       TRANSCRIPTION_EXT is APPENDED, never substituted (artifact-placement.service.ts lfbridgeArtifactPath).
-       .lfbridge/ is COMMITTED so transcripts travel with the repo across computers — NO *.transcription
-       git-ignore line is injected (gitIgnore flag retired). Appending (not replacing) the ext means
-       talk.mp3 & talk.wav no longer collide (old caveat RETIRED). SUPERSEDES the earlier beside-media/
-       replace-ext LOCKED layout AND storages.mdx §6's transcript.yaml sketch.
+  (§3) transcripts live INSIDE the owning root's COMMITTED tracking area — NO .transcribe/ dir, NOT beside
+       the media, NOT the local state dir: <trackingBase>/<rel-dir>/<name.ext>.transcription — mirror the
+       media's relative dir path UNDER that base, keep the FULL filename incl. extension and APPEND
+       .transcription as a 2nd ext. TRANSCRIPTION_EXT is APPENDED, never substituted
+       (artifact-placement.service.ts lfbridgeArtifactPath/artifactPathForPlacement). The area is COMMITTED
+       so transcripts travel with the repo across computers — NO *.transcription git-ignore line is injected
+       (gitIgnore flag retired). Appending (not replacing) the ext means talk.mp3 & talk.wav no longer
+       collide (old caveat RETIRED). SUPERSEDES the earlier beside-media/replace-ext LOCKED layout AND
+       storages.mdx §6's transcript.yaml sketch.
+  (§3.1/§3.4) THE BASE IS KEYED ON STORAGE KIND — rule OWNED by artifact_placement_policy.mdx §0, referenced
+       here, never re-litigated. trackingBaseDir(root, type?) / usesLfbridgeDir(type) in
+       storage-type.service.ts is the SINGLE CHOKE POINT; NO writer joins LFBRIDGE_DIR directly.
+       - WORKING GIT REPO (kind `repo`, the DEFAULT) → KEEPS .lfbridge/ (LFB is a guest → quarantine in one
+         hidden corner): ~/BGit/Bryan_git/charlie-kirk/.lfbridge/videos/_QwGo0LyZ3I.mp4.transcription
+       - DEDICATED LFB FILE REPO / SDL (personal|company|community) → NO .lfbridge/ AT ALL, the root IS the
+         .lfbridge area: ~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/…/x.mp4.transcription
+         NOT …/personal_large_files_bridge/.lfbridge/_Mirror/… (the OLD, now-WRONG pattern).
+       An SDL always has its own .git/ — the KIND WINS over the presence of .git/, so §3.4 rule A's walk-up
+       MUST classify by TYPE BEFORE falling back to "has .git/ → working repo". A pre-existing SDL .lfbridge/
+       is migrated to the root by migrate-sdl-lfbridge.ts (migrateSdlLfbridge) with a READ-FALLBACK until
+       migrated. UNCHANGED by that decision: the APPEND-the-ext naming, the path-MIRRORING itself, and the
+       placement radio's 3 choices — only what `lfbridge` RESOLVES TO in an SDL changes (the root).
   (§5) engine = our Transcribe.js COPIED into code/packages/backend/src/tools/transcribe/ as TS classes,
        called IN-PROCESS (no `node Transcribe.js`, no reuse of ACT3-internal copy). PREFERENCE ORDER
        (DOMINANT): Apple SpeechAnalyzer (macOS 26+, on-device, Swift helper speech/SpeechAnalyzerCLI.swift —

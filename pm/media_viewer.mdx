@@ -383,9 +383,15 @@ and no radio buttons to switch between them.**
 * **Which half shows.** **AI description** appears for **video + image** (visual media); **Transcription**
   appears for **video + audio** (media that can have speech).
 * **The ✓ availability marker.** Each half's header carries a check when its content already exists on
-  disk **inside the owning storage's `.lfbridge/`, path-mirrored, with the extension APPENDED** (a
-  transcript at `<root>/.lfbridge/<rel-dir>/<name.ext>.transcription`; a description at
-  `<root>/.lfbridge/<rel-dir>/<name.ext>.ai_description`), and a hollow outline when it's empty.
+  disk **inside the owning root's tracking area, path-mirrored, with the extension APPENDED** — a
+  transcript at `<trackingBase>/<rel-dir>/<name.ext>.transcription`, a description at
+  `<trackingBase>/<rel-dir>/<name.ext>.ai_description` — and a hollow outline when it's empty. The base is
+  keyed on **storage kind** ([artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)): a
+  **working git repo** keeps its hidden `.lfbridge/`
+  (`~/BGit/Bryan_git/charlie-kirk/.lfbridge/videos/x.mp4.transcription`), while a **dedicated LFB file repo**
+  (a Personal / Company / Community SDL) has **no `.lfbridge/` at all** and the mirror hangs off the **root**
+  (`~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/…/x.mp4.transcription`). The marker resolves the
+  path through the shared resolver, so it never misses an artifact by hard-coding a `.lfbridge` segment.
 * **Content vs. Generate.** When a half has content, it shows it (description as prose; transcript in
   monospace) with a small **Regenerate** link. When it's empty, it shows a **Generate** button:
   * **AI description → Generate description** runs a vision provider ([ai_description.mdx](./ai_description.mdx)).

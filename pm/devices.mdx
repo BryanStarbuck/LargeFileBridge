@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Devices / Peers (the per-computer registry + the graft)
-description: The device model. Every computer that carries a storage issues itself a stable unique device ID (a minted UUID) on first use, kept in ~/T local storage AND copied into every synced storage, and the user gives it a nice human name from the web app (e.g. "bryan-macbook"). Each device also records a HARDWARE FINGERPRINT — Mac model + year, screen size (14"/16"), disk size, RAM, chip, logged-in username / home directory — which the app uses to (a) auto-name a new computer and (b) DISAMBIGUATE two similar machines by appending only the attributes that differ (two MacBook Pros → one shows "(14-inch)", the other "(16-inch)"). The Devices / Peers left-bar page shows a TanStack table of every device; it ALWAYS auto-seeds THIS computer so the table is never empty. Each device records itself as one file in the storage's Syncable Data Location — .lfbridge/devices/<device>.yaml — so the registry of devices TRAVELS with the storage and every computer knows about every other. A device file is SELF-OWNED: a computer writes only its own file and trusts other devices' files as claims (the same trust model as the Sync List). Each device file carries: the device id (changeable in settings) + owner email; the nice name; the hardware fingerprint; this device's SYNC SCHEDULE (cadence + the specific times/windows it syncs this storage); and — the load-bearing part — the GRAFT: how the storage's shared, machine-independent directory hierarchy (the mapped source directories, keyed in mapped_dirs.yaml) maps onto THIS computer's local absolute paths, plus where this computer keeps the pulled files and whether it wants each mapped directory at all. The graft is what lets computer 2 pull the right files down to the RIGHT local locations from the SDL's YAML alone. Distinguishes the shared, travelling device registry (this spec, in the SDL) from the machine-local peers.yaml and config.yaml→computer identity (storage_local.mdx, which never travels). Hub siblings: syncable_data_location.mdx (the SDL that holds devices/), storage_local.mdx (this computer's identity + peers), sync_list.mdx (the trust model + pinned_by), storage_settings.mdx (per-computer settings), storage_company.mdx (multi-user companies whose members are devices), left_bar.mdx (the "Devices / Peers" nav item).
+description: The device model. Every computer that carries a storage issues itself a stable unique device ID (a minted UUID) on first use, kept in ~/T local storage AND copied into every synced storage, and the user gives it a nice human name from the web app (e.g. "bryan-macbook"). Each device also records a HARDWARE FINGERPRINT — Mac model + year, screen size (14"/16"), disk size, RAM, chip, logged-in username / home directory — which the app uses to (a) auto-name a new computer and (b) DISAMBIGUATE two similar machines by appending only the attributes that differ (two MacBook Pros → one shows "(14-inch)", the other "(16-inch)"). The Devices / Peers left-bar page shows a TanStack table of every device; it ALWAYS auto-seeds THIS computer so the table is never empty. Each device records itself as one file in the storage's Syncable Data Location — <SDL>/devices/<device>.yaml, at the SDL ROOT with NO .lfbridge/ segment, because an SDL is a dedicated LFB file repo and its root IS the .lfbridge area (artifact_placement_policy.mdx §0) — so the registry of devices TRAVELS with the storage and every computer knows about every other. A device file is SELF-OWNED: a computer writes only its own file and trusts other devices' files as claims (the same trust model as the Sync List). Each device file carries: the device id (changeable in settings) + owner email; the nice name; the hardware fingerprint; this device's SYNC SCHEDULE (cadence + the specific times/windows it syncs this storage); and — the load-bearing part — the GRAFT: how the storage's shared, machine-independent directory hierarchy (the mapped source directories, keyed in mapped_dirs.yaml) maps onto THIS computer's local absolute paths, plus where this computer keeps the pulled files and whether it wants each mapped directory at all. The graft is what lets computer 2 pull the right files down to the RIGHT local locations from the SDL's YAML alone. Distinguishes the shared, travelling device registry (this spec, in the SDL) from the machine-local peers.yaml and config.yaml→computer identity (storage_local.mdx, which never travels). Hub siblings: syncable_data_location.mdx (the SDL that holds devices/), storage_local.mdx (this computer's identity + peers), sync_list.mdx (the trust model + pinned_by), storage_settings.mdx (per-computer settings), storage_company.mdx (multi-user companies whose members are devices), left_bar.mdx (the "Devices / Peers" nav item).
 ---
 
 # LargeFileBridge — Devices / Peers
@@ -23,7 +23,10 @@ those locations are on it.
 Read the shared model first; this spec does not restate it:
 
 * [syncable_data_location.mdx](./syncable_data_location.mdx) — the **SDL** that holds
-  `.lfbridge/devices/` and `.lfbridge/mapped_dirs.yaml`. Devices are one part of the SDL's inventory.
+  `devices/` and `mapped_dirs.yaml` **at its root**. Devices are one part of the SDL's inventory.
+* [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx) — the **owner** of the storage-kind
+  rule: `.lfbridge/` exists only inside a **working git repo**; an **SDL** (a dedicated LFB file repo) has
+  **none**, so its `devices/` sits at the **root**. This spec follows that rule; it does not restate it.
 * [storage_local.mdx](./storage_local.mdx) — this machine's **local** identity (`config.yaml →
   computer`, §3) and its **`peers.yaml`** (§11). Those are **machine-local and never travel**. The
   device registry here is the opposite: it is **in the SDL and travels**. §4 reconciles the two.
@@ -58,7 +61,7 @@ Every computer that carries a storage has a **device identity** with two parts:
 
 The id is the **random code** the user asked for: it is minted once and then stored in **two places at
 once** — this computer's **`~/T/_large_files_bridge/config.yaml`** (the machine-local source of truth,
-which never travels) **and** copied into **every storage's** `.lfbridge/devices/<device>.yaml`
+which never travels) **and** copied into **every storage's** `devices/<device>.yaml`
 (which travels through the storage's Git repo — the Act3 company storage, the Personal storage, etc.).
 So the same device id is present both locally under `~/T` and in the Dropbox/Google-Drive/Git-backed
 storages, and any computer reading a storage can match the array of `devices/*.yaml` entries against its
@@ -81,11 +84,17 @@ Minting the stable device UUID on first boot (separate from the IPFS PeerID) and
 Each device records **itself** as one file in the storage's Syncable Data Location:
 
 ```
-<SDL>/.lfbridge/devices/
+<SDL>/devices/              ← at the SDL ROOT — no .lfbridge/ segment (artifact_placement_policy §0)
 ├── bryan-macbook.yaml     ← written & owned by the macbook
 ├── studio-tower.yaml      ← written & owned by the studio tower
 └── family-imac.yaml       ← written & owned by the family imac
 ```
+
+An SDL is a **dedicated LFB file repo** — a repo whose entire reason to exist is to hold LFB's files — so
+there is **no `.lfbridge/` to hide the registry under**; the SDL root *is* the `.lfbridge` area
+([artifact_placement_policy.mdx §0/§0.1](./artifact_placement_policy.mdx)). The base directory is resolved
+by storage **kind**, never by a path or a name, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir(root, type?)` (`<root>/.lfbridge` for kind `repo`; `<root>` itself for an SDL). An SDL written by an older LFB that still has a `.lfbridge/devices/` is migrated to the root by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/migrate-sdl-lfbridge.ts` — `migrateSdlLfbridge()`, with a read-fallback to the old path until it is.
 
 Because the registry lives **in the SDL**, it **travels with the storage** — so every computer that
 pulls the storage sees the full set of devices, their schedules, and their grafts. This is how a
@@ -120,7 +129,7 @@ A computer **writes only its own** `devices/<device>.yaml` and treats every othe
 ## 3. What a device file carries
 
 ```yaml
-# <SDL>/.lfbridge/devices/bryan-macbook.yaml   (written & owned by this device)
+# <SDL>/devices/bryan-macbook.yaml   (written & owned by this device)
 schema_version: 1
 updated_at: 2026-07-05T10:31:00Z
 
@@ -178,7 +187,7 @@ graft:
   discipline as `pinned`.
 * **`graft`** has one entry per mapped directory (keyed by `mapped_dirs.yaml`'s `key`, §4).
 
-Writing this device's own file (id, name, schedule, graft) into every storage's `.lfbridge/devices/` and reading the full registry, is to be implemented in code:
+Writing this device's own file (id, name, schedule, graft) into every storage's `devices/` (resolved through `trackingBaseDir()` — the SDL root, §2) and reading the full registry, is to be implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice(storageRoot)` / `readDevices(storageRoot)` (new module; self-owned write, whole-registry read).
 
 ---
@@ -217,7 +226,7 @@ These are easy to confuse; keep them distinct:
 
 | | **Device registry** (this spec) | **`peers.yaml`** ([storage_local.mdx §11](./storage_local.mdx#11-peersyaml--the-users-other-computers)) |
 | --- | --- | --- |
-| Where | `<SDL>/.lfbridge/devices/<device>.yaml` | `~/T/_large_files_bridge/peers.yaml` |
+| Where | `<SDL>/devices/<device>.yaml` (SDL root — no `.lfbridge/`) | `~/T/_large_files_bridge/peers.yaml` |
 | Travels? | **Yes** — in the SDL, per storage | **No** — machine-local |
 | Scope | per storage (a device file per storage) | the whole install (the user's other computers) |
 | Holds | id, name, owner, **schedule**, **graft** | id, label, PeerID, owner, last_seen |
@@ -508,7 +517,7 @@ gets its device registry written and pushed — exactly the case the user was wo
 ### 11.2.1 A company / personal tracking repo auto-adopts its own git root — commit + push, first write and every update (LOCKED, learned from a defect)
 
 **The reported defect.** A company storage — a `*_large_files_bridge` **tracking-data** repo (e.g. the
-**Act3** company storage) — had its `devices/<self>.yaml` **written** into `<root>/.lfbridge/devices/`
+**Act3** company storage) — had its `devices/<self>.yaml` **written** into `<root>/devices/`
 but was **never `git add`/`git commit`/`git push`ed**. The file just sat there, uncommitted, so it never
 reached the other computers. The cause: the Git backbone only resolved when the user had **manually
 turned on** the per-storage *dedicated-repo backing* and typed a path. A brand-new company tracking repo
@@ -583,9 +592,12 @@ The pass itself — for every Git-backed storage, pull → write self device →
    **user-set nice name** (auto-seeded from the fingerprint) and a **hardware fingerprint**; the id and
    name are **editable from the web app** (§1). The id lives in `config.yaml → computer` **under `~/T`**
    and is copied into **each storage's** device file — present both locally and in every storage.
-2. Each device records **itself** as `<SDL>/.lfbridge/devices/<device>.yaml`; the registry **travels
-   with the storage**, so every computer sees the full set of devices, and a device file is
-   **self-owned** — a computer writes only its own and treats others as claims (§2).
+2. Each device records **itself** as `<SDL>/devices/<device>.yaml` — at the **SDL root**, with **no
+   `.lfbridge/` segment**, because an SDL is a dedicated LFB file repo whose root *is* the `.lfbridge`
+   area ([artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)); the base is resolved by
+   storage **kind** via `trackingBaseDir()`, never by name. The registry **travels with the storage**, so
+   every computer sees the full set of devices, and a device file is **self-owned** — a computer writes
+   only its own and treats others as claims (§2).
 3. A device file carries the **id + name + owner**, this device's **pin schedule** for this storage
    (cadence + optional time windows), and the **graft** (§3).
 4. The **graft** maps each mapped source directory (keyed in `mapped_dirs.yaml`) to **this computer's
@@ -632,7 +644,10 @@ The pass itself — for every Git-backed storage, pull → write self device →
   user-set nice name (auto-seeded from the fingerprint) + a HARDWARE FINGERPRINT; id/name editable from
   the web app; source of truth in config.yaml→computer (storage_local §3) UNDER ~/T, copied into each
   storage's device file (so the "random code" is both local AND carried). §2 the registry lives IN the SDL
-  (.lfbridge/devices/<name>.yaml) so it TRAVELS per storage; each file is SELF-OWNED (write only your own;
+  (<SDL>/devices/<name>.yaml — at the SDL ROOT, NO .lfbridge/ segment: an SDL is a dedicated LFB file repo
+  and its root IS the .lfbridge area; rule owned by artifact_placement_policy.mdx §0, base resolved by
+  storage KIND via storage-type.service.ts trackingBaseDir(), old SDL .lfbridge/ migrated by
+  migrate-sdl-lfbridge.ts migrateSdlLfbridge()) so it TRAVELS per storage; each file is SELF-OWNED (write only your own;
   others are claims — same trust as sync_list §5). §3 a device file carries id/name/owner + HARDWARE +
   this device's SCHEDULE (cadence + optional time windows) + the GRAFT. §4 the GRAFT (LOCKED) maps
   machine-independent identity (mapped-dir key from syncable_data_location §3 + relpath) onto THIS

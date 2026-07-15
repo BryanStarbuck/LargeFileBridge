@@ -20,15 +20,35 @@ import { simpleGit, type SimpleGit } from "simple-git";
 import { storageUnitDir } from "../../shared/store/scopes.js";
 import { expandHome } from "../fs/badges.js";
 import { isGitWorkingTree } from "../store-model/units.service.js";
+import { LFBRIDGE_DIR } from "../storage/storage-type.service.js";
 import { log } from "../../shared/logging.js";
 
-/** The shared, append-mostly SDL lists that must union-merge instead of conflicting (git_backbone.mdx §4.2). */
+/** The shared, append-mostly SDL lists that must union-merge instead of conflicting (git_backbone.mdx §4.2).
+ *  Both SHAPES are listed: the SDL root (current — an SDL has no `.lfbridge/`, artifact_placement_policy.mdx
+ *  §0) and the legacy `.lfbridge/` (an SDL not yet migrated by migrate-sdl-lfbridge.ts). A pattern for a
+ *  layout that isn't present is inert, so carrying both is free and keeps a mid-migration repo protected. */
 const UNION_MERGE_PATHS = [
   "LargeFilesBridge_SyncList.yaml",
-  ".lfbridge/manifest.yaml",
-  ".lfbridge/decisions.yaml", // the shared per-file decision ledger (decisions.mdx §4/§5) — union-merged
+  "manifest.yaml",
+  "decisions.yaml", // the shared per-file decision ledger (decisions.mdx §4/§5) — union-merged
+  ".lfbridge/manifest.yaml", // legacy pre-migration shape
+  ".lfbridge/decisions.yaml", // legacy pre-migration shape
   "owner_map.yaml", // company ownership assertions at the sync-repo root (repo_owner_propagation.mdx §2) — union-merged
 ];
+
+/** The SDL's travelling payload at its ROOT (artifact_placement_policy.mdx §0.1). Ignoring any of these is
+ *  the post-migration shape of the git_backbone.mdx §4.2.1 defect — it would stop the device registry (and
+ *  the rest of the SDL text) from ever reaching the user's other computers. */
+const SDL_ROOT_PAYLOAD: ReadonlySet<string> = new Set([
+  "storage.yaml",
+  "mapped_dirs.yaml",
+  "files.yaml",
+  "manifest.yaml",
+  "bookmarks.yaml",
+  "decisions.yaml",
+  "devices",
+  "analysis",
+]);
 
 /** True for any `repo_storage.yaml` path a Git-backed working tree might carry — the top-level legacy shape
  *  (`.lfbridge/repo_storage.yaml`, pre-redesign) and the current sync-repo mirror
@@ -295,13 +315,19 @@ export class GitBackbone {
   }
 
   /**
-   * The Git backbone is only ever ON for an SDL repo whose `.lfbridge/` text — the device registry, the
-   * manifest, the mapped-dir list — is the PAYLOAD that must travel between the user's computers
-   * (storage_personal.mdx §1). A generic storages rule (and older builds) wrote a bare `.lfbridge/` line
-   * into `.gitignore` to keep tracking out of a plain *code* repo; in an SDL repo that same line silently
-   * blocks EVERY device file from being committed or pushed, so two computers never see each other. Remove
-   * a bare `.lfbridge/` ignore so the SDL text is committable. Idempotent; every other `.gitignore` rule
-   * (the big-file byte ignores) is left untouched — and the bytes never live under `.lfbridge/` anyway.
+   * The Git backbone is only ever ON for an SDL repo whose tracking text — the device registry, the manifest,
+   * the mapped-dir list — is the PAYLOAD that must travel between the user's computers (storage_personal.mdx
+   * §1). Ignoring that text silently blocks EVERY device file from being committed or pushed, so two
+   * computers never see each other. That defect is recorded in git_backbone.mdx §4.2.1; this strips any rule
+   * that would cause it. Idempotent; every other `.gitignore` rule (the big-file byte ignores) is left
+   * untouched — the bytes never live in the tracking text anyway.
+   *
+   * The HAZARD MOVED, it did not go away (artifact_placement_policy.mdx §0). An SDL now has NO `.lfbridge/`:
+   * its payload sits at the ROOT (`storage.yaml`, `mapped_dirs.yaml`, `files.yaml`, `manifest.yaml`,
+   * `bookmarks.yaml`, `devices/`, `analysis/`). So we strip BOTH:
+   *   • a bare `.lfbridge/` line — still needed: harmless post-migration, but essential for an SDL that has
+   *     not been migrated yet, whose payload is still under `.lfbridge/`; and
+   *   • a bare ignore of any SDL root payload name — the NEW shape of the same mistake.
    */
   ensureSdlCommittable(): void {
     const gi = path.join(this.dir, ".gitignore");
@@ -312,10 +338,18 @@ export class GitBackbone {
       return; // no .gitignore → nothing is ignoring the SDL
     }
     const lines = body.split("\n");
-    const kept = lines.filter((l) => !/^\s*\.lfbridge\/?\s*$/.test(l));
-    if (kept.length === lines.length) return; // no bare `.lfbridge/` rule present
+    const kept = lines.filter((l) => !this.ignoresSdlPayload(l));
+    if (kept.length === lines.length) return; // no offending rule present
     fs.writeFileSync(gi, kept.join("\n"), "utf8");
-    log.info("git", `${this.dir}: removed '.lfbridge/' from .gitignore so the SDL device registry can be committed`);
+    log.info("git", `${this.dir}: removed SDL-payload ignore rule(s) from .gitignore so the tracking text can be committed`);
+  }
+
+  /** True when a `.gitignore` line would swallow the SDL's travelling payload — the legacy `.lfbridge/`
+   *  directory or one of the root names it moved to. Anchored (`/x`) and bare (`x`) forms both count. */
+  private ignoresSdlPayload(line: string): boolean {
+    const t = line.trim().replace(/^\//, "").replace(/\/$/, "");
+    if (!t || t.startsWith("#") || t.startsWith("!")) return false; // blank / comment / negation
+    return t === LFBRIDGE_DIR || SDL_ROOT_PAYLOAD.has(t);
   }
 
   /** Ensure the union-merge `.gitattributes` so shared append-mostly lists never conflict (git_backbone.mdx §4.2). */

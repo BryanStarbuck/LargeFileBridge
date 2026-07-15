@@ -12,7 +12,8 @@ description: The deep spec behind Transcribe.mdx, learned from the canonical too
 > "primary heavyweight Qwen," treat it as superseded by this order.
 
 [Transcribe.mdx](./Transcribe.mdx) defines the transcription **feature** — the entry points, where the
-`.transcription` output lands (inside `.lfbridge/`, §3 there), the async/non-blocking discipline, and the
+`.transcription` output lands (inside the owning root's kind-resolved tracking area — `.lfbridge/` in a
+working repo, the root itself in a dedicated LFB file repo; §3 there), the async/non-blocking discipline, and the
 truthful reporting. **This file is the ENGINE spec underneath it.** It answers five questions the feature
 spec deliberately defers:
 
@@ -29,7 +30,9 @@ spec deliberately defers:
 
 Siblings this builds on and does not repeat:
 
-* [Transcribe.mdx](./Transcribe.mdx) — the feature. Output placement (§3 there: `.lfbridge/<rel>/<name.ext>.transcription`),
+* [Transcribe.mdx](./Transcribe.mdx) — the feature. Output placement (§3 there:
+  `<trackingBase>/<rel>/<name.ext>.transcription`, the base keyed on storage kind per
+  [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)),
   entry points, the REST surface, the status icon. This engine is what its `transcribeOne()` drives.
 * [parallelization.mdx](./parallelization.mdx) — the shared **Core Budget** (mass-compute = `round(cores ×
   max_core_fraction)`, default 0.9; the anti-oversubscription invariant). §5 here is the transcribe-specific
@@ -49,7 +52,7 @@ The engine is the copied-in transcription layer ([Transcribe.mdx §5](./Transcri
 — in-process, async, non-blocking. This spec extends it with **engine selection** (three engines in a fixed
 preference order), **model provisioning** (for the heavyweight Qwen third choice), **full-duration
 guarantees**, and **parallel calibration**. Nothing here changes where the transcript is written (that is
-[Transcribe.mdx §3](./Transcribe.mdx#3-where-transcripts-are-stored--inside-the-repostorage-lfbridge-path-mirrored-extension-appended-locked-supersedes-the-earlier-beside-media-layout)) or that transcription is always an explicit user action.
+[Transcribe.mdx §3](./Transcribe.mdx#3-where-transcripts-are-stored--inside-the-owning-roots-tracking-area-path-mirrored-extension-appended-locked--supersedes-the-earlier-beside-media-layout)) or that transcription is always an explicit user action.
 
 The engine abstraction (a common interface each concrete engine implements — `available()` /
 `transcribeToFile(onProgress)` — so the caller is engine-agnostic) and the ordered selector are implemented

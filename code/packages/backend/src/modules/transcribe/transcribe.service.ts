@@ -51,10 +51,12 @@ export function resolveTranscriptPath(absFile: string): {
   needsSetup: boolean;
 } {
   const p = resolveArtifactPlacement(absFile);
-  // Honor the repo's transcription placement radio (repo_settings.mdx §4): .lfbridge/ (default), beside the
-  // media, or the state-sync repo. Falls back to .lfbridge/ for an unregistered root or an unconfigured sync repo.
+  // Honor the repo's transcription placement radio (repo_settings.mdx §4): "lfbridge" (default) = the root's
+  // TRACKING BASE, beside the media, or the state-sync repo. Falls back to the tracking base for an
+  // unregistered root or an unconfigured sync repo. `p.owner` carries the already-resolved storage role, so
+  // an SDL gets NO `.lfbridge/` segment even when its path doesn't follow the naming convention (§0).
   const placement = repoArtifactPlacement(p.root, "transcription");
-  const transcriptPath = artifactPathForPlacement(p.root, p.rel, TRANSCRIPTION_EXT, placement);
+  const transcriptPath = artifactPathForPlacement(p.root, p.rel, TRANSCRIPTION_EXT, placement, p.owner);
   return { root: p.root, rel: p.rel, transcriptPath, needsSetup: p.needsSetup };
 }
 

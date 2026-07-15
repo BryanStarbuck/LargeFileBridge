@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — AI description of images & videos
-description: The AI-description feature. At the bottom of the View-one-file media viewer sit two analysis tabs — Transcription and AI description — each with a ✓ when its content already exists, defaulting to whichever is available (preferring transcription). AI description generates a HYPER-DETAILED, searchable prose description of an IMAGE or a VIDEO by uploading the file's bytes to a vision provider with a per-kind prompt, then stores the result so it can be searched and re-found without re-opening the file. Only image + video are describable here (audio is covered by transcription). The description is written INSIDE the owning repo/storage's .lfbridge/ tracking directory, path-mirrored, under the media's FULL filename (original extension kept) with .ai_description APPENDED (skyline.mp4 → .lfbridge/render/skyline.mp4.ai_description; TheFunnyVideo.mp4 → TheFunnyVideo.mp4.ai_description) — committed and traveling with the repo by git, with NO .transcribe/ and NO .lfbridge/analysis/ directory. It is a self-contained "done" YAML record, so the Storage file table's "description" indicator lights up from that artifact's presence. Providers are pluggable adapters: Gemini (Google — the ONLY one that describes VIDEO, via inline base64), OpenAI (gpt-4o, images only), and Grok (xAI grok-2-vision, images only); keys resolve from app config first then well-known env vars, and the file is uploaded inline as base64 (bounded ~18MB) — so any file over ~17.5MB is FIRST auto-compressed to a temporary copy that fits (H.264 video / JPEG image, stepping resolution down only when needed), and the ORIGINAL is never modified. Prompts are shipped defaults the user can customize per-computer from Settings → Tools. IMPORTANT CHARTER NOTE: this is the ONE deliberate external-network path in LFBridge — generating a description uploads the file to the chosen provider; it is ALWAYS explicit and user-initiated, never automatic, and entirely separate from the charter's local-only perceptual-fingerprint feature (which must never phone home). Implemented by the /api/describe backend module, the describe adapters/prompts, and the MediaAnalysis tabs + Tools-page settings on the frontend.
+description: The AI-description feature. At the bottom of the View-one-file media viewer sit two analysis tabs — Transcription and AI description — each with a ✓ when its content already exists, defaulting to whichever is available (preferring transcription). AI description generates a HYPER-DETAILED, searchable prose description of an IMAGE or a VIDEO by uploading the file's bytes to a vision provider with a per-kind prompt, then stores the result so it can be searched and re-found without re-opening the file. Only image + video are describable here (audio is covered by transcription). The description is written INSIDE the owning root's committed tracking area, path-mirrored, under the media's FULL filename (original extension kept) with .ai_description APPENDED (TheFunnyVideo.mp4 → TheFunnyVideo.mp4.ai_description) — committed and traveling with the repo by git, with NO .transcribe/ and NO analysis/ sub-directory. WHERE that area sits is keyed on the root's STORAGE KIND (artifact_placement_policy.mdx §0, the owner of the rule): a WORKING GIT REPO keeps the hidden .lfbridge/ (skyline.mp4 → <repo>/.lfbridge/render/skyline.mp4.ai_description), while a DEDICATED LFB FILE REPO (a Personal/Company/Community SDL) has NO .lfbridge/ AT ALL — the SDL root IS the .lfbridge area, so the mirror hangs straight off it (~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/…/x.mp4.ai_description). It is a self-contained "done" YAML record, so the Storage file table's "description" indicator lights up from that artifact's presence. Providers are pluggable adapters: Gemini (Google — the ONLY one that describes VIDEO, via inline base64), OpenAI (gpt-4o, images only), and Grok (xAI grok-2-vision, images only); keys resolve from app config first then well-known env vars, and the file is uploaded inline as base64 (bounded ~18MB) — so any file over ~17.5MB is FIRST auto-compressed to a temporary copy that fits (H.264 video / JPEG image, stepping resolution down only when needed), and the ORIGINAL is never modified. Prompts are shipped defaults the user can customize per-computer from Settings → Tools. IMPORTANT CHARTER NOTE: this is the ONE deliberate external-network path in LFBridge — generating a description uploads the file to the chosen provider; it is ALWAYS explicit and user-initiated, never automatic, and entirely separate from the charter's local-only perceptual-fingerprint feature (which must never phone home). Implemented by the /api/describe backend module, the describe adapters/prompts, and the MediaAnalysis tabs + Tools-page settings on the frontend.
 ---
 
 # LargeFileBridge — AI description of images & videos
@@ -26,8 +26,11 @@ Siblings this builds on and does not repeat:
   Transcription · AI description tabs. This file is **authoritative** for the AI-description tab.
 * [storages.mdx §6](./storages.mdx) — the per-file media-analysis area. This file **supersedes** §6's
   `description.yaml` sketch: the description is now a **path-mirrored `<name.ext>.ai_description` file
-  inside the owning storage's `.lfbridge/`** (extension **appended**), not a YAML under
-  `.lfbridge/analysis/` (§2).
+  inside the owning root's tracking area** (extension **appended**), not a YAML under an `analysis/`
+  sub-directory (§2).
+* [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx) — the **owner** of the storage-KIND
+  rule this spec applies: `.lfbridge/` exists **only** inside a working git repo; a dedicated LFB file repo
+  (Personal / Company / Community SDL) has **none** — its root *is* the `.lfbridge` area (§2).
 * [os_open.mdx](./os_open.mdx) — the neighboring localhost-only viewer action; unrelated to the network,
   but shares the viewer's action surface.
 * [ai_credentials.mdx](./ai_credentials.mdx) — the **credential resolution order** (config → env → the
@@ -124,17 +127,28 @@ The two-tab panel, the ✓ presence markers, and the transcription-preferring de
 
 ---
 
-## 2. Where the description is stored — inside the repo/storage `.lfbridge/`, path-mirrored, extension APPENDED (LOCKED — supersedes the earlier beside-media layout)
+## 2. Where the description is stored — inside the owning root's tracking area, path-mirrored, extension APPENDED (LOCKED — supersedes the earlier beside-media layout)
 
 The description does **not** live in the Local state dir, there is **no** `.lfbridge/analysis/`
 directory for it, and — as of this revision — it does **not** sit loose next to the media either. Exactly
 like the transcript ([Transcribe.mdx §3](./Transcribe.mdx), the authoritative template), it lives **inside
-the owning repo/storage's own `.lfbridge/` tracking directory**, in a **path-mirrored hierarchy**, under
-the media's **full filename (extension kept)** with **`.ai_description` appended** as a **second**
-extension:
+the owning root's own tracking area**, in a **path-mirrored hierarchy**, under the media's **full filename
+(extension kept)** with **`.ai_description` appended** as a **second** extension.
+
+> **Which tracking area — the storage-KIND rule (owned by [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)).**
+> `.lfbridge/` exists **only inside a working git repo**, where LFB is a **guest** and quarantines its files
+> under one hidden directory. A **dedicated LFB file repo** — the Personal / Company / Community **SDL
+> storage** — has **no `.lfbridge/` directory at all**: the SDL repo root **is** the `.lfbridge` area. That
+> policy spec **owns** the rule; this spec applies it, identically to the transcript.
+>
+> | Storage kind | Example root | The description lands at |
+> | --- | --- | --- |
+> | **`repo`** — a working git repo (Git Storage) | `~/BGit/Bryan_git/charlie-kirk/` | `<root>/.lfbridge/<rel-dir>/<name.ext>.ai_description` |
+> | **`personal` / `company` / `community`** — an SDL file repo | `~/BGit/Bryan_git/personal_large_files_bridge/` | `<root>/<rel-dir>/<name.ext>.ai_description` (**no** `.lfbridge/`) |
 
 ```
-<placement root>/
+WORKING GIT REPO (LFB is a guest → one hidden .lfbridge/ corner)
+<repo>/
 ├── render/
 │   └── skyline.mp4                              ← the real media file (untouched, still in the working tree)
 └── .lfbridge/
@@ -142,28 +156,42 @@ extension:
         └── skyline.mp4.ai_description           ← the generated description: same relative path under
                                                     .lfbridge/, full filename (skyline.mp4) with
                                                     .ai_description APPENDED
+
+SDL FILE REPO (a repo that exists ONLY for LFB → the root IS the .lfbridge area)
+~/BGit/Bryan_git/personal_large_files_bridge/
+└── _Mirror/
+    └── Politics/
+        └── x.mp4.ai_description                 ← NO .lfbridge/ segment — the mirror hangs off the root
 ```
 
-For a file at **`render/skyline.mp4`** the description is written to
-**`<placement root>/.lfbridge/render/skyline.mp4.ai_description`** — the media's relative directory
-mirrored under `.lfbridge/`, the full filename kept, `.ai_description` **appended** (**not** substituted).
-(Example: `TheFunnyVideo.mp4` → `.lfbridge/…/TheFunnyVideo.mp4.ai_description`.) The `.ai_description`
-token is a single constant — `AI_DESCRIPTION_EXT` — **appended**, never replacing the original extension.
+For a **working-repo** file at **`render/skyline.mp4`** the description is written to
+**`<repo>/.lfbridge/render/skyline.mp4.ai_description`** — the media's relative directory
+mirrored under the tracking base, the full filename kept, `.ai_description` **appended** (**not**
+substituted). (Example: `TheFunnyVideo.mp4` → `.lfbridge/…/TheFunnyVideo.mp4.ai_description`.) In an **SDL**
+the same file resolves to **`<sdlRoot>/render/skyline.mp4.ai_description`** — same mirroring, same appended
+extension, **no `.lfbridge/` segment**. The `.ai_description` token is a single constant —
+`AI_DESCRIPTION_EXT` — **appended**, never replacing the original extension.
 
 The **placement root** and the media's mirrored relative hierarchy are resolved **exactly like
 transcription — by the shared ordered placement rule** ([Transcribe.mdx §3.4](./Transcribe.mdx), the
 authoritative spec): walk **up** to the nearest ancestor carrying `storage.yaml` / `.lfbridge/` / `.git/`
-(the artifact lands at `<root>/.lfbridge/<rel-dir>/<name.ext>.ai_description`); else route to the **owning
-storage's dedicated Git repo** when enabled (mirroring the file's hierarchy under that repo's `.lfbridge/`
-— `<dedicatedRepo>/.lfbridge/<rel-dir>/<name.ext>.ai_description`, **committed** there); else the owning
-storage's own root (`<storageRoot>/.lfbridge/<rel-dir>/<name.ext>.ai_description`); else the **first-time
-setup wizard** ([Transcribe.mdx §3.5](./Transcribe.mdx)) when no Personal storage exists; else, as a last
-resort, a `.lfbridge/` created in the media's **own directory**
-(`<mediaDir>/.lfbridge/<name.ext>.ai_description`) — never loose beside the media. **Get AI details / AI
+(the artifact lands at `<trackingBase(root)>/<rel-dir>/<name.ext>.ai_description`); else route to the
+**owning storage's dedicated Git repo** when enabled (mirroring the file's hierarchy under **that repo's
+root** — `<dedicatedRepo>/<rel-dir>/<name.ext>.ai_description`, **committed** there, with **no `.lfbridge/`
+segment**, because a dedicated LFB file repo **is** an SDL); else the owning storage's own root
+(`<storageRoot>/<rel-dir>/<name.ext>.ai_description` for an SDL-kind storage; `.lfbridge/`-prefixed only when
+that root is a working repo); else the **first-time setup wizard** ([Transcribe.mdx §3.5](./Transcribe.mdx))
+when no Personal storage exists; else, as a last resort, a `.lfbridge/` created in the media's **own
+directory** (`<mediaDir>/.lfbridge/<name.ext>.ai_description` — that directory is not an SDL, so the
+working-repo branch applies) — never loose beside the media. Because **every SDL also carries its own
+`.git/`**, the walk-up must classify the root by **storage kind first** and only then fall back to "has
+`.git/` → working repo" — the kind **wins** over the presence of `.git/`
+([artifact_placement_policy.mdx §0.2](./artifact_placement_policy.mdx)). **Get AI details / AI
 description is one of the actions that triggers the first-time wizard**, and it consults placement
 (`needsSetup`) before it runs. Pasted `~/…` paths are home-expanded first (Transcribe.mdx §3.6).
 
-> **Why `.lfbridge/` (and not beside the media).** `.lfbridge/` is **committed and travels with the repo**
+> **Why the tracking area (and not beside the media).** That area — the working repo's `.lfbridge/`, or an
+> SDL's root — is **committed and travels with the repo**
 > ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)), so the description is **version-controlled and
 > synced across the user's computers by git** — generated once on one computer and reused everywhere —
 > while the media working tree stays **clean** (no loose `.ai_description` files scattered next to videos).
@@ -177,7 +205,9 @@ description is one of the actions that triggers the first-time wizard**, and it 
 > `skyline.mov` → `.lfbridge/…/skyline.mov.ai_description` are **distinct files**. The earlier layout's
 > accepted "second run overwrites the first" caveat is therefore **retired** — appending the extension is
 > precisely what fixes it. A tool that wants a media file's description computes the path deterministically:
-> `join(root, ".lfbridge", relDir, mediaFilename + ".ai_description")`.
+> `join(trackingBaseDir(root), relDir, mediaFilename + ".ai_description")` — where `trackingBaseDir()` yields
+> `<root>/.lfbridge` for a working repo and `<root>` for an SDL. It **never** hard-codes `".lfbridge"` into
+> the join, which would put a phantom segment into every SDL path.
 
 ### 2.1 The YAML shape — a self-contained `done` record
 
@@ -205,16 +235,22 @@ generate pane rather than an empty box.
 ### 2.2 The Storage table indicator
 
 The **Storage file table's `analysis: ["description"]` indicator lights up** the moment the
-`.ai_description` artifact exists under `.lfbridge/` for the media (computed deterministically from the
-media path) — one source of truth for "this file has a description," shared by the viewer tab and the
-storage table (which detects the path-mirrored artifact under `.lfbridge/` rather than a YAML under
-`.lfbridge/analysis/`). Because the artifact lives **inside the committed `.lfbridge/`** in every placement
-case, generating it injects **no** git-ignore line — the old **`*.ai_description` nudge is retired** (the
+`.ai_description` artifact exists under the owning root's **tracking base** for the media (computed
+deterministically from the media path via `trackingBaseDir()`, so it looks under `.lfbridge/` in a working
+repo and at the **root** in an SDL) — one source of truth for "this file has a description," shared by the
+viewer tab and the storage table (which detects the path-mirrored artifact directly under that base rather
+than a YAML under an `analysis/` sub-directory). Because the artifact lives **inside the committed tracking
+area** in every placement case, generating it injects **no** git-ignore line — the old
+**`*.ai_description` nudge is retired** (the
 same retirement transcription made for `*.transcription`); the small text artifact is committed and travels
 with the repo, while the multi-GB media stays git-ignored and rides IPFS.
 
-Resolving the description path via the shared ordered placement rule, reading back a done description, and writing the `.ai_description` artifact under `.lfbridge/` are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `resolveDescriptionPath()` / `readDescription()` / `describeOne()` (artifact path via `lfbridgeArtifactPath(root, relPath)` = `join(root, ".lfbridge", relPath) + AI_DESCRIPTION_EXT` in `storage/artifact-placement.service.ts`, where `AI_DESCRIPTION_EXT` is **appended**, not substituted).
+Resolving the description path via the shared ordered placement rule, reading back a done description, and writing the `.ai_description` artifact under the resolved tracking base are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `resolveDescriptionPath()` / `readDescription()` / `describeOne()` (artifact path via `lfbridgeArtifactPath(root, rel, ext)` = `join(trackingBaseDir(root), rel) + AI_DESCRIPTION_EXT` in `storage/artifact-placement.service.ts`, where `AI_DESCRIPTION_EXT` is **appended**, not substituted).
+Deciding the base that path hangs off — `<root>/.lfbridge` for kind `repo`, `<root>` itself for an SDL — is the single choke point every LFB writer resolves through (none joins `LFBRIDGE_DIR` directly), implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir(root, type?)` / `usesLfbridgeDir(type)` / `resolveStorageType(root)`.
+Migrating a pre-existing SDL `.lfbridge/` up to the root (with a read-fallback to the old path until migrated, so no description is reported missing or re-generated — and re-billed to a provider — mid-migration) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/migrate-sdl-lfbridge.ts` — `migrateSdlLfbridge()`.
 
 The storage-table indicator that detects the `.ai_description` artifact is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `analysisOutputs()`.
@@ -748,7 +784,7 @@ with a **blue** "done" fill because it is a status/action indicator, not a store
 
 | State | When | Fill | Edge | Glyph |
 | --- | --- | --- | --- | --- |
-| **Done** | The file **has an AI description** — a `.ai_description` artifact exists under `.lfbridge/` (§2). | **solid blue** (`--lfb-pin`, the same done-blue Transcribe uses) | none — **white** glyph | **white** |
+| **Done** | The file **has an AI description** — a `.ai_description` artifact exists under the owning root's tracking base (§2). | **solid blue** (`--lfb-pin`, the same done-blue Transcribe uses) | none — **white** glyph | **white** |
 | **Could be AI-described** | The file is an **image or video with no description yet** — exactly the [What-Can-Be-AI-Described engine](./describe_calc_engine.mdx)'s candidate. | **~99% white / ~1% tint** wash | **normal-thickness "actionable" edge** (`--lfb-decision-on`, the warm red/orange the product owner calls **red**) | red/orange |
 | **Not applicable** | The file is **not** an image/video (audio, text, other). | **white** | **very thin, very-light-grey** (hairline) | faint grey |
 
@@ -956,10 +992,12 @@ Processing view) is the composition of the code cited in §3.3.1, §12.4, §12.6
 ## 13. Where descriptions land — the shared 3-way placement radios (LOCKED — cross-reference)
 
 **Where** a `.ai_description` artifact is written is **not** decided here — §2 gives the resolved path shape
-(`<root>/.lfbridge/<rel-dir>/<name.ext>.ai_description`), and the **policy** that chooses the placement root
-is owned by [artifact_placement_policy.mdx](./artifact_placement_policy.mdx): both `<rel>.transcription`
-and `<rel>.ai_description` are **Category-A content artifacts** that live in the working repo's committed
-`.lfbridge/` and travel with the repo, so `<rel>.ai_description` follows **the same placement resolution**
+(`<trackingBase>/<rel-dir>/<name.ext>.ai_description`), and the **policy** that chooses the placement root —
+**and** the storage-KIND rule that decides whether that base carries a `.lfbridge/` segment at all (§0: a
+working repo does; an SDL never does) — is owned by
+[artifact_placement_policy.mdx](./artifact_placement_policy.mdx): both `<rel>.transcription`
+and `<rel>.ai_description` are **Category-A content artifacts** that live in the owning root's committed
+tracking area and travel with the repo, so `<rel>.ai_description` follows **the same placement resolution**
 as `<rel>.transcription`. (There is **no** content threshold that redirects LFB's tracking state into the
 repo — that model is retired; tracking state always lives in Local Storage.) The user-facing control is the **3-way placement radios**
 ([repo_settings.mdx](./repo_settings.mdx) + [placement_radios.mdx](./placement_radios.mdx)):
@@ -967,13 +1005,15 @@ repo — that model is retired; tracking state always lives in Local Storage.) T
 * AI description **reuses the identical radios** transcription uses — there is **no** separate
   "where do descriptions go" control. A repo/storage's one placement choice governs **both** its
   `.transcription` and its `.ai_description` artifacts, because both are committed tracking artifacts under
-  the same `.lfbridge/` hierarchy (§2).
+  the **same** kind-resolved tracking base (§2).
 * The three choices, the default, and the migration behavior are specified in
   [placement_radios.mdx](./placement_radios.mdx); this spec defers to it wholesale and only asserts that
-  **descriptions obey the same radio the transcripts obey**.
+  **descriptions obey the same radio the transcripts obey**. The `lfbridge` choice is still **named**
+  `lfbridge` (a frozen wire literal) in an **SDL**, where it resolves to the **root** with no `.lfbridge/`
+  segment ([artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)).
 
 Resolving a `.ai_description` path through the shared placement policy is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveArtifactPlacement()` / `lfbridgeArtifactPath(root, relPath)` (appends `AI_DESCRIPTION_EXT`), the **same** resolver transcription's `resolveTranscriptPath()` calls.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveArtifactPlacement()` / `lfbridgeArtifactPath(root, rel, ext)` / `artifactPathForPlacement(root, rel, ext, placement)` (appends `AI_DESCRIPTION_EXT` to `trackingBaseDir(root)`-based paths), the **same** resolver transcription's `resolveTranscriptPath()` calls.
 
 ---
 
@@ -998,15 +1038,25 @@ external-provider opt-in).
    Transcription. The default tab **prefers Transcription** when present, else the first tab with content,
    else the first tab.
 2. AI description works on **image + video only** (audio → transcription). The description is stored
-   **inside the owning repo/storage's `.lfbridge/`**, path-mirrored, under the media's **full filename with
-   `.ai_description` appended** (`render/skyline.mp4` → `.lfbridge/render/skyline.mp4.ai_description`) —
-   resolved by the shared ordered placement rule, **no** `.lfbridge/analysis/` and **no** `.transcribe/`
-   directory. It is a self-contained `done` YAML record
+   **inside the owning root's committed tracking area**, path-mirrored, under the media's **full filename
+   with `.ai_description` appended** — resolved by the shared ordered placement rule, **no** `analysis/`
+   sub-directory and **no** `.transcribe/` directory. It is a self-contained `done` YAML record
    `{ source, status, engine, provider, generated, kind, description }` — so the Storage table's
-   **`description` indicator** lights up from that artifact's presence. Because it lives in the committed
-   `.lfbridge/`, it is **committed and travels with the repo** in every placement case — **no**
+   **`description` indicator** lights up from that artifact's presence. Because it lives in that committed
+   area, it is **committed and travels with the repo** in every placement case — **no**
    `*.ai_description` git-ignore line is injected (that nudge is retired); appending the extension (rather
    than replacing it) means two files differing only by extension no longer collide.
+2a. **The base is keyed on storage KIND** ([artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx),
+   the owner of the rule), resolved through the single choke point `trackingBaseDir(root)` — **no** code path
+   joins `.lfbridge` directly:
+   * **Working git repo** (kind `repo`, the default) → **keeps** `.lfbridge/`:
+     `render/skyline.mp4` → `<repo>/.lfbridge/render/skyline.mp4.ai_description`.
+   * **Dedicated LFB file repo** (an SDL — kind `personal` / `company` / `community`) → **no `.lfbridge/`
+     at all**, the mirror hangs off the **root**: `~/_Mirror/…/x.mp4` →
+     `~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/…/x.mp4.ai_description` (**not**
+     `…/personal_large_files_bridge/.lfbridge/_Mirror/…`).
+   * An SDL's own `.git/` **never** demotes it to a working repo — the walk-up classifies by **type first**,
+     then falls back to "has `.git/` → working repo".
 3. Providers are the pluggable adapters **Gemini / OpenAI / Grok**; **only Gemini describes video**;
    selection is requested → configured-default → first available that supports the kind (preference Gemini,
    OpenAI, Grok). Keys resolve **config → env → (Gemini only) the shared `~/.config/GoogleCloud/apikey.yaml`**
@@ -1111,17 +1161,31 @@ external-provider opt-in).
   LOCKED:
   (§1) Two viewer tabs: Transcription (audio+video) · AI description (image+video). ✓ = content exists.
        Default-tab prefers Transcription, else first-with-content, else first. MediaAnalysis in MediaViewer.
-  (§2) Store INSIDE the owning repo/storage's .lfbridge/, PATH-MIRRORED, extension APPENDED — NO
-       .lfbridge/analysis/ and NO .transcribe/ dir: <root>/.lfbridge/<rel-dir>/<name.ext>.ai_description
-       (render/skyline.mp4 -> .lfbridge/render/skyline.mp4.ai_description). Self-contained done YAML
-       {source,status:done,engine,provider,generated,kind,description}. AI_DESCRIPTION_EXT constant
-       APPENDED (not substituted) in artifact-placement.service.ts via lfbridgeArtifactPath(root,relPath)
-       = join(root,".lfbridge",relPath)+EXT. tracking.service.ts analysisOutputs detects the
-       .ai_description artifact under .lfbridge/ -> Storage table "description" indicator. Placement root =
-       shared ordered rule (nearest storage.yaml/.lfbridge/.git, else dedicated repo's .lfbridge/, else
-       storage root's .lfbridge/, else a .lfbridge/ in the media's own dir). Supersedes storages.mdx §6's
-       description.yaml skeleton. Committed & travels with repo — NO *.ai_description git-ignore nudge
-       (retired). Append-not-replace => files differing only by ext no longer collide.
+  (§2) Store INSIDE the owning root's COMMITTED tracking area, PATH-MIRRORED, extension APPENDED — NO
+       analysis/ sub-dir and NO .transcribe/ dir: <trackingBase>/<rel-dir>/<name.ext>.ai_description.
+       Self-contained done YAML {source,status:done,engine,provider,generated,kind,description}.
+       AI_DESCRIPTION_EXT constant APPENDED (not substituted) in artifact-placement.service.ts via
+       lfbridgeArtifactPath(root,rel,ext) = join(trackingBaseDir(root),rel)+EXT (also
+       artifactPathForPlacement). tracking.service.ts analysisOutputs detects the .ai_description artifact
+       under that base -> Storage table "description" indicator. Placement root = shared ordered rule
+       (nearest storage.yaml/.lfbridge/.git, else the dedicated SDL repo's ROOT, else the storage root,
+       else a .lfbridge/ in the media's own dir). Supersedes storages.mdx §6's description.yaml skeleton.
+       Committed & travels with repo — NO *.ai_description git-ignore nudge (retired). Append-not-replace
+       => files differing only by ext no longer collide.
+  (§2/§2a) THE BASE IS KEYED ON STORAGE KIND — rule OWNED by artifact_placement_policy.mdx §0, referenced
+       here, never re-litigated. trackingBaseDir(root, type?) / usesLfbridgeDir(type) in
+       storage-type.service.ts is the SINGLE CHOKE POINT; NO writer joins LFBRIDGE_DIR directly.
+       - WORKING GIT REPO (kind `repo`, the DEFAULT) → KEEPS .lfbridge/ (LFB is a guest → quarantine in one
+         hidden corner): <repo>/.lfbridge/render/skyline.mp4.ai_description
+       - DEDICATED LFB FILE REPO / SDL (personal|company|community) → NO .lfbridge/ AT ALL, the root IS the
+         .lfbridge area: ~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/…/x.mp4.ai_description
+         NOT …/personal_large_files_bridge/.lfbridge/_Mirror/… (the OLD, now-WRONG pattern).
+       An SDL always has its own .git/ — the KIND WINS over the presence of .git/, so the walk-up MUST
+       classify by TYPE BEFORE falling back to "has .git/ → working repo". A pre-existing SDL .lfbridge/ is
+       migrated to the root by migrate-sdl-lfbridge.ts (migrateSdlLfbridge) with a READ-FALLBACK until
+       migrated — load-bearing here: a false "missing" would RE-BILL a provider for a description we already
+       have. UNCHANGED by that decision: the APPEND-the-ext naming, the path-MIRRORING itself, and the
+       placement radio's 3 choices — only what `lfbridge` RESOLVES TO in an SDL changes (the root).
   (§3) Adapters gemini/openai/grok. VIDEO = Gemini ONLY (inline base64). Keys config->env. 18MB inline cap.
        selectAdapter: requested->config default->first available supporting the kind (pref Gemini,OpenAI,Grok).
   (§3.3) COMPRESS-TO-FIT: files >17.5MB are transcoded to a TEMP copy that fits (original never touched),

@@ -225,7 +225,9 @@ The header action link **"Show what could be transcribed"** runs the
 [What-Can-Be-Transcribed Calc Engine](./transcribe_calc_engine.mdx) across the storages and **adds
 transcribe slugs** to the list:
 
-* Click → the engine walks each storage for **video/audio without a transcription artifact under `.lfbridge/`**, writes one
+* Click → the engine walks each storage for **video/audio without a transcription artifact at its resolved
+  placement target** (a working repo's `.lfbridge/`; an SDL's **root** — an SDL has no `.lfbridge/`,
+  [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)), writes one
   **transcribe batch** per storage, and the page shows a **transcribe slug** per storage that has any
   (e.g. Personal `58 videos + 13 audio`; 4 of 30 repos each get one).
 * The link shows a brief **"Looking…"** state while the (opt-in, heavier) scan runs; it is cancelable.

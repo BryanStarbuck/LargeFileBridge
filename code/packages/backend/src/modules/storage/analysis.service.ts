@@ -1,5 +1,6 @@
-// Per-file media analysis (storages.mdx §6). Writes the analysis outputs that still live as YAML under
-// `<storage root>/.lfbridge/analysis/<relpath>/`:
+// Per-file media analysis (storages.mdx §6). Writes the analysis outputs that still live as YAML under the
+// storage's TRACKING BASE — `<root>/.lfbridge/analysis/<relpath>/` in a working repo, `<root>/analysis/<relpath>/`
+// in an SDL, which has no `.lfbridge/` (artifact_placement_policy.mdx §0):
 //   * visuals_by_time.yaml   — time ranges × what's visually going on × story (video)
 //
 // Transcript and description are NO LONGER skeletoned here — they are SIDECARS beside the media
@@ -13,7 +14,8 @@ import YAML from "yaml";
 import { mediaKindForName, type CompressionRecord } from "@lfb/shared";
 import { log } from "../../shared/logging.js";
 
-const LFBRIDGE_DIR = ".lfbridge";
+import { trackingBaseDir } from "./storage-type.service.js";
+
 const ANALYSIS_DIR = "analysis";
 
 function isFile(abs: string): boolean {
@@ -45,7 +47,7 @@ export function analyzeFile(root: string, rel: string): string[] {
 
   // Visuals & action by time — video only. Transcript/description are sidecars (see file header).
   if (kind === "video") {
-    const outDir = path.join(root, LFBRIDGE_DIR, ANALYSIS_DIR, rel);
+    const outDir = path.join(trackingBaseDir(root), ANALYSIS_DIR, rel);
     fs.mkdirSync(outDir, { recursive: true });
     writeYaml(path.join(outDir, "visuals_by_time.yaml"), { ...base, segments: [] });
     outputs.push("visuals_by_time");
@@ -57,12 +59,12 @@ export function analyzeFile(root: string, rel: string): string[] {
 
 /**
  * Write the travelling compression record for a file (syncable_data_location.mdx §4.3) into the SDL at
- * `<root>/.lfbridge/analysis/<relpath>/compression.yaml`. Captures what the file WAS before compression
+ * `<root>/analysis/<relpath>/compression.yaml` (no `.lfbridge/` — §0). Captures what the file WAS before compression
  * (original name/extension + size) and the after (codec/size/ratio/at) so every computer that carries the
  * storage knows the file was compressed, from what, and by how much — without re-deriving anything.
  */
 export function writeCompressionRecord(root: string, rel: string, record: CompressionRecord): void {
-  const outDir = path.join(root, LFBRIDGE_DIR, ANALYSIS_DIR, rel);
+  const outDir = path.join(trackingBaseDir(root), ANALYSIS_DIR, rel);
   fs.mkdirSync(outDir, { recursive: true });
   writeYaml(path.join(outDir, "compression.yaml"), {
     source: record.source,

@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Community Storage
-description: The Community storage spec. The on-disk hierarchy a community subscription materializes to — one directory-based storage per community the user chooses to help. Each carries a storage.yaml with name + type: community + a community block (which community by stable id, the role = download/share/support, and community-scoped child properties like the publisher and the Block/Recommended/Full-backup budget mode). Its LFB tracking state (descriptor, fingerprint index, IPFS manifest, media-analysis outputs) lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ — machine-local, never committed beside the downloaded files (communities are download/share, so normally no sync-repo mirror). A user may belong to more than one community, so several community storages can coexist; the opted-in ones appear as children in the Storages left-bar tab. Community storages carry OTHER people's public files the user chose to download for themselves or share/rebroadcast to keep secure — always an explicit per-community opt-in, never a public gateway (charter). Pairs with communities.mdx (the discover/subscribe UI); sibling of storage_repo / storage_personal / storage_company; shares the storage.yaml schema and .lfbridge/ layout defined in storages.mdx.
+description: The Community storage spec. The on-disk hierarchy a community subscription materializes to — one directory-based storage per community the user chooses to help. Each carries a storage.yaml with name + type: community + a community block (which community by stable id, the role = download/share/support, and community-scoped child properties like the publisher and the Block/Recommended/Full-backup budget mode). Its LFB tracking state (descriptor, fingerprint index, IPFS manifest, media-analysis outputs) lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ — machine-local, never committed beside the downloaded files (communities are download/share, so normally no sync-repo mirror). A user may belong to more than one community, so several community storages can coexist; the opted-in ones appear as children in the Storages left-bar tab. Community storages carry OTHER people's public files the user chose to download for themselves or share/rebroadcast to keep secure — always an explicit per-community opt-in, never a public gateway (charter). A community storage is a DEDICATED LFB FILE REPO (an SDL), so it has NO .lfbridge/ directory at all — .lfbridge/ is a working-repo-only concept and an SDL root IS the .lfbridge area (artifact_placement_policy.mdx §0); anything it does write beside its content sits at the root. Pairs with communities.mdx (the discover/subscribe UI); sibling of storage_repo / storage_personal / storage_company; shares the storage.yaml schema and the tracking layout defined in storages.mdx §4.
 ---
 
 # LargeFileBridge — Community Storage
@@ -11,14 +11,19 @@ per community the user chooses to **help**. Where [Personal](./storage_personal.
 **other people's public files** the user opted into carrying — to **download** for themselves or to
 **share / rebroadcast** and help keep secure.
 
-Read the shared model first: the storage family, the `storage.yaml` schema, the `.lfbridge/` tracking
+Read the shared model first: the storage family, the `storage.yaml` schema, the tracking
 layout, cloud clones, and media analysis are defined once in **[storages.mdx](./storages.mdx)**. This spec
 covers only what is **specific to community storage**.
 
 Siblings this builds on and does not repeat:
 
-* [storages.mdx](./storages.mdx) — the umbrella: `storage.yaml` (§3), `.lfbridge/` (§4), clones (§5),
+* [storages.mdx](./storages.mdx) — the umbrella: `storage.yaml` (§3), the tracking layout (§4), clones (§5),
   media analysis (§6).
+* [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx) — **owns the rule** that decides
+  whether a root uses a `.lfbridge/` directory at all. A community storage is a **dedicated LFB file repo**
+  (an **SDL**), so it has **no `.lfbridge/`**: `.lfbridge/` is a **working-repo-only** concept, and an SDL
+  root itself *is* the `.lfbridge` area. (Most of a community's state lives in **Local Storage** anyway —
+  §1.)
 * [Communities](./communities.mdx) — the **discover/subscribe UI**: a community is a publisher of large
   public files; subscribing has two intents — **Get** (consume) or **Support** (rebroadcast/pin), against
   a per-community Block / Recommended / Full-backup budget. **A community storage is what that
@@ -41,6 +46,12 @@ Siblings this builds on and does not repeat:
 ```
 
 * **One root per community.** A user helping three communities has three such storages.
+* **No `.lfbridge/` — anywhere.** A community storage is a **dedicated LFB file repo** (an **SDL**), and
+  `.lfbridge/` is a **working-repo-only** concept (it exists so LFB, a *guest* in someone's project repo,
+  stays in one hidden corner). An SDL root **is** the `.lfbridge` area, so nothing is nested under such a
+  segment here — the rule is owned by
+  [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx). In practice a community's state is
+  in **Local Storage** regardless (next bullet); the root carries only the carried content.
 * **Tracking state lives in Local Storage, not beside the downloaded files.** A community's `files.yaml`,
   `manifest.yaml`, `analysis/`, and its descriptor live in the machine-local state root
   `~/T/_large_files_bridge/repos/<repoKey>/` ([storage_local.mdx](./storage_local.mdx),
@@ -84,7 +95,8 @@ clones:
 ## 3. Media analysis + cloud clones
 
 Community storage can produce the [storages.mdx §6](./storages.mdx) **media-analysis** outputs (transcript
-/ description / visuals-by-time) into `.lfbridge/analysis/` for the videos it carries — useful for search
+/ description / visuals-by-time) into its Local-Storage `analysis/` (§1,
+`~/T/_large_files_bridge/repos/<repoKey>/analysis/`) for the videos it carries — useful for search
 and re-use. Cloud **clones** are supported ([storages.mdx §5](./storages.mdx)) but usually left off, since
 the point of a community storage is IPFS rebroadcast, not a private mirror.
 
@@ -123,6 +135,8 @@ the point of a community storage is IPFS rebroadcast, not a private mirror.
   opt-in, IPFS rebroadcast within budget, never a public gateway (charter). LFB tracking state (descriptor,
   files.yaml, manifest.yaml, analysis/) lives in LOCAL STORAGE ~/T/_large_files_bridge/repos/<repoKey>/,
   machine-local, NEVER committed beside the downloaded content; communities are download/share so normally no
-  sync-repo mirror (artifact_placement_policy.mdx). Pairs with communities.mdx (discover/subscribe); opted-in
+  sync-repo mirror (artifact_placement_policy.mdx). LOCKED: a community storage is a DEDICATED LFB FILE REPO
+  (an SDL) → NO .lfbridge/ AT ALL; .lfbridge/ is working-repo-only and an SDL root IS the .lfbridge area
+  (rule owned by artifact_placement_policy.mdx §0 — reference it, do not restate). Pairs with communities.mdx (discover/subscribe); opted-in
   ones show as children of the Storages tab. Shared model in storages.mdx.
 -->

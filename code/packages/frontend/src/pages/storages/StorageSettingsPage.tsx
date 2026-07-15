@@ -1,6 +1,7 @@
 // Per-storage settings (storage_settings.mdx §7) — reached from the gear on the storage detail header,
 // the storage row ⋮ kebab / right-click, and the detail ⋮ more-menu. Two controls: keep the hidden
-// .lfbridge/ tracking directory on THIS computer + where it goes (§3), and three independent backing
+// tracking area on THIS computer + where it goes (§3 — the .lfbridge/ checkbox + relocate picker are
+// `repo`-ONLY; an SDL has no .lfbridge/ and shows a read-only root line instead), and three independent backing
 // locations — a dedicated Git repo (preferred), a Google Drive location, and a Dropbox directory — each
 // ON/OFF with its own path (§4). Loads via GET, saves via PATCH; the directories themselves appear on
 // the next pin pass (§6). Matches RepoSettingsPage's Section/Toggle styling.
@@ -54,21 +55,34 @@ export function StorageSettingsPage() {
         />
       </Section>
 
-      {/* §3 the hidden tracking directory */}
-      <Section title="Hidden tracking directory">
-        <Toggle
-          label="Keep a hidden .lfbridge/ directory for this storage on this computer"
-          checked={s.lfbridge.enabled}
-          onChange={(v) => patch.mutate({ lfbridge: { enabled: v } })}
-        />
-        <PathField
-          label="Location"
-          value={s.lfbridge.path}
-          placeholder={s.lfbridge.defaultPath}
-          disabled={!s.lfbridge.enabled}
-          onCommit={(v) => patch.mutate({ lfbridge: { path: v } })}
-        />
-      </Section>
+      {/* §3 the tracking area. The `.lfbridge/` control is `repo`-ONLY: a dedicated Large File Bridge file
+          repo (personal / company / community) has NO hidden .lfbridge/ — its root IS the tracking area
+          (artifact_placement_policy.mdx §0). So there is nothing to toggle or relocate for one, and offering
+          the control would name a folder the user will never find. */}
+      {s.type === "repo" ? (
+        <Section title="Hidden tracking directory">
+          <Toggle
+            label="Keep a hidden .lfbridge/ directory for this storage on this computer"
+            checked={s.lfbridge.enabled}
+            onChange={(v) => patch.mutate({ lfbridge: { enabled: v } })}
+          />
+          <PathField
+            label="Location"
+            value={s.lfbridge.path}
+            placeholder={s.lfbridge.defaultPath}
+            disabled={!s.lfbridge.enabled}
+            onCommit={(v) => patch.mutate({ lfbridge: { path: v } })}
+          />
+        </Section>
+      ) : (
+        <Section title="Tracking area">
+          <div className="text-sm text-neutral-600 dark:text-neutral-400">
+            This storage's root <strong>is</strong> its tracking area — a dedicated Large File Bridge file repo
+            has no hidden <code>.lfbridge/</code> directory.
+          </div>
+          <div className="mt-1 font-mono text-sm">{s.root}</div>
+        </Section>
+      )}
 
       {/* §4 backing locations */}
       <Section title="Backing locations" subtitle="Each is an extra, human-reachable copy of this storage.">

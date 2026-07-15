@@ -19,6 +19,11 @@ Read the shared model first; this spec does not restate it:
 
 * [storages.mdx](./storages.mdx) — the storage family, the `storage.yaml` descriptor (§3), the `.lfbridge/`
   tracking area (§4), and **the Storages left-bar tab and its derived children** (§2).
+* [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx) — the storage-**kind** rule that
+  decides where a root's LFB files land: a **working repo** (kind `repo`) keeps a hidden `.lfbridge/`; the
+  **company storage** this mapping auto-creates is an **SDL** — a dedicated LFB file repo with **no
+  `.lfbridge/` at all**, its `storage.yaml` and `devices/` sitting at the **root**. Relevant here because
+  the mapping's product is a company storage.
 * [storage_company.mdx](./storage_company.mdx) — the company storage this mapping **auto-creates**; owns the
   friendly display-name rename and the company sync repo.
 * [storage_personal.mdx](./storage_personal.mdx) — the default owner; owns the **"my personal accounts"** list.

@@ -38,6 +38,7 @@ import { startWatcher, stopWatcher } from "./modules/watcher/watcher.service.js"
 import { resolveStateDir } from "./config/state-dir.js";
 import { migrateSyncToPin } from "./config/migrate-sync-to-pin.js";
 import { migrateDecisionsToLedger } from "./config/migrate-decisions-to-ledger.js";
+import { migrateSdlLfbridge } from "./config/migrate-sdl-lfbridge.js";
 import { log } from "./shared/logging.js";
 
 async function bootstrapState(): Promise<void> {
@@ -120,6 +121,13 @@ async function main(): Promise<void> {
   // `decisions:` enum (decisions.mdx §13). Runs AFTER the sync→pin migration (it reads pin/r/<repo>/config.yaml)
   // and is consent-aware + best-effort (never throws).
   await migrateDecisionsToLedger();
+
+  // One-time, idempotent on-disk migration of every SDL's `.lfbridge/` up to its ROOT
+  // (artifact_placement_policy.mdx §0.3): a dedicated LFB file repo has NO `.lfbridge/` — its root IS the
+  // tracking area. Merges rather than clobbers, `git mv`s so history follows, and never throws. Runs BEFORE
+  // the app serves anything so readers see the migrated layout; whatever it can't move is still found by the
+  // legacy read-fallback, so a partial run degrades to an extra path segment, never a missing artifact.
+  migrateSdlLfbridge();
 
   await bootstrapState();
   const cfg = getAppConfig();

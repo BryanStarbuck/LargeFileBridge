@@ -175,43 +175,58 @@ repos/*/decisions.yaml  merge=union
 
 This backbone drives a **sync repo** — a dedicated `*_large_files_bridge` company/Personal tracking repo
 whose *whole reason to exist* is to carry LFB's **Category-B** tracking state
-([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)). Its committed payload is the
-`repos/<repoKey>/` subtrees (manifest, decisions, sidecars, history, `repo_storage.yaml`) plus the SDL's own
-**device registry** (`.lfbridge/devices/<device>.yaml`, [devices.mdx](./devices.mdx)). That payload must be
-committable — the invariant below exists because it was **violated in production** and it broke the entire
-two-computer story:
+([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)). Because a sync repo **is an SDL** — a
+dedicated LFB file repo — it has **no `.lfbridge/` directory at all**; its root *is* the `.lfbridge` area
+([artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)). So its committed payload sits at the
+**repo root**: the `repos/<repoKey>/` subtrees (manifest, decisions, sidecars, history, `repo_storage.yaml`)
+plus the SDL's own **root metadata** — the **device registry** (`<sdl>/devices/<device>.yaml`,
+[devices.mdx](./devices.mdx)), `storage.yaml`, `mapped_dirs.yaml`, `files.yaml`, `manifest.yaml`,
+`bookmarks.yaml`, and `analysis/`. That payload must be committable — the invariant below exists because it
+was **violated in production** and it broke the entire two-computer story:
 
-> **The defect.** The generic storages rule *"keep `.lfbridge/` git-ignored"* ([storages.mdx §4](./storages.mdx#4-lfbridge--the-hidden-per-storage-tracking-area))
-> was applied to **every** git-backed storage root, so LFB wrote a bare `.lfbridge/` line into the **sync
+> **The defect (provenance — do not lose this).** The generic storages rule *"keep `.lfbridge/`
+> git-ignored"* ([storages.mdx §4](./storages.mdx#4-where-a-storages-state-lives--the-kind-split-then-category-a-vs-category-b-locked)) was
+> applied to **every** git-backed storage root, so LFB wrote a bare `.lfbridge/` line into the **sync
 > repo's** `.gitignore`. That silently made `git add -A` stage **nothing** under `.lfbridge/`: each computer
 > wrote its `devices/<self>.yaml` to disk, committed only `.gitattributes`, and **pushed no device file at
 > all**. Two computers each pushed nothing about themselves, so **neither ever saw the other** — the symptom
 > "I'm not seeing my other computer."
+>
+> **What changed, and what did not.** Under [§0](./artifact_placement_policy.mdx) the sync repo no longer has
+> a `.lfbridge/` for that line to hit — but **the hazard did not go away, it moved**: an ignore rule that
+> swallows the SDL's **root metadata** or its **`devices/` directory** reproduces the exact same silent
+> failure. The lesson is unchanged; only the path it applies to is.
 
 The rule this locks in: **for a Git backbone, the sync repo's tracking text is the payload that must
 travel** ([storage_personal.mdx §1](./storage_personal.mdx#1-anatomy-of-the-personal-storage)) — only the
 big-file **bytes** are ignored, and those never live in the sync repo. So **before every commit** the
-backbone **removes a bare `.lfbridge/` ignore line**, healing a sync repo that a prior build (or the user)
-wrongly ignored so the device registry, `repos/<repoKey>/` subtrees, and analysis can be committed and
-pushed. This is a **design smell to hunt for**: any code path that git-ignores the very tracking text a Git
-backbone exists to carry.
+backbone **strips any ignore line that would swallow the SDL's committed tracking text** — its root metadata
+(`devices/`, `storage.yaml`, `mapped_dirs.yaml`, `files.yaml`, `manifest.yaml`, `bookmarks.yaml`,
+`analysis/`), its `repos/<repoKey>/` subtrees, and a **legacy bare `.lfbridge/` line** (still stripped: a
+not-yet-migrated SDL may hold content there until `migrateSdlLfbridge()` runs, §0.3). This heals a sync repo
+that a prior build (or the user) wrongly ignored. It is a **design smell to hunt for**: any code path that
+git-ignores the very tracking text a Git backbone exists to carry.
 
-> **A plain working code repo is the opposite case — and also never git-ignores `.lfbridge/`.** A `repo`-type
-> code repo is **never** a Git backbone for tracking state: its Category-B state goes to Local Storage (+ the
-> sync repo), **never** committed into the code repo. Its committed `.lfbridge/` now holds only the
-> **Category-A** content — transcripts + AI descriptions — that is *meant* to travel with the repo
-> ([artifact_placement_policy.mdx §1.1](./artifact_placement_policy.mdx)), so it too must never be
-> git-ignored. Both repo kinds keep `.lfbridge/` committed; they simply carry different payloads.
+> **A plain working code repo is the opposite case — and it never git-ignores `.lfbridge/`.** A `repo`-type
+> code repo is the one kind that **does** keep a `.lfbridge/` (§0: LFB is a guest there, so it quarantines
+> its files in one hidden corner). It is **never** a Git backbone for tracking state: its Category-B state
+> goes to Local Storage (+ the sync repo), **never** committed into the code repo. Its committed
+> `.lfbridge/` holds only the **Category-A** content — transcripts + AI descriptions — that is *meant* to
+> travel with the repo ([artifact_placement_policy.mdx §1.1](./artifact_placement_policy.mdx)), so it must
+> never be git-ignored either. Both kinds keep their tracking text **committed**; they simply put it in
+> different places (code repo → `.lfbridge/`; SDL → the root) and carry different payloads.
 
-Ensuring the tracking text is committable on every backbone commit (strip a bare `.lfbridge/` ignore) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.ensureSdlCommittable()` (called from `commitAndPush()` alongside `ensureMergeAttributes()`). The complementary fix — LFB no longer **adds** a `.lfbridge/` ignore for **any** storage: a company/Personal **sync repo** must commit its tracking payload, and a `repo`-type **code repo** commits its Category-A `.lfbridge/` content while its Category-B tracking state is written to Local Storage instead of the repo — is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `reconcileLfbridgeIgnore(root, type)` (now `unignoreLfbridge` for every type; Category-B never lands in a working repo), called from `ensureStorage()` and `ensureBackingLocations()`.
+Ensuring the tracking text is committable on every backbone commit (strip any ignore over the SDL's root metadata / `devices/` / `repos/`, plus a legacy bare `.lfbridge/` line) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.ensureSdlCommittable()` (called from `commitAndPush()` alongside `ensureMergeAttributes()`). The complementary fix — LFB no longer **adds** an ignore over its own tracking text for **any** storage: a company/Personal **sync repo** must commit its root payload, and a `repo`-type **code repo** commits its Category-A `.lfbridge/` content while its Category-B tracking state is written to Local Storage instead of the repo — is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `reconcileLfbridgeIgnore(root, type)` (now `unignoreLfbridge` for every type; Category-B never lands in a working repo), called from `ensureStorage()` and `ensureBackingLocations()`. Which base directory a root's tracking text hangs off — and therefore what must stay committable — is resolved by storage **kind** in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir(root, type?)` / `usesLfbridgeDir(type)`.
 
 > **The user-facing Git Ignore action honors this too (LOCKED).** The **Git Ignore dialog**
 > ([git_ignore.mdx](./git_ignore.mdx)) — the deliberate, user-driven way to git-ignore big files so they
 > pin over IPFS instead of committing — writes **anchored, repo-root-relative** lines and **refuses to emit
-> any line that would ignore a `.lfbridge/` path**, as defense-in-depth against re-introducing this defect
-> from the UI. It only ever **adds** big-file ignore lines; the committed `.lfbridge/` text it never touches
-> ([git_ignore.mdx §5.3–§5.4](./git_ignore.mdx)).
+> any line that would ignore LFB's own committed tracking text**: a `.lfbridge/` path in a **working repo**,
+> or the **SDL root metadata** (`devices/`, `storage.yaml`, `mapped_dirs.yaml`, `files.yaml`,
+> `manifest.yaml`, `bookmarks.yaml`, `analysis/`, `repos/`) in a **sync repo**. That is defense-in-depth
+> against re-introducing this defect from the UI. It only ever **adds** big-file ignore lines; LFB's
+> committed text it never touches ([git_ignore.mdx §5.3–§5.4](./git_ignore.mdx)).
 
 ### 4.3 The strategy, and the fallback when git truly cannot resolve
 
@@ -382,10 +397,15 @@ Enforcing that Git operations only ever target a user-configured storage backbon
        one working dir.
   (§4) AUTOMATIC MERGE: self-owned per-device files don't collide; shared append-mostly Category-B lists
        (repos/<repoKey>/manifest.yaml + decisions.yaml, per artifact_placement_policy.mdx) get .gitattributes
-       merge=union; genuine conflict → merge --abort + surface, never clobber. §4.2.1: the sync repo's
-       committed tracking payload (repos/<repoKey>/ + .lfbridge/devices/) must never be git-ignored (defect
-       fix); a working code repo's .lfbridge/ holds only committed Category-A content — also never ignored;
-       Category-B never lands in a working repo (reconcileLfbridgeIgnore now unignores every type).
+       merge=union; genuine conflict → merge --abort + surface, never clobber. §4.2.1: a sync repo IS an SDL,
+       so it has NO .lfbridge/ (artifact_placement_policy.mdx §0 owns that rule) — its committed tracking
+       payload sits at the ROOT (repos/<repoKey>/ + devices/ + storage.yaml/mapped_dirs.yaml/files.yaml/
+       manifest.yaml/bookmarks.yaml/analysis/) and must never be git-ignored (defect fix: a bare .lfbridge/
+       ignore once staged NOTHING, so two computers pushed no device file and never saw each other — the
+       hazard MOVED to the SDL's root metadata/devices/, it did not go away); a legacy bare .lfbridge/ line is
+       still stripped for a not-yet-migrated SDL. A working code repo's .lfbridge/ holds only committed
+       Category-A content — also never ignored; Category-B never lands in a working repo
+       (reconcileLfbridgeIgnore now unignores every type; base resolved by kind via trackingBaseDir()).
   (§5) URL creds via OS credential helper + GIT_TERMINAL_PROMPT=0; auth fail → surfaced problem, IPFS keeps
        going; no plaintext secrets, no prompt.
   (§6) FIXED cycle per pass: resolve → fetch → merge → reconcile/pin to grafted paths → stage self-owned +

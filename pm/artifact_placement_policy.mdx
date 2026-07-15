@@ -133,7 +133,7 @@ in code:
 * **A mapped-dir key that collides with an SDL metadata name.** Because the SDL mirror now hangs off the root,
   a mapped dir keyed `devices`, `analysis`, `files.yaml`, `storage.yaml`, `manifest.yaml`, `bookmarks.yaml`, or
   `mapped_dirs.yaml` would shadow the SDL's own metadata. These names are **reserved** at the SDL root: the
-  mapped-dir add/rename validator rejects a key that matches one ([storage_settings.mdx §4](./storage_settings.mdx)),
+  mapped-dir add/rename validator rejects a key that matches one ([storage_settings.mdx §4a.1](./storage_settings.mdx#4a1-reserved-mapped-dir-keys--the-validator-this-page-owns-locked)),
   with a message naming the reserved word. Existing mapped dirs are checked on load and surfaced as a storage
   warning rather than silently overwriting metadata.
 * **A pre-existing `.lfbridge/` inside an SDL** (a repo written by an older LFB). It is **migrated** — the

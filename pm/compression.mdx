@@ -954,8 +954,12 @@ The Continue toast is emitted from the plan in `CompressInsideDialog.tsx` (`onCo
   are ALL Category B — LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/... ALWAYS (via
   resolveTrackingRoot in tracking-root.service.ts), additionally mirrored to <syncRepo>/repos/<repoKey>/...
   when the owning company/Personal storage has a sync repo configured AND the per-repo toggle is on (default
-  OFF), NEVER the working repo. (Old model wrote the record into the repo's committed .lfbridge/analysis/ SDL
-  — RETIRED.) writeCompressionRecord (analysis.service.ts) resolves via resolveTrackingRoot + mirrorToSyncRepo.
+  OFF), NEVER the working repo. (Old model wrote the record into the repo's committed .lfbridge/analysis/ —
+  RETIRED.) writeCompressionRecord (analysis.service.ts) resolves via resolveTrackingRoot + mirrorToSyncRepo.
+  NOTE the storage-KIND rule (artifact_placement_policy.mdx §0) does NOT bear on the compression record: it
+  is Category B, so it never lands in ANY repo's tracking area — .lfbridge/ vs SDL-root never arises. The
+  only compression artifacts the kind rule touches are the SDL's own analysis/ tree (§0.1), which hangs off
+  the SDL ROOT, never an SDL .lfbridge/.
   ALREADY-COMPRESSED MARKER (§8.4, LOCKED, IMPLEMENTED): skip already-compressed files BEFORE any transcode, on
   re-runs AND on every peer in the mesh. Mechanism = an IN-FILE marker in the `comment` container tag
   ("LFBcompressed;v1;<codec>"), written INLINE by the encoder we already run — ffmpeg -metadata comment= (video)

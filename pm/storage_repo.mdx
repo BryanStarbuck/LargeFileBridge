@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Repo Storage
-description: The Repo storage spec. A repo storage is any Git repository on the machine that LFBridge tracks large files for. Its root is the repo root (e.g. ~/BGit/xyz/). Placement splits by DATA CATEGORY: the working repo's committed .lfbridge/ folder holds ONLY Category-A derived content — the path-mirrored transcript / AI-description artifacts plus the visuals-by-time YAML of the AI-description family — which is committed and travels with the repo. ALL Category-B tracking state (the storage.yaml descriptor, repo_storage.yaml, the per-file fingerprint index files.yaml, per-file sidecars, per-computer history, the large-file → IPFS CID manifest, decisions.yaml, and compression records) lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ ALWAYS — never in the working repo, so it can never merge-conflict — and is additionally mirrored to the owning company/Personal SYNC REPO when the per-repo toggle is on (default off). This is the canonical directory-based storage: git carries the small files + the Category-A content, IPFS carries the big git-ignored bytes across the user's computers, the manifest travels via the sync repo, and the repo may also clone to Google Drive / Dropbox. Sibling of storage_personal / storage_company / storage_community; shares the storage.yaml schema and .lfbridge/ layout defined in storages.mdx, the placement policy in artifact_placement_policy.mdx, and the tracking-file shapes in repo_tracking_scheme.mdx. Links to repos.mdx / one_repo.mdx (the repos list + per-repo screen) which are the UI over this storage.
+description: The Repo storage spec. A repo storage is any Git repository on the machine that LFBridge tracks large files for. Its root is the repo root (e.g. ~/BGit/xyz/). Placement splits by DATA CATEGORY: the working repo's committed .lfbridge/ folder holds ONLY Category-A derived content — the path-mirrored transcript / AI-description artifacts plus the visuals-by-time YAML of the AI-description family — which is committed and travels with the repo. ALL Category-B tracking state (the storage.yaml descriptor, repo_storage.yaml, the per-file fingerprint index files.yaml, per-file sidecars, per-computer history, the large-file → IPFS CID manifest, decisions.yaml, and compression records) lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ ALWAYS — never in the working repo, so it can never merge-conflict — and is additionally mirrored to the owning company/Personal SYNC REPO when the per-repo toggle is on (default off). This is the canonical directory-based storage: git carries the small files + the Category-A content, IPFS carries the big git-ignored bytes across the user's computers, the manifest travels via the sync repo, and the repo may also clone to Google Drive / Dropbox. A repo storage is the ONLY kind that has a .lfbridge/ at all: LFB is a guest in the user's own working repo, so it quarantines its files under one hidden directory. The dedicated LFB file repos (personal / company / community — the SDLs) have NO .lfbridge/; their tracking text and artifacts hang off the storage root (artifact_placement_policy.mdx §0 owns that storage-KIND rule, resolved in code by trackingBaseDir()/usesLfbridgeDir()). Sibling of storage_personal / storage_company / storage_community; shares the storage.yaml schema and the tracking layout defined in storages.mdx §4, the placement policy in artifact_placement_policy.mdx, and the tracking-file shapes in repo_tracking_scheme.mdx. Links to repos.mdx / one_repo.mdx (the repos list + per-repo screen) which are the UI over this storage.
 ---
 
 # LargeFileBridge — Repo Storage
@@ -9,14 +9,23 @@ A **repo storage** is the most common kind: **any Git repository on the machine*
 large files for. It is the **canonical directory-based storage** — the other three (personal / company /
 community) follow the same shape.
 
-Read the shared model first: the storage family, the `storage.yaml` schema, the `.lfbridge/` tracking
-layout, cloud clones, and media analysis are all defined once in **[storages.mdx](./storages.mdx)**. This
+Read the shared model first: the storage family, the `storage.yaml` schema, the tracking layout,
+cloud clones, and media analysis are all defined once in **[storages.mdx](./storages.mdx)**. This
 spec covers only what is **specific to a repo storage**; it does not restate the shared parts.
+
+> **A repo storage is the only kind with a `.lfbridge/` (LOCKED).** `.lfbridge/` is a **working-repo-only**
+> concept: here LFB is a **guest** in the user's own project, so everything it writes is quarantined under
+> one hidden directory that is obviously not the user's content. The **dedicated LFB file repos**
+> (personal / company / community — the **SDLs**) have **no `.lfbridge/` at all**; their tracking text and
+> artifacts hang off the storage **root**, because a repo that exists *only* to hold LFB's files gains
+> nothing from hiding them. The rule is owned by
+> [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx) — it is keyed on the resolved
+> storage **kind**, never on a path or a name, and kind `repo` is the **default**.
 
 Siblings this builds on and does not repeat:
 
-* [storages.mdx](./storages.mdx) — the umbrella: `storage.yaml` (§3), `.lfbridge/` (§4), clones (§5),
-  media analysis (§6).
+* [storages.mdx](./storages.mdx) — the umbrella: `storage.yaml` (§3), the tracking area + the storage-kind
+  split (§4), clones (§5), media analysis (§6).
 * [Repos](./repos.mdx) / [One repo](./one_repo.mdx) — the **UI over a repo storage**: the repos list and
   the per-repo screen where the user makes the **Add to IPFS (pin)** / Ignore / Undecided decision
   (stored as the `sync` decision value) per large file.
@@ -29,9 +38,12 @@ Siblings this builds on and does not repeat:
   per-computer **`history/<device>.txt`** audit log. §5 there draws the ownership boundary: all Category-B
   tracking state (these plus `manifest.yaml`/`decisions.yaml`) is Local-Storage-always and travels via the
   sync repo, while only the Category-A transcripts / AI descriptions live committed in the working repo.
-* [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) — the authoritative **data-category
-  placement policy** governing *where* every file above lives (Local Storage always; the sync repo also,
-  when enabled; the working repo never — except the two Category-A content artifacts).
+* [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) — the authoritative placement policy,
+  in **two orthogonal rules**: **§0**, the **storage-KIND rule** that decides whether `.lfbridge/` is used
+  at all (only in a working repo — the `trackingBaseDir()` / `usesLfbridgeDir()` choke point every LFB
+  writer resolves its base through), and **§1+**, the **data-category** rule governing *where* every file
+  above lives (Local Storage always; the sync repo also, when enabled; the working repo never — except the
+  two Category-A content artifacts).
 * [special_files.mdx](./special_files.mdx) — the classifier (large · already-pinned · video/image/audio,
   plus compressible/transcribable) that decides which files earn a sidecar and fill `repo_storage.yaml`'s
   counts.

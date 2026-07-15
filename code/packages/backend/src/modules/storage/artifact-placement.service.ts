@@ -1,18 +1,26 @@
 // Storage-aware placement of derived artifacts — the transcript (.transcription) and AI description
 // (.ai_description). Given ANY media file, decide WHICH root the artifact's mirrored path hangs under, by
-// the ordered rule locked in Transcribe.mdx §3.4. The artifact itself is written INSIDE that root's
-// committed `.lfbridge/` directory, path-mirrored, with the ext APPENDED to the media's full filename
-// (extension kept) — NOT beside the media and NOT with the extension replaced (see lfbridgeArtifactPath
-// below): `<root>/.lfbridge/<rel-dir>/<name.ext>.transcription`.
+// the ordered rule locked in Transcribe.mdx §3.4. The artifact is written under that root's TRACKING BASE,
+// path-mirrored, with the ext APPENDED to the media's full filename (extension kept) — NOT beside the media
+// and NOT with the extension replaced (see lfbridgeArtifactPath below).
+//
+// The TRACKING BASE depends on the root's storage KIND (artifact_placement_policy.mdx §0):
+//   • a WORKING repo → `<root>/.lfbridge/<rel>` — LFB is a guest, so it quarantines its files in one hidden
+//     corner that is obviously not the user's own content.
+//   • an SDL file repo (personal/company/community) → `<root>/<rel>` — NO `.lfbridge/` segment. That repo
+//     exists ONLY to hold LFB's files, so its root IS the .lfbridge area.
+// Resolve it via storage-type.service's `trackingBaseDir()`; never join LFBRIDGE_DIR directly.
 //
 //   A. Containing storage/repo root — the NEAREST ancestor carrying storage.yaml / .lfbridge/ / .git/
-//      (the "walk up to the repo root" the product owner described). Artifacts live in the COMMITTED
-//      .lfbridge/ area so they travel with the repo — no *.transcription/*.ai_description gitignore nudge.
+//      (the "walk up to the repo root" the product owner described). Classified by storage KIND, NOT by the
+//      presence of .git/ (every SDL is a git repo too — see ownerForRoot). Artifacts live in the COMMITTED
+//      tracking area so they travel with the repo — no *.transcription/*.ai_description gitignore nudge.
 //   B. Owning company/personal storage for a file living OUT in the wider filesystem: the most specific
 //      storage whose MAPPED source dir (via this device's graft) contains it, else PERSONAL as the default
 //      catch-all for anything under ~. Its artifact is written under the storage's DEDICATED GIT REPO when
-//      that backing is enabled (mirroring the file's hierarchy, NOT git-ignored — the repo exists to hold
-//      and pin these), else under the storage's own root.
+//      that backing is enabled (mirroring the file's hierarchy off the repo ROOT, NOT git-ignored — the repo
+//      exists to hold and pin these), else under the storage's own root. This is the canonical case:
+//      ~/_Mirror/…/x.mp4 → ~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/…/x.mp4.transcription.
 //   C. First-time signal — no Personal storage exists and nothing owns the file → needsSetup:true so the
 //      action routes to the setup wizard (Transcribe.mdx §3.5) instead of writing somewhere surprising.
 //   D. Last resort — literally beside the media (its own directory is the root), the narrow legacy fallback.
@@ -25,6 +33,7 @@ import path from "node:path";
 import type { ArtifactPlacementView, PlacementChoice } from "@lfb/shared";
 import { expandHome } from "../fs/badges.js";
 import { LFBRIDGE_DIR } from "./tracking.service.js";
+import { resolveStorageType, usesLfbridgeDir, trackingBaseDir } from "./storage-type.service.js";
 import { resolveStateSyncRepo } from "./tracking-root.service.js";
 import { listStoragesPage } from "./storage.service.js";
 import { resolveBackingLocations } from "./storage-settings.service.js";
@@ -65,6 +74,16 @@ function isUnder(child: string, parent: string): boolean {
 /** A directory is a containing root when it carries a storage.yaml, a `.lfbridge/`, or a `.git/` (a repo). */
 function isContainingRoot(dir: string): boolean {
   return exists(path.join(dir, "storage.yaml")) || exists(path.join(dir, LFBRIDGE_DIR)) || exists(path.join(dir, ".git"));
+}
+
+/**
+ * Classify a containing root as an SDL storage-root or a plain working repo (artifact_placement_policy.mdx
+ * §0.2). The storage KIND WINS over the presence of `.git/`: every SDL *is* a git repo, so testing `.git/`
+ * first would classify `personal_large_files_bridge/` as a working repo and give every artifact in it a
+ * phantom `.lfbridge/` segment — exactly the bug this rule removes.
+ */
+function ownerForRoot(root: string): ArtifactOwner {
+  return usesLfbridgeDir(resolveStorageType(root)) ? "repo" : "storage-root";
 }
 
 /** Nearest ancestor of `absFile` that is a containing root (rule A), or null when the file is out loose. */
@@ -176,11 +195,12 @@ export function resolveOwnerDedicatedRepo(repoRoot: string): string | null {
 export function resolveArtifactPlacement(input: string): ArtifactPlacement {
   const abs = path.resolve(expandHome(input.trim()));
 
-  // A. Containing storage/repo root (walk-up).
+  // A. Containing storage/repo root (walk-up). Classify by storage KIND, not by `.git/` (§0.2).
   const containing = nearestContainingRoot(abs);
   if (containing) {
+    const owner = ownerForRoot(containing);
     const isGit = exists(path.join(containing, ".git"));
-    return { root: containing, rel: path.relative(containing, abs), gitIgnore: isGit, owner: isGit ? "repo" : "storage-root", needsSetup: false };
+    return { root: containing, rel: path.relative(containing, abs), gitIgnore: owner === "repo" && isGit, owner, needsSetup: false };
   }
 
   // B. Owning company/personal storage → its dedicated repo (no gitignore), else its own root.
@@ -213,37 +233,73 @@ export const AI_DESCRIPTION_EXT = ".ai_description";
 
 /**
  * The path for a media file's derived artifact (Transcribe.mdx §3.1). It lives under the owning root's
- * `.lfbridge/` directory, mirroring the media's relative path, with `ext` APPENDED to the full filename
- * (original extension kept): `a/b/talk.mp3` + `.transcription` → `<root>/.lfbridge/a/b/talk.mp3.transcription`.
- * Appending (not replacing) means `talk.mp3` and `talk.wav` no longer collide. `ext` includes the leading dot.
+ * TRACKING BASE, mirroring the media's relative path, with `ext` APPENDED to the full filename (original
+ * extension kept). Appending (not replacing) means `talk.mp3` and `talk.wav` no longer collide. `ext`
+ * includes the leading dot.
+ *
+ * The base depends on the root's storage KIND (artifact_placement_policy.mdx §0) — the whole point of
+ * routing through `trackingBaseDir()` rather than joining LFBRIDGE_DIR here:
+ *
+ *   working repo (LFB is a guest → quarantine under one hidden dir):
+ *     charlie-kirk/ + `videos/x.mp4` → charlie-kirk/.lfbridge/videos/x.mp4.transcription
+ *   SDL file repo (the repo exists ONLY for LFB → its root IS the .lfbridge area):
+ *     personal_large_files_bridge/ + `_Mirror/a/x.mp4` → personal_large_files_bridge/_Mirror/a/x.mp4.transcription
+ *
+ * (Name kept for its many callers; it is no longer literally always a `.lfbridge` path.)
+ *
+ * Pass the resolved `owner` when you have one ({@link resolveArtifactPlacement}) — see {@link artifactBase}
+ * for why that is more reliable than re-deriving the kind from `root` alone.
  */
-export function lfbridgeArtifactPath(root: string, rel: string, ext: string): string {
-  return path.join(root, LFBRIDGE_DIR, rel) + ext;
+export function lfbridgeArtifactPath(root: string, rel: string, ext: string, owner?: ArtifactOwner): string {
+  return path.join(artifactBase(root, owner), rel) + ext;
+}
+
+/**
+ * The tracking base for an artifact root, preferring the ALREADY-RESOLVED owner over a fresh type lookup.
+ *
+ * Rules B/D resolved the root's role directly, and that knowledge beats re-deriving it: a storage's dedicated
+ * repo and a storage root are SDLs BY ROLE — they exist only to hold LFB's files — even when the directory
+ * name does not follow the `*_large_files_bridge` convention (a user may point the dedicated-repo backing at
+ * `~/BGit/my_big_files`) and even before a descriptor has been written into it. Re-deriving from the path
+ * would classify those as working repos and reintroduce the phantom `.lfbridge/` segment for exactly the
+ * users who configured a custom path. With no owner in hand, fall back to resolving by kind.
+ */
+function artifactBase(root: string, owner?: ArtifactOwner): string {
+  if (owner === "dedicated-repo" || owner === "storage-root") return root;
+  if (owner === "repo") return path.join(root, LFBRIDGE_DIR);
+  return trackingBaseDir(root);
 }
 
 /**
  * The artifact path for a chosen PLACEMENT (placement_radios.mdx / repo_settings.mdx §4-5). The per-repo
  * setting picks WHERE the transcript/description lands:
- *   • "lfbridge"  → `<root>/.lfbridge/<rel><ext>` (the default; {@link lfbridgeArtifactPath}).
+ *   • "lfbridge"  → the root's TRACKING BASE, `<base>/<rel><ext>` (the default; {@link lfbridgeArtifactPath}).
  *   • "beside"    → `<root>/<rel><ext>` — literally next to the media (the opt-in beside-media layout).
  *   • "sync_repo" → `<syncRepo>/<rel><ext>` when the owning storage has a state-sync repo configured, else
  *                   falls back to "lfbridge" (the sync-repo settings surface is a later seam).
  * Switching the radio only changes WHERE FUTURE artifacts are written; existing ones stay put until a
  * "move existing" action relocates them (repo_settings.mdx §4.3).
+ *
+ * NOTE "lfbridge" is a FROZEN WIRE LITERAL naming the option, not a promise of a `.lfbridge/` path segment
+ * (placement_radios.mdx §1.1). In a working repo it resolves to `<root>/.lfbridge/<rel>`; in an SDL it
+ * resolves to `<root>/<rel>` — no segment, because an SDL has no `.lfbridge/` (§0). Do not rename the value.
+ * In an SDL, "lfbridge" and "beside" therefore differ only in root: the SDL's mirror vs. the media's own
+ * directory out in the filesystem.
  */
 export function artifactPathForPlacement(
   root: string,
   rel: string,
   ext: string,
   placement: PlacementChoice,
+  owner?: ArtifactOwner,
 ): string {
   if (placement === "beside") return path.join(root, rel) + ext;
   if (placement === "sync_repo") {
     const sync = resolveStateSyncRepo(root);
     if (sync) return path.join(sync, rel) + ext;
-    // No state-sync repo configured yet → fall back to the default hidden `.lfbridge/`.
+    // No state-sync repo configured yet → fall back to the default tracking base.
   }
-  return lfbridgeArtifactPath(root, rel, ext);
+  return lfbridgeArtifactPath(root, rel, ext, owner);
 }
 
 /**
@@ -258,7 +314,7 @@ export function placementView(input: string): ArtifactPlacementView {
     mediaPath: abs,
     root: p.root,
     rel: p.rel,
-    transcriptPath: lfbridgeArtifactPath(p.root, p.rel, TRANSCRIPTION_EXT),
+    transcriptPath: lfbridgeArtifactPath(p.root, p.rel, TRANSCRIPTION_EXT, p.owner),
     gitIgnore: p.gitIgnore,
     owner: p.owner,
     needsSetup: p.needsSetup,

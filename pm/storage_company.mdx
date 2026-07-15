@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Company Storage
-description: The Company storage spec. A shared pile of a company's large files, one directory-based storage per company, e.g. ~/BGit/Bryan_git/act3_large_files_bridge/. Each carries a storage.yaml with name + type: company + a company block (company_name and company-scoped child properties) and a hidden .lfbridge/ area (fingerprint index, IPFS manifest, media-analysis outputs). A user may belong to MORE THAN ONE company, so several company storages can coexist; each appears as its own child in the Storages left-bar tab (labeled by company name). Company storages are pinned across the members' computers over IPFS and often also clone to a shared Google Drive / Dropbox. The company's settings page also lists the repos owned by this company with a per-row reassign control (§7.1 → storage_settings.mdx §4c); reassigning a repo INTO this company records a travelling ownership assertion (repo_owner_propagation.mdx) that reaches other members but applies on their machines only via review-and-consent, moves NO bytes, and only re-targets which sync repo the repo's tracking mirrors to. Sibling of storage_repo / storage_personal / storage_community; shares the storage.yaml schema and .lfbridge/ layout defined in storages.mdx.
+description: The Company storage spec. A shared pile of a company's large files, one directory-based storage per company, e.g. ~/BGit/Bryan_git/act3_large_files_bridge/. Each carries a storage.yaml with name + type: company + a company block (company_name and company-scoped child properties) plus its tracking metadata (fingerprint index, IPFS manifest, media-analysis outputs) — and all of it sits at the storage ROOT: a company storage is a DEDICATED LFB FILE REPO (an SDL), so it has NO .lfbridge/ directory at all. .lfbridge/ is a working-repo-only concept; the SDL root IS the .lfbridge area (artifact_placement_policy.mdx §0). A user may belong to MORE THAN ONE company, so several company storages can coexist; each appears as its own child in the Storages left-bar tab (labeled by company name). Company storages are pinned across the members' computers over IPFS and often also clone to a shared Google Drive / Dropbox. The company's settings page also lists the repos owned by this company with a per-row reassign control (§7.1 → storage_settings.mdx §4c); reassigning a repo INTO this company records a travelling ownership assertion (repo_owner_propagation.mdx) that reaches other members but applies on their machines only via review-and-consent, moves NO bytes, and only re-targets which sync repo the repo's tracking mirrors to. Sibling of storage_repo / storage_personal / storage_community; shares the storage.yaml schema and the tracking layout defined in storages.mdx §4, with the SDL (no-.lfbridge/) placement rule owned by artifact_placement_policy.mdx §0.
 ---
 
 # LargeFileBridge — Company Storage
@@ -9,14 +9,19 @@ description: The Company storage spec. A shared pile of a company's large files,
 in common. There is **one company storage per company**, and a user may belong to **more than one
 company**, so several can coexist on the same machine.
 
-Read the shared model first: the storage family, the `storage.yaml` schema, the `.lfbridge/` tracking
+Read the shared model first: the storage family, the `storage.yaml` schema, the tracking
 layout, cloud clones, and media analysis are defined once in **[storages.mdx](./storages.mdx)**. This spec
 covers only what is **specific to company storage**.
 
 Siblings this builds on and does not repeat:
 
-* [storages.mdx](./storages.mdx) — the umbrella: `storage.yaml` (§3), `.lfbridge/` (§4), clones (§5),
+* [storages.mdx](./storages.mdx) — the umbrella: `storage.yaml` (§3), the tracking layout (§4), clones (§5),
   media analysis (§6).
+* [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx) — **owns the rule** that decides
+  whether a root uses a `.lfbridge/` directory at all. A company storage is a **dedicated LFB file repo**
+  (an **SDL**), so it has **no `.lfbridge/`**: `.lfbridge/` is a **working-repo-only** concept, and the
+  **SDL root itself *is* the `.lfbridge` area**. Everything below places files at the company root
+  accordingly.
 * [syncable_data_location.mdx](./syncable_data_location.mdx) — the **SDL** model this spec now rests on:
   the company root is the storage's **Syncable Data Location** (small text that travels), and the big
   files live in a **list of mapped source directories** (§1.1), not under the root.
@@ -43,20 +48,25 @@ stay in their natural directories and are brought into scope by a **list of mapp
 
 ```
 ~/BGit/Bryan_git/act3_large_files_bridge/     ← ONE company's storage root = its Syncable Data Location ("ACT3")
+│                                              ← this root IS the .lfbridge area — an SDL has NO .lfbridge/
 ├── LargeFilesBridge_SyncList.yaml            ← the portable list (sync_list.mdx), committed to git here
-├── .lfbridge/
-│   ├── storage.yaml        ← name + type: company + company block (storages.mdx §3)
-│   ├── mapped_dirs.yaml     ← §1.1 the company's mapped source directories (syncable_data_location.mdx §3)
-│   ├── files.yaml          ← per-file fingerprint index (storages.mdx §4.1)
-│   ├── manifest.yaml       ← large-file → IPFS CID + pin state
-│   ├── devices/            ← the device registry + per-device graft (devices.mdx)
-│   ├── bookmarks.yaml      ← bookmarked files, travels (syncable_data_location.mdx §4.4)
-│   └── analysis/           ← per-file media analysis + compression records (storages.mdx §6, SDL §4)
+├── storage.yaml            ← name + type: company + company block (storages.mdx §3)
+├── mapped_dirs.yaml        ← §1.1 the company's mapped source directories (syncable_data_location.mdx §3)
+├── files.yaml              ← per-file fingerprint index (storages.mdx §4.1)
+├── manifest.yaml           ← large-file → IPFS CID + pin state
+├── devices/                ← the device registry + per-device graft (devices.mdx)
+├── bookmarks.yaml          ← bookmarked files, travels (syncable_data_location.mdx §4.4)
+├── analysis/               ← per-file media analysis + compression records (storages.mdx §6, SDL §4)
 └── …NO big files here — they live in the MAPPED directories (§1.1)…
 ```
 
 * **Root:** one **SDL** directory per company, e.g. `~/BGit/Bryan_git/act3_large_files_bridge/` — a small
-  Git repo of metadata. A user in three companies has three such roots, each its own storage. Because this
+  Git repo of metadata. A user in three companies has three such roots, each its own storage. **The company's
+  metadata sits at the root — there is no `.lfbridge/` here.** `.lfbridge/` is a **working-repo-only**
+  concept (where LFB is a guest and quarantines its files); a company storage is a **dedicated LFB file
+  repo**, so the **root itself *is* the `.lfbridge` area** and hiding its files one level down would buy no
+  separation. The rule, its rationale, and the reserved root names are owned by
+  [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx) — this spec only applies it. Because this
   root is a **dedicated tracking-data Git repo the user made for LFB**, when it is itself a git working
   tree LFB **auto-adopts it as the storage's Git backbone** and **commits + pushes** this computer's
   `devices/<self>.yaml` there on first write and every update — no manual dedicated-repo setting needed
@@ -73,7 +83,7 @@ seven directory hierarchies adds all seven; LFB scans each subtree for big files
 opted-in ones over IPFS, and stores their derived artifacts in the SDL — **without relocating a single
 byte**.
 
-* The **logical** list travels in `.lfbridge/mapped_dirs.yaml`
+* The **logical** list travels in `<root>/mapped_dirs.yaml`
   ([syncable_data_location.mdx §3](./syncable_data_location.mdx#3-mapped-source-directories--one-storage-many-hierarchies-locked));
   each mapped directory has a stable **key**.
 * The **absolute local path** of each mapped directory is **per-computer** — resolved by that machine's
@@ -89,7 +99,7 @@ byte**.
 ## 2. `storage.yaml` for a company
 
 ```yaml
-# ~/BGit/Bryan_git/act3_large_files_bridge/.lfbridge/storage.yaml
+# ~/BGit/Bryan_git/act3_large_files_bridge/storage.yaml   (at the SDL root — no .lfbridge/ segment)
 name: "ACT3 Company Files"
 type: company
 created: 2026-05-01T10:12:00Z
@@ -113,7 +123,7 @@ clones:
 ## 3. Media analysis + cloud clones
 
 Company storage produces the [storages.mdx §6](./storages.mdx) **media-analysis** outputs into
-`.lfbridge/analysis/` — and because these are shared, a teammate who pulls the storage gets the
+`<root>/analysis/` — and because these are shared, a teammate who pulls the storage gets the
 transcript / description / visuals-by-time without re-running them. A company storage **often clones to a
 shared Google Drive / Dropbox** ([storages.mdx §5](./storages.mdx)) so members without LFB can still reach
 the files; recorded in the `clones` block.
@@ -159,7 +169,7 @@ left-bar child, the Repos grouping header, and each owned repo's Owner control
 ([repo_company_mapping.mdx §5.1](./repo_company_mapping.mdx#51-the-reassign-control)).
 
 * **Where it is stored.** The friendly name **is** the company descriptor's **`company_name`** in
-  `.lfbridge/storage.yaml` (§2) — the same field that labels the Storages child. On auto-creation `company_name`
+  the root `storage.yaml` (§2) — the same field that labels the Storages child. On auto-creation `company_name`
   is seeded to the **owner slug** (e.g. `ACT3ai`); the rename simply **overwrites** it with the human name
   (e.g. `ACT3 AI`). There is no second field: the descriptor's `company_name` is the single source of truth for
   the label.
@@ -241,11 +251,13 @@ The Owned-repos read (`getOwnedRepos(storageId)`) and the reassign endpoint (`PO
 
 1. There is **one company storage per company**, rooted in its own directory (e.g.
    `~/BGit/Bryan_git/act3_large_files_bridge/`), which is the storage's **Syncable Data Location** —
-   small travelling text, tracked via a hidden **`.lfbridge/`** at its root; **no big files live under
-   the root**.
-2. Its `.lfbridge/storage.yaml` has **`name`** + **`type: company`** and a **`company`** block carrying
+   small travelling text tracked **at the root itself**. It is a **dedicated LFB file repo (an SDL)**, so it
+   has **no `.lfbridge/` directory at all** — `.lfbridge/` is working-repo-only and the SDL root **is** the
+   `.lfbridge` area ([artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)); **no big files
+   live under the root**.
+2. Its root `storage.yaml` has **`name`** + **`type: company`** and a **`company`** block carrying
    **`company_name`** plus company-scoped child properties (division, allow-list, drive anchor, …).
-3. A company maps a **list** of source directory hierarchies (`.lfbridge/mapped_dirs.yaml`), each
+3. A company maps a **list** of source directory hierarchies (`<root>/mapped_dirs.yaml`), each
    **recursive**; LFB scans each subtree for big files without relocating them, and each computer
    resolves a mapped directory to its own absolute path via the device **graft**
    ([devices.mdx §4](./devices.mdx)).
@@ -253,8 +265,9 @@ The Owned-repos read (`getOwnedRepos(storageId)`) and the reassign endpoint (`PO
    (labeled by `company_name`) in the Storages tab.
 5. It is carried across the **members'** computers — the SDL over Git/backbones, the mapped big files over
    IPFS (within the company allow-list) — and often clones to a **shared** Google Drive / Dropbox;
-   `.lfbridge/` holds the mapped-dir list, fingerprints, manifest, devices, bookmarks, and `analysis/`
-   per [storages.mdx §4](./storages.mdx) + [syncable_data_location.mdx §2](./syncable_data_location.mdx).
+   the **root** holds the mapped-dir list, fingerprints, manifest, devices, bookmarks, and `analysis/`
+   per [storages.mdx §4](./storages.mdx) + [syncable_data_location.mdx §2](./syncable_data_location.mdx),
+   placed by the SDL rule in [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx).
 6. A company is created **explicitly** or **automatically** from a repo whose remote names a forge **org**; every
    repo mapped to it **groups under this company** ([repo_company_mapping.mdx §7.1](./repo_company_mapping.mdx#71-grouping-in-the-left-bar-and-repos-list-locked)),
    and an auto-created company is a **lightweight** entry (same storage kind, less configuration) that is promoted
@@ -278,7 +291,11 @@ The Owned-repos read (`getOwnedRepos(storageId)`) and the reassign endpoint (`PO
 <!--
   Company storage = a company's SHARED big files, one per company. The root (e.g.
   ~/BGit/Bryan_git/act3_large_files_bridge/) is the storage's SYNCABLE DATA LOCATION (small travelling
-  text: SyncList + .lfbridge/); NO big files live under it. LOCKED (§1.1): a company maps a LIST of source
+  text: SyncList + the metadata AT THE ROOT); NO big files live under it. LOCKED: a company storage is a
+  DEDICATED LFB FILE REPO (an SDL) → NO .lfbridge/ AT ALL; .lfbridge/ is working-repo-only and the SDL root
+  IS the .lfbridge area, so storage.yaml, mapped_dirs.yaml, files.yaml, manifest.yaml, bookmarks.yaml,
+  devices/, analysis/ all sit at <root>/ (rule owned by artifact_placement_policy.mdx §0 — reference it, do
+  not restate; §0.3 reserves those names against colliding mapped-dir keys). LOCKED (§1.1): a company maps a LIST of source
   directory hierarchies (mapped_dirs.yaml, everything recursive), resolved per-computer by the device GRAFT
   (devices.mdx §4) — the generalization of a repo storage (one hierarchy) to many. storage.yaml: name +
   type: company + company block (company_name + child props like division/allow_list). A user may be in

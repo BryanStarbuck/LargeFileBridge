@@ -22,15 +22,26 @@ import { peerRows } from "../store-model/peers.service.js";
 // Lazy import cycle with storage-settings.service (used only inside functions, never at module-eval time)
 // — safe under NodeNext ESM, same pattern as storage.service <-> storage-settings.service.
 import { readMappedDirsForRoot } from "./storage-settings.service.js";
-import { LFBRIDGE_DIR } from "./tracking.service.js";
+import { trackingBaseDir, legacyTrackingBaseDir } from "./storage-type.service.js";
 import { expandHome } from "../fs/badges.js";
 import { log } from "../../shared/logging.js";
 
 const DEVICES_DIR = "devices";
 
-/** `<storageRoot>/.lfbridge/devices/` — the travelling device registry for one storage. */
+/** The travelling device registry for one storage — under the storage's TRACKING BASE (§0):
+ *  `<sdlRoot>/devices/` for an SDL (which has no `.lfbridge/`), `<repoRoot>/.lfbridge/devices/` for a working
+ *  repo. In practice the registry only ever lives in an SDL, since that is what a Git backbone runs on. */
 export function devicesDir(storageRoot: string): string {
-  return path.join(storageRoot, LFBRIDGE_DIR, DEVICES_DIR);
+  return path.join(trackingBaseDir(storageRoot), DEVICES_DIR);
+}
+
+/** The pre-migration registry location for an SDL — `<root>/.lfbridge/devices/` — or null when there is none
+ *  (§0.3). READ-ONLY fallback: until `migrateSdlLfbridge()` runs, a sibling computer's device file may still
+ *  be sitting here, and failing to read it would make the user's two computers invisible to each other — the
+ *  exact defect git_backbone.mdx §4.2.1 records. Never a write target. */
+export function legacyDevicesDir(storageRoot: string): string | null {
+  const legacy = legacyTrackingBaseDir(storageRoot);
+  return legacy ? path.join(legacy, DEVICES_DIR) : null;
 }
 
 /** The device file path for a nice name, sanitized the same way repo/user folder keys are (devices.mdx §2). */
@@ -140,22 +151,31 @@ export function writeSelfDevice(storageRoot: string, opts?: { owner?: string | n
   return toRecord(readYaml(file, DeviceFileSchema));
 }
 
-/** Read the whole device registry for a storage (every `devices/*.yaml`). Tolerates a missing dir (→ []). */
+/** Read the whole device registry for a storage (every `devices/*.yaml`). Tolerates a missing dir (→ []).
+ *  Reads the current registry AND, for a not-yet-migrated SDL, the legacy `.lfbridge/devices/` one (§0.3) —
+ *  a sibling computer running an older build still writes there, and dropping it would make the user's
+ *  computers invisible to each other. A device id present in both is taken from the CURRENT dir. */
 export function readDevices(storageRoot: string): DeviceRecord[] {
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(devicesDir(storageRoot), { withFileTypes: true });
-  } catch {
-    return []; // no devices/ dir yet → empty registry
-  }
   const out: DeviceRecord[] = [];
-  for (const ent of entries) {
-    if (!ent.isFile() || !ent.name.endsWith(".yaml")) continue;
+  const seen = new Set<string>();
+  const legacy = legacyDevicesDir(storageRoot);
+  for (const dir of [devicesDir(storageRoot), ...(legacy ? [legacy] : [])]) {
+    let entries: fs.Dirent[];
     try {
-      out.push(toRecord(readYaml(path.join(devicesDir(storageRoot), ent.name), DeviceFileSchema)));
-    } catch (e) {
-      // A malformed peer device file is a claim we simply skip — never fatal (devices.mdx §2.1).
-      log.warn("storage", `skipping unreadable device file ${ent.name}: ${(e as Error).message}`);
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue; // no devices/ dir here → nothing to add
+    }
+    for (const ent of entries) {
+      if (!ent.isFile() || !ent.name.endsWith(".yaml")) continue;
+      if (seen.has(ent.name)) continue; // current dir wins over the legacy copy
+      try {
+        out.push(toRecord(readYaml(path.join(dir, ent.name), DeviceFileSchema)));
+        seen.add(ent.name);
+      } catch (e) {
+        // A malformed peer device file is a claim we simply skip — never fatal (devices.mdx §2.1).
+        log.warn("storage", `skipping unreadable device file ${ent.name}: ${(e as Error).message}`);
+      }
     }
   }
   return out;

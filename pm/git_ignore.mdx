@@ -23,8 +23,11 @@ Siblings this builds on and does not repeat:
   that open this same dialog.
 * [git_backbone.mdx](./git_backbone.mdx) — the **Git backbone engine**: which git operations LFB may run, and the
   `.gitattributes`/`.gitignore` rules a git-backbone (sync) tree already lives under. The content rules in §5
-  honor it (never git-ignore a committed `.lfbridge/` path — the sync repo's tracking payload or a working
-  repo's Category-A content, [git_backbone.mdx §4.2.1](./git_backbone.mdx)).
+  honor it (never git-ignore LFB's committed text — a working repo's `.lfbridge/` Category-A content, or a
+  sync repo's **root** tracking payload, [git_backbone.mdx §4.2.1](./git_backbone.mdx)).
+* [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx) — the **owner** of the storage-kind
+  rule that decides **which** paths §5.3 must refuse: `.lfbridge/` exists only in a **working repo**; an
+  **SDL** has none, so its protected text sits at the **root**.
 * [directories.mdx §3](./directories.mdx) — the code-badge vocabulary; applying an ignore lights up the new
   **`I` git-ignored badge** ([directories.mdx §3.4a](./directories.mdx)).
 * [file_system.mdx §5.1](./file_system.mdx) — the deepest-column scope rule this **generalizes** into
@@ -215,13 +218,23 @@ un-anchored name for a specific path.
   repo's own `.gitignore`**, one grouped block per repo — never a single shared file.
 * A path in **no git repo** cannot be git-ignored (git-ignore only means something inside a repo). Such
   paths are **excluded** with the §3 "not in a git repo" note; they are never written anywhere.
-* A `.lfbridge/` path is **never** git-ignored — the engine refuses to emit any line that would ignore one,
-  as defense-in-depth. In a **working repo**, `.lfbridge/` holds only the committed **Category-A** content
-  (transcripts + AI descriptions) that is *meant* to travel with the repo
-  ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)); in a dedicated **SDL / sync repo** it
-  holds the committed tracking payload ([git_backbone.mdx §4.2.1](./git_backbone.mdx)). Either way, ignoring
-  it would break travel — so the refusal stands. (LFB's noisy Category-B tracking state was moved out of the
-  working repo entirely, so there is nothing churny under `.lfbridge/` to worry about.)
+* **LFB's own committed text is never git-ignored** — the engine refuses to emit any line that would ignore
+  it, as defense-in-depth. **Where that text lives depends on the storage kind**
+  ([artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx) owns this rule), so the refusal has
+  two shapes:
+  * In a **working repo** (kind `repo`) — LFB is a guest, so it keeps a `.lfbridge/`. A **`.lfbridge/` path
+    is never ignored**: it holds only the committed **Category-A** content (transcripts + AI descriptions)
+    that is *meant* to travel with the repo ([artifact_placement_policy.mdx §1.1](./artifact_placement_policy.mdx)).
+  * In a dedicated **SDL / sync repo** (kind `personal` / `company` / `community`) — there is **no
+    `.lfbridge/` at all**; the SDL root *is* the `.lfbridge` area. So the protected paths are the SDL's
+    **root metadata** — `devices/`, `storage.yaml`, `mapped_dirs.yaml`, `files.yaml`, `manifest.yaml`,
+    `bookmarks.yaml`, `analysis/` — and the `repos/<repoKey>/` subtrees, which together are the committed
+    tracking payload ([git_backbone.mdx §4.2.1](./git_backbone.mdx)).
+
+  Either way, ignoring it would break travel — a bare ignore over it once staged **nothing** and made two
+  computers invisible to each other (git_backbone §4.2.1's defect) — so the refusal stands. The kind is
+  resolved by `resolveStorageType(root)`, never by name. (LFB's noisy Category-B tracking state was moved
+  out of the working repo entirely, so there is nothing churny under `.lfbridge/` to worry about.)
 
 ### 5.4 Idempotent, skip-already-ignored, append-only (LOCKED)
 
@@ -235,8 +248,11 @@ un-anchored name for a specific path.
   (the one exception is the SDL-committable repair in [git_backbone.mdx §4.2.1](./git_backbone.mdx), which is a
   different, protective code path).
 
-Planning the lines (classify each target as file/dir/not-in-repo, group by owning repo, build anchored repo-relative lines per §5.2, drop `git check-ignore` hits, refuse `.lfbridge/`) is implemented in code:
+Planning the lines (classify each target as file/dir/not-in-repo, group by owning repo, build anchored repo-relative lines per §5.2, drop `git check-ignore` hits, refuse LFB's own committed text) is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.service.ts` — `planGitIgnore()` (returns the `GitIgnorePlan`: `linesByRepo`, `alreadyIgnored`, `notInRepo`), using `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `nearestGitAtOrAbove()` / `checkIgnore()`.
+
+Deciding **which** paths that refusal covers for a given owning repo — `<root>/.lfbridge/` for kind `repo`, the SDL **root** metadata for an SDL — resolves through the same choke point every LFB writer uses:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `resolveStorageType(root)` / `trackingBaseDir(root, type?)` / `usesLfbridgeDir(type)`.
 
 Writing the planned lines into each owning repo's root `.gitignore` (append-only, idempotent, preserve trailing newline) is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.service.ts` — `applyGitIgnore()` / `appendIgnoreLines()` (mirrors the existing `ensureLfbridgeIgnored()` append pattern in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts`).
@@ -287,8 +303,11 @@ The plan/apply routes and the client methods are implemented in code:
    **directory Recursive OFF** → `/<dir>/*` + `!/<dir>/*/`; a **mix** → both, Recursive governing only the
    folder lines.
 7. **Multi-repo + not-in-repo (§5.3):** a selection spanning several repos writes to **each** repo's own
-   root `.gitignore`; a path in **no** repo is excluded with the "not in a git repo" note; a `.lfbridge/`
-   path is never ignored.
+   root `.gitignore`; a path in **no** repo is excluded with the "not in a git repo" note; **LFB's own
+   committed text is never ignored** — a `.lfbridge/` path in a **working repo**, or the **root** metadata
+   (`devices/`, `storage.yaml`, `mapped_dirs.yaml`, `files.yaml`, `manifest.yaml`, `bookmarks.yaml`,
+   `analysis/`, `repos/`) in an **SDL / sync repo**, which has no `.lfbridge/` at all
+   ([artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)).
 8. **Skip-already-ignored, append-only (§5.4):** paths `git check-ignore` already covers are dropped and
    counted ("{N} already ignored"); writing is append-only and idempotent (re-Apply writes nothing new); LFB
    never rewrites the user's existing rules.
@@ -316,7 +335,12 @@ The plan/apply routes and the client methods are implemented in code:
   subdirs tracked); MIX → both (Recursive governs only the dir lines). "IGNORE THE WHOLE FOLDER" product
   decision (NOT a walked big-file list). Each path's OWNING repo = nearestGitAtOrAbove; line goes in THAT
   repo's root .gitignore, relative to THAT root. Multi-repo => write each repo's own .gitignore. Not-in-a-repo
-  => excluded + note. NEVER ignore a .lfbridge/ path (git_backbone.mdx §4.2.1). Skip-already-ignored via git
+  => excluded + note. NEVER ignore LFB's own committed text (git_backbone.mdx §4.2.1) — WHICH path that is
+  depends on storage KIND (artifact_placement_policy.mdx §0 owns the rule): a working repo (kind `repo`)
+  keeps a .lfbridge/ => never ignore .lfbridge/; an SDL/sync repo has NO .lfbridge/ at all (its root IS the
+  .lfbridge area) => never ignore its ROOT metadata (devices/, storage.yaml, mapped_dirs.yaml, files.yaml,
+  manifest.yaml, bookmarks.yaml, analysis/) or repos/. Kind resolved via storage-type.service.ts
+  resolveStorageType()/trackingBaseDir(), never by name. Skip-already-ignored via git
   check-ignore. Append-only + idempotent; LFB only ADDS lines, never rewrites user rules. planGitIgnore()/
   applyGitIgnore()/appendIgnoreLines() in backend modules/git/gitignore.service.ts (mirrors describe.service
   ensureLfbridgeIgnored append pattern); nearestGitAtOrAbove()/checkIgnore() in git.service.ts.

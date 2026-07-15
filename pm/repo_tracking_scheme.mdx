@@ -22,8 +22,12 @@ This spec builds on the siblings and does not repeat them:
 * [storage_local.mdx](./storage_local.mdx) — **Local Storage**, the machine-local state root
   `~/T/_large_files_bridge/` that hosts `repos/<repoKey>/` (§1), the home for all tracking state.
 * [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) — the **data-category placement
-  policy** that governs *where* every file below lives (Local Storage always; company sync repo also, when
-  enabled; the working repo never).
+  policy** (§1+) that governs *where* every file below lives (Local Storage always; company sync repo also,
+  when enabled; the working repo never). Its [**§0**](./artifact_placement_policy.mdx) owns the orthogonal
+  **storage-kind** rule: `.lfbridge/` exists **only** inside a working git repo — the kind this spec is
+  about. A dedicated LFB file repo (an **SDL**: Personal / Company / Community) has **no `.lfbridge/` at
+  all**; its root *is* the `.lfbridge` area. The two rules compose: §0 picks the **base directory** inside a
+  root, §1+ picks **which root**.
 * [decisions.mdx](./decisions.mdx) — the `decisions.yaml` ledger. The per-file sidecars and history logs
   in this spec are the human-readable, per-machine mirror of that ledger plus the automatic events it does
   not carry. The ledger, too, now lives in Local Storage / the sync repo — not the working repo.

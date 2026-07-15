@@ -66,7 +66,7 @@ Left_Nav:
           icon: "HardDrive"
           route: "/storages"
           order: 2
-          description: "All the large-file storages you belong to in one map: your Personal files, each Company you're in, a Repos link to the repos list, and the Communities you carry. Each directory-based storage has a storage.yaml (name + type) and a hidden .lfbridge/ tracking area, pins over IPFS, and may also clone to Google Drive / Dropbox. See pm/storages.mdx."
+          description: "All the large-file storages you belong to in one map: your Personal files, each Company you're in, a Repos link to the repos list, and the Communities you carry. Each directory-based storage (an SDL) has a storage.yaml (name + type) at its ROOT, which IS its tracking area — an SDL has no .lfbridge/ (that is only for working git repos; see pm/artifact_placement_policy.mdx §0). It pins over IPFS, and may also clone to Google Drive / Dropbox. See pm/storages.mdx."
           # OWNER-GROUPED REPO NESTING (pm/left_bar.mdx §3.2, pm/repo_company_mapping.mdx): on top of the
           # static children below, each repo GROUPS UNDER ITS OWNER — the Personal child and each per-Company
           # child are THEMSELVES expandable to reveal the repos owned by them (label = repo name, route =

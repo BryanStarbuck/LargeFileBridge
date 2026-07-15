@@ -11,9 +11,20 @@ import { compressInfo, HARD_SKIP } from "../fs/badges.js";
 import { mapLimit, responsiveBudget } from "../../shared/concurrency.js";
 import { log } from "../../shared/logging.js";
 import { repoStateDir } from "./tracking-root.service.js";
-import { resolveStorageType, tracksIndexInLocalStorage } from "./storage-type.service.js";
+import {
+  resolveStorageType,
+  tracksIndexInLocalStorage,
+  trackingBaseDir,
+  legacyTrackingBaseDir,
+  usesLfbridgeDir,
+  RESERVED_SDL_ROOT_NAMES,
+  LFBRIDGE_DIR,
+} from "./storage-type.service.js";
 
-export const LFBRIDGE_DIR = ".lfbridge";
+// Re-exported for the many existing importers; the canonical definition lives in storage-type.service (the
+// leaf that owns the storage-KIND rule). Reminder: `.lfbridge/` is a WORKING-REPO-ONLY concept — never join
+// it directly, always go through `trackingBaseDir(root)` (artifact_placement_policy.mdx §0).
+export { LFBRIDGE_DIR };
 const FILES_YAML = "files.yaml";
 const ANALYSIS_DIR = "analysis";
 // Analysis outputs that still live as YAML under .lfbridge/analysis/<rel>/ (visuals-by-time; the
@@ -30,28 +41,34 @@ const AI_DESCRIPTION_EXT = ".ai_description";
 const MAX_FILES = 5000; // a safety cap so an enormous tree can't run the index unbounded (logged if hit).
 const FINGERPRINT_CHUNK = 64 * 1024;
 
-/** The legacy in-repo index location — `<root>/.lfbridge/files.yaml`. Still READ as a fallback so a repo that
- *  was indexed before the Local-Storage migration keeps its counts until its next re-index; SWEPT afterward
- *  (§ sweepLegacyRepoIndex). For an SDL storage this is ALSO the canonical location. */
+/** The legacy in-repo index location — `<root>/.lfbridge/files.yaml`. Still READ as a fallback in two cases:
+ *  a working repo indexed before the Local-Storage migration (SWEPT afterward — § sweepLegacyRepoIndex), and
+ *  an SDL not yet migrated to the root layout (artifact_placement_policy.mdx §0.3). Never a WRITE target. */
 function lfbridgeFilesYamlPath(root: string): string {
   return path.join(root, LFBRIDGE_DIR, FILES_YAML);
 }
 
-/** Where THIS storage's `files.yaml` fingerprint index lives, by storage KIND (storage-type.service.ts):
- *  a working `repo` → Local Storage `~/T/_large_files_bridge/repos/<repoKey>/files.yaml` (never the working
- *  tree); a personal/company/community SDL → its committed `<root>/.lfbridge/files.yaml` (travels). Pass the
- *  known `type` to skip a descriptor read on hot paths (the Storages/Repos list); omit it to resolve here. */
+/** Where THIS storage's `files.yaml` fingerprint index lives — both rules compose (storage-type.service.ts):
+ *  by CATEGORY, a working `repo` → Local Storage `~/T/_large_files_bridge/repos/<repoKey>/files.yaml` (never
+ *  the working tree); by KIND, a personal/company/community SDL → its committed `<root>/files.yaml` — at the
+ *  ROOT, since an SDL has no `.lfbridge/` (§0). Pass the known `type` to skip a descriptor read on hot paths
+ *  (the Storages/Repos list); omit it to resolve here. */
 function filesYamlPath(root: string, type?: StorageType): string {
   const t = type ?? resolveStorageType(root);
   if (tracksIndexInLocalStorage(t)) return path.join(repoStateDir(root), FILES_YAML);
-  return lfbridgeFilesYamlPath(root);
+  return path.join(trackingBaseDir(root, t), FILES_YAML);
 }
 
-/** Which §6 analysis outputs already exist for a file. Transcript + description are detected inside the
- *  committed `.lfbridge/`, path-mirrored, with the ext APPENDED to the full filename (Transcribe.mdx §3.1):
- *  <root>/.lfbridge/<rel-dir>/<name.ext>.transcription / .ai_description; visuals-by-time is still a YAML
- *  under .lfbridge/analysis/<rel>/. */
-export function analysisOutputs(root: string, rel: string): string[] {
+/** Which §6 analysis outputs already exist for a file. Transcript + description are detected under the root's
+ *  TRACKING BASE (artifact_placement_policy.mdx §0) — `<root>/.lfbridge/` for a working repo, `<root>` itself
+ *  for an SDL — path-mirrored, with the ext APPENDED to the full filename (Transcribe.mdx §3.1); visuals-by-
+ *  time is still a YAML under `<base>/analysis/<rel>/`.
+ *
+ *  This is the "is it already done?" check, so it must NEVER report a false MISSING: that regenerates work,
+ *  and for a paid AI description it re-bills the provider. So it probes every layout an artifact could
+ *  legitimately be in — the tracking base, beside the media, and (for a not-yet-migrated SDL) the legacy
+ *  `.lfbridge/` base (§0.3). */
+export function analysisOutputs(root: string, rel: string, type?: StorageType): string[] {
   const out: string[] = [];
   const isFileAt = (p: string): boolean => {
     try {
@@ -60,16 +77,25 @@ export function analysisOutputs(root: string, rel: string): string[] {
       return false;
     }
   };
-  // Detect the artifact in EITHER placement (placement_radios.mdx): the hidden `.lfbridge/` (default) OR
-  // beside the media (the opt-in beside-media layout) — so a file's "done" status is correct whichever
-  // placement the repo chose. (The sync-repo placement is detected via its own path when that seam lands.)
-  const lfbridgeBase = path.join(root, LFBRIDGE_DIR, rel); // full filename kept; ext appended below
-  const besideBase = path.join(root, rel);
-  if (isFileAt(lfbridgeBase + TRANSCRIPTION_EXT) || isFileAt(besideBase + TRANSCRIPTION_EXT)) out.push("transcript");
-  if (isFileAt(lfbridgeBase + AI_DESCRIPTION_EXT) || isFileAt(besideBase + AI_DESCRIPTION_EXT)) out.push("description");
-  const dir = path.join(root, LFBRIDGE_DIR, ANALYSIS_DIR, rel);
+  const t = type ?? resolveStorageType(root);
+  // Detect the artifact in EVERY placement (placement_radios.mdx): under the tracking base (the default) OR
+  // beside the media (the opt-in beside-media layout) OR, for an SDL awaiting migration, the legacy
+  // `.lfbridge/` base — so a file's "done" status is correct whichever layout it is actually in. (The
+  // sync-repo placement is detected via its own path when that seam lands.)
+  const legacy = legacyTrackingBaseDir(root, t);
+  const bases = [
+    path.join(trackingBaseDir(root, t), rel), // full filename kept; ext appended below
+    path.join(root, rel), // beside the media
+    ...(legacy ? [path.join(legacy, rel)] : []), // legacy pre-migration SDL layout
+  ];
+  if (bases.some((b) => isFileAt(b + TRANSCRIPTION_EXT))) out.push("transcript");
+  if (bases.some((b) => isFileAt(b + AI_DESCRIPTION_EXT))) out.push("description");
+  const analysisDirs = [
+    path.join(trackingBaseDir(root, t), ANALYSIS_DIR, rel),
+    ...(legacy ? [path.join(legacy, ANALYSIS_DIR, rel)] : []),
+  ];
   for (const [key, file] of Object.entries(ANALYSIS_FILES)) {
-    if (isFileAt(path.join(dir, file))) out.push(key);
+    if (analysisDirs.some((d) => isFileAt(path.join(d, file)))) out.push(key);
   }
   return out;
 }
@@ -103,11 +129,12 @@ async function fingerprint(abs: string, st: fs.Stats): Promise<string | null> {
 }
 
 /**
- * (Re)build `<root>/.lfbridge/files.yaml` from the large files under the storage. Returns the count.
+ * (Re)build the storage's `files.yaml` index from the large files under it — at `filesYamlPath(root, type)`,
+ * which is Local Storage for a working repo and `<root>/files.yaml` for an SDL. Returns the count.
  * Two phases (parallelization.mdx §3): (1) a cheap metadata-only walk collects the large-file entries; then
  * (2) the per-file FINGERPRINTING (head+tail read + sha256) fans out WIDE across files, bounded by the
  * RESPONSIVE budget (cores − 2), so a large storage indexes quickly without pinning the app. Indexing
- * MULTIPLE storages parallelizes across storages too — each writes only its own `.lfbridge/files.yaml`.
+ * MULTIPLE storages parallelizes across storages too — each writes only its own index.
  */
 export async function indexStorageFiles(root: string, type?: StorageType): Promise<number> {
   const t = type ?? resolveStorageType(root);
@@ -124,10 +151,15 @@ export async function indexStorageFiles(root: string, type?: StorageType): Promi
     } catch {
       return;
     }
+    // In an SDL the tracking base IS the root, so LFB's own metadata (devices/, analysis/, the root YAMLs)
+    // sits in the walk's path. Skip it at the TOP LEVEL ONLY — these names are reserved there (§0.3), but
+    // deeper down they are just ordinary user directories inside a mapped-dir mirror and must be indexed.
+    const atSdlRoot = !usesLfbridgeDir(t) && path.resolve(dir) === path.resolve(root);
     for (const ent of entries) {
       if (collected.length >= MAX_FILES) break;
       const name = ent.name;
       if (name === LFBRIDGE_DIR || name === ".git" || name === "node_modules" || HARD_SKIP.has(name)) continue;
+      if (atSdlRoot && RESERVED_SDL_ROOT_NAMES.has(name)) continue;
       const abs = path.join(dir, name);
       if (ent.isDirectory()) {
         walk(abs);

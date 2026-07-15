@@ -24,6 +24,7 @@ import { expandHome } from "../fs/badges.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { readYaml, updateYaml } from "../../shared/store/yaml-store.js";
 import { readStorageIndex, countStorageIndex, indexStorageFiles, LFBRIDGE_DIR } from "./tracking.service.js";
+import { trackingBaseDir, clearStorageTypeCache } from "./storage-type.service.js";
 import { analyzeFile } from "./analysis.service.js";
 // Lazy import cycles with storage-settings.service (ensureBackingLocations) and devices.service
 // (writeSelfDevice) — used only inside functions, never at module-eval time — safe under NodeNext ESM.
@@ -149,11 +150,18 @@ function omit(o: Record<string, any>, keys: string[]): Record<string, unknown> {
 // ── initialize a storage (storages.mdx §3–§4) ─────────────────────────────────
 export function ensureStorage(root: string, type: StorageType, extras?: Partial<StorageDescriptor>): StorageDescriptor {
   if (!safeIsDir(root)) throw new Error(`not a directory: ${root}`);
-  fs.mkdirSync(path.join(root, LFBRIDGE_DIR), { recursive: true });
-  // `.lfbridge/` is NEVER git-ignored now — it holds only committed content (repo: transcripts / AI
+  // Create the KIND-CORRECT tracking area (artifact_placement_policy.mdx §0): a working repo gets its hidden
+  // `.lfbridge/`; an SDL gets nothing new — its root already IS the tracking area, so creating a `.lfbridge/`
+  // there would resurrect the very directory this rule removes. `trackingBaseDir` returns `root` for an SDL,
+  // making the mkdir a harmless no-op on an existing dir.
+  fs.mkdirSync(trackingBaseDir(root, type), { recursive: true });
+  // The tracking text is NEVER git-ignored — it holds only committed content (repo: transcripts / AI
   // descriptions) or device text (SDL); the noisy tracking state moved to Local Storage. Heal any repo a
   // prior build wrongly ignored so those files can travel (artifact_placement_policy.mdx §1).
   if (exists(path.join(root, ".git"))) reconcileLfbridgeIgnore(root, type);
+  // A descriptor may be about to be written (or the kind may have just changed) — drop the memoized kind so
+  // the next resolve reads truth from disk rather than a stale classification.
+  clearStorageTypeCache(root);
   // Record THIS computer in the storage's travelling device registry (devices.mdx §2). Self-owned write,
   // best-effort — a device-file failure must never block initializing the storage.
   try {
@@ -280,7 +288,9 @@ function buildRow(root: string): StorageRow {
     companyName,
     communityId,
     initialized: !!desc,
-    hasLfbridge: safeIsDir(path.join(root, LFBRIDGE_DIR)),
+    // "Does this storage have its tracking area yet?" — kind-correct (§0): the hidden `.lfbridge/` for a
+    // working repo; for an SDL the root IS the tracking area, so this is true once the root exists.
+    hasLfbridge: safeIsDir(trackingBaseDir(root, type)),
     fileCount: countStorageIndex(root, type),
     clones: desc?.clones ?? { ...EMPTY_CLONES },
     route: type === "personal" ? "/storages/personal" : `/storages/${id}`,
@@ -411,7 +421,9 @@ export function findStorageRootForPath(absPath: string): string | null {
     cur = path.dirname(cur);
   }
   for (;;) {
-    if (safeIsDir(path.join(cur, LFBRIDGE_DIR))) return cur;
+    // A working repo is marked by its hidden `.lfbridge/`; an SDL has NO `.lfbridge/` (§0), so it is marked
+    // by its root descriptor instead. Probing only for `.lfbridge/` would walk straight past every SDL.
+    if (safeIsDir(path.join(cur, LFBRIDGE_DIR)) || exists(path.join(cur, STORAGE_YAML))) return cur;
     const parent = path.dirname(cur);
     if (parent === cur) return null;
     cur = parent;
@@ -420,9 +432,10 @@ export function findStorageRootForPath(absPath: string): string | null {
 
 // ── bookmarks (syncable_data_location.mdx §4.4) — travel with the storage ─────────────────────────────
 // Starred files are a property of the STORAGE, not the computer, so they live in the SDL
-// (`<root>/.lfbridge/bookmarks.yaml`) and come across in the YAML to every machine that carries it.
+// (`<root>/bookmarks.yaml` — at the root, since an SDL has no `.lfbridge/`, artifact_placement_policy.mdx
+// §0) and come across in the YAML to every machine that carries it.
 function bookmarksPath(root: string): string {
-  return path.join(root, LFBRIDGE_DIR, "bookmarks.yaml");
+  return path.join(trackingBaseDir(root), "bookmarks.yaml");
 }
 
 /** Read a storage's bookmarked relpaths (defaults-on-absence). */
@@ -456,10 +469,11 @@ export async function setBookmark(storageId: string, relPath: string, on: boolea
 // deleted (charter: surface and offer, never act on files unasked). Called per storage from the pass.
 function ensureLfbridgeAt(dir: string, type: StorageType): void {
   try {
-    fs.mkdirSync(path.join(dir, LFBRIDGE_DIR), { recursive: true });
+    // Kind-correct (§0): `.lfbridge/` for a working repo, the root itself for an SDL (a no-op mkdir).
+    fs.mkdirSync(trackingBaseDir(dir, type), { recursive: true });
     if (exists(path.join(dir, ".git"))) reconcileLfbridgeIgnore(dir, type);
   } catch (e) {
-    log.warn("storage", `ensure .lfbridge at ${dir} failed: ${(e as Error).message}`);
+    log.warn("storage", `ensure tracking area at ${dir} failed: ${(e as Error).message}`);
   }
 }
 
@@ -469,13 +483,14 @@ export function ensureBackingLocations(id: string): void {
 
   const settings = readStorageSettings(id);
 
-  // The storage's own hidden tracking area at its configured (possibly relocated) location (§3).
+  // The storage's own tracking area at its configured (possibly relocated) location (§3). The DEFAULT is
+  // kind-correct (§0): `<root>/.lfbridge` for a working repo, `<root>` itself for an SDL.
   if (settings.lfbridge.enabled) {
-    const lfDir = settings.lfbridge.path ? expandHome(settings.lfbridge.path) : path.join(storage.root, LFBRIDGE_DIR);
+    const lfDir = settings.lfbridge.path ? expandHome(settings.lfbridge.path) : trackingBaseDir(storage.root, storage.type);
     try {
       fs.mkdirSync(lfDir, { recursive: true });
     } catch (e) {
-      log.warn("storage", `ensure .lfbridge for ${id} at ${lfDir} failed: ${(e as Error).message}`);
+      log.warn("storage", `ensure tracking area for ${id} at ${lfDir} failed: ${(e as Error).message}`);
     }
     if (exists(path.join(storage.root, ".git"))) reconcileLfbridgeIgnore(storage.root, storage.type);
   }

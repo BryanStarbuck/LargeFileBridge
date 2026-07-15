@@ -156,7 +156,7 @@ companies:
 
 The Storages child **re-labels to "Acme Marketing"** immediately; `marketing-videos` stays grouped under
 it (the grouping is by company **id**, not by label, so a rename never regroups anything). If a company
-storage directory has been materialized, its `.lfbridge/storage.yaml` `company.company_name` is updated to
+storage directory has been materialized, its root `storage.yaml` `company.company_name` is updated to
 match ([storage_company.mdx §2](./storage_company.mdx)).
 
 Renaming a company (updating `display_name`, never `source.org`) and re-labeling the Storages child are
@@ -283,8 +283,11 @@ per-repo sync toggle for its repos ([repo_settings.mdx §2](./repo_settings.mdx)
 sync repo does two things:
 
 1. **Materializes the company storage.** A [company storage](./storage_company.mdx) is created rooted at the
-   sync repo, with `.lfbridge/storage.yaml` carrying `type: company` + `company.company_name: "Acme
-   Marketing"`. The company is now a real storage, not just a grouping.
+   sync repo, with a root `storage.yaml` carrying `type: company` + `company.company_name: "Acme
+   Marketing"`. (It sits at the root, not under a `.lfbridge/` — a company storage is an **SDL**, and an SDL
+   has no `.lfbridge/` at all: its root *is* the `.lfbridge` area,
+   [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx).) The company is now a real storage,
+   not just a grouping.
 
    ```yaml
    # companies.yaml — the company now points at its sync repo:
@@ -308,7 +311,7 @@ sync repo does two things:
 └── files/campaigns/…
 
 ~/BGit/Bryan_git/acme_large_files_bridge/          ← the company sync repo (committed, travels to members)
-├── .lfbridge/storage.yaml                         ← type: company, company_name: "Acme Marketing"
+├── storage.yaml                                   ← type: company, company_name: "Acme Marketing" (SDL root — no .lfbridge/)
 └── repos/
     └── marketing-videos-77aa/                      ← <repoKey> — the ADDITIVE mirror of the tracking above
         ├── repo_storage.yaml

@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Personal Storage
-description: The Personal storage spec. A user's own personal large files, tracked as a directory-based storage whose Syncable Data Location is a Git repo the user configures — conventionally ~/BGit/Bryan_git/personal_large_files_bridge/. This is the CANONICAL Git-backbone use case: one user with two (or more) computers, each running LFB, each pointed at the same Personal repo. On each computer the user opens Personal storage settings, turns Git ON, and supplies the repo either as a LOCAL FILE PATH (a checkout already on that box) or as an HTTP(S) URL (a Git server not mapped to the local filesystem, which LFB clones into a machine-local working-copy cache). Turning Git on GRANTS LFB permission to run git fetch, git merge (automatic), git add/commit, and git push on every backbone pass, carried by the git_backbone.mdx engine using simple-git over the system git binary. Each computer registers itself as a UNIQUE device: it writes a .lfbridge/devices/<device-id>.yaml — its stable minted id plus a hardware fingerprint (model, year, disk, screen, RAM, chip, OS user) collected from OS APIs, falling back to a composed fingerprint — into the Personal repo, and reads the OTHER devices' files to discover the user's other computers, which then appear in the Devices left-bar tab. There is exactly one Personal storage per user. The storage.yaml carries name + type: personal; the .lfbridge/ area carries the fingerprint index, IPFS manifest, media-analysis outputs, and the device registry; big files stay in their natural home directories, git-ignored, moving over IPFS while the small SDL text moves over Git. Personal's settings page also lists the repos owned by Personal — including the auto-defaulted no-org repos — with a per-row reassign dropdown (Personal | each company | + New company…) to move any to a company (§14.1 → storage_settings.mdx §4c); moving a repo to a company with a sync repo records a travelling ownership assertion (repo_owner_propagation.mdx) that applies on the company members' machines only via review-and-consent, moves NO bytes, and re-targets the repo's tracking mirror from Personal's sync repo to the company's. Sibling of storage_repo / storage_company / storage_community (shared storage.yaml + .lfbridge layout in storages.mdx), storage_settings.mdx (where Git is turned on and the Owned-repos list renders), git_backbone.mdx (the Git engine), devices.mdx (the device registry + graft), syncable_data_location.mdx (the SDL that travels), repo_company_mapping.mdx (the owner mapping), and repo_owner_propagation.mdx (how a company reassignment travels + is consent-gated).
+description: The Personal storage spec. A user's own personal large files, tracked as a directory-based storage whose Syncable Data Location is a Git repo the user configures — conventionally ~/BGit/Bryan_git/personal_large_files_bridge/. This is the CANONICAL Git-backbone use case: one user with two (or more) computers, each running LFB, each pointed at the same Personal repo. On each computer the user opens Personal storage settings, turns Git ON, and supplies the repo either as a LOCAL FILE PATH (a checkout already on that box) or as an HTTP(S) URL (a Git server not mapped to the local filesystem, which LFB clones into a machine-local working-copy cache). Turning Git on GRANTS LFB permission to run git fetch, git merge (automatic), git add/commit, and git push on every backbone pass, carried by the git_backbone.mdx engine using simple-git over the system git binary. Each computer registers itself as a UNIQUE device: it writes a devices/<device-id>.yaml at the Personal repo ROOT — its stable minted id plus a hardware fingerprint (model, year, disk, screen, RAM, chip, OS user) collected from OS APIs, falling back to a composed fingerprint — into the Personal repo, and reads the OTHER devices' files to discover the user's other computers, which then appear in the Devices left-bar tab. There is exactly one Personal storage per user. The Personal SDL repo has NO .lfbridge/ directory AT ALL — .lfbridge/ is a working-repo-only concept and the SDL ROOT *is* the .lfbridge area (artifact_placement_policy.mdx §0 owns that rule) — so storage.yaml (name + type: personal), mapped_dirs.yaml, the files.yaml fingerprint index, the IPFS manifest.yaml, bookmarks.yaml, the media-analysis outputs (analysis/), the path-mirrored artifacts, and the devices/ registry ALL sit at the repo root (~/BGit/Bryan_git/personal_large_files_bridge/devices/<device-id>.yaml, NOT .lfbridge/devices/…); big files stay in their natural home directories, git-ignored, moving over IPFS while the small SDL text moves over Git. Personal's settings page also lists the repos owned by Personal — including the auto-defaulted no-org repos — with a per-row reassign dropdown (Personal | each company | + New company…) to move any to a company (§14.1 → storage_settings.mdx §4c); moving a repo to a company with a sync repo records a travelling ownership assertion (repo_owner_propagation.mdx) that applies on the company members' machines only via review-and-consent, moves NO bytes, and re-targets the repo's tracking mirror from Personal's sync repo to the company's. Sibling of storage_repo / storage_company / storage_community (shared storage.yaml + tracking-area layout in storages.mdx), artifact_placement_policy.mdx §0 (the storage-kind rule that says an SDL has no .lfbridge/), storage_settings.mdx (where Git is turned on and the Owned-repos list renders), git_backbone.mdx (the Git engine), devices.mdx (the device registry + graft), syncable_data_location.mdx (the SDL that travels), repo_company_mapping.mdx (the owner mapping), and repo_owner_propagation.mdx (how a company reassignment travels + is consent-gated).
 ---
 
 # LargeFileBridge — Personal Storage
@@ -17,8 +17,12 @@ other** and stay in step.
 
 Read the shared model first; this spec does not restate it:
 
-* [storages.mdx](./storages.mdx) — the storage family: `storage.yaml` (§3), the hidden `.lfbridge/`
-  layout (§4), cloud clones (§5), media analysis (§6).
+* [storages.mdx](./storages.mdx) — the storage family: `storage.yaml` (§3), the tracking-area layout
+  (§4), cloud clones (§5), media analysis (§6).
+* [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx) — **the owner of the storage-kind
+  rule**, which this spec follows and does not restate: **`.lfbridge/` is a working-repo-only concept.**
+  A **dedicated LFB file repo** — and the Personal SDL *is* one — has **no `.lfbridge/` directory at
+  all**; **the Personal repo root *is* the `.lfbridge` area**, so every path below hangs off the root.
 * [storage_settings.mdx](./storage_settings.mdx) — the per-storage settings page where the user **turns
   the Git backbone on** and supplies the remote (§4.1 there).
 * [git_backbone.mdx](./git_backbone.mdx) — the **Git engine** this spec drives: the granted operations, the
@@ -44,21 +48,21 @@ computer:
 
 ```
 ~/BGit/Bryan_git/personal_large_files_bridge/     ← the personal storage root (its SDL; a Git repo)
+│                                                  ← NO .lfbridge/ — this ROOT *is* the tracking area (§1.1)
 ├── .git/                                          ← the user's clone (local-path remote) or LFB's cache clone (URL remote)
 ├── .gitattributes                                 ← merge=union for the append-mostly lists (git_backbone.mdx §4.2)
 ├── LargeFilesBridge_SyncList.yaml                 ← the portable list (committed, travels via Git)
-└── .lfbridge/                                     ← the hidden tracking area — COMMITTED for a Git backbone (§6)
-    ├── storage.yaml        ← name + type: personal (storages.mdx §3)
-    ├── mapped_dirs.yaml    ← the home-tree hierarchies this Personal storage covers (SDL §3)
-    ├── files.yaml          ← per-file fingerprint index (storages.mdx §4.1)
-    ├── manifest.yaml       ← large-file → IPFS CID + pin state
-    ├── bookmarks.yaml      ← the user's starred files
-    ├── devices/            ← the DEVICE REGISTRY — one file per computer (§4)
-    │   ├── bryan-macbook-pro.yaml
-    │   └── bryan-mac-studio.yaml
-    ├── <rel-dir>/<name.ext>.transcription   ← transcript — path-mirrored, ext APPENDED (storages.mdx §6)
-    ├── <rel-dir>/<name.ext>.ai_description  ← AI description — path-mirrored, ext APPENDED (storages.mdx §6)
-    └── analysis/           ← visuals-by-time + compression record only (storages.mdx §6)
+├── storage.yaml        ← name + type: personal (storages.mdx §3)
+├── mapped_dirs.yaml    ← the home-tree hierarchies this Personal storage covers (SDL §3)
+├── files.yaml          ← per-file fingerprint index (storages.mdx §4.1)
+├── manifest.yaml       ← large-file → IPFS CID + pin state
+├── bookmarks.yaml      ← the user's starred files
+├── devices/            ← the DEVICE REGISTRY — one file per computer (§4)
+│   ├── bryan-macbook-pro.yaml
+│   └── bryan-mac-studio.yaml
+├── <rel-dir>/<name.ext>.transcription   ← transcript — path-mirrored, ext APPENDED (storages.mdx §6)
+├── <rel-dir>/<name.ext>.ai_description  ← AI description — path-mirrored, ext APPENDED (storages.mdx §6)
+└── analysis/           ← visuals-by-time + compression record only (storages.mdx §6)
 
 …the user's personal big files stay in their natural home-tree directories (git-ignored, moved over IPFS)…
 ```
@@ -73,25 +77,55 @@ computer:
   SDL's small text — `LargeFilesBridge_SyncList.yaml`, `storage.yaml`, `mapped_dirs.yaml`, `files.yaml`,
   `manifest.yaml`, `bookmarks.yaml`, `devices/`, and `analysis/` — **is committed**, because Git is the
   vehicle that makes it travel. Only the **big-file bytes** are git-ignored (and they never live in this
-  repo anyway). This narrows the generic *"keep `.lfbridge/` git-ignored"* rule
-  ([storages.mdx §4](./storages.mdx#4-lfbridge--the-hidden-per-storage-tracking-area)) to its true intent:
+  repo anyway). This narrows the generic *"keep the tracking area git-ignored"* rule
+  ([storages.mdx §4](./storages.mdx#4-where-a-storages-state-lives--the-kind-split-then-category-a-vs-category-b-locked)) to its true intent:
   keep the *bytes* out of Git, not the metadata whose entire purpose is to ride Git to your other
   computers.
 
-  LFB **enforces** this: for a personal (or company/community) SDL repo it never adds a `.lfbridge/`
-  ignore, and before every backbone commit it **strips** a stray `.lfbridge/` line so the device registry
-  is actually committed and pushed — a bare `.lfbridge/` ignore here silently blocks every device file and
-  makes the two computers invisible to each other ([git_backbone.mdx §4.2.1](./git_backbone.mdx#421-the-lfbridge-sdl-text-must-never-be-git-ignored-locked-learned-from-a-defect)).
+  LFB **enforces** this: for a personal (or company/community) SDL repo it never adds an ignore for the
+  SDL's own text, and before every backbone commit it **strips** a stray one so the device registry is
+  actually committed and pushed. Because the SDL has **no `.lfbridge/`** (§1.1), the hazard is now an
+  ignore on the SDL's **root metadata** — `storage.yaml`, `mapped_dirs.yaml`, `files.yaml`,
+  `manifest.yaml`, `bookmarks.yaml`, `analysis/`, and above all **`devices/`**. A bare **`devices/`** line
+  (or a broad root ignore such as `*.yaml` or `/*` with no re-include) is the new **silent killer**: it
+  blocks every device file, so the two computers never see each other and the failure looks like "the
+  backbone just doesn't work" — the same defect that was hit in production, whose hazard **moved** from a
+  `.lfbridge/` line to the root metadata rather than going away
+  ([git_backbone.mdx §4.2.1](./git_backbone.mdx#421-the-sync-repos-committed-tracking-payload-must-never-be-git-ignored-locked-learned-from-a-defect)).
   Handled in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts`
-  — `reconcileLfbridgeIgnore(root, type)` and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts`
+  — `reconcileLfbridgeIgnore(root, type)` (for an SDL it reconciles the **root** metadata + `devices/`, not
+  a `.lfbridge/` line) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts`
   — `GitBackbone.ensureSdlCommittable()`.
+
+### 1.1 The Personal repo root *is* the `.lfbridge` area — there is no `.lfbridge/` here (LOCKED)
+
+`.lfbridge/` is a **working-repo-only** concept. In a **working git repo** LFB is a **guest**, so it
+quarantines everything it writes under one hidden `.lfbridge/` that is obviously not the user's content.
+The Personal storage's SDL is the **opposite**: a repo whose entire reason to exist is to hold LFB's files.
+Hiding them under `.lfbridge/` inside a repo that contains nothing else buys no separation and only adds a
+meaningless path segment — so **the Personal repo has no `.lfbridge/` directory at all, and its root *is*
+the `.lfbridge` area**. Everything in the tree above — `storage.yaml`, `mapped_dirs.yaml`, `files.yaml`,
+`manifest.yaml`, `bookmarks.yaml`, `devices/`, `analysis/`, and the path-mirrored artifact tree — sits at
+the **root**:
+
+```
+CORRECT  ~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/Politics/…/FINAL_CIA_Drones.mp4.transcription
+WRONG    ~/BGit/Bryan_git/personal_large_files_bridge/.lfbridge/_Mirror/Politics/…/FINAL_CIA_Drones.mp4.transcription
+```
+
+The rule is **owned by** [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx) — with the
+SDL's own metadata in §0.1, the kind-not-name keying in §0.2, and the reserved root names (a mapped-dir key
+named `devices`, `analysis`, `files.yaml`, … would shadow the SDL's metadata) plus the migration of a
+pre-existing `.lfbridge/` in §0.3. This spec **follows** it and does not restate it. Two consequences worth
+naming here: the decision is keyed on the resolved **storage kind** (`personal`), never on the repo's path
+or name; and Personal's own `.git/` — every SDL has one — **never** demotes it to a working repo.
 
 ---
 
 ## 2. `storage.yaml` for personal
 
 ```yaml
-# ~/BGit/Bryan_git/personal_large_files_bridge/.lfbridge/storage.yaml
+# ~/BGit/Bryan_git/personal_large_files_bridge/storage.yaml   ← at the ROOT — an SDL has no .lfbridge/ (§1.1)
 name: "My Personal Files"
 type: personal
 created: 2026-05-01T10:12:00Z
@@ -141,13 +175,13 @@ device file, and **reads the others** to learn about the user's other machines. 
 identity, fingerprint, disambiguation, the graft, the Devices/Peers table — is
 [devices.mdx](./devices.mdx); this section is the Personal-storage view of it.
 
-### 4.1 A unique id per device, under `.lfbridge/devices/`
+### 4.1 A unique id per device, under `devices/` at the repo root
 
-Inside the Personal repo, LFB keeps a **`devices/`** directory, and each computer creates **one file
-keyed by its own unique id**:
+At the **root** of the Personal repo — an SDL has no `.lfbridge/` (§1.1) — LFB keeps a **`devices/`**
+directory, and each computer creates **one file keyed by its own unique id**:
 
 ```
-~/BGit/Bryan_git/personal_large_files_bridge/.lfbridge/devices/
+~/BGit/Bryan_git/personal_large_files_bridge/devices/
 ├── bryan-macbook-pro.yaml    ← written & OWNED by the laptop (its id inside)
 └── bryan-mac-studio.yaml     ← written & OWNED by the studio tower
 ```
@@ -234,7 +268,7 @@ time on each machine and how the two converge.
 
 1. **Open Personal storage settings; turn Git on.** The user enables the dedicated-Git-repo backing
    location and enters the **local path** to their checkout (§5).
-2. **LFB seeds the SDL.** On the next pass it ensures `.lfbridge/` in the repo, writes `storage.yaml`
+2. **LFB seeds the SDL.** On the next pass it writes, **at the repo root** (§1.1), `storage.yaml`
    (`type: personal`), the `mapped_dirs.yaml` for the home-tree directories the user added, the
    `.gitattributes` (`merge=union`, [git_backbone.mdx §4.2](./git_backbone.mdx#42-append-mostly-shared-lists-merge-by-union)),
    and — crucially — **this laptop's own** `devices/bryan-macbook-pro.yaml` with its id + fingerprint (§4).
@@ -306,9 +340,10 @@ Driving the per-pass Git cycle for the Personal storage (fetch+merge before the 
 
 ## 8. Media analysis + cloud clones
 
-Personal storage produces the same [storages.mdx §6](./storages.mdx) **media-analysis** outputs into
-`.lfbridge/` (transcript / description as path-mirrored `<name.ext>.transcription` / `.ai_description`
-files with the extension appended; visuals-by-time + compression records under `.lfbridge/analysis/`) and
+Personal storage produces the same [storages.mdx §6](./storages.mdx) **media-analysis** outputs into its
+SDL — **at the repo root**, with no `.lfbridge/` segment (§1.1) — (transcript / description as
+path-mirrored `<name.ext>.transcription` / `.ai_description` files with the extension appended;
+visuals-by-time + compression records under the root's `analysis/`) and
 may **clone** to Google Drive / Dropbox ([storages.mdx §5](./storages.mdx)) — recorded in the `clones`
 block. These artifacts ride the same Git backbone (§7) to the user's other computers, so they are
 **generated once and reused everywhere** ([syncable_data_location.mdx §4](./syncable_data_location.mdx#4-derived-artifacts--generate-once-reuse-everywhere-locked-value)).
@@ -327,13 +362,14 @@ go** (transcripts, AI descriptions):
   the **dedicated Git repo** is the preferred one, and (per this spec) the vehicle that carries the SDL
   between the user's computers over the git backbone. Its convention default is **`~/BGit/Bryan_git/personal_large_files_bridge/`**.
 * **When the dedicated repo is ON**, a transcript / description for a loose personal file (e.g.
-  `~/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4`) is written **inside that repo's
-  `.lfbridge/`**, path-mirrored (the file's path **relative to `~`**) with the media's **full filename and
-  the extension APPENDED**:
-  `~/BGit/Bryan_git/personal_large_files_bridge/.lfbridge/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4.transcription`
-  (and `…/FINAL_CIA_Drones.mp4.ai_description`) — **committed** (it lives in `.lfbridge/`), and with **no**
+  `~/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4`) is written **at that repo's root**,
+  path-mirrored (the file's path **relative to `~`**) with the media's **full filename and
+  the extension APPENDED** — and, because the SDL has **no `.lfbridge/`** (§1.1), the mirror hangs
+  directly off the root:
+  `~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4.transcription`
+  (and `…/FINAL_CIA_Drones.mp4.ai_description`) — **committed** (the whole SDL text is), and with **no**
   `.transcribe/` directory. This is placement rule B of [Transcribe.mdx §3.4](./Transcribe.mdx).
-* **When it is OFF**, the same artifacts fall back to the Personal storage root's own `.lfbridge/`, or — as
+* **When it is OFF**, the same artifacts fall back to the Personal storage root itself, or — as
   the last resort — a `.lfbridge/` created in the media's own directory (rule D); they are **never** written
   loose beside the media.
 
@@ -347,7 +383,7 @@ or **Get AI details** on a loose file. Rather than write output somewhere surpri
   ([repo_settings.mdx](./repo_settings.mdx)); we detect the repo by walking up to its `.git/`.
 * If a **company** storage already covers the path, use it; otherwise **default to Personal** and create the
   one Personal storage.
-* **Where the Personal `.lfbridge/` root is created:** default to a directory **under the home (`~`)
+* **Where the Personal tracking root is created:** default to a directory **under the home (`~`)
   tree**; or, if the user prefers, point it at a **dedicated Git repo**
   (`~/BGit/Bryan_git/personal_large_files_bridge/`) — at which point the Git backbone (§5–§7) takes over
   and artifacts store **under that repo** per §9. Nothing is created until the user completes the wizard
@@ -369,8 +405,8 @@ Personal storage participates in the product-wide **TO DO Batch** system
 ([to_do_batches.mdx](./to_do_batches.mdx)). A **TO DO Batch is a per-storage bundle of recommended file
 actions** — there is exactly **one** batch for the Personal storage, persisted as hierarchical YAML at
 **`~/T/_large_files_bridge/_do_batches/personal_2_do.yaml`**. Like every batch it is **local, disposable,
-and uncommitted** — it lives only in the machine-local state root, is **never** written into `.lfbridge/`,
-and is **never** team-shared (it is not a decision; the folded decisions ledger stays the source of truth).
+and uncommitted** — it lives only in the machine-local state root, is **never** written into the Personal
+SDL (nor into any working repo's `.lfbridge/`), and is **never** team-shared (it is not a decision; the folded decisions ledger stays the source of truth).
 
 * **Which categories apply to Personal.** Because loose personal files live **outside any repo**, the
   **`git_ignore`** category ("big-but-not-git-ignored") is **only meaningful under a repo**, so it **never**
@@ -392,7 +428,7 @@ and is **never** team-shared (it is not a decision; the folded decisions ledger 
 * **Transcription discovery for Personal.** The on-demand **"Show what could be transcribed"** link runs
   the **What Can Be Transcribed Calc Engine** ([transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx)),
   which walks the Personal storage's mapped home-tree directories for **video/audio that has no
-  `.transcription` artifact under `.lfbridge/`** and emits a per-storage **transcribe batch** → a **transcribe slug** (a
+  `.transcription` artifact in the Personal SDL's root-hung mirror** (§1.1) and emits a per-storage **transcribe batch** → a **transcribe slug** (a
   ~80%-width, default-checked popup: *"Transcribe N files"* → background jobs on
   [processing.mdx](./processing.mdx)).
 
@@ -504,18 +540,25 @@ The Owned-repos read (`getOwnedRepos("personal")`) and the reassign endpoint (`P
 ## 15. Acceptance criteria
 
 1. A user has **exactly one** personal storage, whose SDL is conventionally the Git repo
-   `~/BGit/Bryan_git/personal_large_files_bridge/`, tracked via a hidden **`.lfbridge/`** at its root.
-2. Its `.lfbridge/storage.yaml` has **`name`** + **`type: personal`** and a (usually empty) `personal`
+   `~/BGit/Bryan_git/personal_large_files_bridge/`. Being a **dedicated LFB file repo**, it has **no
+   `.lfbridge/` directory at all** — **its root *is* the tracking area** (§1.1,
+   [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)); `.lfbridge/` is a
+   working-repo-only concept.
+2. Its **root** `storage.yaml` — `~/BGit/Bryan_git/personal_large_files_bridge/storage.yaml`, **not**
+   `.lfbridge/storage.yaml` — has **`name`** + **`type: personal`** and a (usually empty) `personal`
    block; no `company`/`community`/`repo` block.
 3. **The Git backbone is turned on per-computer from Personal storage settings**, and doing so **grants
    LFB permission** to run `git fetch` / `merge` (automatic) / `commit` / `push` on that repo every
    backbone pass ([git_backbone.mdx](./git_backbone.mdx)). The remote may be a **local file path** (a checkout used in
    place) or an **HTTP(S) URL** (cloned into a machine-local cache) (§5).
-4. **When the backbone is a Git repo, the SDL's small text is committed** (SyncList, storage.yaml,
+4. **When the backbone is a Git repo, the SDL's root text is committed** (SyncList, storage.yaml,
    mapped_dirs, files, manifest, bookmarks, `devices/`, `analysis/`); only the **big-file bytes** are
-   git-ignored, and those never live in the repo (§1). Bytes move over IPFS; text moves over Git.
+   git-ignored, and those never live in the repo (§1). Bytes move over IPFS; text moves over Git. LFB
+   never ignores that root text and **strips** a stray ignore before each backbone commit — a bare
+   **`devices/`** line or a broad root ignore is the silent killer that makes the two computers invisible
+   to each other (§1).
 5. **Each computer registers itself as a unique device**: it writes a self-owned
-   `.lfbridge/devices/<device-id>.yaml` keyed by its **stable minted id**, carrying a **hardware
+   `devices/<device-id>.yaml` **at the Personal repo root** keyed by its **stable minted id**, carrying a **hardware
    fingerprint** (OS machine id when available, else composed from model + year + disk + screen + RAM +
    chip + OS user), collected **locally with no networking**. Two computers write **different** files, so
    the registry **never conflicts** on merge (§4).
@@ -561,22 +604,33 @@ The Owned-repos read (`getOwnedRepos("personal")`) and the reassign endpoint (`P
   Personal storage = the user's OWN private big files, and the CANONICAL Git-backbone use case: one user,
   two computers, one Personal Git repo (conventionally ~/BGit/Bryan_git/personal_large_files_bridge/),
   configured on BOTH. §1 anatomy: the SDL IS a git repo; big files stay in mapped home-tree dirs
-  (git-ignored, IPFS); for a GIT backbone the .lfbridge/ TEXT is COMMITTED (only bytes git-ignored) —
-  narrows the generic git-ignore rule to its true intent. §3 the driving story (two computers, turn Git
-  on, register as unique devices, discover each other, stay in step). §4 each computer writes a UNIQUE,
-  SELF-OWNED .lfbridge/devices/<id>.yaml (minted UUID + hardware fingerprint from OS APIs, else composed
+  (git-ignored, IPFS); for a GIT backbone the SDL's ROOT TEXT is COMMITTED (only bytes git-ignored) —
+  narrows the generic git-ignore rule to its true intent. §1.1 (LOCKED) the STORAGE-KIND rule applied to
+  Personal: .lfbridge/ is a WORKING-REPO-ONLY concept; the Personal SDL has NO .lfbridge/ AT ALL and its
+  ROOT *is* the .lfbridge area (storage.yaml, mapped_dirs, files, manifest, bookmarks, devices/, analysis/,
+  and the path-mirrored artifact tree all hang off the ROOT). Rule OWNED BY artifact_placement_policy.mdx
+  §0/§0.1/§0.2/§0.3 — reference it, never restate; keyed on resolved storage KIND (personal), never on
+  path/name, and Personal's own .git/ never demotes it to a working repo. The git-ignore enforcement was
+  re-mechanized to match: the hazard is no longer a ".lfbridge/" line but an ignore on the SDL's ROOT
+  metadata — above all a bare devices/ (or a broad root ignore), the new silent killer that blocks every
+  device file and makes the two computers invisible to each other — the hazard MOVED, it did not go away
+  (git_backbone.mdx §4.2.1, already reframed to match). §3 the driving story (two computers,
+  turn Git on, register as unique devices, discover each other, stay in step). §4 each computer writes a
+  UNIQUE, SELF-OWNED devices/<id>.yaml AT THE REPO ROOT (minted UUID + hardware fingerprint from OS APIs, else composed
   from model/year/disk/screen/RAM/chip/user; no networking) and reads the OTHERS to discover the user's
   other computers → Devices left-bar tab. §5 turning Git ON (storage_settings §4.1) = the permission grant;
   remote is a LOCAL PATH (used in place) or an HTTP(S) URL (LFB clones into pin/s/personal/git/ cache,
   creds via OS helper). §6 first-time walkthrough both computers, converge. §7 the backbone loop = git_backbone §6
   cycle: resolve→fetch→auto-merge→reconcile/pin to grafted paths→stage self-owned+commit→push, non-ff
   retry, idempotent. §8 media analysis + clones ride the same backbone (generate once, reuse everywhere).
-  §9 Personal = default owner of loose files; dedicated repo ON = artifacts committed under it. Code:
+  §9 Personal = default owner of loose files; dedicated repo ON = artifacts committed under it, mirrored
+  off the ROOT (…/personal_large_files_bridge/_Mirror/…, NOT …/.lfbridge/_Mirror/…). Code:
   devices.service writeSelfDevice/readDevices, hardware.service collectHardware, storage-settings.service
   read/writeStorageSettings (backing.dedicated_repo remote), git.service resolveWorkingCopy/GitBackbone,
   pin.service pinStorageUnit (git cycle around reconcile), DevicesPage. Keep aligned with git_backbone.mdx
   (the engine), storage_settings.mdx §4.1 (the toggle+remote), devices.mdx (identity/fingerprint/graft),
-  syncable_data_location.mdx (the SDL text), storages.mdx (storage.yaml + .lfbridge + analysis).
+  syncable_data_location.mdx (the SDL text), storages.mdx (storage.yaml + tracking area + analysis),
+  artifact_placement_policy.mdx §0 (the storage-kind rule that owns §1.1).
   §12 TO DO Batch: Personal owns ONE local/disposable/uncommitted batch personal_2_do.yaml under
   §13 Personal = DEFAULT OWNER OF REPOS too (repo_company_mapping.mdx): no/local/unknown remote or a known-forge
   owner on the "my personal accounts" list → Personal. The personal-accounts list is OWNED HERE (app config

@@ -9,7 +9,10 @@
 //   • FILE → `/<rel>`; DIR recursive ON → `/<rel>/`; DIR recursive OFF → `/<rel>/*` + `!/<rel>/*/` (§5.2).
 //   • Each target's owning repo = nearestGitAtOrAbove; a selection may span several repos, each getting
 //     its own `.gitignore`; a path in NO repo is excluded and counted (§5.3).
-//   • NEVER emit a line that would ignore a `.lfbridge/` path (git_backbone.mdx §4.2.1) — refuse such targets.
+//   • NEVER emit a line that would ignore the SDL's travelling text (git_backbone.mdx §4.2.1) — refuse such
+//     targets. TWO shapes: a `.lfbridge/` path (a working repo, or a not-yet-migrated SDL) and an SDL's ROOT
+//     payload (`<sdl>/devices`, `<sdl>/storage.yaml`, …), since an SDL has no `.lfbridge/`
+//     (artifact_placement_policy.mdx §0).
 //   • Skip-already-ignored via `git check-ignore`, and drop a line already present in the .gitignore;
 //     writing is append-only + idempotent, LFB only ever ADDS lines (§5.4).
 // Node fs only (no shell `find`) + the shared git helpers.
@@ -18,6 +21,7 @@ import path from "node:path";
 import type { GitIgnoreRequest, GitIgnorePlan, GitIgnoreRepoLines, GitIgnoreResult } from "@lfb/shared";
 import { expandHome } from "../fs/badges.js";
 import { nearestGitAtOrAbove, checkIgnore } from "./git.service.js";
+import { RESERVED_SDL_ROOT_NAMES, resolveStorageType, usesLfbridgeDir } from "../storage/storage-type.service.js";
 import { log } from "../../shared/logging.js";
 
 /** One classified target: an existing file/dir, its owning repo, and its repo-root-relative POSIX path. */
@@ -31,6 +35,21 @@ interface Target {
 /** A path is "under .lfbridge/" if any path segment is exactly `.lfbridge` — that text is never ignored. */
 function isLfbridgePath(abs: string): boolean {
   return abs.split(path.sep).includes(".lfbridge");
+}
+
+/**
+ * True when `abs` IS one of an SDL's own root payload entries (`<sdl>/devices`, `<sdl>/storage.yaml`, …) —
+ * the post-`.lfbridge/` shape of the same "never ignore the SDL's travelling text" rule
+ * (artifact_placement_policy.mdx §0, git_backbone.mdx §4.2.1). Ignoring one would make the user's computers
+ * invisible to each other.
+ *
+ * Deliberately checks only the IMMEDIATE parent, not any ancestor: `devices` is reserved at an SDL ROOT, but
+ * deeper down (or in a working repo) it is an ordinary user directory the user may legitimately ignore.
+ */
+function isSdlRootPayload(abs: string): boolean {
+  const parent = path.dirname(abs);
+  if (!RESERVED_SDL_ROOT_NAMES.has(path.basename(abs))) return false;
+  return !usesLfbridgeDir(resolveStorageType(parent));
 }
 
 /** Repo-root-relative, POSIX-separated path (git .gitignore lines are always `/`-separated). */
@@ -74,8 +93,10 @@ export function planGitIgnore(req: GitIgnoreRequest): GitIgnorePlan {
   const classified: Target[] = [];
 
   for (const abs of targets) {
-    // Defense-in-depth: never git-ignore the `.lfbridge/` SDL text (git_backbone.mdx §4.2.1). Refuse silently.
-    if (isLfbridgePath(abs)) continue;
+    // Defense-in-depth: never git-ignore the SDL's travelling text (git_backbone.mdx §4.2.1) — in either
+    // layout: the legacy `.lfbridge/` tree, or an SDL's root payload now that it has no `.lfbridge/` (§0).
+    // Refuse silently.
+    if (isLfbridgePath(abs) || isSdlRootPayload(abs)) continue;
     let st: fs.Stats;
     try {
       st = fs.statSync(abs);
