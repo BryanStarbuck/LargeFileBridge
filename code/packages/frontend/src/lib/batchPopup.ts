@@ -7,9 +7,10 @@
 // scope and build the same transcribe/describe WarningDef the tiles use, then open it.
 import { toast } from "sonner";
 import type { PreviewPlan } from "@lfb/shared";
-import { formatBytes } from "@lfb/shared";
+import { formatBytes, mediaKindForName } from "@lfb/shared";
 import { api } from "../api/client.js";
 import { clientLog } from "./clientLog.js";
+import { DESCRIBE_KIND_FILTERS } from "./describe.js";
 import { requestStorageSetup } from "./setupWizard.js";
 import { withModelReady } from "./transcribe.js";
 import type { WarningDef } from "../components/ui/warnings/registry.js";
@@ -244,11 +245,15 @@ export async function openDescribeBatch(scope: BatchScope): Promise<void> {
           ? "Every image/video file in this scope already has an AI description, so there is nothing to do here."
           : `Large File Bridge found ${n} image/video file${n === 1 ? "" : "s"} with no AI description yet. It can generate one for each with your configured AI provider.`,
       whyItMatters:
-        "An AI description makes an image or video searchable and captioned without opening it. Each file is sent to your configured AI provider; add a key in Settings → AI credentials first. Review the list on the right and uncheck any you want to skip.",
+        "An AI description makes an image or video searchable and captioned without opening it. Each file is sent to your configured AI provider; add a key in Settings → AI credentials first. Use the Videos / Images filter to narrow the list, and uncheck any you want to skip.",
+      // ai_description.mdx §12.4.1 — the Videos/Images filter row. Each row is tagged with its media kind
+      // so unchecking a kind hides it AND drops it from the batch (the visible list IS the applied set).
+      kindFilters: DESCRIBE_KIND_FILTERS,
       targets: plan.files.map((f) => ({
         id: f.path,
         label: labelForPath(f.path),
         name: basename(f.path),
+        kind: mediaKindForName(f.path) ?? undefined,
         sizeText: formatBytes(f.sizeBytes),
         pathText: labelForPath(f.path),
       })),

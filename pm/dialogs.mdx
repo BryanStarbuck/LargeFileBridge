@@ -189,6 +189,12 @@ It is the **`WarningPopup`** ([warnings.mdx §4](./warnings.mdx)) fed a **transc
 * **Live count in the confirm button.** The solid-blue button reads **"Transcribe N files"** /
   **"Describe N files"** where **N is the live checked count** (`actionLabel` "Transcribe" + the popup's
   appended `— N files`); unchecking a row decrements it. Confirm is **disabled at zero checked**.
+* **The "Filter:" kind row** ([warnings.mdx §4.5.4](./warnings.mdx)). When the action spans two media kinds,
+  the right pane leads with a **"Filter:"** row of per-kind checkboxes — **Videos** and **Images** for AI
+  descriptions ([ai_description.mdx §12.4.1](./ai_description.mdx)) — **both checked by default**.
+  Unchecking a kind **hides those rows and drops them from the batch**: the popup applies **visible ∩
+  checked**, so a file that is not in the list on the right is **never** processed, and the live count falls
+  with it.
 * **Apply = model/provider gate, then background enqueue.** Confirm runs the transcribe/describe **consent
   gate** ([transcribe_engine.mdx §3](./transcribe_engine.mdx) `withModelReady` for transcribe; the AI
   provider-key check for describe) — which may interpose the one-time model-download or the credentials

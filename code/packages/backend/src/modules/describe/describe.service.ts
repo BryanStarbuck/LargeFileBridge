@@ -22,7 +22,7 @@ import { repoArtifactPlacement } from "../store-model/units.service.js";
 import { track } from "../progress/progress.registry.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
 import { getPrompt } from "./prompts.js";
-import { selectAdapter, providerStatus, providerKeySources, providerMeta, mimeForMedia, type ProviderId } from "./adapters.js";
+import { selectAdapter, providerStatus, providerKeySources, providerMeta, mimeForMedia, withProviderRetry, type ProviderId } from "./adapters.js";
 import { fitMediaUnderLimit } from "./fit-media.js";
 import { log } from "../../shared/logging.js";
 
@@ -195,7 +195,12 @@ export async function describeOne(
       const fit = await fitMediaUnderLimit(abs, kind);
       try {
         const mimeType = mimeForMedia(fit.path, kind);
-        return await adapter.describe({ absPath: fit.path, kind, mimeType, prompt });
+        // Bounded retry on TRANSIENT provider failures (ai_description.mdx §3.5) — a timeout, a 429/5xx, a
+        // dropped socket, or an empty-200 must never permanently burn a file. Wrapped OUTSIDE the fit so a
+        // retry re-sends the already-compressed copy instead of re-running the whole ffmpeg transcode.
+        return await withProviderRetry(`${adapter.id} describe ${name}`, () =>
+          adapter.describe({ absPath: fit.path, kind, mimeType, prompt }),
+        );
       } finally {
         fit.cleanup();
       }

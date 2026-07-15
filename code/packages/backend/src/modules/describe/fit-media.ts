@@ -23,6 +23,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir, ensureDir } from "../../config/state-dir.js";
+import { coreBudget } from "../../shared/concurrency.js";
 import { log } from "../../shared/logging.js";
 
 /** The byte ceiling we compress down to. Held safely under the 18MB inline cap in adapters.ts so the
@@ -195,24 +196,70 @@ async function encodeCrf(src: string, out: string, origH: number, targetH: numbe
   ]);
 }
 
-/** Two-pass encode to an EXACT target video bitrate — the deterministic "must fit" fallback. */
-async function encodeTwoPass(src: string, out: string, origH: number, targetH: number, videoKbps: number): Promise<{ code: number | null; err: string }> {
+/** Two-pass encode to an EXACT target video bitrate — the deterministic "must fit" fallback. `audioKbps`
+ *  of 0 drops the audio track entirely (§3.3.2); `fps` of null keeps the source frame rate. Both passes
+ *  share the scale/rate/bitrate args so the pass-1 statistics describe the same encode pass 2 performs. */
+async function encodeTwoPass(
+  src: string,
+  out: string,
+  origH: number,
+  targetH: number,
+  videoKbps: number,
+  audioKbps: number,
+  fps: number | null,
+): Promise<{ code: number | null; err: string }> {
   const scale = targetH < origH ? ["-vf", `scale=-2:${targetH}`] : [];
+  const rate = fps ? ["-r", String(fps)] : [];
   const logbase = tmpPath("").replace(/\.$/, "") + "-2pass";
-  const common = [...scale, "-c:v", "libx264", "-preset", "medium", "-b:v", `${videoKbps}k`, "-passlogfile", logbase];
+  const common = [...scale, ...rate, "-c:v", "libx264", "-preset", "medium", "-b:v", `${videoKbps}k`, "-passlogfile", logbase];
   const p1 = await runAsync("ffmpeg", ["-y", "-i", src, ...common, "-pass", "1", "-an", "-f", "mp4", "/dev/null"]);
   if (p1.code !== 0) {
     tryUnlink(`${logbase}-0.log`);
     tryUnlink(`${logbase}-0.log.mbtree`);
     return p1;
   }
+  const audio = audioKbps > 0 ? ["-c:a", "aac", "-b:a", `${audioKbps}k`] : ["-an"];
   const p2 = await runAsync("ffmpeg", [
     "-y", "-i", src, ...common, "-pass", "2",
-    "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart", out,
+    "-pix_fmt", "yuv420p", ...audio, "-movflags", "+faststart", out,
   ]);
   tryUnlink(`${logbase}-0.log`);
   tryUnlink(`${logbase}-0.log.mbtree`);
   return p2;
+}
+
+// ── the byte budget for the deterministic two-pass fit ────────────────────────────
+// A duration-derived budget is the whole game for a long video: the cap is a fixed number of BYTES, so the
+// longer the clip the fewer bits per second we may spend. These helpers spend that budget honestly.
+
+/** Never ask x264 for less than this — below it the encode is not a video, and the retry loop's ratio
+ *  correction would chase zero. When even this overshoots we fail honestly rather than lie. */
+const MIN_VIDEO_KBPS = 8;
+
+/**
+ * The audio bitrate this budget can afford (§3.3.2). Audio is kept when it costs a small share of the
+ * budget, degraded when it costs more, and DROPPED when the budget is too small to seat it — because a
+ * fixed audio track is a per-SECOND cost against a fixed BYTE cap, so on a long enough clip it consumes
+ * the entire cap by itself (64kbps alone exceeds 17.5MB past ~36 min) and makes the file impossible to fit
+ * at ANY video bitrate. Dropping it is what keeps a long video describable at all; speech is the
+ * transcript's job (Transcribe.mdx), while this prompt describes what is SEEN.
+ */
+function audioKbpsFor(totalKbps: number): number {
+  if (totalKbps >= 320) return 64; // audio ≤ 20% of budget — keep it
+  if (totalKbps >= 160) return 32; // tight — degrade it
+  return 0; // audio would crowd out the picture — drop it
+}
+
+/**
+ * The frame rate to encode at for a given video budget. A vision model samples video at roughly ONE frame
+ * per second, so frames beyond that rate are bits spent on detail the model never looks at. Trading them
+ * away is what turns a sub-100kbps encode from a smear of artifacts into legible frames. Generous budgets
+ * keep the source rate (null).
+ */
+function fpsFor(videoKbps: number): number | null {
+  if (videoKbps >= 200) return null; // plenty — keep the source frame rate
+  if (videoKbps >= 60) return 5;
+  return 1; // what the model samples anyway
 }
 
 async function fitVideoUnderLimit(src: string, limitBytes: number): Promise<{ out: string; note: string }> {
@@ -223,9 +270,27 @@ async function fitVideoUnderLimit(src: string, limitBytes: number): Promise<{ ou
   const origH = info?.height ?? 1080;
   const ladder = resolutionLadder(origH);
 
+  // Is the CRF ladder worth walking at all? The ladder is a SEARCH — every rung is a full encode of the
+  // whole clip — and it only pays off when "keep the resolution, compress harder" has a real chance. For a
+  // long video it has none: the byte cap divided by the duration leaves a bitrate no CRF encode at source
+  // resolution will ever land under, so all ~10 rungs are doomed and each one re-encodes a multi-hundred-MB
+  // file before the two-pass below finally does the job. That is not a slow path, it is a WASTED one —
+  // hours of ffmpeg per file. When the budget is that tight, skip straight to the deterministic two-pass
+  // (ai_description.mdx §3.3.2), which is also where such a clip was always going to end up.
+  const budgetKbps = info?.duration && info.duration > 0
+    ? Math.floor((limitBytes * 8 * 0.94) / 1000 / info.duration)
+    : null;
+  const ladderIsPlausible = budgetKbps === null || budgetKbps >= 250;
+  if (!ladderIsPlausible) {
+    log.info(
+      "describe",
+      `fit: ${path.basename(src)} is ${(info?.duration ?? 0) / 60 | 0}min — a ${budgetKbps}kbps budget can't hold a CRF encode, going straight to the two-pass fit`,
+    );
+  }
+
   // Walk the ladder. At the ORIGINAL resolution give two CRF attempts (28, then a very aggressive 34) so
   // we exhaust "keep the resolution, just compress harder" before dropping pixels. Lower rungs get one.
-  for (let i = 0; i < ladder.length; i++) {
+  for (let i = 0; ladderIsPlausible && i < ladder.length; i++) {
     const targetH = ladder[i];
     const crfs = i === 0 ? [28, 34] : [30];
     for (const crf of crfs) {
@@ -246,17 +311,46 @@ async function fitVideoUnderLimit(src: string, limitBytes: number): Promise<{ ou
   // bitrate; if ffprobe couldn't give one, assume a conservative 600s so we err on the smaller side.
   const floorH = ladder[ladder.length - 1];
   const duration = info?.duration && info.duration > 0 ? info.duration : 600;
-  const audioKbps = 64;
   const totalKbps = Math.floor((limitBytes * 8 * 0.94) / 1000 / duration);
-  const videoKbps = Math.max(120, totalKbps - audioKbps);
-  const out = tmpPath(".mp4");
-  const r = await encodeTwoPass(src, out, origH, floorH, videoKbps);
-  const outSize = sizeOf(out);
-  if (r.code === 0 && outSize > 0 && outSize <= limitBytes) {
-    return { out, note: `compressed to fit: H.264 two-pass ${videoKbps}kbps at ${floorH}p (${(outSize / 1024 / 1024).toFixed(1)}MB)` };
+  let audioKbps = audioKbpsFor(totalKbps);
+  // Spend exactly what the budget allows. This must NOT be clamped UP to some minimum: a floor higher than
+  // the budget is precisely how this "guarantee" used to produce an oversize file and then throw — every
+  // video past ~12.5 min failed that way (ai_description.mdx §3.3.2).
+  let videoKbps = Math.max(MIN_VIDEO_KBPS, totalKbps - audioKbps);
+  let lastFfmpegErr = "";
+
+  // MEASURE AND CORRECT. The bitrate above is a prediction, and predictions can miss — a wrong/absent
+  // duration, container overhead, an unusually incompressible source. So we check the ACTUAL size and, if
+  // it overshot, re-derive the bitrate from what we measured (and stop paying for audio) rather than
+  // failing on the first miss.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const fps = fpsFor(videoKbps);
+    const out = tmpPath(".mp4");
+    const r = await encodeTwoPass(src, out, origH, floorH, videoKbps, audioKbps, fps);
+    const outSize = sizeOf(out);
+    if (r.code === 0 && outSize > 0 && outSize <= limitBytes) {
+      const parts = [`H.264 two-pass ${videoKbps}kbps at ${floorH}p`];
+      if (fps) parts.push(`${fps}fps`);
+      parts.push(audioKbps > 0 ? `${audioKbps}k audio` : "no audio");
+      return { out, note: `compressed to fit: ${parts.join(", ")} (${(outSize / 1024 / 1024).toFixed(1)}MB)` };
+    }
+    tryUnlink(out);
+    // The encode itself failed (missing codec, unreadable source) — a smaller bitrate won't help.
+    if (r.code !== 0 || outSize <= 0) {
+      lastFfmpegErr = r.err;
+      break;
+    }
+    // Overshot: correct from the MEASURED overshoot, drop the audio, and try once more.
+    const corrected = Math.floor(videoKbps * (limitBytes / outSize) * 0.9);
+    log.warn(
+      "describe",
+      `fit: ${path.basename(src)} landed at ${(outSize / 1024 / 1024).toFixed(1)}MB over the ${(limitBytes / 1024 / 1024).toFixed(1)}MB cap at ${videoKbps}kbps — retrying at ${Math.max(MIN_VIDEO_KBPS, corrected)}kbps, no audio`,
+    );
+    if (Math.max(MIN_VIDEO_KBPS, corrected) === videoKbps && audioKbps === 0) break; // already at the floor
+    audioKbps = 0;
+    videoKbps = Math.max(MIN_VIDEO_KBPS, corrected);
   }
-  tryUnlink(out);
-  throw new Error(`could not compress this video under ${(limitBytes / 1024 / 1024).toFixed(1)}MB for AI description${r.err ? ` (ffmpeg: ${lastErr(r.err)})` : ""}`);
+  throw new Error(`could not compress this video under ${(limitBytes / 1024 / 1024).toFixed(1)}MB for AI description${lastFfmpegErr ? ` (ffmpeg: ${lastErr(lastFfmpegErr)})` : ""}`);
 }
 
 // ── image fit ──────────────────────────────────────────────────────────────────────
@@ -290,6 +384,42 @@ async function fitImageUnderLimit(src: string, limitBytes: number): Promise<{ ou
   throw new Error(`could not compress this image under ${(limitBytes / 1024 / 1024).toFixed(1)}MB for AI description`);
 }
 
+// ── the transcode gate (ai_description.mdx §12.6.1) ───────────────────────────────────────────────────
+// The describe queue fans out ~24-wide on the premise that describe is NETWORK-bound — "the machine sits
+// idle while the provider thinks", so parallelism is free (§12.6). That premise holds for a file that fits
+// and is only true for that file. An OVERSIZE file makes describe run a full ffmpeg transcode first, which
+// is the most core-hungry work in the app — so ~24-wide describe silently means up to ~24 concurrent
+// ffmpeg encodes, blowing past the core budget every other bucket is careful to respect
+// (parallelization.mdx §3). The machine then starves, in-flight provider calls miss their deadline, and
+// files that never needed a transcode at all fail as collateral.
+//
+// So the fan-out stays wide for the NETWORK (the spec's real intent) and is gated here for the CPU: many
+// describes may be in flight, but only a core-budgeted few may be transcoding at any moment. The rest wait
+// their turn at the gate instead of fighting for cores.
+let transcodeActive = 0;
+const transcodeWaiters: Array<() => void> = [];
+
+/** Reserve a transcode slot, waiting when the core budget is already spent. Always release in a finally. */
+async function acquireTranscodeSlot(): Promise<() => void> {
+  const cap = Math.max(1, Math.floor(coreBudget() / VIDEO_THREADS_PER_ENCODE));
+  if (transcodeActive >= cap) {
+    log.info("describe", `fit: core budget full (${transcodeActive}/${cap} transcodes) — queueing behind it`);
+    await new Promise<void>((resolve) => transcodeWaiters.push(resolve));
+  }
+  transcodeActive++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    transcodeActive--;
+    transcodeWaiters.shift()?.();
+  };
+}
+
+/** Threads a single ffmpeg encode realistically uses — the divisor that turns cores into concurrent jobs,
+ *  mirroring the compress:video bucket's cap (parallelization.mdx §3). */
+const VIDEO_THREADS_PER_ENCODE = 4;
+
 /**
  * Ensure the media we upload for AI description is at or under `limitBytes`. Returns the ORIGINAL path
  * untouched when it already fits; otherwise transcodes a temporary compressed copy that fits and returns
@@ -301,9 +431,17 @@ export async function fitMediaUnderLimit(absPath: string, kind: "image" | "video
   if (size >= 0 && size <= limitBytes) {
     return { path: absPath, compressed: false, cleanup: NOOP_CLEANUP, note: null };
   }
-  const { out, note } = kind === "video"
-    ? await fitVideoUnderLimit(absPath, limitBytes)
-    : await fitImageUnderLimit(absPath, limitBytes);
+  // Only the oversize path transcodes, so only it pays the core-budget gate (§12.6.1).
+  const release = await acquireTranscodeSlot();
+  let out: string;
+  let note: string;
+  try {
+    ({ out, note } = kind === "video"
+      ? await fitVideoUnderLimit(absPath, limitBytes)
+      : await fitImageUnderLimit(absPath, limitBytes));
+  } finally {
+    release();
+  }
   log.info("describe", `${absPath} (${(size / 1024 / 1024).toFixed(1)}MB) → ${note}`);
   return {
     path: out,

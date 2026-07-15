@@ -342,6 +342,57 @@ The compress-to-fit pipeline (the 17.5MB target, the resolution ladder, the CRF 
 guarantee — all to a temp file, never the original) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `fitMediaUnderLimit()` (with `fitVideoUnderLimit()` / `fitImageUnderLimit()` / `resolutionLadder()`); invoked from `describeOne()` in `describe.service.ts` right before the adapter call, with the temp copy cleaned up in a `finally`.
 
+### 3.3.2 The two-pass fit is a GUARANTEE — a fixed floor must never outvote the byte budget (LOCKED)
+
+The last rung of the ladder (§3.3) is billed as the **deterministic "must fit"** step: a two-pass encode to
+an exact bitrate derived from the byte cap and the clip's duration. It is the promise that every oversize
+video eventually fits. **That promise was broken**, and the break is instructive enough to lock the rule.
+
+**The defect.** The bitrate was derived from the budget and then **clamped up** to a fixed 120kbps floor:
+
+```
+videoKbps = Math.max(120, totalKbps - audioKbps)   // ← the floor outvotes the budget
+```
+
+The cap is a fixed number of **bytes**, so the longer the clip the fewer bits per second it may spend. Past
+a certain duration the budget-derived rate falls **below** the floor, `max()` raises it back **above** what
+the budget allows, the encode lands **over** the cap, and the "guarantee" **throws**. The cliff was at
+**12.5 minutes**, and it was exact: every video past it failed, and the evidence agreed to the minute —
+of the failures on the product owner's tree the shortest was **13.9 min**, none were shorter, and each
+failure printed `kb/s:120.03` — the floor's own fingerprint.
+
+**A per-second cost cannot be fixed against a per-file cap.** The same error hid behind the audio track: a
+constant 64kbps of audio was always reserved, and 64kbps alone exceeds 17.5MB past **~36 minutes** — so for
+a long clip **no** video bitrate could fit, not even zero. Lifting the floor alone would not have saved
+those files.
+
+**The rules (all LOCKED):**
+
+1. **Never clamp the bitrate UP to a floor above the budget.** Spend what the budget allows; the only floor
+   is a token `MIN_VIDEO_KBPS` that exists to stop the correction loop chasing zero.
+2. **Audio is a passenger, not a fixture.** It is kept when it costs a small share of the budget (≤20%),
+   degraded when tight, and **dropped entirely** when the budget can't seat it. A silent description beats
+   no description, and speech is the **transcript's** job ([Transcribe.mdx](./Transcribe.mdx)) — this
+   prompt describes what is **seen**.
+3. **Trade frame rate before picture quality.** A vision model samples video at roughly **1fps**, so frames
+   beyond that rate are bits spent on detail the model never looks at. Long clips encode at 1–5fps, which
+   is what makes a sub-100kbps encode legible instead of a smear.
+4. **Measure, then correct.** The computed bitrate is a *prediction* (a missing duration, container
+   overhead, an incompressible source can all miss). Check the **actual** output size and, on an overshoot,
+   re-derive the bitrate from what was **measured** and retry (bounded), rather than failing on first miss.
+5. **Don't walk a ladder that cannot land.** The CRF ladder is a *search*, and every rung is a full encode
+   of the whole clip. When the budget-per-second is too small for any CRF encode at source resolution to
+   fit (< ~250kbps), all ~10 rungs are doomed — that is not a slow path but a **wasted** one, hours of
+   ffmpeg per file. Skip straight to the two-pass, which is where such a clip was always going to land.
+
+Verified against the real failures: **13.9 min/182MB → 16.7MB** (was: failed), **29.2 min/166MB → 16.4MB**
+(was: failed), **139.1 min/909MB → 16.0MB at 16kbps/1fps/no audio** (was: failed; audio alone would have
+needed 3.8× the whole cap), and the 11-min clip that already worked still fits — now with *more* video
+bitrate, because degraded audio freed budget for the picture.
+
+The budget allocation, the audio/fps ladders, the measure-and-correct retry, and the doomed-ladder skip are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `fitVideoUnderLimit()` (the `ladderIsPlausible` skip + the correcting two-pass loop), `audioKbpsFor()`, `fpsFor()`, and `encodeTwoPass()` (which takes the audio bitrate and fps).
+
 ### 3.3.1 Compress-to-fit runs ASYNC — it must NEVER block the event loop (LOCKED)
 
 The compress-to-fit transcode (§3.3) shells out to **ffmpeg / ffprobe / ImageMagick**, and a single video
@@ -413,6 +464,57 @@ The auto-heal of a pinned retired model on config load is handled in code:
 
 Rewriting a provider 404 into the actionable, model-naming error is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `explainModelError()` (applied around every provider `postJson()` call in `gemini.describe()` and `chatVisionAdapter.describe()`).
+
+### 3.5 A transient failure is NOT a verdict — bounded retry with backoff (NEW, LOCKED)
+
+A hosted vision call fails for two fundamentally different reasons, and **treating them alike is the single
+most expensive bug this feature has had**:
+
+* **Permanent** — a bad key, a retired model (§3.4), unsupported media, an explicit safety `blockReason`.
+  It will fail identically forever. Retrying wastes the user's time and quota.
+* **Transient** — a timeout under load, a `429`, a `5xx`, a dropped socket, **or an empty `200`**. It would
+  have **succeeded moments later**.
+
+**The empty `200` belongs in the transient column, and that is the counter-intuitive one.** The provider
+can return a perfectly well-formed response carrying no description text. It reads like a verdict — *"the
+model won't describe this file"* — so it was treated as permanent. It isn't: the same video that came back
+empty described **on the very next attempt**, `finishReason: STOP`, 1,877 tokens of text. Nothing about
+the file was wrong; the provider simply had a bad moment. A genuine refusal is a *different* thing and
+stays permanent — it arrives as an explicit `blockReason` / safety verdict, never as a silent empty body.
+
+**What went wrong.** The queue recorded a failure per file and moved on; **nothing retried**. So a
+transient blip permanently marked a file "not described." In one overnight run on the product owner's tree,
+**1,803 distinct files** — the overwhelming majority of the batch — failed with Node's bare
+`This operation was aborted`. Successes went **49 → 5 → 0 → 0 → 0** per hour while aborts climbed into the
+hundreds: the provider's throughput could not sustain the fan-out (§12.6), every in-flight call blew its
+fixed **120s** deadline, and each one burned a file **permanently**. The tree looked barely-described the
+next morning, and the popup — correctly — re-offered all 1,900 files, which is what made the whole batch
+look like it had never run. **The files were not skipped; they were spent.**
+
+**The rules (LOCKED):**
+
+1. **Retry transient classes, bounded** — 4 attempts total, exponential backoff (2s base, doubling)
+   **with jitter** so a wide fan-out does not retry in lockstep and re-create the stampede.
+2. **Honor the provider's own hint** — a `Retry-After` header wins over the computed backoff.
+3. **Never retry a permanent fault** — it fails on the first attempt, immediately.
+4. **The deadline scales with the payload.** A fixed timeout is wrong when payloads span two orders of
+   magnitude: 200KB and 17.5MB cannot share one deadline. Base 120s + ~20s/MB, capped at 10 min.
+5. **Name the failure honestly.** `This operation was aborted` told the user nothing — a timeout must say
+   it timed out, and after how long ([§8](#8-empty-error--disabled-states)'s truthful-outcome rule).
+6. **Retry is per-call, not per-batch.** It lives at the provider seam, so every adapter and every entry
+   point (single Generate, queue, batch popup) inherits it with no caller opt-in.
+7. **Wrap the WHOLE provider call, not just the HTTP.** The retry sits around the entire
+   `adapter.describe()` — round-trip *and* response interpretation — because the empty-`200` only becomes
+   an error once the adapter reads a response the HTTP layer considered a total success. A retry bolted
+   onto the fetch alone silently misses it. It is wrapped **outside the fit** (§3.3), so a retry re-sends
+   the already-compressed copy instead of re-running a multi-minute ffmpeg transcode.
+
+Verified: two forced transient failures → the file still describes on attempt 3 (old code: permanent
+failure); two forced empty-`200`s → described on attempt 3 (old code: permanent failure); a `401` → fails
+on attempt 1 in 0.1s with no wasted retries.
+
+The transient/permanent split, the jittered backoff, the `Retry-After` honor, the size-scaled deadline, and the honest timeout message are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `withProviderRetry()` (the retry loop) with `isTransient()`, `retryAfterMs()`, `timeoutForBytes()`, and `postJsonOnce()` (one attempt + the honest timeout rename); applied around `adapter.describe()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()`. Shared by **all** adapters, since every provider call funnels through that one seam.
 
 ---
 
@@ -900,6 +1002,63 @@ deliberate** batch call, but **no bulk popup Apply may use it**.
 The metric-tile / header-primary describe popup's Apply enqueues (never inline) in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildDescribeWarning()` `apply` (calls `api.describeEnqueue({ paths: checkedPaths })`, mirror of `buildTranscribeWarning()` which calls `api.transcribeEnqueue`); the unified batch popup's Apply in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `openDescribeBatch()` (also `api.describeEnqueue`). The server enqueue is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `enqueueDescribe()` → `jobqueue.service.ts` `enqueue()` (op `describe`).
 
+### 12.4.1 The popup's **Videos / Images** kind filter (NEW, LOCKED)
+
+An AI description applies to **two** media kinds — **videos** and **images** — and a user very often wants
+only **one** of them. A folder of 1,800 photos and 12 videos offers no way to say *"just do the videos"*
+short of unchecking 1,800 rows by hand, so today the user either describes everything or gives up. The
+popup therefore carries a **kind filter** directly above its candidate list.
+
+**The filter.** A row labelled **"Filter:"** sits at the top of the popup's right pane (above the candidate
+list) and holds exactly **two checkboxes**:
+
+* **Videos** — **checked / on by default**.
+* **Images** — **checked / on by default**.
+
+Both start on, so the popup's default behavior is **exactly what it is today** (every candidate listed);
+the filter only ever **narrows**.
+
+**What a filter does.** Unchecking a kind **removes those files from the candidate list on the right** —
+they disappear from view. **The filter is the applied set, not a view convenience**: a file that is **not
+in the right-hand list is not described**. Turn **Videos** off and the videos vanish from the list and
+**none of them is described** when the user confirms; the same holds for **Images**. This is the LOCKED
+guarantee — *what you see in the list is exactly what Confirm will process*, so a filtered-out file can
+never be silently swept into the batch.
+
+**How the rest of the popup follows the filter.**
+
+* **The live count and the button.** The confirm button's live count ([dialogs.mdx §5.1](./dialogs.mdx))
+  counts only **visible, checked** rows — filtering the videos out decrements *"Describe N files"* by the
+  video count on the spot. The header's *"N of M selected"* reads against the **visible** set the same way.
+* **Confirm is disabled at zero visible-checked.** Unchecking **both** kinds empties the list; the popup
+  stays open with nothing to do and the button is disabled — never a silent no-op batch.
+* **The filter is not destructive to a row's checkbox.** Hiding a kind does not uncheck its rows; turning
+  the kind back on restores them **checked exactly as they were**, so a user can flip between kinds while
+  auditing without losing per-row decisions.
+* **"Select all" / "Clear"** act on the **visible** rows only — they mean *"all of what I am looking at"*.
+* The filter is a **client-side view over the plan's candidates** — it never re-fetches the plan and never
+  changes the server-side narrowing (scope, drop-unsupported, drop-already-done all still happen upstream,
+  §12.5). A filtered-out file is simply not in the confirmed set.
+
+**Where it applies.** Every describe popup: the **Describable metric tile** (§12.2), the blue **"Describe ›"
+header primary** (§12.3), and the unified batch popup from the page action-links row and the ⋮ / right-click
+menu ([dialogs.mdx §5–§6](./dialogs.mdx)) — they are the one same popup, so they all carry the one same
+filter. The transcribe popup carries the **same mechanism** with **its** kinds (audio / video) — the
+generic capability lives in the popup, not in describe ([warnings.mdx §4.5.4](./warnings.mdx)).
+
+The kind filter (the "Filter:" checkbox row, the visible-set narrowing, and the visible∩checked apply set) is
+implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `WarningPopup()`
+(the `kindsOn` state, the `visible` / `filtered` memos, and the `effectiveChecked` set handed to `apply()`),
+over the `kindFilters` / `WarningTarget.kind` model in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/warnings/registry.ts` —
+`initialKindFilters()` / `visibleTargetIds()`.
+
+The two describe popups declare the Videos/Images filter and tag each candidate's kind in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `openDescribeBatch()` ·
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildDescribeWarning()`
+(both use `DESCRIBE_KIND_FILTERS` + `mediaKindForName()` from `@lfb/shared`).
+
 ### 12.5 An already-described file is NEVER re-offered and NEVER re-described (LOCKED)
 
 This is the **"1,953 files" scenario** the product owner called out: in the File System browser the user
@@ -956,7 +1115,11 @@ truth** rather than the recollection of an earlier run:
   column (a planning file, an inventory) is **not** what this filter reads and may disagree wildly with the
   sidecars. Our source of truth is the `done` sidecar at the resolved placement path — nothing else.
 
-### 12.6 Describe is GENEROUSLY parallel — no hardware bottleneck (LOCKED)
+### 12.6 Describe is GENEROUSLY parallel — no hardware bottleneck (LOCKED — read with §12.6.1)
+
+> **Corrected by [§12.6.1](#1261-but-no-hardware-bottleneck-is-only-true-for-a-file-that-fits-new-locked--corrects-126).**
+> The "no hardware bottleneck" premise below holds **only for a file already under the size cap**. An
+> oversize file transcodes first, so the wide fan-out must be gated for that path. Read both.
 
 Transcription and compression are **local CPU/GPU** work: Whisper and ffmpeg saturate cores and RAM, so
 their queue caps are **core-budgeted** and deliberately narrow ([parallelization.mdx §3](./parallelization.mdx)).
@@ -978,6 +1141,35 @@ The per-bucket concurrency (describe = the generous fixed cap, transcribe/compre
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` —
 `DESCRIBE_CONCURRENCY` (env-overridable) returned by `capFor()` for the `describe` bucket, alongside the
 core-budgeted `transcribe` / `compress:image` / `compress:video` caps. Policy: [parallelization.mdx §3](./parallelization.mdx).
+
+### 12.6.1 …but "no hardware bottleneck" is only true for a file that FITS (NEW, LOCKED — corrects §12.6)
+
+§12.6 fans describe out ~24-wide on one premise: *"the machine sits idle while the provider thinks"*, so
+parallelism is free. **That premise is true only for a file already under the cap.** An **oversize** file
+makes describe run a full **ffmpeg transcode** first (§3.3) — the most core-hungry work in the app. So a
+~24-wide describe bucket silently meant **up to ~24 concurrent ffmpeg encodes**, exactly the `cores²`
+over-subscription every other bucket is careful to avoid ([parallelization.mdx §3](./parallelization.mdx)).
+The bucket that was documented as *"the one bucket where more parallelism is safe even on a small laptop"*
+was, on a video-heavy tree, the **heaviest** thing running.
+
+§12.6's other escape hatch — *"a burst of 429s surfaces as failing dock cards the user can retry"* — also
+did not hold: the failures arrived as **120s timeouts**, not `429`s, and there was **no retry** at all
+(§3.5). Both halves of the safety argument were assumptions rather than observed behavior.
+
+**The correction (LOCKED).** Keep §12.6's *intent* — the fan-out stays wide, because it is right for the
+**network** — and gate the part that was never network work:
+
+* **The network fan-out is unchanged** — ~24 describes may be **in flight** at once.
+* **The transcode is core-budgeted** — only `coreBudget() / VIDEO_THREADS_PER_ENCODE` of them may be
+  **running ffmpeg** at any moment; the rest wait at the gate rather than fighting for cores.
+* **A file that fits never touches the gate.** It has no transcode, so it costs nothing and waits for
+  nothing — the common case keeps the full generous parallelism §12.6 intended.
+
+The rule this locks in general: **a queue cap may only be called "network-bound" if every path in that job
+is network-bound.** One conditional CPU branch inside an "I/O bucket" is enough to starve the box.
+
+The transcode gate (wide network fan-out, core-budgeted encodes) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `acquireTranscodeSlot()` (the semaphore) held across `fitVideoUnderLimit()` / `fitImageUnderLimit()` inside `fitMediaUnderLimit()`, sized from `coreBudget()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts`.
 
 ### 12.7 The 2,000-file run — async end-to-end, watchable, never a server freeze (LOCKED)
 

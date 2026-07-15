@@ -564,6 +564,37 @@ While the file list is focused:
 The popup's Space-to-play + arrow-cursor scope is registered in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `WarningPopup` (`useHotkeys("action-popup", …)` + the `<video>` ref play/pause handler).
 
+### 4.5.4 The kind-filter row — "Filter:" above the list (NEW, LOCKED)
+
+A popup whose subjects span **more than one media kind** may declare a **kind filter**: a row labelled
+**"Filter:"** at the top of the right pane, above the list, holding **one checkbox per kind**. It exists
+because a batch action that covers two kinds (AI descriptions cover **videos** and **images**; transcripts
+cover **audio** and **video**) is very often wanted for **one** kind only, and unchecking 1,800 photo rows
+by hand to reach 12 videos is not a real affordance.
+
+* **Every kind checkbox opens CHECKED (on).** With all kinds on, the popup behaves exactly as it does with
+  no filter at all — the filter only ever **narrows**.
+* **Unchecking a kind hides those rows** from the list.
+* **The visible list IS the applied set (the LOCKED guarantee).** `apply()` receives **visible ∩ checked**
+  ids — never a hidden row. A file the user cannot see in the list **is not acted on**. This is what makes
+  the filter safe to reason about: *what you see is what Confirm does.*
+* **The live count (§4.6) counts visible-checked only** — the header's *"N of M selected"* and the button's
+  *"— N files"* both fall the moment a kind is filtered out. **Zero visible-checked disables Confirm** (§5.2),
+  so filtering everything out is a visible dead-end, never a silent no-op.
+* **Filtering is non-destructive.** Hiding a kind does not uncheck its rows; re-checking the kind restores
+  them exactly as the user left them.
+* **"Select all" / "Clear" act on the visible rows** — they mean "all of what I'm looking at".
+* A target that declares **no kind**, or a kind no filter covers, is **always visible** (unfilterable).
+* The filter is **client-side over the already-fetched candidates** — it never re-runs the plan/preview and
+  never alters the upstream server-side narrowing ([dialogs.mdx §5.2](./dialogs.mdx)).
+
+The kind-filter row, the visible-set narrowing, and the visible∩checked apply set are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `WarningPopup`
+(`kindsOn` state → `visible` / `filtered` memos → `effectiveChecked` handed to `apply()`); the model
+(`WarningPopupSpec.kindFilters`, `WarningTarget.kind`) plus `initialKindFilters()` / `visibleTargetIds()` in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/warnings/registry.ts`.
+The AI-description Videos/Images instance: [ai_description.mdx §12.4.1](./ai_description.mdx).
+
 ### 4.6 The live count (the "6" that updates)
 
 Everywhere the popup states **how many subjects the action will touch**, that number is the count of

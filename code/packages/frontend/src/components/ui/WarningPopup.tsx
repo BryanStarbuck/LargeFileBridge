@@ -20,11 +20,13 @@ import {
   axisColumns,
   hasPerRowAxes,
   initialCheckedTargets,
+  initialKindFilters,
   initialRowAxisChecks,
   initialSelection,
   pluralizeNoun,
   radiosSatisfied,
   resolveActionLabel,
+  visibleTargetIds,
   type AxisId,
   type PerRowAxes,
   type RowAxisChecks,
@@ -150,6 +152,9 @@ export function WarningPopup({
   const [checked, setChecked] = useState<Set<string>>(() => initialCheckedTargets(popup));
   const [rowChecks, setRowChecks] = useState<RowAxisChecks>(() => initialRowAxisChecks(popup));
   const [touched, setTouched] = useState<Set<string>>(() => new Set()); // "id:axis" the user has flipped
+  // §4.5.4 — the "Filter:" row's per-kind checkboxes (all ON at open). Hiding a kind never unchecks its
+  // rows, so re-showing it restores them exactly as the user left them.
+  const [kindsOn, setKindsOn] = useState<Record<string, boolean>>(() => initialKindFilters(popup));
   const [query, setQuery] = useState("");
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -165,19 +170,34 @@ export function WarningPopup({
   const actionRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
 
+  // §4.5.4 — the rows the kind filter currently SHOWS. This is not cosmetic: it is the apply gate. A row
+  // the user cannot see is never acted on, so every count and the apply set below intersect with it.
+  const visibleIds = useMemo(() => visibleTargetIds(popup, kindsOn), [popup, kindsOn]);
+  const visibleTargets = useMemo(
+    () => (popup.kindFilters?.length ? targets.filter((t) => visibleIds.has(t.id)) : targets),
+    [targets, visibleIds, popup.kindFilters],
+  );
+
   // Per-row derived state (§4.5.1): a row is "included" when ≥1 of its axes is checked; each axis carries
-  // its own checked-row count for the composed label (§4.4.1).
+  // its own checked-row count for the composed label (§4.4.1). Filtered-out rows are excluded (§4.5.4).
   const includedIds = perRowMode
-    ? targets.filter((t) => AXIS_ORDER.some((a) => rowChecks[t.id]?.[a])).map((t) => t.id)
+    ? visibleTargets.filter((t) => AXIS_ORDER.some((a) => rowChecks[t.id]?.[a])).map((t) => t.id)
     : [];
+  // §4.5.4 — THE apply set in the single-checkbox model: visible ∩ checked. Also the live count (§4.6).
+  const effectiveChecked = useMemo(
+    () => visibleTargets.filter((t) => checked.has(t.id)).map((t) => t.id),
+    [visibleTargets, checked],
+  );
   const axisCounts: Record<AxisId, number> = { ipfs: 0, ignore: 0, compress: 0 };
   if (perRowMode) {
-    for (const t of targets) for (const a of AXIS_ORDER) if (rowChecks[t.id]?.[a]) axisCounts[a]++;
+    for (const t of visibleTargets) for (const a of AXIS_ORDER) if (rowChecks[t.id]?.[a]) axisCounts[a]++;
   }
 
   const destructive = popup.destructive?.(sel) ?? false;
   // §5.2 — need ≥1 checked subject to apply (per-row: ≥1 row with an ON axis; single: ≥1 checked box).
-  const targetsOk = perRowMode ? includedIds.length > 0 : !hasTargets || checked.size > 0;
+  // Both counts are VISIBLE-only (§4.5.4), so filtering every kind out disables Confirm rather than
+  // committing rows the user can no longer see.
+  const targetsOk = perRowMode ? includedIds.length > 0 : !hasTargets || effectiveChecked.length > 0;
   const canApply =
     !applying && radiosSatisfied(popup, sel) && targetsOk && (popup.canApply ? popup.canApply(sel) : true);
 
@@ -210,13 +230,19 @@ export function WarningPopup({
       return next;
     });
   };
+  // §4.5.4 — "all" means all of what the user is LOOKING AT: the kind-filtered set (not the search window,
+  // which is a transient find-as-you-type view, §4.5). With no kind filter this is the whole found set.
   const selectAll = () => {
     setConfirming(false);
-    setChecked(new Set(targets.map((t) => t.id))); // whole found set, not just the filtered window (§4.5)
+    setChecked((prev) => new Set([...prev, ...visibleTargets.map((t) => t.id)]));
   };
   const clearAll = () => {
     setConfirming(false);
-    setChecked(new Set());
+    setChecked((prev) => {
+      const next = new Set(prev);
+      for (const t of visibleTargets) next.delete(t.id);
+      return next;
+    });
   };
 
   // §4.5.1 — flip ONE axis on ONE row. Marks it "touched" so a pre-checked RECOMMENDED axis loses its
@@ -281,7 +307,8 @@ export function WarningPopup({
       return;
     }
     // The checked subjects, and — in per-row mode — each included row's ON axes (§4.5.1) handed to apply().
-    const ids = perRowMode ? includedIds : [...checked];
+    // Both are the VISIBLE set (§4.5.4): a row hidden by the kind filter is never handed to apply().
+    const ids = perRowMode ? includedIds : effectiveChecked;
     let perRow: PerRowAxes | undefined;
     if (perRowMode) {
       perRow = {};
@@ -361,7 +388,9 @@ export function WarningPopup({
       ? composeActionLabel(checkedAxisKeys)
       : resolveActionLabel(popup, sel);
   const countSuffix =
-    !perRowMode && hasTargets ? ` — ${checked.size} ${pluralizeNoun(noun, checked.size)}` : "";
+    !perRowMode && hasTargets
+      ? ` — ${effectiveChecked.length} ${pluralizeNoun(noun, effectiveChecked.length)}`
+      : "";
   const label = confirming ? `Confirm — ${base}${countSuffix}` : `${base}${countSuffix}`;
   const actionBg = destructive ? "var(--lfb-bad)" : "var(--lfb-primary)";
 
@@ -383,10 +412,11 @@ export function WarningPopup({
   };
 
   const showSearch = targets.length > 30;
+  // The rendered rows: the kind-filtered set (§4.5.4) narrowed further by the find-as-you-type search.
   const filtered = useMemo(() => {
-    if (!query.trim()) return targets;
+    if (!query.trim()) return visibleTargets;
     const q = query.toLowerCase();
-    return targets.filter(
+    return visibleTargets.filter(
       (t) =>
         (t.name ?? t.label).toLowerCase().includes(q) ||
         (rowPath(t) ?? "").toLowerCase().includes(q) ||
@@ -537,10 +567,33 @@ export function WarningPopup({
             <div className="flex min-h-0 flex-col border-t border-[var(--lfb-border)] md:w-1/2 md:border-l md:border-t-0">
               <div className="flex items-center justify-between gap-2 px-5 pt-4 pb-2">
                 <div className="text-sm font-medium text-black">{subjectsHeading}</div>
+                {/* §4.6 live count, over the VISIBLE set (§4.5.4) — filtering a kind out drops both numbers */}
                 <div className="text-xs text-black/60" aria-live="polite">
-                  {perRowMode ? includedIds.length : checked.size} of {targets.length} selected
+                  {perRowMode ? includedIds.length : effectiveChecked.length} of {visibleTargets.length}{" "}
+                  selected
                 </div>
               </div>
+
+              {/* §4.5.4 — the "Filter:" row: one checkbox per media kind, all ON at open. Unchecking a kind
+                  hides its rows AND drops them from the batch (the list IS the applied set). */}
+              {!!popup.kindFilters?.length && (
+                <div className="flex items-center gap-4 px-5 pb-2 text-xs">
+                  <span className="font-medium text-black/70">Filter:</span>
+                  {popup.kindFilters.map((f) => (
+                    <label key={f.id} className="flex cursor-pointer items-center gap-1.5 text-black/70">
+                      <input
+                        type="checkbox"
+                        checked={!!kindsOn[f.id]}
+                        onChange={(e) => {
+                          setConfirming(false);
+                          setKindsOn((prev) => ({ ...prev, [f.id]: e.target.checked }));
+                        }}
+                      />
+                      {f.label}
+                    </label>
+                  ))}
+                </div>
+              )}
               <div className="flex items-center gap-3 px-5 pb-2 text-xs">
                 {perRowMode ? (
                   <>

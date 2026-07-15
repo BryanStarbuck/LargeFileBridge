@@ -63,6 +63,14 @@ export type WarningTargetPreview = {
   height?: number;
 };
 
+// One checkbox in the popup's "Filter:" row (warnings.mdx §4.5.4) — a media-kind filter over the subjects
+// list. A filter's `id` is matched against each target's `kind`; all filters open CHECKED, so a popup that
+// declares them behaves exactly as an unfiltered one until the user narrows.
+export type WarningKindFilter = {
+  id: string; // matched against WarningTarget.kind ("video", "image", "audio")
+  label: string; // the checkbox label ("Videos", "Images")
+};
+
 // One subject the warning is about — a file or directory (warnings.mdx §4.5). Rendered as a row in the
 // popup's right-pane subjects list. Two row models (§4.5):
 //   1. PER-ROW TOGGLES (§4.5.1) — when `axes` is present, the row leads with up-to-3 action toggles
@@ -73,6 +81,7 @@ export type WarningTargetPreview = {
 export type WarningTarget = {
   id: string; // stable key — usually the absolute path (also what apply() receives)
   label: string; // fallback display text when `name` is absent (repo-relative or middle-truncated path)
+  kind?: string; // §4.5.4 — the media kind this row is, matched against the popup's `kindFilters` ids
   // §4.5 two-line row layout — preferred over label/sublabel:
   name?: string; // ROW 1 left — the file's basename; the ROW strips the extension for display
   sizeText?: string; // ROW 1 right — right-aligned size ("128 MB") or a directory rollup ("12 videos")
@@ -100,6 +109,10 @@ export type WarningPopupSpec = {
   targets?: WarningTarget[];
   // Noun for the live count in the header/button ("file" default → "— 4 files"). e.g. "video", "directory".
   targetNoun?: string;
+  // §4.5.4 — the "Filter:" row above the subjects list: one checkbox per media kind, ALL ON at open. Each
+  // filter's id is matched against a target's `kind`; unchecking a kind HIDES those rows AND drops them
+  // from the batch (apply() gets visible ∩ checked). Omit ⇒ no filter row (every target always visible).
+  kindFilters?: WarningKindFilter[];
   // §4.4 — the blue action button label; may depend on the chosen options. When `targets` are present
   // the popup appends the LIVE checked count ("— {n} {noun}s"); do NOT bake a count into this string.
   actionLabel: string | ((sel: WarningSelection) => string);
@@ -189,6 +202,30 @@ export function initialCheckedTargets(popup?: WarningPopupSpec): Set<string> {
   const s = new Set<string>();
   for (const t of popup?.targets ?? []) if (t.defaultChecked !== false) s.add(t.id);
   return s;
+}
+
+// §4.5.4 — the filter row's state when the popup opens: EVERY declared kind ON, so a filtered popup starts
+// showing exactly what an unfiltered one would. Keyed by filter id → checked.
+export function initialKindFilters(popup?: WarningPopupSpec): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  for (const f of popup?.kindFilters ?? []) out[f.id] = true;
+  return out;
+}
+
+// §4.5.4 — the ids currently VISIBLE under the filter row: a target whose `kind` matches an OFF filter is
+// hidden; a target with no kind (or a kind no filter covers) is unfilterable and always visible. This is
+// also the apply gate — the popup hands apply() visible ∩ checked, so a hidden row is never acted on.
+export function visibleTargetIds(
+  popup: WarningPopupSpec | undefined,
+  kindsOn: Record<string, boolean>,
+): Set<string> {
+  const filters = popup?.kindFilters ?? [];
+  const ids = new Set<string>();
+  for (const t of popup?.targets ?? []) {
+    const filtered = t.kind != null && filters.some((f) => f.id === t.kind);
+    if (!filtered || kindsOn[t.kind!]) ids.add(t.id);
+  }
+  return ids;
 }
 
 // English pluralization for the live count noun ("file" → "files", "1 file"). Handles the common

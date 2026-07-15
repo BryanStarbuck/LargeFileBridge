@@ -11,6 +11,7 @@ import type { RepoDetail, FileRow } from "@lfb/shared";
 import { formatBytes, mediaKindForName } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { clientLog } from "../../lib/clientLog.js";
+import { DESCRIBE_KIND_FILTERS } from "../../lib/describe.js";
 import { withModelReady } from "../../lib/transcribe.js";
 import type { WarningDef } from "../../components/ui/warnings/registry.js";
 import type { MetricId } from "./metricWarnings.js";
@@ -291,11 +292,15 @@ export function buildDescribeWarning(detail: RepoDetail, repoId: string): Warnin
     popup: {
       whatThisIs: `Large File Bridge found ${n} image/video file${n === 1 ? "" : "s"} in this repo with no AI description yet. It can generate one for each with your configured AI provider.`,
       whyItMatters:
-        "An AI description makes an image or video searchable and captioned without opening it. Each file is sent to your configured AI provider; add a key in Settings → AI credentials first. Review the list on the right and uncheck any you want to skip.",
+        "An AI description makes an image or video searchable and captioned without opening it. Each file is sent to your configured AI provider; add a key in Settings → AI credentials first. Use the Videos / Images filter to narrow the list, and uncheck any you want to skip.",
+      // ai_description.mdx §12.4.1 — the Videos/Images filter row, same as the unified batch popup: each row
+      // carries its media kind, and a kind filtered out of the list is dropped from the batch too.
+      kindFilters: DESCRIBE_KIND_FILTERS,
       targets: files.map((f) => ({
         id: absPath(detail, f),
         label: f.path,
         name: basename(f.path),
+        kind: mediaKindForName(f.path) ?? undefined,
         sizeText: formatBytes(f.sizeBytes),
         pathText: f.path,
       })),

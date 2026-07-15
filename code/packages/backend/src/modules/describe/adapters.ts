@@ -14,6 +14,7 @@ import type { MediaKind, DescribeProvider } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import { loadGoogleApiKey, hasGoogleApiKeyFile } from "../../config/google-apikey-file.js";
 import { DEFAULT_GEMINI_MODEL, DEFAULT_GROK_MODEL, DEFAULT_OPENAI_MODEL, looksLikeModelRetired } from "./models.js";
+import { log } from "../../shared/logging.js";
 
 export type ProviderId = "gemini" | "grok" | "openai";
 
@@ -74,29 +75,130 @@ function explainModelError(e: Error, model: string, provider: string): Error {
   return e;
 }
 
-/** fetch with a hard timeout so a hung provider call can't wedge the request forever. */
-async function postJson(url: string, body: unknown, headers: Record<string, string>, timeoutMs = 120_000): Promise<unknown> {
+// ── transient-failure policy (ai_description.mdx §3.5) ───────────────────────────────────────────────
+// A hosted vision call fails for two very different reasons, and conflating them is what lost a 1,800-file
+// batch overnight: a PERMANENT fault (bad key, retired model, unsupported media, safety block) will fail
+// identically forever, while a TRANSIENT one (timeout under load, provider 429/5xx, a dropped socket) would
+// have succeeded moments later. The queue records a failure per file and moves on — nothing retries — so a
+// transient blip permanently marks the file "not described" and the user's only clue is a failed dock card
+// among 1,800 others. Every transient class below is therefore retried with exponential backoff + jitter
+// BEFORE the failure is allowed to escape to the queue.
+
+/** How many total attempts a single provider call gets (1 try + 3 retries). */
+const MAX_ATTEMPTS = 4;
+/** Base backoff; doubled per attempt and jittered, so 24 in-flight jobs don't retry in lockstep. */
+const RETRY_BASE_MS = 2_000;
+
+/**
+ * True when an error is worth trying again — a timeout, a socket-level fetch failure, a 429, or a 5xx…
+ * …and ALSO the provider's **empty 200**: a well-formed response that simply carries no description text.
+ * That one is easy to mistake for a permanent verdict ("the model won't describe this file") but it is
+ * not — the SAME video that came back empty described perfectly on the very next attempt, `finishReason:
+ * STOP`, 1,877 tokens of text. An empty candidate is the provider having a bad moment, so it retries like
+ * any other blip. (A genuine refusal is different and stays permanent: it arrives as an explicit
+ * `blockReason` / safety verdict, which does NOT match here.)
+ */
+function isTransient(e: unknown): boolean {
+  const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+  if (/blocked the request|blockReason|SAFETY|PROHIBITED/i.test(msg)) return false; // a real refusal — permanent
+  return (
+    /AbortError|timed out|This operation was aborted/i.test(msg) ||
+    /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|network/i.test(msg) ||
+    /\b429\b|rate limit|RESOURCE_EXHAUSTED|quota/i.test(msg) ||
+    /\b5\d\d\b\s|internal error|unavailable|overloaded/i.test(msg) ||
+    /returned no description|returned non-JSON/i.test(msg)
+  );
+}
+
+/** The provider's own "wait this long" hint, in ms, when it sent one (Retry-After: seconds | HTTP-date). */
+function retryAfterMs(res: Response): number | null {
+  const h = res.headers.get("retry-after");
+  if (!h) return null;
+  const secs = Number(h);
+  if (Number.isFinite(secs)) return Math.max(0, secs * 1000);
+  const when = Date.parse(h);
+  return Number.isFinite(when) ? Math.max(0, when - Date.now()) : null;
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * The request timeout for a payload. A FIXED timeout is wrong here because the payloads differ by two
+ * orders of magnitude: a 200KB thumbnail and a 17.5MB video get the same deadline, so the deadline is
+ * either far too slack for the thumbnail or too tight for the video the moment the link is busy. Scale it
+ * with the bytes being uploaded, on a generous floor.
+ */
+function timeoutForBytes(bytes: number): number {
+  const perMb = 20_000; // 20s per MB of upload — generous for a slow link
+  return Math.min(10 * 60_000, 120_000 + Math.floor((bytes / (1024 * 1024)) * perMb));
+}
+
+/** One fetch attempt with a hard timeout so a hung provider call can't wedge the request forever. */
+async function postJsonOnce(url: string, payload: string, headers: Record<string, string>, timeoutMs: number): Promise<unknown> {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json", ...headers },
-      body: JSON.stringify(body),
+      body: payload,
       signal: ac.signal,
     });
     const text = await res.text();
     if (!res.ok) {
-      throw new Error(`${res.status} ${res.statusText}: ${text.slice(0, 400)}`);
+      const hint = retryAfterMs(res);
+      const err = new Error(`${res.status} ${res.statusText}: ${text.slice(0, 400)}`) as Error & { retryAfterMs?: number };
+      if (hint != null) err.retryAfterMs = hint;
+      throw err;
     }
     try {
       return JSON.parse(text);
     } catch {
       throw new Error(`provider returned non-JSON: ${text.slice(0, 200)}`);
     }
+  } catch (e) {
+    // Name the real failure. Node's bare "This operation was aborted" told the user nothing about WHY a
+    // file was skipped — it is a timeout, and the message should say so, with the deadline it blew.
+    if (e instanceof Error && /abort/i.test(`${e.name}: ${e.message}`)) {
+      throw new Error(`provider call timed out after ${Math.round(timeoutMs / 1000)}s`);
+    }
+    throw e;
   } finally {
     clearTimeout(t);
   }
+}
+
+/** ONE POST attempt with a size-scaled timeout. The retry lives at the adapter seam (`withProviderRetry`),
+ *  not here — because the provider's **empty 200** is thrown by the adapter AFTER this call returns fine,
+ *  and it deserves a retry just as much as a dropped socket does. Retrying here would miss it. */
+async function postJson(url: string, body: unknown, headers: Record<string, string>): Promise<unknown> {
+  const payload = JSON.stringify(body);
+  return postJsonOnce(url, payload, headers, timeoutForBytes(payload.length));
+}
+
+/**
+ * Run one whole provider call with bounded retry on TRANSIENT failures only (§3.5). This wraps the ENTIRE
+ * `adapter.describe()` — the HTTP round-trip *and* the response interpretation — so every transient class
+ * is covered by one policy: timeouts, 429/5xx, dropped sockets, and the empty-200 that only becomes an
+ * error once the adapter reads the (perfectly valid) response. Permanent faults — a bad key, a retired
+ * model, a safety refusal — throw on the FIRST attempt; retrying them only makes the user wait.
+ */
+export async function withProviderRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      if (!isTransient(e) || attempt === MAX_ATTEMPTS) break;
+      const hinted = (e as { retryAfterMs?: number })?.retryAfterMs;
+      const backoff = hinted ?? RETRY_BASE_MS * 2 ** (attempt - 1);
+      const jittered = Math.floor(backoff * (0.5 + Math.random()));
+      log.warn("describe", `${label} failed (attempt ${attempt}/${MAX_ATTEMPTS}): ${(e as Error).message?.slice(0, 140)} — retrying in ${Math.round(jittered / 1000)}s`);
+      await sleep(jittered);
+    }
+  }
+  throw lastErr;
 }
 
 // ── Gemini (Google) — the only adapter that describes VIDEO as well as images ──────────────────────

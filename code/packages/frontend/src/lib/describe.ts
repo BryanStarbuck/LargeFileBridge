@@ -6,6 +6,19 @@ import type { DescribeResult } from "@lfb/shared";
 import { api } from "@/api/client";
 import { clientLog } from "./clientLog.js";
 import { requestStorageSetup } from "./setupWizard.js";
+import type { WarningKindFilter } from "@/components/ui/warnings/registry";
+
+/**
+ * The describe popup's "Filter:" row (ai_description.mdx §12.4.1 / warnings.mdx §4.5.4): AI descriptions
+ * cover exactly two media kinds, and a user very often wants only ONE of them (a folder of 1,800 photos and
+ * 12 videos gives no way to say "just the videos" short of unchecking 1,800 rows). Both open CHECKED, so
+ * the default behavior is unchanged; unchecking a kind hides those rows AND drops them from the batch.
+ * The ids MUST match `mediaKindForName()`'s values — that is what tags each target's `kind`.
+ */
+export const DESCRIBE_KIND_FILTERS: WarningKindFilter[] = [
+  { id: "video", label: "Videos" },
+  { id: "image", label: "Images" },
+];
 
 /** One-file outcome → a human line (ai_description.mdx §2). */
 function msgOne(r: DescribeResult): string {
