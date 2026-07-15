@@ -328,7 +328,18 @@ export function OneRepoPage() {
         <span onClick={(e) => e.stopPropagation()}>
           <DecisionToggle
             state={f.gitignore ? "on" : "off"}
-            title="Add to git ignore"
+            // A rule we must not rewrite (a pattern, or a non-root-.gitignore source) owns this file, so
+            // OFF is not ours to perform — say so and name the rule rather than offering a dead click
+            // (git_ignore.mdx §5.5).
+            locked={!!f.gitignoreLocked}
+            title={
+              f.gitignoreLocked && f.gitignoreRule
+                ? `Git-ignored by ${f.gitignoreRule.source}:${f.gitignoreRule.line} — ${f.gitignoreRule.pattern}\n` +
+                  `That rule covers more than this file, so Large File Bridge will not rewrite it. Edit ${f.gitignoreRule.source} to change this.`
+                : f.gitignore
+                  ? "Git-ignored — click to stop ignoring this file"
+                  : "Add to git ignore"
+            }
             onToggle={() =>
               setAxes.mutate({ paths: [f.path], ipfs: f.decision === "sync", gitignore: !f.gitignore })
             }

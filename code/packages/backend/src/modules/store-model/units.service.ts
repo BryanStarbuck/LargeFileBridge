@@ -25,7 +25,7 @@ import {
 import type { ComputerUnitConfig, PlacementChoice } from "@lfb/shared";
 import type { RepoOwner } from "@lfb/shared";
 import { compressInfo } from "../fs/badges.js";
-import { resolveRepoOwner, checkIgnore } from "../git/git.service.js";
+import { resolveRepoOwner, checkIgnoreVerbose, type IgnoreRule } from "../git/git.service.js";
 // storage.service <-> units.service form a static import cycle used ONLY inside functions (getStorageRow is
 // called from ownerForRepoConfig, never at module-eval), which is safe under NodeNext ESM — same pattern the
 // storage.service <-> storage-settings.service pair documents.
@@ -285,14 +285,15 @@ function composeFileRows(
   // git-ignored through our own toggle; a rule the user wrote by hand (or any pattern rule, e.g.
   // `**/videos/**`) has no ledger event, so a ledger-sourced flag reported "not ignored" for files git
   // genuinely ignores. `git check-ignore` is the source of truth for "is this file ignored" — one
-  // batched call per repo, same helper (and therefore the same definition of ignored) the FS-page
-  // badges use. Never let it break row composition; on failure nothing is reported ignored.
-  const gitIgnoredAbs = repoRootAbs
-    ? checkIgnore(
+  // batched call per repo. The VERBOSE form also gives us the OWNING RULE, which tells the UI whether the
+  // toggle can be turned off (our exact anchored line) or is locked by a rule we must not rewrite
+  // (git_ignore.mdx §5.5). Never let it break row composition; on failure nothing is reported ignored.
+  const ignoreRules = repoRootAbs
+    ? checkIgnoreVerbose(
         repoRootAbs,
         status.candidates.map((c) => path.join(repoRootAbs, c.path)),
       )
-    : new Set<string>();
+    : new Map<string, IgnoreRule>();
   return status.candidates.map((cand) => {
     const decision: Decision = cfg.decisions[cand.path] ?? "undecided";
     const m = manifestByPath.get(cand.path);
@@ -321,7 +322,7 @@ function composeFileRows(
       // The git-ignore axis as GIT ACTUALLY SEES IT (decisions.mdx §1) — drives the inline
       // Add-to-git-ignore (⊘) toggle independently of the IPFS-axis `decision`. Reality, not intent:
       // `prov.gitignore` is the recorded DECISION and is kept for provenance only.
-      gitignore: repoRootAbs ? gitIgnoredAbs.has(path.join(repoRootAbs, cand.path)) : false,
+      ...gitIgnoreAxis(repoRootAbs, cand.path, ignoreRules),
       // The Compress / Transcribe task-tab status for this file (task_tabs.mdx §4.4/§5/§6). Cheap,
       // name-only for compress; transcribe needs one sidecar existence check per media file.
       compress: compressStatusFor(cand.path),
@@ -329,6 +330,33 @@ function composeFileRows(
       describe: describeStatusFor(cand.path, repoRootAbs),
     };
   });
+}
+
+/**
+ * The git-ignore axis fields for ONE row, derived from git's verbose verdict (git_ignore.mdx §5.5).
+ *
+ * `gitignoreLocked` answers "can the user turn this OFF here?". It is true when git ignores the file via a
+ * rule we must NOT rewrite — a broad/pattern rule, or one sourced outside the repo's root `.gitignore`.
+ * The UI then renders the toggle ON but non-interactive and names the rule, instead of offering a click
+ * that would silently do nothing. The test MUST mirror `unignorePaths()`'s accept condition, or the UI
+ * would offer a removal the engine then refuses.
+ */
+function gitIgnoreAxis(
+  repoRootAbs: string | null,
+  relPath: string,
+  rules: Map<string, IgnoreRule>,
+): Pick<FileRow, "gitignore" | "gitignoreLocked" | "gitignoreRule"> {
+  if (!repoRootAbs) return { gitignore: false };
+  const rule = rules.get(path.join(repoRootAbs, relPath));
+  if (!rule) return { gitignore: false };
+  const ownRootIgnore = path.resolve(repoRootAbs, rule.source) === path.join(repoRootAbs, ".gitignore");
+  const exact = `/${relPath.split(path.sep).join("/")}`;
+  const removable = ownRootIgnore && rule.pattern.trim() === exact;
+  return {
+    gitignore: true,
+    gitignoreLocked: !removable,
+    gitignoreRule: { source: path.basename(rule.source), line: rule.line, pattern: rule.pattern },
+  };
 }
 
 // Compress task status (task_tabs.mdx §6). Reuses the single-source-of-truth extension verdict

@@ -126,6 +126,14 @@ export interface FileRow {
   // toggle, a hand-written line, or a pattern like `**/videos/**`). Drives the inline Add-to-git-ignore
   // (⊘) toggle (decision_toggles.mdx). Independent of `decision` (which is the IPFS-axis projection).
   gitignore?: boolean;
+  // True when `gitignore` is on via a rule LFBridge must NOT rewrite (a broad/pattern rule, or one from
+  // outside the repo's root .gitignore). The ⊘ toggle then renders ON but NON-INTERACTIVE and names the
+  // rule — turning it off is the user's edit to make (git_ignore.mdx §5.5). Absent/false = our exact
+  // anchored line owns it, so clicking OFF really un-ignores the file.
+  gitignoreLocked?: boolean;
+  // The rule that ignores this file, for the "Ignored by .gitignore:3 — `**/videos/**`" explanation.
+  // `source` is a basename (e.g. ".gitignore"). Absent when the file is not ignored.
+  gitignoreRule?: { source: string; line: number; pattern: string };
 }
 
 // One file a peer computer pinned that THIS computer is missing — the subject of the "pull them down"
@@ -999,6 +1007,26 @@ export interface GitIgnoreResult {
   repos: number; // count of repos whose .gitignore was appended to
   alreadyIgnored: number; // target paths git already ignored (nothing written for them)
   notInRepo: number; // target paths not inside any git repo (nothing written for them)
+}
+
+// Why an un-ignore could not be performed (git_ignore.mdx §5.5). Only `pattern-rule` and `foreign-source`
+// are "the rule is not ours to touch" refusals the UI explains; the rest are benign no-ops.
+export type UnignoreRefusal =
+  | "not-ignored" // git already does not ignore it — the toggle is already off, nothing to do
+  | "not-in-repo" // no owning git repo → the ignore axis does not apply
+  | "pattern-rule" // a BROAD rule (e.g. `**/videos/**`) ignores it — removing it would un-ignore other files
+  | "foreign-source" // the rule lives outside the repo's root .gitignore (.git/info/exclude, a global ignore)
+  | "still-ignored" // our exact line was removable, but ANOTHER rule still ignores it → we rolled back
+  | "write-failed"; // the .gitignore could not be rewritten
+
+// The result of trying to un-ignore ONE path (git_ignore.mdx §5.5) — POST /api/git/ignore/remove.
+export interface UnignoreOutcome {
+  path: string; // the absolute path asked about
+  removed: boolean; // true = git no longer ignores this file (our exact anchored line was removed)
+  refusal?: UnignoreRefusal; // why not, when `removed` is false
+  // The rule that ignores (or still ignores) the file, verbatim from `git check-ignore -v`, so the UI can
+  // name it: "Ignored by .gitignore:3 — `**/videos/**`". Null when the file simply is not ignored.
+  rule?: { source: string; line: number; pattern: string } | null;
 }
 
 // ── Single-entity views + sticky flags (menus.mdx §6.6, files.mdx, directories.mdx) ──

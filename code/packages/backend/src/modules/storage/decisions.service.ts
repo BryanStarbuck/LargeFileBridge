@@ -31,7 +31,7 @@ import { resolveTrackingRoot } from "./tracking-root.service.js";
 import { mirrorToSyncRepo } from "./tracking-sync.service.js";
 import { storageSid } from "./storage.service.js";
 import { readStorageSettings } from "./storage-settings.service.js";
-import { applyGitIgnore } from "../git/gitignore.service.js";
+import { applyGitIgnore, unignorePaths } from "../git/gitignore.service.js";
 import { classifyRemoteVisibility } from "../git/git.service.js";
 import { classifySpecial } from "../scanner/special-file.service.js";
 import { effectiveFlags, getAppConfig } from "../store-model/config.service.js";
@@ -250,7 +250,7 @@ export async function recordDecision(
   relPaths: string[],
   axes: DecisionAxes,
   decidedBy: string | null,
-  opts: { asked?: boolean } = {},
+  opts: { asked?: boolean; unignore?: boolean } = {},
 ): Promise<void> {
   const repoRoot = repoRootFor(folder);
   const asked = opts.asked !== false;
@@ -316,6 +316,26 @@ export async function recordDecision(
       applyGitIgnore({ paths: abs, recursive: false });
     } catch (e) {
       log.warn("decisions", `${repoRoot}: git-ignore apply failed: ${(e as Error).message}`);
+    }
+  }
+
+  // The OFF direction (git_ignore.mdx §5.5) — un-ignore, gated on `opts.unignore`. The charter's "never
+  // git-ignore a file on our own" cuts BOTH ways: editing a user's `.gitignore` must follow an explicit
+  // click, so ONLY the user-facing toggle path opts in. Policy/auto/rename writes carry gitignore:false
+  // routinely and must NEVER silently un-ignore a file as a side effect.
+  if (asked && opts.unignore && axes.gitignore === false) {
+    const abs = relPaths.map((p) => path.join(repoRoot, p));
+    try {
+      const refused = unignorePaths(abs).filter((o) => !o.removed && o.refusal !== "not-ignored");
+      for (const o of refused) {
+        log.info(
+          "decisions",
+          `${repoRoot}: kept git-ignore for ${path.relative(repoRoot, o.path)} (${o.refusal}` +
+            `${o.rule ? ` — ${o.rule.source}:${o.rule.line} '${o.rule.pattern}'` : ""})`,
+        );
+      }
+    } catch (e) {
+      log.warn("decisions", `${repoRoot}: git-ignore removal failed: ${(e as Error).message}`);
     }
   }
 }

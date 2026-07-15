@@ -108,6 +108,28 @@ click propagation**: clicking a toggle flips that decision and does **nothing el
 file, never selects the row. This mirrors the existing rule for the inline **Decision** select and the
 **CID** copy cell ([one_repo.mdx §4.7](./one_repo.mdx#47-row--cell-navigation-per-file--locked)).
 
+### 1.2.1 LOCKED is not DISABLED (LOCKED)
+
+A toggle can be **ON and true, yet not ours to change from here**. The case that matters today: git
+ignores a file via a rule LFBridge must not rewrite — a pattern like `**/videos/**`, or a rule in
+`.git/info/exclude` ([git_ignore.mdx §5.5](./git_ignore.mdx)). Such a toggle renders **LOCKED**:
+
+| | Fill / edge | Opacity | Click | Tooltip |
+| --- | --- | --- | --- | --- |
+| **LOCKED** | **exactly the ON look** — solid orange, no edge | **full** — *never dimmed* | none (no hover affordance) | **names the rule**: *"Git-ignored by `.gitignore:2` — `**/videos/**`. That rule covers more than this file, so Large File Bridge will not rewrite it. Edit `.gitignore` to change this."* |
+| **DISABLED** | its normal state look | dimmed (40%) | none | why the control is unavailable |
+
+> **Why full opacity:** the file **really is** git-ignored. Dimming it would read as *"not really on"* and
+> undo the whole point of showing real state ([§1.0](#10-each-toggle-shows-reality-not-the-recorded-intent-locked)).
+> LOCKED changes only **what a click can do**, never **what is true**.
+
+The rule is: **never render a click that would silently do nothing.** If OFF cannot be performed, the
+toggle must say why. `FileRow.gitignoreLocked` + `FileRow.gitignoreRule` carry this per row.
+
+The LOCKED-vs-DISABLED render split is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/decision/DecisionToggles.tsx` —
+`DecisionToggle` (the `locked` prop: full opacity, `cursor-default`, `aria-disabled`, explanatory `title`).
+
 ---
 
 ## 2. Clicking a toggle = one decision event (LOCKED)
@@ -127,7 +149,17 @@ A click is **optimistic** and **immediate**:
      from the manifest; local bytes are **never** deleted.
    * **Add-to-git-ignore ON** → the `.gitignore` engine writes an anchored, repo-root-relative rule
      ([git_ignore.mdx §5](./git_ignore.mdx#5-the-gitignore-content-rules-locked-the-engine)); it is
-     idempotent and append-only. OFF → the corresponding rule is removed (only if LFBridge added it).
+     idempotent and append-only. **OFF** → the engine removes **the exact anchored single-file line**
+     `/<rel>` and verifies with `git check-ignore` that the file really is un-ignored, rolling the line
+     back if another rule still covers it ([git_ignore.mdx §5.5](./git_ignore.mdx)). If a **broad/pattern**
+     rule ignores the file, OFF is **refused** and the toggle is **locked** (§1.2.1) — it is never a
+     silent no-op.
+
+     > **Superseded wording:** this used to read *"the corresponding rule is removed (only if LFBridge
+     > added it)"*. That was never buildable — LFB appends **bare** lines with no marker or attribution,
+     > so "did we add it?" is unknowable. The exact-anchored-line test replaces it and is *stronger*:
+     > such a line matches exactly one file, so removing it is provably scoped to the clicked file no
+     > matter who typed it.
 4. On error the toggle **rolls back** to its prior state and a non-intrusive error note appears
    ([warnings.mdx §5.5](./warnings.mdx)).
 

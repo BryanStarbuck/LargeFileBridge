@@ -30,27 +30,37 @@ function DecisionToggle({
   glyph,
   title,
   disabled,
+  locked,
   onToggle,
 }: {
   state: ToggleState;
   glyph: ReactNode;
   title: string;
   disabled?: boolean;
+  // LOCKED ≠ disabled (decision_toggles.mdx §1.2.1). The state is REAL and firmly ON — it is simply not
+  // ours to change from here (e.g. a `.gitignore` pattern rule we must not rewrite). So it keeps FULL
+  // opacity — dimming it would read as "not really on" and undo the honesty of showing real state — and
+  // only loses its click + hover affordance. `title` carries the explanation.
+  locked?: boolean;
   onToggle: () => void;
 }) {
   // N/A → a blank 16px spacer so the pair keeps a fixed footprint on every row (decision_toggles.mdx §1.1).
   if (state === "na") return <span aria-hidden className="inline-block h-4 w-4 shrink-0" />;
+  const inert = disabled || locked;
   return (
     <button
       type="button"
       title={title}
       aria-pressed={state === "on"}
+      aria-disabled={inert}
       disabled={disabled}
       onClick={(e) => {
         e.stopPropagation(); // control cell — never navigate the row (decision_toggles.mdx §1.2)
-        if (!disabled) onToggle();
+        if (!inert) onToggle();
       }}
-      className="inline-grid h-4 w-4 shrink-0 place-items-center rounded-[3px] p-0 disabled:opacity-40"
+      className={`inline-grid h-4 w-4 shrink-0 place-items-center rounded-[3px] p-0 disabled:opacity-40${
+        locked ? " cursor-default" : ""
+      }`}
       style={boxStyle(state)}
     >
       {glyph}

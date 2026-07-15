@@ -244,9 +244,11 @@ un-anchored name for a specific path.
 * Writing is **append-only and idempotent**: existing `.gitignore` content is read, the new lines that are
   not already present are appended (preserving a trailing newline), and the file is rewritten. Re-running
   the same Apply writes nothing new.
-* LFB **only ever adds** lines here; it never removes or rewrites a user's existing `.gitignore` rules
-  (the one exception is the SDL-committable repair in [git_backbone.mdx §4.2.1](./git_backbone.mdx), which is a
-  different, protective code path).
+* LFB **only ever adds** lines here; it never rewrites a user's existing `.gitignore` rules. There are
+  exactly **two** exceptions, both narrow and deliberate: the SDL-committable repair in
+  [git_backbone.mdx §4.2.1](./git_backbone.mdx) (a different, protective code path), and the
+  **exact-line un-ignore** in §5.5 (the toggle's OFF direction), which may delete **one** anchored
+  single-file line and **nothing else**.
 
 Planning the lines (classify each target as file/dir/not-in-repo, group by owning repo, build anchored repo-relative lines per §5.2, drop `git check-ignore` hits, refuse LFB's own committed text) is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.service.ts` — `planGitIgnore()` (returns the `GitIgnorePlan`: `linesByRepo`, `alreadyIgnored`, `notInRepo`), using `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `nearestGitAtOrAbove()` / `checkIgnore()`.
@@ -256,6 +258,47 @@ Deciding **which** paths that refusal covers for a given owning repo — `<root>
 
 Writing the planned lines into each owning repo's root `.gitignore` (append-only, idempotent, preserve trailing newline) is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.service.ts` — `applyGitIgnore()` / `appendIgnoreLines()` (mirrors the existing `ensureLfbridgeIgnored()` append pattern in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts`).
+
+### 5.5 UN-ignore: the OFF direction, and the only line LFB may delete (LOCKED)
+
+Turning the **⊘ toggle off** ([decision_toggles.mdx](./decision_toggles.mdx)) must actually un-ignore the
+file — a control that silently does nothing is a lie. But `.gitignore` **has authors other than us**: the
+user hand-edits it, and one **pattern** line can ignore hundreds of files. So the OFF direction is the
+narrowest removal that can exist:
+
+| The rule that ignores the file | What OFF does |
+| --- | --- |
+| **Exactly the anchored single-file line** `/<rel>` — the shape §5.2 writes for a file | **Remove that one line.** It matches exactly ONE file, so the blast radius *is* the file the user clicked. |
+| A **broad/pattern** rule (`**/videos/**`, `/docs/**`, a bare `rogue.bin`) | **Refuse** (`pattern-rule`) and **name the rule**. Rewriting it could un-ignore hundreds of files and let big bytes back into commits — the exact disaster this product prevents. |
+| A rule outside the repo's root `.gitignore` (`.git/info/exclude`, a global ignore) | **Refuse** (`foreign-source`) and name the source. |
+| Not ignored / not in a repo | Benign no-op (`not-ignored` / `not-in-repo`). |
+
+Three rules make this safe, and all three are **LOCKED**:
+
+1. **Exact-anchored-only.** Because the line matches one file, we do **not** need to know whether *we*
+   wrote it — removing it does precisely what the user just asked and touches nothing else. This is why
+   no `.gitignore` provenance/marker is needed (and why the older "only if LFBridge added it" wording was
+   never buildable: `appendIgnoreLines()` writes bare lines with no attribution).
+2. **Verify-then-rollback.** After removing, re-ask `git check-ignore`. If the file is **still** ignored
+   (an earlier rule also covers it — git reports the *last* matching rule, so an exact line can win while
+   a pattern lurks beneath), the edit achieved nothing the user asked for → **put the line back** and
+   refuse (`still-ignored`). The `.gitignore` is never left changed without a result.
+3. **Explicit click only.** The charter's *"never git-ignore a file on our own"* cuts **both** ways:
+   editing a user's `.gitignore` follows an explicit click. Only the user-facing toggle path opts in
+   (`recordDecision(..., { unignore: true })`). Policy, auto-decision, and rename writes carry
+   `gitignore:false` routinely and must **never** silently un-ignore a file as a side effect.
+
+**When a rule is not ours to remove, the toggle says so.** It renders **ON but non-interactive**, with the
+rule named — *"Git-ignored by `.gitignore:2` — `**/videos/**`. That rule covers more than this file, so
+Large File Bridge will not rewrite it."* That is honest and teaches the rule, rather than offering a dead
+click. The row carries `gitignoreLocked` + `gitignoreRule` for exactly this
+([decision_toggles.mdx §1.0](./decision_toggles.mdx)).
+
+The un-ignore engine (group by repo, one verbose check per repo, exact-line test, remove, verify, roll back) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.service.ts` — `unignorePaths()` / `removeIgnoreLines()`, using `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `checkIgnoreVerbose()` (the `-v` form that reports the owning rule).
+
+Deciding whether a row's toggle is interactive or locked (the SAME accept condition as `unignorePaths()`, or the UI would offer a removal the engine refuses) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `gitIgnoreAxis()`.
 
 ---
 

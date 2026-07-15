@@ -14,13 +14,21 @@
 //     payload (`<sdl>/devices`, `<sdl>/storage.yaml`, …), since an SDL has no `.lfbridge/`
 //     (artifact_placement_policy.mdx §0).
 //   • Skip-already-ignored via `git check-ignore`, and drop a line already present in the .gitignore;
-//     writing is append-only + idempotent, LFB only ever ADDS lines (§5.4).
+//     writing is append-only + idempotent (§5.4). The ONE removal carve-out is `unignorePaths()` — the
+//     toggle's OFF direction — which deletes ONLY an exact anchored single-file line and verifies the
+//     result, never a broad/pattern rule (§5.5).
 // Node fs only (no shell `find`) + the shared git helpers.
 import fs from "node:fs";
 import path from "node:path";
-import type { GitIgnoreRequest, GitIgnorePlan, GitIgnoreRepoLines, GitIgnoreResult } from "@lfb/shared";
+import type {
+  GitIgnoreRequest,
+  GitIgnorePlan,
+  GitIgnoreRepoLines,
+  GitIgnoreResult,
+  UnignoreOutcome,
+} from "@lfb/shared";
 import { expandHome } from "../fs/badges.js";
-import { nearestGitAtOrAbove, checkIgnore } from "./git.service.js";
+import { nearestGitAtOrAbove, checkIgnore, checkIgnoreVerbose } from "./git.service.js";
 import { RESERVED_SDL_ROOT_NAMES, resolveStorageType, usesLfbridgeDir } from "../storage/storage-type.service.js";
 import { log } from "../../shared/logging.js";
 
@@ -173,6 +181,116 @@ export function applyGitIgnore(req: GitIgnoreRequest): GitIgnoreResult {
       `(${plan.alreadyIgnored} already ignored, ${plan.notInRepo} not in a repo)`,
   );
   return { written, repos, alreadyIgnored: plan.alreadyIgnored, notInRepo: plan.notInRepo };
+}
+
+/**
+ * UN-IGNORE a set of paths — the OFF direction of the Add-to-git-ignore toggle (git_ignore.mdx §5.5).
+ *
+ * This is the ONE carve-out from §5.4's "LFB only ever adds lines". It is deliberately the narrowest
+ * removal that can exist, because `.gitignore` has authors other than us:
+ *
+ *   • We remove ONLY a line that is EXACTLY the anchored single-file form `/<rel>` — the shape
+ *     `linesForTarget()` writes for a file. Such a line matches exactly ONE file, so removing it cannot
+ *     affect any other path. We therefore do not need to know whether WE wrote it: removing it does
+ *     precisely what the user just asked and nothing more.
+ *   • We REFUSE any broader rule (`**\/videos/**`, a bare `RT_1.mp4`, a directory rule). Rewriting one
+ *     could un-ignore hundreds of files and let big bytes back into commits — the exact disaster this
+ *     product exists to prevent. The refusal carries the rule so the UI can name it instead of no-op'ing.
+ *   • We REFUSE a rule sourced outside the repo's root `.gitignore` (`.git/info/exclude`, a global ignore).
+ *   • VERIFY-THEN-ROLLBACK: after removing, we re-ask `git check-ignore`. If the file is STILL ignored
+ *     (another rule also covers it), the removal did not achieve what the user asked, so we put the line
+ *     back and refuse. The `.gitignore` is never left in a state the user did not get a result from.
+ *
+ * Never throws: every path yields an outcome. Synchronous — it rewrites a few lines of text.
+ */
+export function unignorePaths(absPaths: string[]): UnignoreOutcome[] {
+  const outcomes: UnignoreOutcome[] = [];
+  // Group by owning repo so each repo needs only ONE verbose check-ignore call.
+  const byRepo = new Map<string, string[]>();
+  for (const raw of absPaths) {
+    const abs = path.resolve(expandHome(raw.trim()));
+    const repo = nearestGitAtOrAbove(abs);
+    if (!repo) {
+      outcomes.push({ path: abs, removed: false, refusal: "not-in-repo", rule: null });
+      continue;
+    }
+    byRepo.set(repo, [...(byRepo.get(repo) ?? []), abs]);
+  }
+
+  for (const [repo, list] of byRepo) {
+    const rules = checkIgnoreVerbose(repo, list);
+    for (const abs of list) {
+      const rule = rules.get(abs) ?? null;
+      if (!rule) {
+        outcomes.push({ path: abs, removed: false, refusal: "not-ignored", rule: null });
+        continue;
+      }
+      // The rule must live in THIS repo's root .gitignore — never touch an exclude file or a global ignore.
+      if (path.resolve(repo, rule.source) !== path.join(repo, ".gitignore")) {
+        outcomes.push({ path: abs, removed: false, refusal: "foreign-source", rule });
+        continue;
+      }
+      // The rule must be the exact anchored single-file line. Anything broader is not ours to rewrite.
+      const exact = `/${repoRel(repo, abs)}`;
+      if (rule.pattern.trim() !== exact) {
+        outcomes.push({ path: abs, removed: false, refusal: "pattern-rule", rule });
+        continue;
+      }
+      const before = readFileOrNull(path.join(repo, ".gitignore"));
+      if (before === null || !removeIgnoreLines(repo, [exact])) {
+        outcomes.push({ path: abs, removed: false, refusal: "write-failed", rule });
+        continue;
+      }
+      // VERIFY: did that actually un-ignore it, or does another rule still cover the file?
+      const still = checkIgnoreVerbose(repo, [abs]).get(abs) ?? null;
+      if (still) {
+        restoreFile(path.join(repo, ".gitignore"), before); // ROLLBACK — the user got no result from the edit
+        outcomes.push({ path: abs, removed: false, refusal: "still-ignored", rule: still });
+        continue;
+      }
+      log.info("git", `${repo}: un-ignored ${repoRel(repo, abs)} (removed exact line '${exact}')`);
+      outcomes.push({ path: abs, removed: true, rule: null });
+    }
+  }
+  return outcomes;
+}
+
+/** Read a file's text, or null when it cannot be read (used to snapshot `.gitignore` for rollback). */
+function readFileOrNull(p: string): string | null {
+  try {
+    return fs.readFileSync(p, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/** Put a snapshotted `.gitignore` back verbatim after a failed/ineffective removal. */
+function restoreFile(p: string, body: string): void {
+  try {
+    fs.writeFileSync(p, body, "utf8");
+  } catch (e) {
+    log.warn("git", `could not roll back ${p}: ${(e as Error).message}`);
+  }
+}
+
+/**
+ * Drop every line whose trimmed text exactly equals one of `lines` from `<repo>/.gitignore`, preserving all
+ * other content (comments, blank lines, ordering) byte-for-byte. Returns true when the file was rewritten.
+ */
+function removeIgnoreLines(repo: string, lines: string[]): boolean {
+  const gi = path.join(repo, ".gitignore");
+  const body = readFileOrNull(gi);
+  if (body === null) return false;
+  const drop = new Set(lines.map((l) => l.trim()));
+  const kept = body.split("\n").filter((l) => !drop.has(l.trim()));
+  if (kept.length === body.split("\n").length) return false; // nothing matched — do not rewrite
+  try {
+    fs.writeFileSync(gi, kept.join("\n"), "utf8");
+    return true;
+  } catch (e) {
+    log.warn("git", `could not rewrite ${gi}: ${(e as Error).message}`);
+    return false;
+  }
 }
 
 /** The set of trimmed, non-empty lines already in a repo's root `.gitignore` (for the skip-existing test). */

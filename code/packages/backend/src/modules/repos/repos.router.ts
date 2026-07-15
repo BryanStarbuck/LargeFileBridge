@@ -286,7 +286,11 @@ reposRouter.patch("/:repoId/files", async (req, res) => {
       log.info("repos", `${folder}: set ${paths.length} file(s) -> ${decision} (ledger)`);
     } else {
       // Two-axis decision from the checkbox popup — both axes as chosen (either may be undefined).
-      await recordDecision(folder, paths, { ipfs: body.data.ipfs, gitignore: body.data.gitignore }, decidedBy);
+      // `unignore: true` — this is THE user-facing click, the only path allowed to remove a `.gitignore`
+      // line (git_ignore.mdx §5.5). It still only ever removes an exact anchored single-file line.
+      await recordDecision(folder, paths, { ipfs: body.data.ipfs, gitignore: body.data.gitignore }, decidedBy, {
+        unignore: true,
+      });
       log.info(
         "repos",
         `${folder}: decided ${paths.length} file(s) ipfs=${!!body.data.ipfs} gitignore=${!!body.data.gitignore} by ${decidedBy ?? "?"}`,

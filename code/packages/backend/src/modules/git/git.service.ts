@@ -562,9 +562,56 @@ export function nearestGitAtOrAbove(dir: string): string | null {
 export function checkIgnore(repoRoot: string, absPaths: string[]): Set<string> {
   const ignored = new Set<string>();
   if (absPaths.length === 0) return ignored;
-  let out = "";
+  const out = runCheckIgnore(repoRoot, absPaths, false);
+  if (out === null) return ignored;
+  for (const line of out.split("\n")) {
+    const p = line.trim();
+    if (p) ignored.add(p);
+  }
+  return ignored;
+}
+
+/** The one `.gitignore` rule that causes a path to be ignored, as git reports it under `-v`. */
+export interface IgnoreRule {
+  source: string; // the file holding the rule — usually "<repo>/.gitignore", but can be .git/info/exclude or a global
+  line: number; // 1-based line number within `source`
+  pattern: string; // the rule text itself, e.g. "**/videos/**" or "/videos/RT_1.mp4"
+}
+
+/**
+ * Like `checkIgnore`, but also reports WHICH rule ignores each path (`git check-ignore -v`), keyed by the
+ * absolute path as passed in. This is what lets the product (a) refuse to un-ignore a file whose rule is a
+ * broad pattern we must not rewrite, and (b) TELL the user the rule and line that ignores it
+ * (git_ignore.mdx §5.5). Paths that are not ignored are simply absent from the map.
+ *
+ * Same exit-code contract and same never-throw posture as `checkIgnore`: any unexpected failure is logged
+ * and yields an empty map ("nothing known to be ignored"), so a listing never breaks over it.
+ */
+export function checkIgnoreVerbose(repoRoot: string, absPaths: string[]): Map<string, IgnoreRule> {
+  const rules = new Map<string, IgnoreRule>();
+  if (absPaths.length === 0) return rules;
+  const out = runCheckIgnore(repoRoot, absPaths, true);
+  if (out === null) return rules;
+  for (const raw of out.split("\n")) {
+    if (!raw.trim()) continue;
+    // `-v` format: "<source>:<linenum>:<pattern>\t<pathname>". Split on the TAB first so a pattern
+    // containing colons (or a path containing them) can never be mis-parsed.
+    const tab = raw.indexOf("\t");
+    if (tab < 0) continue;
+    const left = raw.slice(0, tab);
+    const pathname = raw.slice(tab + 1).trim();
+    const m = /^(.+):(\d+):(.*)$/.exec(left);
+    if (!m || !pathname) continue;
+    rules.set(pathname, { source: m[1], line: Number(m[2]), pattern: m[3] });
+  }
+  return rules;
+}
+
+/** The shared `git check-ignore --stdin` invocation. Returns stdout, or null when it genuinely failed. */
+function runCheckIgnore(repoRoot: string, absPaths: string[], verbose: boolean): string | null {
+  const args = verbose ? ["check-ignore", "-v", "--stdin"] : ["check-ignore", "--stdin"];
   try {
-    out = execFileSync("git", ["check-ignore", "--stdin"], {
+    return execFileSync("git", args, {
       cwd: repoRoot,
       input: absPaths.join("\n") + "\n",
       encoding: "utf8",
@@ -575,18 +622,10 @@ export function checkIgnore(repoRoot: string, absPaths: string[]): Set<string> {
     // check-ignore exits 1 when NONE of the inputs are ignored — expected, not an error. Its stdout
     // still carries whichever inputs WERE ignored (empty on a clean exit-1), so read it off the error.
     const err = e as { status?: number; stdout?: string | Buffer };
-    if (err.status === 1 && err.stdout != null) {
-      out = err.stdout.toString();
-    } else {
-      log.warn("git", `check-ignore failed in ${repoRoot}: ${(e as Error).message}`);
-      return ignored;
-    }
+    if (err.status === 1 && err.stdout != null) return err.stdout.toString();
+    log.warn("git", `check-ignore failed in ${repoRoot}: ${(e as Error).message}`);
+    return null;
   }
-  for (const line of out.split("\n")) {
-    const p = line.trim();
-    if (p) ignored.add(p);
-  }
-  return ignored;
 }
 
 /** Turn a fetch/push error into a user-facing problem, flagging auth failures for re-authentication (git_backbone.mdx §5). */
