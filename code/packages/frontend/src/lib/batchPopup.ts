@@ -97,6 +97,18 @@ function basename(p: string): string {
   return p.split("/").pop() || p;
 }
 
+/**
+ * The "already have one — excluded" clause for the popup's sub line (dialogs.mdx §5.2). The /plan preview
+ * ALREADY drops files that carry a finished artifact, but the popup used to show only the remainder — so a
+ * user who had run the action before could not tell an excluded file from one that was never done, and a
+ * large candidate count read as "it is redoing everything". Stating the excluded count makes the skip
+ * VISIBLE and the list verifiable. Empty string when nothing was excluded.
+ */
+function excludedClause(alreadyDone: number, noun: string): string {
+  if (alreadyDone <= 0) return "";
+  return ` ${alreadyDone} file${plural(alreadyDone)} already ${alreadyDone === 1 ? "has" : "have"} ${noun} and ${alreadyDone === 1 ? "is" : "are"} excluded from this list.`;
+}
+
 /** The one-line sub under "Opening window…" (dialogs.mdx §5.4). A recursive `root` walk is the slow case
  *  (it traverses the whole subtree), so it says so; a checked `paths` set is already resolved, so it's brief. */
 function openingSub(scope: BatchScope, noun: string): string {
@@ -138,7 +150,7 @@ export async function openTranscribeBatch(scope: BatchScope): Promise<void> {
     sub:
       n === 0
         ? `All ${plan.considered} audio/video file${plural(plan.considered)} here already have a transcript.`
-        : "Large File Bridge can generate a text transcript for each locally — nothing runs until you apply.",
+        : `Large File Bridge can generate a text transcript for each locally — nothing runs until you apply.${excludedClause(plan.alreadyDone, "a transcript")}`,
     popup: {
       whatThisIs:
         n === 0
@@ -225,7 +237,7 @@ export async function openDescribeBatch(scope: BatchScope): Promise<void> {
     sub:
       n === 0
         ? `All ${plan.considered} image/video file${plural(plan.considered)} here already have an AI description.`
-        : "Large File Bridge can generate an AI description for each image/video — nothing runs until you apply.",
+        : `Large File Bridge can generate an AI description for each image/video — nothing runs until you apply.${excludedClause(plan.alreadyDone, "an AI description")}`,
     popup: {
       whatThisIs:
         n === 0

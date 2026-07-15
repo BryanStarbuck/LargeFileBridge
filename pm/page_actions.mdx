@@ -133,6 +133,13 @@ The narrowing is applied **before** enqueue, so the queue only ever holds real w
 A producing action also drops files it **cannot** act on (a non-media file for Create Transcriptions, a
 non-image/-video for Create AI descriptions) — those are silently excluded from the count, never queued.
 
+**The drop is applied silently; the popup must not report it silently (LOCKED).** This rule keeps
+already-done files out of the set, but a user staring at a large candidate count cannot see a filter that
+left no trace — a big number reads as "it is redoing everything I already did". So wherever this narrowing
+feeds the batch-confirm popup, the popup **states the excluded `alreadyDone` count** in its sub line
+([dialogs.mdx §5.2.1](./dialogs.mdx)). Filtering correctly and *showing* that you filtered are two separate
+requirements, and both are LOCKED.
+
 **First-time gate (LOCKED).** Before a producing action queues anything, the planner resolves **where each
 output would land** ([Transcribe.mdx §3.4](./Transcribe.mdx)). If **every eligible file** resolves to
 `needsSetup` — the user has **no Personal storage configured** and the files are owned by no repo/company

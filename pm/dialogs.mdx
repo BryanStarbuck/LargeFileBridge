@@ -229,6 +229,35 @@ The scope→WarningDef builders that fetch the plan and construct the popup for 
 are implemented in code (NEW):
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `openTranscribeBatch(scope)` / `openDescribeBatch(scope)` (fetch the plan, build the transcribe/describe `WarningDef` with the previewed files as checked targets, and open it via the popup host §5.3).
 
+### 5.2.1 The excluded already-done count is STATED, not just applied (NEW, LOCKED)
+
+Rule 2 (skip-already-done) is applied on the server (§5.2) — a file that already carries a finished
+transcript / AI description is **never** in `files`, so the popup **cannot** offer to redo it, and Confirm
+**cannot** re-enqueue it. That much has always held. What the popup did **not** do was **say so**: it showed
+only the eligible remainder and never mentioned the excluded ones.
+
+That silence is a real product defect, because **the user cannot tell a correct list from a broken one**.
+Re-open a 2,000-file tree you have run this action on before and the popup says "1,900 files are ready for
+an AI description" — a number the user reads as *"it is redoing everything I already did"*. The list was
+right; the popup just never showed its work. The user's only recourse is to count sidecars on disk by hand.
+
+**The rule.** Whenever the plan excluded anything (`alreadyDone > 0`), the popup's **sub line states the
+excluded count** next to the candidate count — e.g. *"…nothing runs until you apply. **91 files already
+have an AI description and are excluded from this list.**"* When `alreadyDone` is 0 the clause is omitted
+(nothing was skipped, so there is nothing to explain). This makes the skip **visible and checkable at a
+glance**, and it turns "is this thing redoing my work?" into a question the popup answers itself.
+
+* The count is the plan's own `alreadyDone` (§5.2) — the popup **never** recomputes it, so the number shown
+  and the filter applied can never disagree.
+* This is a **transparency** requirement, not a filtering one — the filter is upstream and unchanged.
+* Both producing actions obey it: transcriptions and AI descriptions.
+
+Stating the excluded count in the popup sub line is implemented in code (NEW):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `excludedClause(alreadyDone, noun)`, appended to the `sub` built by `openTranscribeBatch()` / `openDescribeBatch()`.
+
+The server-side skip this clause reports is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `previewDescribe()` (the `readDescription(abs)` → `alreadyDone++; continue;` branch) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `previewTranscribe()`.
+
 ### 5.3 One global popup host so any launcher can open it (NEW, LOCKED)
 
 The metric tile opens the popup because `MetricsStrip` **mounts its own** `WarningPopup`

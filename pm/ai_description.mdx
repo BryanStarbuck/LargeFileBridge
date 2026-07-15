@@ -928,6 +928,34 @@ Both the preview and the enqueue apply the identical drop-already-described filt
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` —
 `previewDescribe()` and `enqueueDescribe()` (the `if (!overwrite && !dp.needsSetup && readDescription(abs)) { alreadyDone++; continue; }` guard in each).
 
+#### 12.5.1 …and the popup SAYS how many it dropped (NEW, LOCKED)
+
+The filter above is necessary but **not sufficient**, because it is invisible. Re-open a tree you have run
+before and the popup reports a large candidate count with no mention of the skipped files — indistinguishable
+from a popup that is about to redo everything. The user then has no way to audit it short of counting
+`.ai_description` sidecars on disk by hand. **So the popup states the excluded count** in its sub line
+whenever `alreadyDone > 0` ([dialogs.mdx §5.2.1](./dialogs.mdx)) — *"91 files already have an AI description
+and are excluded from this list."*
+
+**A large candidate count is not, by itself, evidence that the filter is broken.** The honest reading of
+`1,900 candidates / 91 already done` is that **91** files have a `done` sidecar and **1,900** genuinely do
+not — the tree is mostly un-described. Before treating a big number as a re-offer bug, check the **ground
+truth** rather than the recollection of an earlier run:
+
+* **Count the sidecars** the filter actually reads: `rg --files -g '*.ai_description' <placement-root>`
+  (for a file out in the wider filesystem, that root is the owning storage's dedicated repo, **not** beside
+  the media — §3.4 / [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)).
+* **Read the preview's own log line** — `previewDescribe()` logs
+  `preview [root …]: N considered → M candidates (K already done, U unsupported)` to `~/T/_large_files_bridge/log.log`.
+  If `K` equals the sidecar count on disk, the filter is behaving.
+* **A prior run that "did most of them" may not have.** Video describes **fail** when the file cannot be
+  compressed under the provider's inline cap (§3.3) and images fail on provider errors; a failed file
+  writes **no** sidecar and is **correctly** offered again. `grep '\[describe\]' error.err` shows the real
+  outcome of the earlier run.
+* **A third-party index is not our state.** An external YAML/CSV that happens to carry an `ai_description`
+  column (a planning file, an inventory) is **not** what this filter reads and may disagree wildly with the
+  sidecars. Our source of truth is the `done` sidecar at the resolved placement path — nothing else.
+
 ### 12.6 Describe is GENEROUSLY parallel — no hardware bottleneck (LOCKED)
 
 Transcription and compression are **local CPU/GPU** work: Whisper and ffmpeg saturate cores and RAM, so
