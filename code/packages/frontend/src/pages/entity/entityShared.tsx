@@ -5,6 +5,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import type { EntityView } from "@lfb/shared";
 import { api } from "@/api/client";
+import { copyText } from "@/lib/clipboard";
 import { clientLog } from "../../lib/clientLog.js";
 
 /** The two labeled sticky-flag switches — Never IPFS & Do not compress (menus.mdx §6.6). */
@@ -75,12 +76,7 @@ export function EntityHeaderMissing({
       <div className="mt-3 flex gap-3 text-sm">
         <button
           className="text-[var(--lfb-primary)]"
-          onClick={() => {
-            // Clipboard write can reject (permissions/insecure context) — log it so a silent copy
-            // failure leaves a trail; the optimistic toast stays for the common success path.
-            navigator.clipboard?.writeText(view.path).catch((e) => clientLog.warn("EntityHeaderMissing.copyPath", e));
-            toast.success("Path copied");
-          }}
+          onClick={() => { void copyText(view.path, "Path", "EntityHeaderMissing.copyPath"); }}
         >
           Copy path
         </button>

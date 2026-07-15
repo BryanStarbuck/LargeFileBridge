@@ -29,6 +29,7 @@ import { StatTile, StatTileRow } from "../../components/ui/StatTile.js";
 import { type Health } from "../../components/ui/health.js";
 import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
 import { clientLog } from "../../lib/clientLog.js";
+import { writeClipboard } from "@/lib/clipboard";
 
 const PIN_TYPES = ["recursive", "direct", "mfs"];
 const TRACKED = ["pinned", "import", "path-less"];
@@ -556,9 +557,12 @@ function CopyText({ text, display, mono }: { text: string; display: string; mono
     <button
       onClick={(e) => {
         e.stopPropagation();
-        navigator.clipboard?.writeText(text).catch((err) => clientLog.warn("IpfsPage.copy", err));
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1200);
+        // ✓ only on a write that really landed (menus.mdx §3.3).
+        void writeClipboard(text, "IpfsPage.copy").then((ok) => {
+          if (!ok) return toast.error("Couldn't copy to the clipboard");
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        });
       }}
       title={`Copy ${text}`}
       className={`inline-flex items-center gap-1 hover:text-[var(--lfb-primary)] ${mono ? "font-mono text-xs" : ""}`}

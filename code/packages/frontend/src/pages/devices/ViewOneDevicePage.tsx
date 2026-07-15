@@ -25,6 +25,7 @@ import { type Health } from "../../components/ui/health.js";
 import { relativeTime, absoluteTime } from "../../lib/format.js";
 import { confirmModal } from "../../lib/modals.js";
 import { clientLog } from "../../lib/clientLog.js";
+import { copyText } from "@/lib/clipboard";
 
 function seenHealth(iso: string | null): Health {
   if (!iso) return "neutral";
@@ -50,8 +51,7 @@ function KindIcon({ kind }: { kind: string }) {
 }
 
 function copy(text: string, label: string) {
-  navigator.clipboard?.writeText(text).catch((e) => clientLog.warn("ViewOneDevicePage.copy", e));
-  toast.success(`${label} copied`);
+  void copyText(text, label, "ViewOneDevicePage.copy");
 }
 
 // One label/value row in a definition grid. `copyable` renders the value as a click-to-copy code chip.

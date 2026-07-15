@@ -70,6 +70,29 @@ The token set and the `<DecisionToggle>` render states are defined in code:
 `DecisionToggle` (renders one axis) and `DecisionToggles` (renders the pair); tokens in
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/index.css` (`--lfb-toggle-off-edge`, `--lfb-decision-on`).
 
+### 1.0 Each toggle shows REALITY, not the recorded intent (LOCKED)
+
+A toggle reports **the state of the world**, not what our ledger remembers deciding. The two axes
+therefore read from **different** sources, and the ignore axis in particular must **never** be sourced
+from the decision ledger:
+
+| Axis | ON is read from | Why not the ledger |
+| --- | --- | --- |
+| **Add-to-git-ignore (⊘)** | **Git itself** — `git check-ignore`, one batched call per repo | The ledger only holds files **we** ignored via our own toggle. A rule the user wrote by hand, or any **pattern** rule (e.g. `**/videos/**`), produces **no ledger event** — so a ledger-sourced toggle renders **OFF for a file git genuinely ignores**, which is a lie the user can see. |
+| **Add-to-IPFS** | the manifest / pin state | (unchanged) |
+
+The ledger keeps its role as **provenance** — `decided_by` / `decided_at`, i.e. *who chose this and
+when* — and as the travelling team record. It is **not** the display source for the ignore toggle.
+
+> **The invariant:** if `git check-ignore` says a file is ignored, the ⊘ toggle is **solid** — whatever
+> the ledger does or does not contain. Reality wins over intent, every time.
+
+Deriving the git-ignore axis from git for every file row is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
+`composeFileRows()` (one batched `checkIgnore()` per repo), using
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `checkIgnore()`,
+the same helper (and therefore the same definition of *ignored*) the File-System badges use.
+
 ### 1.1 Sizing, hit-target, and pairing
 
 * Each toggle is **16×16** with an invisible **≥24×24** hit target so it is clickable on a dense table

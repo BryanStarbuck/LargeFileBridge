@@ -25,7 +25,7 @@ import {
 import type { ComputerUnitConfig, PlacementChoice } from "@lfb/shared";
 import type { RepoOwner } from "@lfb/shared";
 import { compressInfo } from "../fs/badges.js";
-import { resolveRepoOwner } from "../git/git.service.js";
+import { resolveRepoOwner, checkIgnore } from "../git/git.service.js";
 // storage.service <-> units.service form a static import cycle used ONLY inside functions (getStorageRow is
 // called from ownerForRepoConfig, never at module-eval), which is safe under NodeNext ESM — same pattern the
 // storage.service <-> storage-settings.service pair documents.
@@ -281,6 +281,18 @@ function composeFileRows(
   const repoRootAbs = cfg.repo.path
     ? path.resolve(cfg.repo.path.replace(/^~(?=\/|$)/, process.env.HOME || "~"))
     : null;
+  // The git-ignore AXIS IS READ FROM GIT, NOT FROM THE LEDGER. The ledger only records files WE
+  // git-ignored through our own toggle; a rule the user wrote by hand (or any pattern rule, e.g.
+  // `**/videos/**`) has no ledger event, so a ledger-sourced flag reported "not ignored" for files git
+  // genuinely ignores. `git check-ignore` is the source of truth for "is this file ignored" — one
+  // batched call per repo, same helper (and therefore the same definition of ignored) the FS-page
+  // badges use. Never let it break row composition; on failure nothing is reported ignored.
+  const gitIgnoredAbs = repoRootAbs
+    ? checkIgnore(
+        repoRootAbs,
+        status.candidates.map((c) => path.join(repoRootAbs, c.path)),
+      )
+    : new Set<string>();
   return status.candidates.map((cand) => {
     const decision: Decision = cfg.decisions[cand.path] ?? "undecided";
     const m = manifestByPath.get(cand.path);
@@ -306,9 +318,10 @@ function composeFileRows(
       decidedBy: prov?.decidedBy ?? null,
       decidedAt: prov?.decidedAt ?? null,
       neverIpfs,
-      // The git-ignore axis, folded from the shared ledger (decisions.mdx §1) — drives the inline
-      // Add-to-git-ignore (⊘) toggle independently of the IPFS-axis `decision`.
-      gitignore: prov?.gitignore ?? false,
+      // The git-ignore axis as GIT ACTUALLY SEES IT (decisions.mdx §1) — drives the inline
+      // Add-to-git-ignore (⊘) toggle independently of the IPFS-axis `decision`. Reality, not intent:
+      // `prov.gitignore` is the recorded DECISION and is kept for provenance only.
+      gitignore: repoRootAbs ? gitIgnoredAbs.has(path.join(repoRootAbs, cand.path)) : false,
       // The Compress / Transcribe task-tab status for this file (task_tabs.mdx §4.4/§5/§6). Cheap,
       // name-only for compress; transcribe needs one sidecar existence check per media file.
       compress: compressStatusFor(cand.path),

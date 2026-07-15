@@ -13,6 +13,7 @@ import { PageHeader } from "../../components/ui/PageHeader.js";
 import { Section } from "../../components/ui/Section.js";
 import { healthColor, type Health } from "../../components/ui/health.js";
 import { clientLog } from "../../lib/clientLog.js";
+import { copyText } from "@/lib/clipboard";
 
 type ToolLevel = "required" | "optional";
 
@@ -28,8 +29,7 @@ interface ToolRow {
 }
 
 function copy(text: string): void {
-  navigator.clipboard?.writeText(text).catch((e) => clientLog.warn("ToolsPage.copy", e));
-  toast.success("Copied");
+  void copyText(text, "Command", "ToolsPage.copy");
 }
 
 export function ToolsPage() {

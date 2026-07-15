@@ -16,6 +16,7 @@ import { StatusBanner } from "@/components/ui/StatusBanner";
 import { type Health } from "@/components/ui/health";
 import { relativeTime, absoluteTime, middleTruncate } from "@/lib/format";
 import { clientLog } from "@/lib/clientLog";
+import { copyText } from "@/lib/clipboard";
 
 export function ViewOneFilePage() {
   const { path } = useSearch({ strict: false }) as { path?: string };
@@ -102,7 +103,7 @@ export function ViewOneFilePage() {
                 <code
                   className="cursor-pointer text-xs text-black/60"
                   title={`${v.cid} — click to copy`}
-                  onClick={() => { navigator.clipboard?.writeText(v.cid!).catch((e) => clientLog.warn("ViewOneFilePage.copyCid", e)); toast.success("CID copied"); }}
+                  onClick={() => { void copyText(v.cid!, "CID", "ViewOneFilePage.copyCid"); }}
                 >
                   {middleTruncate(v.cid, 20)}
                 </code>

@@ -139,6 +139,63 @@ the right-click is the power-user shortcut. They are two triggers for **one** me
 The pointer-positioned menu (same catalog, clamped on-screen, closes on Esc / outside-click) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `EntityMenuAt` component.
 
+### 3.2 The menu is ISOLATED from the row underneath it (LOCKED)
+
+**Choosing a menu item does exactly what that item says — and nothing the row would have done.** A
+click inside the popover **never** also fires the row's click. Selecting **Copy path** copies the path
+and leaves you where you are; it does **not** open the file's viewer, and neither does any other item
+whose own job isn't to navigate.
+
+This is a **locked, product-wide rule** because a menu that also triggers its row is *wrong twice*: the
+user lands somewhere they didn't ask for, **and** the action they did ask for is obscured by the
+navigation.
+
+* **Isolation is the popover's job, not each item's.** Every trigger (§3 kebab, §3.1 right-click, §4
+  more-menu) shares **one** popover component, and **that** component stops the click. An item author
+  never has to remember to stop propagation — a rule enforced per-item is a rule that breaks the first
+  time someone adds an item.
+* **Why the trigger button's `stopPropagation` is NOT enough (the trap).** The popover is **portaled to
+  `<body>`**, so it looks isolated in the DOM — but **React re-dispatches events through the React
+  tree, not the DOM tree**. The kebab is rendered *inside* the row, so a click on a portaled menu
+  **item** still bubbles to the row's `onClick` handler. Stopping the click on the trigger button
+  covers only the button itself; the items are a separate dispatch and stay exposed.
+* **This is a fixed bug, kept documented so it cannot return.** Right-clicking a media file in a repo's
+  file table and choosing **Copy path** navigated to that file's viewer (`/video?path=…`) instead of
+  simply copying — the row's `onClick` fired via the portal's React-tree bubbling. Fixed by stopping
+  `click` / `dblclick` at the popover root.
+
+Menu isolation (the popover root stops `click`/`dblclick` so a portaled item can never fire the row's `onClick`) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `MenuPortal` component.
+
+The row `onClick` that this isolates the menu from is applied in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the body `<tr>`, which also hosts the `rowMenu` kebab cell).
+
+### 3.3 A copy action copies — and says what really happened (LOCKED)
+
+A **copy** action (§5: **Copy path**, **Copy CID**, **Copy Peer ID**, and every click-to-copy identifier
+cell) has exactly **one** effect: the text lands on the clipboard. It never navigates, never mutates,
+never touches a file.
+
+**The feedback must report the real outcome — never an optimistic guess.**
+
+* **Confirm only a write that landed.** The clipboard write is **asynchronous** and can genuinely fail
+  (permissions, an insecure context, an unfocused document). The toast/✓ waits for the write to settle:
+  success **only** on a resolved write.
+* **A failed copy says so.** On failure the user gets an explicit error — *"Couldn't copy the path to the
+  clipboard"* — and the failure is logged to the [fault trail](../CLAUDE.md). A copy that silently fails
+  while claiming *"Path copied"* is the worst case: the user pastes stale content and trusts it.
+* **Fall back before failing.** When the async Clipboard API is unavailable or rejects, retry via the
+  legacy `execCommand("copy")` path so the copy still lands; only report failure when **both** fail.
+* **One clipboard write, everywhere.** Every copy surface calls the shared helper — no call site
+  hand-rolls `navigator.clipboard.writeText`, because that is exactly how the optimistic-toast bug got
+  copy-pasted across a dozen surfaces.
+
+The one clipboard write (awaits the write, `execCommand` fallback, toasts the true outcome) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/clipboard.ts` — `writeClipboard()` (no toast; for surfaces with their own inline ✓) and `copyText()` (writes + toasts the real result).
+
+The menu's copy actions (Copy path / Copy CID), which only copy and never navigate, are built in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()`, the local `copy()` helper.
+
 ---
 
 ## 4. The entity `⋮` "more" menu — single-entity pages
@@ -446,7 +503,13 @@ Whether a file earns the pin **`P`** badge (and Never IPFS suppressing it) is co
    gateway.
 7. Every **mutating** menu action runs through the progress dock as its taxonomy op
    ([webapp.mdx §11](./webapp.mdx#11-what-shows-up-in-the-dock--the-lfbridge-operation-taxonomy)), and
-   every **navigate** action routes via TanStack Router; **copy** actions write the clipboard and toast.
+   every **navigate** action routes via TanStack Router; **copy** actions write the clipboard and toast
+   the **real** outcome (§3.3) — awaited, `execCommand`-fallback, explicit error on failure, and never
+   an optimistic "copied" on a write that didn't land.
+7b. **Menu isolation (§3.2):** choosing any item from any trigger (kebab / right-click / more-menu) does
+   **only** that item's job — the popover stops the click at its root, so a portaled item can never also
+   fire the row's `onClick`. Regression to guard: **Copy path** on a media row copies the path and stays
+   put; it does **not** open `/video?path=…`.
 8. The inline **[decision toggles](./decision_toggles.mdx)** are the **fast path** for the catalog's
    **Add to IPFS / Remove from IPFS** and **Git ignore** actions (§5.6): a row toggle, the entity menu, the
    bulk menu, and a **To-Do batch's** recommendations all write the **same** single-axis decision; the

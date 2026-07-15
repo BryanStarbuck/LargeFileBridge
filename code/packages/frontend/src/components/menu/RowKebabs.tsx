@@ -28,13 +28,13 @@ import { api } from "@/api/client";
 import { ActionsKebab, type Action } from "./EntityMenu";
 import { openTranscribeBatch, openDescribeBatch } from "@/lib/batchPopup";
 import { confirmModal } from "@/lib/modals";
+import { copyText } from "@/lib/clipboard";
 import { clientLog } from "../../lib/clientLog.js";
 
-// Copy to clipboard with a toast — the shared "copy" action body.
+// Copy to clipboard with a toast — the shared "copy" action body. Delegates to the one clipboard write
+// (lib/clipboard.ts) so the toast reports the REAL outcome, never an optimistic "copied" on a failed write.
 function copyToClipboard(text: string, label: string) {
-  // clipboard.writeText can reject (permissions / insecure context) — log the floating promise.
-  navigator.clipboard?.writeText(text).catch((e) => clientLog.warn("RowKebabs.copy", e));
-  toast.success(`${label} copied`);
+  void copyText(text, label, "RowKebabs.copy");
 }
 
 // ── The row settings gear (storage_settings.mdx §1 / repo_settings.mdx §1) ──────

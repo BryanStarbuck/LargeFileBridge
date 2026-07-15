@@ -19,6 +19,7 @@ import { formatBytes } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { middleTruncate } from "../../lib/format.js";
 import { clientLog } from "../../lib/clientLog.js";
+import { writeClipboard } from "@/lib/clipboard";
 import { ProgressView, SecurityCard, AutostartRow, ConfigHealthCard, UpgradeCard, num } from "./ipfsShared.js";
 
 export function IpfsDashboardPage() {
@@ -266,7 +267,15 @@ function CopyText({ text, display, mono }: { text: string; display: string; mono
   const [copied, setCopied] = useState(false);
   return (
     <button
-      onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(text).catch((err) => clientLog.warn("IpfsDashboardPage.copy", err)); setCopied(true); setTimeout(() => setCopied(false), 1200); }}
+      onClick={(e) => {
+        e.stopPropagation();
+        // ✓ only on a write that really landed (menus.mdx §3.3).
+        void writeClipboard(text, "IpfsDashboardPage.copy").then((ok) => {
+          if (!ok) return toast.error("Couldn't copy to the clipboard");
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        });
+      }}
       title={`Copy ${text}`}
       className={`inline-flex items-center gap-1 hover:text-[var(--lfb-primary)] ${mono ? "font-mono text-xs" : ""}`}
     >

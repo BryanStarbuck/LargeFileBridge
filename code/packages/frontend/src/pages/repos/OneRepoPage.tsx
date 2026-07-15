@@ -40,6 +40,7 @@ import { Disclosure } from "../../components/ui/Disclosure.js";
 import { refetchUntilResolved } from "../../components/ui/warnings/resolveRefetch.js";
 import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
 import { clientLog } from "../../lib/clientLog.js";
+import { copyText } from "@/lib/clipboard";
 
 // "sync" is the FROZEN wire value for the Add-to-IPFS (pin) decision; it renders as "Add to IPFS (pin)".
 const DECISIONS: Decision[] = ["sync", "ignore", "undecided"];
@@ -465,7 +466,7 @@ export function OneRepoPage() {
     { id: "peers", header: "Peers", kind: "int", align: "right", accessor: (f) => f.peers.length,
       cell: (f) => <span className={f.decision === "sync" && f.cid && f.peers.length === 0 ? "text-red-600" : ""}>{f.peers.length}</span> },
     { id: "cid", header: "CID", kind: "text", accessor: (f) => f.cid,
-      cell: (f) => f.cid ? <code className="text-xs text-black/60" title={f.cid} onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(f.cid!).catch((err) => clientLog.warn("OneRepoPage.copyCid", err)); toast.success("CID copied"); }}>{middleTruncate(f.cid, 16)}</code> : <span className="text-black/20">—</span> },
+      cell: (f) => f.cid ? <code className="text-xs text-black/60" title={f.cid} onClick={(e) => { e.stopPropagation(); void copyText(f.cid!, "CID", "OneRepoPage.copyCid"); }}>{middleTruncate(f.cid, 16)}</code> : <span className="text-black/20">—</span> },
     { id: "changed", header: "Changed", kind: "timestamp", accessor: (f) => f.changedAt,
       cell: (f) => <span title={absoluteTime(f.changedAt)}>{relativeTime(f.changedAt)}</span> },
     // ── Task-tab columns (task_tabs.mdx §4). Present in the union; shown only on the tabs that list them.

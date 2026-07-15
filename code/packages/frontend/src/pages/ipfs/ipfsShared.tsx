@@ -10,7 +10,8 @@ import type {
   IpfsInstallJob, IpfsNodeStatus, IpfsAutostartStatus, IpfsJobKind, IpfsJobPhase,
   IpfsConfigHealth, IpfsUpgradeInfo,
 } from "@lfb/shared";
-import { clientLog } from "../../lib/clientLog.js";
+import { toast } from "sonner";
+import { writeClipboard } from "@/lib/clipboard";
 
 export function num(n: number | null): string {
   return n == null ? "—" : n.toLocaleString();
@@ -202,9 +203,13 @@ export function CopyText({
     <button
       onClick={(e) => {
         e.stopPropagation();
-        navigator.clipboard?.writeText(text).catch((err) => clientLog.warn("ipfs.copy", err));
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1200);
+        // The ✓ is this button's feedback, so flip it only when the write REALLY landed; a failed copy
+        // toasts the error instead of showing a check that lies (menus.mdx §3.3).
+        void writeClipboard(text, "ipfs.copy").then((ok) => {
+          if (!ok) return toast.error("Couldn't copy to the clipboard");
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        });
       }}
       title={`Copy ${text}`}
       className={`inline-flex items-center gap-1 hover:text-[var(--lfb-primary)] ${mono ? "font-mono text-xs" : ""}`}

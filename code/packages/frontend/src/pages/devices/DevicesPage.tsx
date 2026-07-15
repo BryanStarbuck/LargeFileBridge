@@ -7,7 +7,6 @@
 // page; the IPFS Peer ID cell copies to the clipboard.
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { toast } from "sonner";
 import type { DeviceRow } from "@lfb/shared";
 import { deviceDescriptor } from "@lfb/shared";
 import { Laptop, Monitor, Server, HardDrive } from "lucide-react";
@@ -20,7 +19,7 @@ import { StatusBanner } from "../../components/ui/StatusBanner.js";
 import { Disclosure } from "../../components/ui/Disclosure.js";
 import { healthColor, type Health } from "../../components/ui/health.js";
 import { relativeTime, truncatePeerId } from "../../lib/format.js";
-import { clientLog } from "../../lib/clientLog.js";
+import { copyText } from "@/lib/clipboard";
 
 // Recent = green, a bit stale = amber, long gone / never = neutral.
 function seenHealth(iso: string | null): Health {
@@ -42,8 +41,7 @@ function KindIcon({ kind }: { kind: string }) {
 
 // Copy the full Peer ID to the clipboard (the cell only shows a truncated 8…8 form). Stops row-click.
 function copyPeerId(id: string) {
-  navigator.clipboard?.writeText(id).catch((e) => clientLog.warn("DevicesPage.copyPeerId", e));
-  toast.success("Peer ID copied");
+  void copyText(id, "Peer ID", "DevicesPage.copyPeerId");
 }
 
 export function DevicesPage() {

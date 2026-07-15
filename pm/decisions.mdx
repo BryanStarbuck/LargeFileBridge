@@ -64,6 +64,27 @@ user *looked at these files and chose to do nothing* — which is precisely what
 reappearing (§2, §7). The prior model had no way to say "I saw it, leave it," so a re-scan kept re-raising
 the same yellow banner; that is the bug this fixes.
 
+### 1.1 This ledger records INTENT — git records the git-ignore STATE (LOCKED)
+
+The `gitignore` axis stored here is **what the user asked for**. It is **not** the answer to *"is this
+file currently git-ignored?"* — only **git** can answer that, because `.gitignore` has authors other than
+us: the user hand-edits it, and a single **pattern** line (e.g. `**/videos/**`) can ignore hundreds of
+files that this ledger has never heard of.
+
+Therefore, everywhere the product **displays or counts** git-ignored state — the ⊘ toggle
+([decision_toggles.mdx §1.0](./decision_toggles.mdx)), the *big-files-not-ignored* metric, the To-Do
+batches — the value is read from **`git check-ignore`**, never folded out of this ledger. This ledger
+supplies **provenance only** (`decided_by`, `decided_at`) plus the team-shared intent record.
+
+> **Why this is LOCKED:** a ledger-sourced flag reports **"not ignored" for files git plainly ignores**
+> (any repo whose `.gitignore` predates LFBridge has *zero* ledger events, so **every** row reads OFF).
+> That is a visible falsehood about the user's own filesystem, and it also over-counts the
+> *big-files-not-ignored* metric, nagging the user to ignore files that are **already** ignored.
+
+Reading the git-ignore state from git when composing file rows is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
+`composeFileRows()` and `computeTaskMetrics()` (the `bigNotIgnored` count).
+
 **The two axes are surfaced as two checkboxes** ([warnings.mdx §4.3](./warnings.mdx), option kind
 `checkbox`) — never a radio group — in the popup, the bulk actions, and the per-file menu:
 

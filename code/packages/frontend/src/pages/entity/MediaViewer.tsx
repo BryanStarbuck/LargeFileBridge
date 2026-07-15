@@ -33,6 +33,7 @@ import { CredentialsMissingDialog } from "@/components/describe/CredentialsMissi
 import { runOsOpen } from "@/lib/os";
 import { confirmModal, promptModal } from "@/lib/modals";
 import { patchEntityBadges } from "@/lib/patchEntityBadges";
+import { copyText } from "@/lib/clipboard";
 import { EntityHeaderMissing } from "./entityShared";
 import { relativeTime, absoluteTime } from "@/lib/format";
 import { clientLog } from "../../lib/clientLog.js";
@@ -125,10 +126,7 @@ export function MediaViewer({ kind }: { kind: MediaKind }) {
           <div
             className="mt-0.5 cursor-pointer truncate font-mono text-xs text-black/50 hover:text-black/80"
             title={`${v.path} — click to copy`}
-            onClick={() => {
-              navigator.clipboard?.writeText(v.path).catch((e) => clientLog.warn("MediaViewer.copyPath", e));
-              toast.success("Path copied");
-            }}
+            onClick={() => { void copyText(v.path, "Path", "MediaViewer.copyPath"); }}
           >
             {v.path}
           </div>
@@ -264,10 +262,7 @@ function ActionBar({
     if (!(await confirmModal({ title: `Move ${v.name} to LFBridge trash?`, body: "This is recoverable — the file is moved to the trash folder, not erased.", confirmLabel: "Move to trash" }))) return;
     del.mutate();
   };
-  const copyPath = () => {
-    navigator.clipboard?.writeText(v.path).catch((e) => clientLog.warn("MediaViewer.copyPath", e));
-    toast.success("Path copied");
-  };
+  const copyPath = () => { void copyText(v.path, "Path", "MediaViewer.copyPath"); };
   const openRawInBrowser = () => { if (grantUrl) window.open(grantUrl, "_blank", "noopener"); };
   const openFolderInBrowser = () => navigate({ to: "/fs", search: { path: parent } });
 
@@ -373,7 +368,7 @@ function ActionBar({
   const extras: Action[] = [
     { id: "never-ipfs", group: "Flag", label: "Never publish via IPFS", icon: <Ban className="h-4 w-4" />, checked: v.flags.neverIpfs, onSelect: () => flags.mutate({ neverIpfs: !v.flags.neverIpfs }) },
     { id: "no-compress", group: "Flag", label: "Do not compress", icon: <Ban className="h-4 w-4" />, checked: v.flags.noCompress, onSelect: () => flags.mutate({ noCompress: !v.flags.noCompress }) },
-    ...(v.cid ? [{ id: "copy-cid", group: "Copy", label: "Copy CID", icon: <Copy className="h-4 w-4" />, onSelect: () => { navigator.clipboard?.writeText(v.cid!).catch((e) => clientLog.warn("MediaViewer.copyCid", e)); toast.success("CID copied"); } }] : []),
+    ...(v.cid ? [{ id: "copy-cid", group: "Copy", label: "Copy CID", icon: <Copy className="h-4 w-4" />, onSelect: () => { void copyText(v.cid!, "CID", "MediaViewer.copyCid"); } }] : []),
     { id: "delete", group: "Danger", label: "Delete…", danger: true, icon: <Trash2 className="h-4 w-4" />, onSelect: onDelete },
   ];
 

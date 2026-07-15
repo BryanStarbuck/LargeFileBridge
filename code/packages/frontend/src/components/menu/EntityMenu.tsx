@@ -32,6 +32,7 @@ import { patchEntityBadges } from "@/lib/patchEntityBadges";
 import { openTranscribeBatch, openDescribeBatch } from "@/lib/batchPopup";
 import { confirmModal, promptModal } from "@/lib/modals";
 import { openCompressInside } from "@/lib/compressInside";
+import { copyText } from "@/lib/clipboard";
 import { clientLog } from "../../lib/clientLog.js";
 
 // ── The action model ─────────────────────────────────────────────────────────
@@ -103,6 +104,14 @@ export function MenuPortal({ pos, onClose, children }: { pos: MenuPos; onClose: 
       style={{ position: "fixed", left: adj.x, top: adj.y, zIndex: 60 }}
       className="min-w-[15rem] rounded-lg border border-[var(--lfb-border)] bg-white py-1 shadow-xl"
       onContextMenu={(e) => e.preventDefault()}
+      // Menu isolation (menus.mdx §3.2) — REQUIRED, not belt-and-braces. This popover is portaled to
+      // <body>, but React re-dispatches its events through the REACT tree, not the DOM tree: the kebab
+      // lives inside the row, so a click on a menu ITEM bubbles to the row's `onClick` and navigates.
+      // (That was the "Copy path opened the video page" bug — KebabButton's stopPropagation only covers
+      // the trigger button, never the portaled items.) Stop click here, at the one choke point every
+      // trigger shares, so no menu action can ever also fire the row underneath it.
+      onClick={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
     >
       {children}
     </div>,
@@ -248,11 +257,9 @@ interface Ctx {
 function buildActions(v: EntityView, ctx: Ctx): Action[] {
   const a: Action[] = [];
   const parent = v.path.replace(/[/\\][^/\\]*$/, "") || v.path;
-  const copy = (text: string, label: string) => () => {
-    // clipboard.writeText can reject (permissions / insecure context) — log the floating promise.
-    navigator.clipboard?.writeText(text).catch((e) => clientLog.warn("EntityMenu.copy", e));
-    toast.success(`${label} copied`);
-  };
+  // Copy actions ONLY copy — they never navigate (menus.mdx §3.3). copyText awaits the write and toasts
+  // the real outcome (with an execCommand fallback), so a failed copy never claims success.
+  const copy = (text: string, label: string) => async (): Promise<void> => { await copyText(text, label, "EntityMenu.copy"); };
   const compress = async () => {
     if (!(await confirmModal({ title: `Compress ${v.name}?`, body: "Medium quality, same resolution — the original moves to LFBridge trash (recoverable).", confirmLabel: "Compress" }))) return;
     api.compressFile(v.path)
