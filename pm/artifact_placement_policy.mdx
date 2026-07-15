@@ -1,9 +1,21 @@
 ---
 title: LargeFileBridge — Artifact & Tracking-State Placement Policy (the data-category split)
-description: The authoritative, cross-cutting policy for WHERE LargeFileBridge writes its per-repo state. The split is by DATA CATEGORY, not by a content threshold. Category A — the user's derived CONTENT (transcripts .transcription + AI descriptions .ai_description) — lives in the working repo's committed .lfbridge/, path-mirrored, and travels with the repo. Category B — LFB's noisy COMPRESSION / BIG-FILE / GIT-IGNORE tracking state (repo_storage.yaml with its per-scan last_scan + counts, files.yaml, per-file <name>.yaml sidecars, history/<device>.txt, decisions.yaml, manifest.yaml, compression records) — NEVER enters the working repo. Category B lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ (repoKey = shortHash of the resolved absolute repo path) ALWAYS — machine-local, never touching git, so it can never merge-conflict — and is ADDITIONALLY mirrored to the owning company/Personal storage's SYNC REPO at <syncRepo>/repos/<repoKey>/ when that sync repo is configured and the per-repo toggle is on (default OFF), so the state can travel across the user's computers without polluting the working repo. This supersedes the earlier content-threshold three-tier model: there is no tier that writes tracking state into the working repo. Logs (launcher.log / log.log / error.err) live ONLY in Local Storage and are NEVER committed or mirrored anywhere. Documents the per-scan refreshCounts churn, the decisions.yaml/manifest.yaml traveller reconciliation, the sync-repo reconcile (append-only merge + union-merge), repoKey derivation and collision guard, and a catalogue of non-default and error cases. Sibling of storage_local.mdx (the state root that hosts repos/<repoKey>/), repo_tracking_scheme.mdx (the Category-B files this policy places), repo_settings.mdx (the per-repo sync-repo toggle), storage_company.mdx / storage_personal.mdx (the owning storage that configures the sync repo), Transcribe.mdx / ai_description.mdx (the two Category-A artifacts), placement_radios.mdx (the artifact placement radio), repo_owner_propagation.mdx (how the repo→company ownership that decides WHICH sync repo a repo mirrors to travels to teammates and is consent-gated), and scan.mdx.
+description: The authoritative, cross-cutting policy for WHERE LargeFileBridge writes its per-repo state. TWO orthogonal rules. Rule ONE (§0, the storage-KIND rule) — .lfbridge/ exists ONLY inside a working git repo (Git Storage, e.g. ~/BGit/Bryan_git/charlie-kirk/.lfbridge/videos/), where LFB is a guest and quarantines its files in one hidden corner; a DEDICATED LFB FILE REPO (the Personal/Company/Community SDL storage, e.g. ~/BGit/Bryan_git/personal_large_files_bridge/) has NO .lfbridge/ AT ALL — the SDL repo root IS the .lfbridge area, so artifacts AND the SDL's own metadata (storage.yaml, mapped_dirs.yaml, files.yaml, manifest.yaml, bookmarks.yaml, devices/, analysis/) all sit at the ROOT (~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/…, NOT .lfbridge/_Mirror/…). Keyed on resolved storage KIND via trackingBaseDir()/usesLfbridgeDir() (storage-type.service.ts), never on a path or name; default is `repo` (keeps .lfbridge/); an SDL's own .git/ never demotes it to a working repo; a pre-existing SDL .lfbridge/ is migrated to the root by migrate-sdl-lfbridge.ts with a read-fallback until migrated. Rule TWO (§1+, the DATA-CATEGORY split, not a content threshold) — Category A, the user's derived CONTENT (transcripts .transcription + AI descriptions .ai_description), lives in the working repo's committed .lfbridge/, path-mirrored, and travels with the repo. Category B — LFB's noisy COMPRESSION / BIG-FILE / GIT-IGNORE tracking state (repo_storage.yaml with its per-scan last_scan + counts, files.yaml, per-file <name>.yaml sidecars, history/<device>.txt, decisions.yaml, manifest.yaml, compression records) — NEVER enters the working repo. Category B lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ (repoKey = shortHash of the resolved absolute repo path) ALWAYS — machine-local, never touching git, so it can never merge-conflict — and is ADDITIONALLY mirrored to the owning company/Personal storage's SYNC REPO at <syncRepo>/repos/<repoKey>/ when that sync repo is configured and the per-repo toggle is on (default OFF), so the state can travel across the user's computers without polluting the working repo. This supersedes the earlier content-threshold three-tier model: there is no tier that writes tracking state into the working repo. Logs (launcher.log / log.log / error.err) live ONLY in Local Storage and are NEVER committed or mirrored anywhere. Documents the per-scan refreshCounts churn, the decisions.yaml/manifest.yaml traveller reconciliation, the sync-repo reconcile (append-only merge + union-merge), repoKey derivation and collision guard, and a catalogue of non-default and error cases. Sibling of storage_local.mdx (the state root that hosts repos/<repoKey>/), repo_tracking_scheme.mdx (the Category-B files this policy places), repo_settings.mdx (the per-repo sync-repo toggle), storage_company.mdx / storage_personal.mdx (the owning storage that configures the sync repo), Transcribe.mdx / ai_description.mdx (the two Category-A artifacts), placement_radios.mdx (the artifact placement radio), repo_owner_propagation.mdx (how the repo→company ownership that decides WHICH sync repo a repo mirrors to travels to teammates and is consent-gated), and scan.mdx.
 ---
 
 # LargeFileBridge — Artifact & Tracking-State Placement Policy
+
+This spec answers "where does LFB write?" with **two orthogonal rules**, applied in order:
+
+1. **§0 — the storage-KIND rule.** Is `.lfbridge/` used **at all**? Only in a **working git repo**. A
+   **dedicated LFB file repo** (Personal / Company / Community SDL) has **none** — its root *is* the
+   `.lfbridge` area.
+2. **§1+ — the data-CATEGORY rule.** Given a root, which of LFB's files may live in it at all? Content (A)
+   may; noisy tracking state (B) never enters a **working** repo.
+
+The two compose: §0 picks the **base directory** inside a root; §1 picks **which root**.
+
+---
 
 LargeFileBridge (LFB) writes two very different kinds of per-repo file, and the rule for **where each
 goes** is a hard split by **data category** — not by any threshold or timing:
@@ -45,6 +57,96 @@ This spec builds on, and does not restate, its siblings:
   out of git.
 * [decisions.mdx §4](./decisions.mdx) — the `decisions.yaml` ledger, whose travelling vehicle this policy
   moves from the working repo to the sync repo (§5).
+
+---
+
+## 0. The storage-kind rule — WHEN `.lfbridge/` is used at all (LOCKED)
+
+Orthogonal to the A/B category split below, and applying to **every** LFB-written file in **any** root, is a
+second rule: **`.lfbridge/` exists only inside a working git repo.** A **dedicated LFB file repo** — the
+Personal / Company / Community **SDL storage** — has **no `.lfbridge/` directory at all**.
+
+| Storage kind | Example root | LFB's files land at | `.lfbridge/`? |
+| --- | --- | --- | --- |
+| **`repo`** — a user's working git repo (Git Storage) | `~/BGit/Bryan_git/charlie-kirk/` | `<root>/.lfbridge/<rel>` | **YES** |
+| **`personal` / `company` / `community`** — a dedicated LFB file repo (SDL) | `~/BGit/Bryan_git/personal_large_files_bridge/` | `<root>/<rel>` | **NO — never** |
+
+```
+GIT STORAGE (a working repo — LFB is a guest, so it stays in one hidden corner)
+  media:      ~/BGit/Bryan_git/charlie-kirk/videos/_QwGo0LyZ3I.mp4
+  transcript: ~/BGit/Bryan_git/charlie-kirk/.lfbridge/videos/_QwGo0LyZ3I.mp4.transcription
+                                             ^^^^^^^^^^
+
+SDL FILE REPO (a repo that exists ONLY for LFB — the whole repo IS the .lfbridge area)
+  media:      ~/_Mirror/Politics/Charlie_Kirk_Mi/Teachers_Lounge/Teacher_Lounge_Shooter.mp4
+  transcript: ~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/Politics/Charlie_Kirk_Mi/Teachers_Lounge/Teacher_Lounge_Shooter.mp4.transcription
+                                                          ^ no .lfbridge/ segment — the mirror hangs off the root
+```
+
+**Why.** In a working repo LFB is a **guest**: the repo belongs to the user's own project, so everything LFB
+writes is quarantined under one hidden `.lfbridge/` directory that is obviously not the user's content. An
+SDL file repo is the **opposite** — it is a repo whose entire reason to exist is to hold LFB's files. Hiding
+them under `.lfbridge/` inside a repo that contains nothing else buys no separation and only adds a
+confusing, meaningless path segment to every file. **The SDL repo root *is* the `.lfbridge` area.**
+
+### 0.1 What this means for the SDL repo's own metadata (LOCKED)
+
+The rule is **total** — it is not limited to the path-mirrored artifacts. **Every** file LFB previously wrote
+under an SDL's `.lfbridge/` now sits at the SDL **root**:
+
+```
+~/BGit/Bryan_git/personal_large_files_bridge/
+├── storage.yaml                ← was .lfbridge/storage.yaml   (storages.mdx §3)
+├── mapped_dirs.yaml            ← was .lfbridge/mapped_dirs.yaml
+├── files.yaml                  ← was .lfbridge/files.yaml      (the fingerprint index)
+├── manifest.yaml               ← was .lfbridge/manifest.yaml
+├── bookmarks.yaml              ← was .lfbridge/bookmarks.yaml
+├── devices/                    ← was .lfbridge/devices/        (storage_personal.mdx §4.1)
+│   └── <device-id>.yaml
+├── analysis/                   ← was .lfbridge/analysis/
+│   └── <rel>/visuals_by_time.yaml
+└── _Mirror/                    ← was .lfbridge/_Mirror/        (the path-mirrored artifacts)
+    └── Politics/…/Teacher_Lounge_Shooter.mp4.transcription
+```
+
+### 0.2 The rule is keyed on storage KIND, never on a path or a name (LOCKED)
+
+The decision is made by the **resolved storage type**, never by string-matching a root's name:
+
+* `resolveStorageType(root)` returns `repo` | `personal` | `company` | `community`
+  ([storage-type.service.ts](#code)). An explicit `type:` in the storage descriptor wins; else the
+  `<name>_large_files_bridge` naming convention names an SDL; else the root is a plain working **`repo`**.
+* **The default is `repo`** — i.e. an unclassified root **keeps** `.lfbridge/`. This is the conservative
+  direction: mis-classifying a working repo as an SDL would scatter LFB's files across the user's project
+  tree, which is unrecoverable-feeling; mis-classifying an SDL as a working repo merely leaves an extra path
+  segment.
+* An SDL root that **also** carries a `.git/` (every SDL does — it is a git repo) is still an SDL. The kind
+  wins over the presence of `.git/`; the containing-root walk (§1.1's rule A) must classify by type **before**
+  it falls back to "has `.git/` → working repo".
+
+The single choke point that turns a root + storage kind into the base directory every LFB file hangs under is
+in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir(root, type?)` (returns `<root>/.lfbridge` for kind `repo`, and `<root>` itself for an SDL) and its predicate `usesLfbridgeDir(type)`. **Every** LFB writer resolves its base through this function and none joins `LFBRIDGE_DIR` directly.
+
+### 0.3 Non-default & error cases (LOCKED)
+
+* **A mapped-dir key that collides with an SDL metadata name.** Because the SDL mirror now hangs off the root,
+  a mapped dir keyed `devices`, `analysis`, `files.yaml`, `storage.yaml`, `manifest.yaml`, `bookmarks.yaml`, or
+  `mapped_dirs.yaml` would shadow the SDL's own metadata. These names are **reserved** at the SDL root: the
+  mapped-dir add/rename validator rejects a key that matches one ([storage_settings.mdx §4](./storage_settings.mdx)),
+  with a message naming the reserved word. Existing mapped dirs are checked on load and surfaced as a storage
+  warning rather than silently overwriting metadata.
+* **A pre-existing `.lfbridge/` inside an SDL** (a repo written by an older LFB). It is **migrated** — the
+  entries are `git mv`-ed to the root and the now-empty `.lfbridge/` removed — by the one-shot migration
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/migrate-sdl-lfbridge.ts` — `migrateSdlLfbridge()`. Until a given SDL is migrated, readers **fall back** to the old `.lfbridge/` path so no artifact is
+  reported missing (and none is regenerated) mid-migration.
+* **A name collision during migration** (a file already exists at the root destination, e.g. the SDL already
+  had a top-level `_Mirror/` alongside `.lfbridge/_Mirror/`). The migration **merges** directories and, for a
+  genuine file-vs-file conflict, keeps the **root** copy, leaves the `.lfbridge/` copy in place, and logs a
+  WARN naming both paths — it never overwrites and never deletes the loser.
+* **A working repo is later reclassified as an SDL** (the user sets `type:` or renames it to the convention).
+  Its `.lfbridge/` is migrated to the root by the same one-shot migration on the next pass. The reverse
+  (SDL → working repo) is not migrated automatically; LFB logs a WARN and keeps reading both layouts.
 
 ---
 
@@ -310,6 +412,20 @@ never be in a git tree at all.
 
 ## 10. Acceptance criteria
 
+0. **`.lfbridge/` exists only inside a working git repo** (§0). A dedicated LFB file repo (Personal /
+   Company / Community SDL) has **no `.lfbridge/` directory at all**: its artifacts **and** its own metadata
+   (`storage.yaml`, `mapped_dirs.yaml`, `files.yaml`, `manifest.yaml`, `bookmarks.yaml`, `devices/`,
+   `analysis/`) sit at the SDL **root**. `charlie-kirk/videos/x.mp4` → `charlie-kirk/.lfbridge/videos/x.mp4.transcription`;
+   `~/_Mirror/a/b.mp4` → `personal_large_files_bridge/_Mirror/a/b.mp4.transcription` (**no** `.lfbridge/`
+   segment).
+0a. The decision is keyed on **resolved storage kind** via the single choke point `trackingBaseDir(root)` /
+   `usesLfbridgeDir(type)` — never on a path or a name; **no** writer joins `LFBRIDGE_DIR` directly. The
+   default kind is **`repo`** (keeps `.lfbridge/`), and an SDL's own `.git/` never demotes it to a working
+   repo (§0.2).
+0b. A pre-existing SDL `.lfbridge/` is **migrated** to the root (`migrate-sdl-lfbridge.ts`), readers **fall
+   back** to the old path until it is, the migration **merges** rather than overwrites (root copy wins a
+   file-vs-file conflict, loser retained + WARN), and mapped-dir keys colliding with a reserved SDL metadata
+   name are **rejected** (§0.3).
 1. LFB splits per-repo files by **data category**: **Category A** (transcripts + AI descriptions) lives in
    the working repo's committed `.lfbridge/` and travels with the repo; **Category B** (`repo_storage.yaml`,
    `files.yaml`, per-file sidecars, `history/<device>.txt`, `decisions.yaml`, `manifest.yaml`, compression
@@ -340,7 +456,29 @@ never be in a git tree at all.
     `writeRepoStorage()` (repo-storage.service.ts).
 
 <!--
-  AUTHORITATIVE placement policy. SPLIT BY DATA CATEGORY (not a content threshold):
+  AUTHORITATIVE placement policy. TWO ORTHOGONAL RULES.
+
+  RULE ONE (§0) — the storage-KIND rule, WHEN .lfbridge/ is used AT ALL:
+  - kind `repo` (a user's WORKING git repo, e.g. ~/BGit/Bryan_git/charlie-kirk/) → LFB is a GUEST → everything
+    it writes is quarantined under <root>/.lfbridge/<rel>. KEEPS .lfbridge/.
+  - kind personal|company|community (a DEDICATED LFB FILE REPO / SDL, e.g.
+    ~/BGit/Bryan_git/personal_large_files_bridge/) → NO .lfbridge/ AT ALL. The SDL repo root IS the .lfbridge
+    area, so hiding files under .lfbridge/ inside a repo containing nothing else buys no separation and only
+    adds a meaningless path segment. TOTAL rule — not just the path-mirrored artifacts: storage.yaml,
+    mapped_dirs.yaml, files.yaml, manifest.yaml, bookmarks.yaml, devices/, analysis/ ALL move to the ROOT.
+    CANONICAL: ~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/…  NOT  …/.lfbridge/_Mirror/… (the old,
+    now-WRONG pattern).
+  - Keyed on RESOLVED STORAGE KIND (resolveStorageType), NEVER on a path/name. Default = `repo` (conservative:
+    keeps .lfbridge/). An SDL always has .git/ — kind WINS over the presence of .git/, so the containing-root
+    walk must classify by TYPE BEFORE falling back to "has .git/ → working repo".
+  - SINGLE CHOKE POINT: trackingBaseDir(root, type?) / usesLfbridgeDir(type) in storage-type.service.ts. EVERY
+    writer resolves its base through it; NO writer joins LFBRIDGE_DIR directly. Enforce with a grep.
+  - Non-defaults (§0.3): reserved SDL-root metadata names reject a colliding mapped-dir key; a pre-existing SDL
+    .lfbridge/ is migrated by migrate-sdl-lfbridge.ts (migrateSdlLfbridge) with a READ-FALLBACK until migrated;
+    migration MERGES (root copy wins a file conflict, loser retained + WARN, never overwrite/delete);
+    repo→SDL reclassification migrates, SDL→repo does not (WARN + read both).
+
+  RULE TWO (§1+) — SPLIT BY DATA CATEGORY (not a content threshold):
   - Category A = user CONTENT (transcripts + AI descriptions) → working repo's committed .lfbridge/, travels
     with the repo (placement radio lfbridge|beside|sync_repo, placement_radios.mdx).
   - Category B = LFB's noisy tracking state (repo_storage.yaml w/ per-scan last_scan+counts, files.yaml,
