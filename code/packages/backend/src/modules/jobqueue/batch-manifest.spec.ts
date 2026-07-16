@@ -1,11 +1,11 @@
 // Batch manifest round-trip (to_fix.mdx §9 "Unit — … manifest round-trip", rows C1/C2/C5).
 //
-// Uses node:test via tsx, matching perceptual.no-network.spec.ts — the repo's established pattern.
-//   npx tsx --test src/modules/jobqueue/batch-manifest.spec.ts
+// Runner: vitest (`pnpm test` in this package).
 //
 // LFB_STATE_DIR is redirected to a temp dir BEFORE importing the service, because state-dir.ts reads the
 // env at call time and we must never write test manifests into the user's real ~/T/_large_files_bridge.
-import { test, before, after } from "node:test";
+// That ordering is why the import below is a dynamic `await import` rather than a static one.
+import { test, afterAll } from "vitest";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -19,11 +19,7 @@ const { writeManifest, appendOutcome, finalizeManifest, listManifests, readManif
   "./batch-manifest.service.js"
 );
 
-before(() => {
-  fs.mkdirSync(TMP, { recursive: true });
-});
-
-after(() => {
+afterAll(() => {
   fs.rmSync(TMP, { recursive: true, force: true });
 });
 

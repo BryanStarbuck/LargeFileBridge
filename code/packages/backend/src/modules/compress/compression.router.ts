@@ -18,8 +18,13 @@ export const compressRouter = Router();
 compressRouter.use(requireAllowListed);
 
 // GET /api/compress/tools — which brew tools are installed (compression.mdx §2).
-compressRouter.get("/tools", (_req, res) => {
-  res.json({ ok: true, data: detectTools() });
+compressRouter.get("/tools", async (_req, res) => {
+  try {
+    res.json({ ok: true, data: await detectTools() });
+  } catch (e) {
+    log.error("compress", `detectTools failed: ${(e as Error).message}`);
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
 });
 
 // GET /api/compress/settings — the per-media codec allow/deny + quality prefs (compression.mdx §7).
@@ -38,11 +43,11 @@ compressRouter.patch("/settings", async (req, res) => {
 });
 
 // GET /api/compress/check?path=<abs> — dry-run plan + alpha safety (compression.mdx §3/§6). No side effects.
-compressRouter.get("/check", (req, res) => {
+compressRouter.get("/check", async (req, res) => {
   const p = typeof req.query.path === "string" ? req.query.path : undefined;
   if (!p) return res.status(400).json({ ok: false, error: "path required" });
   try {
-    res.json({ ok: true, data: checkFile(p) });
+    res.json({ ok: true, data: await checkFile(p) });
   } catch (e) {
     res.status(400).json({ ok: false, error: (e as Error).message });
   }

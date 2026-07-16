@@ -223,8 +223,27 @@ function probeCmd(bin: string, args: string[], timeoutMs = 4000): Promise<string
  * of them, not one per child. Dead pids are dropped from the registry as we go — a module that forgot to
  * unregister must not make this list grow forever.
  */
-async function probeChildRss(): Promise<ChildRssSnapshot | null> {
+// Exported for its test (heap-watch.spec.ts). The warning path that consumes it only fires under real
+// memory pressure, which a test cannot honestly manufacture — so the probe itself is the seam where
+// "does child RSS actually become visible?" can be answered against a real child process.
+export async function probeChildRss(): Promise<ChildRssSnapshot | null> {
+  // Reap the dead FIRST, with signal 0 — a liveness test that sends no signal and forks nothing. This is
+  // both cheaper than asking `ps` and, more importantly, CORRECT in a case `ps` cannot express: `ps -p`
+  // exits NON-ZERO when none of the requested pids are alive, which `probeCmd` (rightly) reports as a
+  // failed probe — so an all-dead list used to return `null` and bail out BEFORE the reap below, leaving
+  // those pids in the registry forever. Every later probe then re-asked about the same corpses, got the
+  // same non-zero exit, and reported "unknown" instead of "no children" until some new live child
+  // happened to register. Establishing liveness before we fork removes the ambiguity entirely.
+  for (const pid of [...childLabels.keys()]) {
+    try {
+      process.kill(pid, 0); // signal 0 = "does this pid exist and may I signal it?" — sends nothing
+    } catch {
+      childLabels.delete(pid); // ESRCH: it is gone. That IS the death certificate.
+    }
+  }
   const pids = [...childLabels.keys()].slice(0, MAX_PROBED_CHILDREN);
+  // No live children is a FACT (zero), not a failed measurement (null) — the warning must be able to say
+  // "nothing in children" rather than shrug.
   if (pids.length === 0) return { totalBytes: 0, top: [], count: 0 };
   const out = await probeCmd("ps", ["-o", "pid=,rss=", "-p", pids.join(",")]);
   if (out == null) return null;

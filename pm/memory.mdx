@@ -228,18 +228,25 @@ Estimation is **deliberately conservative**. Over-reserving costs throughput. Un
 the process.
 
 * **File size is only a valid proxy where bytes-in = bytes-resident.** That holds for **describe**: the
-  file's bytes *are* the payload we pull into this heap. It is **wrong for compress**, where the input is
-  **decoded**, not uploaded — a **5 MB JPEG decodes to ~96 MB** of raw pixels
-  ([to_fix.mdx §3.3.5](./to_fix.mdx)), so file size under-counts the real cost by **~20×**.
-* **Today this trap is latent, not live** — and must stay that way. `estimatedBytes()` returns **0** for
-  every non-describe op, so the budget does **not** lie about compress; it simply **does not cover that
-  bucket** (compress streams file→file through child processes, so its cost is subprocess RSS, governed by
-  the thread caps rather than by the V8 heap budget).
+  file's bytes *are* the payload we pull into this heap. It would **not** hold for anything that
+  **decodes** its input in-process — a 5 MB JPEG is ~96 MB of raw pixels once decoded, a ~20× gap.
+* **`estimatedBytes()` covers describe ONLY, and that is correct — not an oversight.** It returns **0**
+  for every other op, because no other op holds bytes in *this* heap:
+  * **compress** streams file→file through child processes (ffmpeg / ImageMagick) — subprocess RSS,
+    governed by the thread caps, not the V8 budget. Its one in-process decode, the perceptual
+    fingerprint, was capped at **~1 MB** when `decodeForHash()` began resizing to 512px **before** the
+    raw decode ([to_fix.mdx §3.3.1](./to_fix.mdx)). Before that change it held **~105 MB/file** and this
+    bucket genuinely did need a budget — see [to_fix.mdx §7.4](./to_fix.mdx)'s RESOLUTION for why
+    pricing it at `pixels × 4` **today** would over-reserve ~96× and is explicitly **not** wanted.
+  * **transcribe** hands media to children **by path** and reads only `.txt` artifacts — its RAM is
+    Whisper's, clamped by `transcribeConcurrency()`.
 * **The guard, for whoever extends the budget upward.** When the global budget grows to sit **above** the
-  buckets ([to_fix.mdx §6.1](./to_fix.mdx)) and compress starts reserving, it must **not** reserve on
-  `fileSize`. A budget wired that way would admit a fatal batch **while reporting itself healthy** — and a
-  budget that lies is worse than no budget. Compress needs its own estimator, priced on **decoded
-  dimensions** (`width × height × channels`), not on the bytes on disk.
+  buckets ([to_fix.mdx §6.1](./to_fix.mdx)), the question is **not** "which buckets should reserve?" but
+  **"does this bucket hold bytes in our heap?"** If a future change puts an in-process decode back on the
+  compress path, it must reserve on **decoded dimensions** (`width × height × channels`), never on
+  `fileSize` — a budget wired that way would admit a fatal batch **while reporting itself healthy**, and a
+  budget that lies is worse than no budget. Conversely, do not reserve for a bucket that only spends
+  subprocess RSS: that throttles it for memory it never allocates.
 
 The describe-only scope of the reservation — and the `if (t.op !== "describe") return 0` that keeps the
 compress bucket out of the byte budget for now — is in code:

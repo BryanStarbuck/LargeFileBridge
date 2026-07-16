@@ -41,10 +41,13 @@ import { migrateSyncToPin } from "./config/migrate-sync-to-pin.js";
 import { migrateDecisionsToLedger } from "./config/migrate-decisions-to-ledger.js";
 import { migrateSdlLfbridge } from "./config/migrate-sdl-lfbridge.js";
 import { log, flushLogs, logError } from "./shared/logging.js";
-import { txnBoot, txnShutdown, startHeartbeat, stopHeartbeat, txnBegin, txnEnd } from "./shared/transactions.js";
+import { txnBoot, txnShutdown, startHeartbeat, stopHeartbeat, txnBegin, txnEnd, readPreviousSessionEnd } from "./shared/transactions.js";
+import { recordSessionStart } from "./shared/session.js";
 import { startHeapWatch, stopHeapWatch } from "./shared/heap-watch.js";
 import { restoreQueueOnBoot } from "./modules/jobqueue/queue-restore.js";
-import { admitRestored } from "./modules/jobqueue/jobqueue.service.js";
+import { admitRestored, recordQuarantined } from "./modules/jobqueue/jobqueue.service.js";
+import { readDescription } from "./modules/describe/describe.service.js";
+import { readTranscript } from "./modules/transcribe/transcribe.service.js";
 
 async function bootstrapState(): Promise<void> {
   // Mint a stable computer id on first boot (storage.mdx §3).
@@ -133,10 +136,24 @@ async function main(): Promise<void> {
   } catch {
     bootPort = undefined;
   }
+  // How did the LAST session end? Read BEFORE txnBoot writes ours, or we would pair our own marker and
+  // every session would look clean (crash_recovery.mdx §5.1 — BOOT without a following SHUTDOWN ⇒ the
+  // previous session died). This ordering is load-bearing; do not move txnBoot above it.
+  const previousSession = readPreviousSessionEnd();
+  recordSessionStart(previousSession);
+  if (previousSession.previousEnded === "abnormal") {
+    log.warn(
+      "main",
+      `the previous session ended ABNORMALLY${previousSession.previousEndedAt ? ` (last sign of life ${previousSession.previousEndedAt})` : ""} — ` +
+        `no SHUTDOWN marker followed its BOOT (crash_recovery.mdx §5.1).`,
+    );
+  }
+
   txnBoot({
     port: bootPort,
     heapLimitMB: Math.round(v8.getHeapStatistics().heap_size_limit / (1024 * 1024)),
     version: process.env.npm_package_version, // set by pnpm when launched via a package script; omitted otherwise
+    previousEnded: previousSession.previousEnded,
   });
 
   // Watch the heap climb toward that ceiling and WARN before V8 aborts (memory.mdx P-32). Started before
@@ -247,12 +264,28 @@ async function main(): Promise<void> {
   // Best-effort: a corrupt journal must never stop the server from booting — the app coming up is worth more
   // than the backlog it lost.
   try {
-    const { tasks, summary } = restoreQueueOnBoot();
+    // The skip-already-done check is INJECTED here (crash_recovery.mdx §4.1 step 2) rather than imported
+    // by queue-restore, which is deliberately a leaf. main.ts is the composition root and already owns
+    // both halves, so this is where the op's own idempotence check meets the restore pass.
+    const { tasks, summary } = restoreQueueOnBoot({
+      isAlreadyDone: (task) =>
+        task.overwrite
+          ? false // an explicit overwrite means "do it again" — an existing output is not a reason to skip
+          : task.op === "describe"
+            ? readDescription(task.path) !== null
+            : task.op === "transcribe"
+              ? readTranscript(task.path) !== null
+              : false, // compress has no cheap "already done" signal — let the runner's own guards decide
+    });
     if (tasks.length) admitRestored(tasks);
-    if (summary.restored || summary.quarantined) {
+    // A quarantined task must reach the USER, not just the log (crash_recovery.mdx §4.3, AC6). Without
+    // this the file that crashed the app twice simply vanishes from the backlog in silence.
+    if (summary.quarantinedTasks.length) recordQuarantined(summary.quarantinedTasks);
+    if (summary.restored || summary.quarantined || summary.skipped || summary.vanished) {
       log.warn(
         "main",
-        `previous session ended with work in flight — restored ${summary.restored} job(s), quarantined ${summary.quarantined}`,
+        `previous session ended with work in flight — restored ${summary.restored} job(s), ` +
+          `quarantined ${summary.quarantined}, skipped ${summary.skipped} already-done, dropped ${summary.vanished} vanished`,
       );
     }
   } catch (e) {

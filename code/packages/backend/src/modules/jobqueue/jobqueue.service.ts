@@ -379,6 +379,26 @@ function recordFailure(f: Omit<FailedItemView, "at">): void {
   recentFailures.push({ ...f, at: new Date().toISOString() });
   if (recentFailures.length > MAX_FAILURES) recentFailures.splice(0, recentFailures.length - MAX_FAILURES);
 }
+/**
+ * Surface tasks the boot restore QUARANTINED as Failed rows (crash_recovery.mdx §4.3, AC6).
+ *
+ * Quarantine used to be a `log.warn` and nothing else, which made it invisible in the product: a file
+ * that crashed the app twice simply disappeared from the backlog, and the user was never told the app had
+ * stopped trying. "A quarantined task is surfaced, not swallowed" — this is the surfacing.
+ *
+ * It lives here, rather than in queue-restore, because `recentFailures` is this module's state and
+ * queue-restore is deliberately a leaf. main.ts wires the two together at boot.
+ */
+export function recordQuarantined(tasks: Array<{ op: string; path: string; attempts: number }>): void {
+  for (const t of tasks) {
+    recordFailure({
+      op: t.op as JobOp,
+      path: t.path,
+      reason: `Quarantined — this file crashed Large File Bridge ${t.attempts === 1 ? "once" : `${t.attempts} times`} and was not retried.`,
+    });
+  }
+}
+
 /** Recently-failed items, pruned past the retention window (so failures stay readable after a run). */
 export function listRecentFailures(): FailedItemView[] {
   const now = Date.now();
@@ -386,6 +406,94 @@ export function listRecentFailures(): FailedItemView[] {
     if (now - Date.parse(recentFailures[i].at) > FAILURE_RETENTION_MS) recentFailures.splice(i, 1);
   }
   return [...recentFailures];
+}
+
+// ── A10 — the per-batch retry budget (to_fix.mdx §2.7) ─────────────────────────────────────────────────
+//
+// Defence in depth, BEHIND the circuit breaker. §2.4 catches the account-level faults we ENUMERATED
+// (credits depleted). This catches the one we didn't: a revoked key, a region block, a model retired
+// mid-run — any systemic fault that shows up only as "everything is failing." We don't have to predict
+// it; we only have to notice that a batch is grinding and stop.
+//
+// > "Pause the batch and ask — don't grind."
+//
+// The ceiling is on the batch's OBSERVED failure ratio. It counts every failure rather than only
+// provably-transient ones: at the queue we hold a reason string, not a classification, and a batch
+// failing >20% is systemically wrong whichever kind of failure it is. Counting all of them is the
+// conservative superset — it can only make us stop sooner, and stopping is the safe direction.
+const BATCH_FAILURE_CEILING = 0.2;
+// A ratio needs a denominator worth trusting. With <10 settled files "20%" is two files, which is noise —
+// and halting a small batch on two ordinary failures would be its own bug. Below the sample floor the
+// batch simply runs; per-file retry and the circuit breaker still apply.
+const BATCH_CEILING_MIN_SAMPLE = 10;
+
+interface BatchHealth {
+  settled: number;
+  failed: number;
+  halted: boolean;
+}
+const batchHealth = new Map<string, BatchHealth>();
+
+/**
+ * Count one settled file against its batch's retry budget and halt the batch if it has blown through it.
+ * Called from runTask's `finally`, after the task's own outcome is recorded.
+ */
+function noteBatchOutcome(batchId: string | undefined, reason: TerminalReason): void {
+  if (!batchId) return;
+  // `halted` and `skipped` are not evidence of anything going wrong: halted files were never attempted,
+  // and a skip means the work was already done. Counting either would let a healthy batch halt itself.
+  if (reason === "halted" || reason === "skipped") return;
+  const h = batchHealth.get(batchId) ?? { settled: 0, failed: 0, halted: false };
+  h.settled++;
+  if (reason === "failed" || reason === "quarantined") h.failed++;
+  batchHealth.set(batchId, h);
+  // Bound the map. There is no reliable "batch finished" signal here to delete on — a batch can end by
+  // completing, halting, or the process dying — so evict oldest-first rather than leak one entry per batch
+  // in a process that runs for weeks. Insertion order is age order; the evicted batch is long settled.
+  if (batchHealth.size > 200) {
+    const oldest = batchHealth.keys().next().value;
+    if (oldest && oldest !== batchId) batchHealth.delete(oldest);
+  }
+  if (h.halted || h.settled < BATCH_CEILING_MIN_SAMPLE) return;
+  const ratio = h.failed / h.settled;
+  if (ratio <= BATCH_FAILURE_CEILING) return;
+  h.halted = true;
+  const pct = Math.round(ratio * 100);
+  haltPending(
+    (t) => t.batchId === batchId,
+    `${pct}% of this batch is failing (${h.failed} of ${h.settled}) — stopped before it ground through the rest`,
+    "jobqueue",
+  );
+}
+
+/**
+ * Drain every pending task matching `match`, marking each HALTED — never failed (invariant §10.5).
+ *
+ * The shared mechanic behind BOTH stop conditions: the provider circuit (§2.4) and the batch retry
+ * budget (§2.7). They differ only in which tasks they select and what they call the reason, so the
+ * splice/inflight/journal/manifest bookkeeping — the part that is easy to get subtly wrong — lives once.
+ */
+function haltPending(match: (t: QueueTask) => boolean, reason: string, context: string): number {
+  const halted: QueueTask[] = [];
+  for (let i = pending.length - 1; i >= 0; i--) {
+    if (!match(pending[i])) continue;
+    halted.push(...pending.splice(i, 1));
+  }
+  if (halted.length === 0) return 0;
+  for (const t of halted) {
+    inflight.delete(keyOf(t));
+    recordFailure({ op: t.op, path: t.path, reason, state: "halted" });
+    if (t.id) appendTerminal(t.id, "halted");
+    settleOne(t.batchId, t.path, "halted", reason);
+  }
+  // ONE line for the whole drain, never one per file — the flood of identical lines is the very thing that
+  // buried the signal and rotated the evidence away last time (to_fix.mdx §4.5).
+  log.error(
+    context,
+    `HALTED ${halted.length} queued job(s): ${reason}. They were NOT attempted and NOT failed — ` +
+      `fix the cause and re-run the action to queue them again (to_fix.mdx §2.4/§2.7).`,
+  );
+  return halted.length;
 }
 
 /** Start as many pending tasks as the per-op caps allow. Synchronous; parks when nothing is runnable. */
@@ -418,31 +526,14 @@ function blockedByCircuit(t: QueueTask): string | null {
  * which re-runs the page action, which preflights first (§2.5).
  */
 function haltDoomedTasks(): void {
-  const halted: QueueTask[] = [];
-  for (let i = pending.length - 1; i >= 0; i--) {
-    if (!blockedByCircuit(pending[i])) continue;
-    halted.push(...pending.splice(i, 1));
-  }
-  if (halted.length === 0) return;
-  for (const t of halted) {
-    inflight.delete(keyOf(t));
-    const reason = blockedByCircuit(t) ?? "the provider is refusing work";
-    recordFailure({ op: t.op, path: t.path, reason, state: "halted" });
-    // End it in the journal so the restore fold does not resurrect it (crash_recovery.mdx §3.3).
-    if (t.id) appendTerminal(t.id, "halted");
-    // …and in the manifest, as `halted` — never `failed` (to_fix.mdx §4.2 / invariant §10.5). These tasks
-    // never reach runTask (they are spliced straight out of `pending`), so this is their ONLY chance to
-    // settle; without it the batch's outstanding count never drains and its manifest never closes,
-    // making a cleanly-halted batch indistinguishable on disk from a crashed one.
-    settleOne(t.batchId, t.path, "halted", reason);
-  }
-  // ONE line for the whole drain, never one per file — the flood of identical lines is the very thing that
-  // buried the signal and rotated the evidence away last time (to_fix.mdx §4.5).
-  log.error(
+  // The reason is read from the FIRST blocked task before the drain, because `haltPending` splices as it
+  // goes and a reason resolved afterwards would be asking about a task no longer in the queue.
+  const first = pending.find((t) => blockedByCircuit(t));
+  if (!first) return;
+  haltPending(
+    (t) => blockedByCircuit(t) !== null,
+    blockedByCircuit(first) ?? "the provider is refusing work",
     "jobqueue",
-    `HALTED ${halted.length} queued describe job(s): ${blockedByCircuit(halted[0]) ?? "provider unavailable"} ` +
-      `They were NOT attempted and NOT failed — fix the account and re-run the action to queue them again ` +
-      `(to_fix.mdx §2.4).`,
   );
 }
 
@@ -644,6 +735,10 @@ async function runTask(t: QueueTask): Promise<void> {
       // The manifest's per-file outcome (to_fix.mdx §4.2), recorded at the SAME choke point as the
       // journal terminal so the two can never disagree about what happened to a file.
       settleOne(t.batchId, t.path, manifestOutcome(t.op, reason), failReason);
+      // …and count it against the batch's retry budget (§2.7). Ordered AFTER settleOne so that, if this
+      // outcome is the one that trips the ceiling, the halted remainder settles into a manifest whose
+      // earlier outcomes are already recorded.
+      noteBatchOutcome(t.batchId, reason);
     }
   });
 }

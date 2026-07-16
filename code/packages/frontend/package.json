@@ -9,7 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
-    "test": "echo \"(no tests)\" && exit 0"
+    "test": "vitest run"
   },
   "dependencies": {
     "@auth/react": "link:../../../../OpenAuthFederated/code/packages/auth-react",
@@ -34,6 +34,7 @@
     "@vitejs/plugin-react": "^6.0.3",
     "tailwindcss": "^4.3.2",
     "typescript": "^7.0.2",
-    "vite": "^8.1.4"
+    "vite": "^8.1.4",
+    "vitest": "^4.1.10"
   }
 }

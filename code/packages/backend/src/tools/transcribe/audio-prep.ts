@@ -7,6 +7,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { registerChildProcess, unregisterChildProcess } from "../../shared/heap-watch.js";
 
 export const VIDEO_EXTENSIONS = [".mp4", ".m4v", ".mov", ".mkv", ".avi", ".webm", ".mpg", ".mpeg", ".wmv", ".flv"];
 export const AUDIO_EXTENSIONS = [".mp3", ".wav", ".flac", ".ogg", ".oga", ".aac", ".m4a", ".opus", ".aiff", ".aif", ".wma"];
@@ -98,13 +99,19 @@ const STDOUT_CAP_BYTES = 1024 * 1024;
 export function spawnAsync(
   bin: string,
   args: string[],
-  opts: { allowFail?: boolean; onLine?: (line: string) => void; captureStdout?: boolean } = {},
+  opts: { allowFail?: boolean; onLine?: (line: string) => void; captureStdout?: boolean; label?: string } = {},
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const captureStdout = opts.captureStdout === true;
     // The pipe exists for capture OR for line streaming; "ignore" is what makes a non-reading caller free.
     const wantStdoutPipe = captureStdout || !!opts.onLine;
     const child = spawn(bin, args, { stdio: ["ignore", wantStdoutPipe ? "pipe" : "ignore", "pipe"], env: toolEnv() });
+    // Make this child's RSS VISIBLE (to_fix.mdx §6.1, row E1). Whisper is ~2 GB resident per instance and
+    // none of it lands in `heapUsed` — it is not our heap, it is not even our process — so heap-watch
+    // reports "healthy" straight through a transcription-driven memory crisis. Registering here, at the
+    // one runner every transcription child passes through, is what turns "4.2 GB in children" into
+    // "2.1 GB of it is whisper:interview.mp4".
+    registerChildProcess(child.pid, opts.label ?? path.basename(bin));
     const chunks: string[] = [];
     let captured = 0;
     let stderr = "";
@@ -127,8 +134,15 @@ export function spawnAsync(
     child.stderr?.on("data", (chunk: string) => {
       stderr = (stderr + chunk).slice(-4096); // keep only the tail — a long ffmpeg/whisper log can be huge
     });
-    child.on("error", (err) => reject(err));
+    // Unregister on BOTH settle paths. A leaked pid would be probed forever — the registry reaps dead pids,
+    // but leaving it to that would mean attributing RSS to a job that ended. `unregisterChildProcess` is
+    // idempotent precisely because close+error can both fire.
+    child.on("error", (err) => {
+      unregisterChildProcess(child.pid);
+      reject(err);
+    });
     child.on("close", (code) => {
+      unregisterChildProcess(child.pid);
       if (opts.onLine && pending) opts.onLine(pending);
       if (!opts.allowFail && code !== 0) {
         reject(new Error(`${bin} exited ${code}: ${stderr.split("\n").slice(-3).join(" ").slice(0, 200)}`));

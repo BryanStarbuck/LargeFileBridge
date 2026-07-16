@@ -111,27 +111,26 @@ function onPath(bin: string): boolean {
 // `brew install imagemagick` bundles the libheif delegate; if it's missing we surface an "install libheif"
 // message instead of silently failing on an Apple photo (images.mdx §4.1). Memoized — the `-list format`
 // probe is comparatively heavy and detectTools() runs per compress.
-let _heifSupport: boolean | null = null;
-function magickSupportsHeif(): boolean {
+// Memoized on the PROMISE, not the value: detectTools() is called per file and the describe/compress queue
+// fans many jobs out at once, so caching only the settled boolean would let N concurrent first-callers each
+// fork their own `-list format` probe. One probe, ever — every later caller awaits the same promise.
+let _heifSupport: Promise<boolean> | null = null;
+function magickSupportsHeif(): Promise<boolean> {
   if (_heifSupport !== null) return _heifSupport;
-  if (onPath("heif-dec") || onPath("heif-convert")) {
-    _heifSupport = true;
-    return _heifSupport;
-  }
-  if (!(onPath("magick") || onPath("convert"))) {
-    _heifSupport = false;
-    return _heifSupport;
-  }
-  try {
-    const r = run(magickBin(), ["-list", "format"], 15000);
-    _heifSupport = /\bheic\b|\bheif\b/i.test(r.out);
-  } catch {
-    _heifSupport = false;
-  }
+  _heifSupport = (async (): Promise<boolean> => {
+    if (onPath("heif-dec") || onPath("heif-convert")) return true;
+    if (!(onPath("magick") || onPath("convert"))) return false;
+    try {
+      const r = await run(magickBin(), ["-list", "format"], 15000);
+      return /\bheic\b|\bheif\b/i.test(r.out);
+    } catch {
+      return false;
+    }
+  })();
   return _heifSupport;
 }
 
-export function detectTools(): CompressTools {
+export async function detectTools(): Promise<CompressTools> {
   return {
     ffmpeg: onPath("ffmpeg"),
     ffprobe: onPath("ffprobe"),
@@ -140,31 +139,63 @@ export function detectTools(): CompressTools {
     cwebp: onPath("cwebp"),
     cjpeg: onPath("cjpeg"),
     jpegoptim: onPath("jpegoptim"),
-    heif: magickSupportsHeif(),
+    heif: await magickSupportsHeif(),
   };
 }
 function magickBin(): string {
   return onPath("magick") ? "magick" : "convert";
 }
 
-// ── probes (dimensions + alpha) ────────────────────────────────────────────────
-function run(bin: string, args: string[], timeoutMs = 10 * 60 * 1000): { code: number | null; out: string; err: string } {
-  const r = spawnSync(bin, args, { encoding: "utf8", timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 });
-  return { code: r.status, out: r.stdout ?? "", err: r.stderr ?? "" };
-}
+// ── the one process runner (to_fix.mdx §3.3.4 / T3) ────────────────────────────
+// EVERY child this module forks — the multi-minute ffmpeg/oxipng/cwebp transcode AND the short
+// ffprobe/`magick identify` probes — runs through here, ASYNC (child_process.spawn). Nothing in this file
+// may block the Node event loop. The probes used to be `spawnSync` "because they only take tens of ms" —
+// but a spawnSync's timeout is a CEILING, not a promise: an ffprobe against a huge file on a cold cloud
+// mount (Dropbox/Google Drive) stalls on I/O, and the whole app — every request, the progress poll, the
+// queue — froze behind it for up to the full 10 minutes. That is the same freeze that made the Processing
+// page fail to load during a mass AI-description run (ai_description.mdx §3.3.1, job_queue.mdx §3,
+// performance.mdx P-27). Mirrors describe/fit-media.ts runAsync() and media/perceptual.service.ts.
+//
+// STDOUT CAPTURE IS OPT-IN, and that is a memory decision (memory.mdx P-30): the transcode caller throws
+// stdout away, so it hands the child /dev/null and allocates nothing; only the probes (whose answer IS
+// stdout — an ffprobe line is bytes, `-list format` is kilobytes) ask for it, capped at ~1MB. Chunks are
+// pushed to an ARRAY and joined ONCE at settle, so the concat is linear rather than the quadratic
+// `out = (out + chunk).slice(-cap)` on every data event. stderr is always captured, tail-bounded at 4096.
+const STDOUT_CAP_BYTES = 1024 * 1024;
 
-// The heavy transcode runner — ASYNC (child_process.spawn), so a multi-minute ffmpeg/oxipng/cwebp run
-// NEVER blocks the Node event loop. This is what lets the background compress queue run while the web
-// app stays responsive (the user navigates other tabs, the progress poll keeps answering). Quick probes
-// (ffprobe/identify — tens of ms) stay synchronous; only this long call needs to yield.
-function runAsync(bin: string, args: string[], timeoutMs = 30 * 60 * 1000): Promise<{ code: number | null; err: string }> {
+function runAsync(
+  bin: string,
+  args: string[],
+  timeoutMs = 30 * 60 * 1000,
+  opts: { captureStdout?: boolean } = {},
+): Promise<{ code: number | null; out: string; err: string }> {
   return new Promise((resolve) => {
+    const captureStdout = opts.captureStdout === true;
+    const chunks: string[] = [];
+    let captured = 0;
     let err = "";
     let settled = false;
-    const child = spawn(bin, args, { stdio: ["ignore", "ignore", "pipe"] });
+    let child;
+    try {
+      child = spawn(bin, args, { stdio: ["ignore", captureStdout ? "pipe" : "ignore", "pipe"] });
+    } catch (e) {
+      // A missing binary can throw synchronously — resolve like a failed run rather than reject, so every
+      // caller's single `code !== 0` branch keeps handling it (no caller needs a try/catch).
+      resolve({ code: null, out: "", err: (e as Error).message });
+      return;
+    }
+    // Joined once, at settle — never in the data handler.
+    const finishOut = (): string => (captureStdout ? chunks.join("") : "");
     const timer = setTimeout(() => {
       if (!settled) child.kill("SIGKILL");
     }, timeoutMs);
+    // Null when capture is off (stdio "ignore") — the optional chain is what makes that a no-op.
+    child.stdout?.on("data", (d) => {
+      if (captured >= STDOUT_CAP_BYTES) return; // past the cap we drop, we do not grow
+      const s = d.toString();
+      chunks.push(s);
+      captured += s.length;
+    });
     child.stderr?.on("data", (d) => {
       // Keep only the tail — a long ffmpeg log can be huge; we only surface the last lines on failure.
       err = (err + d.toString()).slice(-4096);
@@ -173,15 +204,23 @@ function runAsync(bin: string, args: string[], timeoutMs = 30 * 60 * 1000): Prom
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ code: null, err: e.message });
+      resolve({ code: null, out: finishOut(), err: e.message });
     });
     child.on("close", (code) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ code, err });
+      resolve({ code, out: finishOut(), err });
     });
   });
+}
+
+// ── probes (dimensions + alpha) ────────────────────────────────────────────────
+// The probe flavour of the runner: stdout IS the answer here, and the 10-minute ceiling is the one the
+// probes have always carried. Everything below awaits this — a probe that returns a Promise instead of a
+// value would silently defeat the §5.1 integrity gate, so every probe's return type is written out.
+function run(bin: string, args: string[], timeoutMs = 10 * 60 * 1000): Promise<{ code: number | null; out: string; err: string }> {
+  return runAsync(bin, args, timeoutMs, { captureStdout: true });
 }
 
 // ── the already-compressed marker (compression.mdx §8.4) ───────────────────────
@@ -197,12 +236,12 @@ function markerPayload(codec: string): string {
   return `${MARKER_PREFIX}v1;${codec}`;
 }
 
-// Read our marker's `comment` from a file (empty string if absent/unreadable). Fast synchronous probe.
-function readMarker(abs: string, media: CompressMedia, tools: CompressTools): string {
+// Read our marker's `comment` from a file (empty string if absent/unreadable). Fast async probe.
+async function readMarker(abs: string, media: CompressMedia, tools: CompressTools): Promise<string> {
   try {
     if (media === "video") {
       if (!tools.ffprobe) return "";
-      const r = run("ffprobe", [
+      const r = await run("ffprobe", [
         "-v", "error",
         "-show_entries", "format_tags=comment",
         "-of", "default=noprint_wrappers=1:nokey=1",
@@ -211,7 +250,7 @@ function readMarker(abs: string, media: CompressMedia, tools: CompressTools): st
       return r.out.trim();
     }
     if (!tools.magick) return "";
-    const r = run(magickBin(), ["identify", "-format", "%c", abs]);
+    const r = await run(magickBin(), ["identify", "-format", "%c", abs]);
     return r.out.trim();
   } catch {
     return "";
@@ -220,30 +259,30 @@ function readMarker(abs: string, media: CompressMedia, tools: CompressTools): st
 
 // True when the file already carries OUR current-version marker — the skip signal (§8.4). A mark from an
 // OLDER version is treated as absent so a genuinely improved engine can re-sweep those files.
-function isAlreadyCompressed(abs: string, media: CompressMedia, tools: CompressTools): boolean {
-  return readMarker(abs, media, tools).startsWith(MARKER_PREFIX);
+async function isAlreadyCompressed(abs: string, media: CompressMedia, tools: CompressTools): Promise<boolean> {
+  return (await readMarker(abs, media, tools)).startsWith(MARKER_PREFIX);
 }
 
-function imageDims(abs: string, tools: CompressTools): { w: number; h: number } | null {
+async function imageDims(abs: string, tools: CompressTools): Promise<{ w: number; h: number } | null> {
   if (!tools.magick) return null;
-  const r = run(magickBin(), ["identify", "-format", "%w %h", abs]);
+  const r = await run(magickBin(), ["identify", "-format", "%w %h", abs]);
   const m = /(\d+)\s+(\d+)/.exec(r.out.trim());
   return m ? { w: Number(m[1]), h: Number(m[2]) } : null;
 }
 
 /** true = image has USED transparency; false = opaque; null = couldn't determine. */
-function imageAlphaUsed(abs: string, tools: CompressTools): boolean | null {
+async function imageAlphaUsed(abs: string, tools: CompressTools): Promise<boolean | null> {
   if (!tools.magick) return null;
-  const r = run(magickBin(), ["identify", "-format", "%[opaque]", abs]);
+  const r = await run(magickBin(), ["identify", "-format", "%[opaque]", abs]);
   const v = r.out.trim().toLowerCase();
   if (v === "true") return false; // fully opaque → alpha unused
   if (v === "false") return true; // has transparency
   return null;
 }
 
-function videoInfo(abs: string, tools: CompressTools): { w: number; h: number; pixFmt: string } | null {
+async function videoInfo(abs: string, tools: CompressTools): Promise<{ w: number; h: number; pixFmt: string } | null> {
   if (!tools.ffprobe) return null;
-  const r = run("ffprobe", [
+  const r = await run("ffprobe", [
     "-v", "error", "-select_streams", "v:0",
     "-show_entries", "stream=width,height,pix_fmt", "-of", "csv=p=0", abs,
   ]);
@@ -398,7 +437,7 @@ function pickVideoTarget(prefs: CompressMediaPrefs, tools: CompressTools, srcExt
 }
 
 /** Dry-run: what would happen + is it alpha-safe. Never touches the file. */
-export function checkFile(input: string): CompressCheck {
+export async function checkFile(input: string): Promise<CompressCheck> {
   const abs = path.resolve(expandHome(input.trim()));
   const name = path.basename(abs);
   const media = mediaOf(name);
@@ -415,10 +454,10 @@ export function checkFile(input: string): CompressCheck {
   const srcExt = path.extname(abs).toLowerCase();
   // Per-extension opt-OUT (images.mdx §2.2). An excluded extension is skipped BEFORE any probe.
   if (prefs.skipExts.includes(srcExt)) return { ...base, action: "extension excluded by settings" };
-  const tools = detectTools();
+  const tools = await detectTools();
 
   if (media === "images") {
-    const alphaUsed = imageAlphaUsed(abs, tools);
+    const alphaUsed: boolean | null = await imageAlphaUsed(abs, tools);
     const plan = pickImageTarget(prefs, tools, srcExt, alphaUsed);
     if ("toolMissing" in plan) return { ...base, alphaUsed, toolMissing: plan.toolMissing, action: `needs ${plan.toolMissing}` };
     if ("skip" in plan) return { ...base, alphaUsed, action: plan.skip };
@@ -431,8 +470,8 @@ export function checkFile(input: string): CompressCheck {
     };
   }
   // video
-  const info = videoInfo(abs, tools);
-  const alphaUsed = info ? pixFmtHasAlpha(info.pixFmt) : null;
+  const info = await videoInfo(abs, tools);
+  const alphaUsed: boolean | null = info ? pixFmtHasAlpha(info.pixFmt) : null;
   const plan = pickVideoTarget(prefs, tools, srcExt);
   if ("toolMissing" in plan) return { ...base, alphaUsed, toolMissing: plan.toolMissing, action: `needs ${plan.toolMissing}` };
   if ("skip" in plan) return { ...base, alphaUsed, action: plan.skip };
@@ -536,9 +575,9 @@ async function perceptualFingerprint(abs: string, media: CompressMedia): Promise
 // Source codec label for the sidecar `codec.from` — probed BEFORE the transcode (the original is gone from
 // its path afterwards). For video we ask ffprobe for the stream codec_name; for images we fall back to the
 // source extension (jpeg/png/heic…). "unknown" when nothing resolves.
-function sourceCodecLabel(abs: string, media: CompressMedia, tools: CompressTools): string {
+async function sourceCodecLabel(abs: string, media: CompressMedia, tools: CompressTools): Promise<string> {
   if (media === "video" && tools.ffprobe) {
-    const r = run("ffprobe", [
+    const r = await run("ffprobe", [
       "-v", "error", "-select_streams", "v:0",
       "-show_entries", "stream=codec_name", "-of", "default=noprint_wrappers=1:nokey=1", abs,
     ]);
@@ -577,20 +616,20 @@ export async function compressFile(input: string, opts?: CompressFileOpts | stri
   } catch {
     return fail(abs, "file not found");
   }
-  const check = checkFile(abs);
+  const check = await checkFile(abs);
   if (!check.media || check.media === "audio") return fail(abs, check.action, "skipped", beforeBytes);
   if (check.toolMissing) return fail(abs, `needs ${check.toolMissing}`, "failed", beforeBytes);
   if (!check.alphaSafe) return fail(abs, check.warning ?? "alpha safety check failed", "blocked", beforeBytes);
   if (!check.eligible) return fail(abs, check.action, "skipped", beforeBytes);
 
   const settings = getCompressionSettings();
-  const tools = detectTools();
+  const tools = await detectTools();
   const media = check.media;
 
   // §8.4 — the already-compressed marker. If this file already carries our in-file marker (from a prior
   // pass here, or because a peer compressed it and it pinned over IPFS), skip it BEFORE any transcode — the
   // whole point is to never re-encode a file we (or another of the user's computers) already compressed.
-  if (isAlreadyCompressed(abs, media, tools)) {
+  if (await isAlreadyCompressed(abs, media, tools)) {
     return { path: abs, status: "skipped", reason: "already compressed (marker)", beforeBytes, afterBytes: beforeBytes, codec: check.targetCodec };
   }
 
@@ -606,11 +645,17 @@ export async function compressFile(input: string, opts?: CompressFileOpts | stri
   // and (video/image) its perceptual fingerprint, plus its source codec. Once the replace (step 5) runs the
   // original only exists in trash, so "what it was" must be recorded now. All best-effort (guarded).
   const beforeCap = exactHashAndSize(abs);
-  const srcCodec = sourceCodecLabel(abs, media, tools);
+  const srcCodec = await sourceCodecLabel(abs, media, tools);
   const fingerprintBefore = await perceptualFingerprint(abs, media);
 
   const out = tmpOut(plan.ext);
-  const inDims = media === "images" ? imageDims(abs, tools) : (videoInfo(abs, tools) && { w: videoInfo(abs, tools)!.w, h: videoInfo(abs, tools)!.h });
+  // The INPUT half of the §5.1 integrity gate + the §5 resolution guard below. The type is written out on
+  // purpose: it is what makes tsc reject a probe left un-awaited here (a Promise is ALWAYS truthy, so a
+  // missing await would turn the `!outDims` gate below into a permanent false and let corrupt output
+  // replace the user's original — silent data loss). One probe per file, not three.
+  const inInfo = media === "images" ? null : await videoInfo(abs, tools);
+  const inDims: { w: number; h: number } | null =
+    media === "images" ? await imageDims(abs, tools) : (inInfo ? { w: inInfo.w, h: inInfo.h } : null);
 
   // Build + run the tool.
   let cmd: { bin: string; args: string[] };
@@ -632,7 +677,10 @@ export async function compressFile(input: string, opts?: CompressFileOpts | stri
   }
 
   // §5 — verify resolution unchanged (never downscale) and that we actually gained.
-  const outDims = media === "images" ? imageDims(out, tools) : (videoInfo(out, tools) && { w: videoInfo(out, tools)!.w, h: videoInfo(out, tools)!.h });
+  // Re-probed with the SAME probe that read the input, and RESOLVED (awaited) before the gate reads it.
+  const outInfo = media === "images" ? null : await videoInfo(out, tools);
+  const outDims: { w: number; h: number } | null =
+    media === "images" ? await imageDims(out, tools) : (outInfo ? { w: outInfo.w, h: outInfo.h } : null);
   // §5.1 — OUTPUT INTEGRITY GATE (LOCKED, fail-CLOSED). A transcode can exit 0 yet leave a TRUNCATED or
   // CORRUPT file — e.g. a ~134-byte broken JPEG — that `safeSize` (>0) and the size-gain guard both happily
   // accept (it IS smaller than the original), after which the irreversible replace clobbers a good file

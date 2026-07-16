@@ -11,7 +11,9 @@ import type { ProgressJob, ProgressListResult } from "@lfb/shared";
 import { requireAllowListed } from "../auth/identify.js";
 import { list } from "./progress.registry.js";
 import { queueDepth, queueDepthByOp, listBatches, workerUtilization, listQueuedItems, listRecentFailures } from "../jobqueue/jobqueue.service.js";
+import { lastRestoreSummary } from "../jobqueue/queue-restore.js";
 import { getScanJob } from "../scanner/scan-job.js";
+import { sessionState } from "../../shared/session.js";
 import { log } from "../../shared/logging.js";
 
 export const progressRouter = Router();
@@ -50,6 +52,12 @@ progressRouter.get("/", (_req, res) => {
     // Per-item Processing table rows (processing.mdx §4.3): the head of the pending queue + recent failures.
     const queuedItems = listQueuedItems();
     const recentFailures = listRecentFailures();
+    // THE SESSION BLOCK (crash_recovery.mdx §5.1) — the three durable inputs that let the page tell
+    // Finished, Empty and Interrupted apart instead of rendering all three as a bare zero. Sent on EVERY
+    // poll, not only when interesting: it is the denominator for the empty state, and an empty state that
+    // only sometimes knows whether we crashed is exactly the ambiguity D2 forbids.
+    const session = sessionState();
+    const restore = lastRestoreSummary();
     const data: ProgressListResult = {
       jobs,
       ...(queued > 0 ? { queued } : {}),
@@ -58,6 +66,17 @@ progressRouter.get("/", (_req, res) => {
       ...(workers.busy > 0 ? { workers } : {}),
       ...(queuedItems.length > 0 ? { queuedItems } : {}),
       ...(recentFailures.length > 0 ? { recentFailures } : {}),
+      ...(session
+        ? {
+            session: {
+              ...session,
+              ...(restore.restored ? { restored: restore.restored } : {}),
+              ...(restore.skipped ? { restoreSkipped: restore.skipped } : {}),
+              ...(restore.vanished ? { restoreVanished: restore.vanished } : {}),
+              ...(restore.quarantined ? { quarantined: restore.quarantined } : {}),
+            },
+          }
+        : {}),
     };
     res.json({ ok: true, data });
   } catch (e) {

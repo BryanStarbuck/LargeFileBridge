@@ -191,9 +191,13 @@ with no cap at all, did not.** memory.mdx invariant 1 ("no bucket may admit by c
    `readFileSync` entirely.
 3. **Size-gate.** Refuse/downsample beyond a pixel-count ceiling; a 100 MP TIFF must not decode.
 4. **Kill the `spawnSync`.** Use the async `runAsync` pattern `fit-media.ts` already established.
-5. **Bring compress under the byte budget** — `estimatedBytes()` for a compress job is
-   `~pixels × 4`, **not** file size. A 5 MB JPEG can decode to 96 MB: **file size is a terrible proxy
-   for memory, and the budget must not use it for this bucket.**
+5. ~~**Bring compress under the byte budget**~~ — **SUPERSEDED by §3.3.1 — do not implement.** The
+   original demand: `estimatedBytes()` for a compress job is `~pixels × 4`, **not** file size, because
+   a 5 MB JPEG can decode to 96 MB. That premise **died with item 1 above**: once `decodeForHash()`
+   resizes to 512px before decoding, compress holds **~1 MB** in this heap, and everything else on the
+   path is subprocess RSS. Pricing it at `pixels × 4` would now over-reserve **~96×**. See §7.4's
+   RESOLUTION. The surviving lesson is narrower: **file size is a terrible proxy for memory** wherever
+   bytes-in ≠ bytes-resident — which is why the budget covers **describe only**.
 6. Free `data` before `luminanceQuality`, or make it consume a downscaled copy.
 
 ### §3.4 — A contradiction to *avoid* creating
@@ -341,11 +345,33 @@ second** — and then wrote "LOCKED" next to it.
 and the manifest's terminal record (§4.2) — otherwise "never attempted" reads as "tried and failed."
 Touches `processing.mdx` + `job_queue.mdx`; **neither knows about it yet.**
 
-### §7.4 — 🟡 `estimatedBytes()` must not use file size for compress
+### §7.4 — 🟢 RESOLVED — `estimatedBytes()` must not use file size for compress
 memory.mdx's `estimatedBytes()` is `min(fileSize, INLINE_MAX_BYTES)` — right for describe (upload
-bytes), **wrong for compress**, where a 5 MB JPEG decodes to 96 MB (§3.3.5). If the byte budget
-extends to the compress bucket using file size, it will **under-count by ~20×** and admit a fatal
-batch while reporting itself healthy. **A budget that lies is worse than no budget.**
+bytes), and it would have been **wrong for compress** on the pre-§3.3 code, where the fingerprint
+decoded a 5 MB JPEG to 96 MB of raw RGBA **inside this heap** (§3.3.5). A budget wired to `fileSize`
+would have **under-counted by ~20×** and admitted a fatal batch while reporting itself healthy.
+**A budget that lies is worse than no budget.**
+
+**RESOLUTION (2026-07-16) — the code is right; this section was wrong, and is amended.** §7.4 asked
+for `estimatedBytes()` to price compress at `pixels × 4`. **Do not implement that.** Its premise —
+that compress holds decoded pixels in our heap — **stopped being true when §3.3.1 landed**:
+* `perceptual.service.ts` — `decodeForHash()` now resizes to **512px before** the raw decode, so the
+  fingerprint's in-heap cost is **~1 MB, not ~96 MB**.
+* Everything else on the compress path streams **file→file through child processes** (ffmpeg /
+  ImageMagick), so its cost is **subprocess RSS**, not V8 heap — governed by the thread caps and
+  §6.1's clamp, not by the byte budget.
+
+So `jobqueue.service.ts` — `estimatedBytes()`'s `if (t.op !== "describe") return 0` is **correct, not
+an oversight**, and its in-code rationale is sound. Pricing compress at `pixels × 4` today would
+reserve **~96× the bytes it actually allocates** and throttle the bucket for memory it never touches.
+
+**This resolution is CONDITIONAL on §3.3.1 staying landed.** Revert the downscale and compress goes
+back to ~105 MB/file in-heap, `estimatedBytes() → 0` becomes a lie, and §7.4's original demand
+returns. That coupling is exactly why §3.4 / F5 exist: the "never downscale" invariant governs the
+**output file** and must never be read as licence to remove `decodeForHash()`'s internal resize.
+
+**What survives §7.4 is the *principle*, not the formula:** a bucket only needs a byte reservation
+where **bytes are resident in this heap**. See §10 invariant 3, amended accordingly.
 
 ---
 
@@ -391,8 +417,12 @@ Extending memory.mdx §5 and crash_recovery.mdx §11:
 
 1. **Account-level provider faults halt the batch.** Only per-file faults retry per file.
 2. **Never queue N files against an unverified account.** Preflight once, cheaply.
-3. **`estimatedBytes()` models what a job *decodes to*, not what it reads.** File size is a proxy
-   only where bytes-in = bytes-resident (§7.4).
+3. **A bucket needs a byte reservation only where the bytes are resident in *this* heap.** File size
+   is a valid proxy only where bytes-in = bytes-resident — true for describe (the file's bytes *are*
+   the upload payload), false for anything that decodes in-process. Where a job **does** decode into
+   our heap, price it on what it **decodes to**, never on what it reads. Where it streams
+   file→file through a child, it belongs to the RSS clamp, **not** the byte budget — reserving there
+   throttles a bucket for memory it never allocates (§7.4 RESOLUTION).
 4. **Every batch writes a manifest with its file list before enqueuing.**
 5. **An un-attempted task is `halted`, never `failed`.**
 6. **Every log line from a batch carries its `batch_id`.**

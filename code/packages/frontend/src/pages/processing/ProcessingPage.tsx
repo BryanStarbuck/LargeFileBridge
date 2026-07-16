@@ -9,6 +9,7 @@ import { StatusBanner } from "../../components/ui/StatusBanner.js";
 import { useProgress, verb } from "../../progress/ProgressContext.js";
 import { ProcessingItemsTable } from "./ProcessingItemsTable.js";
 import { groupHalted, haltedWarningDef, type HaltedGroup } from "./haltedWarning.js";
+import { sessionCopy } from "./sessionState.js";
 
 // "compress" → "compressing", etc. — a lowercase gerund for the Waiting backlog line.
 function backlogLabel(op: ProgressKind): string {
@@ -68,6 +69,22 @@ function BatchCard({ b }: { b: ProcessingBatch }) {
   );
 }
 
+/**
+ * "All 1,440 files described." — the Finished state's headline (crash_recovery.mdx §5).
+ *
+ * Built from the recently-finished batches rather than a counter, so it reports what actually completed.
+ * Returns undefined when there is nothing to summarize, and the caller falls back to generic copy.
+ */
+function summarizeFinished(finished: ProcessingBatch[]): string | undefined {
+  if (finished.length === 0) return undefined;
+  const done = finished.reduce((n, b) => n + b.done, 0);
+  const failed = finished.reduce((n, b) => n + b.failed, 0);
+  if (done === 0 && failed === 0) return undefined;
+  const label = finished.length === 1 ? finished[0].label : "queued work";
+  const head = done > 0 ? `${done.toLocaleString()} ${done === 1 ? "file" : "files"} finished` : "Finished";
+  return failed > 0 ? `${head} — ${failed.toLocaleString()} failed (${label}).` : `${head} (${label}).`;
+}
+
 // The single "work stopped, here's why, here's the fix" banner for one open provider circuit (to_fix.mdx
 // §2.4). Standard educate-and-fix surface: warn/amber banner + the blue arrow that opens the popup carrying
 // Resume (warnings.mdx §3/§4).
@@ -77,12 +94,24 @@ function HaltedBanner({ group }: { group: HaltedGroup }) {
 }
 
 export function ProcessingPage() {
-  const { jobs, queuedByOp, batches, queuedItems, recentFailures, workers } = useProgress();
+  const { jobs, queuedByOp, batches, queuedItems, recentFailures, workers, session } = useProgress();
   const waiting = Object.entries(queuedByOp).filter(([, n]) => (n ?? 0) > 0) as [ProgressKind, number][];
   // The per-item table (processing.mdx §4.3) shows Running (jobs) + Pending (queuedItems) + Failed
   // (recentFailures) rows; it renders whenever any of those exist.
   const hasItems = jobs.length > 0 || queuedItems.length > 0 || recentFailures.length > 0;
   const nothing = !hasItems && waiting.length === 0 && batches.length === 0;
+
+  // D2 (crash_recovery.mdx §5) — an empty queue is THREE states, and this page used to render all of them
+  // as the calm one. "Did work finish in this session?" is answered by the batch registry: a finished batch
+  // is retained ~30 min, which is exactly the window in which the question is worth asking.
+  const finishedBatches = batches.filter((b) => b.finishedAt !== null);
+  const didWorkThisSession = finishedBatches.length > 0;
+  const finishedSummary = summarizeFinished(finishedBatches);
+  const copy = sessionCopy(session, didWorkThisSession, finishedSummary);
+  // The restore banner is NOT gated on `nothing`: an interrupted session must announce itself even while
+  // the restored jobs are actively running above (§4.2 — it persists until the work completes, and a user
+  // who walks up to a busy page still needs to know the app crashed and this is the recovery).
+  const interrupted = copy.state === "interrupted";
   // Worker utilization — the parallelism read (processing.mdx §3a): how many core-slots of the mass-compute
   // budget are busy right now. Shown atop "Running now" so the user can SEE the mass parallelization working.
   const utilPct = workers && workers.budget > 0 ? Math.round((workers.busy / workers.budget) * 100) : 0;
@@ -94,13 +123,22 @@ export function ProcessingPage() {
     <div className="flex flex-col gap-5">
       <PageHeader title="Processing" subtitle="Background work — compression, transcriptions, and more." />
 
+      {/* The RESTORE / INTERRUPTED banner (crash_recovery.mdx §4.2) — persistent, not a toast: a toast that
+          fires while the user is asleep is the same as no notification at all. It sits above everything
+          because "the app crashed and here is what happened to your work" outranks any running job. */}
+      {interrupted && <StatusBanner state="warn" headline={copy.headline} sub={copy.sub} />}
+
       {halted.map((g) => (
         <HaltedBanner key={g.key} group={g} />
       ))}
 
-      {nothing && (
+      {nothing && !interrupted && (
         <div className="rounded-lg border border-dashed px-6 py-10 text-center text-black/50" style={{ borderColor: "var(--lfb-border)" }}>
-          Nothing is processing right now.
+          {/* Finished ≠ Empty. "All 1,440 files described." is a different fact from "nothing was ever
+              queued", and rendering the second when the first is true is how the 2026-07-15 loss stayed
+              invisible for six hours. */}
+          <div>{copy.headline}</div>
+          {copy.sub && <div className="mt-1 text-xs text-black/40">{copy.sub}</div>}
         </div>
       )}
 

@@ -27,6 +27,7 @@ import type {
   ProcessingBatch,
   QueuedItemView,
   FailedItemView,
+  SessionView,
 } from "@lfb/shared";
 import { api } from "../api/client.js";
 import { mapLimit } from "../lib/concurrency.js";
@@ -50,6 +51,9 @@ interface ProgressCtx {
   queuedItems: QueuedItemView[]; // PENDING items as rows for the per-item table (processing.mdx §4.3)
   recentFailures: FailedItemView[]; // FAILED items + reason for the per-item table (processing.mdx §4.3)
   workers: { busy: number; budget: number } | null; // core-budget utilization (processing.mdx §3a)
+  // This session + how the last one ended (crash_recovery.mdx §5.1). The input that lets an empty queue
+  // say WHICH empty it is — Finished, Empty, or Interrupted — instead of always claiming the calm one.
+  session: SessionView | null;
   processing: boolean; // any running job, pending backlog, OR active batch (processing.mdx §1)
   run: (specs: JobSpec[], opts?: { invalidate?: unknown[][]; batchLabel?: string }) => Promise<void>;
 }
@@ -151,14 +155,15 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
   // recently-failed items, both from the same poll. Absent-safe (default []).
   const queuedItems = useMemo<QueuedItemView[]>(() => server?.queuedItems ?? [], [server]);
   const recentFailures = useMemo<FailedItemView[]>(() => server?.recentFailures ?? [], [server]);
+  const session = useMemo<SessionView | null>(() => server?.session ?? null, [server]);
   const workers = server?.workers ?? null; // core-budget utilization (processing.mdx §3a)
   // "Processing" (processing.mdx §1): a running job, a pending backlog, OR a still-active batch. Drives
   // the conditional left-bar item + the dock's presence.
   const processing = jobs.length > 0 || queued > 0 || batches.some((b) => !b.finishedAt);
 
   const value = useMemo<ProgressCtx>(
-    () => ({ jobs, queued, queuedByOp, batches, queuedItems, recentFailures, workers, processing, run }),
-    [jobs, queued, queuedByOp, batches, queuedItems, recentFailures, workers, processing, run],
+    () => ({ jobs, queued, queuedByOp, batches, queuedItems, recentFailures, workers, session, processing, run }),
+    [jobs, queued, queuedByOp, batches, queuedItems, recentFailures, workers, session, processing, run],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

@@ -17,6 +17,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { log } from "../../shared/logging.js";
+import { registerChildProcess, unregisterChildProcess } from "../../shared/heap-watch.js";
 import { toolEnv, whisperModel } from "./audio-prep.js";
 
 // Video / container formats whose audio track must be demuxed to MP3 before Whisper can read it.
@@ -337,6 +338,10 @@ export class Transcriber {
       const captureStdout = opts.captureStdout === true;
       const wantStdoutPipe = captureStdout || !!opts.onLine;
       const child = spawn(bin, args, { stdio: ["ignore", wantStdoutPipe ? "pipe" : "ignore", "pipe"], env: toolEnv() });
+      // Whisper is ~2 GB resident per instance and invisible to heapUsed (to_fix.mdx §6.1, row E1) — this
+      // is the single biggest memory consumer the process cannot see. Registering it here makes a heap/OS
+      // warning able to NAME it instead of reporting a healthy heap beside a swapping machine.
+      registerChildProcess(child.pid, `${path.basename(bin)}`);
       const chunks: string[] = [];
       let captured = 0;
       let stderr = "";
@@ -361,8 +366,13 @@ export class Transcriber {
         stderr = (stderr + chunk).slice(-4096); // keep only the tail — a whisper/ffmpeg log can be huge
       });
 
-      child.on("error", (err) => reject(err)); // e.g. ENOENT — binary vanished mid-run
+      // Idempotent, and wired to BOTH settle paths so a registered pid can never outlive its child.
+      child.on("error", (err) => {
+        unregisterChildProcess(child.pid);
+        reject(err);
+      }); // e.g. ENOENT — binary vanished mid-run
       child.on("close", (code) => {
+        unregisterChildProcess(child.pid);
         if (opts.onLine && pending) opts.onLine(pending); // flush any final partial line
         if (!opts.allowFail && code !== 0) {
           reject(new Error(`${bin} exited ${code}: ${stderr.split("\n").slice(-3).join(" ").slice(0, 200)}`));

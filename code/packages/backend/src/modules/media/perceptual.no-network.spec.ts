@@ -1,16 +1,14 @@
 // Guard + functional test for the perceptual fingerprint module (perceptual_fingerprint.mdx §6).
 //
-// Uses Node's built-in test runner (node:test) — the repo has no third-party test framework installed, and
-// the built-in runner needs zero dependencies. Run it with tsx's loader:
-//   npx tsx --test src/modules/media/perceptual.no-network.spec.ts
-// or:
-//   node --import tsx --test src/modules/media/perceptual.no-network.spec.ts
+// Runner: vitest (`pnpm test` in this package). This file previously imported `node:test` and was never
+// executed by any script — the package's `test` was a stub. Only the RUNNER import changed; every
+// assertion below is the original.
 //
 // Two guarantees are asserted:
 //   1. NO NETWORK: the module's source imports no http client / fetch / socket (charter hard requirement).
 //   2. FUNCTIONAL: a resized + re-encoded copy of an image stays within the Hamming threshold of the
 //      original, while a visually different image is far outside it.
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";

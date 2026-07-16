@@ -18,6 +18,7 @@
 //   3. BOOT/SHUTDOWN markers. A BEGIN with no END followed by a BOOT with no intervening SHUTDOWN means
 //      exactly one thing: the process died while that file was in flight. A gap becomes unambiguous.
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { RollingFileWriter, stripControlChars } from "./logging.js";
 import { resolveLogDir } from "../config/state-dir.js";
@@ -139,6 +140,88 @@ export function txnBoot(fields: TxnFields = {}): void {
 /** Emitted on a CLEAN exit (SIGINT/SIGTERM). Its ABSENCE before a BOOT is what proves a crash. */
 export function txnShutdown(fields: TxnFields = {}): void {
   emit("SHUTDOWN", "process", { pid: process.pid, ...fields });
+}
+
+/** How the PREVIOUS session ended (crash_recovery.mdx §5.1 input 1). */
+export interface PreviousSession {
+  previousEnded: "clean" | "abnormal" | "unknown";
+  previousEndedAt?: string;
+}
+
+/**
+ * Read how the last session ended, by pairing BOOT/SHUTDOWN markers (crash_recovery.mdx §5.1).
+ *
+ * **Call this BEFORE txnBoot()** — once this session's own BOOT is on disk it becomes the last one and we
+ * would be reading our own marker. main.ts enforces the ordering.
+ *
+ * The rule: **BOOT without a following SHUTDOWN ⇒ the previous session died.** That absence is the whole
+ * proof, and it is why txnShutdown is only ever emitted on a deliberate exit — an OOM abort runs no JS, so
+ * a crash CANNOT write anything. We detect it by what is missing, because nothing else is available.
+ *
+ * Honesty about the three answers:
+ *   * `clean`    — we saw a SHUTDOWN after the last BOOT, or there is no ledger at all (a first-ever run
+ *                  has no previous session, so nothing was interrupted — an assertion we can make).
+ *   * `abnormal` — a BOOT with no SHUTDOWN after it. Someone died.
+ *   * `unknown`  — a ledger exists but carries no BOOT (rotation aged it out). We cannot assert that
+ *                  nothing was interrupted, so per §5's LOCKED rule we must NOT claim Empty. We fail
+ *                  toward telling the user something happened.
+ */
+export function readPreviousSessionEnd(): PreviousSession {
+  // Newest generation first: the live file, then one rotation back — enough to span a restart, and bounded
+  // so boot never reads five files to answer one question.
+  const candidates = [TXN_FILE, `${TXN_FILE}.1`];
+  let sawAnyFile = false;
+  for (const file of candidates) {
+    let text: string;
+    try {
+      text = fs.readFileSync(file, "utf8");
+      sawAnyFile = true;
+    } catch {
+      continue; // absent generation — try the next
+    }
+    const lines = text.split("\n");
+    // Scan BACKWARD to the most recent BOOT: everything after it belongs to the last session.
+    // The verb is matched in its OWN COLUMN (`[ISO] [BOOT]`), never anywhere in the line — a task whose
+    // file path or error text happened to contain "BOOT" would otherwise be read as a process restart.
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (!isVerb(lines[i], "BOOT")) continue;
+      const bootAt = timestampOf(lines[i]);
+      // Did that session ever say goodbye?
+      for (let j = i + 1; j < lines.length; j++) {
+        if (isVerb(lines[j], "SHUTDOWN")) {
+          return { previousEnded: "clean", previousEndedAt: timestampOf(lines[j]) ?? bootAt };
+        }
+      }
+      // A BOOT with nothing after it — the session it opened never closed.
+      // previousEndedAt is the LAST thing that session managed to write: the closest we can get to a
+      // time of death from a process that could not report its own.
+      const lastActivity = lastTimestampAfter(lines, i) ?? bootAt;
+      return { previousEnded: "abnormal", previousEndedAt: lastActivity };
+    }
+  }
+  // No BOOT anywhere. No ledger at all ⇒ first run ⇒ nothing was interrupted. A ledger that exists but has
+  // no BOOT ⇒ rotation ate it ⇒ we genuinely do not know.
+  return sawAnyFile ? { previousEnded: "unknown" } : { previousEnded: "clean" };
+}
+
+/** True when `line` carries `verb` in the VERB column — `[ISO] [BOOT]`, not merely somewhere in the text. */
+function isVerb(line: string, verb: TxnVerb): boolean {
+  return new RegExp(`^\\[[^\\]]+\\] \\[${verb}\\]`).test(line);
+}
+
+/** The leading `[ISO]` stamp of a ledger line, if it has one. */
+function timestampOf(line: string): string | undefined {
+  const m = /^\[([^\]]+)\]/.exec(line);
+  return m ? m[1] : undefined;
+}
+
+/** The last timestamped line after index `from` — the previous session's final sign of life. */
+function lastTimestampAfter(lines: string[], from: number): string | undefined {
+  for (let i = lines.length - 1; i > from; i--) {
+    const ts = timestampOf(lines[i]);
+    if (ts) return ts;
+  }
+  return undefined;
 }
 
 /**

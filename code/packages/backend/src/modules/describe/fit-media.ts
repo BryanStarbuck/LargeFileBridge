@@ -23,6 +23,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir, ensureDir } from "../../config/state-dir.js";
+import { registerChildProcess, unregisterChildProcess } from "../../shared/heap-watch.js";
 import { coreBudget } from "../../shared/concurrency.js";
 import { log } from "../../shared/logging.js";
 import { txn } from "../../shared/transactions.js";
@@ -96,6 +97,9 @@ function runAsync(
       resolve({ code: null, err: (e as Error).message, out: "" });
       return;
     }
+    // Make the transcode child's RSS visible to heap-watch (to_fix.mdx §6.1, row E1). ffmpeg is not free,
+    // and a describe batch can run several at once under the transcode slot — none of it in `heapUsed`.
+    registerChildProcess(child.pid, path.basename(bin));
     // Joined once, at settle — never in the data handler (that concat is the quadratic part of P-30).
     const finishOut = (): string => (captureStdout ? chunks.join("") : "");
     const timer = setTimeout(() => {
@@ -112,12 +116,14 @@ function runAsync(
       err = (err + d.toString()).slice(-4096); // keep only the tail — a long ffmpeg log can be huge
     });
     child.on("error", (e) => {
+      unregisterChildProcess(child.pid);
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       resolve({ code: null, err: e.message, out: finishOut() });
     });
     child.on("close", (code) => {
+      unregisterChildProcess(child.pid);
       if (settled) return;
       settled = true;
       clearTimeout(timer);

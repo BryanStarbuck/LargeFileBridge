@@ -793,6 +793,28 @@ export interface ProgressListResult {
   // visible after the run — including a transcription that came back short of the full duration. Absent when
   // nothing failed.
   recentFailures?: FailedItemView[];
+  // THIS SESSION (crash_recovery.mdx §5.1) — what turns a bare `queued: 0` from a lie into a fact.
+  // "Zero pending is not a state. It is three states wearing the same coat": Finished, Empty, and
+  // Interrupted all render as an empty queue, and on 2026-07-15 the page confidently showed the calm
+  // Empty copy while ~1,290 jobs had just been vaporized by an OOM.
+  //
+  // It rides the ONE polled payload (processing.mdx §5, the one-source rule) so the page, the dock and the
+  // nav item cannot disagree about whether the app crashed. Absent only before boot has recorded it.
+  session?: SessionView;
+}
+
+/** How this session started and how the last one ended (crash_recovery.mdx §5.1). */
+export interface SessionView {
+  startedAt: string; // this session's BOOT
+  // `unknown` is NOT a shrug — it is the honest answer when the ledger's BOOT marker has rotated away,
+  // and per §5's LOCKED rule it must render as Interrupted, never as Empty. We fail toward telling the
+  // user something happened: an honest "we're not sure" beats a confident lie.
+  previousEnded: "clean" | "abnormal" | "unknown";
+  previousEndedAt?: string; // the last session's final sign of life, where the markers can supply it
+  restored?: number; // re-admitted tasks (§4.1)
+  restoreSkipped?: number; // dropped because the output already existed
+  restoreVanished?: number; // dropped because the file is gone
+  quarantined?: number; // §4.3 — crashed us twice, not retried
 }
 
 // One PENDING item (queued, not started) shown as a row on the Processing page's per-item table
