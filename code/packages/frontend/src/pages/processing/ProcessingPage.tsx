@@ -5,8 +5,10 @@
 import { CheckCircle2, Loader2, AlertTriangle } from "lucide-react";
 import type { ProcessingBatch, ProgressKind } from "@lfb/shared";
 import { PageHeader } from "../../components/ui/PageHeader.js";
+import { StatusBanner } from "../../components/ui/StatusBanner.js";
 import { useProgress, verb } from "../../progress/ProgressContext.js";
 import { ProcessingItemsTable } from "./ProcessingItemsTable.js";
+import { groupHalted, haltedWarningDef, type HaltedGroup } from "./haltedWarning.js";
 
 // "compress" → "compressing", etc. — a lowercase gerund for the Waiting backlog line.
 function backlogLabel(op: ProgressKind): string {
@@ -66,6 +68,14 @@ function BatchCard({ b }: { b: ProcessingBatch }) {
   );
 }
 
+// The single "work stopped, here's why, here's the fix" banner for one open provider circuit (to_fix.mdx
+// §2.4). Standard educate-and-fix surface: warn/amber banner + the blue arrow that opens the popup carrying
+// Resume (warnings.mdx §3/§4).
+function HaltedBanner({ group }: { group: HaltedGroup }) {
+  const def = haltedWarningDef(group);
+  return <StatusBanner state={def.state} headline={def.headline} sub={def.sub} warning={def} />;
+}
+
 export function ProcessingPage() {
   const { jobs, queuedByOp, batches, queuedItems, recentFailures, workers } = useProgress();
   const waiting = Object.entries(queuedByOp).filter(([, n]) => (n ?? 0) > 0) as [ProgressKind, number][];
@@ -76,10 +86,17 @@ export function ProcessingPage() {
   // Worker utilization — the parallelism read (processing.mdx §3a): how many core-slots of the mass-compute
   // budget are busy right now. Shown atop "Running now" so the user can SEE the mass parallelization working.
   const utilPct = workers && workers.budget > 0 ? Math.round((workers.busy / workers.budget) * 100) : 0;
+  // ONE banner per open provider circuit, never one card per halted file (to_fix.mdx §2.4). The halted items
+  // still carry their own "Not attempted" rows in the table below (§7.3) — this is the actionable summary.
+  const halted = groupHalted(recentFailures);
 
   return (
     <div className="flex flex-col gap-5">
       <PageHeader title="Processing" subtitle="Background work — compression, transcriptions, and more." />
+
+      {halted.map((g) => (
+        <HaltedBanner key={g.key} group={g} />
+      ))}
 
       {nothing && (
         <div className="rounded-lg border border-dashed px-6 py-10 text-center text-black/50" style={{ borderColor: "var(--lfb-border)" }}>

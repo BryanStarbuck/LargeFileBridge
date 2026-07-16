@@ -18,12 +18,26 @@
 // stops 24 concurrent uploads from pinning ~2 GB of base64 in the first place. A warning that fires
 // every night is a bug report about the gate, not a feature of this file.
 //
-// Zero dependencies beyond node:v8 — instrumentation must never be the thing that takes the server down.
+// THE HEAP IS ONLY ONE OF FOUR LAYERS (to_fix.mdx §6). heapUsed sees our JS objects and base64; it does NOT
+// see child processes (ffmpeg, and Whisper at 2–6 GB PER INSTANCE) and it does NOT see the OS. So a module
+// that samples heapUsed alone reports HEALTHY through a transcription-driven memory crisis — the machine
+// swaps, every process crawls, and our fault trail says nothing is wrong. Meanwhile the other half of the
+// system, transcribeConcurrency(), budgets those children's RAM but is blind to OUR heap. Two blind halves
+// facing each other, able to peak simultaneously. This file now samples all three layers it can reach:
+// heapUsed (V8), child RSS (`ps`, attributed to the job that spawned it), and OS pressure (`vm_stat`).
+//
+// Zero dependencies beyond node builtins — instrumentation must never be the thing that takes the server
+// down. Every probe here is ASYNC (charter T3: no spawnSync on a queue/request path — and a `ps` that
+// blocks the event loop to report on memory would be a self-parody), best-effort, and swallows its errors:
+// a diagnostic that throws, blocks, or holds the loop open is worse than no diagnostic at all.
+import { spawn } from "node:child_process";
+import os from "node:os";
 import v8 from "node:v8";
 import { log } from "./logging.js";
 import { txnBegin, txnEnd, type TxnFields } from "./transactions.js";
 
 const MIB = 1024 * 1024;
+const KIB = 1024;
 
 /**
  * ~12s. Fast enough that a heap climbing from 2 GB to the ceiling under a saturated describe batch is
@@ -90,6 +104,241 @@ type HeapContextSource = () => TxnFields;
 let contextSource: HeapContextSource | null = null;
 export function registerHeapContextSource(fn: HeapContextSource): void {
   contextSource = fn;
+}
+
+// ── Layer 2: child-process RSS (to_fix.mdx §6.1) ────────────────────────────────────────────────────────
+//
+// Whisper is 2 GB resident per instance and ffmpeg is not free either, and NONE of it appears in heapUsed —
+// it is not our heap, it is not even our process. The registry below is how a child becomes visible: the
+// module that spawns one calls registerChildProcess() with a LABEL naming the job (op + file), and the RSS
+// we read back is attributed to that job rather than landing as an anonymous number. "4.2 GB in children"
+// tells you the box is in trouble; "4.2 GB in children, 2.1 of it transcribe:interview.mp4" tells you what
+// to stop.
+//
+// Registration is a courtesy, not a requirement: an unregistered child is simply invisible, exactly as it is
+// today, so nothing breaks by not calling these. The API is exported for other modules to adopt (2_2_do.mdx
+// §E1); this file deliberately does not reach into them, because heap-watch must stay a LEAF — a warning
+// that fires because memory is exhausted must not depend on an import cycle through the subsystem that
+// exhausted it (the same rule that made the context source a registration).
+
+/** What a registered child is doing, for attribution in the warning — e.g. `transcribe:interview.mp4`. */
+const childLabels = new Map<number, string>();
+
+/** Track a spawned child's RSS against `label`. Safe to call for any pid; unregister in a finally. */
+export function registerChildProcess(pid: number | undefined, label: string): void {
+  if (typeof pid === "number" && Number.isFinite(pid) && pid > 0) childLabels.set(pid, label);
+}
+
+/** Stop tracking a child. Idempotent — a double-unregister (close + error) must be harmless. */
+export function unregisterChildProcess(pid: number | undefined): void {
+  if (typeof pid === "number") childLabels.delete(pid);
+}
+
+/** How many children we ask `ps` about at once. A runaway registry must not build an unbounded argv. */
+const MAX_PROBED_CHILDREN = 64;
+
+/**
+ * The external probes are far more expensive than process.memoryUsage() — each forks a process — so they run
+ * on their own, slower cadence and their result is CACHED for the heap sampler to read. That ordering is the
+ * point: the warning path itself stays synchronous and instant, and never waits on a fork to say the process
+ * is about to die.
+ */
+const PROBE_MS = Math.max(15_000, Number(process.env.LFB_MEM_PROBE_MS) || 60_000);
+
+/** Swapping this much between probes means the machine is paging, not merely busy — concurrency is too high. */
+const SWAPOUT_WARN_BYTES = Math.max(8 * MIB, Number(process.env.LFB_SWAP_WARN_BYTES) || 64 * MIB);
+
+/** Re-warn about OS pressure at most this often; the fault trail is only useful while it stays readable. */
+const SWAP_REWARN_MS = 5 * 60_000;
+
+interface ChildRssSnapshot {
+  totalBytes: number;
+  /** Largest-first, `label=MB`, already truncated to a readable few. */
+  top: string[];
+  count: number;
+}
+
+interface OsMemSnapshot {
+  freeBytes: number;
+  /** macOS compressed-memory footprint — pressure BEFORE the box starts swapping. */
+  compressedBytes: number | null;
+  /** Cumulative pages swapped out since boot; only the DELTA between probes is meaningful. */
+  swapouts: number | null;
+}
+
+let lastChildRss: ChildRssSnapshot | null = null;
+let lastOsMem: OsMemSnapshot | null = null;
+let lastSwapouts: number | null = null;
+let lastSwapWarnAt = 0;
+let probeInFlight = false;
+let probeTimer: NodeJS.Timeout | null = null;
+
+/**
+ * Run a short probe command and return its stdout, or null on ANY failure (missing binary, non-zero exit,
+ * timeout, unparseable — all the same to us: no reading this tick). Async by charter (T3), capped, killed on
+ * a timeout, and it never rejects: instrumentation reports what it can and stays quiet about what it can't.
+ */
+function probeCmd(bin: string, args: string[], timeoutMs = 4000): Promise<string | null> {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(bin, args, { stdio: ["ignore", "pipe", "ignore"] });
+    } catch {
+      resolve(null);
+      return;
+    }
+    const chunks: string[] = [];
+    let captured = 0;
+    let settled = false;
+    const done = (v: string | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(v);
+    };
+    const timer = setTimeout(() => {
+      try {
+        child!.kill("SIGKILL");
+      } catch {
+        /* already gone */
+      }
+      done(null);
+    }, timeoutMs);
+    timer.unref?.();
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (c: string) => {
+      if (captured >= 256 * KIB) return; // a `ps`/`vm_stat` answer is a few hundred bytes; past this, drop
+      chunks.push(c);
+      captured += c.length;
+    });
+    child.on("error", () => done(null));
+    child.on("close", (code) => done(code === 0 ? chunks.join("") : null));
+  });
+}
+
+/**
+ * Sum the RSS of every registered child via one `ps -o pid=,rss= -p a,b,c` (RSS is in KB). One fork for all
+ * of them, not one per child. Dead pids are dropped from the registry as we go — a module that forgot to
+ * unregister must not make this list grow forever.
+ */
+async function probeChildRss(): Promise<ChildRssSnapshot | null> {
+  const pids = [...childLabels.keys()].slice(0, MAX_PROBED_CHILDREN);
+  if (pids.length === 0) return { totalBytes: 0, top: [], count: 0 };
+  const out = await probeCmd("ps", ["-o", "pid=,rss=", "-p", pids.join(",")]);
+  if (out == null) return null;
+
+  const seen = new Set<number>();
+  const rows: Array<{ label: string; bytes: number }> = [];
+  let totalBytes = 0;
+  for (const line of out.split("\n")) {
+    const m = line.trim().match(/^(\d+)\s+(\d+)$/);
+    if (!m) continue;
+    const pid = Number(m[1]);
+    const bytes = Number(m[2]) * KIB; // ps reports RSS in kilobytes
+    seen.add(pid);
+    totalBytes += bytes;
+    rows.push({ label: childLabels.get(pid) ?? `pid ${pid}`, bytes });
+  }
+  // `ps` omits pids that have exited — that omission IS the death certificate, so reap them here.
+  for (const pid of pids) if (!seen.has(pid)) childLabels.delete(pid);
+
+  rows.sort((a, b) => b.bytes - a.bytes);
+  return {
+    totalBytes,
+    top: rows.slice(0, 3).map((r) => `${r.label}=${Math.round(r.bytes / MIB)}MB`),
+    count: rows.length,
+  };
+}
+
+/**
+ * OS memory pressure. `vm_stat` is darwin-only and this app's home is a Mac, so elsewhere we report free
+ * memory alone rather than pretend. Page size is read from vm_stat's own header — it is 16 KB on Apple
+ * Silicon and 4 KB on Intel, and hardcoding either would silently mis-scale every number by 4×.
+ */
+async function probeOsMem(): Promise<OsMemSnapshot> {
+  const snap: OsMemSnapshot = { freeBytes: os.freemem(), compressedBytes: null, swapouts: null };
+  if (os.platform() !== "darwin") return snap;
+  const out = await probeCmd("vm_stat", []);
+  if (out == null) return snap;
+
+  const pageSize = Number(out.match(/page size of (\d+) bytes/)?.[1]) || 4096;
+  const field = (name: string): number | null => {
+    const m = out.match(new RegExp(`^${name}:\\s+(\\d+)\\.?`, "m"));
+    return m ? Number(m[1]) : null;
+  };
+  const compressorPages = field("Pages occupied by compressor");
+  if (compressorPages != null) snap.compressedBytes = compressorPages * pageSize;
+  snap.swapouts = field("Swapouts");
+  return snap;
+}
+
+/**
+ * Refresh the cached child/OS numbers and, independently of the heap, warn when the machine is PAGING.
+ *
+ * Swap gets its own warning because it is its own failure (to_fix.mdx §6.1: "swap is the signal concurrency
+ * is too high even when nothing OOMs"). A box that is swapping is not about to abort — it is simply doing
+ * everything 100× slower, indefinitely, with no error anywhere. Nothing else in this process would ever say
+ * so. Swapouts is cumulative since boot, so only the delta between probes carries information: a machine
+ * that swapped during last month's Xcode build must not warn us today.
+ */
+async function probeSystem(): Promise<void> {
+  if (probeInFlight) return; // a `ps` that outlives its interval must not stack up forks behind itself
+  probeInFlight = true;
+  try {
+    const [child, osMem] = await Promise.all([probeChildRss(), probeOsMem()]);
+    if (child) lastChildRss = child;
+    lastOsMem = osMem;
+
+    if (osMem.swapouts == null) return;
+    const prev = lastSwapouts;
+    lastSwapouts = osMem.swapouts;
+    if (prev == null || osMem.swapouts <= prev) return; // first probe (no baseline), or no new swapping
+
+    // Pages → bytes uses the same 4 KB floor as probeOsMem's fallback; we only need the order of magnitude.
+    const swappedBytes = (osMem.swapouts - prev) * 4096;
+    const now = Date.now();
+    if (swappedBytes < SWAPOUT_WARN_BYTES || now - lastSwapWarnAt < SWAP_REWARN_MS) return;
+    lastSwapWarnAt = now;
+    log.warn(
+      "heap-watch",
+      `MEMORY PRESSURE: the machine swapped ~${Math.round(swappedBytes / MIB)}MB out in the last ` +
+        `${Math.round(PROBE_MS / 1000)}s (free=${Math.round(osMem.freeBytes / MIB)}MB` +
+        (osMem.compressedBytes != null ? `, compressed=${Math.round(osMem.compressedBytes / MIB)}MB` : "") +
+        `). Nothing will crash — it will just get slower and stay slower, which is why nothing else reports ` +
+        `this. It means we are running MORE work at once than this box has RAM for` +
+        (lastChildRss && lastChildRss.count > 0
+          ? `: ${lastChildRss.count} child process(es) holding ~${Math.round(lastChildRss.totalBytes / MIB)}MB` +
+            (lastChildRss.top.length ? ` (${lastChildRss.top.join(", ")})` : "")
+          : "") +
+        `. See to_fix.mdx §6.1 — the RAM clamp in transcribeConcurrency() is admitting too much.`,
+    );
+    const t = txnBegin("memory_pressure", {
+      swappedMB: Math.round(swappedBytes / MIB),
+      freeMB: Math.round(osMem.freeBytes / MIB),
+      childRssMB: lastChildRss ? Math.round(lastChildRss.totalBytes / MIB) : undefined,
+      children: lastChildRss?.count,
+    });
+    txnEnd(t, "ok", {});
+  } catch {
+    // Best-effort by design: a probe that cannot read the machine tells us nothing and must cost nothing.
+  } finally {
+    probeInFlight = false;
+  }
+}
+
+/** The cached child/OS numbers, formatted for the heap warning — never blocks, never forks. */
+function machineContext(): TxnFields {
+  const f: TxnFields = {};
+  if (lastChildRss) {
+    f.childRssMB = Math.round(lastChildRss.totalBytes / MIB);
+    f.children = lastChildRss.count;
+    if (lastChildRss.top.length) f.topChildren = lastChildRss.top.join(",");
+  }
+  if (lastOsMem) {
+    f.freeMB = Math.round(lastOsMem.freeBytes / MIB);
+    if (lastOsMem.compressedBytes != null) f.compressedMB = Math.round(lastOsMem.compressedBytes / MIB);
+  }
+  return f;
 }
 
 let timer: NodeJS.Timeout | null = null;

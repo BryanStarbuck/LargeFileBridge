@@ -17,12 +17,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { log } from "../../shared/logging.js";
-import { toolEnv } from "./audio-prep.js";
+import { toolEnv, whisperModel } from "./audio-prep.js";
 
 // Video / container formats whose audio track must be demuxed to MP3 before Whisper can read it.
 const VIDEO_EXTENSIONS = [".mp4", ".m4v", ".mov", ".mkv", ".avi", ".webm", ".mpg", ".mpeg", ".wmv", ".flv"];
 // Everything Whisper can ingest directly once we have audio.
 const AUDIO_EXTENSIONS = [".mp3", ".wav", ".flac", ".ogg", ".oga", ".aac", ".m4a", ".opus", ".aiff", ".aif", ".wma"];
+/** The stdout capture ceiling — the same 1 MiB as fit-media.ts `runAsync()` (memory.mdx P-30). The only
+ *  callers here that capture read a single line of ffprobe output, so a megabyte is enormous slack. */
+const STDOUT_CAP_BYTES = 1024 * 1024;
 
 export interface TranscribeToolStatus {
   whisper: boolean;
@@ -157,6 +160,11 @@ export class Transcriber {
    * below Apple SpeechAnalyzer (materially more accurate than base/tiny, no multi-GB auto-download). Override
    * with LFB_TRANSCRIBE_MODEL. We pass NO duration-limiting flag, so Whisper slides its window over the WHOLE
    * file (transcribe_engine.mdx §4.1).
+   *
+   * The model name comes from audio-prep's whisperModel() rather than a literal here, because this runner and
+   * the RAM clamp that decides how many of these may run at once MUST name the same model (to_fix.mdx §6.2) —
+   * this site said `small` (~2 GiB) while activeTranscribeModelKey() said `base` (~1 GiB), a silent 2×
+   * under-count of Whisper's footprint on every Mac box.
    */
   private async runWhisper(
     audioFile: string,
@@ -171,7 +179,7 @@ export class Transcriber {
     const whisperOut = path.join(audioDir, `${audioBase}.txt`);
     this.tryUnlink(whisperOut); // clear any stale prior output so our success check is meaningful
 
-    const model = process.env.LFB_TRANSCRIBE_MODEL || "small";
+    const model = whisperModel();
     const base = ["--model", model, "--output_format", "txt", "--output_dir", audioDir, "--language", "en"];
     // Turn Whisper's decoded segments into a determinate fraction AND track how much audio was covered:
     // each stdout line carries the segment it just finished as `[start --> end]`; end ÷ duration is the
@@ -274,7 +282,7 @@ export class Transcriber {
     const r = await this.spawnAsync(
       "ffprobe",
       ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", inputFile],
-      { allowFail: true },
+      { allowFail: true, captureStdout: true }, // reads stdout — the duration IS the answer (to_fix.mdx §6.2)
     );
     const n = Number.parseFloat((r.stdout ?? "").trim());
     return Number.isFinite(n) && n > 0 ? n : null;
@@ -285,7 +293,7 @@ export class Transcriber {
     const r = await this.spawnAsync(
       "ffprobe",
       ["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_type", "-of", "csv=p=0", inputFile],
-      { allowFail: true },
+      { allowFail: true, captureStdout: true }, // reads stdout — its presence IS the answer (to_fix.mdx §6.2)
     );
     return (r.stdout ?? "").trim().length > 0;
   }
@@ -303,32 +311,53 @@ export class Transcriber {
 
   // ── process helpers ──────────────────────────────────────────────────────────────
   /**
-   * Async, non-blocking replacement for spawnSync. Buffers stdout/stderr and (optionally) invokes
-   * `onLine` per COMPLETE stdout line so callers can stream progress. Rejects on a non-zero exit unless
-   * `allowFail` is set. Never blocks the event loop — the whole point of the async engine (§5.1).
+   * Async, non-blocking replacement for spawnSync. Optionally invokes `onLine` per COMPLETE stdout line so
+   * callers can stream progress. Rejects on a non-zero exit unless `allowFail` is set. Never blocks the
+   * event loop — the whole point of the async engine (§5.1).
+   *
+   * STDOUT CAPTURE IS OPT-IN, and that is a memory decision (to_fix.mdx §6.2, memory.mdx P-30 — the shape
+   * is copied verbatim from fit-media.ts `runAsync()`, the precedent). This used to do `stdout += chunk`
+   * with no ceiling for every caller, and the two callers that matter are the WHISPER runs below: they last
+   * hours, emit a segment line every few seconds of audio, consume that output ONLY through `onLine`, and
+   * then throw the return value away. So a multi-hour file held its entire segment log in one string that
+   * `stdout + chunk` reallocated on every chunk — quadratic in chunk count, for a value nobody reads.
+   * Now: capture only when asked, cap at 1 MiB (an ffprobe answer is one line), accumulate into a chunk
+   * ARRAY joined once at close. `onLine` opens the pipe without turning capture on — streaming progress
+   * must not imply retaining the log — and a caller doing neither gets /dev/null and allocates nothing.
+   * stderr stays captured and tail-bounded at 4096; it is what the error message below reads.
    */
   private spawnAsync(
     bin: string,
     args: string[],
-    opts: { allowFail?: boolean; onLine?: (line: string) => void } = {},
+    opts: { allowFail?: boolean; onLine?: (line: string) => void; captureStdout?: boolean } = {},
   ): Promise<{ status: number | null; stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
-      const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], env: toolEnv() });
-      let stdout = "";
+      const captureStdout = opts.captureStdout === true;
+      const wantStdoutPipe = captureStdout || !!opts.onLine;
+      const child = spawn(bin, args, { stdio: ["ignore", wantStdoutPipe ? "pipe" : "ignore", "pipe"], env: toolEnv() });
+      const chunks: string[] = [];
+      let captured = 0;
       let stderr = "";
       let pending = ""; // partial trailing line between chunks (for onLine)
 
       child.stdout?.setEncoding("utf8");
       child.stderr?.setEncoding("utf8");
+      // Joined once, at settle — never in the data handler (that concat is the quadratic part of P-30).
+      const finishOut = (): string => (captureStdout ? chunks.join("") : "");
       child.stdout?.on("data", (chunk: string) => {
-        stdout += chunk;
+        if (captureStdout && captured < STDOUT_CAP_BYTES) {
+          chunks.push(chunk); // past the cap we drop, we do not grow
+          captured += chunk.length;
+        }
         if (!opts.onLine) return;
         pending += chunk;
         const lines = pending.split(/\r?\n/);
         pending = lines.pop() ?? ""; // keep the last (possibly incomplete) fragment
         for (const line of lines) if (line) opts.onLine(line);
       });
-      child.stderr?.on("data", (chunk: string) => { stderr += chunk; });
+      child.stderr?.on("data", (chunk: string) => {
+        stderr = (stderr + chunk).slice(-4096); // keep only the tail — a whisper/ffmpeg log can be huge
+      });
 
       child.on("error", (err) => reject(err)); // e.g. ENOENT — binary vanished mid-run
       child.on("close", (code) => {
@@ -337,7 +366,7 @@ export class Transcriber {
           reject(new Error(`${bin} exited ${code}: ${stderr.split("\n").slice(-3).join(" ").slice(0, 200)}`));
           return;
         }
-        resolve({ status: code, stdout, stderr });
+        resolve({ status: code, stdout: finishOut(), stderr });
       });
     });
   }

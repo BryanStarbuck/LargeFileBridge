@@ -333,6 +333,11 @@ export const api = {
   // Preview-only (dialogs.mdx §5.2): the eligible candidate list under a scope, nothing queued.
   describePlan: (body: { paths?: string[]; root?: string; overwrite?: boolean }) =>
     unwrap<PreviewPlan>(http.post("/describe/plan", body)),
+  // Close a provider's open circuit after the user has fixed the account (to_fix.mdx §2.4 — "Close on user
+  // Resume or a successful probe"). The ONE thing the halted banner's Resume does; the halted files are then
+  // re-queued by re-running the action, since a halt drains the queue rather than parking it.
+  describeResume: (provider: "gemini" | "grok" | "openai") =>
+    unwrap<{ resumed: boolean }>(http.post("/describe/resume", { provider })),
   describePrompt: (kind: DescribeKind) => unwrap<DescribePromptView>(http.get("/describe/prompt", { params: { kind } })),
   customizeDescribePrompt: (kind: DescribeKind) =>
     unwrap<DescribePromptView>(http.post("/describe/prompt/customize", { kind })),

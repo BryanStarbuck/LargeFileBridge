@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import type { DescribeKind, DescribeResult, DescribeBatchResult, DescribeView, DescribeProvidersStatus, DescribeAiConfig, DescribeAiConfigPatch, AiCredentialsInfo, EnqueuePlan, PreviewPlan } from "@lfb/shared";
+import type { DescribeKind, DescribeResult, DescribeBatchResult, DescribeView, DescribeProvidersStatus, DescribeAiConfig, DescribeAiConfigPatch, AiCredentialsInfo, EnqueuePlan, PreviewPlan, ProviderHealthView, ProviderResumeResult } from "@lfb/shared";
 import { mediaKindForName } from "@lfb/shared";
 import { HARD_SKIP } from "../../shared/scan-filters.js";
 import { expandHome } from "../fs/badges.js";
@@ -24,7 +24,7 @@ import { enqueue } from "../jobqueue/jobqueue.service.js";
 import { getPrompt } from "./prompts.js";
 import { selectAdapter, providerStatus, providerKeySources, providerMeta, mimeForMedia, withProviderRetry, type ProviderId } from "./adapters.js";
 // The provider-account gate (to_fix.mdx §2): preflight before a batch, circuit breaker on an account fault.
-import { preflightProvider, noteProviderFailure } from "./provider-health.service.js";
+import { preflightProvider, noteProviderFailure, noteProviderSuccess, circuitStatuses, resumeProvider } from "./provider-health.service.js";
 import { fitMediaUnderLimit } from "./fit-media.js";
 import { log } from "../../shared/logging.js";
 import { txn, txnBegin, txnEnd, type TxnOutcome, type TxnFields } from "../../shared/transactions.js";
@@ -115,10 +115,52 @@ function ledgerNoWork(abs: string, fields: TxnFields, outcome: TxnOutcome, reaso
   txnEnd(t, outcome, { reason });
 }
 
-/** Provider matrix + the default provider — drives the viewer/settings "which AIs are available" surface. */
+/**
+ * Per-provider ACCOUNT health for the Settings → AI surface (to_fix.mdx §2.6).
+ *
+ * `providerStatus()` answers "is a key configured" — which on 2026-07-15 said Gemini was perfectly fine for
+ * the 106 minutes between the credits dying and the doomed batch being queued. A configured key on a dead
+ * account is indistinguishable from a healthy one until somebody CALLS it. These rows carry what that
+ * question can't: whether the circuit is open, why, and when the provider last actually served something.
+ *
+ * Free to call — it reads the in-memory circuit state written by real calls and probes, and never itself
+ * calls a provider. That is what lets a Settings page poll it, so "why did nothing happen last night" is
+ * answerable BEFORE the overnight run rather than after (§2.6).
+ */
+export function providerHealth(): ProviderHealthView[] {
+  const statuses = circuitStatuses();
+  return providerMeta().map((m) => {
+    const s = statuses[m.id];
+    return {
+      id: m.id,
+      open: s?.open ?? false,
+      reason: s?.reason ?? null,
+      openedAt: s?.openedAt ?? null,
+      lastGoodAt: s?.lastGoodAt ?? null,
+      lastCheckedAt: s?.lastCheckedAt ?? null,
+    };
+  });
+}
+
+/** The user fixed the account and pressed Resume (to_fix.mdx §2.4). Re-probes and closes the circuit ONLY on
+ *  a success — see `resumeProvider`; a Resume that trusted the click would put the doomed batch straight
+ *  back on the wire. Returns the resulting health row either way, so the banner can re-render from one call. */
+export async function resumeDescribeProvider(provider: ProviderId): Promise<ProviderResumeResult> {
+  const r = await resumeProvider(provider);
+  const health = providerHealth().find((h) => h.id === provider)!;
+  return { resumed: r.resumed, reason: r.reason, health };
+}
+
+/** Below this size a batch isn't worth a probe: a one-file describe from the viewer discovers the same fault
+ *  just as fast by simply trying, and shouldn't wait on a probe first (to_fix.mdx §2.5). Shared by
+ *  `enqueueDescribe` and `previewDescribe` so the popup's verdict and the enqueue's gate can never disagree. */
+const PREFLIGHT_MIN_BATCH = 2;
+
+/** Provider matrix + the default provider — drives the viewer/settings "which AIs are available" surface.
+ *  Carries per-provider account health beside "available" (to_fix.mdx §2.6): configured ≠ working. */
 export function describeProviders(): DescribeProvidersStatus {
   const providers = providerStatus();
-  return { providers, defaultProvider: getAppConfig().ai.provider, anyAvailable: providers.some((p) => p.available) };
+  return { providers, defaultProvider: getAppConfig().ai.provider, anyAvailable: providers.some((p) => p.available), health: providerHealth() };
 }
 
 /** The editable AI config the Settings page reads — provider default + per-provider model + key SOURCE
@@ -137,6 +179,9 @@ export function getAiConfig(): DescribeAiConfig {
       usingFile: sources[m.id].usingFile,
       available: m.available,
     })),
+    // Health beside the key editor (to_fix.mdx §2.6) — the page where a user asks "why did nothing happen
+    // last night" is the page that must answer it, with last-known-good rather than "a key is configured".
+    health: providerHealth(),
   };
 }
 
@@ -270,6 +315,10 @@ export async function describeOne(
         // Cross the content threshold (artifact_placement_policy.mdx §2): an AI description ALONE is a durable
         // user artifact, so this repo's `.lfbridge/` tracking placement is justified from here on (one-way latch).
         markDurableArtifact(root);
+        // The provider just SERVED a real call — date its last-known-good (to_fix.mdx §2.6). The mirror of the
+        // `noteProviderFailure` in the catch below: every describe folds into health exactly once, so Settings
+        // → AI can say "Gemini last worked at 19:47" instead of only "a key is configured".
+        noteProviderSuccess(adapter.id);
         // `chars`, never the 1,877 chars themselves — the description text never enters a ledger line (§9).
         end({ chars: text.length, model });
         log.info("describe", `${abs} → ${descriptionPath} (${adapter.id}/${model}, ${text.length} chars)`);
@@ -373,7 +422,6 @@ export async function enqueueDescribe(opts: {
   //
   // Only worth paying for a real batch — a one-file describe from the viewer discovers the same fault just
   // as fast by simply trying, and shouldn't wait on a probe first.
-  const PREFLIGHT_MIN_BATCH = 2;
   if (eligible.length >= PREFLIGHT_MIN_BATCH) {
     // Which provider will actually run? Resolve it the same way describeOne will, using a representative
     // eligible file — asking about a provider that would never be chosen would be a meaningless gate.
@@ -412,8 +460,15 @@ export async function enqueueDescribe(opts: {
  * PREVIEW the eligible AI-description candidates for a scope WITHOUT queuing anything (dialogs.mdx §5.2).
  * Same narrowing as `enqueueDescribe` (scope, drop unsupported + already-described) but returns the eligible
  * candidate FILE LIST (path + size) for the unified batch-confirm popup. Nothing is written or queued.
+ *
+ * Also carries the provider's PREFLIGHT verdict (to_fix.mdx §2.5, §2.7 A7). Without it the popup is a liar by
+ * omission: it renders "1,440 files ready — Confirm" against a depleted account, the user confirms, and only
+ * /enqueue's own preflight says no — after the click, in a place the user reads as an error rather than as
+ * the answer to the question they were actually asking. The preflight is CACHED and single-flighted (~60s),
+ * and the popup's Confirm hits /enqueue within that window, so surfacing health here costs ZERO extra probes
+ * — the plan and the enqueue share the one call. Async purely for that probe.
  */
-export function previewDescribe(opts: { paths?: string[]; root?: string; overwrite?: boolean }): PreviewPlan {
+export async function previewDescribe(opts: { paths?: string[]; root?: string; overwrite?: boolean }): Promise<PreviewPlan> {
   const overwrite = opts.overwrite ?? false;
   const candidates = describeCandidates(opts);
   let alreadyDone = 0;
@@ -446,8 +501,30 @@ export function previewDescribe(opts: { paths?: string[]; root?: string; overwri
     }
     files.push({ path: abs, sizeBytes });
   }
+  // ── PREFLIGHT for the popup (to_fix.mdx §2.5) ───────────────────────────────────────────────────────
+  // Same gate `enqueueDescribe` applies, asked one step earlier so the answer lands where the user is still
+  // deciding. Mirrors that path exactly — same PREFLIGHT_MIN_BATCH, same representative-file adapter
+  // resolution — because a popup that green-lights a batch /enqueue then refuses is worse than no popup.
+  // Never fatal: a preview that can't determine health still lists its candidates (health stays undefined,
+  // and /enqueue's own preflight remains the real gate) — the §2.3 bias, applied to the plan itself.
+  let health: PreviewPlan["health"];
+  try {
+    if (files.length >= PREFLIGHT_MIN_BATCH) {
+      const repKind = describeKindFor(path.basename(files[0].path));
+      const adapter = repKind ? selectAdapter(repKind, undefined) : null;
+      if (adapter) {
+        const r = await preflightProvider(adapter.id);
+        health = { provider: adapter.id, ok: r.ok, reason: r.reason };
+        if (!r.ok) {
+          log.warn("describe", `preview [${scopeLabel(opts)}]: provider ${adapter.id} is not healthy — ${r.reason} (to_fix.mdx §2.5)`);
+        }
+      }
+    }
+  } catch (e) {
+    log.warn("describe", `preview: preflight could not run: ${(e as Error).message} — listing candidates without a health verdict.`);
+  }
   log.info("describe", `preview [${scopeLabel(opts)}]: ${candidates.length} considered → ${files.length} candidates (${alreadyDone} already done, ${unsupported} unsupported)`);
-  return { files, considered: candidates.length, alreadyDone, unsupported };
+  return { files, considered: candidates.length, alreadyDone, unsupported, health };
 }
 
 /** Checked `paths` used as-is, else the recursive `root` walked for image/video (page_actions.mdx §1.1). */

@@ -7,17 +7,22 @@
 // Rows are the union of three slices of the one GET /api/progress poll (processing.mdx §5):
 //   * jobs           → Running  (with done/total/unit → a % where determinate)
 //   * queuedItems    → Pending
-//   * recentFailures → Failed   (+ reason)
+//   * recentFailures → Failed   (+ reason)  — OR Halted, when the row carries `state: "halted"`
 // NOTE: recent DONE rows are intentionally NOT included — the backend does not emit them yet (no `done`
 // slice on GET /api/progress). When it does, add a fourth slice here and extend STATE_ORDER.
-import { Loader2, Clock3, XCircle } from "lucide-react";
+import { Loader2, Clock3, XCircle, PauseCircle } from "lucide-react";
 import type { ProgressJob, ProgressKind, QueuedItemView, FailedItemView } from "@lfb/shared";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
 import { formatBytes, relativeTime } from "../../lib/format.js";
 import { verb } from "../../progress/ProgressContext.js";
 
-type ItemState = "running" | "pending" | "failed";
+// HALTED is its own state, never a flavour of Failed (to_fix.mdx §2.4/§7.3). A halted item was NEVER
+// ATTEMPTED — the provider's circuit opened (credits depleted, key revoked) and the queue dropped it rather
+// than burn a doomed upload. Rendering it red as "Failed" tells the user their files were tried and are bad,
+// and they re-run 1,440 files believing they were attempted. It is a "needs your action" state, so it wears
+// the warn/amber language (warnings.mdx §2), not the bad/red one.
+type ItemState = "running" | "pending" | "halted" | "failed";
 
 // One flat row for the table — the three server slices normalised into a common shape. Only the fields
 // relevant to a given state are populated (a pending item has no progress; a failure has no startedAt).
@@ -39,9 +44,16 @@ interface ProcessingItem {
   at?: string; // failed: when it failed
 }
 
-// Group order for the default sort: Running (0) → Pending (1) → Failed (2) (processing.mdx §4.3.1).
-const STATE_ORDER: Record<ItemState, number> = { running: 0, pending: 1, failed: 2 };
-const STATE_LABEL: Record<ItemState, string> = { running: "Running", pending: "Queued", failed: "Failed" };
+// Group order for the default sort: Running (0) → Pending (1) → Halted (2) → Failed (3) (processing.mdx
+// §4.3.1). Halted sits in its OWN group next to Pending — that is what it is, work still owed — and never
+// inside the Failed group (to_fix.mdx §7.3).
+const STATE_ORDER: Record<ItemState, number> = { running: 0, pending: 1, halted: 2, failed: 3 };
+const STATE_LABEL: Record<ItemState, string> = {
+  running: "Running",
+  pending: "Queued",
+  halted: "Not attempted",
+  failed: "Failed",
+};
 
 function basename(p: string): string {
   const parts = p.split("/").filter(Boolean);
@@ -99,9 +111,11 @@ function buildRows(
     });
   });
   recentFailures.forEach((f, i) => {
+    // Read the state the backend already sends instead of assuming "failed" (to_fix.mdx §7.3). Absent =
+    // a real, attempted failure — that is the field's documented default (FailedItemView.state).
     rows.push({
       id: `fail-${i}-${f.path}`,
-      state: "failed",
+      state: f.state === "halted" ? "halted" : "failed",
       op: f.op,
       path: f.path,
       reason: f.reason,
@@ -132,6 +146,18 @@ function StatusChip({ state }: { state: ItemState }) {
       </span>
     );
   }
+  if (state === "halted") {
+    // Amber, paused, and worded as what happened: this file was never tried (to_fix.mdx §2.4/§7.3).
+    return (
+      <span
+        className="inline-flex items-center gap-1.5 rounded-full bg-[var(--lfb-warn-bg)] px-2 py-0.5 text-xs font-medium text-[var(--lfb-warn)]"
+        title="Never attempted — the AI provider stopped accepting work, so Large File Bridge halted this file instead of burning a doomed upload."
+      >
+        <PauseCircle className="h-3 w-3" aria-hidden />
+        Not attempted
+      </span>
+    );
+  }
   return (
     <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--lfb-bad-bg)] px-2 py-0.5 text-xs font-medium text-[var(--lfb-bad)]">
       <XCircle className="h-3 w-3" aria-hidden />
@@ -150,7 +176,8 @@ export function ProcessingItemsTable({
   recentFailures: FailedItemView[];
 }) {
   const rows = buildRows(jobs, queuedItems, recentFailures);
-  const anyFailed = recentFailures.length > 0;
+  // The Reason column pins itself open whenever a row carries one — failures AND halts both do (§7.3).
+  const anyReason = recentFailures.length > 0;
 
   const columns: LfbColumn<ProcessingItem>[] = [
     {
@@ -160,7 +187,7 @@ export function ProcessingItemsTable({
       kind: "enum",
       minWidth: 110,
       accessor: (it) => STATE_LABEL[it.state],
-      filterOptions: ["Running", "Queued", "Failed"],
+      filterOptions: ["Running", "Queued", "Not attempted", "Failed"],
       cell: (it) => <StatusChip state={it.state} />,
     },
     {
@@ -193,6 +220,8 @@ export function ProcessingItemsTable({
       filterable: false,
       cell: (it) => {
         if (it.state === "failed") return <span className="text-[var(--lfb-bad)]">failed</span>;
+        // Halted made no progress because it never started — say so, in amber, not red (to_fix.mdx §7.3).
+        if (it.state === "halted") return <span className="text-[var(--lfb-warn)]">not started</span>;
         if (it.state === "pending") return <span className="text-black/20">—</span>;
         const pct = jobPct(it);
         if (pct === null) {
@@ -279,25 +308,30 @@ export function ProcessingItemsTable({
       },
     },
     {
-      // Priority 9 — Reason. Auto-shown (pinned) whenever ANY row is Failed so a failure's reason is never
+      // Priority 9 — Reason. Auto-shown (pinned) whenever ANY row is Failed or Halted so the reason is never
       // hidden (processing.mdx §4.3.2); otherwise it is the FIRST column to drop as the page narrows.
       id: "reason",
       header: "Reason",
       kind: "text",
-      priority: anyFailed ? undefined : 9,
+      priority: anyReason ? undefined : 9,
       minWidth: 160,
       sortable: false,
       filterable: false,
       accessor: (it) => it.reason ?? "",
       cell: (it) => {
-        if (it.state !== "failed") return <span className="text-black/20">—</span>;
+        if (it.state !== "failed" && it.state !== "halted") return <span className="text-black/20">—</span>;
         const covered =
           it.coveredSec !== undefined && it.durationSec !== undefined
             ? `covered ${formatDuration(it.coveredSec)} of ${formatDuration(it.durationSec)}`
             : null;
+        // Halted reasons are the provider's actionable prose ("gemini credits are depleted — top up at
+        // ai.studio, then Resume") and read in amber; only a real failure is red (to_fix.mdx §7.3).
+        const tone = it.state === "halted" ? "var(--lfb-warn)" : "var(--lfb-bad)";
         return (
           <span className="flex min-w-0 flex-col">
-            <span className="truncate text-[var(--lfb-bad)]">{it.reason}</span>
+            <span className="truncate" style={{ color: tone }}>
+              {it.reason}
+            </span>
             {covered && <span className="truncate text-xs text-black/40">{covered}</span>}
           </span>
         );

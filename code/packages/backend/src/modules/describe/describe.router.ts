@@ -6,7 +6,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { requireAllowListed } from "../auth/identify.js";
 import { log } from "../../shared/logging.js";
-import { describeProviders, readDescription, describeOne, describeMany, describeTree, enqueueDescribe, previewDescribe, getAiConfig, setAiConfig, aiCredentialsInfo } from "./describe.service.js";
+import { describeProviders, readDescription, describeOne, describeMany, describeTree, enqueueDescribe, previewDescribe, getAiConfig, setAiConfig, aiCredentialsInfo, providerHealth, resumeDescribeProvider } from "./describe.service.js";
 import { promptView, customizePrompt, savePrompt, resetPrompt } from "./prompts.js";
 
 export const describeRouter = Router();
@@ -18,6 +18,31 @@ const Provider = z.enum(["auto", "gemini", "grok", "openai"]);
 // GET /api/describe/providers — which vision providers are configured on this machine + what each covers.
 describeRouter.get("/providers", (_req, res) => {
   res.json({ ok: true, data: describeProviders() });
+});
+
+// GET /api/describe/health — per-provider ACCOUNT health: circuit open/closed, why, and last-known-good
+// (to_fix.mdx §2.6). Reads in-memory state only — it never calls a provider, so it is safe to poll and is the
+// route that makes "why did nothing happen last night" answerable BEFORE the overnight run.
+describeRouter.get("/health", (_req, res) => {
+  res.json({ ok: true, data: { providers: providerHealth() } });
+});
+
+// POST /api/describe/resume { provider } — the user topped up / fixed the key and wants work to flow again
+// (to_fix.mdx §2.4: "Close on user Resume or a successful probe"). Re-PROBES the account and closes the
+// circuit ONLY if the probe succeeds; a still-dead account comes back 200 with `resumed: false` + the reason,
+// circuit untouched. That is deliberate: this is a health VERDICT, not a failed request, and the banner
+// re-renders from the returned health row either way. Closing on the click alone would re-release exactly the
+// doomed batch this circuit was opened to stop.
+const ResumeBody = z.object({ provider: z.enum(["gemini", "grok", "openai"]) });
+describeRouter.post("/resume", async (req, res) => {
+  const body = ResumeBody.safeParse(req.body);
+  if (!body.success) return res.status(400).json({ ok: false, error: "provider must be gemini|grok|openai" });
+  try {
+    res.json({ ok: true, data: await resumeDescribeProvider(body.data.provider) });
+  } catch (e) {
+    log.error("describe", `resume failed for ${body.data.provider}: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
 });
 
 // GET /api/describe/config — the editable AI config (default provider + per-provider model + key SOURCE),

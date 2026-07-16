@@ -857,6 +857,20 @@ export interface PreviewPlan {
   considered: number; // set size after Rule 1 (checked set, or the recursive walk)
   alreadyDone: number; // dropped because the output already exists
   unsupported: number; // dropped because not the right media kind
+  // Provider-account health as of the PREVIEW (to_fix.mdx §2.5). Optional because only actions that call an
+  // external account carry it (describe does; transcribe runs locally and has no account to be dead).
+  // `ok: false` means the popup must NOT present a normal plan — the account cannot serve this batch, so it
+  // shows `reason` and offers Resume instead of a Confirm that would queue N doomed files. This is the field
+  // that makes the 2026-07-15 mistake visible at the CLICK rather than 106 minutes of retries later.
+  health?: PreviewPlanHealth;
+}
+
+// The preflight verdict carried by a PreviewPlan (to_fix.mdx §2.5). Deliberately not the full
+// ProviderHealthView: the popup only needs "can this batch run, and if not, why, and against whom".
+export interface PreviewPlanHealth {
+  provider: "gemini" | "grok" | "openai"; // the provider this batch WOULD run against
+  ok: boolean; // false ONLY on an unambiguous account fault — a flaky probe fails OPEN (to_fix.mdx §2.3)
+  reason: string | null; // actionable prose when !ok ("Gemini credits are depleted — top up at …")
 }
 
 // ── Web session activity ping (sessions.mdx) ────────────────────────────────
@@ -1352,11 +1366,38 @@ export interface DescribeProvider {
   supports: MediaKind[];
   usingFile?: boolean; // Gemini only: the resolved key came from the shared GoogleCloud/apikey.yaml
 }
+// ACCOUNT health for one provider (to_fix.mdx §2.6). `available` above answers "is a key CONFIGURED"; this
+// answers the question that actually decided the 2026-07-15 incident — "would that key WORK right now, and
+// when did it last work?". A configured key on a depleted account looks perfectly healthy without this.
+// Continuous, not exceptional: credits dying is a Tuesday, so this is readable BEFORE the overnight run.
+export interface ProviderHealthView {
+  id: "gemini" | "grok" | "openai";
+  open: boolean; // the circuit is OPEN — this provider is refusing work and its jobs are halted (§2.4)
+  reason: string | null; // why, in actionable prose, when `open`
+  openedAt: string | null; // ISO — when the account was first seen dead
+  lastGoodAt: string | null; // ISO — last call/probe this provider actually SERVED ("last known good", §2.6)
+  lastCheckedAt: string | null; // ISO — last time we asked (probe or real call); null = never asked
+}
 // GET /api/describe/providers — the provider matrix + whether any provider is usable at all.
 export interface DescribeProvidersStatus {
   providers: DescribeProvider[];
   defaultProvider: string; // "auto" | a provider id
   anyAvailable: boolean;
+  health: ProviderHealthView[]; // per-provider account health (to_fix.mdx §2.6) — one entry per provider
+}
+// GET /api/describe/health — the same health rows on their own, for a poll that must not pay for the
+// provider matrix. POST /api/describe/resume returns one row: the provider it just re-probed (§2.4).
+export interface ProviderHealthStatus {
+  providers: ProviderHealthView[];
+}
+// POST /api/describe/resume — the user fixed the account and asked for work to flow again (to_fix.mdx §2.4).
+// `resumed` is true ONLY when the re-probe SUCCEEDED and the circuit was actually closed; on false the
+// circuit is still open and `reason` says why. A Resume never closes a circuit blindly — that would put
+// 1,440 doomed files straight back on the queue.
+export interface ProviderResumeResult {
+  resumed: boolean;
+  reason: string | null;
+  health: ProviderHealthView;
 }
 // An existing generated description read back for a media file (GET /api/describe/file).
 export interface DescribeView {
@@ -1407,6 +1448,10 @@ export interface DescribeAiProviderConfig {
 export interface DescribeAiConfig {
   provider: "auto" | "gemini" | "grok" | "openai"; // the default provider ("auto" = first available)
   providers: DescribeAiProviderConfig[];
+  // Account health beside the key editor (to_fix.mdx §2.6). The Settings → AI page is exactly where the user
+  // asks "why did nothing happen last night" — it must be able to answer with last-known-good, not just
+  // "a key is configured". One entry per provider, same order as `providers`.
+  health: ProviderHealthView[];
 }
 
 // GET /api/describe/credentials — everything the "AI credentials" instructions page needs to tell the

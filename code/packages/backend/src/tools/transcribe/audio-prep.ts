@@ -14,6 +14,28 @@ export const AUDIO_EXTENSIONS = [".mp3", ".wav", ".flac", ".ogg", ".oga", ".aac"
 const isWindows = os.platform() === "win32";
 
 /**
+ * The Whisper model the `mac` engine actually runs, and the ONE place that decides it (to_fix.mdx §6.2).
+ *
+ * This constant exists because two sites disagreed and nothing made them agree: `runWhisper()` spawned
+ * `--model small` (~2 GiB resident) while `activeTranscribeModelKey()` reported `"base"` (~1 GiB) to the
+ * RAM clamp — so `transcribeConcurrency()` sized every Mac box against HALF the memory a whisper job
+ * really takes, and admitted twice the jobs the machine could hold. A budget that under-counts by 2× is
+ * worse than no budget. Both sites now read this constant and the SAME `LFB_TRANSCRIBE_MODEL` override
+ * (via {@link whisperModel}), so the runner and the RAM table cannot drift apart again.
+ *
+ * It lives here, in the engine-agnostic helper module, because both readers already depend on this file
+ * and this file depends on nothing but node builtins — there is no import cycle to create.
+ * `small` is the deliberate choice (transcribe_engine.mdx §2/§3): materially more accurate than
+ * base/tiny, no multi-GB auto-download.
+ */
+export const DEFAULT_MAC_WHISPER_MODEL = "small";
+
+/** The whisper model to run / to charge RAM for. Env override is honored identically by both readers. */
+export function whisperModel(): string {
+  return process.env.LFB_TRANSCRIBE_MODEL || DEFAULT_MAC_WHISPER_MODEL;
+}
+
+/**
  * The interactive dev shell's PATH commonly carries directories a restricted/background process does not:
  * pipx installs `whisper` and `mlx-qwen3-asr` shims into `~/.local/bin`, and Homebrew lives at
  * `/opt/homebrew/bin` (Apple Silicon) or `/usr/local/bin` (Intel). A tool can be genuinely installed and
@@ -47,27 +69,55 @@ export function commandExists(command: string): boolean {
   }
 }
 
+/** The stdout capture ceiling — the same 1 MiB as fit-media.ts `runAsync()` (memory.mdx P-30). Every
+ *  capturing caller here reads a one-line ffprobe answer, so a megabyte is orders of magnitude of slack. */
+const STDOUT_CAP_BYTES = 1024 * 1024;
+
 /**
  * Async, non-blocking spawn (transcribe_engine.mdx §4.1 — NEVER spawnSync, which freezes the event loop for
- * the whole run). Buffers stdout/stderr and optionally streams complete stdout lines to `onLine`. Rejects on
- * a non-zero exit unless `allowFail`. There is deliberately NO wall-clock timeout — a 1–2h+ file may run for
- * hours and must not be reaped mid-file. Runs with the widened tool PATH (above) so a bare command name
- * (`"whisper"`, `"mlx-qwen3-asr"`, `"ffmpeg"`) resolves the same way `commandExists()` detected it.
+ * the whole run). Optionally streams complete stdout lines to `onLine`. Rejects on a non-zero exit unless
+ * `allowFail`. There is deliberately NO wall-clock timeout — a 1–2h+ file may run for hours and must not be
+ * reaped mid-file. Runs with the widened tool PATH (above) so a bare command name (`"whisper"`,
+ * `"mlx-qwen3-asr"`, `"ffmpeg"`) resolves the same way `commandExists()` detected it.
+ *
+ * STDOUT CAPTURE IS OPT-IN, and that is a memory decision, not a style one (to_fix.mdx §6.2, memory.mdx
+ * P-30 — fit-media.ts `runAsync()` is the precedent this mirrors exactly). This runner used to do
+ * `stdout += chunk` for EVERY caller with no ceiling, which is the worst shape available on this path:
+ * the *hours-long* transcription children are the chattiest (a multi-hour ASR run emits a segment line
+ * per few seconds of audio) and they are precisely the callers that never read `stdout` — so the entire
+ * segment log accumulated in one ever-growing string, and `stdout + chunk` transiently allocates ~2× the
+ * accumulated string on every chunk, making it quadratic in chunk count. So: capture only when asked, cap
+ * at 1 MiB, and accumulate into a chunk ARRAY joined once at close so the concat is linear.
+ *
+ * When neither `captureStdout` nor `onLine` is set the child is handed /dev/null for stdout — nothing is
+ * allocated and there is no pipe that could fill and block the child. `onLine` still needs the pipe (it
+ * consumes the stream line-by-line and discards it), so it opens one WITHOUT turning capture on: streaming
+ * progress must never imply retaining the log. stderr is always captured and tail-bounded at 4096 — small,
+ * and it is what every error message here reads.
  */
 export function spawnAsync(
   bin: string,
   args: string[],
-  opts: { allowFail?: boolean; onLine?: (line: string) => void } = {},
+  opts: { allowFail?: boolean; onLine?: (line: string) => void; captureStdout?: boolean } = {},
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], env: toolEnv() });
-    let stdout = "";
+    const captureStdout = opts.captureStdout === true;
+    // The pipe exists for capture OR for line streaming; "ignore" is what makes a non-reading caller free.
+    const wantStdoutPipe = captureStdout || !!opts.onLine;
+    const child = spawn(bin, args, { stdio: ["ignore", wantStdoutPipe ? "pipe" : "ignore", "pipe"], env: toolEnv() });
+    const chunks: string[] = [];
+    let captured = 0;
     let stderr = "";
     let pending = "";
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
+    // Joined once, at settle — never in the data handler (that concat is the quadratic part of P-30).
+    const finishOut = (): string => (captureStdout ? chunks.join("") : "");
     child.stdout?.on("data", (chunk: string) => {
-      stdout += chunk;
+      if (captureStdout && captured < STDOUT_CAP_BYTES) {
+        chunks.push(chunk); // past the cap we drop, we do not grow
+        captured += chunk.length;
+      }
       if (!opts.onLine) return;
       pending += chunk;
       const lines = pending.split(/\r?\n/);
@@ -75,7 +125,7 @@ export function spawnAsync(
       for (const line of lines) if (line) opts.onLine(line);
     });
     child.stderr?.on("data", (chunk: string) => {
-      stderr += chunk;
+      stderr = (stderr + chunk).slice(-4096); // keep only the tail — a long ffmpeg/whisper log can be huge
     });
     child.on("error", (err) => reject(err));
     child.on("close", (code) => {
@@ -84,7 +134,7 @@ export function spawnAsync(
         reject(new Error(`${bin} exited ${code}: ${stderr.split("\n").slice(-3).join(" ").slice(0, 200)}`));
         return;
       }
-      resolve({ status: code, stdout, stderr });
+      resolve({ status: code, stdout: finishOut(), stderr });
     });
   });
 }
@@ -130,7 +180,7 @@ export async function probeDurationSec(inputFile: string): Promise<number | null
   const r = await spawnAsync(
     "ffprobe",
     ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", inputFile],
-    { allowFail: true },
+    { allowFail: true, captureStdout: true }, // reads stdout — the duration IS the answer (to_fix.mdx §6.2)
   );
   const n = Number.parseFloat((r.stdout ?? "").trim());
   return Number.isFinite(n) && n > 0 ? n : null;
@@ -142,7 +192,7 @@ export async function hasAudioStream(inputFile: string): Promise<boolean> {
   const r = await spawnAsync(
     "ffprobe",
     ["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_type", "-of", "csv=p=0", inputFile],
-    { allowFail: true },
+    { allowFail: true, captureStdout: true }, // reads stdout — its presence IS the answer (to_fix.mdx §6.2)
   );
   return (r.stdout ?? "").trim().length > 0;
 }
