@@ -800,6 +800,9 @@ export interface ProgressJob {
   done?: number; // determinate progress numerator
   total?: number; // determinate progress denominator
   unit?: string; // "MB" | "files" | "%" | …
+  // The join to the batches table (processing.mdx §5 / AC5). A RUNNING item needs it as much as a queued
+  // one: narrowing to a batch must not make its in-flight files disappear from the items table.
+  batchId?: string;
 }
 
 // GET /api/progress → the union of all in-flight jobs (registry + the active discovery scan). `queued`
@@ -857,6 +860,10 @@ export interface QueuedItemView {
   path: string;
   kind?: string | null;
   sizeBytes?: number;
+  // THE JOIN between the two Processing tables (processing.mdx §5 / AC5): clicking a batch row narrows the
+  // items table to that batch's files. Absent = an "Ad hoc" item (a single-file action with no bulk run
+  // behind it), which is a real value the Batch facet renders — not a missing one.
+  batchId?: string;
 }
 // One recently-FAILED item (processing.mdx §4.3.1). For a truncated transcript the covered-vs-total seconds
 // are carried so the table can show "covered 00:20:00 of 01:47:12" (transcribe_engine.mdx §4).
@@ -871,13 +878,27 @@ export interface FailedItemView {
   // opened (credits depleted, key revoked) and the queue dropped it rather than burn a doomed upload.
   // Rendering it as "failed" tells the user their files are bad when nothing was ever tried. Optional so
   // every existing producer keeps its meaning: absent = a real, attempted failure.
-  state?: "failed" | "halted";
+  //
+  // `rejected` is the third member and is NEITHER of the other two: the provider CONSIDERED the file and
+  // declined it, after every retry was spent (ai_description.mdx §2.3). It renders SLATE, never red, and it
+  // is never offered a Retry — re-running it spends a real provider call to be told the same thing. It
+  // appears in this list because the user must be able to SEE which files have no description and why, not
+  // because anything went wrong (processing_batches.mdx §4.2).
+  state?: "failed" | "halted" | "rejected";
+  // The join to the batches table (processing.mdx §5 / AC5) — see QueuedItemView.batchId.
+  batchId?: string;
 }
 
 // The plan a producing PAGE ACTION returns (page_actions.mdx §5): after resolving scope (checked set or
 // the recursive root) and dropping already-done + unsupported files, how many were background-queued.
 // `willProcess` is the number the "{N} files will have their … created" toast shows (== queued).
 export interface EnqueuePlan {
+  // The batch this Confirm opened (processing_batches.mdx §7 / AC12) — the manifest's id, adopted by the
+  // live row. Without it a Confirm cannot point its toast at its OWN row ("View progress"), which is the
+  // one moment the user is definitely looking. `CompressInsidePlan.batchId` is the precedent. Optional
+  // because a plan that queued NOTHING (needsSetup / blocked / everything already done) opens no batch —
+  // an absent id means "there is no row", never "we lost it".
+  batchId?: string;
   considered: number; // set size after Rule 1 (checked set, or the recursive walk)
   eligible: number; // after Rule 2 — media that does NOT already have the output
   alreadyDone: number; // dropped because the output already exists
@@ -1509,11 +1530,29 @@ export interface DescribeResult {
   model: string | null;
   reason: string | null;
 }
-// A batch / tree run of AI description — the per-file results plus honest counts (mirrors
-// TranscribeBatchResult; ai_description.mdx §5 POST /describe/batch|/tree).
+/**
+ * A batch / tree run of AI description — the per-file results plus honest counts
+ * (ai_description.mdx §5 POST /describe/batch|/tree).
+ *
+ * `rejected` is its OWN count, not a fold into `skipped` (processing_batches.mdx §4.2). A refusal is an
+ * ANSWER — the provider considered the file and said no, and the verdict is on disk in a
+ * `.ai_description_rejected`. The three plausible places to put it are each wrong in their own way:
+ *   • `failed`  — paints a tree of copyrighted slides red when nothing is broken, and feeds the retry
+ *                 ceiling (which is what halted 483 files on 2026-07-16);
+ *   • `described` — claims a description exists for a file that has none;
+ *   • `skipped` — where it briefly lived: the sum is right, but "skipped" means *we* didn't ask, and this
+ *                 file was asked and answered. It buries the one number the product owner asked for
+ *                 underneath "already done".
+ * So: a fourth count. It deliberately does NOT mirror `TranscribeBatchResult`, which has no `rejected`
+ * because Whisper does not object to a podcast — only a provider-judged op can be refused (§4.5).
+ *
+ * The counts sum: `described + rejected + skipped + failed === results.length`.
+ */
 export interface DescribeBatchResult {
   results: DescribeResult[];
   described: number;
+  /** The provider CONSIDERED the file and declined it, after every retry was spent (§4.2). */
+  rejected: number;
   skipped: number;
   failed: number;
 }

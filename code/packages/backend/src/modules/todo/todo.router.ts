@@ -13,9 +13,26 @@ import { recalcAll, importanceScore } from "./todo-batch.engine.js";
 import { scanAll as transcribeScanAll, scanStorage as transcribeScanStorage } from "./transcribe-scan.engine.js";
 import { folderForRepoId } from "../store-model/units.service.js";
 import { recordDecision } from "../storage/decisions.service.js";
+import { writeManifest, trackBatch } from "../jobqueue/batch-manifest.service.js";
+import fs from "node:fs";
 import { pullMissing } from "../pin/pin.service.js";
-import { enqueue } from "../jobqueue/jobqueue.service.js";
+import { enqueue, createBatch } from "../jobqueue/jobqueue.service.js";
 import { enqueueTranscribe } from "../transcribe/transcribe.service.js";
+
+/** `~`-collapsed path for a human-readable batch scope/label. */
+function collapseHome(p: string): string {
+  const home = process.env.HOME ?? "";
+  return home && p.startsWith(home) ? "~" + p.slice(home.length) : p;
+}
+
+/** Byte size for the batch manifest, or 0 when unreadable. */
+function statSizeOrZero(p: string): number {
+  try {
+    return fs.statSync(p).size;
+  } catch {
+    return 0;
+  }
+}
 
 export const todoRouter = Router();
 todoRouter.use(requireAllowListed);
@@ -160,11 +177,34 @@ todoRouter.post("/batches/:id/apply", async (req, res) => {
     }
 
     if (compress.length) {
+      // An Apply is ONE batch (processing_batches.mdx §1.2), so the user gets a single row answering "is my
+      // Apply done?". It used to call bare `enqueue()` with NO batchId at all — so the fanned-out work was
+      // invisible on the Processing page and unreconstructable after a crash. `mixed` because an Apply is a
+      // TO DO action spanning several ops, not a compress run that happens to come from the To Do page.
+      const files = compress.map((i) => path.join(root, i.path));
+      const scope = collapseHome(root);
+      const manifest = writeManifest({
+        op: "todo_apply",
+        scope,
+        counts: { chosen: chosen.length, compress: compress.length, pull_down: pullDown.length },
+        files: files.map((p) => ({ path: p, sizeBytes: statSizeOrZero(p) })),
+      });
+      createBatch({
+        batchId: manifest.batchId,
+        kind: "mixed",
+        label: `Apply · ${scope} · ${files.length} files`,
+        scope,
+        total: files.length,
+        deleteOriginal: "trash",
+        manifestPath: manifest.file,
+      });
+      trackBatch(manifest.batchId, files.length);
       enqueue(
         compress.map((i) => ({
           op: "compress" as const,
           path: path.join(root, i.path),
           overwrite: false,
+          batchId: manifest.batchId,
           compress: {
             deleteOriginal: "trash" as const,
             mediaKind: (i.category === "compress_video" ? "video" : "image") as "video" | "image",

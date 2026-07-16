@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 import type { OcrResult as MacOcrResult } from "mac-ocr";
 import type { OcrBlock, OcrEngineId, OcrLevel, OcrEngineStatus } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
+import { coreBudget } from "../../shared/concurrency.js";
 import { log } from "../../shared/logging.js";
 
 /** One engine's recognition of ONE image. `text` may legitimately be "" — most images have no text, and
@@ -182,32 +183,53 @@ function normalizeVision(r: MacOcrResult): Recognition {
 // Workers are also REUSED across files: the library's own guidance is that "each worker uses a high amount of
 // memory, so code should never be able to create an arbitrary number of workers", and at ~250ms of real work
 // per image a per-file worker spawn would dominate the run (§16.2 rule 6).
-type TessWorker = Awaited<ReturnType<typeof import("tesseract.js").createWorker>>;
+//
+// And the pool must be a POOL, not a worker (§10.4 / §16.2 rule 6). ONE worker per language serializes every
+// recognition behind it: `ocr:image` fans `coreBudget()` jobs wide (ocr.service.ts), and a single worker would
+// quietly collapse that fan-out to ~1 core no matter the budget — the engine would look "parallel" and run
+// like a queue. tesseract.js's own answer is `createScheduler()`: N workers, one FIFO, `addJob` dispatches to
+// whichever worker is idle. So the pool is sized to the SAME mass-compute budget the caller fans out with —
+// one definition of "how parallel", no second drifting core math (parallelization.mdx §1).
+type TessScheduler = ReturnType<typeof import("tesseract.js").createScheduler>;
 
-const workerPool = new Map<string, Promise<TessWorker>>();
+// Keyed by language: a scheduler's workers are initialized for ONE language, and a second language is a
+// second pool rather than a reinitialize storm.
+const schedulerPool = new Map<string, Promise<TessScheduler>>();
 
-async function tessWorkerFor(lang: string): Promise<TessWorker> {
-  let w = workerPool.get(lang);
-  if (!w) {
-    w = (async () => {
-      const { createWorker } = await import("tesseract.js");
-      log.info("ocr", `starting tesseract.js worker (lang=${lang}, vendored data at ${VENDORED_LANG_DIR})`);
+async function tessSchedulerFor(lang: string): Promise<TessScheduler> {
+  let s = schedulerPool.get(lang);
+  if (!s) {
+    // Lazily built and memoized as a PROMISE, so concurrent first callers await one construction rather than
+    // racing to spin up 2×N workers. Nothing starts unless tesseract actually runs — on a Mac the fallback
+    // never fires and this whole block stays cold.
+    s = (async () => {
+      const { createScheduler, createWorker } = await import("tesseract.js");
+      const size = coreBudget();
+      log.info("ocr", `starting tesseract.js scheduler (lang=${lang}, ${size} workers, vendored data at ${VENDORED_LANG_DIR})`);
+      const scheduler = createScheduler();
       // langPath pinned to the VENDORED directory + cacheMethod "none" — the fallback MUST work with the
       // network unplugged (§3.3). Left at its defaults, tesseract.js fetches <lang>.traineddata from a CDN on
       // first use, which would make the fallback engine phone home on a feature whose entire premise (§4) is
       // that it does not. `gzip: false` because the vendored files are uncompressed .traineddata.
-      return createWorker(lang, 1, { langPath: VENDORED_LANG_DIR, gzip: false, cacheMethod: "none" });
+      const workers = await Promise.all(
+        Array.from({ length: size }, () =>
+          createWorker(lang, 1, { langPath: VENDORED_LANG_DIR, gzip: false, cacheMethod: "none" }),
+        ),
+      );
+      for (const w of workers) scheduler.addWorker(w);
+      return scheduler;
     })();
-    workerPool.set(lang, w);
+    schedulerPool.set(lang, s);
   }
-  return w;
+  return s;
 }
 
-/** Terminate the pooled workers (process shutdown / tests). Safe to call when the pool is empty. */
+/** Terminate the pooled workers (process shutdown / tests). Safe to call when the pool is empty.
+ *  `scheduler.terminate()` terminates every worker it holds, so there is no separate worker list to track. */
 export async function shutdownOcrWorkers(): Promise<void> {
-  const workers = [...workerPool.values()];
-  workerPool.clear();
-  await Promise.allSettled(workers.map(async (p) => (await p).terminate()));
+  const schedulers = [...schedulerPool.values()];
+  schedulerPool.clear();
+  await Promise.allSettled(schedulers.map(async (p) => (await p).terminate()));
 }
 
 const tesseract: OcrEngine = {
@@ -218,9 +240,10 @@ const tesseract: OcrEngine = {
     // NOTE: tesseract.js has no first-class fast/accurate switch (§3.1's table), so this adapter ignores
     // `level`. The two-speed rule is still honored where it actually matters — a video is SAMPLED at a 15s
     // stride rather than fully decoded — so the fallback is slower per frame but never asymptotically wrong.
-    const worker = await tessWorkerFor(tesseractLang(language));
-    // ImageLike accepts a path in Node, so unlike Vision there is no read to do here.
-    const { data } = await worker.recognize(absImage);
+    const scheduler = await tessSchedulerFor(tesseractLang(language));
+    // ImageLike accepts a path in Node, so unlike Vision there is no read to do here. `addJob` queues onto
+    // the pool and resolves on whichever worker took it — the caller's wide fan-out actually runs wide.
+    const { data } = await scheduler.addJob("recognize", absImage);
     // v7 has NO `data.words`: the hierarchy is blocks → paragraphs → lines → words, and `blocks` is null
     // unless block output is enabled. We publish LINE-level blocks — the granularity a reader actually wants
     // — and no bbox: tesseract's boxes are in PIXELS and `Page` carries no image dimensions to normalize

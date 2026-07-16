@@ -10,7 +10,7 @@
 //   * recentFailures → Failed   (+ reason)  — OR Halted, when the row carries `state: "halted"`
 // NOTE: recent DONE rows are intentionally NOT included — the backend does not emit them yet (no `done`
 // slice on GET /api/progress). When it does, add a fourth slice here and extend STATE_ORDER.
-import { Loader2, Clock3, XCircle, PauseCircle } from "lucide-react";
+import { Loader2, Clock3, XCircle, PauseCircle, Ban } from "lucide-react";
 import type { ProgressJob, ProgressKind, QueuedItemView, FailedItemView } from "@lfb/shared";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
@@ -22,7 +22,12 @@ import { verb } from "../../progress/ProgressContext.js";
 // than burn a doomed upload. Rendering it red as "Failed" tells the user their files were tried and are bad,
 // and they re-run 1,440 files believing they were attempted. It is a "needs your action" state, so it wears
 // the warn/amber language (warnings.mdx §2), not the bad/red one.
-type ItemState = "running" | "pending" | "halted" | "failed";
+//
+// REJECTED is likewise its own state, and is the opposite mistake to halted: the provider DID look at this
+// file and declined it (ai_description.mdx §2.3). It is a settled ANSWER, already recorded on disk in a
+// `.ai_description_rejected` — so it wears SLATE (neutral), never red (nothing is broken) and never amber
+// (nothing is owed). Re-running it spends a real provider call to be told the same thing.
+type ItemState = "running" | "pending" | "halted" | "rejected" | "failed";
 
 // One flat row for the table — the three server slices normalised into a common shape. Only the fields
 // relevant to a given state are populated (a pending item has no progress; a failure has no startedAt).
@@ -47,11 +52,12 @@ interface ProcessingItem {
 // Group order for the default sort: Running (0) → Pending (1) → Halted (2) → Failed (3) (processing.mdx
 // §4.3.1). Halted sits in its OWN group next to Pending — that is what it is, work still owed — and never
 // inside the Failed group (to_fix.mdx §7.3).
-const STATE_ORDER: Record<ItemState, number> = { running: 0, pending: 1, halted: 2, failed: 3 };
+const STATE_ORDER: Record<ItemState, number> = { running: 0, pending: 1, halted: 2, rejected: 3, failed: 4 };
 const STATE_LABEL: Record<ItemState, string> = {
   running: "Running",
   pending: "Queued",
   halted: "Not attempted",
+  rejected: "Rejected",
   failed: "Failed",
 };
 
@@ -115,7 +121,7 @@ function buildRows(
     // a real, attempted failure — that is the field's documented default (FailedItemView.state).
     rows.push({
       id: `fail-${i}-${f.path}`,
-      state: f.state === "halted" ? "halted" : "failed",
+      state: f.state === "halted" ? "halted" : f.state === "rejected" ? "rejected" : "failed",
       op: f.op,
       path: f.path,
       reason: f.reason,
@@ -158,6 +164,20 @@ function StatusChip({ state }: { state: ItemState }) {
       </span>
     );
   }
+  if (state === "rejected") {
+    // Slate, and worded as a verdict rather than a fault: the provider looked and said no. Deliberately not
+    // red (nothing is broken — a folder of copyrighted slides refusing is the provider working as designed)
+    // and not amber (nothing is owed — the answer is already on disk).
+    return (
+      <span
+        className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600"
+        title="The AI provider considered this file and declined to describe it. The verdict is recorded beside the media in a .ai_description_rejected file. Re-running spends a real call to be told the same thing — use overwrite to ask it to reconsider."
+      >
+        <Ban className="h-3 w-3" aria-hidden />
+        Rejected
+      </span>
+    );
+  }
   return (
     <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--lfb-bad-bg)] px-2 py-0.5 text-xs font-medium text-[var(--lfb-bad)]">
       <XCircle className="h-3 w-3" aria-hidden />
@@ -187,7 +207,9 @@ export function ProcessingItemsTable({
       kind: "enum",
       minWidth: 110,
       accessor: (it) => STATE_LABEL[it.state],
-      filterOptions: ["Running", "Queued", "Not attempted", "Failed"],
+      // The vocabulary must carry EVERY state the table can render, or a user cannot isolate the one they
+      // came for. `Rejected` is the value the product owner asked for (processing.mdx §4.3.1a).
+      filterOptions: ["Running", "Queued", "Not attempted", "Rejected", "Failed"],
       cell: (it) => <StatusChip state={it.state} />,
     },
     {

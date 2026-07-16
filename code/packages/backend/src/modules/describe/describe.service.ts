@@ -619,7 +619,7 @@ export async function enqueueDescribe(opts: {
   });
   trackBatch(manifest.batchId, queued);
   log.info("describe", `enqueue [${scopeLabel(opts)}]: ${candidates.length} considered → ${queued} queued (${alreadyDone} already done, ${unsupported} unsupported)`);
-  return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued, willProcess: queued, needsSetup: false, setupPath: null, blocked: false, blockedReason: null };
+  return { batchId: manifest.batchId, considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued, willProcess: queued, needsSetup: false, setupPath: null, blocked: false, blockedReason: null };
 }
 
 /**
@@ -750,10 +750,15 @@ function walkDescribable(root: string): string[] {
   return out;
 }
 
-function summarizeDescribe(results: DescribeResult[]): DescribeBatchResult {
+/** Exported for describe-counts.spec.ts — the sum invariant is the whole claim of the shape. */
+export function summarizeDescribe(results: DescribeResult[]): DescribeBatchResult {
   return {
     results,
     described: results.filter((r) => r.status === "described").length,
+    // A refusal gets its OWN count (processing_batches.mdx §4.2), not a fold. It briefly lived in `skipped`,
+    // which kept the sum right but said something false: "skipped" means WE didn't ask, and this file was
+    // asked and answered — so the one number the product owner asked for sat buried under "already done".
+    rejected: results.filter((r) => r.status === "rejected").length,
     // needs_setup counts with skipped (nothing produced, not an error) so the counts still sum.
     skipped: results.filter((r) => r.status === "skipped" || r.status === "needs_setup").length,
     failed: results.filter((r) => r.status === "failed" || r.status === "no_provider" || r.status === "unsupported").length,

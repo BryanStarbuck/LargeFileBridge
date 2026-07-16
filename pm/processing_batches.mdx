@@ -59,7 +59,7 @@ makes zero or two.
   provably the same run.
 
 The batchId minted for the manifest and stamped onto every task is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/batch/batch-manifest.service.ts` — `writeManifest()` (mints `batch_id`), consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` / `describe.service.ts` / `ocr.service.ts` (each stamps `batchId: manifest.batchId` onto its `enqueue()` tasks).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/batch-manifest.service.ts` — `writeManifest()` (mints `batch_id`), consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` / `describe.service.ts` / `ocr.service.ts` (each stamps `batchId: manifest.batchId` onto its `enqueue()` tasks).
 
 ### 1.1 The batch is minted at Confirm, not at first run (LOCKED)
 
@@ -206,9 +206,14 @@ re-offered, never re-billed."* Counting it as failed would:
 
 **But it is not a success either**, and folding it into `ok` is the other half of the error. A user reading
 **"1,440 done"** on a batch where 41 files silently have no description has been told something false. The
-whole reason the product owner asked for this number is that **it is currently invisible** — `rejected` is
-today folded into `done` and nothing anywhere aggregates refusals into a rate (there is no rejection-rate
-metric in the product).
+whole reason the product owner asked for this number is that it **was invisible**: `rejected` was folded
+into `done`, and nothing anywhere aggregated refusals into a rate.
+
+**Now built (2026-07-16).** The refusal survives to the settle point as its own terminal reason, lands in
+its own counter, and is rendered in its own column at its own rate. It had been destroyed one line before
+the choke point that could have counted it — `runTaskInner`'s describe branch let `status: "rejected"` fall
+through to `done` — so the counter had nothing to count and the durable manifest recorded a refusal as
+`described`, asserting a description exists for a file that has only a `.ai_description_rejected`.
 
 So: **third bucket, third column, its own color.** Green means described. Red means broken. **Slate means
 the provider looked and declined** — a fact the user needs, in a color that does not shout.
@@ -363,7 +368,7 @@ get re-run; new work is new work.
   words for (`halted`, and `stoppedBy` for the *why*).
 
 Stopping a batch (drain pending → `halted`, reason "stopped by you") is served in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `stopBatch(batchId)` (reuses `haltDoomedTasks()`'s splice + `recordFailure({ state: "halted" })` path), exposed as `POST /api/progress/batches/:id/stop` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.router.ts`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `stopBatch(batchId)` (reuses `haltPending()`'s splice + `recordFailure({ state: "halted" })` path), exposed as `POST /api/progress/batches/:id/stop` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.router.ts`.
 
 ---
 

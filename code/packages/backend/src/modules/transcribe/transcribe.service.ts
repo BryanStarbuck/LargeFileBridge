@@ -276,7 +276,7 @@ export function enqueueTranscribe(opts: { paths?: string[]; root?: string; overw
   log.info("transcribe", `enqueue [${scopeLabel(opts)}]: ${candidates.length} considered → ${queued} queued (${alreadyDone} already done, ${unsupported} unsupported)`);
   // `blocked` is always false here: transcription runs LOCALLY (Whisper/qwen), so there is no provider
   // account to preflight and no circuit that can refuse it (to_fix.mdx §2.5 — the gate is describe-only).
-  return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued, willProcess: queued, needsSetup: false, setupPath: null, blocked: false, blockedReason: null };
+  return { batchId: manifest.batchId, considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued, willProcess: queued, needsSetup: false, setupPath: null, blocked: false, blockedReason: null };
 }
 
 /**

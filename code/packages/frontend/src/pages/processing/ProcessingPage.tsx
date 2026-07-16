@@ -1,73 +1,19 @@
-// The Processing page (/processing) — the full background-work view (processing.mdx §4). Three stacked
-// regions, each shown only when it has content: Running now (the registry jobs), Waiting (the per-op
-// pending backlog), and Batches (one card per "Compress inside" run, with a progress bar and — on finish
-// — the ERROR LIST from compress_inside.mdx §4). Reads the single polled source via useProgress().
-import { CheckCircle2, Loader2, AlertTriangle } from "lucide-react";
-import type { ProcessingBatch, ProgressKind } from "@lfb/shared";
+// The Processing page (/processing) — the full background-work view (processing.mdx §4).
+//
+// TWO STACKED TABLES (§4.0.1): the BATCHES table on top (one row per bulk run) over the ITEMS table
+// (per-file rows). This replaced three regions — "Running now" / "Waiting" / "Batches"-as-cards. The
+// Waiting region is gone: a queued file is a row in the items table with status Queued, not a prose line
+// that says a number the table below it could already show.
+import { useQueryClient } from "@tanstack/react-query";
+import type { ProcessingBatch } from "@lfb/shared";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { StatusBanner } from "../../components/ui/StatusBanner.js";
-import { useProgress, verb } from "../../progress/ProgressContext.js";
+import { useProgress } from "../../progress/ProgressContext.js";
 import { ProcessingItemsTable } from "./ProcessingItemsTable.js";
+import { ProcessingBatchesTable } from "./ProcessingBatchesTable.js";
+import { api } from "../../api/client.js";
 import { groupHalted, haltedWarningDef, type HaltedGroup } from "./haltedWarning.js";
 import { sessionCopy } from "./sessionState.js";
-
-// "compress" → "compressing", etc. — a lowercase gerund for the Waiting backlog line.
-function backlogLabel(op: ProgressKind): string {
-  return verb(op).toLowerCase();
-}
-
-function BatchCard({ b }: { b: ProcessingBatch }) {
-  const processed = b.done + b.failed;
-  const pct = b.total > 0 ? Math.min(100, Math.round((processed / b.total) * 100)) : 100;
-  const finished = b.finishedAt !== null;
-  const disposition = b.deleteOriginal === "hard" ? "hard-deleted" : "moved to LFBridge trash";
-  return (
-    <div className="rounded-lg border px-4 py-3" style={{ borderColor: "var(--lfb-border)" }}>
-      <div className="flex items-center gap-2">
-        {finished ? (
-          b.failed > 0 ? (
-            <AlertTriangle className="h-4 w-4 shrink-0 text-[var(--lfb-bad)]" />
-          ) : (
-            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
-          )
-        ) : (
-          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[var(--lfb-primary)]" />
-        )}
-        <span className="min-w-0 flex-1 truncate font-medium text-black">{b.label}</span>
-        <span className="shrink-0 text-xs text-black/50">
-          {processed} / {b.total}
-        </span>
-      </div>
-      <div className="mt-0.5 pl-6 text-xs text-black/40">Originals: {disposition}</div>
-
-      {!finished && (
-        <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-          <div className="h-full rounded-full bg-[var(--lfb-primary)] transition-[width] duration-300" style={{ width: `${pct}%` }} />
-        </div>
-      )}
-
-      {finished && b.failed === 0 && (
-        <div className="mt-2 text-sm text-emerald-700">All {b.done} files compressed.</div>
-      )}
-
-      {finished && b.failed > 0 && (
-        <div className="mt-2">
-          <div className="text-sm text-black/70">
-            Compressed {b.done} file{b.done === 1 ? "" : "s"} — {b.failed} had error{b.failed === 1 ? "" : "s"}:
-          </div>
-          <ul className="mt-1.5 space-y-1">
-            {b.errors.map((e) => (
-              <li key={e.path} className="rounded border border-[var(--lfb-border)] bg-red-50/40 px-2 py-1 text-xs">
-                <span className="font-mono text-black/70">{e.path}</span>
-                <span className="text-[var(--lfb-bad)]"> — {e.reason}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-}
 
 /**
  * "All 1,440 files described." — the Finished state's headline (crash_recovery.mdx §5).
@@ -77,12 +23,18 @@ function BatchCard({ b }: { b: ProcessingBatch }) {
  */
 function summarizeFinished(finished: ProcessingBatch[]): string | undefined {
   if (finished.length === 0) return undefined;
-  const done = finished.reduce((n, b) => n + b.done, 0);
+  // `ok` alone is "finished" — a refusal is settled but NOT done (processing_batches.mdx §4), so it is
+  // reported separately rather than inflating the success headline.
+  const done = finished.reduce((n, b) => n + b.ok, 0);
+  const rejected = finished.reduce((n, b) => n + b.rejected, 0);
   const failed = finished.reduce((n, b) => n + b.failed, 0);
-  if (done === 0 && failed === 0) return undefined;
+  if (done === 0 && failed === 0 && rejected === 0) return undefined;
   const label = finished.length === 1 ? finished[0].label : "queued work";
   const head = done > 0 ? `${done.toLocaleString()} ${done === 1 ? "file" : "files"} finished` : "Finished";
-  return failed > 0 ? `${head} — ${failed.toLocaleString()} failed (${label}).` : `${head} (${label}).`;
+  const tail: string[] = [];
+  if (rejected > 0) tail.push(`${rejected.toLocaleString()} refused by the provider`);
+  if (failed > 0) tail.push(`${failed.toLocaleString()} failed`);
+  return tail.length > 0 ? `${head} — ${tail.join(", ")} (${label}).` : `${head} (${label}).`;
 }
 
 // The single "work stopped, here's why, here's the fix" banner for one open provider circuit (to_fix.mdx
@@ -94,12 +46,18 @@ function HaltedBanner({ group }: { group: HaltedGroup }) {
 }
 
 export function ProcessingPage() {
-  const { jobs, queuedByOp, batches, queuedItems, recentFailures, workers, session } = useProgress();
-  const waiting = Object.entries(queuedByOp).filter(([, n]) => (n ?? 0) > 0) as [ProgressKind, number][];
+  const { jobs, batches, queuedItems, recentFailures, workers, session } = useProgress();
   // The per-item table (processing.mdx §4.3) shows Running (jobs) + Pending (queuedItems) + Failed
   // (recentFailures) rows; it renders whenever any of those exist.
   const hasItems = jobs.length > 0 || queuedItems.length > 0 || recentFailures.length > 0;
-  const nothing = !hasItems && waiting.length === 0 && batches.length === 0;
+  const nothing = !hasItems && batches.length === 0;
+
+  // Stop a batch (processing_batches.mdx §6.2). Invalidate on settle so the row's "Not attempted" count
+  // appears immediately instead of waiting out the poll interval.
+  const qc = useQueryClient();
+  const stop = (batchId: string): void => {
+    void api.stopBatch(batchId).finally(() => void qc.invalidateQueries({ queryKey: ["progress"] }));
+  };
 
   // D2 (crash_recovery.mdx §5) — an empty queue is THREE states, and this page used to render all of them
   // as the calm one. "Did work finish in this session?" is answered by the batch registry: a finished batch
@@ -142,45 +100,29 @@ export function ProcessingPage() {
         </div>
       )}
 
-      {hasItems && (
-        <section>
-          <div className="mb-2 flex items-baseline justify-between">
-            <h2 className="text-sm font-semibold text-black/60">Running now</h2>
-            {workers && workers.busy > 0 && (
-              <span className="text-xs text-black/50" title="Cores in use by background compression & processing (parallelization.mdx §4)">
-                {workers.busy} / {workers.budget} workers busy (~{utilPct}% of cores)
-              </span>
-            )}
-          </div>
-          {/* The per-item table (processing.mdx §4.3): Running / Pending / Failed rows with responsive
-              priority-drop columns (reuses the house DataTable machinery). */}
-          <ProcessingItemsTable jobs={jobs} queuedItems={queuedItems} recentFailures={recentFailures} />
-        </section>
+      {/* The WORKERS read (processing.mdx §3a) — atop the page, above the batches table. It used to live
+          inside the "Running now" header, so it vanished whenever a batch was active but no single item
+          was running: the parallelism read disappeared exactly when the user wanted it. */}
+      {workers && workers.busy > 0 && (
+        <div className="text-xs text-black/50" title="Cores in use by background compression & processing (parallelization.mdx §4)">
+          {workers.busy} / {workers.budget} workers busy (~{utilPct}% of cores)
+        </div>
       )}
 
-      {waiting.length > 0 && (
-        <section>
-          <h2 className="mb-2 text-sm font-semibold text-black/60">Waiting</h2>
-          <div className="rounded-lg border px-4 py-3 text-sm text-black/70" style={{ borderColor: "var(--lfb-border)" }}>
-            {waiting.map(([op, n], i) => (
-              <span key={op}>
-                {i > 0 && <span className="text-black/30"> · </span>}
-                {n} {backlogLabel(op)}
-              </span>
-            ))}
-            <span className="text-black/40"> waiting to start</span>
-          </div>
-        </section>
-      )}
-
+      {/* THE BATCHES TABLE — on top (§4.1). One row per bulk run; absent from the DOM at zero batches
+          rather than rendering an empty frame. */}
       {batches.length > 0 && (
         <section>
           <h2 className="mb-2 text-sm font-semibold text-black/60">Batches</h2>
-          <div className="flex flex-col gap-2">
-            {batches.map((b) => (
-              <BatchCard key={b.id} b={b} />
-            ))}
-          </div>
+          <ProcessingBatchesTable batches={batches} onStop={stop} />
+        </section>
+      )}
+
+      {/* THE ITEMS TABLE — per-file rows (processing.mdx §4.3). The old "Waiting" region is gone: a queued
+          file is a ROW here with status Queued, not a prose line reciting a number the table already has. */}
+      {hasItems && (
+        <section>
+          <ProcessingItemsTable jobs={jobs} queuedItems={queuedItems} recentFailures={recentFailures} />
         </section>
       )}
     </div>

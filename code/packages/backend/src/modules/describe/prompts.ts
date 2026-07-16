@@ -31,8 +31,20 @@ function exists(p: string): boolean {
   }
 }
 
-/** The prompt TEXT actually used for a kind: the per-computer override if present, else the shipped default. */
-export function getPrompt(kind: DescribeKind): string {
+// Memoized per kind, for the life of the process. getPrompt() is called PER FILE from describe.service.ts
+// inside the describe txn, and it resolved the text with a synchronous stat + readFileSync every time — a
+// small file, but a literal violation of the LOCKED "never readFileSync on a queue/request hot path" rule
+// (processing.mdx §4.4 item 1 / AC9, performance.mdx P-27). Unlike a `which` probe, a prompt CAN change
+// mid-process: the user edits it from settings. So every writer below (customize/save/reset) invalidates
+// this cache — without that, an edited prompt would not take effect until restart, a worse bug than the
+// one this fixes. Those writers are the only way the files change, so the cache cannot go stale.
+const _promptText = new Map<DescribeKind, string>();
+
+function invalidatePrompt(kind: DescribeKind): void {
+  _promptText.delete(kind);
+}
+
+function readPrompt(kind: DescribeKind): string {
   const ov = overridePath(kind);
   if (exists(ov)) {
     try {
@@ -42,6 +54,15 @@ export function getPrompt(kind: DescribeKind): string {
     }
   }
   return fs.readFileSync(shippedPath(kind), "utf8");
+}
+
+/** The prompt TEXT actually used for a kind: the per-computer override if present, else the shipped default. */
+export function getPrompt(kind: DescribeKind): string {
+  const hit = _promptText.get(kind);
+  if (hit !== undefined) return hit;
+  const text = readPrompt(kind);
+  _promptText.set(kind, text);
+  return text;
 }
 
 /** The prompt as the settings UI sees it: its text, whether it is an override, and where it lives. */
@@ -57,6 +78,7 @@ export function customizePrompt(kind: DescribeKind): DescribePromptView {
   if (!exists(ov)) {
     fs.mkdirSync(overrideDir(), { recursive: true });
     fs.writeFileSync(ov, fs.readFileSync(shippedPath(kind), "utf8"), "utf8");
+    invalidatePrompt(kind);
     log.info("describe", `prompt customized (copied default → ${ov})`);
   }
   return promptView(kind);
@@ -66,6 +88,7 @@ export function customizePrompt(kind: DescribeKind): DescribePromptView {
 export function savePrompt(kind: DescribeKind, text: string): DescribePromptView {
   fs.mkdirSync(overrideDir(), { recursive: true });
   fs.writeFileSync(overridePath(kind), text, "utf8");
+  invalidatePrompt(kind);
   return promptView(kind);
 }
 
@@ -76,5 +99,6 @@ export function resetPrompt(kind: DescribeKind): DescribePromptView {
   } catch {
     /* already default */
   }
+  invalidatePrompt(kind);
   return promptView(kind);
 }

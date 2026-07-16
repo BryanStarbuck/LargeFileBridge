@@ -274,8 +274,15 @@ export function classifyProviderFault(e: unknown): ProviderFaultKind {
  * That one is easy to mistake for a permanent verdict ("the model won't describe this file") but it is
  * not — the SAME video that came back empty described perfectly on the very next attempt, `finishReason:
  * STOP`, 1,877 tokens of text. An empty candidate is the provider having a bad moment, so it retries like
- * any other blip. (A genuine refusal is different and stays permanent: it arrives as an explicit
- * `blockReason` / safety verdict, which does NOT match here.)
+ * any other blip.
+ *
+ * A genuine REFUSAL retries too, and that is the counter-intuitive part (§3.5 — which used to claim the
+ * opposite here, that a refusal "stays permanent" and arrives only as an explicit `blockReason`). Both
+ * halves were false: Gemini also refuses with an empty candidate carrying nothing but a `finishReason`, and
+ * generation is SAMPLED, so an output-side filter is a coin toss, not a verdict — one slide, 10 identical
+ * calls, 6 × `STOP` (described) vs 4 × `RECITATION` (empty). Calling that permanent would strand files the
+ * next attempt would describe, so a refusing `finishReason` classifies "transient" and only a refusal that
+ * SURVIVES every retry becomes the `.ai_description_rejected` verdict (§2.3).
  *
  * Now a thin read of `classifyProviderFault` so there is exactly ONE place that decides what a fault is.
  */
@@ -574,7 +581,14 @@ const gemini: DescribeAdapter = {
         thinkingBudgetRejected = true;
         log.warn("describe", `Gemini model "${model}" rejected thinkingBudget:0 — describing without it for the rest of this run`);
         delete body.generationConfig;
-        json = (await postJson(url, body, {}, { provider: "gemini", model, parent })) as typeof json;
+        try {
+          json = (await postJson(url, body, {}, { provider: "gemini", model, parent })) as typeof json;
+        } catch (retryErr) {
+          // The replayed call reaches the same model, so it can fail the same actionable way — a retired-model
+          // 404 escaping raw here would be the ONE path that skips §5.1's explanation (the `else` below wraps
+          // every other throw). Same treatment, whichever attempt surfaced it.
+          throw explainModelError(retryErr as Error, model, "Gemini");
+        }
       } else {
         // Turn Google's raw 404 ("... is no longer available ... NOT_FOUND") into an actionable message
         // that names the retired model and the current recommended one (ai_description.mdx §5.1).

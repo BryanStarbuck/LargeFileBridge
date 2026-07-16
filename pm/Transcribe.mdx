@@ -135,8 +135,9 @@ The kebab/menu items (`Transcribe…` on a file, `Transcribe all files…` on a 
 
 ### 2.5 The page action — "Create Transcriptions" (selected-or-all, background-queued)
 
-The primary bulk entry point is the **`Create Transcriptions`** item in the header **`Actions ▾`** menu on
-every file-list page ([page_actions.mdx](./page_actions.mdx) — the hub that owns this convention). Unlike
+The primary bulk entry point is the **`Create Transcriptions`** page action-link in the blue action-links row
+under the title of every file-list page ([page_actions.mdx §0](./page_actions.mdx) — the hub that owns this
+convention). Unlike
 the "Transcribe all files…" kebab on a single directory/repo/storage (§2.4, which walks one entity), the
 page action honours the **whole page's set** and the three LOCKED page-action rules:
 
@@ -617,7 +618,7 @@ Allow-list-gated like every data route, mirroring `compression.router.ts`:
 | `POST /api/transcribe/batch` | `{ paths[], overwrite? }` | Transcribe a selected set. |
 | `POST /api/transcribe/tree` | `{ path, overwrite? }` | Transcribe ALL audio/video under a directory or repo. |
 | `POST /api/transcribe/storage/:id` | `{ overwrite? }` | Transcribe ALL audio/video in a storage. |
-| `POST /api/transcribe/enqueue` | `{ paths?, root?, overwrite? }` | **Plan + background-queue** (the `Actions ▾` page action, §2.5). Resolves the eligible set (checked `paths` or the recursive `root`, minus already-transcribed), pushes it onto the [background queue](./job_queue.mdx), and **returns the plan immediately** (`EnqueuePlan` — [page_actions.mdx §5](./page_actions.mdx)), not the results. |
+| `POST /api/transcribe/enqueue` | `{ paths?, root?, overwrite? }` | **Plan + background-queue** (the page action-link, §2.5). Resolves the eligible set (checked `paths` or the recursive `root`, minus already-transcribed), pushes it onto the [background queue](./job_queue.mdx), and **returns the plan immediately** (`EnqueuePlan` — [page_actions.mdx §5](./page_actions.mdx)), not the results. |
 
 The transcription REST surface (tools / read-transcript / file / batch / tree / storage / **enqueue**) is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.router.ts` — `transcribeRouter`, mounted at `/api/transcribe` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts`. The `POST /enqueue` handler calls `enqueueTranscribe()` and returns without awaiting the queue.

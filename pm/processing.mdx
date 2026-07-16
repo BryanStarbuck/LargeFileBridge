@@ -396,7 +396,7 @@ truth and can never disagree**: each row's state is exactly the bucket its batch
   `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `haltDoomedTasks()` (splices `pending`, `recordFailure({ state: "halted" })`, `appendTerminal(id, "halted")`), carried on `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FailedItemView.state?: "failed" | "halted"`.
 
   The amber **"Not attempted"** rendering and the one-banner-per-circuit grouping are in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingItemsTable.tsx` — `ItemState` / `STATE_ORDER` / the state labels; `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/haltedWarning.tsx` — `haltedGroups()` / `haltedWarningDef()` (the re-queue action).
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingItemsTable.tsx` — `ItemState` / `STATE_ORDER` / the state labels; `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/haltedWarning.tsx` — `groupHalted()` / `haltedWarningDef()` (the re-queue action).
 * **Sort.** Default **Running → Pending → Failed → Halted → Rejected → Done**, so in-flight work is on top,
   the **actionable** problems (`Failed`, then the free-to-fix `Halted`) sit next where they are found without
   hunting, and the **settled** outcomes (`Rejected`, `Done`) — the ones with nothing to do about them — sit
@@ -483,7 +483,7 @@ are the live batches — and that forces **two deliberate, documented departures
 The Batch facet's runtime vocabulary, its non-persistence, and the `Ad hoc` value are to be implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingItemsTable.tsx` — `ProcessingItemsTable` (the `id: "batch"` column, its vocabulary derived from `useProgress().batches` + the `Ad hoc` sentinel for `batchId == null`, held in component state and excluded from the `tables.views.<tableId>` persistence write).
 
-The Status facet ships its vocabulary today (`filterOptions: ["Running", "Queued", "Failed"]`) but as a `<select>`; the Kind facet's values, the rail rendering, the `Failed only` preset, and the real `defaultSort` (replacing the invisible `STATE_ORDER` pre-sort) are to be implemented in code:
+The Status facet ships its vocabulary today (`filterOptions: ["Running", "Queued", "Not attempted", "Failed"]` — it still lacks `Rejected`) but as a `<select>`; the Kind facet's values, the rail rendering, the `Failed only` preset, and the real `defaultSort` (replacing the invisible `STATE_ORDER` pre-sort) are to be implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingItemsTable.tsx` — `ProcessingItemsTable` (the `id: "status"` / `id: "kind"` columns and the `STATE_ORDER` row sort), against the new facet-rail region of `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
 
 ### 4.3.2 The columns (transcribe example) + responsive priority-drop (LOCKED)

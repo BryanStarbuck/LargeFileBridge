@@ -25,6 +25,13 @@ function msgOne(r: DescribeResult): string {
   switch (r.status) {
     case "described":
       return `AI description generated${r.model ? ` — ${r.model}` : ""}`;
+    case "rejected": {
+      // A refusal is an ANSWER, not a breakdown (ai_description.mdx §2.3) — so it must never read like the
+      // `default:` "Description failed" line below. Name the `.ai_description_rejected` just written: the
+      // provider's own reason for declining lives in that record, and it is the only thing worth reading next.
+      const record = r.descriptionPath?.split("/").pop();
+      return `Provider declined to describe this file${r.model ? ` — ${r.model}` : ""}${record ? ` — reason recorded in ${record}` : ""}`;
+    }
     case "skipped":
       return "Already described";
     case "no_provider":

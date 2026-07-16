@@ -170,10 +170,43 @@ function readFailureReason(): string | null {
 }
 
 /**
+ * Extract a plist's ProgramArguments as a string[] — the ONLY key that says what a job actually
+ * executes. Prefer plutil (a real parser: handles binary plists, entities, whitespace); fall back to a
+ * regex scoped to the ProgramArguments <array> block if plutil is missing or the file is malformed.
+ */
+async function readProgramArguments(file: string, body: string): Promise<string[]> {
+  try {
+    const { stdout } = await run("plutil", ["-convert", "json", "-o", "-", file]);
+    const args = (JSON.parse(stdout) as { ProgramArguments?: unknown }).ProgramArguments;
+    if (Array.isArray(args)) return args.filter((a): a is string => typeof a === "string");
+    return [];
+  } catch {
+    // Scoped fallback: only the <array> that immediately follows <key>ProgramArguments</key>.
+    const block = /<key>\s*ProgramArguments\s*<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(body)?.[1];
+    if (!block) return [];
+    return [...block.matchAll(/<string>([\s\S]*?)<\/string>/g)].map((m) => m[1].trim());
+  }
+}
+
+/** Does this argv actually launch an ipfs daemon? argv[0]'s BASENAME is the program; `daemon` its verb. */
+function runsIpfsDaemon(args: string[]): boolean {
+  const [program, ...rest] = args;
+  if (!program) return false;
+  return path.basename(program) === "ipfs" && rest.includes("daemon");
+}
+
+/**
  * Find a FOREIGN launchd job that also runs `ipfs daemon` — overwhelmingly `brew services start kubo`
- * (homebrew.mxcl.kubo). Both agents fire at login, race for ~/.ipfs/repo.lock, and the loser exits 1
- * forever (KeepAlive is off). Installing a second agent alongside one of these is the bug, not the fix
- * (ipfs_ui.mdx §13.2), so we detect it rather than compete with it.
+ * (homebrew.mxcl.kubo, ProgramArguments = ["/opt/homebrew/opt/kubo/bin/ipfs", "daemon"]). Both agents
+ * fire at login, race for ~/.ipfs/repo.lock, and the loser exits 1 forever (KeepAlive is off).
+ * Installing a second agent alongside one of these is the bug, not the fix (ipfs_ui.mdx §13.2), so we
+ * detect it rather than compete with it.
+ *
+ * We match ONLY ProgramArguments, per §13.2's wording. Scanning the whole plist body for "ipfs" +
+ * "daemon" (what we did before) false-positives on a job that merely MENTIONS ipfs in
+ * EnvironmentVariables (IPFS_PATH), WatchPaths, StandardOutPath, or its Label — and a false positive
+ * is not cosmetic: installAutostart() bails on any conflict, so a bystander plist would SILENTLY
+ * refuse to install auto-start and leave IPFS dead across reboots while the UI blames another agent.
  */
 async function findConflict(): Promise<IpfsAutostartConflict | null> {
   const dirs = [
@@ -200,7 +233,7 @@ async function findConflict(): Promise<IpfsAutostartConflict | null> {
         continue;
       }
       // Only a job that actually launches an ipfs daemon competes for the repo lock.
-      if (!/<string>[^<]*\bipfs\b<\/string>/.test(body) || !/<string>daemon<\/string>/.test(body)) continue;
+      if (!runsIpfsDaemon(await readProgramArguments(file, body))) continue;
       let running = false;
       try {
         const { stdout } = await run("launchctl", ["print", `gui/${uid()}/${label}`]);

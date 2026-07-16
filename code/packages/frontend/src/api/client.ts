@@ -130,6 +130,9 @@ export const api = {
   toggleBookmark: (repoId: string, bookmarked: boolean) =>
     unwrap<RepoRow>(http.post(`/repos/${repoId}/bookmark`, { bookmarked })),
   rescan: () => unwrap<RescanResult>(http.post("/repos/rescan")),
+  // Stop a batch (processing_batches.mdx §6.2): its QUEUED files become "Not attempted" and can be
+  // re-run for free; anything already in flight finishes.
+  stopBatch: (batchId: string) => unwrap<{ halted: number }>(http.post(`/progress/batches/${batchId}/stop`)),
   scanStatus: () => unwrap<ScanJob>(http.get("/repos/scan-status")),
   // Progress dock (webapp.mdx §12 source B) — every in-flight server-side job (registry + active scan),
   // so a launchd or other-tab pin/scan still shows a card. Polled by the ProgressProvider.

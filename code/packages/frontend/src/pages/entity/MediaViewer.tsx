@@ -18,7 +18,7 @@ import {
   Move, Trash2, Music, Captions, Sparkles, TextSelect, Monitor, Ban, RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { EntityView, Decision, MediaKind, PlatformInfo } from "@lfb/shared";
+import type { EntityView, Decision, MediaKind, OcrBlock, PlatformInfo } from "@lfb/shared";
 import { formatBytes, mediaKindForName } from "@lfb/shared";
 import type { CompressResult } from "@lfb/shared";
 import { api } from "@/api/client";
@@ -29,7 +29,7 @@ import { useTranscribeFile } from "@/lib/useTranscribeFile";
 import { useHotkeys } from "@/lib/hotkeys";
 import { TranscribeSetupCard } from "@/components/TranscribeSetupCard";
 import { runDescribeFile } from "@/lib/describe";
-import { runOcrFile } from "@/lib/ocr";
+import { runOcrFile, withOcrReady } from "@/lib/ocr";
 import { CredentialsMissingDialog } from "@/components/describe/CredentialsMissingDialog";
 import { runOsOpen } from "@/lib/os";
 import { confirmModal, promptModal } from "@/lib/modals";
@@ -52,6 +52,19 @@ export function MediaViewer({ kind }: { kind: MediaKind }) {
   // (media_viewer.mdx §4.3). Probe never computes it (needs a full parse), so the element is the source.
   const [duration, setDuration] = useState<number | null>(null);
   useEffect(() => { setDuration(null); }, [path]);
+  // The <video> element itself (band 5), so band 6's timecoded OCR rows can SEEK it (ocr.mdx §7 —
+  // "Video rows seek", the §1.2 payoff and the one capability neither sibling column has). The ref lives
+  // HERE because the player and the analysis columns are sibling components; neither can reach the other.
+  const playerRef = useRef<HTMLVideoElement | null>(null);
+  // Seek + play + bring the player back into view: a click near the bottom of band 6 is worthless if the
+  // frame it jumped to is scrolled off the top of the page.
+  const seekPlayer = (sec: number) => {
+    const el = playerRef.current;
+    if (!el) return;
+    el.currentTime = sec;
+    void el.play().catch(() => {}); // autoplay may be refused — the seek still landed, which is the point
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
 
   const { data: v, isLoading } = useQuery({
     queryKey: ["entity", path],
@@ -160,11 +173,12 @@ export function MediaViewer({ kind }: { kind: MediaKind }) {
           view={v}
           probeCodec={probe?.codec ?? null}
           onDuration={setDuration}
+          playerRef={playerRef}
         />
       </div>
 
       {/* Band 6 — Transcription · AI description tabs (media_viewer.mdx §6). */}
-      <MediaAnalysis view={v} kind={kind} navigate={navigate} />
+      <MediaAnalysis view={v} kind={kind} navigate={navigate} onSeek={seekPlayer} />
     </div>
   );
 }
@@ -200,6 +214,32 @@ function ActionBar({
   });
   // Async, non-blocking transcription with an instant pending state (Transcribe.mdx §5.1).
   const transcribe = useTranscribeFile(v.path, v.name);
+
+  // Existing OCR text (ocr.mdx §8.1) — drives the OCR / Re-run OCR label, exactly as `transcript` drives
+  // Transcribe / Re-transcribe. Same query key as band 6's column, so the two agree and share one fetch.
+  const { data: ocrText } = useQuery({
+    queryKey: ["ocr", v.path],
+    queryFn: () => api.ocr(v.path),
+    enabled: kind === "image" || kind === "video",
+  });
+  const [ocrBusy, setOcrBusy] = useState(false);
+  // Read (or re-read) the text in this file. Gated through the shared readiness gate like every other OCR
+  // entry point (ocr.mdx §6) — a pass-through in the common case, so the click still feels instant.
+  const onOcr = () => {
+    void withOcrReady({
+      label: `OCR ${v.name}`,
+      run: () => {
+        setOcrBusy(true);
+        runOcrFile(v.path, v.name, {
+          overwrite: !!ocrText, // the one overwrite path (§12.4): an existing artifact is only replaced on Re-run
+          onDone: () => qc.invalidateQueries({ queryKey: ["ocr", v.path] }),
+          // Clear on EVERY terminal outcome — a failed run never reaches onDone and would leave the button
+          // stuck at "OCR'ing…" forever.
+          onSettled: () => setOcrBusy(false),
+        });
+      },
+    });
+  };
 
   const flags = useMutation({
     mutationFn: (patch: { neverIpfs?: boolean; noCompress?: boolean }) => api.setEntityFlags(v.path, patch),
@@ -344,6 +384,18 @@ function ActionBar({
     });
   }
 
+  // OCR — image + video (ocr.mdx §8.1; §4.2's shared-actions matrix gains an OCR row: ✓ image, ✓ video,
+  // — audio). Ranked just under Transcribe: reading the words on screen is a search convenience, and never
+  // outranks the recording's own words. Pending flips the control to a disabled spinner instantly.
+  if (kind === "image" || kind === "video") {
+    const label = ocrBusy ? "OCR'ing…" : ocrText ? "Re-run OCR" : "OCR…";
+    items.push({
+      key: "ocr", priority: 55,
+      bar: <Btn icon={<TextSelect className="h-4 w-4" />} label={label} onClick={onOcr} disabled={ocrBusy} />,
+      menu: [{ id: "ocr", group: "Work", label, icon: <TextSelect className="h-4 w-4" />, disabled: ocrBusy, onSelect: onOcr }],
+    });
+  }
+
   // Copy path.
   items.push({
     key: "copy-path", priority: 40,
@@ -408,10 +460,13 @@ function MediaAnalysis({
   view: v,
   kind,
   navigate,
+  onSeek,
 }: {
   view: EntityView;
   kind: MediaKind;
   navigate: ReturnType<typeof useNavigate>;
+  /** Seek the band-5 player — what a timecoded OCR row does when clicked (ocr.mdx §7). Video only. */
+  onSeek?: (sec: number) => void;
 }) {
   const qc = useQueryClient();
   const canTranscribe = kind === "video" || kind === "audio"; // has (or may have) audio to transcribe
@@ -515,6 +570,16 @@ function MediaAnalysis({
   const videoNeedsFfmpeg = kind === "video" && !!ocrEngines && !ocrEngines.videoToolsPresent;
   const noOcrEngine = !!ocrEngines && !ocrEngines.anyAvailable;
 
+  // The TIMECODED rows of a video's OCR (ocr.mdx §7 / §5.1). `blocks[]` is the structure the artifact
+  // carries: normalized bboxes for an IMAGE (no timeline — it renders as flat text), start/end ranges for a
+  // VIDEO. Only rows with a real `start` can seek, and an older `.ocr` written before blocks existed has
+  // none — in that case we fall back to the flat text rather than rendering an empty column.
+  const ocrRows: (OcrBlock & { start: number })[] =
+    kind === "video"
+      ? (ocrText?.blocks ?? []).filter((b): b is OcrBlock & { start: number } => typeof b.start === "number")
+      : [];
+  const ocrSeekable = ocrRows.length > 0 && !!onSeek;
+
   // Third column — Text (OCR) (image + video). ocr.mdx §7.
   const ocrColumn = canOcr ? (
     <AnalysisColumn title="Text (OCR)" present={!!ocrText}>
@@ -543,7 +608,11 @@ function MediaAnalysis({
             }
             busy={ocrBusy}
             onRegenerate={() => onRunOcr(true)}
-          />
+          >
+            {/* A VIDEO renders its blocks as timecoded rows that SEEK; an image (no timeline) and a
+                block-less legacy artifact fall through to AnalysisBody's flat `body` text. */}
+            {ocrSeekable ? <OcrTimecodedRows rows={ocrRows} onSeek={onSeek!} /> : null}
+          </AnalysisBody>
         )
       ) : (
         <GeneratePane
@@ -632,7 +701,10 @@ function AnalysisColumn({ title, present, children }: { title: string; present: 
   );
 }
 
-function AnalysisBody({ body, meta, mono, onRegenerate, busy }: { body: string; meta: React.ReactNode; mono?: boolean; onRegenerate: () => void; busy?: boolean }) {
+// The meta line + Regenerate control + the content pane, shared by all three analysis columns. `children`
+// is an optional REPLACEMENT for the flat `<pre>` (the OCR column's timecoded rows use it) — the header
+// stays identical either way, so there is one pattern here, not two.
+function AnalysisBody({ body, meta, mono, onRegenerate, busy, children }: { body: string; meta: React.ReactNode; mono?: boolean; onRegenerate: () => void; busy?: boolean; children?: React.ReactNode }) {
   return (
     <div>
       <div className="mb-2 flex items-center justify-between text-xs text-black/45">
@@ -645,9 +717,38 @@ function AnalysisBody({ body, meta, mono, onRegenerate, busy }: { body: string; 
           <RefreshCw className={`h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} /> {busy ? "Regenerating…" : "Regenerate"}
         </button>
       </div>
-      <pre className={`max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-lg border border-[var(--lfb-border)] bg-slate-50 px-4 py-3 text-sm text-black/80 ${mono ? "font-mono" : ""}`}>
-        {body}
-      </pre>
+      {children ?? (
+        <pre className={`max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-lg border border-[var(--lfb-border)] bg-slate-50 px-4 py-3 text-sm text-black/80 ${mono ? "font-mono" : ""}`}>
+          {body}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+// A video's OCR text as TIMECODED, CLICKABLE rows (ocr.mdx §7's diagram: `03:00–06:15 → seek`). This is the
+// §1.2 payoff — "find the slide that showed the pricing tier" — and the reason the artifact timecodes its
+// blocks at all: reading the words is half the job, LANDING on them is the other half. Each entry is one
+// span of screen text after the consecutive-duplicate collapse (§2.2.3), so a slide held for 3 minutes is
+// one row with a range, not 12 identical ones.
+function OcrTimecodedRows({ rows, onSeek }: { rows: (OcrBlock & { start: number })[]; onSeek: (sec: number) => void }) {
+  return (
+    <div className="max-h-[50vh] overflow-auto rounded-lg border border-[var(--lfb-border)] bg-slate-50 py-1">
+      {rows.map((b, i) => (
+        <button
+          key={i}
+          onClick={() => onSeek(b.start)}
+          title={`Jump to ${formatDuration(b.start)}`}
+          className="flex w-full gap-3 px-4 py-1.5 text-left hover:bg-black/[0.04]"
+        >
+          <span className="shrink-0 pt-px font-mono text-xs tabular-nums text-[var(--lfb-primary)]">
+            {/* A range only when the text actually persisted across samples; a single-sample hit is one time. */}
+            {formatDuration(b.start)}
+            {typeof b.end === "number" && b.end > b.start ? `–${formatDuration(b.end)}` : ""}
+          </span>
+          <span className="min-w-0 whitespace-pre-wrap font-mono text-sm text-black/80">{b.text}</span>
+        </button>
+      ))}
     </div>
   );
 }
@@ -770,12 +871,15 @@ function ViewerSurface({
   view,
   probeCodec,
   onDuration,
+  playerRef,
 }: {
   kind: MediaKind;
   src: string | null;
   view: EntityView;
   probeCodec: string | null;
   onDuration: (sec: number | null) => void;
+  /** Handed down from the viewer so band 6's OCR rows can seek this player (ocr.mdx §7). */
+  playerRef?: React.MutableRefObject<HTMLVideoElement | null>;
 }) {
   const [failed, setFailed] = useState(false);
   // Video only: after the native <video> can't decode the file's codec, we retry through the backend
@@ -841,6 +945,7 @@ function ViewerSurface({
           <video
             // Remount when we swap native → transcode stream so the element reloads the new source.
             key={videoFallback ? "stream" : "native"}
+            ref={playerRef}
             src={videoFallback ? streamSrc ?? src : src}
             controls
             preload="metadata"

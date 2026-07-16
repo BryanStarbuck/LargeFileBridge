@@ -12,6 +12,39 @@ import { requestStorageSetup } from "./setupWizard.js";
 import type { WarningKindFilter } from "@/components/ui/warnings/registry";
 
 /**
+ * The ONE readiness gate every OCR producer routes through (ocr.mdx §6) — the third sibling of
+ * transcribe's `withModelReady` / describe's provider check. The viewer action, the ⋮ item, the page
+ * action-link and the popup Apply all call it, so there is no path to the engine that skips it.
+ *
+ * The deliberate difference from its siblings: OCR gates on almost NOTHING. Both engines are npm
+ * dependencies and Vision ships with the OS, so the common case is always ready — and §6 locks that
+ * "a ready check that is always true must not cost a dialog". This is therefore a PASS-THROUGH whenever
+ * an engine resolves; it only speaks up for the one case that is genuinely dead (`no_engine`), where
+ * running would queue work that can only fail. The video/ffmpeg asymmetry (§6) is NOT gated here: an
+ * ffmpeg-less machine OCRs every image fine, so the per-file run reports `needs_ffmpeg` honestly rather
+ * than blocking a batch that is mostly images.
+ */
+export async function withOcrReady(opts: { label: string; run: () => void }): Promise<void> {
+  let status;
+  try {
+    status = await api.ocrEngines();
+  } catch (e) {
+    // Probe unknown → run anyway and let the per-file outcome be the honest answer; a probe that failed
+    // is not evidence the engine is missing, and blocking on it would be worse than the real run's toast.
+    clientLog.error("ocr.engines", e);
+    opts.run();
+    return;
+  }
+  if (status.anyAvailable) {
+    opts.run();
+    return;
+  }
+  // The one not-ready case (§6.1): no engine at all. Honest, and still no dialog — there is nothing for
+  // the user to consent to or download here, only something to be told.
+  toast.error(`Can't ${opts.label} — no OCR engine is available on this computer.`);
+}
+
+/**
  * The OCR popup's "Filter:" row (ocr.mdx §9.1 / warnings.mdx §4.5.4). More load-bearing here than for
  * describe: the two kinds differ in cost by TWO ORDERS OF MAGNITUDE — an image is ~250ms, a 40-minute video
  * is a frame-extraction pass plus ~160 recognitions. A user who wants "just the screenshots, now" must not be

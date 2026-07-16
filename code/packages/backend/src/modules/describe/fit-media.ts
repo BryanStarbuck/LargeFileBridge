@@ -53,12 +53,25 @@ const NOOP_CLEANUP = () => {};
 // ── small process helpers ───────────────────────────────────────────────────────
 // `which` is a near-instant detection probe (a few ms), so it stays synchronous — the mirror of
 // compression.service.ts `onPath()`. Only the HEAVY calls below (ffprobe/ffmpeg/magick) run async.
+//
+// MEMOIZED per binary, for the life of the process — the same fix, for the same reason, as that mirror.
+// fitVideoUnderLimit() and magickBin() call this PER FILE, so an un-cached probe forked a child and blocked
+// the event loop once per file: on a ~2,000-file describe run that is thousands of synchronous spawns on the
+// hot path, which is the freeze performance.mdx P-27 / processing.mdx §4.4 exist to forbid. A tool does not
+// appear or vanish mid-process, so the first answer is the only answer we need — one fork per tool, ever.
+// The cached probe itself is explicitly permitted (ocr.mdx §10.4); the per-file repetition was the defect.
+const _which = new Map<string, boolean>();
 function which(bin: string): boolean {
+  const hit = _which.get(bin);
+  if (hit !== undefined) return hit;
+  let found = false;
   try {
-    return spawnSync("which", [bin], { encoding: "utf8" }).status === 0;
+    found = spawnSync("which", [bin], { encoding: "utf8" }).status === 0;
   } catch {
-    return false;
+    found = false;
   }
+  _which.set(bin, found);
+  return found;
 }
 // The heavy process runner — ASYNC (child_process.spawn), so a multi-minute ffmpeg/magick transcode (and
 // even the shorter ffprobe/magick probes) NEVER block the Node event loop (ai_description.mdx §3.3.1,

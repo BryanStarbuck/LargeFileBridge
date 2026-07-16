@@ -472,6 +472,9 @@ export function listQueuedItems(): QueuedItemView[] {
     op: t.op,
     path: t.path,
     kind: mediaKindForName(path.basename(t.path)),
+    // The join to the batches table (processing.mdx §5 / AC5). `QueueTask.batchId` already existed and was
+    // simply dropped here, so the two tables had nothing to join on.
+    batchId: t.batchId,
   }));
 }
 
@@ -585,7 +588,7 @@ function haltPending(match: (t: QueueTask) => boolean, reason: string, context: 
   if (halted.length === 0) return 0;
   for (const t of halted) {
     inflight.delete(keyOf(t));
-    recordFailure({ op: t.op, path: t.path, reason, state: "halted" });
+    recordFailure({ op: t.op, path: t.path, reason, state: "halted", batchId: t.batchId });
     if (t.id) appendTerminal(t.id, "halted");
     settleOne(t.batchId, t.path, "halted", reason);
     // The live batch row too. These tasks are SPLICED OUT of `pending`, so `runTask`'s `finally` — the
@@ -890,7 +893,7 @@ async function runTaskInner(t: QueueTask): Promise<TerminalReason> {
       const tr = await transcribeOne(t.path, t.overwrite);
       if (tr.status === "failed" || tr.status === "tool_missing") {
         outcome = "failed";
-        recordFailure({ op: "transcribe", path: t.path, reason: tr.reason ?? tr.status });
+        recordFailure({ op: "transcribe", path: t.path, reason: tr.reason ?? tr.status, batchId: t.batchId });
         queueFailureLog("transcribe", t.path, tr.reason ?? tr.status);
       } else if (tr.status === "skipped") outcome = "skipped";
     } else if (t.op === "describe") {
@@ -905,9 +908,14 @@ async function runTaskInner(t: QueueTask): Promise<TerminalReason> {
       // exactly what halted 483 files on 2026-07-16. It drains green, same as OCR's text-free image below.
       if (dr.status === "failed" || dr.status === "no_provider" || dr.status === "unsupported") {
         outcome = "failed";
-        recordFailure({ op: "describe", path: t.path, reason: dr.reason ?? dr.status });
+        recordFailure({ op: "describe", path: t.path, reason: dr.reason ?? dr.status, batchId: t.batchId });
         queueFailureLog("describe", t.path, dr.reason ?? dr.status);
       } else if (dr.status === "rejected") {
+        // Surface the refusal as a ROW (processing.mdx §4.3.1 / §5) with its own state — slate, no Retry.
+        // It is NOT a failure: `recordFailure` is only the transport for "recent per-file outcomes the
+        // items table renders", and `state` is what keeps the three apart. Without this the user can see
+        // that 41 files have no description (the batch counter) but never WHICH ones.
+        recordFailure({ op: "describe", path: t.path, reason: dr.reason ?? "provider declined this file", state: "rejected", batchId: t.batchId });
         // Carry the verdict THROUGH to the settle point (processing_batches.mdx §4.2). This used to fall
         // through to `done`, which destroyed the signal one line before `settleOne`/`recordBatchResult`
         // could see it — so the Rejected column had nothing to count and the manifest on disk recorded a
@@ -922,7 +930,7 @@ async function runTaskInner(t: QueueTask): Promise<TerminalReason> {
       const or = await ocrOne(t.path, { overwrite: t.overwrite });
       if (or.status === "failed" || or.status === "no_engine" || or.status === "needs_ffmpeg" || or.status === "unsupported") {
         outcome = "failed";
-        recordFailure({ op: "ocr", path: t.path, reason: or.reason ?? or.status });
+        recordFailure({ op: "ocr", path: t.path, reason: or.reason ?? or.status, batchId: t.batchId });
         queueFailureLog("ocr", t.path, or.reason ?? or.status);
       } else if (or.status === "skipped") outcome = "skipped";
     } else {
@@ -947,7 +955,7 @@ async function runTaskInner(t: QueueTask): Promise<TerminalReason> {
       const ok = r.status === "compressed" || r.status === "skipped";
       if (!ok) {
         outcome = "failed";
-        recordFailure({ op: "compress", path: t.path, reason: r.reason ?? r.status });
+        recordFailure({ op: "compress", path: t.path, reason: r.reason ?? r.status, batchId: t.batchId });
         queueFailureLog("compress", t.path, r.reason ?? r.status);
       } else if (r.status === "skipped") outcome = "skipped";
     }
@@ -956,7 +964,7 @@ async function runTaskInner(t: QueueTask): Promise<TerminalReason> {
     // A throw needs no recordBatchResult here: runTask's `finally` folds the "failed" terminal for EVERY
     // op, including this one. (It used to be needed because only compress was counted.)
     // Any thrown op surfaces as a Failed row on the Processing table (processing.mdx §4.3).
-    recordFailure({ op: t.op, path: t.path, reason: (e as Error).message });
+    recordFailure({ op: t.op, path: t.path, reason: (e as Error).message, batchId: t.batchId });
     log.error("jobqueue", `${t.op} failed for ${t.path}: ${(e as Error).message}`);
     return "failed";
   }
@@ -984,3 +992,8 @@ registerHeartbeatSource(() => ({
   memBudgetMB: Math.round(memoryBudget() / 1048576),
 }));
 startHeartbeat();
+
+/** Internal seam for tests only (batch-taxonomy.spec.ts) — the two pure mappers at the settle choke point.
+ *  Exported here rather than making them public API: they are an implementation detail of §4's taxonomy,
+ *  but they are also exactly the thing a future edit is most likely to get subtly wrong. */
+export const __test = { batchResultState, manifestOutcome };

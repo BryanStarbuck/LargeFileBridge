@@ -168,15 +168,26 @@ gate now does, with two rules that together guarantee the restart property:
    `"failed"`/`"degraded"` — or any auth probe is still retrying a transient network error — the gate
    renders a **"Reconnecting to Large File Bridge…"** screen and keeps polling. When the backend
    returns, the still-valid cookie rehydrates with **no Google round-trip**.
-2. **Retry transient failures; never retry an authoritative HTTP response.** The `security/config` and
-   `auth/me` probes retry **only** on a no-response network error (backend down), and **not** on a real
-   4xx/5xx. So a restart blip waits for recovery instead of resolving as "signed out." The sign-in page
-   appears **only** on an authoritative signed-out (`auth/me` returns `authenticated:false` from a real
-   200, or `load()` is `"loaded"` with no session).
+2. **Retry transient failures; never retry an AUTHORITATIVE response.** The `security/config` and
+   `auth/me` probes retry on a no-response network error (backend down) **and on a status that only the
+   PROXY could have invented — `502` / `504`** (§6). They never retry a status the app itself can emit. So
+   a restart blip waits for recovery instead of resolving as "signed out." The sign-in page appears **only**
+   on an authoritative signed-out (`auth/me` returns `authenticated:false` from a real 200, or `load()` is
+   `"loaded"` with no session).
+
+   > **This rule previously read "retry only on a no-response network error, and **not** on a real
+   > 4xx/5xx."** That is the exact premise §6 was written to overturn, and it shipped as a bug: Vite's dev
+   > proxy **invents a 502** when the backend is down, so "a real 5xx is authoritative" treated the proxy's
+   > guess as the backend's answer and bounced the user to sign-in. Response-vs-no-response was never the
+   > right axis — **who authored the status** is. `503` stays excluded because the app emits it itself
+   > (`transcode.service.ts` — "ffmpeg not installed").
 
 The gate, the three boot states, and the transient-retry predicate are handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/main.tsx` — `Root()`, `BootStatus`, and
-`retryWhileBackendDown` (plus `isTransientNetworkError`).
+`retryWhileBackendDown`, with the predicate itself in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/transientError.ts` — `isTransientNetworkError()`
+(it lives in its own module, not `main.tsx`, so it is unit-testable — `transientError.spec.ts` asserts both
+directions: 502/504 transient, 503/500/4xx authoritative).
 
 The `load()` retry/backoff and the `loadState()` it feeds are handled in code:
 `~/BGit/Bryan_git/OpenAuthFederated/code/packages/auth-react/src/core.ts` — `RealAuthCore.loadWithRetry()`.
@@ -298,6 +309,7 @@ The lifetime policy is set in code:
 | SPA auth wiring (token bridge, auto-refresh, sign-in redirect) | `frontend/src/api/authCore.ts` |
 | Bearer attach + reactive 401 retry | `frontend/src/api/axios.ts` |
 | Boot gate (Reconnecting / boot-error / Loading / SignIn) | `frontend/src/main.tsx` — `Root`, `BootStatus`, `retryWhileBackendDown` |
+| The transient-vs-authoritative predicate (§6) | `frontend/src/lib/transientError.ts` — `isTransientNetworkError()`; covered by `transientError.spec.ts` |
 | Credentials resolution + setup card | `config/credentials-file.ts`; `health.router.ts` `GET /auth-config`; `CredentialsSetupCard.tsx` |
 
 ---
@@ -307,8 +319,9 @@ The lifetime policy is set in code:
 1. **A server restart never forces re-login.** The signing secret and session records persist to the
    state root; the cookie is a persistent browser cookie. The gate treats "backend down" as
    **Reconnecting**, never sign-in.
-2. **The sign-in page appears only on an AUTHORITATIVE signed-out** — a real HTTP answer, never a
-   transient network error.
+2. **The sign-in page appears only on an AUTHORITATIVE signed-out** — a status the BACKEND authored, never
+   a transient network error and never one the **proxy** invented on its behalf (§6: a Vite-proxy `502`
+   looks like "a real HTTP answer" and is not one).
 3. **The signing secret must be stable and disk-backed.** If it ever rotates on restart, every cookie
    is invalidated — treat that as a P0 regression (§5, cause C).
 4. **Auth state lives under the state root, never in a hand-editable config** (`user.yaml`/settings). A

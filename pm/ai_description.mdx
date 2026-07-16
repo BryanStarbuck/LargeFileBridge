@@ -46,7 +46,7 @@ Siblings this builds on and does not repeat:
   describe educate-and-fix popup (§12). Authoritative for the tab strip, the metric panels, and the status
   icon grammar; this file supplies the describe-specific mirror of each.
 * [one_repo.mdx](./one_repo.mdx) — the per-repo header where the blue **"Describe ›"** recommendation
-  primary surfaces alongside **"Transcribe ›"**, and the `Actions ▾` **Create AI descriptions** page action.
+  primary surfaces alongside **"Transcribe ›"**, and the **Create AI descriptions** page action-link.
 * [warnings.mdx §10.6](./warnings.mdx) — the authoritative catalog of every **AI-description warning**
   (no provider, retired model, provider error/rate-limit/timeout, no-storage-owner, over-cap). This file
   points at those; it does not restate them.
@@ -70,7 +70,7 @@ surface to one obliges adding it to the other.
 | Transcription ([Transcribe.mdx](./Transcribe.mdx)) | AI description (this spec) |
 | --- | --- |
 | **Transcribe…** action button, every scale (viewer, file/dir ⋮, repo kebab, storage) — [Transcribe.mdx §2](./Transcribe.mdx) | **Create AI description / Describe…** action button, every scale — §9 |
-| **Create Transcriptions** `Actions ▾` page action — [Transcribe.mdx §2.5](./Transcribe.mdx) | **Create AI descriptions** `Actions ▾` page action — §5.1 |
+| **Create Transcriptions** page action-link — [Transcribe.mdx §2.5](./Transcribe.mdx) | **Create AI descriptions** page action-link — §5.1 |
 | **Transcribe** task tab — [task_tabs.mdx §4.4](./task_tabs.mdx) | **AI descriptions** task tab — §11 |
 | Three-state **Transcribe status icon** (`Captions`) — [task_tabs.mdx §5](./task_tabs.mdx) | Three-state **Describe status icon** (`ScanText`) — §11.2 |
 | **`transcribable` / `transcribed`** metric pair + educate-and-fix popup — [task_tabs.mdx §2/§5.1](./task_tabs.mdx) | **`describable` / `described`** metric pair + popup — §12 |
@@ -625,7 +625,14 @@ The transient/permanent split, the jittered backoff, the `Retry-After` honor, th
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `withProviderRetry()` (the retry loop) with `isTransient()`, `retryAfterMs()`, `timeoutForBytes()`, and `postJsonOnce()` (one attempt + the honest timeout rename); applied around `adapter.describe()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()`. Shared by **all** adapters, since every provider call funnels through that one seam.
 
 The refusal-vs-blip split of the empty `200` is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — the `gemini` adapter's `describe()` names the `finishReason` in the thrown error, and `classifyProviderFault()` sorts the refusing reasons to `permanent`. Regression-covered in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/provider-faults.spec.ts`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — the `gemini` adapter's `describe()` names the `finishReason` in the thrown error, and `classifyProviderFault()` sorts the refusing reasons to **`transient`** (§3.5 rule 2 — generation is **sampled**, so a refusing `finishReason` is a coin toss worth 4 rolls, not a verdict; only a `promptFeedback.blockReason` is `permanent`). Regression-covered in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/provider-faults.spec.ts`.
+
+> **This line used to say `permanent`** — the exact inverse of the code, of §3.5 rule 2 four paragraphs
+> above, and of the spec file's own regression test. It appears to have survived from a pre-correction
+> draft. It is called out rather than quietly fixed because a citation that inverts its own spec is worse
+> than no citation: it reads as permission to "fix" the code back into the bug it documents. Measured on one
+> slide, **10 identical calls → 6 described, 4 `RECITATION`**: classifying that permanent strands a file
+> that describes ~60% of the time and writes it a rejection record it never earned.
 
 ---
 
@@ -781,17 +788,26 @@ Allow-list-gated like every data route, mounted at `/api/describe`:
 | `GET /api/describe/credentials` | — | Where to put a Gemini key + in what format (path, placeholder YAML, config.yaml path, env var names) — powers the credentials-missing popup's Instructions page ([ai_credentials.mdx](./ai_credentials.mdx)). No raw key value. |
 | `GET /api/describe/file?path=<abs>` | — | The existing generated description (`DescribeView`) for a media file, or `null`. |
 | `POST /api/describe/file` | `{ path, overwrite?, provider? }` | **Generate** (the external, user-initiated vision call) → `DescribeResult`. |
-| `POST /api/describe/batch` | `{ paths[], overwrite?, provider? }` | Generate for a **selected set** of image/video files → `DescribeBatchResult` (per-file `described`/`skipped`/…). |
+| `POST /api/describe/batch` | `{ paths[], overwrite?, provider? }` | Generate for a **selected set** of image/video files → `DescribeBatchResult` — four counts that SUM: **`described`** / **`rejected`** / **`skipped`** / **`failed`**, plus the per-file `results[]`. |
 | `POST /api/describe/tree` | `{ path, overwrite?, provider? }` | Generate for **all** image/video under a directory or repo (walked recursively). |
-| `POST /api/describe/enqueue` | `{ paths?, root?, overwrite?, provider? }` | **Plan + background-queue** (the `Actions ▾` page action, §5.1). Resolves the eligible set (checked `paths` or the recursive `root`, minus already-described and non-image/-video), pushes it onto the [background queue](./job_queue.mdx), and **returns the plan immediately** (`EnqueuePlan` — [page_actions.mdx §5](./page_actions.mdx)). |
+| `POST /api/describe/enqueue` | `{ paths?, root?, overwrite?, provider? }` | **Plan + background-queue** (the `Creatons ▾` page action, §5.1). Resolves the eligible set (checked `paths` or the recursive `root`, minus already-described and non-image/-video), pushes it onto the [background queue](./job_queue.mdx), and **returns the plan immediately** (`EnqueuePlan` — [page_actions.mdx §5](./page_actions.mdx)). |
 | `GET /api/describe/prompt?kind=` | `kind=image\|video` | The prompt text in use + whether it is an override (`DescribePromptView`). |
 | `POST /api/describe/prompt/customize` | `{ kind }` | Copy the shipped default → a per-computer override. |
 | `PUT /api/describe/prompt` | `{ kind, text }` | Save edited override text. |
 | `DELETE /api/describe/prompt?kind=` | `kind=image\|video` | Revert to the shipped default. |
 
 `DescribeResult.status` reports each generation truthfully: **`described`** (success, with the model),
-**`skipped`** (already described and `overwrite` not set), **`no_provider`** (no adapter for the kind — add
-a key), **`unsupported`** (not an image/video), or **`failed`** (a provider/IO error, with the reason).
+**`rejected`** (the provider CONSIDERED the file and declined it, after every retry — a verdict recorded in
+`<media>.ai_description_rejected`, §2.3; **not** a failure), **`skipped`** (already settled — described *or*
+refused — and `overwrite` not set), **`needs_setup`** (no placement root yet — the wizard, §3.5),
+**`no_provider`** (no adapter for the kind — add a key), **`unsupported`** (not an image/video), or
+**`failed`** (a provider/IO error, with the reason).
+
+In `DescribeBatchResult` these fold into **four counts that sum**: `described` + `rejected` + `skipped`
+(incl. `needs_setup`) + `failed` === `results.length`. **`rejected` is its own count, never folded into
+`skipped`** — "skipped" means *we* didn't ask, and a refused file was asked and answered
+([processing_batches.mdx §4.2](./processing_batches.mdx)). Locked by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe-counts.spec.ts`.
 
 The describe REST surface (providers / read / generate / prompt read-customize-save-reset) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.router.ts` — `describeRouter`, mounted at `/api/describe` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts`.
@@ -802,7 +818,7 @@ The frontend launcher and API client methods are handled in code:
 ### 5.1 The page action — "Create AI descriptions" (selected-or-all, background-queued)
 
 Beyond the single-file **Generate** (§5, the viewer's one-file vision call), the bulk entry point is the
-**`Create AI descriptions`** item in the header **`Actions ▾`** menu on every file-list page
+**`Create AI descriptions`** **page action-link** in the header's blue action-links row on every file-list page ([page_actions.mdx §0](./page_actions.mdx) — there is **no** `Actions ▾` dropdown; the only occurrence of that string in the frontend is a comment recording that it was replaced)
 ([page_actions.mdx](./page_actions.mdx) — the hub that owns this convention). It obeys the three LOCKED
 page-action rules, mirroring **Create Transcriptions** ([Transcribe.mdx §2.5](./Transcribe.mdx)):
 
@@ -953,7 +969,7 @@ These mirror **Transcribe all files…** at each scale ([Transcribe.mdx §2.4](.
 
 ### 9.5 The page action (cross-reference)
 
-The primary **bulk, page-scoped** entry point — **Create AI descriptions** in the header `Actions ▾`
+The primary **bulk, page-scoped** entry point — **Create AI descriptions** in the header's blue action-links row
 menu — is specified in **§5.1** (scope / skip-already-done / background-queue, the mirror of **Create
 Transcriptions**). The §9.4 kebab items walk **one** entity; the §5.1 page action honours the **whole
 page's checked-or-all set** and obeys the three LOCKED page-action rules.
@@ -1283,7 +1299,10 @@ later commit can never disagree:
 
 Both the preview and the enqueue apply the identical drop-already-described filter in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` —
-`previewDescribe()` and `enqueueDescribe()` (the `if (!overwrite && !dp.needsSetup && readDescription(abs)) { alreadyDone++; continue; }` guard in each).
+`previewDescribe()` and `enqueueDescribe()` (the
+`if (!overwrite && !dp.needsSetup && (readDescription(abs) || exists(dp.rejectedPath))) { alreadyDone++; continue; }`
+guard in each). **Note the `|| exists(dp.rejectedPath)` clause** — it is the whole point of the bullet above, and the
+quotation here previously omitted it, showing the pre-refusal guard as if it were current.
 
 #### 12.5.1 …and the popup SAYS how many it dropped (NEW, LOCKED)
 
@@ -1498,7 +1517,8 @@ external-provider opt-in).
    override and **reset** it.
 5. The REST surface (`GET /providers`, `GET /file`, `POST /file`, `GET /prompt`, `POST /prompt/customize`,
    `PUT /prompt`, `DELETE /prompt`) is allow-list-gated and mounted at `/api/describe`; each generation
-   reports truthfully (`described` / `skipped` / `no_provider` / `unsupported` / `failed`).
+   reports truthfully (`described` / **`rejected`** / `skipped` / `no_provider` / `unsupported` / `failed` /
+   **`needs_setup`**) — matching `DescribeResult.status` in `packages/shared/src/types.ts`.
 6. Settings → Tools shows the **provider-key status** (configured / no-key, with the env var / config key
    hint and the "only Gemini describes video" note) and the **per-kind prompt editor** (Save customize /
    Reset).
@@ -1507,7 +1527,7 @@ external-provider opt-in).
    from the charter's local-only perceptual-fingerprint feature (which must never phone home). With no
    provider configured, nothing is uploaded.
 8. **Symmetry contract (§0):** every transcription surface has an AI-description mirror — the action button
-   at every scale, the `Actions ▾` page action, the task tab, the three-state status icon, the metric pair +
+   at every scale, the page action-link, the task tab, the three-state status icon, the metric pair +
    popup, the header recommendation primary, the calc engine, the readiness gate, the shared launcher, and
    the shared `FileRow` / `TaskMetrics` / `DescribeResult` fields — with the **one** deliberate asymmetry
    that description's readiness is a **provider key** while transcription's is a **local model**.

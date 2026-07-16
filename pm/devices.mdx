@@ -351,7 +351,7 @@ device:
 
 These header buttons are page-level actions (the device *is* the page's subject), not a per-row `⋮`
 kebab ([menus.mdx](./menus.mdx)); this page is not a file-list page, so it carries its own header buttons
-rather than the shared `Actions ▾` menu ([page_actions.mdx](./page_actions.mdx)).
+rather than the shared file action-links row ([page_actions.mdx §0](./page_actions.mdx)).
 
 The existing three actions render in the `PageHeader` `actions` slot, right-aligned, in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/ViewOneDevicePage.tsx` — `ViewOneDevicePage` (the `actions={…}` header slot: Copy Peer ID / Open in File System / Remove peer).
@@ -380,7 +380,7 @@ Per the charter (*"All tables are TanStack tables. No exceptions."*) every table
 The Devices / Peers page (`/devices`) currently carries **no header actions** — it is a pure table
 (the `PageHeader` has only a title + subtitle, no `actions` slot). Because it is a device registry, not
 a file list, the two customer actions it wants are its **own header buttons** (right-aligned in the
-header), not the shared file `Actions ▾` menu ([page_actions.mdx](./page_actions.mdx)):
+header), not the shared file action-links row ([page_actions.mdx](./page_actions.mdx)):
 
 | Action | What it does | Placement | Status |
 | --- | --- | --- | --- |

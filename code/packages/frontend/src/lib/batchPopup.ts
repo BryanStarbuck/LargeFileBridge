@@ -11,7 +11,7 @@ import { formatBytes, mediaKindForName } from "@lfb/shared";
 import { api } from "../api/client.js";
 import { clientLog } from "./clientLog.js";
 import { DESCRIBE_KIND_FILTERS } from "./describe.js";
-import { OCR_KIND_FILTERS } from "./ocr.js";
+import { OCR_KIND_FILTERS, withOcrReady } from "./ocr.js";
 import { requestStorageSetup } from "./setupWizard.js";
 import { withModelReady } from "./transcribe.js";
 import type { WarningDef } from "../components/ui/warnings/registry.js";
@@ -297,8 +297,9 @@ export async function openDescribeBatch(scope: BatchScope): Promise<void> {
  * its own; it fills in this one.
  *
  * Unlike describe there is no provider/account to gate on (ocr.mdx §4), so Apply has no credentials branch —
- * the only not-ready cases are "no engine at all" and "a video without ffmpeg", which the per-file jobs report
- * honestly as Failed rows rather than blocking the whole batch.
+ * it routes through `withOcrReady` like every other OCR entry point (§6's no-bypass rule), which is a
+ * pass-through whenever an engine resolves. "A video without ffmpeg" stays UNGATED on purpose: the per-file
+ * jobs report it honestly as Failed rows rather than blocking a batch whose images would all have succeeded.
  */
 export async function openOcrBatch(scope: BatchScope): Promise<void> {
   // dialogs.mdx §5.4 — spinner FIRST, synchronously, then the walk. A recursive OCR scope can be thousands of
@@ -361,20 +362,30 @@ export async function openOcrBatch(scope: BatchScope): Promise<void> {
           count === 1 ? "1 file will have its OCR text created" : `${count} files will have their OCR text created`,
         invalidate: [["repos"], ["fs"]],
       },
+      // Engine-gated on Apply, then BACKGROUND-ENQUEUED — the mirror of openTranscribeBatch's model gate
+      // (ocr.mdx §6: every entry point gates identically, no bypass). withOcrReady resolves instantly in the
+      // common case, so Apply keeps its immediate feel.
       apply: async (_sel, checkedPaths) => {
-        try {
-          const enq = await api.ocrEnqueue({ paths: checkedPaths });
-          if (enq.needsSetup) {
-            requestStorageSetup({
-              mediaPath: enq.setupPath ?? checkedPaths[0] ?? "",
-              actionLabel: "read the text from",
-              retry: () => void openOcrBatch({ paths: checkedPaths }),
-            });
-          }
-        } catch (e) {
-          clientLog.error("batchPopup.ocrEnqueue", e);
-          toast.error(e instanceof Error ? e.message : "Could not queue OCR");
-        }
+        await withOcrReady({
+          label: `OCR ${checkedPaths.length} file${checkedPaths.length === 1 ? "" : "s"}`,
+          run: () => {
+            void api
+              .ocrEnqueue({ paths: checkedPaths })
+              .then((enq) => {
+                if (enq.needsSetup) {
+                  requestStorageSetup({
+                    mediaPath: enq.setupPath ?? checkedPaths[0] ?? "",
+                    actionLabel: "read the text from",
+                    retry: () => void openOcrBatch({ paths: checkedPaths }),
+                  });
+                }
+              })
+              .catch((e) => {
+                clientLog.error("batchPopup.ocrEnqueue", e);
+                toast.error(e instanceof Error ? e.message : "Could not queue OCR");
+              });
+          },
+        });
       },
     },
   };

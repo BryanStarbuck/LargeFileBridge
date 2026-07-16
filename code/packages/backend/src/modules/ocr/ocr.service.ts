@@ -411,7 +411,7 @@ export async function enqueueOcr(opts: { paths?: string[]; root?: string; overwr
   });
   trackBatch(manifest.batchId, queued);
   log.info("ocr", `enqueue [${scopeLabel(opts)}]: ${candidates.length} considered → ${queued} queued (${alreadyDone} already done, ${unsupported} unsupported)`);
-  return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued, willProcess: queued, needsSetup: false, setupPath: null, blocked: false, blockedReason: null };
+  return { batchId: manifest.batchId, considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued, willProcess: queued, needsSetup: false, setupPath: null, blocked: false, blockedReason: null };
 }
 
 /**
