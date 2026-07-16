@@ -11,6 +11,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
+import { Agent } from "undici";
 import type { MediaKind, DescribeProvider } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import { loadGoogleApiKey, hasGoogleApiKeyFile } from "../../config/google-apikey-file.js";
@@ -159,6 +160,60 @@ const ACCOUNT_DEAD_RE =
  *  (to_fix.mdx §13) — which is why this returns a verdict instead of reaching for the circuit breaker. */
 export type ProviderFaultKind = "transient" | "permanent" | "account_dead";
 
+// ── the REFUSAL and its evidence (ai_description.mdx §2.3) ────────────────────────────────────────────
+//
+// When the model REFUSES a file, the provider is telling us something specific and permanent about THAT
+// file — and it is the only party that knows why. That answer is the whole value of the event, and we used
+// to throw all of it away: the adapter reduced a rich refusal to the string "returned no description", so
+// the `finishMessage` explaining *which* rule fired never reached the user. §2.3 requires us to keep every
+// detail the provider sent, so `rejection` carries the parsed highlights AND the untouched `raw` response.
+//
+// The provider's response body is SAFE to persist here — it is Google's answer about the user's own file,
+// written to the user's own sidecar. That is not in tension with transactions_log.mdx §9 (never a body, never
+// a key in the LEDGER): §9 governs the ledger, and this never goes there. The API key rides the URL's
+// `?key=`, never the response, so nothing secret can land in the file.
+
+/** The refusing `finishReason`s — the model declining to emit what it generated. These do NOT make the
+ *  fault permanent (they are sampled, so they retry — see `classifyProviderFault`); they decide which empty
+ *  responses EARN a `.ai_description_rejected` record once every retry has been spent (§2.3). A plain
+ *  `STOP` with no text is a blip, not a refusal, and must never be recorded as one. */
+const REFUSAL_FINISH_REASONS = new Set(["RECITATION", "SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "IMAGE_SAFETY"]);
+export function isRefusalFinishReason(reason: string | null | undefined): boolean {
+  return !!reason && REFUSAL_FINISH_REASONS.has(reason.toUpperCase());
+}
+
+/** Everything the provider told us about a refusal. `raw` is the provider's ENTIRE response, so a detail we
+ *  never thought to parse is still on disk for the user to read (§2.3). */
+export interface ProviderRejection {
+  provider: ProviderId;
+  model: string;
+  finishReason: string | null;
+  finishMessage: string | null;
+  blockReason: string | null;
+  safetyRatings?: unknown;
+  promptFeedback?: unknown;
+  usageMetadata?: unknown;
+  modelVersion?: string | null;
+  responseId?: string | null;
+  raw: unknown;
+}
+
+/** Ride the rejection on the Error itself. The refusal surfaces through `adapter.describe()`'s throw, and a
+ *  second return channel would mean reshaping the adapter contract for every provider (§5.4's rule: don't
+ *  reshape the API you observe). `rejectionOf()` is the one reader. */
+export function attachRejection(e: Error, rejection: ProviderRejection): Error {
+  (e as Error & { rejection?: ProviderRejection }).rejection = rejection;
+  return e;
+}
+
+/** The provider's refusal evidence, when this error IS a refusal — else null (an ordinary fault, a timeout,
+ *  a dead account). Presence of this object is what decides whether a `.ai_description_rejected` is written,
+ *  which is why it is set ONLY where the provider actually refused: a retired model or a revoked key is a
+ *  broken CONFIG, not a verdict about the file, and must never litter the tree with rejection records. */
+export function rejectionOf(e: unknown): ProviderRejection | null {
+  return (e as { rejection?: ProviderRejection })?.rejection ?? null;
+}
+
 /**
  * Classify a provider failure (to_fix.mdx §2.3).
  *
@@ -170,6 +225,22 @@ export type ProviderFaultKind = "transient" | "permanent" | "account_dead";
  */
 export function classifyProviderFault(e: unknown): ProviderFaultKind {
   const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+
+  // A REFUSAL we have structured evidence for (§2.3) — classify off the object, never off the prose. The
+  // message now names the finishReason, and "…(finishReason: PROHIBITED_CONTENT)" would trip the safety
+  // regex below purely by wording. Structure decides; text is for humans.
+  const rejection = rejectionOf(e);
+  if (rejection) {
+    // The INPUT was refused BEFORE generation (`promptFeedback.blockReason`). That is a verdict on the file
+    // itself and is deterministic — permanent, fails on attempt 1.
+    if (rejection.blockReason) return "permanent";
+    // An empty candidate carrying a refusing finishReason is an OUTPUT-side filter, and generation is
+    // SAMPLED — so it is a coin toss, not a verdict. MEASURED: one slide, 10 identical calls → 6 described
+    // (7.6k–10.2k chars) and 4 `RECITATION`. Calling it permanent would strand ~60% of a describable file's
+    // chances and write it a rejection record it did not earn; retrying 4× fails all four only ~2.6% of the
+    // time. This is exactly the bias §3.5 states: when ambiguous, prefer TRANSIENT.
+    return "transient";
+  }
 
   // A real refusal — an explicit safety verdict. Permanent for this file, but the account is fine.
   if (/blocked the request|blockReason|SAFETY|PROHIBITED/i.test(msg)) return "permanent";
@@ -271,6 +342,39 @@ function callFailureReason(status: number, e: unknown): string {
   return "network";
 }
 
+// ── the pooled-connection stall (ai_description.mdx §3.6) ─────────────────────────────────────────────
+//
+// Node's global `fetch` keeps a per-origin undici Pool and REUSES its keep-alive sockets. Against
+// generativelanguage.googleapis.com under concurrency, a request handed to an already-used socket can sit
+// in the pool's queue UNSENT until our own AbortController fires — the failure surfaces as
+// "provider call timed out after 120s" and looks exactly like a slow provider. It is not: the socket never
+// carried the request.
+//
+// Measured on the 2026-07-16 batch, 48 real files, 24-way, identical file list and same wall-clock:
+//                                     requests sent   queue(create->sendHeaders) p90   outcome
+//   pooled reuse (Node default)          35/48                 121.3s                  18 TIMEOUTS
+//   fresh connection per request         48/48                   0.1s                  48 ok, wall 51s
+//   python control (new conn per req)    48/48                     —                   48 ok
+// Time spent WAITING ON GOOGLE was identical in every arm (sendHeaders->response p50 ~22s, max ~28s), and
+// event-loop lag peaked at 6ms — the provider was never slow and we were never CPU-blocked. Lowering
+// concurrency to 8 made it WORSE (queue p50 98.6s): fewer sockets, more reuse. `connections: 64`,
+// `pipelining: 0`, `keepAliveTimeout: 1` and `Connection: close` ALL failed to fix it, because undici
+// reuses a socket the moment it is free and none of those knobs govern that path. Only genuinely
+// declining reuse works.
+//
+// So each provider call gets its OWN Agent, closed in `finally`. The cost is one TLS handshake (~0.1s) per
+// call — under 1% of a ~22s describe — and it buys back the 27% failure rate and 3x the wall time.
+// Scoped deliberately to provider calls: the IPFS client talks to 127.0.0.1 at low concurrency and is not
+// affected.
+function freshProviderDispatcher(): Agent {
+  return new Agent({
+    connections: 1, // this Agent serves exactly ONE request, so its pool can never hand out a used socket
+    connectTimeout: 15_000, // a fresh TCP+TLS handshake per call; 10s (undici's default) was tripping on bursts
+    headersTimeout: 0, // OUR AbortController owns the deadline (timeoutForBytes) — one clock, not three
+    bodyTimeout: 0,
+  });
+}
+
 /** One fetch attempt with a hard timeout so a hung provider call can't wedge the request forever.
  *  This is ALSO the single site where every outbound provider request is ledgered — one `provider_call`
  *  BEGIN/END pair per attempt, covering gemini/grok/openai and every future adapter for free
@@ -286,6 +390,7 @@ async function postJsonOnce(
 ): Promise<unknown> {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs);
+  const dispatcher = freshProviderDispatcher(); // §3.6 — never reuse a pooled socket for a provider call
   // txnBegin/txnEnd by hand rather than txn(): txn()'s failure path would put the thrown error's MESSAGE in
   // `reason=`, and this call's error message carries a 400-char slice of the provider's response body. The
   // ledger must never hold a body (§9), so we END with our own slug instead.
@@ -301,12 +406,14 @@ async function postJsonOnce(
   let status = 0; // stays 0 when the fetch never got one — a timeout/DNS/socket failure (§3.4)
   let respBytes = 0;
   try {
+    // `dispatcher` is undici's option, not WHATWG's, so it is absent from the DOM RequestInit type.
     const res = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json", ...headers },
       body: payload,
       signal: ac.signal,
-    });
+      dispatcher,
+    } as RequestInit & { dispatcher: Agent });
     status = res.status;
     const text = await res.text();
     respBytes = Buffer.byteLength(text);
@@ -333,6 +440,9 @@ async function postJsonOnce(
     throw e;
   } finally {
     clearTimeout(t);
+    // Release the socket this Agent owns. `close()` waits for in-flight work and would hang on the abort
+    // path, so tear it down outright — the request is over either way, and a leaked Agent is a leaked fd.
+    void dispatcher.destroy().catch(() => {});
   }
 }
 
@@ -376,6 +486,30 @@ export async function withProviderRetry<T>(label: string, fn: () => Promise<T>):
   throw lastErr;
 }
 
+// ── thinking budget (ai_description.mdx §3.7) ─────────────────────────────────────────────────────────
+//
+// DEFAULT_GEMINI_MODEL is the `gemini-flash-latest` ALIAS, and Google hot-swaps it forward. It now resolves
+// to gemini-3.5-flash, a THINKING model that reasons before answering unless told not to — so this app
+// silently started paying for reasoning it never asked for the day Google moved the alias. Measured on this
+// corpus: ~1,400 thinking tokens per image and p50 27s → 16s with thinking off, output length unchanged
+// (~1,200 tokens). Describing what is in a picture is perception, not deduction; the thinking tokens buy
+// nothing here and cost latency on every file of a 483-file batch.
+//
+// This is a SPEED/COST fix, not the timeout fix — §3.6's pooled-socket stall was the failure (§3.7). It matters
+// anyway: it is ~40% off the wall time of every batch and ~676k thinking tokens off a 483-file run.
+const NO_THINKING = { thinkingConfig: { thinkingBudget: 0 } };
+
+// The alias moves under us, so this must not be a one-way bet. A future Flash could REQUIRE a non-zero
+// budget and reject ours with a 400 — which would break every describe, a worse outcome than the tokens we
+// are saving. So a 400 that names the thinking config is treated as "this model won't take it": we latch it
+// off for the rest of the process and retry the call plain. Self-healing beats a pin we would have to
+// notice and edit.
+let thinkingBudgetRejected = false;
+function looksLikeThinkingRejected(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /\b400\b/.test(msg) && /thinking|thinkingBudget|thinkingConfig/i.test(msg);
+}
+
 // ── Gemini (Google) — the only adapter that describes VIDEO as well as images ──────────────────────
 const gemini: DescribeAdapter = {
   id: "gemini",
@@ -416,23 +550,71 @@ const gemini: DescribeAdapter = {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
     // The base64 goes STRAIGHT into the body — no `data` local held alongside it, so the encoded bytes have
     // exactly one root and the raw Buffer is already gone by the time we get here (memory.mdx P-29).
-    const body = {
+    const body: Record<string, unknown> = {
       contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: mimeType, data: await readBase64Capped(absPath) } }] }],
     };
+    if (!thinkingBudgetRejected) body.generationConfig = NO_THINKING;
     let json: {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-      promptFeedback?: { blockReason?: string };
+      candidates?: Array<{
+        content?: { parts?: Array<{ text?: string }> };
+        finishReason?: string;
+        finishMessage?: string;
+        safetyRatings?: unknown;
+      }>;
+      promptFeedback?: { blockReason?: string; safetyRatings?: unknown };
+      usageMetadata?: unknown;
+      modelVersion?: string;
+      responseId?: string;
     };
     try {
       json = (await postJson(url, body, {}, { provider: "gemini", model, parent })) as typeof json;
     } catch (e) {
-      // Turn Google's raw 404 ("... is no longer available ... NOT_FOUND") into an actionable message
-      // that names the retired model and the current recommended one (ai_description.mdx §5.1).
-      throw explainModelError(e as Error, model, "Gemini");
+      // This model won't take a zero thinking budget — latch it off and serve the file plain (§5.2).
+      if (!thinkingBudgetRejected && looksLikeThinkingRejected(e)) {
+        thinkingBudgetRejected = true;
+        log.warn("describe", `Gemini model "${model}" rejected thinkingBudget:0 — describing without it for the rest of this run`);
+        delete body.generationConfig;
+        json = (await postJson(url, body, {}, { provider: "gemini", model, parent })) as typeof json;
+      } else {
+        // Turn Google's raw 404 ("... is no longer available ... NOT_FOUND") into an actionable message
+        // that names the retired model and the current recommended one (ai_description.mdx §5.1).
+        throw explainModelError(e as Error, model, "Gemini");
+      }
     }
-    if (json.promptFeedback?.blockReason) throw new Error(`Gemini blocked the request: ${json.promptFeedback.blockReason}`);
-    const text = (json.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? "").join("").trim();
-    if (!text) throw new Error("Gemini returned no description");
+    // Everything Google said about this refusal, kept whole for the `.ai_description_rejected` record (§2.3).
+    const rejection = (): ProviderRejection => ({
+      provider: "gemini",
+      model,
+      finishReason: json.candidates?.[0]?.finishReason ?? null,
+      finishMessage: json.candidates?.[0]?.finishMessage ?? null,
+      blockReason: json.promptFeedback?.blockReason ?? null,
+      safetyRatings: json.candidates?.[0]?.safetyRatings,
+      promptFeedback: json.promptFeedback,
+      usageMetadata: json.usageMetadata,
+      modelVersion: json.modelVersion ?? null,
+      responseId: json.responseId ?? null,
+      raw: json,
+    });
+
+    if (json.promptFeedback?.blockReason) {
+      throw attachRejection(new Error(`Gemini blocked the request: ${json.promptFeedback.blockReason}`), rejection());
+    }
+    const candidate = json.candidates?.[0];
+    const text = (candidate?.content?.parts ?? []).map((p) => p.text ?? "").join("").trim();
+    // NAME the finishReason when there is no text. The empty-200 retry above is right for a candidate that
+    // simply came back blank (finishReason STOP) — but Gemini also returns an empty candidate to REFUSE, and
+    // a refusal is permanent. Without the reason in the message every refusal read as "returned no
+    // description" → transient → 4 attempts × ~30s of certain failure per file, and those wasted failures
+    // counted toward the batch ceiling (jobqueue §2.7) that halted the rest of the batch. Measured at ~3% of
+    // calls on this corpus (RECITATION on slide/document images, the odd PROHIBITED_CONTENT).
+    // classifyProviderFault() reads this text and sorts the permanent reasons from the retryable ones.
+    if (!text) {
+      const err = new Error(`Gemini returned no description (finishReason: ${candidate?.finishReason ?? "none"})`);
+      // ONLY a refusing finishReason earns the rejection record. A blank candidate with `STOP` is the
+      // provider having a bad moment (§3.5) — it retries and usually succeeds, so writing it a rejection
+      // file would record a verdict the provider never reached.
+      throw isRefusalFinishReason(candidate?.finishReason) ? attachRejection(err, rejection()) : err;
+    }
     return { text, model };
   },
 };

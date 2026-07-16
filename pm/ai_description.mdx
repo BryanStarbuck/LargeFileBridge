@@ -255,6 +255,72 @@ Migrating a pre-existing SDL `.lfbridge/` up to the root (with a read-fallback t
 The storage-table indicator that detects the `.ai_description` artifact is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `analysisOutputs()`.
 
+### 2.3 When the provider REFUSES — `.ai_description_rejected` (NEW, LOCKED)
+
+Sometimes the provider considers a file and **says no**: a safety verdict, or a `RECITATION` filter on a
+slide that resembles copyrighted material. **That is an answer, not a breakdown** — and the provider is the
+only party that knows why. We used to throw the whole answer away: the adapter reduced it to
+*"returned no description"*, so Google's `finishMessage` — the sentence naming which rule fired — never
+reached the user, and the only trace was one line in `error.err` that rotates away within days.
+
+**A refusal earns a durable record. It is written INSTEAD of the description, named
+`<media>.ai_description_rejected`.**
+
+* **Same place, same rules.** Same root, same placement radio, same path mirror, same appended-extension
+  grammar as `.ai_description` (§2) — only the extension differs. `Slide23.jpeg` →
+  `Slide23.jpeg.ai_description_rejected`.
+* **A separate EXTENSION, not a `status: rejected` inside `.ai_description`.** So "does this file have a
+  description?" stays a pure **file-exists** test for every reader (§2.2's indicator, the viewer, the
+  batch preview) instead of every one of them having to parse a YAML to find out — and so a refusal is
+  visible in a plain directory listing.
+* **Only a real refusal writes one** — a refusal that **survived every retry** (§3.5), or a blocked input.
+  A timeout, a dead account, or a retired model **must never** write one: those are a broken *config* or a
+  broken *link*, not a verdict about the file, and a retired model would otherwise litter the whole tree
+  with rejection records on every file in the batch.
+* **A description SUPERSEDES a refusal.** When a file is later described — a new model, an overwrite retry,
+  a re-encoded upload — the stale `.ai_description_rejected` is **deleted**, so the tree can never assert
+  both "described" and "refused" about one file.
+
+**What goes in it: everything the provider said.** Two layers, because the useful detail is rarely the one
+you predicted:
+
+1. The **named fields** a human reads first — `finish_reason`, the `finish_message` that actually explains
+   the refusal, `block_reason`, `model_version`, and the `response_id` **to quote to Google when disputing
+   a refusal**.
+2. **`provider_response`** — the provider's **entire, untouched response**, so a detail we never thought to
+   parse is still on disk.
+
+**This does not conflict with [transactions_log.mdx §9](./transactions_log.mdx)** ("never a body, never a key
+in the ledger): §9 governs the **ledger**, and this never goes there. The API key rides the URL's `?key=`
+and never the response body, so nothing secret can reach the file. Values are written **spelled out** —
+YAML anchor/alias output is disabled, because this file exists to be read and forwarded, not to make the
+reader resolve a `*a1` pointer.
+
+**A refusal is SETTLED — never re-offered, never re-billed** (the §12.5 rule, and
+[ocr.mdx §2.3](./ocr.mdx)'s "existence IS the signal"). The batch preview and the enqueue both drop a file
+that already has a rejection record, and `describeOne` backstops the paths that bypass the queue. Without
+this, every future batch would spend a real provider call to be told the same thing — the failures that
+halted 483 files on 2026-07-16. **Overwrite is the one way to ask the provider to reconsider.**
+
+**A refusal is NOT a queue failure.** The batch counts it **done**, not failed: nothing went wrong, and the
+answer is already recorded on disk. Counting it as failed would paint a tree of copyrighted slides red and
+feed the batch ceiling ([job_queue.mdx §2.7](./job_queue.mdx)) that halts the remaining files — the exact
+defect this record exists to end. It drains green, the same way OCR's text-free image does.
+
+Verified end-to-end on the real refusing slide: `status=rejected`, a `.ai_description_rejected` written with
+Google's copyright `finishMessage` and full `provider_response`, **no** `.ai_description`, and a second run
+that does **not** re-ask the provider.
+
+Capturing every detail of a refusal and deciding which empty response IS one are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `ProviderRejection` / `attachRejection()` / `rejectionOf()` / `isRefusalFinishReason()` (the `gemini` adapter's `describe()` builds the evidence; `classifyProviderFault()` reads the object, never the prose).
+Writing the record, superseding it on a later success, and never re-offering a settled refusal are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `writeRejection()` / `resolveDescriptionPath()` (returns `rejectedPath`) / `isRejected()`, with the drop-already-settled guard in `previewDescribe()` / `enqueueDescribe()` / `describeOne()`.
+The extension itself is the single source of truth in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `AI_DESCRIPTION_REJECTED_EXT`.
+Counting a refusal as `done` rather than `failed` is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `runTaskInner()` (the `describe` branch).
+Regression-covered in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/provider-faults.spec.ts`.
+
 ---
 
 ## 3. The provider adapters — key resolution, supported kinds, the video rule, the size cap
@@ -467,6 +533,12 @@ Rewriting a provider 404 into the actionable, model-naming error is handled in c
 
 ### 3.5 A transient failure is NOT a verdict — bounded retry with backoff (NEW, LOCKED)
 
+> **The diagnosis in this section is corrected by [§3.6](#36-a-provider-call-must-never-reuse-a-pooled-socket-new-locked--corrects-35).**
+> The retry policy below is right and stays LOCKED. But the *cause* it names for the 1,803 aborted files —
+> *"the provider's throughput could not sustain the fan-out (§12.6)"* — is *wrong*, and it was never
+> measured. The provider was never the bottleneck: those calls **timed out before they were ever sent**,
+> stalled in Node's own connection pool. Retry was treating a symptom.
+
 A hosted vision call fails for two fundamentally different reasons, and **treating them alike is the single
 most expensive bug this feature has had**:
 
@@ -479,8 +551,44 @@ most expensive bug this feature has had**:
 can return a perfectly well-formed response carrying no description text. It reads like a verdict — *"the
 model won't describe this file"* — so it was treated as permanent. It isn't: the same video that came back
 empty described **on the very next attempt**, `finishReason: STOP`, 1,877 tokens of text. Nothing about
-the file was wrong; the provider simply had a bad moment. A genuine refusal is a *different* thing and
-stays permanent — it arrives as an explicit `blockReason` / safety verdict, never as a silent empty body.
+the file was wrong; the provider simply had a bad moment.
+
+**An empty body is not always a blip, though — sometimes it is a REFUSAL.** This section used to claim a
+genuine refusal *"arrives as an explicit `blockReason` / safety verdict, **never** as a silent empty body."*
+**That is false.** Gemini also **refuses** by returning an empty candidate carrying nothing but a
+`finishReason` — HTTP `200`, no error, no `blockReason`. On the product owner's corpus that is ~3% of calls:
+`RECITATION` on slide and court-document images, the occasional `PROHIBITED_CONTENT`. The adapter reported
+only *"returned no description"*, so the reason — and Google's `finishMessage` explaining exactly which rule
+fired — was **thrown away**. §2.3 now records all of it.
+
+**A refusing `finishReason` is STILL transient, and this is the counter-intuitive part.** The tempting fix
+is to call it permanent — *the model refused, why ask twice?* **Measured, that is wrong.** Generation is
+**sampled**, so the output-side filter is a coin toss, not a verdict. One slide, **10 identical calls**:
+
+| finishReason | calls | result |
+|---|---|---|
+| `STOP` | **6** | described normally, 7.6k–10.2k chars |
+| `RECITATION` | **4** | empty |
+
+The same bytes, the same prompt, the same model — a **~40% coin toss**. Calling that permanent would strand
+a file that describes 6 times in 10 and brand it with a rejection record it never earned; retrying 4× fails
+all four only ~2.6% of the time. So it **retries**, exactly as [§3.5](#35-a-transient-failure-is-not-a-verdict--bounded-retry-with-backoff-new-locked)'s
+stated bias demands: *when ambiguous, prefer transient*. Verified: the slide above now describes **3/3**
+through the app.
+
+**The one empty response that IS permanent** is `promptFeedback.blockReason` — the **input** refused
+*before* generation. Nothing was sampled, so there is nothing to re-roll.
+
+**The rules (LOCKED):**
+
+1. **Classify on the evidence OBJECT, never on the message prose.** The error names the `finishReason` for
+   humans, and `"…(finishReason: PROHIBITED_CONTENT)"` would trip a `/SAFETY|PROHIBITED/` regex **by pure
+   wording**. Structure decides; text is for reading.
+2. **A refusing `finishReason` retries** (`RECITATION`, `SAFETY`, `PROHIBITED_CONTENT`, `BLOCKLIST`, `SPII`).
+3. **A blocked INPUT (`blockReason`) is permanent** — attempt 1, no retries.
+4. **Only a refusal that SURVIVES every retry earns a `.ai_description_rejected`** (§2.3). A blank `STOP`
+   never does: recording it would assert a verdict the provider never reached, and would permanently stop
+   re-offering a file that merely had a bad moment.
 
 **What went wrong.** The queue recorded a failure per file and moved on; **nothing retried**. So a
 transient blip permanently marked a file "not described." In one overnight run on the product owner's tree,
@@ -515,6 +623,92 @@ on attempt 1 in 0.1s with no wasted retries.
 
 The transient/permanent split, the jittered backoff, the `Retry-After` honor, the size-scaled deadline, and the honest timeout message are implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `withProviderRetry()` (the retry loop) with `isTransient()`, `retryAfterMs()`, `timeoutForBytes()`, and `postJsonOnce()` (one attempt + the honest timeout rename); applied around `adapter.describe()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()`. Shared by **all** adapters, since every provider call funnels through that one seam.
+
+The refusal-vs-blip split of the empty `200` is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — the `gemini` adapter's `describe()` names the `finishReason` in the thrown error, and `classifyProviderFault()` sorts the refusing reasons to `permanent`. Regression-covered in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/provider-faults.spec.ts`.
+
+---
+
+### 3.6 A provider call must never reuse a pooled socket (NEW, LOCKED — corrects §3.5)
+
+Node's global `fetch` keeps a per-origin **undici Pool** and reuses its keep-alive sockets. Against
+`generativelanguage.googleapis.com` **under concurrency**, a request handed to an already-used socket can
+sit in the pool's queue **unsent** until our own `AbortController` fires. It then surfaces as
+`provider call timed out after 120s` — which reads exactly like a slow provider and is not: **the socket
+never carried the request.** We were timing our own queue.
+
+**Every previous explanation for this failure was an assumption.** §3.5 blamed the provider's throughput;
+§12.6 named "the provider's rate limit" as the only real ceiling; §12.6.1 correctly noted the failures were
+`120s` timeouts rather than `429`s but left the cause open. Measurement settles it.
+
+**The evidence.** 48 real files from the failing batch, 24-way, identical file list, Node and a Python
+control run **simultaneously** against the same account:
+
+| Arm | Requests sent | Queue (create → sendHeaders) p90 | Total p50 | Outcome | Wall |
+|---|---|---|---|---|---|
+| Pooled reuse (Node default) | **35/48** | **121.3s** | 42s | **18 timeouts** | 155s |
+| Fresh connection per request | **48/48** | **0.1s** | 21.4s | **48 ok** | **51s** |
+| Python control (new conn/req) | 48/48 | — | 23s | 48 ok | — |
+
+The decisive split is **queue time, not server time**: time from *request sent* to *response* was ~22s p50
+/ ~28s max in **every** arm, including the broken one. Peak **event-loop lag was 6ms**, so nothing was
+CPU-blocked either. The provider was fast and consistent throughout; sustained 24-way for 3 minutes (221
+calls) produced **zero** timeouts and no throttling.
+
+**Counter-intuitive, and the reason to write this down: lowering concurrency makes it WORSE.** At 8-way the
+queue p50 rose to **98.6s** — fewer sockets means *more* reuse. The instinct to "back off the fan-out" is
+exactly wrong here, and §12.6's generous ~24-wide default is **vindicated**, not implicated.
+
+**These knobs do NOT fix it** (all measured, all still ~18 timeouts): `connections: 64`, `pipelining: 0`,
+`keepAliveTimeout: 1`, and a `Connection: close` header. undici reuses a socket the moment it is **free**,
+and none of those govern that path. Only genuinely declining reuse works.
+
+**The rules (LOCKED):**
+
+1. **Every provider call gets its own dispatcher**, destroyed when the call ends. One TLS handshake
+   (~0.1s) per call is **under 1%** of a ~22s describe — it buys back a 27% failure rate and ~3x the wall
+   time. This is a fixed, non-negotiable cost, not a tunable.
+2. **Our `AbortController` owns the one deadline** (`timeoutForBytes`, §3.5 rule 4). The dispatcher's
+   `headersTimeout` / `bodyTimeout` are disabled so there is **one** clock, not three racing ones.
+3. **Scoped to provider calls only.** The IPFS client talks to `127.0.0.1` at low concurrency and is
+   untouched — this is a remedy for *this* origin's behavior under fan-out, not a global policy.
+4. **A timeout here is infrastructure, never a verdict about the file** — it stays `transient` (§3.5).
+
+Verified on the real app path (the same module the queue calls), 48 files, 24-way: **47 ok, 1 permanent
+refusal (§3.5), zero timeouts, wall 23s, peak event-loop lag 485ms** — against 18 timeouts and 155s before.
+The one failure is a genuine model refusal, not a stall.
+
+The fresh-dispatcher-per-call rule is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` —
+`freshProviderDispatcher()`, applied in `postJsonOnce()` (passed as `dispatcher`, torn down in `finally`).
+Shared by **all** adapters, since every provider call funnels through that one seam.
+
+### 3.7 The thinking budget — the alias moved and we started paying for reasoning (NEW, LOCKED)
+
+`DEFAULT_GEMINI_MODEL` is the **`gemini-flash-latest` alias**, chosen in §3.4 so a retirement can never hard-break
+the app. That choice is right and stands — but it has a **cost side nobody was watching**: Google hot-swaps
+the alias forward, and it now resolves to **`gemini-3.5-flash`**, a **thinking** model that reasons before
+answering unless told not to. The day Google moved the alias, this app silently began paying for reasoning
+it never asked for. **No config changed; the behavior changed underneath us.**
+
+Describing what is in a picture is **perception, not deduction**. Measured on this corpus: **~1,400 thinking
+tokens per image**, p50 **27s → 16s** with thinking off, and **output length unchanged** (~1,200 tokens).
+The thinking tokens buy nothing here and cost latency on every file of a 483-file batch.
+
+**This is a speed/cost rule, not the timeout fix** — §3.6 was the failure. It is worth ~40% of the wall
+time of every batch and ~676k thinking tokens on a 483-file run.
+
+**The rules (LOCKED):**
+
+1. **Send `thinkingConfig.thinkingBudget: 0`** on describe calls.
+2. **It must self-heal, because the alias moves.** A future Flash could *require* a non-zero budget and
+   reject ours with a `400` — that would break **every** describe, far worse than the tokens saved. So a
+   `400` naming the thinking config latches the option **off for the process** and retries the call plain.
+   Self-healing beats a pin someone has to notice and edit — the same reasoning that chose the alias in §3.4.
+
+The zero thinking budget and its self-healing fallback are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` —
+`NO_THINKING` + `looksLikeThinkingRejected()`, applied in the `gemini` adapter's `describe()`.
 
 ---
 
@@ -1080,8 +1274,12 @@ later commit can never disagree:
   even if a description was written **between** the preview and the Confirm (another computer's pull, a
   concurrent run), the enqueue re-checks and **queues only the still-missing files** — the `alreadyDone`
   count rises and those files are silently skipped, never re-described.
-* **Overwrite is the only exception.** Re-describing an already-done file happens **only** when the user
-  explicitly asks to overwrite (`overwrite: true`) — never as a side effect of confirming the batch popup.
+* **A REFUSED file is settled too** ([§2.3](#23-when-the-provider-refuses--ai_description_rejected-new-locked)).
+  A file carrying a `.ai_description_rejected` is dropped by the same guards, for the same reason: the
+  provider has already answered, and re-queuing it spends a real call to be told the same thing.
+* **Overwrite is the only exception.** Re-describing an already-done file — or asking the provider to
+  reconsider a refusal — happens **only** when the user explicitly asks to overwrite (`overwrite: true`),
+  never as a side effect of confirming the batch popup.
 
 Both the preview and the enqueue apply the identical drop-already-described filter in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` —
@@ -1120,6 +1318,12 @@ truth** rather than the recollection of an earlier run:
 > **Corrected by [§12.6.1](#1261-but-no-hardware-bottleneck-is-only-true-for-a-file-that-fits-new-locked--corrects-126).**
 > The "no hardware bottleneck" premise below holds **only for a file already under the size cap**. An
 > oversize file transcodes first, so the wide fan-out must be gated for that path. Read both.
+>
+> **The ~24-wide default is VINDICATED by [§3.6](#36-a-provider-call-must-never-reuse-a-pooled-socket-new-locked--corrects-35),
+> but "the provider's rate limit" below is NOT the ceiling that was actually being hit.** Measured: 24-way
+> sustained for 3 minutes (221 calls) produced **zero** throttling, and **lowering** concurrency to 8 made
+> throughput *worse*. The real ceiling was Node's own connection pool. Do not "fix" a describe stall by
+> narrowing this number — that is the wrong direction.
 
 Transcription and compression are **local CPU/GPU** work: Whisper and ffmpeg saturate cores and RAM, so
 their queue caps are **core-budgeted** and deliberately narrow ([parallelization.mdx §3](./parallelization.mdx)).

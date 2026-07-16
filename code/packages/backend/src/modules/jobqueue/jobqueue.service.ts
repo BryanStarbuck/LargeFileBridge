@@ -795,6 +795,11 @@ async function runTaskInner(t: QueueTask): Promise<TerminalReason> {
         overwrite: t.overwrite,
         provider: (t.provider as ProviderId | "auto" | undefined) ?? undefined,
       });
+      // NOTE the status that is NOT a failure: `rejected` — the provider CONSIDERED the file and refused it
+      // (ai_description.mdx §2.3), after every retry was spent. That is an answer, and it is already durably
+      // recorded in the file's `.ai_description_rejected`. Counting it as failed would (a) paint a tree of
+      // copyrighted slides red when nothing is broken, and (b) feed the §2.7 batch ceiling — which is
+      // exactly what halted 483 files on 2026-07-16. It drains green, same as OCR's text-free image below.
       if (dr.status === "failed" || dr.status === "no_provider" || dr.status === "unsupported") {
         outcome = "failed";
         recordFailure({ op: "describe", path: t.path, reason: dr.reason ?? dr.status });

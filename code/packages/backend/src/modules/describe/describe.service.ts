@@ -16,14 +16,29 @@ import { expandHome } from "../fs/badges.js";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
 import { appConfigPath } from "../../shared/store/scopes.js";
 import { googleApiKeyFileInfo } from "../../config/google-apikey-file.js";
-import { resolveArtifactPlacement, artifactPathForPlacement, AI_DESCRIPTION_EXT } from "../storage/artifact-placement.service.js";
+import {
+  resolveArtifactPlacement,
+  artifactPathForPlacement,
+  AI_DESCRIPTION_EXT,
+  AI_DESCRIPTION_REJECTED_EXT,
+} from "../storage/artifact-placement.service.js";
 import { markDurableArtifact } from "../storage/tracking-root.service.js";
 import { repoArtifactPlacement } from "../store-model/units.service.js";
 import { track } from "../progress/progress.registry.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
 import { writeManifest, trackBatch } from "../jobqueue/batch-manifest.service.js";
 import { getPrompt } from "./prompts.js";
-import { selectAdapter, providerStatus, providerKeySources, providerMeta, mimeForMedia, withProviderRetry, type ProviderId } from "./adapters.js";
+import {
+  selectAdapter,
+  providerStatus,
+  providerKeySources,
+  providerMeta,
+  mimeForMedia,
+  withProviderRetry,
+  rejectionOf,
+  type ProviderId,
+  type ProviderRejection,
+} from "./adapters.js";
 // The provider-account gate (to_fix.mdx §2): preflight before a batch, circuit breaker on an account fault.
 import { preflightProvider, noteProviderFailure, noteProviderSuccess, circuitStatuses, resumeProvider } from "./provider-health.service.js";
 import { fitMediaUnderLimit } from "./fit-media.js";
@@ -52,6 +67,9 @@ export function resolveDescriptionPath(absFile: string): {
   root: string;
   rel: string;
   descriptionPath: string;
+  /** Where a provider REFUSAL is recorded instead of a description (§2.3) — same root, same placement
+   *  rule, same path mirror; only the appended extension differs. */
+  rejectedPath: string;
   needsSetup: boolean;
 } {
   const p = resolveArtifactPlacement(absFile);
@@ -59,7 +77,20 @@ export function resolveDescriptionPath(absFile: string): {
   // `p.owner` carries the already-resolved storage role, so an SDL gets NO `.lfbridge/` segment (§0).
   const placement = repoArtifactPlacement(p.root, "aiDescription");
   const descriptionPath = artifactPathForPlacement(p.root, p.rel, AI_DESCRIPTION_EXT, placement, p.owner);
-  return { root: p.root, rel: p.rel, descriptionPath, needsSetup: p.needsSetup };
+  const rejectedPath = artifactPathForPlacement(p.root, p.rel, AI_DESCRIPTION_REJECTED_EXT, placement, p.owner);
+  return { root: p.root, rel: p.rel, descriptionPath, rejectedPath, needsSetup: p.needsSetup };
+}
+
+/** True when the provider has already REFUSED this file and we recorded the verdict (§2.3). Existence IS
+ *  the signal — the same rule the `.ai_description` / `.ocr` sidecars use — and it is what stops a batch
+ *  from re-offering a refusal forever (§12.5, [ocr.mdx §2.3](./ocr.mdx)). Deliberately a bare file-exists
+ *  test, never a parse: a hand-edited or truncated record must still count as "we already asked". */
+export function isRejected(absFile: string): boolean {
+  try {
+    return exists(resolveDescriptionPath(path.resolve(expandHome(absFile.trim()))).rejectedPath);
+  } catch {
+    return false; // unresolvable placement → treat as not-yet-asked; the describe path re-checks anyway
+  }
 }
 
 /** Only image + video are describable here (audio → transcription covers it). */
@@ -95,6 +126,64 @@ function result(
   reason: string | null,
 ): DescribeResult {
   return { path: p, status, descriptionPath, model, reason };
+}
+
+/**
+ * Record a provider's REFUSAL of one file (§2.3) — `<media>.ai_description_rejected`.
+ *
+ * The contract is "**any and all details** the provider responded with", so this keeps two layers: the
+ * named fields a human reads first (`finish_reason`, and the `finish_message` that actually explains which
+ * rule fired), and `provider_response` — the provider's **entire untouched response**, so a detail we never
+ * thought to parse is still on disk. YAML like every other sidecar, and `status: rejected` states plainly
+ * that this file has NO description and why.
+ */
+function writeRejection(p: {
+  root: string;
+  rejectedPath: string;
+  abs: string;
+  kind: DescribeKind;
+  rejection: ProviderRejection;
+  message: string;
+}): void {
+  const r = p.rejection;
+  fs.mkdirSync(path.dirname(p.rejectedPath), { recursive: true });
+  fs.writeFileSync(
+    p.rejectedPath,
+    YAML.stringify({
+      source: path.relative(p.root, p.abs),
+      status: "rejected",
+      engine: r.model,
+      provider: r.provider,
+      generated: new Date().toISOString(),
+      kind: p.kind,
+      // Why there is no description — the fields a human reads first.
+      rejected: {
+        finish_reason: r.finishReason,
+        finish_message: r.finishMessage, // Google's own prose: "…may contain material that resembles existing copyrighted works…"
+        block_reason: r.blockReason,
+        model_version: r.modelVersion,
+        response_id: r.responseId, // quote this to Google when disputing a refusal
+        error: p.message,
+      },
+      safety_ratings: r.safetyRatings ?? null,
+      prompt_feedback: r.promptFeedback ?? null,
+      usage: r.usageMetadata ?? null,
+      // The whole answer, verbatim. Never contains the API key — that rides the URL's `?key=`, not the body.
+      provider_response: r.raw ?? null,
+    }, {
+      // `usage` and `provider_response.usageMetadata` are the SAME object, so YAML's default aliasing emits
+      // an `&a1` anchor and a `*a1` reference instead of the value. This file exists to be READ — by the
+      // user, and by whoever they forward it to — so spell every value out rather than make them resolve a
+      // pointer. (No cycles here; `raw` is parsed JSON.)
+      aliasDuplicateObjects: false,
+    }),
+    "utf8",
+  );
+  // Same content-threshold latch as a description (artifact_placement_policy.mdx §2). A refusal record is a
+  // durable artifact we intend to keep and to travel with the repo, so the tracking placement it was just
+  // written to must STAY where it is — without the latch a later real description would move the base and
+  // strand this file at the old path.
+  markDurableArtifact(p.root);
 }
 
 /** The file's size for the ledger's `bytes=` — the single best predictor of both duration and heap
@@ -241,7 +330,7 @@ export async function describeOne(
     return result(abs, "unsupported", null, null, "only images and videos can be AI-described");
   }
 
-  const { root, descriptionPath, needsSetup } = resolveDescriptionPath(abs);
+  const { root, descriptionPath, rejectedPath, needsSetup } = resolveDescriptionPath(abs);
   // First-time gate (Transcribe.mdx §3.5): no Personal storage owns this file — route to the setup wizard
   // rather than writing a description in a surprising place.
   if (needsSetup) {
@@ -251,6 +340,14 @@ export async function describeOne(
   if (!opts.overwrite && readDescription(abs)) {
     ledgerNoWork(abs, { bytes, kind }, "skipped", "already_described");
     return result(abs, "skipped", descriptionPath, null, "already described");
+  }
+  // The provider already REFUSED this file and we recorded the verdict (§2.3). Asking again without an
+  // explicit overwrite would spend a real call to be told the same thing. The preview and the enqueue drop
+  // these before they are ever queued (§12.5); this is the backstop for the paths that bypass the queue —
+  // `describeMany` / `describeTree`, the CLI, a direct POST.
+  if (!opts.overwrite && exists(rejectedPath)) {
+    ledgerNoWork(abs, { bytes, kind }, "skipped", "already_rejected");
+    return result(abs, "skipped", rejectedPath, null, `the AI provider refused this file — see ${path.basename(rejectedPath)}; re-describe with overwrite to ask again`);
   }
 
   const adapter = selectAdapter(kind, opts.provider);
@@ -313,6 +410,15 @@ export async function describeOne(
           }),
           "utf8",
         );
+        // A description SUPERSEDES an earlier refusal of the same file (§2.3): the provider changed its mind
+        // — a new model, a re-encoded upload, an overwrite retry. Leaving the stale `.ai_description_rejected`
+        // behind would have the tree assert both "described" and "refused" about one file, and would keep
+        // every future batch dropping a file that is now perfectly described.
+        try {
+          if (exists(rejectedPath)) fs.unlinkSync(rejectedPath);
+        } catch (e) {
+          log.warn("describe", `described ${abs} but could not clear its old rejection record ${rejectedPath}: ${(e as Error).message}`);
+        }
         // Cross the content threshold (artifact_placement_policy.mdx §2): an AI description ALONE is a durable
         // user artifact, so this repo's `.lfbridge/` tracking placement is justified from here on (one-way latch).
         markDurableArtifact(root);
@@ -333,6 +439,21 @@ export async function describeOne(
     // rest of the batch at admission instead of letting 1,439 more files rediscover the same dead account
     // one doomed upload at a time. That rediscovery is what pinned 24 payloads in the heap on 2026-07-15.
     const fault = noteProviderFailure(adapter.id, e);
+    // The provider REFUSED this file (§2.3) — that is an ANSWER, not a breakdown. Record everything it told
+    // us in a `.ai_description_rejected` beside where the description would have gone, so the refusal is a
+    // durable, readable artifact instead of one line in error.err that rotates away. Only a real refusal
+    // carries `rejection`; a timeout or a dead account does not, and must never write one of these.
+    const rejection = rejectionOf(e);
+    if (rejection) {
+      try {
+        writeRejection({ root, rejectedPath, abs, kind, rejection, message: msg });
+        log.warn("describe", `${adapter.id} REFUSED ${abs} (${rejection.finishReason ?? rejection.blockReason ?? "no reason given"}) → ${rejectedPath}`);
+        return result(abs, "rejected", rejectedPath, rejection.model, msg);
+      } catch (writeErr) {
+        // Failing to RECORD the refusal must not masquerade as the refusal itself — say both things.
+        log.error("describe", `could not write the rejection record for ${abs}: ${(writeErr as Error).message}`);
+      }
+    }
     // The complete fault trail lands in error.err (shared/logging.ts writes WARN/ERROR/FATAL there).
     log.error("describe", `describe failed for ${abs} [provider=${adapter.id}, kind=${kind}, fault=${fault}]: ${msg}`);
     return result(abs, "failed", null, null, msg);
@@ -398,7 +519,9 @@ export async function enqueueDescribe(opts: {
     try {
       const dp = resolveDescriptionPath(abs);
       // A file that needs first-time setup has no real destination yet — never counts as already-done.
-      if (!overwrite && !dp.needsSetup && readDescription(abs)) {
+      // A REFUSED file counts as settled too (§2.3): the provider already answered, and re-queuing it would
+      // spend a real call to be told the same thing — the failures that halted the batch on 2026-07-16.
+      if (!overwrite && !dp.needsSetup && (readDescription(abs) || exists(dp.rejectedPath))) {
         alreadyDone++;
         continue;
       }
@@ -507,7 +630,9 @@ export async function previewDescribe(opts: { paths?: string[]; root?: string; o
     // the file is still OFFERED in the popup rather than silently dropping the whole scan.
     try {
       const dp = resolveDescriptionPath(abs);
-      if (!overwrite && !dp.needsSetup && readDescription(abs)) {
+      // Drop the already-described AND the already-REFUSED (§2.3) — a refusal is a settled answer, so the
+      // popup must not offer it again. Overwrite remains the one way to ask the provider to reconsider.
+      if (!overwrite && !dp.needsSetup && (readDescription(abs) || exists(dp.rejectedPath))) {
         alreadyDone++;
         continue;
       }

@@ -1446,7 +1446,11 @@ export interface DescribeResult {
   path: string;
   // "needs_setup" — mirrors TranscribeResult: no Personal storage exists and the file is owned by
   // nothing, so the first-time setup wizard must run first (Transcribe.mdx §3.5, ai_description.mdx §2).
-  status: "described" | "skipped" | "no_provider" | "unsupported" | "failed" | "needs_setup";
+  // "rejected" — the PROVIDER refused this file (a safety/recitation verdict). Distinct from "failed":
+  // nothing went wrong, we got a real answer and recorded it in a `.ai_description_rejected` sidecar
+  // (ai_description.mdx §2.3). Retrying repeats the verdict, so it is never retried automatically.
+  status: "described" | "rejected" | "skipped" | "no_provider" | "unsupported" | "failed" | "needs_setup";
+  /** The `.ai_description` written, or — when `status: "rejected"` — the `.ai_description_rejected`. */
   descriptionPath: string | null;
   model: string | null;
   reason: string | null;

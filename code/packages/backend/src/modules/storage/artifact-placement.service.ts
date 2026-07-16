@@ -231,6 +231,11 @@ export function resolveArtifactPlacement(input: string): ArtifactPlacement {
 export const TRANSCRIPTION_EXT = ".transcription";
 export const AI_DESCRIPTION_EXT = ".ai_description";
 export const OCR_EXT = ".ocr";
+/** The provider REFUSED this file (ai_description.mdx §2.3). Written INSTEAD of `.ai_description`, in the
+ *  same place with the same rules, holding every detail the provider sent about the refusal. A separate
+ *  extension (not a `status: rejected` inside `.ai_description`) so "has a description" stays a pure
+ *  file-exists test for every reader — and so a refusal is visible in a directory listing. */
+export const AI_DESCRIPTION_REJECTED_EXT = ".ai_description_rejected";
 
 /**
  * The path for a media file's derived artifact (Transcribe.mdx §3.1). It lives under the owning root's
