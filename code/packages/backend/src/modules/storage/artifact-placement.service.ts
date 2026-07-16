@@ -224,12 +224,13 @@ export function resolveArtifactPlacement(input: string): ArtifactPlacement {
   return { root: path.dirname(abs), rel: path.basename(abs), gitIgnore: isGit, owner: "beside", needsSetup: false };
 }
 
-// The derived-artifact extensions (Transcribe.mdx §3, ai_description.mdx §2). Single source of truth —
-// imported by transcribe.service / describe.service so the two never drift. Both artifacts are written
-// INSIDE the owning root's committed `.lfbridge/` directory, path-mirrored, with the ext APPENDED to the
-// media's FULL filename (extension kept) — NOT beside the media and NOT with the extension replaced.
+// The derived-artifact extensions (Transcribe.mdx §3, ai_description.mdx §2, ocr.mdx §5). Single source of
+// truth — imported by transcribe.service / describe.service / ocr.service so the three never drift. All are
+// written INSIDE the owning root's committed `.lfbridge/` directory, path-mirrored, with the ext APPENDED to
+// the media's FULL filename (extension kept) — NOT beside the media and NOT with the extension replaced.
 export const TRANSCRIPTION_EXT = ".transcription";
 export const AI_DESCRIPTION_EXT = ".ai_description";
+export const OCR_EXT = ".ocr";
 
 /**
  * The path for a media file's derived artifact (Transcribe.mdx §3.1). It lives under the owning root's

@@ -25,7 +25,9 @@ import { DecisionToggle } from "../../components/decision/DecisionToggles.js";
 import { TranscribeStatusIcon } from "../../components/TranscribeStatusIcon.js";
 import { CompressStatusIcon } from "../../components/CompressStatusIcon.js";
 import { DescribeStatusIcon } from "../../components/DescribeStatusIcon.js";
+import { OcrStatusIcon } from "../../components/OcrStatusIcon.js";
 import { runDescribeFile } from "../../lib/describe.js";
+import { runOcrFile } from "../../lib/ocr.js";
 import { TaskTabs } from "./TaskTabs.js";
 import { TASK_TABS, type TaskTabId } from "./taskTabs.config.js";
 import { MetricsStrip, type MetricView } from "./MetricsStrip.js";
@@ -234,6 +236,19 @@ export function OneRepoPage() {
     }
   };
 
+  // OCR status-icon click (ocr.mdx §11.2). "could" reads the text from this one file; "done" opens the
+  // viewer, whose Text (OCR) column shows it. "na" is inert.
+  const onOcrActivate = (f: FileRow) => {
+    if (!detail?.path || f.ocr === "na") return;
+    const abs = `${detail.path}/${f.path}`;
+    const name = f.path.slice(f.path.lastIndexOf("/") + 1);
+    if (f.ocr === "could") {
+      runOcrFile(abs, name, { onDone: () => qc.invalidateQueries({ queryKey: ["repo", repoId] }) });
+    } else {
+      navigate({ to: viewerRouteForName(name), search: { path: abs } });
+    }
+  };
+
   // A metric panel with NO educate-and-fix popup (task_tabs.mdx §2.4): re-tune the view to the tab where
   // the user acts on it. Metrics that DO carry a popup (undecided, pullDown) open it instead — the metric
   // panels are this page's only warning surface; there is no separate warning banner (§2.6).
@@ -242,6 +257,7 @@ export function OneRepoPage() {
     if (id === "compressibleVideos" || id === "compressibleImages" || id === "alreadyCompressed") setActiveTab("compress");
     else if (id === "transcribable" || id === "transcribed") setActiveTab("transcribe");
     else if (id === "describable" || id === "described") setActiveTab("ai-descriptions");
+    else if (id === "ocrable" || id === "ocred") setActiveTab("ocr");
     else setActiveTab("ipfs");
   };
 
@@ -547,6 +563,23 @@ export function OneRepoPage() {
         />
       ),
     },
+    // `ocr` — the three-state OCR status icon (ocr.mdx §11.2), the third sibling. Header-less leading
+    // control column; only appears on the OCR tab.
+    {
+      id: "ocr",
+      header: "",
+      kind: "enum",
+      accessor: (f) => f.ocr ?? "na",
+      filterOptions: ["could", "done", "na"],
+      cell: (f) => (
+        <OcrStatusIcon
+          state={f.ocr ?? "na"}
+          onActivate={() => onOcrActivate(f)}
+          onMouseEnter={() => setHoverInfo(fileSummary(f))}
+          onMouseLeave={() => setHoverInfo(null)}
+        />
+      ),
+    },
   ];
 
   // The active tab's projection (task_tabs.mdx §7): pick + order the columns it lists, and filter the rows
@@ -595,6 +628,9 @@ export function OneRepoPage() {
     describable: "Describe",
     compressibleVideos: "Compress",
     compressibleImages: "Compress",
+    // Ranked LAST in topRecommendation() (ocr.mdx §12.3) — a search convenience never outranks a backup
+    // risk — but when it IS the only outstanding work it is correctly the whole recommendation.
+    ocrable: "OCR",
   };
   const headerPrimaryLabel =
     (topRec?.metricId && HEADER_PRIMARY_LABEL[topRec.metricId]) || "View recommendation";

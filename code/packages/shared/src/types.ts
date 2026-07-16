@@ -113,6 +113,10 @@ export interface FileRow {
   // AI-description task status (ai_description.mdx §11) — mirrors transcribe: "could" = image/video with no
   // .ai_description sidecar yet, "done" = a description exists, "na" = not image/video (audio → transcription).
   describe?: TaskStatus;
+  // OCR task status (ocr.mdx §11.2) — the third sibling: "could" = image/video with no .ocr artifact yet,
+  // "done" = an artifact exists, "na" = not image/video. "done" INCLUDES an artifact whose text is empty —
+  // most images have no text, and that is a result, not a candidate to re-offer forever (ocr.mdx §2.3).
+  ocr?: TaskStatus;
   // Decision provenance from the folded, team-shared ledger (decisions.mdx §10). Both null when the file
   // has no decision record yet (Undecided). `decidedBy` is the allow-listed email, the sentinel
   // "policy:<email>" for a policy auto-decision, or null when attribution is anonymous.
@@ -161,6 +165,8 @@ export interface TaskMetrics {
   transcribed: number; // audio/video that already have a transcript ("done")
   describable: number; // image/video with no AI description yet ("could") — mirrors transcribable
   described: number; // image/video that already have an AI description ("done")
+  ocrable: number; // image/video with no OCR text yet ("could") — the third sibling (ocr.mdx §12.1)
+  ocred: number; // image/video that already have OCR text ("done"), including legitimately-empty text
   bigNotIgnored: number; // large files not yet git-ignored (the git-ignore nudge)
 }
 
@@ -748,6 +754,7 @@ export type ProgressKind =
   | "compress"
   | "transcribe"
   | "describe"
+  | "ocr" // read the text out of an image/video's pixels (ocr.mdx) — the third analysis transaction
   | "hash"
   | "fingerprint"
   | "ignore"
@@ -868,6 +875,11 @@ export interface EnqueuePlan {
 export interface PreviewPlanFile {
   path: string; // absolute path
   sizeBytes: number; // 0 when the file can't be stat-ed
+  // OCR only, VIDEO rows only (ocr.mdx §9.2): how many frames this clip will be sampled at — ⌈duration /
+  // stride⌉, bounded by max_frames. It is a COST HINT, shown inline so the user can see WHY one row is
+  // expensive before committing to it; absent when the duration can't be probed or the set is too large to
+  // probe. Optional because it is the one field OCR's plan has that transcribe's/describe's do not.
+  frames?: number;
 }
 
 // The PREVIEW plan a producing PAGE ACTION returns (dialogs.mdx §5.2): the same Rule-1 (scope) + Rule-2
@@ -1447,6 +1459,79 @@ export interface DescribeBatchResult {
   skipped: number;
   failed: number;
 }
+// ── OCR — read the text out of the pixels (ocr.mdx) ─────────────────────────
+// The THIRD transaction type. Transcription answers "what was SAID" (audio), AI description answers "what is
+// SEEN" (a vision model's prose), and OCR answers "what does it SAY on screen" — the literal glyphs, verbatim.
+// Image + video only (audio has no pixels). 100% LOCAL: no provider, no key, no upload (§4).
+export type OcrKind = "image" | "video";
+export type OcrEngineId = "vision" | "tesseract";
+/** The recognition level, keyed on media kind (ocr.mdx §2, LOCKED): image → accurate, video frame → fast. */
+export type OcrLevel = "accurate" | "fast";
+
+/** One positioned/timed observation. An IMAGE block carries a NORMALIZED bbox (0–1 x/y/w/h) so the viewer can
+ *  overlay a hit at any render size; a VIDEO block carries a time RANGE so a hit can SEEK (§5.1, §7). */
+export interface OcrBlock {
+  text: string;
+  confidence: number | null;
+  bbox?: [number, number, number, number] | null; // image only — normalized [x, y, w, h]
+  start?: number; // video only — seconds
+  end?: number; // video only — seconds (a RANGE after consecutive-duplicate collapse, §2.2.3)
+}
+
+/** The existing OCR text for a media file (GET /api/ocr/file), or null when no artifact exists yet.
+ *  NOTE: `text` may legitimately be "" — most images have no text, and that is a SUCCESS (§2.3). A read
+ *  returns null ONLY when the artifact is absent or not `done`, NEVER because the text is empty. */
+export interface OcrView {
+  mediaPath: string;
+  ocrPath: string; // <trackingBase>/<rel-dir>/<name.ext>.ocr
+  text: string; // the flattened, searchable text — may be ""
+  blocks: OcrBlock[];
+  engine: OcrEngineId | null;
+  level: OcrLevel | null;
+  kind: OcrKind | null;
+  generatedAt: string | null; // ISO
+  strideSeconds: number | null; // video only
+  framesSampled: number | null; // video only
+  truncated: boolean; // video only — max_frames bit, so the clip was sampled only up to that point (§15.2)
+}
+
+/** The result of one OCR run (POST /api/ocr/file). Reports truthfully per file.
+ *  `ocred` covers the EMPTY-TEXT case: a text-free image is a success, not a failure (§2.3). */
+export interface OcrResult {
+  path: string;
+  status: "ocred" | "skipped" | "no_engine" | "needs_ffmpeg" | "unsupported" | "failed" | "needs_setup";
+  ocrPath: string | null;
+  engine: OcrEngineId | null;
+  chars: number | null; // 0 is a real, successful answer — "no text in this image"
+  reason: string | null;
+}
+
+/** A batch / tree OCR run — per-file results plus honest counts (mirrors DescribeBatchResult). */
+export interface OcrBatchResult {
+  results: OcrResult[];
+  ocred: number;
+  skipped: number;
+  failed: number;
+}
+
+/** One engine row for Settings → Tools + the readiness gate (ocr.mdx §6/§17). */
+export interface OcrEngineStatus {
+  id: OcrEngineId;
+  label: string;
+  available: boolean;
+}
+
+/** GET /api/ocr/engines — the engine matrix + whether the VIDEO path's external tool is present.
+ *  `videoToolsPresent` false means: every image OCRs fine, every video does not (§6's stated asymmetry). */
+export interface OcrEnginesStatus {
+  engines: OcrEngineStatus[];
+  defaultEngine: OcrEngineId | "auto";
+  anyAvailable: boolean;
+  videoToolsPresent: boolean;
+  language: string;
+  strideSeconds: number;
+}
+
 // The per-kind prompt as the settings/viewer surface sees it (GET /api/describe/prompt).
 export interface DescribePromptView {
   kind: DescribeKind;

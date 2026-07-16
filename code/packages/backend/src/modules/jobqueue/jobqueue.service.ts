@@ -22,6 +22,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { transcribeOne } from "../transcribe/transcribe.service.js";
 import { describeOne } from "../describe/describe.service.js";
+import { ocrOne } from "../ocr/ocr.service.js";
 import { compressFile } from "../compress/compression.service.js";
 import { track } from "../progress/progress.registry.js";
 import type { ProviderId } from "../describe/adapters.js";
@@ -49,7 +50,7 @@ import {
   type TerminalReason,
 } from "./queue-journal.js";
 
-export type JobOp = "transcribe" | "describe" | "compress";
+export type JobOp = "transcribe" | "describe" | "compress" | "ocr";
 export type CompressMediaKind = "image" | "video";
 
 export interface QueueTask {
@@ -77,7 +78,16 @@ export interface QueueTask {
 // is NETWORK-parallel, not core-bound. The invariant (parallelization.mdx §2): for every bucket
 // `concurrentJobs × threadsPerJob ≈ budget`, NEVER cores². Caps are read LIVE from coreBudget() at
 // admission, so the Settings knob (performance.max_core_fraction) takes effect on the next task, no restart.
-type Bucket = "transcribe" | "describe" | "compress:image" | "compress:video";
+//
+// `ocr` is media-aware for the SAME reason compress is, and its shape is the deliberate opposite of
+// describe's (ocr.mdx §10.1): OCR is LOCAL CPU — Vision/Tesseract burn cores, nothing waits on a network — so
+// it draws the MASS-COMPUTE budget, not a generous network fan-out. Fanning OCR ~24-wide would be exactly the
+// cores² over-subscription this table exists to prevent.
+//   • ocr:image — one recognition ≈ one core → fan WIDE (`budget` jobs).
+//   • ocr:video — sampling frames shells out to ffmpeg, so it fans NARROW; the extraction additionally takes
+//     the SHARED transcode slot in fit-media.ts (ocr.mdx §10.3), so an OCR extraction and a describe
+//     compress-to-fit compete for ONE budget instead of each believing it owns the machine.
+type Bucket = "transcribe" | "describe" | "compress:image" | "compress:video" | "ocr:image" | "ocr:video";
 const VIDEO_THREADS = 4; // per-job ffmpeg threads for a BATCHED video compress (a one-off passes no cap)
 const WHISPER_THREADS = 4; // Whisper is multi-threaded; a couple of runs saturate the machine
 // Describe waits on a vision-API network ROUND-TRIP, not local CPU — it has NO hardware bottleneck, so it
@@ -86,9 +96,13 @@ const WHISPER_THREADS = 4; // Whisper is multi-threaded; a couple of runs satura
 // bounded only by the provider's rate limit, tunable via LFB_DESCRIBE_CONCURRENCY (default 24).
 const DESCRIBE_CONCURRENCY = Math.max(1, Number(process.env.LFB_DESCRIBE_CONCURRENCY) || 24);
 
-/** The admission bucket a task competes in (compress splits by media kind). */
+/** The admission bucket a task competes in (compress and ocr split by media kind).
+ *  OCR's kind comes straight from the FILENAME rather than a producer-stamped field: unlike compress — where
+ *  the producer already knows the kind when it plans the batch — every OCR producer would have to stamp it,
+ *  and a single un-stamped path would silently land a video in the wide image bucket. */
 function bucketOf(t: QueueTask): Bucket {
   if (t.op === "compress") return t.compress?.mediaKind === "video" ? "compress:video" : "compress:image";
+  if (t.op === "ocr") return mediaKindForName(t.path) === "video" ? "ocr:video" : "ocr:image";
   return t.op;
 }
 
@@ -111,6 +125,12 @@ function capFor(bucket: Bucket, budget: number): number {
       });
     case "describe":
       return DESCRIBE_CONCURRENCY; // network-parallel, not core-bound
+    case "ocr:image":
+      return budget; // WIDE — a recognition is ~single-threaded, so one job per core (ocr.mdx §16.2 rule 3)
+    case "ocr:video":
+      // NARROW — each video shells out to ffmpeg to sample frames. The extraction ALSO takes the shared
+      // transcode slot (ocr.mdx §10.3), so this cap and that gate agree rather than compete.
+      return Math.max(1, Math.floor(budget / VIDEO_THREADS));
   }
 }
 
@@ -178,6 +198,8 @@ const running: Record<Bucket, number> = {
   describe: 0,
   "compress:image": 0,
   "compress:video": 0,
+  "ocr:image": 0,
+  "ocr:video": 0,
 };
 
 const keyOf = (t: Pick<QueueTask, "op" | "path">): string => `${t.op}|${t.path}`;
@@ -650,7 +672,14 @@ function start(t: QueueTask): void {
 }
 
 function totalRunning(): number {
-  return running.transcribe + running.describe + running["compress:image"] + running["compress:video"];
+  return (
+    running.transcribe +
+    running.describe +
+    running["compress:image"] +
+    running["compress:video"] +
+    running["ocr:image"] +
+    running["ocr:video"]
+  );
 }
 
 /**
@@ -659,12 +688,18 @@ function totalRunning(): number {
  * thread-equivalents (a video job occupies VIDEO_THREADS cores, a transcribe WHISPER_THREADS, an image 1),
  * so "busy" reflects real cores in use; describe is network (not core-bound) and is excluded. Clamped to
  * the budget for a sane display.
+ *
+ * OCR IS INCLUDED, and that is the point of ocr.mdx §10.1: it is LOCAL CPU, so leaving it out — the way
+ * describe is left out — would under-report a busy machine during the one op most likely to be run over an
+ * entire tree.
  */
 export function workerUtilization(): { busy: number; budget: number } {
   const budget = coreBudget();
   const busy =
     running["compress:image"] * 1 +
     running["compress:video"] * VIDEO_THREADS +
+    running["ocr:image"] * 1 +
+    running["ocr:video"] * VIDEO_THREADS +
     running["transcribe"] * WHISPER_THREADS;
   return { busy: Math.min(budget, busy), budget };
 }
@@ -765,6 +800,16 @@ async function runTaskInner(t: QueueTask): Promise<TerminalReason> {
         recordFailure({ op: "describe", path: t.path, reason: dr.reason ?? dr.status });
         queueFailureLog("describe", t.path, dr.reason ?? dr.status);
       } else if (dr.status === "skipped") outcome = "skipped";
+    } else if (t.op === "ocr") {
+      // OCR (ocr.mdx §10.5). ocrOne registers its own track("ocr", …), so the dock card comes for free.
+      // NOTE the statuses that are NOT failures: `ocred` with 0 chars is a SUCCESS — most images have no text
+      // (ocr.mdx §2.3) — so a tree of text-free photos must drain green, not red.
+      const or = await ocrOne(t.path, { overwrite: t.overwrite });
+      if (or.status === "failed" || or.status === "no_engine" || or.status === "needs_ffmpeg" || or.status === "unsupported") {
+        outcome = "failed";
+        recordFailure({ op: "ocr", path: t.path, reason: or.reason ?? or.status });
+        queueFailureLog("ocr", t.path, or.reason ?? or.status);
+      } else if (or.status === "skipped") outcome = "skipped";
     } else {
       // compress — wrap in a track("compress", …) so the file shows a live dock card while it runs.
       // The heavy transcode is async inside compressFile (spawn), so this does NOT block the event loop.
@@ -815,6 +860,10 @@ registerHeartbeatSource(() => ({
   describe: running.describe,
   compressImage: running["compress:image"],
   compressVideo: running["compress:video"],
+  // OCR joins the per-op counts (ocr.mdx §18.1): without these, a 2,000-file OCR run is invisible in the
+  // heartbeat — exactly the blindness the heartbeat exists to end.
+  ocrImage: running["ocr:image"],
+  ocrVideo: running["ocr:video"],
   memActiveMB: Math.round(memoryActive / 1048576),
   memBudgetMB: Math.round(memoryBudget() / 1048576),
 }));

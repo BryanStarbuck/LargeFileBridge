@@ -1,0 +1,1553 @@
+---
+title: LargeFileBridge — OCR (read the text out of images & videos)
+description: The OCR feature — the THIRD sibling transaction type alongside transcription and AI description. OCR extracts the text that is VISIBLE IN THE PIXELS of an IMAGE or a VIDEO (a screenshot's UI labels, a slide deck, a whiteboard, a receipt, a chyron/lower-third, a street sign, burned-in subtitles) so those words become searchable without opening the file. It is deliberately NOT the same question as its two siblings: transcription answers "what was SAID" (audio), AI description answers "what is SEEN" (prose written by a vision model), and OCR answers "what does it SAY on screen" (the literal glyphs, verbatim). The two speeds are a hard rule keyed on media kind: an IMAGE runs the SLOW/ACCURATE pass (one file, accuracy is free); a VIDEO advances every 15 seconds, extracts one frame, and runs each frame through the FAST pass (dozens-to-thousands of frames, throughput is everything). The engine is a LIBRARY THE WEB APP DEPENDS ON — an npm dependency, never a `brew install` tool the user must provision: primary is `mac-ocr` (a prebuilt universal binary wrapping Apple's Vision framework / VNRecognizeTextRequest, on-device, whose `.fast` / `.accurate` recognition levels ARE our two speeds), with `tesseract.js` (pure WASM, no native toolchain) as the cross-platform fallback. UNLIKE AI description, OCR is 100% LOCAL — it never uploads a byte, so it is charter-compliant by construction and needs no API key, no credentials popup, and no provider matrix. The result is written INSIDE the owning root's committed tracking area, path-mirrored, under the media's FULL filename with `.ocr` APPENDED (Slide_Deck.mp4 → Slide_Deck.mp4.ocr) — identical placement to `.transcription` / `.ai_description`, keyed on storage KIND (artifact_placement_policy.mdx §0): a working git repo keeps `.lfbridge/`, a dedicated LFB file repo (SDL) has none. Every surface the two siblings have, OCR mirrors — and this spec corrects two places where the sibling specs are STALE: the media viewer's band 6 is SIDE-BY-SIDE analysis columns, not tabs (media_viewer.mdx §6 is authoritative over ai_description.mdx §1's two-tab description), so OCR adds a THIRD column "Text (OCR)"; and there is NO `Actions ▾` dropdown (page_actions.mdx §0 reversed it to a row of blue links), so the bulk entry point is a "Create OCR text" ACTION-LINK. The mirrored set: the four producing entry points of dialogs.mdx §6 (metric tile, blue header primary, page action-link, ⋮/right-click), the "Create OCR text" item in the `Create` group of the file AND directory menus (adjacent to Create Transcription(s) / Create AI description(s), always in that order — the repo kebab gets nothing, since it has no producing actions at all), the OCR task tab, the three-state status icon (TextSelect glyph, violet done-color — the 4th skin of the one shared StatusActionIcon), the OCRable/OCRed metric pair, the blue "OCR ›" header primary (ranked LAST of seven — a search convenience never outranks a backup risk), the To-Do slug, and the ONE unified batch-confirm popup every entry point opens. Parallelization is the deliberate asymmetry: describe fans ~24-wide because it waits on a network, OCR is LOCAL CPU and therefore draws the MASS-COMPUTE core budget (parallelization.mdx §1) — fanning wide for images, and gating video frame-extraction behind the shared transcode slot so a 24-way fan-out can never become 24 concurrent ffmpeg encodes. Implemented by the /api/ocr backend module, the OCR engine adapters, and the MediaAnalysis "Text (OCR)" column + Tools settings on the frontend.
+---
+
+# LargeFileBridge — OCR (read the text out of images & videos)
+
+`LargeFileBridge` can **read the text that is visible in the pixels** of an **image** or a **video** and
+store it so those words become **searchable, greppable, and re-findable without opening the file**. A
+screenshot of a terminal, a slide deck exported to MP4, a photo of a whiteboard, a receipt, a news chyron,
+a street sign, burned-in subtitles — all of it is text the user can *see* but that no `grep` can reach,
+because it is pixels, not characters. OCR turns those pixels back into characters.
+
+This is the **third transaction type**, and the reason it exists as its own transaction rather than a corner
+of an existing one is that it answers a **different question** from either sibling:
+
+| Transaction | The question it answers | Input kinds | Output |
+| --- | --- | --- | --- |
+| **Transcription** ([Transcribe.mdx](./Transcribe.mdx)) | *"What was **said**?"* | audio + video | Speech → text, verbatim |
+| **AI description** ([ai_description.mdx](./ai_description.mdx)) | *"What is **seen**?"* | image + video | A vision model's **prose** about the frame |
+| **OCR** (this spec) | *"What does it **say on screen**?"* | image + video | The **literal glyphs**, verbatim, with positions |
+
+The distinction is not academic. AI description **paraphrases** and may *mention* that a sign exists; OCR
+**quotes** the sign, exactly, and can be searched for. A slide deck video described by Gemini yields "a
+slide listing quarterly figures"; the same video OCR'd yields the actual figures. They compose — they do not
+substitute.
+
+Two things make this feature worth pinning down: **the two-speed rule** (§2 — image = slow/accurate, video =
+fast at a 15-second stride, which is the whole performance story), and **the engine being a library rather
+than a `brew` tool** (§3 — the explicit product directive, and the thing that keeps OCR installable,
+offline, and charter-clean).
+
+Siblings this builds on and does not repeat:
+
+* [Transcribe.mdx](./Transcribe.mdx) — the **template** for every media-analysis surface: the entry points at
+  every scale (§2), the tracking-area artifact placement (§3), the readiness gate, the calc engine. OCR
+  mirrors its shape wholesale.
+* [ai_description.mdx](./ai_description.mdx) — the **closest** sibling (same input kinds: image + video). Its
+  **§0 symmetry contract** is the rule this spec extends from a **pair** to a **triple** (§0).
+* [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx) — the **owner** of the storage-KIND
+  rule (`.lfbridge/` only in a working git repo; an SDL's root **is** the tracking area). This spec applies
+  it identically to `.ocr` (§5).
+* [parallelization.mdx](./parallelization.mdx) — the **owner** of the Core Budget. OCR is a **local-CPU**
+  consumer and draws the **mass-compute** budget, which is the deliberate asymmetry against describe (§10).
+* [dialogs.mdx §5](./dialogs.mdx) — the **owner** of the unified batch-confirm popup. Every OCR producer
+  opens **that one popup** (§9).
+* [menus.mdx §5](./menus.mdx) — the **owner** of the per-entity ⋮ / right-click action catalogs (§8).
+* [page_actions.mdx](./page_actions.mdx) — the **owner** of the three LOCKED page-action rules
+  (selected-or-all / skip-already-done / background-queue) **and** of the §0 reversal that made page actions a
+  row of **blue links**, not an `Actions ▾` dropdown (§8.5).
+* [job_queue.mdx](./job_queue.mdx) / [processing.mdx](./processing.mdx) — the background queue (new op
+  **`ocr`**) and the Processing surface (§10.4).
+* [task_tabs.mdx](./task_tabs.mdx) — the per-repo tab strip, three-state status icons, and metric panels
+  (§11–§12).
+* [warnings.mdx §10.11](./warnings.mdx) — the catalog of every OCR warning (§13). This file points at it.
+* [media_viewer.mdx](./media_viewer.mdx) — the viewer whose bottom band now hosts **three** analysis tabs
+  (§7).
+
+---
+
+## 0. The symmetry contract is now a TRIPLE, not a pair (LOCKED)
+
+[ai_description.mdx §0](./ai_description.mdx) locks a hard design rule: *everything transcription has, AI
+description mirrors* — a user who has learned one has learned the other, and a developer touching one is
+obliged to touch the other. **OCR joins that contract as the third column.** Adding a surface to any one of
+the three now obliges adding it to all three.
+
+| Transcription | AI description | **OCR (this spec)** |
+| --- | --- | --- |
+| **Create Transcription(s)** in the ⋮ / right-click `Create` group (file + directory) | **Create AI description(s)** | **Create OCR text** — §8.2/§8.3 |
+| **Create Transcriptions** page action-**link** | **Create AI descriptions** | **Create OCR text** — §8.5 |
+| **Transcription** analysis column in the viewer | **AI description** column | **Text (OCR)** column — §7 |
+| **Transcribe** task tab | **AI descriptions** task tab | **OCR** task tab — §11 |
+| 3-state **Transcribe** icon (`Captions`, blue) | 3-state **Describe** icon (`ScanText`, teal) | 3-state **OCR** icon (`TextSelect`, **violet**) — §11.2 |
+| `Transcribable` / `Transcribed` metrics | `Describable` / `Described` | **`OCRable` / `OCRed`** — §12 |
+| Blue **"Transcribe ›"** header primary | Blue **"Describe ›"** | Blue **"OCR ›"** (ranked **last**) — §12.3 |
+| "What Can Be Transcribed" calc engine | "What Can Be AI-Described" | **"What Can Be OCR'd"** — §14 |
+| Model-download readiness (`withModelReady`) | Credential readiness (`withDescribeReady`) | **Engine readiness** (`withOcrReady`, ~always ready) — §6 |
+| Shared launcher `lib/transcribe.ts` | `lib/describe.ts` | **`lib/ocr.ts`** — §6.1 |
+| `openTranscribeBatch()` popup launcher | `openDescribeBatch()` | **`openOcrBatch()`** — §9 |
+| 3-way placement radios ("transcripts") | same radios ("AI descriptions") | **same radios ("OCR text")** — §5.3 |
+| `FileRow.transcribe` · `TranscribeResult` | `FileRow.describe` · `DescribeResult` | **`FileRow.ocr` · `OcrResult`** — §18.1 |
+| `.transcription` artifact | `.ai_description` artifact | **`.ocr` artifact** — §5 |
+
+**The two deliberate asymmetries** — and they are the whole personality of this feature:
+
+1. **OCR is LOCAL.** Transcription is local (an ASR model); AI description is the app's *one* deliberate
+   network upload; **OCR is local like transcription and, unlike description, needs no key, no provider
+   matrix, and no credentials popup** (§4). The whole `ai_credentials.mdx` axis is simply **absent** here —
+   there is nothing to configure and nothing to leak.
+2. **OCR is TWO-SPEED, keyed on media kind** (§2). Neither sibling has this: transcription runs one engine at
+   one quality, description sends one prompt per kind. OCR deliberately runs a **different recognition
+   level** for an image than for a video frame, because the workloads differ by three orders of magnitude.
+
+The symmetry is asserted in code by the parallel module trees `modules/transcribe/` ↔ `modules/describe/` ↔
+**`modules/ocr/`**, `lib/transcribe.ts` ↔ `lib/describe.ts` ↔ **`lib/ocr.ts`**, `TranscribeStatusIcon.tsx` ↔
+`DescribeStatusIcon.tsx` ↔ **`OcrStatusIcon.tsx`**, and the paired fields on
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` (`TaskMetrics`, `FileRow`,
+`OcrResult`/`OcrBatchResult` mirroring the describe/transcribe pairs).
+
+---
+
+## 1. Use cases
+
+The feature earns its place through concrete, recurring jobs on the product owner's own tree. Each of these
+is a case where the words are **visible but unsearchable** today.
+
+### 1.1 "Which screenshot had that error message?"
+
+`~/screenshots/` holds hundreds of PNGs. The user remembers a stack trace mentioning `ECONNREFUSED 8787`
+but not which image it was in. Today: open them one by one. With OCR: every screenshot carries a `.ocr`
+artifact, and one search across the tree lands on the file. This is the **highest-frequency** case, and it is
+pure **image / slow-accurate** work (§2.1, §16).
+
+### 1.2 "Find the slide that showed the pricing tier"
+
+A 40-minute recorded deck (`.mp4`). The words live on the slides, not in the narration — so the
+**transcript can't find them** (the presenter said "as you can see here"). OCR at a 15-second stride catches
+every slide (a slide is on screen far longer than 15s) and timecodes it, so the user gets *"03:15 — Creator
+$29/mo…"* and can seek straight there. This is the case the **15-second stride was chosen for** (§2.2.1).
+
+### 1.3 The investigation tree — chyrons, exhibits, and documents-as-images
+
+The Charlie Kirk / Intel / UAP investigation repos hold thousands of clips and screenshots whose evidentiary
+content is **on-screen text**: a news lower-third naming a person, a court exhibit photographed rather than
+scanned, a document screenshotted from a PDF. OCR makes that corpus **greppable**, which is the difference
+between an archive and a research tool. It composes with the sibling artifacts: the `.transcription` gives
+what was said, the `.ocr` gives what the chyron claimed, and the `.ai_description` gives the scene.
+
+### 1.4 Receipts, statements, and the Medical LLC folder
+
+Photographed receipts and statements are images of text. OCR gives a searchable text layer beside each one
+without any upload — which matters, because these are **financial documents** and the charter's local-only
+posture (§4) is the reason this use case is permissible at all. AI-describing a receipt would upload it to a
+provider; **OCR never does**.
+
+### 1.5 Burned-in subtitles on a downloaded clip
+
+A clip with hardcoded subtitles and no audio track (or non-English audio). Transcription yields nothing
+useful; OCR at the 15-second stride recovers the subtitle text. The **dedupe rule** (§2.2.3) matters here —
+a subtitle persists across many frames and must not be recorded a dozen times.
+
+### 1.6 "Is this file worth keeping?"
+
+The rollup case. Before compressing or pinning a directory of 300 clips, the user wants to know **what is in
+them**. OCR is the cheapest of the three transactions (no network, no model download in the primary path),
+so it is often the **first** one run over a new tree — it costs nothing but CPU and answers "what is this?"
+for anything screen-recorded.
+
+### 1.7 The negative case — what OCR is NOT for
+
+* **Not audio.** An `.mp3` has no pixels. The OCR tab does not appear for audio (§7) and audio files are
+  never candidates (§14).
+* **Not a description.** OCR on a photo of a beach returns nothing (there is no text) — and that is a
+  **correct, successful** result, not a failure (§2.3). A file with `text: ""` is **OCR'd**; it simply has no
+  text. It must never be re-offered as "not yet OCR'd" (§12.5).
+* **Not a reporting service.** Like the perceptual-fingerprint feature, OCR reads the user's own files
+  locally and tells **only the user** (§4).
+
+---
+
+## 2. The two-speed rule (LOCKED — the core of this spec)
+
+**The recognition speed is keyed on the media kind, and it is not negotiable:**
+
+| Kind | Pass | Why |
+| --- | --- | --- |
+| **Image** | **SLOW / ACCURATE** — `.accurate` recognition level, language correction **on** | One file, one pass. The user is asking about *this* image; accuracy is worth every millisecond. A 4K screenshot costs a few hundred ms even at the slow setting — there is nothing to save. |
+| **Video** | **FAST** — `.fast` recognition level, language correction **off**, one frame every **15 s** | A 40-minute video at a 15s stride is **160 frames**. At the slow level that is minutes per file; at the fast level it is seconds. Multiply by a 2,000-file tree and the choice is the difference between a feature and an unusable one. |
+
+This mapping is **exactly** what Apple's Vision framework exposes as `VNRequestTextRecognitionLevel.accurate`
+vs `.fast` (§3.2), which is a large part of why that engine was chosen: our product rule and the engine's
+native knob are the **same knob**.
+
+### 2.1 The image path — slow, accurate, whole-file
+
+An image is decoded once and handed to the engine at the **accurate** level with **language correction on**
+(the engine may consult a lexicon to fix `rn` → `m` and similar confusions). No striding, no sampling, no
+frame extraction, no ffmpeg. The result is a **single** text block plus per-observation bounding boxes and
+confidences (§5.1). Detail: §16.
+
+### 2.2 The video path — advance 15 seconds, grab a frame, fast-OCR it
+
+A video is **sampled**, never fully decoded frame-by-frame. The pipeline:
+
+1. **Probe** the clip for duration (`ffprobe`).
+2. **Extract** one frame every **15 seconds** in **one** ffmpeg pass — `-vf fps=1/15` — writing numbered
+   JPEGs into a **temporary** directory under the state dir. One pass, not one `-ss` seek per frame: a
+   single sequential decode is dramatically cheaper than N seeks, and the frames come out already strided.
+3. **Fast-OCR each frame**, in parallel (§10.2), tagging each result with its **timecode** (frame index × 15s).
+4. **Dedupe** consecutive identical text (§2.2.3).
+5. **Delete the temp frames** in a `finally`. **The user's original video is never modified or moved** —
+   this is a read-only sampling pass. (Same posture as describe's compress-to-fit temp copy,
+   [ai_description.mdx §3.3](./ai_description.mdx).)
+
+Detail and the throughput numbers: §15.
+
+#### 2.2.1 Why 15 seconds (LOCKED)
+
+The stride is the product decision, and it is chosen against **how long on-screen text stays on screen**:
+
+* A **slide** lives 30 s–5 min. A **chyron** lives 10–30 s. A **title card** lives 3–8 s. A **subtitle** lives
+  2–5 s.
+* At 15 s we catch **every slide and effectively every chyron** — the §1.2 and §1.3 cases, which are the ones
+  the feature exists for — while sampling **0.07%** of a 30fps stream. Halving it to 7.5 s **doubles the cost**
+  to buy mostly title cards; going to 30 s starts dropping chyrons.
+* We accept, explicitly, that a **fast-moving subtitle track may be sampled rather than captured whole**
+  (§1.5). The user who needs every subtitle wants the `subtitle_stride` override, not a different default.
+
+The stride is a **setting** (`ocr.video_stride_seconds`, default **15**) so a user with a subtitle-heavy tree
+can tighten it (§17), but **15 is the default and the number every UI states**.
+
+#### 2.2.2 The first frame is never frame 0 (LOCKED)
+
+`fps=1/15` emits its first frame at **t=0**, which on a huge share of real videos is **black, a fade-in, or a
+platform splash** — i.e. reliably the **worst** frame in the clip. The extraction therefore offsets the
+sampling grid by **half a stride** (`-ss 7.5` equivalent, via the filter's phase), so frames land at
+**7.5 s, 22.5 s, 37.5 s…** — the **middle** of each 15-second window, where the content of that window
+actually is. The count of frames is unchanged; only the phase moves.
+
+#### 2.2.3 Consecutive-duplicate frames collapse (LOCKED)
+
+A slide on screen for 3 minutes produces **12 identical frames** → 12 identical text blocks. Recording all 12
+would bloat the artifact, wreck the timecode index, and make the text tab unreadable. So consecutive
+observations whose **normalized text is identical** (whitespace-collapsed, case-sensitive) **collapse into one
+entry with a time RANGE**:
+
+```yaml
+- start: 180.0
+  end: 375.0        # the same slide across 13 samples → ONE entry, 3m15s wide
+  text: "Q3 Revenue — $4.2M …"
+```
+
+Non-adjacent repeats do **not** collapse (a slide returned to later is a genuinely separate appearance, and
+the user searching for it wants both timecodes). The comparison is on **normalized** text so that a
+one-character OCR wobble between two samples of the same static slide does not defeat the collapse — a
+**similarity threshold** (≥95% by Levenshtein ratio) is used rather than strict equality, because two
+fast-level passes over the *same* pixels can and do differ by a character.
+
+### 2.3 Empty is a SUCCESS, not a failure (LOCKED)
+
+Most images have **no text**. A beach photo OCRs to `""`. This is the **correct** and **successful** outcome
+and it must be recorded as one: `status: done`, `text: ""`, `blocks: []`. Getting this wrong is the bug that
+would make the feature unusable at scale, because:
+
+* If empty read back as "no artifact yet", **every text-free file in the tree would be re-offered forever** —
+  the popup would say "2,000 files can be OCR'd" the morning after OCR'ing 2,000 files (the exact class of
+  defect [ai_description.mdx §12.5](./ai_description.mdx) locks closed for descriptions).
+* If empty read back as **`failed`**, the Processing page would show a wall of red for a run in which nothing
+  went wrong.
+
+So: **the artifact's existence with `status: done` is the truth**, and `text` may legitimately be empty.
+Only a real fault (engine crash, unreadable file, ffmpeg missing on a video) is `failed`. The presence
+indicator (§5.2) and the `ocred` metric (§12) both key on the **artifact**, never on the text being non-empty.
+
+---
+
+## 3. The engine — a LIBRARY, not a `brew install` (LOCKED, with the research)
+
+**The product directive is explicit:** *"We actually want to have it where it's a library our web app uses,
+not a `brew install` tool."* This is a real constraint with real consequences, and it is what §3.1's research
+was conducted against.
+
+**Why it matters.** Transcription's engines (`qwen3-asr` via pipx, `whisper` via brew) taught us the cost of
+a **provisioned tool**: a consent dialog, a `withModelReady` gate, a tools-preflight page, a "Re-check"
+button, a detection routine that must never report an installed tool missing
+([Transcribe.mdx §5.2.1](./Transcribe.mdx)), and a support surface where a user's broken PATH becomes our
+bug. **A library has none of that.** It arrives with `pnpm install`, it is version-pinned in the lockfile, it
+cannot be half-installed, and it works on a fresh clone with zero user action. For a feature we want run over
+**every image in the tree**, that difference decides adoption.
+
+### 3.1 The research — candidates evaluated
+
+| Candidate | Delivery | Local? | Speed knob | Verdict |
+| --- | --- | --- | --- | --- |
+| **`mac-ocr`** (npm) — Apple **Vision** (`VNRecognizeTextRequest`) behind a **prebuilt universal binary**, typed promise-based Node API. MIT, macOS 10.15+. | **npm dependency** — no Xcode, no Swift toolchain, no brew. | **Yes** — *"Recognition happens entirely on-device — nothing is uploaded."* | **`--fast` vs accurate — our exact two speeds** | ✅ **PRIMARY** |
+| **`tesseract.js`** (npm) — pure **WASM** port of Tesseract, 100+ languages, worker/scheduler pool. | **npm dependency** — no native build. | **Yes**, *but* it **downloads `traineddata` on first run** unless the language data is vendored and `langPath` is pointed at it (§3.3). | Engine params, not a first-class fast/accurate switch | ✅ **FALLBACK** (non-Mac / Vision unavailable) |
+| **`node-tesseract-ocr`** | Thin wrapper that **shells out to a brew-installed `tesseract`** | Yes | — | ❌ **Violates the directive** — it *is* the brew tool, wearing an npm hat. |
+| **RapidOCR / PP-OCRv5 via `onnxruntime-node`** (`onnx-ocr-js`, `ppu-paddle-ocr`) | npm + **ONNX model files** (tens of MB) to fetch/vendor | Yes | Model-size choice | ❌ **Rejected for v1** — genuinely good accuracy, but reintroduces exactly the **model-provisioning** problem (§3.3) we are choosing a library to avoid, plus an `onnxruntime-node` native binary per platform. Revisit only if Tesseract's fallback accuracy proves insufficient. |
+| **Scribe.js** | npm, builds on tesseract.js; adds PDF + accuracy | Yes | — | ❌ **Rejected for v1** — its headline win is **PDF**, which is not our input kind (§14 candidates are image + video). Heavier and slower than tesseract.js for the same job. Revisit **if and when** LFBridge OCRs PDFs. |
+| **Cloud OCR** (Google Vision API, AWS Textract, Klippa…) | Network | **No** | — | ❌ **Rejected on charter grounds.** OCR has **no reason** to upload; making it a second network path would forfeit §4, the property that makes §1.4 acceptable. |
+
+**Sources:** [mac-ocr](https://github.com/privatenumber/mac-ocr) · [VNRecognizeTextRequest](https://developer.apple.com/documentation/vision/vnrecognizetextrequest) · [tesseract.js API](https://github.com/naptha/tesseract.js/blob/master/docs/api.md) · [tesseract.js workers vs schedulers](https://github.com/naptha/tesseract.js/blob/master/docs/workers_vs_schedulers.md) · [tesseract.js-offline](https://github.com/jeromewu/tesseract.js-offline) · [Scribe.js vs Tesseract](https://github.com/scribeocr/scribe.js/blob/master/docs/scribe_vs_tesseract.md) · [RapidOCR](https://github.com/RapidAI/RapidOCR)
+
+### 3.2 The decision (LOCKED) — Vision primary, Tesseract fallback
+
+**Primary: `mac-ocr` / Apple Vision.** Every developer machine and every deployment target of this app today
+is a Mac (the product owner's tower, the laptop, the Mac Studio "CLAW" server). Vision is **state-of-the-art
+accuracy, free, on-device, requires no model download, is maintained by the OS vendor, and is
+hardware-accelerated on Apple Silicon** — and, decisively, its **`.fast` / `.accurate` recognition levels are
+precisely the two speeds §2 requires**. We do not have to build a speed abstraction; we have to *expose* one.
+
+* **Image → accurate** (`usesLanguageCorrection` on) · **Video frame → `--fast`** (correction off).
+* Results carry **bounding boxes + confidence** per observation, which is what fills `blocks[]` (§5.1).
+* Languages are BCP-47 (`-l en-US -l ja-JP`), queryable per macOS version; the default follows the app locale
+  and is overridable (§17).
+
+**Fallback: `tesseract.js`.** Keeps the feature alive on Linux/Windows (the charter's *"server-side later"*
+posture) and on a Mac where the Vision binary won't run. Selection is **automatic**, mirroring transcription's
+qwen→whisper auto-fallback ([transcribe_engine.mdx](./transcribe_engine.mdx)); the resolved engine is
+**recorded in the artifact** (§5.1) so a file OCR'd by the weaker engine can be identified and re-run later.
+
+**The engine set is a pluggable adapter table**, exactly like describe's provider adapters — so adding
+RapidOCR later is a new row, not a refactor.
+
+The engine adapters, per-kind speed selection, availability probe, and auto-fallback are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/engines.ts` — `ENGINES` (`vision` / `tesseract`), `selectEngine(kind, requested)`, `engineStatus()`, `recognize(imagePath, { level })`.
+
+### 3.3 The one provisioning caveat — Tesseract's language data must be VENDORED (LOCKED)
+
+`mac-ocr` needs **nothing**: the binary ships in the package and Vision's models are part of macOS. That is
+the whole point.
+
+**`tesseract.js` is the exception, and it is a charter problem if ignored.** Out of the box it **fetches
+`<lang>.traineddata` from a CDN on first use** — meaning the *fallback* engine would make LFBridge **phone
+home**, silently, on a feature whose entire premise is that it does not (§4). Therefore:
+
+* The language data for the **default language set** is **vendored into the package** and `langPath` /
+  `corePath` are pointed at those **local files** (the `tesseract.js-offline` pattern). The fallback engine
+  **must work with the network unplugged**, and that is an acceptance criterion (§18.4).
+* If a user requests a language whose data is **not vendored**, that is a **permissioned provisioning
+  download** — it reuses transcription's consent flow (`withModelReady` / the model-provision service,
+  [transcribe_engine.mdx §3](./transcribe_engine.mdx)), surfacing a **consent dialog** that names the download.
+  It is **never** silent, and never a side effect of clicking "OCR…".
+
+Vendoring the traineddata and pinning `langPath`/`corePath` to local paths (so the fallback engine never reaches the network) are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/engines.ts` — the `tesseract` adapter's `createWorker(lang, oem, { langPath: VENDORED_LANG_DIR, corePath: VENDORED_CORE_DIR, gzip: false })`; data files under `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/assets/tessdata/`.
+
+---
+
+## 4. The charter posture — OCR NEVER uploads (LOCKED)
+
+[ai_description.mdx §7](./ai_description.mdx) carries a prominent warning: describing a file is *"the ONE
+deliberate external-network path in LFBridge."* **OCR is not a second one, and must never become one.**
+
+* **No bytes leave the machine.** Vision recognizes on-device; the vendored Tesseract runs in-process on WASM
+  (§3.3). There is **no** provider, **no** endpoint, **no** API key, **no** `ai_credentials` surface, and
+  **no** credentials popup anywhere in this feature.
+* **Therefore OCR needs no "explicit user action for privacy reasons."** It still only runs when clicked
+  (menus.mdx §6.1's never-act-without-a-click guardrail is universal), but the *reason* is different: describe
+  is click-gated because it **uploads**; OCR is click-gated because it **costs CPU**. This distinction is why
+  OCR is a candidate for the To-Do batch flow with a far lower cost/safety bar than describe
+  ([describe_calc_engine.mdx §5](./describe_calc_engine.mdx) vs §14.3).
+* **It aligns with the perceptual-fingerprint rule.** The charter demands the fingerprint feature *"run
+  entirely locally… must NOT phone home… we are not a reporting service."* OCR sits on **that** side of the
+  line, not description's. A user's receipts (§1.4) and investigation exhibits (§1.3) are OCR'd with **no
+  disclosure of any kind to anyone**.
+* **Any change that introduces a network call to this module is a charter violation** and must be caught in
+  review. This spec is the place that says so.
+
+---
+
+## 5. Where the OCR text lands — `.ocr`, appended, in the owning root's tracking area (LOCKED)
+
+**Identical to `.transcription` and `.ai_description` in every respect but the extension.** The artifact
+lives **inside the owning root's own committed tracking area**, in a **path-mirrored hierarchy**, under the
+media's **full filename (extension kept)** with **`.ocr` appended** as a second extension.
+
+> **Which tracking area — the storage-KIND rule** (owned by
+> [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)): `.lfbridge/` exists **only inside a
+> working git repo**, where LFB is a guest. A **dedicated LFB file repo** — a Personal / Company / Community
+> **SDL** — has **no `.lfbridge/` at all**; its root **is** the tracking area.
+>
+> | Storage kind | Example root | The OCR text lands at |
+> | --- | --- | --- |
+> | **`repo`** — a working git repo | `~/BGit/Bryan_git/charlie-kirk/` | `<root>/.lfbridge/videos/x.mp4.ocr` |
+> | **`personal` / `company` / `community`** — an SDL | `~/BGit/Bryan_git/personal_large_files_bridge/` | `<root>/_Mirror/…/x.mp4.ocr` (**no** `.lfbridge/`) |
+
+```
+WORKING GIT REPO                          SDL FILE REPO (root IS the tracking area)
+<repo>/                                   ~/BGit/Bryan_git/personal_large_files_bridge/
+├── decks/                                └── _Mirror/
+│   └── Q3.mp4       ← untouched              └── Politics/
+└── .lfbridge/                                    └── x.mp4.ocr    ← NO .lfbridge/ segment
+    └── decks/
+        └── Q3.mp4.ocr   ← .ocr APPENDED
+```
+
+The `.ocr` token is a single constant — **`OCR_EXT`** — **appended**, never substituting the original
+extension, so `Q3.mp4.ocr` and `Q3.mov.ocr` are **distinct** files (the same append-not-replace fix
+[Transcribe.mdx §3.2](./Transcribe.mdx) locks). The placement **root** resolves through the **same shared
+ordered rule** as its two siblings ([Transcribe.mdx §3.4](./Transcribe.mdx), authoritative) — walk up to the
+nearest ancestor carrying `storage.yaml` / `.lfbridge/` / `.git/`, else the owning storage's dedicated repo,
+else the storage root, else the first-time setup wizard, else a last-resort `.lfbridge/` in the media's own
+directory — and classifies the root by **storage kind first**, since every SDL also carries a `.git/`. A tool
+computing the path does `join(trackingBaseDir(root), relDir, mediaFilename + ".ocr")` and **never** hard-codes
+`".lfbridge"` into the join.
+
+**Why the tracking area:** it is **committed and travels with the repo**, so OCR text generated on the tower
+is **reused on the laptop** with no re-run — and OCR text is small UTF-8, so committing it is cheap and
+desirable. **No `*.ocr` git-ignore line is ever injected** (the same retirement `.transcription` and
+`.ai_description` made).
+
+### 5.1 The YAML shape — a self-contained `done` record
+
+```yaml
+source: decks/Q3.mp4
+status: done
+engine: vision              # vision | tesseract  (§3.2)
+level: fast                 # fast (video frames) | accurate (image)  — §2
+generated: 2026-07-16T09:41:00Z
+kind: video                 # image | video
+language: en-US
+stride_seconds: 15          # video only — the sampling stride actually used (§2.2.1)
+frames_sampled: 160         # video only — how many frames were read
+text: |                     # the flattened, searchable text (the whole point)
+  Q3 Revenue — $4.2M
+  Creator $29/mo …
+blocks:                     # image: positioned observations · video: timecoded entries
+  - start: 180.0            # video only: seconds (a RANGE after dedupe, §2.2.3)
+    end: 375.0
+    text: "Q3 Revenue — $4.2M"
+    confidence: 0.97
+  # image form:
+  # - bbox: [0.12, 0.44, 0.31, 0.06]   # x,y,w,h normalized 0–1
+  #   text: "ECONNREFUSED 8787"
+  #   confidence: 0.99
+```
+
+* **`text`** is the flattened concatenation — it is what search greps and what the tab shows. It is
+  **legitimately empty** for a text-free file (§2.3).
+* **`blocks[]`** carries the structure: **normalized bounding boxes** for an image (so the viewer can later
+  highlight *where* a hit was), **timecoded ranges** for a video (so a hit can **seek**, §1.2).
+* A read returns a usable `OcrView` **only** when the artifact exists with `status: done` — the `text` being
+  empty does **not** make it null (§2.3, the load-bearing distinction).
+
+### 5.2 The presence indicator
+
+The Storage file table's `analysis` indicator gains **`"ocr"`**, lighting up the moment the `.ocr` artifact
+exists under the media's kind-resolved tracking base — the same single source of truth the viewer tab (§7),
+the status icon (§11.2), and the `ocred` metric (§12) all read.
+
+Resolving the `.ocr` path via the shared ordered placement rule, reading back a done record, and writing the artifact under the resolved tracking base are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/ocr.service.ts` — `resolveOcrPath()` / `readOcr()` / `ocrOne()` (artifact path via `lfbridgeArtifactPath(root, rel, OCR_EXT)` in `storage/artifact-placement.service.ts`).
+Deciding the base that path hangs off — `<root>/.lfbridge` for kind `repo`, `<root>` for an SDL — is the single choke point every LFB writer resolves through, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir(root, type?)` / `usesLfbridgeDir(type)`.
+The storage-table indicator that detects the `.ocr` artifact is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `analysisOutputs()`.
+
+### 5.3 Placement is chosen by the SHARED 3-way radios (cross-reference)
+
+There is **no** separate "where does OCR text go" control. A repo/storage's **one** placement choice
+([repo_settings.mdx](./repo_settings.mdx) + [placement_radios.mdx](./placement_radios.mdx)) governs **all
+three** artifacts — `.transcription`, `.ai_description`, and `.ocr` — because all three are **Category-A
+content artifacts** under the same kind-resolved tracking base
+([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)). This spec defers wholesale and asserts
+only that **OCR obeys the radio the transcripts obey**.
+
+---
+
+## 6. Engine readiness — `withOcrReady` (LOCKED)
+
+The third column of §0's readiness row. Transcription gates on a **model download**; description gates on a
+**provider key**; **OCR gates on almost nothing** — which is the feature's best property, and the gate exists
+only to make the rare failure honest:
+
+* **The common case is ALWAYS ready.** On a Mac, `mac-ocr` is an npm dependency and Vision is in the OS.
+  There is **no** setup card, **no** consent dialog, and **no** "Re-check" button in the path the user will
+  actually hit. **A ready check that is always true must not cost a dialog.**
+* **The two not-ready cases:**
+  1. **No engine at all** — the Vision binary won't run (non-Mac, or a broken package) **and** the vendored
+     Tesseract fallback is unavailable. Surfaces as `no_engine` with an honest reason.
+  2. **A non-vendored language was requested** — the one permissioned download (§3.3), which reuses
+     transcription's consent dialog and **never** proceeds silently.
+* **Video adds one tool dependency: ffmpeg/ffprobe** (frame extraction, §2.2). When a **video** is OCR'd on a
+  machine without ffmpeg, the run **`failed`**s with the install hint (`brew install ffmpeg`) — the same
+  honest-outcome posture describe takes for its compress-to-fit ([ai_description.mdx §3.3](./ai_description.mdx)).
+  **Images need no external tool at all.** Note the asymmetry this creates and do not paper over it: an
+  ffmpeg-less machine OCRs every image fine and every video not at all.
+* **Every entry point gates identically — no bypass** (the rule [Transcribe.mdx §5.2.2](./Transcribe.mdx)
+  locks): the viewer button, the ⋮ item, the page action, the popup Apply, and the queue worker all route
+  through the same gate. There is no path that reaches the engine without it.
+
+### 6.1 The shared launcher (`lib/ocr.ts`) (LOCKED)
+
+The third sibling of `lib/transcribe.ts` / `lib/describe.ts`. **Every** frontend OCR producer calls it, so
+the readiness gate, the pending state, the toast, and the query invalidation are written **once**:
+
+`runOcrFile(path)` → flips the control to a disabled **OCR'ing…** spinner **instantly** (the click is never a
+no-op — the defect [Transcribe.mdx §2.1](./Transcribe.mdx) fixed), posts, toasts the **honest outcome**, and
+invalidates `["ocr"]` + `["progress"]`.
+
+The shared launcher and the readiness gate are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/ocr.ts` — `runOcrFile()` / `withOcrReady()`; the backend probe `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/engines.ts` — `engineStatus()`.
+
+---
+
+## 7. The media viewer — a THIRD analysis panel, side-by-side (LOCKED — amends media_viewer.mdx §6)
+
+> **Read this before you write the code, because the closest sibling spec is stale here.**
+> [ai_description.mdx §1](./ai_description.mdx) describes the viewer's analysis band as a **two-tab strip**
+> with a ✓ per tab and a "default-tab rule". **That is not what the viewer is.**
+> [media_viewer.mdx §6](./media_viewer.mdx) is **authoritative** and says the opposite, in terms:
+> *"Both are shown at once — there are **no tabs and no radio buttons** to switch between them."* The band is
+> **side-by-side analysis columns**. OCR follows **media_viewer.mdx**, and there is **no tab strip and no
+> default-tab rule** in this feature.
+
+The band (band 6) held **two** columns — AI description (left) and Transcription (right). It now holds a
+**third**: **Text (OCR)**.
+
+```
+┌───────────────────────┬───────────────────────┬───────────────────────┐
+│ ✨ AI description   ✓ │ 🎬 Transcription    ✓ │ 🔤 Text (OCR)       ✓ │
+├───────────────────────┼───────────────────────┼───────────────────────┤
+│ ## Overview           │ 00:03  So if you look │ 03:00–06:15           │
+│ A wide establishing…  │ 00:11  at the numbers │   Q3 Revenue — $4.2M  │  ← video: click to SEEK
+│                       │                       │ 06:15–06:45           │
+│                       │                       │   Creator $29/mo …    │
+└───────────────────────┴───────────────────────┴───────────────────────┘
+```
+
+* **Which columns show, by kind** (the amended matrix — the OCR column is the new one):
+
+  | Kind | AI description | Transcription | **Text (OCR)** |
+  | --- | --- | --- | --- |
+  | **audio** | — | ✓ | **—** (no pixels, §1.7) |
+  | **image** | ✓ | — | **✓** |
+  | **video** | ✓ | ✓ | **✓** (all three) |
+
+  A **video** therefore shows **three** columns and an **audio** file shows **one**. Column widths divide the
+  band evenly among the columns actually shown, so an image's two columns each get half — the band never
+  reserves dead space for an inapplicable analysis.
+* **The label is "Text (OCR)"** — the charter's spell-it-out rule governs the **product name**, not this
+  acronym, but a user-facing label reading only "OCR" is jargon. "Text" is what the user wants; "(OCR)" says
+  how it got there.
+* **The ✓ availability marker** resolves the artifact at `<trackingBase>/<rel-dir>/<name.ext>.ocr` — the same
+  mechanism the sibling ✓s use for `.transcription` / `.ai_description` (media_viewer.mdx §6) — and it shows
+  **even when the text is empty** (§2.3). A text-free image shows **✓** over a pane reading *"No text found
+  in this image."* That is a **result**. The user must not be invited to re-run it forever.
+* **No content → a `GeneratePane`**, matching its siblings' **Generate description** / **Generate transcript**:
+  the OCR column's pane reads **Read text from this file** (§8.1).
+* **Video rows seek.** Clicking a timecoded OCR entry seeks the player to `start` — the §1.2 payoff, and the
+  one capability neither sibling column has.
+* **Image hits can highlight.** `blocks[].bbox` is normalized (§5.1) so the viewer can overlay a box on the
+  image for the selected line.
+* **Copy text (proposed, not built).** [media_viewer.mdx §6.1](./media_viewer.mdx) lists **Copy transcript** /
+  **Copy description** as *proposed*. **Copy OCR text** joins them as **proposed** — and it is the one of the
+  three a user most obviously wants, since the artifact is literally the text off the screen. It is tracked
+  there, not built here.
+
+The third analysis column, its ✓ presence marker, the generate pane, and the seek-on-click are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `MediaAnalysis` (a third `AnalysisColumn` / `AnalysisBody` / `GeneratePane`, gated on `kind` being image or video) and `ActionBar` (the **OCR…** action, §8.1).
+
+---
+
+## 8. Entry points — every UI surface where OCR can be invoked (LOCKED)
+
+The product directive: *"When there are actions, we want to include OCR… For every UI where it can appear,
+these triple-dot dropdown menus mean right-click on files or directories. When we're ever in a one-repo or
+the file system, we want to have sections for every single part of those user interfaces they can invoke."*
+This section is that inventory.
+
+> **Two stale-spec traps to avoid — do not copy them from the siblings.**
+> 1. **There is no `Actions ▾` dropdown.** [page_actions.mdx §0](./page_actions.mdx) records a **design
+>    reversal**: page actions are a **visible horizontal row of blue hyperlinks** under the page title
+>    (`gap: 14px`, thin `·` separators), overflowing into **`More ▾`** (§3.1) — not a dropdown.
+>    [Transcribe.mdx §2.5](./Transcribe.mdx) and [ai_description.mdx §5.1](./ai_description.mdx) still say
+>    "the header `Actions ▾` menu"; **they are stale**. OCR follows page_actions.mdx.
+> 2. **The menu items are named `Create …`, in the `Create` group.** [menus.mdx §5.2/§5.3](./menus.mdx) is
+>    the LOCKED catalog: a directory gets **Create Transcriptions** / **Create AI descriptions**; a file gets
+>    **Create Transcription** / **Create AI description** (singular). [Transcribe.mdx §2.2/§2.4](./Transcribe.mdx)'s
+>    "**Transcribe…**" and "**Transcribe all files…**" items in a "**Work**" group **do not exist**. OCR uses
+>    the **`Create` group** and the **`Create …`** naming, so the trio reads as one family.
+>
+> The current LOCKED truth for entry points is **[dialogs.mdx §6](./dialogs.mdx) + [menus.mdx §5](./menus.mdx)
+> + [page_actions.mdx §0/§0.1](./page_actions.mdx)**, and this section is written against those.
+
+**[dialogs.mdx §6](./dialogs.mdx) is the authoritative list, and it names exactly four producing entry
+points.** OCR fills the third column of each:
+
+| Entry point | Where | OCR's item |
+| --- | --- | --- |
+| **Metric tile** | one-repo metrics strip | **`OCRable`** → popup (§12.2) |
+| **Header primary** | one-repo header | blue **OCR ›** → popup (§12.3) |
+| **Page action-link** | the action-links row on every file-list page | **Create OCR text** → popup (§8.5) |
+| **⋮ kebab / right-click** | directory or file entity menu | **Create OCR text** / **Create OCR text** (§8.2–§8.4) |
+
+Everything below is those four, plus the single-file launcher surfaces.
+
+### 8.1 One file — the Media Viewer action bar
+
+Open an image or video in the **[Media Viewer](./media_viewer.mdx)**; its action bar (band 3) gains an
+**OCR / Re-run OCR** action ([media_viewer.mdx §4.2–§4.3](./media_viewer.mdx)'s shared-actions matrix gains
+an OCR row: ✓ image, ✓ video, — audio), and the **Text (OCR)** analysis column (band 6, §7) shows a **Read
+text from this file** pane when no artifact exists. Clicking either flips to a disabled **OCR'ing…** spinner
+**instantly** and raises a dock card. When an artifact exists the action reads **Re-run OCR** (the one
+`overwrite: true` path, §12.4).
+
+**Hotkey (proposed, not locked).** [hotkeys.mdx §5](./hotkeys.mdx) gives transcription **`T`** and gives AI
+description **nothing** — there is **no precedent for a third analysis hotkey**, so OCR does not claim one by
+default. If one is wanted, **`R`** ("read") is free in the media-viewer scope (as are `X`, `G`, `I`, `E`, `Q`);
+`O` is taken by *open raw*, so the obvious letter is **not** available.
+
+### 8.2 One file — the ⋮ kebab / right-click → **Create OCR text** (LOCKED)
+
+**The `⋮` triple-dot menu and right-click are the SAME menu** ([menus.mdx §3.1](./menus.mdx)) — one catalog,
+two affordances, which is exactly what the directive means by *"these triple-dot dropdown menus mean
+right-click on files or directories."*
+
+The **File** catalog ([menus.mdx §5.3](./menus.mdx)) gains **Create OCR text** in the **`Create`** group,
+directly **after** `Create Transcription` and `Create AI description` — the three are **always adjacent and
+always in that order**, at every scale, so the trio is learnable as one thing. Image/video only.
+
+Like its siblings it **opens the unified popup** ([dialogs.mdx §6.4](./dialogs.mdx)) with **this one file as
+the sole checked candidate** — the education plus an explicit **"OCR 1 file"** confirm. It is **not** a
+silent one-click run; the menu is the same actions as the fast path, not a bypass
+([menus.mdx §5.6](./menus.mdx)).
+
+* The item is **absent** (not disabled) for a non-image/-video file — the grammar the sibling items use.
+* Right-click opens the identical menu, **isolated from the row underneath** ([menus.mdx §3.2](./menus.mdx))
+  — it must never also trigger the row's cell-link navigation.
+
+### 8.3 A directory — the ⋮ kebab / right-click → **Create OCR text** (LOCKED)
+
+The **Directory (non-repo)** catalog ([menus.mdx §5.2](./menus.mdx)) gains **Create OCR text** in the
+**`Create`** group, beside `Create Transcriptions` / `Create AI descriptions`. It opens the unified popup
+**scoped to this directory's subtree** (`{ root: <dir> }`), listing every OCR-able image/video under it,
+with a solid-blue **"OCR N files"** confirm.
+
+This is the **directory triple-dot / right-click** flow the directive names, and the twin of the
+*"Compress videos & images inside…"* entry point ([parallelization.mdx §5](./parallelization.mdx)). Because
+a recursive walk can resolve to thousands of files, it gets the **"Opening window…"** spinner
+([dialogs.mdx §5.4](./dialogs.mdx), §9) — it **never** bare-confirms and **never** insta-enqueues.
+
+### 8.4 Repo & storage scale — where OCR does and does NOT appear (LOCKED)
+
+**The repo `⋮` has no producing actions today, and OCR does not add one.** [menus.mdx §5.1](./menus.mdx)'s
+Repo catalog is Open / Work / Config / Copy / Danger — it carries **no** `Create Transcriptions` and **no**
+`Create AI descriptions`. ([Transcribe.mdx §2.4](./Transcribe.mdx)'s claim that the repo kebab gains
+"Transcribe all files…" describes a surface that does not exist.) A whole repo is OCR'd from the one-repo
+page's **action-link** (§8.5), its **metric tile** (§12.2), or its **header primary** (§12.3) — three ways
+already. **Adding a fourth to the repo kebab would break the symmetry contract in the wrong direction**: it
+would give OCR a surface neither sibling has. If the repo catalog ever gains producing actions, it gains
+**all three** at once (§0).
+
+**Storage scale** is the action-links row on the storage detail page ([storages.mdx](./storages.mdx)) —
+covered by §8.5, since that page carries the same catalog.
+
+### 8.5 The page action-link — **Create OCR text** (LOCKED)
+
+The primary bulk entry point, and it is a **link in the action-links row**, not a dropdown item (see the trap
+note above). It sits beside **Create Transcriptions · Create AI descriptions · Compress all**, and obeys the
+three LOCKED [page_actions.mdx §1](./page_actions.mdx) rules:
+
+* **Rule 1 — Scope** ([§1.1](./page_actions.mdx)) — with rows **checked**, exactly the checked set; with
+  **nothing** checked, **every image/video on the page, recursively**.
+* **Rule 2 — Skip-already-done** ([§1.2](./page_actions.mdx)) — files with a `done` `.ocr` artifact
+  (**including empty-text ones** — §2.3) and non-image/-video files are dropped **before** the popup lists
+  anything.
+* **Rule 3 — Background queue, return immediately** ([§1.3](./page_actions.mdx)) — but note the **§0.1
+  reversal**: the **click opens the popup**; the popup's **Confirm** is what enqueues (op `ocr`) and returns.
+
+**The per-page catalog** ([page_actions.mdx §4](./page_actions.mdx)) gains **Create OCR text** on exactly the
+pages that carry its two siblings: **One repo · File System / a directory · Full paths · Storage detail ·
+View one directory**. The row is **measured**, so on a narrow page OCR — the newest and lowest-priority link
+— is the first to overflow into **`More ▾`** ([§3.1](./page_actions.mdx)). Storage detail and File System
+additionally carry **Show what could be OCR'd** (§14), mirroring *Show what could be transcribed*.
+
+The toast wording follows the LOCKED pattern ([page_actions.mdx §2](./page_actions.mdx)): **"{N} files will
+have their OCR text created"** / **"All {M} files already have OCR text — nothing to do"**. `N` is the
+`willProcess` figure from the enqueue endpoint, never the raw page count.
+
+### 8.6 The metric tile (one-repo)
+
+The **`OCRable`** metric panel is itself an entry point: clicking it opens the educate-and-fix popup whose
+Apply enqueues. Detail: §12.2.
+
+### 8.7 The blue header primary (one-repo)
+
+When OCR is the worst-scoring recommendation, the one-repo header's blue primary reads **OCR ›**
+([task_tabs.mdx §2.7](./task_tabs.mdx), [one_repo.mdx §3.1](./one_repo.mdx)) and opens the same popup.
+Detail and the ranking: §12.3.
+
+### 8.8 The To-Do batch slug
+
+The **"Show what could be OCR'd"** discovery link produces a per-storage **OCR slug** whose ~80% popup Apply
+enqueues background `ocr` jobs. Detail: §14.
+
+### 8.9 The File System page — the full inventory (LOCKED)
+
+The directive singles this page out. On [file_system.mdx](./file_system.mdx), OCR is reachable from **every**
+one of these, and **no others**:
+
+| # | Surface | Targets | Opens |
+| --- | --- | --- | --- |
+| 1 | **File row `⋮` / right-click** → **Create OCR text** | that one file | popup, 1 checked (§8.2) |
+| 2 | **Directory row `⋮` / right-click** → **Create OCR text** | that dir's subtree (`{root}`) | popup + spinner (§8.3) |
+| 3 | **Action-links row** → **Create OCR text** | checked set, else whole page recursive | popup (§8.5) |
+| 4 | **Action-links row** → **Show what could be OCR'd** *(specified, **not built** — §20.2)* | every storage — read-only, writes a batch | no popup (§14) |
+| 5 | **A file's single-entity page `⋮`** → **Create OCR text** | that file | popup, 1 checked (§8.2) |
+| 6 | **The Media Viewer** → **OCR** action / **Text (OCR)** column's Read-text pane | that file | launcher (§6.1) |
+
+(There is **no** `Actions ▾` row and **no** multi-select "OCR selected…" item: the **checked set is Rule 1's
+scope** for the action-link, which *is* how a selection is OCR'd — [page_actions.mdx §1.1](./page_actions.mdx).)
+
+### 8.10 The One-Repo page — the full inventory (LOCKED)
+
+On [one_repo.mdx](./one_repo.mdx), likewise exhaustively:
+
+| # | Surface | Targets | Opens |
+| --- | --- | --- | --- |
+| 1 | **Blue header primary** → **OCR ›** (when it is the top recommendation) | the repo's candidates | popup, **no spinner** (§12.3) |
+| 2 | **`OCRable` metric tile** click | every not-yet-OCR'd candidate in the repo | popup, **no spinner** (§12.2) |
+| 3 | **`OCRed` metric tile** click | — | **nothing** — a done metric is inert (§12.1) |
+| 4 | **Action-links row** → **Create OCR text** | checked set, else page recursive | popup (§8.5) |
+| 5 | **The OCR task tab** → per-row **OCR status icon** (`could` state) | one file per click | launcher (§6.1) |
+| 6 | **File row `⋮` / right-click** → **Create OCR text** | that one file | popup, 1 checked (§8.2) |
+| 7 | **Directory row `⋮` / right-click** → **Create OCR text** | that dir's subtree | popup + spinner (§8.3) |
+| 8 | **The repo `⋮`** | — | **nothing** — the repo catalog has no producing actions (§8.4) |
+
+**Rows 1 and 2 take no "Opening window…" spinner** and this is a real rule, not an omission: they build the
+candidate list from the **already-in-memory `RepoDetail.files`**, so there is no scope walk to wait on
+([dialogs.mdx §5.4](./dialogs.mdx) — the spinner is **only** for scope-walking opens). Rows 4 and 7 **do**
+walk, and **do** get it.
+
+The `Create OCR text` items in the **File** and **Directory** catalogs are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the `Create` group; calls `openOcrBatch({ paths: [file] })` / `openOcrBatch({ root: dir })`).
+The `Create OCR text` page action-link and the `Show what could be OCR'd` link are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createOcrText()` (calls `openOcrBatch()` from `lib/batchPopup.ts`) / `showWhatCanBeOcred()`; mounted through `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `producingActions()`.
+The media-viewer action and its launcher are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` (calls `runOcrFile()` from `lib/ocr.ts`).
+
+---
+
+## 9. The unified batch-confirm popup — OCR is the third launcher (LOCKED)
+
+[dialogs.mdx §5](./dialogs.mdx) owns **the** popup: *the SINGLE surface every batch entry point opens.*
+**OCR joins it as a third launcher — it does not get a popup of its own.** Every rule below is inherited, and
+this section documents only what OCR fills in.
+
+* **What it is** ([dialogs.mdx §5.1](./dialogs.mdx)) — **not a bespoke dialog**: it is the **`WarningPopup`**
+  ([warnings.mdx §4](./warnings.mdx)) fed an **OCR `WarningDef`** whose `targets` are the candidate files.
+  Two-pane, **~80% of screen**: **left** = the education + a **media preview** on row hover (**Space** to
+  play, [hotkeys.mdx §5a](./hotkeys.mdx)); **right** = the **candidate checklist, every row checked at
+  open**. **Never** a native `window.confirm` ([dialogs.mdx §1](./dialogs.mdx) — banned, grep must be 0).
+* **The confirm button carries the live count** — a solid-blue **"OCR N files"** (`actionLabel` + the popup's
+  appended `— N files`), **disabled at zero checked**, and it applies to **visible ∩ checked** so the kind
+  filter (§9.1) and the checkboxes compose.
+* **The candidate list comes from a PLAN, not a count** ([dialogs.mdx §5.2](./dialogs.mdx)) — `POST
+  /api/ocr/plan` (§18) previews server-side (applying scope + skip-already-done) and returns the **actual
+  file list**, so preview and enqueue can never disagree.
+* **The excluded count is STATED, not just applied** ([dialogs.mdx §5.2.1](./dialogs.mdx)) — via
+  `excludedClause(alreadyDone, "OCR text")`, the sub gains *"…**312 files already have OCR text** and are
+  excluded from this list."* — **omitted entirely when `alreadyDone === 0`**. Silently dropping them is what
+  makes a correctly-working batch look broken.
+* **The "Opening window…" spinner** ([dialogs.mdx §5.4](./dialogs.mdx)) — appears **synchronously** on click,
+  **before** the `/plan` request is awaited, so a multi-minute recursive walk never looks hung; cancellable
+  (Cancel / Esc / backdrop) with a **generation token** making a late-arriving plan a no-op. **Only for
+  scope-walking opens** (§8.3, §8.5) — the metric tile and header primary build from in-memory
+  `RepoDetail.files` and take **no** spinner (§8.10).
+* **One global host** ([dialogs.mdx §5.3](./dialogs.mdx)) — `requestBatchPopup()` on the single-slot bus,
+  rendered by the one `BatchPopupHost` mounted in `App.tsx`. Any launcher, any page, no per-page wiring.
+* **Confirm ENQUEUES — it never runs OCR inline** ([ai_description.mdx §12.4](./ai_description.mdx), the
+  locked-closed defect where the popup called the batch endpoint directly and results never appeared in
+  Processing). OCR's Apply calls **`api.ocrEnqueue`** (op `ocr` → **Processing**), **never** `api.ocrBatch`.
+* **Apply is gated** exactly where its siblings are gated — but OCR's gate is nearly always a no-op (§6),
+  since there is no model to download and no key to add. **Do not render a consent step that has nothing to
+  consent to.**
+
+### 9.1 The OCR popup's "Filter:" kind row — Videos / Images (LOCKED)
+
+The popup's standard **"Filter:" kind row** ([warnings.mdx §4.5.4](./warnings.mdx)) — shown whenever an
+action spans two media kinds, as describe's does ([ai_description.mdx §12.4.1](./ai_description.mdx)) — with
+**Videos** and **Images** both checked by default, applying **visible ∩ checked**.
+
+**It is more load-bearing for OCR than for any other action**, because the two kinds differ in cost by
+**two orders of magnitude** (§15 vs §16): an image is ~250 ms; a 40-minute video is a frame-extraction pass
+plus 160 recognitions. A user who wants *"just the screenshots, now"* must not be forced to also commit to
+every video in the tree. So the sub-line states **both** counts **and the cost asymmetry**, honestly:
+
+> *"**1,204 images** and **86 videos** can have OCR text created. Images finish in seconds; each video is
+> sampled every 15 seconds and takes about a minute per hour of footage. **312 files already have OCR text**
+> and are excluded from this list."*
+
+### 9.2 The per-row detail
+
+Rows carry the standard per-row toggles ([decision_toggles.mdx](./decision_toggles.mdx)) plus, for a
+**video** row, the resolved **frame count** (`⌈duration / 15⌉`) inline — so the user can see *why* one row is
+expensive **before** committing to it. `POST /api/ocr/plan` returns `frames?` per video row precisely to
+feed this (§18); it is the one field OCR's plan has that its siblings' plans do not.
+
+The OCR batch-popup launcher is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `openOcrBatch(scope)` (fetches `POST /api/ocr/plan`, builds the OCR `WarningDef` with the previewed files as checked targets, appends `excludedClause(alreadyDone, "OCR text")`, and opens it via the global host `requestBatchPopup()`), whose Apply calls `api.ocrEnqueue`; the host `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/BatchPopupHost.tsx` — `BatchPopupHost`.
+
+---
+
+## 10. Parallelization (LOCKED)
+
+**The headline: OCR is LOCAL CPU work, so it draws the MASS-COMPUTE core budget** — the opposite of describe.
+[parallelization.mdx §3](./parallelization.mdx)'s map gains a row, and getting it right matters because OCR
+is the transaction most likely to be run over an entire tree (§1.6).
+
+### 10.1 Which budget, and why (LOCKED)
+
+[ai_description.mdx §12.6](./ai_description.mdx) fans describe **~24-wide** on one premise: *"the machine
+sits idle while the provider thinks"* — parallelism is free because the work is a **network round-trip**.
+**That premise is false for OCR.** Vision and Tesseract burn **local cores**; nothing waits on a network
+(§4). Fanning OCR out 24-wide would be exactly the `cores²` oversubscription
+[parallelization.mdx §2](./parallelization.mdx) exists to prevent.
+
+So OCR draws the **mass-compute budget** — `round(cores × max_core_fraction)`, default **90%** — the same
+budget compression and batch transcription use. It is *"pure batch CPU work the user explicitly kicked off and
+is watching drain in the background"*: the textbook mass-compute consumer.
+
+| Operation | Budget | Fan-out shape | Why |
+| --- | --- | --- | --- |
+| **OCR — images** | **mass-compute** | **wide**: `budget` jobs, **1 thread each** | One recognition ≈ one core. Textbook single-threaded-tool → fan wide (§2 of parallelization.mdx). |
+| **OCR — video frames** | **mass-compute** | **wide over frames**, inside a **core-budgeted** extraction gate (§10.3) | The recognitions are wide; the **ffmpeg extraction** is not (§10.3). |
+| **OCR — frame extraction (ffmpeg)** | **mass-compute** | **narrow**: `floor(budget / videoThreads)`, threads **capped** | ffmpeg is internally multi-threaded — the same narrow shape compress-video uses. |
+
+**Anti-oversubscription holds:** `concurrentJobs × threadsPerJob ≈ budget`, never `cores²`.
+
+### 10.2 Two levels of fan-out, one shared limiter
+
+A video is **itself** a batch (160 frames). Naively that is two nested fan-outs — `budget` videos × `budget`
+frames = `cores²`, the classic mistake. So the **frame recognitions and the file-level jobs draw from ONE
+shared limiter**, exactly as the pin pass does ([pin_process.mdx §4](./pin_process.mdx), the shipped
+reference for two-level-one-limiter). A single video being OCR'd alone fans its 160 frames across the whole
+budget (fast); 20 videos at once share that same budget between them. **The box is never oversubscribed and
+never idle.**
+
+### 10.3 The extraction gate — the describe §12.6.1 lesson, applied UP FRONT (LOCKED)
+
+[ai_description.mdx §12.6.1](./ai_description.mdx) records a defect worth not repeating: a bucket documented
+as *"the one bucket where more parallelism is safe even on a small laptop"* turned out to run **up to ~24
+concurrent ffmpeg encodes**, because one **conditional CPU branch** (compress-to-fit) hid inside an
+"I/O bucket". The rule it locked: **a queue cap may only be called "network-bound" if EVERY path in that job
+is network-bound.**
+
+**OCR takes that lesson as a starting condition.** Its video path **always** shells out to ffmpeg — the CPU
+branch is not conditional, it is the norm. Therefore:
+
+* **Frame extraction acquires the SHARED transcode slot** — the same semaphore describe's `fitMediaUnderLimit()`
+  holds, sized from `coreBudget() / VIDEO_THREADS_PER_ENCODE`. So a describe transcode and an OCR extraction
+  **compete for one budget** rather than each believing it owns the machine.
+* **Images never touch the gate.** They have no ffmpeg step, so they cost nothing and wait for nothing — the
+  common, high-volume case keeps the full wide fan-out.
+* **The gate is released before recognition.** The slot covers **only** the ffmpeg pass; the 160 recognitions
+  that follow draw the ordinary limiter (§10.2). Holding a transcode slot across recognition would serialize
+  the cheap part behind the expensive part's budget.
+
+### 10.4 Async end-to-end — never `spawnSync` (LOCKED)
+
+**The single most important implementation rule in this spec.** Memory: *"'Processing page won't load during
+~2000 AI descriptions' = event-loop FREEZE: fit-media.ts used spawnSync on the ~24-way describe hot path."*
+That is [performance.mdx P-27](./performance.mdx), theme **T3 — the backend blocks the Node event loop**, and
+[ai_description.mdx §3.3.1](./ai_description.mdx) locks it closed.
+
+**OCR must be born with it closed:**
+
+* **Every** child process — `ffprobe`, `ffmpeg` — runs through an **async** runner (`child_process.spawn`,
+  awaited, with a hard-kill timeout), **never** `spawnSync`. `ocrOne()` / `extractFrames()` / `probeVideo()`
+  are **all `async`** and awaited.
+* **Every** file read is `fs.promises` — **never** `readFileSync`. A frame JPEG read on a wide fan-out blocks
+  the loop exactly as a base64 payload read did.
+* **The Tesseract fallback runs in a WORKER, never on the main thread.** `tesseract.js` recognition is a
+  multi-second **CPU-bound WASM** call; run in-process it freezes the loop just as thoroughly as `spawnSync`
+  — with none of the visibility, since there is no child process to blame. It uses the library's
+  **scheduler + worker pool** ([tesseract.js workers vs schedulers](https://github.com/naptha/tesseract.js/blob/master/docs/workers_vs_schedulers.md)),
+  pool size = the core budget, workers **reused** across files (worker startup dominates a small image's
+  cost, and *"each worker uses a high amount of memory, so code should never be able to create an arbitrary
+  number of workers"*).
+* Only the near-instant `which`-style availability probe stays synchronous (a few ms — the same exception
+  compression's `onPath()` takes).
+
+**The acceptance test is the sibling's:** fire **2,000 OCR jobs**, then open **`/processing` in a second
+browser** — it **loads and moves** within one poll interval ([ai_description.mdx §12.7](./ai_description.mdx)).
+
+### 10.5 The queue bucket
+
+The queue ([job_queue.mdx §3](./job_queue.mdx)) gains an **`ocr`** bucket — or, precisely, **two** caps like
+compress's media-aware pair: **`ocr:image`** (wide, mass-compute) and **`ocr:video`** (the extraction gate,
+§10.3). `ProgressKind` gains `"ocr"`, so every existing surface — the dock card, the Processing rows, the
+Waiting backlog, the per-op counts — works with **no new UI**.
+
+The `ocr` bucket's media-aware caps and the shared extraction gate are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` (the `ocr:image` / `ocr:video` buckets, drawn from `coreBudget()`) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `acquireTranscodeSlot()` (the shared semaphore OCR's `extractFrames()` also acquires) · the op union `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `ProgressKind` (add `"ocr"`).
+Policy: [parallelization.mdx §3](./parallelization.mdx).
+
+---
+
+## 11. The OCR task tab & the three-state status icon (LOCKED)
+
+### 11.1 The tab
+
+[task_tabs.mdx §1](./task_tabs.mdx)'s per-repo tab strip becomes **All · IPFS · Compress · Transcribe · AI
+descriptions · OCR**. The OCR tab lists the repo's **image/video** files with the OCR status icon leading,
+plus the standard metrics strip (§12) and hover-info region, and it re-tunes the table from the same
+data-driven tab config the other five use ([task_tabs.mdx §7](./task_tabs.mdx)) — **no bespoke table**.
+Default sort is the shared **"could-first"** (the actionable rows), then **Size desc**.
+
+### 11.2 The three-state OCR status icon (`TextSelect`, done-color **violet**)
+
+The **fourth** skin of the one shared `StatusActionIcon` — *"one shared component in three skins — same box,
+same three states, same could ⇄ done toggle and click contract; only the **glyph** and the **done-color**
+differ"* ([task_tabs.mdx §5.3](./task_tabs.mdx)). OCR makes it four:
+
+| Icon | Tab | Glyph | Flag | **Done color** |
+| --- | --- | --- | --- | --- |
+| Transcribe | Transcribe | `Captions` | `transcribable` | **blue** (`--lfb-pin`) |
+| Describe | AI descriptions | `ScanText` | `describable` | **teal** (`--lfb-describe-done`) |
+| Compress | Compress | `Archive` | compressible | **green** (health "good") |
+| **OCR** | **OCR** | **`TextSelect`** | **`ocrable`** | **violet** (`--lfb-ocr-done`) |
+
+The glyph must not be `ScanText` — **that is describe's**, and the two features are already the easiest pair
+to confuse (same input kinds, adjacent menu items). `TextSelect` (a text cursor over glyphs) reads as
+*"select the text out of this"*, which is the feature.
+
+The three states obey the identical grammar ([task_tabs.mdx §5](./task_tabs.mdx)), in a **leading,
+header-less control column to the LEFT of `File`** (the product owner's LOCKED instruction, quoted in §4.4:
+*"move that transcribe icon over to the left of the file icon and get rid of the title of it"*):
+
+| State | Fill | Edge | Click |
+| --- | --- | --- | --- |
+| **Done** | solid **violet**, white glyph | none | opens the artifact — the **Text (OCR)** column in the viewer (§7) |
+| **Could be OCR'd** | ~99% white, ~1% violet wash | the shared actionable edge `--lfb-decision-on` | **OCR's that one file** (§6.1) |
+| **N/A** | white | the shared `--lfb-toggle-off-edge` hairline, faint grey glyph | inert |
+
+The **"could" edge and the N/A hairline are identical across all four icons** — only the filled done swatch
+tells them apart. The cell is a **control**: it stops propagation and never navigates the row.
+
+**The empty-text case is `Done`, and that is the whole point of §2.3.** A tree of text-free holiday photos
+settles at **100% done** — a **big green 0** on `OCRable` ([task_tabs.mdx §2.2](./task_tabs.mdx)) — and stays
+there, rather than presenting an eternal wall of candidates.
+
+The OCR status icon is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/OcrStatusIcon.tsx` — via the shared `StatusActionIcon` (the sibling of `TranscribeStatusIcon.tsx` / `DescribeStatusIcon.tsx` / `CompressStatusIcon.tsx`); the click wired in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `onOcrActivate()`.
+
+---
+
+## 12. The `ocrable` / `ocred` metric pair, the popup, and the "OCR ›" header primary (LOCKED)
+
+### 12.1 The metric pair
+
+`TaskMetrics` gains **`ocrable`** and **`ocred`**, mirroring `transcribable`/`transcribed` and
+`describable`/`described`, and rendered as panels named **`OCRable`** (could) and **`OCRed`** (done) —
+the [task_tabs.mdx §4.4/§4.5](./task_tabs.mdx) could/done naming convention:
+
+* **`OCRable`** — image/video files with **no** `.ocr` artifact. **Clicking it opens the educate-and-fix
+  popup** (§12.2); the panel is **amber-tinted** when > 0 (the "offer" health tint for task work,
+  [task_tabs.mdx §2.3](./task_tabs.mdx)) and a **big green 0** when the repo is fully OCR'd (§2.2).
+* **`OCRed`** — files with a `done` artifact. **It is INERT** — clicking does nothing. This is the
+  convention, not an oversight: `buildMetricWarning()`'s switch returns **`null`** for every done-metric
+  (`transcribed`, `described`, `alreadyCompressed`, …), because a *finished* count has nothing to fix.
+  **`ocred` joins that null list.**
+
+### 12.2 The metric → popup → Confirm → Processing flow
+
+Identical to the sibling flow ([task_tabs.mdx §2.4.1](./task_tabs.mdx), [ai_description.mdx §12.2](./ai_description.mdx)):
+click the tile → **`buildOcrWarning`** builds the def from the **in-memory** `RepoDetail.files` (so **no
+`/plan` call and no "Opening window…" spinner** — §8.10) → the **one** unified popup (§9) opens with the
+candidates checked → **Confirm** → `POST /api/ocr/enqueue` → op `ocr` → **Processing**. **The Apply
+enqueues; it never runs OCR inline** (§9, the locked-closed defect).
+
+The `buildOcrWarning` builder and its registration in the metric switch are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildOcrWarning()`, returned by `buildMetricWarning()` for `ocrable` and **`null`** for `ocred`; rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx`. The numbers come from `RepoDetail.taskMetrics`, computed in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail()`.
+
+### 12.3 The blue "OCR ›" header recommendation — and where it ranks (LOCKED)
+
+The one-repo header's blue primary is **worst-first** across the repo's recommendations
+([task_tabs.mdx §2.7](./task_tabs.mdx), [one_repo.mdx §3.1](./one_repo.mdx)). The LOCKED order gains a
+**sixth** actionable position, at the **end**:
+
+```
+ipfs-down → pull-down → undecided → transcribe → describe → compress → ocr
+  (bad)      (bad)       (warn)      (warn)       (warn)     (warn)    (warn)
+```
+
+**OCR ranks last, behind compress.** The rationale is honest and worth stating so nobody "promotes" it later:
+an un-pinned file is a **data-loss** risk; an undecided file is an **unmade decision**; a missing transcript
+or description is **missing content**; an uncompressed video is **wasted disk**. Missing OCR text is a
+**search convenience** — the cheapest of the seven to fix and the least costly to lack. It must never
+outrank a backup problem, and on a repo where it is the *only* outstanding item it is, correctly, the whole
+recommendation.
+
+The inherited precedence rules still apply: **scan-stale wins** (the primary reads *"Scan now"*),
+**all-clear = no button**, and the primary is **gated on click, not on display** — though for OCR that gate
+is nearly always a no-op (§6).
+
+The label and its position in the worst-first order are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `topRecommendation()` (returns `{ metricId, warning, label }`; the `ocr` entry appended **last** in the ordered list), rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx`.
+
+### 12.4 An already-OCR'd file is NEVER re-offered and NEVER re-OCR'd (LOCKED)
+
+The rule [ai_description.mdx §12.5](./ai_description.mdx) locks, restated because **§2.3 makes OCR the sibling
+most exposed to it**: eligibility keys on **the artifact's existence**, never on the text being non-empty. A
+file with a `done` artifact is dropped from `ocrable`, dropped from the plan (§10.5's `/plan`), dropped
+before enqueue, and **skipped by the worker** even if it somehow arrives — unless `overwrite` is explicitly
+set (the **Re-run OCR** button, §8.1). The popup **states** how many it dropped (§9, [dialogs.mdx
+§5.2.1](./dialogs.mdx)).
+
+---
+
+## 13. Warnings (cross-reference — two homes, LOCKED)
+
+[warnings.mdx](./warnings.mdx) is **authoritative**; this section only names the set and fixes **where it
+goes**, because the two siblings set **opposite precedents** and OCR must pick one:
+
+* **AI description has a dedicated category, §10.6** (6 entries).
+* **Transcription has none** — its warnings are scattered (§10.10.11 `transcription-tools-missing`,
+  §10.3.14's cross-references).
+
+**OCR follows describe's precedent: a dedicated category.** Scattering a third feature's warnings across
+§10.3/§10.10 is how transcription's became hard to find, and a feature with an engine, an optional
+OS tool, and a fallback has enough conditions to earn a home. §10.1–§10.10 are taken, so:
+
+### 13.1 The new **§10.11 — OCR warnings** (engine / tool / result conditions)
+
+| id | Level | Condition |
+| --- | --- | --- |
+| `ocr-no-engine` | `bad` | No OCR engine on this computer — Vision unavailable **and** the vendored Tesseract fallback failed to load (§6). |
+| `ocr-video-needs-ffmpeg` | `bad` | A video can't be OCR'd — ffmpeg/ffprobe is missing (§6). **Images are unaffected** — the popup must say so rather than implying OCR is broken. |
+| `ocr-failed` | `bad` | A run failed, with the engine's honest reason (§18's `failed`). |
+| `ocr-language-not-vendored` | `warn` | A requested language needs a one-time data download (§3.3) — **consent required**, never silent. |
+| `ocr-fallback-engine-in-use` | `warn` | Files were OCR'd by the **fallback** engine; accuracy is lower and a re-run on a Vision-capable machine would improve them (§3.2). The artifact's `engine:` field is what detects this. |
+| `ocr-frames-truncated` | `warn` | A video hit `max_frames` and was **sampled only up to that point** (§15.2 rule 7) — the no-silent-caps rule made visible. |
+
+Each entry documents the catalog's mandatory **(A) Detection & conditions · (B) Popup · (C) Fix**, and any
+entry naming a **file set** must supply `targets` and render the two-pane subjects list with checkboxes
+(warnings.mdx §4.5/§4.6/§5.2) — i.e. it **is** the popup of §9.
+
+### 13.2 The new **§11.1.4 — the `OCRable` metric-tile popup**
+
+The task-work tile popups live in **§11**, *not* §10 ([warnings.mdx §11.1](./warnings.mdx) — "The task-work
+metric popups"). §11.1.1–§11.1.3 are transcribe / describe / compress; **§11.1.4 is OCR**:
+
+> **§11.1.4 OCRable — image/video with no OCR text — `warn` (id: `repo-ocrable-work`)**
+
+This is the def `buildOcrWarning()` produces (§12.2) — the sibling of `repo-transcribable-work` /
+`repo-describable-work`. **Do not put it in §10.11**; the two homes are the convention, and this spec is
+where that split is written down for the third sibling.
+
+---
+
+## 14. Bulk discovery — the "What Can Be OCR'd" calc engine (LOCKED)
+
+The **discovery** direction — *"across all my storages, what could still be OCR'd?"* — mirrors
+[describe_calc_engine.mdx](./describe_calc_engine.mdx) / [transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx)
+exactly. Its full detail belongs in a sibling **`ocr_calc_engine.mdx`**; the contract is:
+
+### 14.1 On-demand only — NEVER the scheduled scan (LOCKED)
+
+Triggered **only** by an explicit **"Show what could be OCR'd"** link. The scheduled 15-minute scan
+([background_processing.mdx](./background_processing.mdx)) **never** runs it — a periodic job that silently
+burned 90% of the cores on the user's tree is precisely the outcome both sibling engines forbid.
+
+### 14.2 What counts as "can be OCR'd" (LOCKED)
+
+An **image or video** ([special_files.mdx](./special_files.mdx) classification) with **no** `done` `.ocr`
+artifact (§12.4). **Engine capability is NOT part of the candidate test** — the mirror of
+[describe_calc_engine.mdx §2.1](./describe_calc_engine.mdx): a machine with no ffmpeg still *has* OCR-able
+videos; that is a **readiness** problem (§6), reported honestly at run time, not a reason to lie about the
+candidate count.
+
+### 14.3 Cost & safety — the cheapest of the three (LOCKED)
+
+Where describe's calc engine carries a heavy **cost/safety** posture (every candidate is an **upload** and a
+**billed** provider call), **OCR has neither** (§4). The cost of a mistaken OCR batch is **CPU time and
+nothing else** — no bytes leave, no money is spent, no original is touched. So its popup copy is
+correspondingly lighter: it states the **time** cost (§9.1's honest per-kind asymmetry), not a privacy or
+billing warning. **This is the sibling it is safe to say yes to**, and the spec should not borrow describe's
+gravity where it does not apply.
+
+### 14.4 Per-storage batching & the slug
+
+One **OCR batch per storage** (Personal, Dropbox, every Google Drive, every repo) written into
+`~/T/_large_files_bridge/_do_batches/<scope>_<slug>_ocr_2_do.yaml`
+([to_do_batches.mdx §4](./to_do_batches.mdx)'s transcribe-batch shape, parameterized): `kind: ocr`,
+`pattern: ocr`, totals **`ocr_image` / `ocr_video`**, items `{ path, size_bytes, has_ocr, frames? }`. It is
+**recalculate-and-replace** and therefore **self-clearing** as artifacts appear (§5). Rendered as an **OCR
+slug** whose ~80% popup (§9) Apply enqueues background `ocr` jobs. The engine **produces nothing** on its own
+— it lists candidates and feeds Apply. Discovery route: `POST /api/todo/ocr-scan?scope=<id>`, the sibling of
+`/api/todo/transcribe-scan`.
+
+> **This batch kind is NOT registered yet, and neither is describe's — see §18.1.1.** Specifying it here does
+> not make it exist; `TodoBatchSummary.kind`, `TodoCategory`, `TodoBatchPattern`, and `TodoApplyResult` know
+> only `transcribe`. Register **all three** together or none.
+
+> **NOT BUILT — see §20.2.** This whole section is **specified, not written**, and deliberately so: the
+> To-Do batch enums are the three-way gap of §18.1.1, and registering `ocr` alone would deepen the very
+> asymmetry §0 exists to prevent. The names below are the *intended* shape when all three land together.
+
+The OCR calc engine and its route **would** live in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/ocr-scan.engine.ts` — class `WhatCanBeOcredCalcEngine`, methods `scanStorage()` / `scanAll()` (the sibling of `transcribe-scan.engine.ts` — `WhatCanBeTranscribedCalcEngine`); route `POST /api/todo/ocr-scan` on `todo.router.ts`. Frontend: `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `OcrBatchPopup` / `ShowOcrableLink`.
+
+---
+
+## 15. Performance — OCR for VIDEO (LOCKED)
+
+The expensive half, and the reason §2's fast level exists.
+
+### 15.1 The cost model
+
+For a clip of duration `D` seconds at stride `S` (default 15):
+
+```
+frames        = ⌈D / S⌉
+cost          = extract(D)                +  frames × recognize_fast
+                └ ONE sequential ffmpeg      └ ~30–60 ms/frame (Vision .fast, 1080p, Apple Silicon)
+                  decode+scale pass
+```
+
+Worked, on a ~10-core Apple Silicon machine:
+
+| Clip | Frames @15s | Extract | Recognize | **Total** |
+| --- | --- | --- | --- | --- |
+| 5 min | 20 | ~3 s | ~1 s | **~4 s** |
+| 40 min (the §1.2 deck) | 160 | ~20 s | ~6 s | **~26 s** |
+| 139 min (the longest real file) | 556 | ~70 s | ~22 s | **~90 s** |
+
+**Extraction dominates — by roughly 3×.** That single fact drives every rule below. The naive expectation
+("OCR is the slow part") is wrong, and optimizing recognition while ignoring the decode would be optimizing
+the cheap half.
+
+### 15.2 The rules (all LOCKED)
+
+1. **One sequential pass, not N seeks.** `-vf fps=1/15` in **one** ffmpeg invocation. `N` separate `-ss`
+   seeks pay container-open + keyframe-seek + teardown **per frame** and, on a long clip, cost **multiples**
+   of a straight decode. **Never loop `-ss`.**
+2. **Downscale in the extraction, not after.** Emit frames at **max 1920px wide** (`-vf fps=1/15,scale=…`)
+   — ffmpeg's scaler is far faster than the recognizer's, and text legible at 4K is legible at 1080p. A 4K
+   clip that skips this pays ~4× the recognition cost for **zero** accuracy.
+3. **`-an` — drop audio.** The audio track is decoded for nothing otherwise. Speech is the transcript's job.
+4. **JPEG frames at q≈3, not PNG.** Frames are ephemeral (§2.2) and PNG encoding is a needless CPU + disk
+   cost at 160 frames per file.
+5. **The extraction holds the shared transcode slot; the recognitions do not** (§10.3).
+6. **`fps=1/15` is a filter, not a sample-and-discard.** ffmpeg decodes every frame regardless (it must —
+   inter-frame compression), so the win is in **not encoding** 71,999 of 72,000 frames. Do not expect a 15×
+   speedup from a 15× stride; expect the encode side to vanish and the decode side to remain. This is why
+   §2.2.1 does **not** treat stride as a free performance knob: **halving the stride does not double the
+   cost** (the decode is already paid) — it roughly doubles only the recognition third.
+7. **Cap the frame count.** A pathological input (a 10-hour stream) would emit 2,400 frames. `max_frames`
+   (default **1,000**) bounds it; when it bites, the artifact records `truncated: true` and the UI **says
+   so** — a silent cap reads as "we covered it all" when we didn't ([parallelization.mdx](./parallelization.mdx)'s
+   no-silent-caps rule).
+8. **Delete the temp frames in a `finally`.** 160 JPEGs × 2,000 videos is real disk. They live under the
+   state dir, never beside the media.
+
+### 15.3 The 2,000-video scenario
+
+The [use_case_ai_description_at_scale.mdx](./use_case_ai_description_at_scale.mdx) tour, applied: 2,000
+videos × ~26 s ≈ **14.4 core-hours**, drained at 90% of 10 cores ≈ **1.6 hours** wall-clock — and, critically,
+**with the app fully responsive throughout** (§10.4), every file visible on `/processing`, and the poll payload
+bounded ([processing.mdx §5](./processing.mdx)). Compare **describe**'s same-tree run, which was
+**provider-rate-limited into an overnight failure cascade** ([ai_description.mdx §3.5](./ai_description.mdx)):
+OCR has **no provider**, so it has **no rate limit, no 429s, no timeouts, and no transient-vs-permanent
+problem** (§4). Its only ceiling is the box, and the box is ours.
+
+---
+
+## 16. Performance — OCR for IMAGES (LOCKED)
+
+The cheap, high-volume half — and the one that must never be made slow in the name of the video path.
+
+### 16.1 The cost model
+
+```
+cost = decode(image) + recognize_accurate     ≈ 150–400 ms   (Vision .accurate, a 4K screenshot)
+```
+
+**No ffmpeg. No frames. No temp files. No gate.** An image is the simplest path in the app: read, recognize,
+write. A directory of 1,204 screenshots (§1.1) at 90% of 10 cores ≈ **45 seconds** for the whole folder.
+
+### 16.2 The rules (all LOCKED)
+
+1. **Accurate, always** (§2.1). At ~250 ms there is nothing worth saving — and the `.fast` level's errors are
+   precisely the ones that ruin a *search index*, which is the artifact's entire purpose. **Never** apply the
+   video path's fast level to a standalone image.
+2. **Language correction ON.** It is what turns `rn`→`m` and `0`→`O` confusions into words a user will
+   actually search for. On the video path it is **off** (the wrong trade at 160 frames).
+3. **Fan WIDE — `budget` jobs, 1 thread each** (§10.1). A single recognition is effectively single-threaded;
+   this is the textbook wide fan-out.
+4. **Do NOT pre-scale images.** Unlike the video path (§15.2 rule 2), a still is a **one-shot** cost and the
+   full resolution is exactly what makes small text (a form label, a stack trace) legible. Rule 2 there and
+   this rule here **look contradictory and are not**: one is about 160 frames of redundant pixels, the other
+   about the single frame the user actually asked about.
+5. **A HEIC is an image.** It routes through the same conversion the media pipeline already uses
+   (`magick "file.heic[0]"` — the primary still only; [images.mdx](./images.mdx)), then OCRs normally.
+6. **Reuse the Tesseract worker pool across files** (§10.4). At ~250 ms of work, a per-file worker **spawn**
+   would dominate the run.
+7. **Empty is the common case and must be CHEAP** (§2.3). A text-free photo does a full recognition and
+   writes an artifact with `text: ""`. Do not add a "does this look like it has text?" pre-filter to avoid
+   it — that heuristic costs about what the recognition costs and would be wrong in the direction that
+   matters (skipping a real hit).
+
+---
+
+## 17. Settings (Settings → Tools)
+
+An **OCR** section, the sibling of the AI-description one — but far smaller, because **there are no
+credentials to manage** (§4):
+
+* **Engine status** — one row per engine (**Apple Vision** / **Tesseract (fallback)**) showing **● available**
+  or **✗ unavailable**, with the resolved default. A note states plainly: **"OCR runs entirely on this
+  computer. Nothing is uploaded."**
+* **`ocr.video_stride_seconds`** — default **15** (§2.2.1). Labeled *"Read a frame from each video every N
+  seconds"* with the live implication shown (*"≈ 160 frames for a 40-minute video"*).
+* **`ocr.max_frames`** — default **1,000** (§15.2 rule 7).
+* **`ocr.language`** — default from the app locale (BCP-47). Choosing a non-vendored language triggers the
+  consent flow (§3.3), never a silent download.
+* **`ocr.engine`** — `auto` (default) | `vision` | `tesseract`.
+
+The config schema block is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — the `ocr` block of `AppConfigSchema` (`engine` default `"auto"`, `video_stride_seconds` default `15`, `max_frames` default `1000`, `language`); edited from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx`.
+
+---
+
+## 18. The REST surface (`/api/ocr`)
+
+Allow-list-gated like every data route, and the exact shape of `/api/transcribe` and `/api/describe`:
+
+| Method + path | Body / query | What |
+| --- | --- | --- |
+| `GET /api/ocr/engines` | — | The engine matrix (available / unavailable, the resolved default, ffmpeg presence) + `anyAvailable`. |
+| `GET /api/ocr/file?path=<abs>` | — | The existing `OcrView` for a media file, or `null` (§5.1). |
+| `POST /api/ocr/file` | `{ path, overwrite?, engine? }` | **Run OCR** on one file → `OcrResult`. |
+| `POST /api/ocr/batch` | `{ paths[], overwrite?, engine? }` | A selected set → `OcrBatchResult`. |
+| `POST /api/ocr/tree` | `{ path, overwrite?, engine? }` | All image/video under a directory/repo, recursive. |
+| `POST /api/ocr/plan` | `{ paths?, root? }` | **Preview only — nothing queued** ([dialogs.mdx §5.2](./dialogs.mdx)). Applies scope + skip-already-done server-side → `{ files: {path, sizeBytes, kind, frames?}[], considered, alreadyDone, unsupported }` for the popup (§9). |
+| `POST /api/ocr/enqueue` | `{ paths?, root?, overwrite?, engine? }` | **Plan + background-queue** (op `ocr`) → returns the `EnqueuePlan` **immediately** (§8.5). |
+
+`OcrResult.status` reports each run truthfully: **`ocred`** (success — **including empty text**, §2.3),
+**`skipped`** (an artifact exists and `overwrite` not set), **`no_engine`** (§6), **`needs_ffmpeg`** (a video
+on a machine without ffmpeg, §6), **`unsupported`** (not an image/video), or **`failed`** (with the reason).
+
+The OCR REST surface is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/ocr.router.ts` — `ocrRouter`, mounted at `/api/ocr` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts`.
+The services are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/ocr.service.ts` — `ocrOne()` / `ocrMany()` / `ocrTree()` / `previewOcr()` / `planOcr()` / `enqueueOcr()`; the video sampler `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/frames.ts` — `extractFrames()` (async `spawn`, `fps=1/15`, half-stride phase, `scale`, `-an`, JPEG q3) / `probeVideo()` / `collapseDuplicates()`.
+The frontend client methods are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `api.ocrEngines` / `ocr` / `ocrFile` / `ocrBatch` / `ocrTree` / `ocrPlan` / `ocrEnqueue`.
+
+### 18.1 The enums OCR must join — the exhaustive list (LOCKED)
+
+A third transaction type is mostly **enum work**, and a missed member is a silent hole (a dock card with no
+verb, an op that never appears in the heartbeat, a batch kind the store can't round-trip). The complete set:
+
+| Enum / type | File | Add |
+| --- | --- | --- |
+| `ProgressKind` | `packages/shared/src/types.ts` | `"ocr"` — the dock/Processing taxonomy. **Adding it is what makes the dock card, the Processing rows, the Waiting backlog, and `queuedByOp` work with NO new UI.** |
+| `JobOp` | `backend/src/modules/jobqueue/jobqueue.service.ts` | `"ocr"` (`"transcribe" \| "describe" \| "compress"` → `+ "ocr"`) |
+| `Bucket` + `bucketOf()` + `capFor()` | same file | `"ocr:image"` / `"ocr:video"` (§10.5) |
+| `QueueTask` | same file | an `ocr?: { stride?, engine? }` payload, mirroring `compress?: { … }` |
+| `FileRow.ocr` | `packages/shared/src/types.ts` | a `TaskStatus` (`could` / `done` / `na`) beside `.transcribe` / `.describe` / `.compress` |
+| `RepoDetail.taskMetrics` | same file | `ocrable` / `ocred` (§12.1) |
+| `OcrResult` / `OcrBatchResult` / `OcrView` | same file | beside the transcribe/describe result types |
+| `AppConfigSchema.ocr` | `packages/shared/src/schemas.ts` | §17's block |
+| `RepoSettings.ocr.placement` | same file | the third placement radio instance (§5.3) |
+| **`transactions_log.mdx` §3.2's `op` enum** | `pm/transactions_log.mdx` + the logger | **`ocr`** — and §5's "what MUST be instrumented" gains `ocrOne()` + the frame extraction, the sibling of §5.2 `describeOne` (**the gap that caused the incident**) and §5.6 fit-media |
+| **The heartbeat line** | `transactions_log.mdx` §6 | it carries per-op running counts (`describe=24 transcribe=0 compress=0`) → **`ocr=N` must be added**, or a 2,000-file OCR run is invisible in the heartbeat |
+| `storages.mdx §6`'s `analysis: […]` list | `storage.yaml` + `backend/src/modules/storage/analysis.service.ts` — `analyzeFile` | **`"ocr"`** beside `transcript` / `description` / `visuals_by_time` (§5.2) |
+| `placement_radios.mdx §2`'s parameterized noun | `pm/placement_radios.mdx` | the third instance says **"OCR text"** (transcription says *"transcripts"*, AI descriptions says *"AI descriptions"*) |
+
+#### 18.1.1 The To-Do batch enums are a THREE-way gap now (LOCKED — flag, don't paper over)
+
+This one is **not** a clean "add a member", and it must be called out rather than silently half-done:
+[describe_calc_engine.mdx §0/§3](./describe_calc_engine.mdx) declares `kind: describe` with
+`describe_image` / `describe_video` categories — **but that kind was never registered**.
+`to_do_batches.mdx §4` documents **only** the transcribe kind, and the shared types agree with the code, not
+the spec:
+
+* `TodoBatchSummary.kind` = `"todo" | "transcribe"` — **no `describe`**
+* `TodoCategory` = `… | "transcribe_video" | "transcribe_audio"` — **no `describe_*`**
+* `TodoBatchPattern` = `… | "transcribe" | "mixed"` — **no `describe`**
+* `TodoApplyResult` = `{ applied, pins, gitignored, compressed, transcribed }` — **no `described`**
+
+**So describe's calc engine is spec-ahead-of-code** ([spec-ahead-of-code backlog](./to_fix.mdx)), and adding
+OCR makes it a **three-way** gap. §14's OCR batch kind (`ocr`, `ocr_image` / `ocr_video`) is therefore
+specified **knowing it is not yet registered**, and the honest instruction is: **whoever registers one
+registers all three** — `"todo" | "transcribe" | "describe" | "ocr"` — because the sibling enum is exactly
+the kind of asymmetry §0 exists to prevent. Do **not** quietly add `ocr` alongside a still-missing `describe`.
+
+---
+
+## 19. Acceptance criteria
+
+1. **The two speeds (§2):** an **image** OCRs at the **accurate** level with language correction **on**; a
+   **video** samples **one frame every 15 s** and OCRs each at the **fast** level with correction **off**. The
+   stride is `ocr.video_stride_seconds` (default 15), frames are phased **half a stride** in (never t=0,
+   §2.2.2), and consecutive duplicate text collapses into one **time-ranged** entry at ≥95% similarity
+   (§2.2.3).
+2. **Empty is success (§2.3):** a text-free file yields `status: done`, `text: ""` — the ✓ shows, the status
+   icon reads **Done**, the `ocred` metric counts it, and it is **never re-offered**. It is not `failed` and
+   not "no artifact".
+3. **The engine is a library (§3):** OCR works after `pnpm install` with **no `brew install`**, no Xcode, and
+   no user provisioning — `mac-ocr`/Vision primary (its `.fast`/`.accurate` levels **are** the two speeds),
+   `tesseract.js` fallback, auto-selected, the resolved engine recorded in the artifact.
+4. **Local, offline, forever (§4, §3.3):** OCR makes **zero** network calls. With the network unplugged, both
+   engines OCR normally (the Tesseract `traineddata` is **vendored**, `langPath` local). There is no API key,
+   no provider matrix, and no credentials popup anywhere in the feature. A non-vendored language is a
+   **consented** download, never silent.
+5. **Placement (§5):** the artifact is `<trackingBase(root)>/<rel-dir>/<name.ext>.ocr` — extension
+   **appended**, path-mirrored, inside the **committed** tracking area, resolved through `trackingBaseDir()`
+   (a working repo keeps `.lfbridge/`; an **SDL has none** and an SDL's own `.git/` never demotes it). No
+   `*.ocr` git-ignore line is injected. The 3-way placement radios govern it identically to `.transcription`.
+6. **A third analysis COLUMN, not a tab (§7):** the viewer's band 6 shows **AI description · Transcription ·
+   Text (OCR)** **side by side, all at once** — **no tab strip, no radio buttons, no default-tab rule**
+   ([media_viewer.mdx §6](./media_viewer.mdx) is authoritative; ai_description.mdx §1's two-tab description is
+   **stale**). **audio** → Transcription only; **image** → AI description + Text; **video** → all three, widths
+   dividing evenly among the columns shown. Each ✓ reflects artifact presence **including empty text**. A
+   video's OCR rows **seek** on click.
+7. **Every entry point exists, with the RIGHT names (§8):** the four producing entry points of
+   [dialogs.mdx §6](./dialogs.mdx) — metric tile, header primary, page action-**link**, and ⋮/right-click —
+   each carry OCR. The menu item is **Create OCR text** in the **`Create`** group (file **and** directory),
+   directly after `Create Transcription(s)` / `Create AI description(s)`. There is **no `Actions ▾` dropdown**
+   (page_actions.mdx §0) and **no repo-kebab item** (menus.mdx §5.1 has no producing actions — §8.4). The
+   File System (§8.9) and One-Repo (§8.10) inventories are complete and each row resolves as tabulated.
+8. **One popup (§9):** every entry point — **including the single-file menu item** — opens **the** unified
+   `WarningPopup`-based batch popup, never a native dialog (grep `window.confirm` = 0), always fed by
+   `POST /api/ocr/plan` for scope-walking opens, always **stating** the excluded already-done count via
+   `excludedClause()` (omitted at 0), with the **"Filter: Videos / Images"** row and the honest per-kind cost
+   line, and a solid-blue **"OCR N files"** confirm that is disabled at zero and applies to **visible ∩
+   checked**. The **"Opening window…"** spinner appears **synchronously** for scope-walking opens **only** —
+   the metric tile and header primary build from in-memory `RepoDetail.files` and take none. **Confirm calls
+   `api.ocrEnqueue`** — never `api.ocrBatch`, never inline.
+9. **Parallelization (§10):** OCR draws the **mass-compute** budget (**not** describe's ~24 network fan-out).
+   Images fan **wide** (budget × 1 thread); video **frame extraction** acquires the **shared transcode slot**
+   sized from `coreBudget()`; frames and files draw **one shared limiter** so nesting never reaches `cores²`.
+   `concurrentJobs × threadsPerJob ≈ budget`.
+10. **Async end-to-end (§10.4):** **no `spawnSync`** and **no `readFileSync`** anywhere on the OCR path; the
+    Tesseract fallback runs in a **pooled worker**, never the main thread. Firing **2,000 OCR jobs** and
+    opening **`/processing` in a second browser** loads and moves within one poll interval.
+11. **Video performance (§15):** **one** ffmpeg pass (`fps=1/15`, never N × `-ss`), downscaled to ≤1920px in
+    the extraction, `-an`, JPEG q3, temp frames deleted in a `finally`, `max_frames` (default 1,000) bounding
+    pathological inputs and, when it bites, recorded as `truncated: true` and **said out loud**.
+12. **Image performance (§16):** no ffmpeg, no temp files, no gate, **no pre-scaling**, accurate level,
+    correction on, worker pool reused. ~1,200 screenshots complete in about a minute on a 10-core box.
+13. **Symmetry (§0):** the §0 triple table holds — every transcription surface has **both** an AI-description
+    and an **OCR** mirror; the module trees `modules/{transcribe,describe,ocr}/`, the launchers
+    `lib/{transcribe,describe,ocr}.ts`, the status icons, and the popup launchers
+    `open{Transcribe,Describe,Ocr}Batch` are parallel.
+14. **Every enum joined (§18.1):** `ProgressKind` + `"ocr"` (which is what makes the dock card, Processing
+    rows, Waiting backlog and `queuedByOp` work with **no new UI**); `JobOp`, `Bucket`/`bucketOf`/`capFor`;
+    `FileRow.ocr`; `TaskMetrics.{ocrable,ocred}`; `OcrResult`/`OcrBatchResult`/`OcrView`;
+    `AppConfigSchema.ocr`; `RepoSettings.ocr.placement`; **`transactions_log.mdx §3.2`'s `op` enum + §6's
+    heartbeat per-op counts (`ocr=N`)**; and `storages.mdx §6`'s `analysis: […]` list + `analyzeFile`.
+    **§18.1.1:** the To-Do batch enums are a **three-way** gap (describe's kind was never registered either)
+    — register `"todo" | "transcribe" | "describe" | "ocr"` **together**, never `ocr` alongside a missing
+    `describe`.
+15. **Warnings land in BOTH homes (§13):** a new **§10.11 "OCR warnings"** category (`ocr-no-engine`,
+    `ocr-video-needs-ffmpeg`, `ocr-failed`, `ocr-language-not-vendored`, `ocr-fallback-engine-in-use`,
+    `ocr-frames-truncated`) **and** **§11.1.4 `repo-ocrable-work`** for the metric tile — following
+    describe's §10.6 precedent, not transcription's scattered one.
+16. **Recommendation ranking (§12.3):** the blue **"OCR ›"** primary ranks **last** of the seven
+    (`ipfs-down → pull-down → undecided → transcribe → describe → compress → ocr`) — a search convenience
+    never outranks a backup risk, a decision, missing content, or wasted disk. Scan-stale still wins;
+    all-clear still shows no button.
+
+---
+
+## 20. Build status — what is BUILT, and what is deliberately not (2026-07-16)
+
+The spec above is the design; this section is the honest ledger of how much of it exists, so nobody reads a
+LOCKED rule as a shipped feature. **The vertical slice is built and verified end-to-end**; two seams are
+deliberately deferred with reasons.
+
+### 20.1 Built and verified
+
+| Area | Status |
+| --- | --- |
+| **The engines (§3)** — `mac-ocr` + `tesseract.js` as **npm dependencies**, auto-select, availability probes | ✅ `modules/ocr/engines.ts` |
+| **The two speeds (§2)** — image→accurate+correction, video frame→fast | ✅ Verified on real media (§20.3) |
+| **The video sampler (§2.2, §15)** — one ffmpeg pass, `fps=1/15`, half-stride phase, ≤1920 scale, `-an`, JPEG q3, `max_frames`, temp cleanup | ✅ `modules/ocr/frames.ts` |
+| **Duplicate collapse (§2.2.3)** — similarity-threshold, time ranges | ✅ + 10 unit tests (`ocr.spec.ts`) |
+| **Empty-is-success (§2.3)** | ✅ Verified: a text-free photo → `ocred`/`text: ""`, and a re-run **skips** it |
+| **The artifact (§5)** — `.ocr` appended, path-mirrored, kind-resolved base, placement radio | ✅ `ocr.service.ts` + `OCR_EXT` + `ocr_placement` |
+| **The REST surface (§18)** — engines/file/batch/tree/plan/enqueue | ✅ `ocr.router.ts`, mounted at `/api/ocr` |
+| **The queue (§10.5)** — `ocr:image` (wide) / `ocr:video` (narrow) buckets, shared transcode gate | ✅ `jobqueue.service.ts` + exported `acquireTranscodeSlot()` |
+| **The enums (§18.1)** — `ProgressKind`, `JobOp`, `Bucket`, `FileRow.ocr`, `TaskMetrics`, config schema, heartbeat, `analysisOutputs` | ✅ |
+| **The UI** — viewer 3rd column, OCR task tab, `TextSelect`/violet status icon, `OCRable`/`OCRed` tiles, `buildOcrWarning`, header primary **ranked last**, `Create OCR text` in file+directory menus and the action-links row, `openOcrBatch` popup | ✅ |
+
+### 20.2 Deliberately NOT built
+
+* **The calc engine (§14) / To-Do OCR batches.** Not built **on the spec's own instruction**: §18.1.1 shows
+  the To-Do batch enums are a **three-way gap** — describe's `kind: describe` was specified but **never
+  registered**, so `TodoBatchSummary.kind` still reads `"todo" | "transcribe"`. Adding `ocr` alone would
+  deepen exactly the asymmetry §0 exists to prevent. **Register all three together, or none.** Consequently
+  **"Show what could be OCR'd"** (§8.9 row 4) does not exist yet either, and `showWhatCanBeOcred()` /
+  `ocr-scan.engine.ts` are **specified, not written**.
+* **Warnings §10.11 / §11.1.4 catalog entries (§13).** The **`repo-ocrable-work`** def is built (it is what
+  `buildOcrWarning()` returns and what the tile opens); the prose entries in `warnings.mdx`'s catalog are
+  not yet written into that file.
+* **Settings → Tools OCR section (§17).** The config **schema** and every default are live
+  (`AppConfigSchema.ocr`), and are read by the engine at run time; the Settings **editor UI** for them is not
+  built. The defaults are the spec's defaults, so nothing is broken — only untunable from the UI.
+* **A hotkey (§8.1)** — deliberately not claimed, since describe has none either.
+
+### 20.3 The verification that matters (real media, real engine)
+
+Not a mock. Apple Vision, on this machine, through `ocrOne()`:
+
+* **The two-speed rule is EMPIRICALLY the right call.** On a 900×260 image of known text:
+  **accurate = 513ms, perfect** (`Creator $29/mo`, confidence 1.000); **fast = 94ms (5.5× faster) but
+  CORRUPTED** (`Creator $291mo`, confidence 0.500). That corruption is precisely §16.2 rule 1's argument —
+  the fast level's errors are the ones that ruin a *search index* — now measured rather than asserted.
+* **A screenshot** (`stacktrace.png`) → `ocred`, 117 chars, read `Error: connect ECONNREFUSED 127.0.0.1:8787`
+  correctly (the §1.1 use case).
+* **A text-free photo** (`beach.jpg`) → `ocred`, **0 chars**, artifact written with `text: ""`, and the
+  **re-run returned `skipped`** — §2.3 and §12.4 holding together, which is the defect that would otherwise
+  re-offer every text-free file forever.
+* **A 126-second slide deck** with a **black opening frame** → 8 frames at the 15s stride in **846ms**;
+  the half-stride phase **dodged the black frame** (§2.2.2); the collapse turned 8 samples into **3
+  time-ranged entries** (`0:00–0:45 "Q3 Revenue $4.2M"`, `0:45–1:15 "Creator Plan $29 per month"`,
+  `1:15–2:00 "Thank You"`) — §2.2.3 working on real footage.
+* **A 13-file tree** (12 images + the video) → `previewOcr` offered 13 with a **9-frame hint** on the video
+  row (§9.2); `enqueueOcr` returned the plan **immediately** and the queue drained all 13, peaking at
+  **16 of 22 core-slots busy** (12 images × 1 thread + 1 video × 4 threads = 16 ≤ budget) — the
+  anti-oversubscription invariant (§10.1) holding in a real run. Re-planning the same tree then offered
+  **0 candidates, 13 already done**.
+
+### 20.4 §10.2 caught a real bug in this implementation (worth keeping)
+
+The nested fan-out rule is not theoretical — **the first cut of this module violated it**, and the spec is
+what found it. The queue caps *files* (`ocr:video` = `floor(budget / VIDEO_THREADS)` = 5 on a 22-core box),
+and the video path then fanned its *frames* out across `coreBudget()` — a fresh 22 **per video**:
+
+```
+5 concurrent videos × 22 frames each = 110 recognitions on a 22-core box
+```
+
+Exactly the `cores²` over-subscription [parallelization.mdx §2](./parallelization.mdx) calls the load-bearing
+invariant. **A per-video `mapLimit(frames, coreBudget())` looks correct in isolation and is wrong in
+composition** — a per-call budget cannot see the other calls; only shared state can. That is *why* §10.2 says
+"one shared limiter" and not "bound the frames".
+
+Fixed with a module-level semaphore both levels draw from (`withRecognitionSlot()`), the pin pass's
+two-level/one-limiter shape ([pin_process.mdx §4](./pin_process.mdx)). **Verified:** 6 videos × 8 frames — 48
+recognitions wanting to run at once — peaked at **exactly 22 = the budget**, never above.
+
+<!--
+  CANONICAL spec for the THIRD transaction type: OCR (read text out of pixels). Siblings: Transcribe.mdx
+  ("what was SAID", audio+video) and ai_description.mdx ("what is SEEN", image+video). OCR = "what does it
+  SAY on screen" (literal glyphs, verbatim), image+video. NOT audio (no pixels). NOT a description.
+
+  §0 SYMMETRY is now a TRIPLE (extends ai_description.mdx §0's pair). Adding a surface to one obliges all 3.
+     Two deliberate asymmetries: (1) OCR is LOCAL (no key/provider/credentials — describe's whole
+     ai_credentials axis is ABSENT); (2) OCR is TWO-SPEED keyed on kind (neither sibling is).
+  §2 TWO-SPEED (LOCKED, the core): IMAGE → slow/ACCURATE + language correction ON. VIDEO → frame every 15s,
+     FAST level, correction OFF. Maps 1:1 onto Vision's .accurate/.fast — a big reason that engine won.
+     §2.2.1 why 15s: slides 30s–5min, chyrons 10–30s → 15s catches them; subtitles may be sampled (accepted).
+     §2.2.2 phase the grid HALF a stride (7.5/22.5/37.5…) — t=0 is reliably black/fade/splash.
+     §2.2.3 consecutive dupes collapse to ONE time-RANGE entry, ≥95% similarity (not strict equality — two
+     fast passes over the same pixels differ). Non-adjacent repeats do NOT collapse (separate appearances).
+     §2.3 EMPTY = SUCCESS (status:done, text:""). Load-bearing: if empty read as "no artifact", every
+     text-free file is re-offered FOREVER (the ai_description §12.5 defect class). Presence keys on the
+     ARTIFACT, never on text being non-empty.
+  §3 ENGINE = LIBRARY, not brew (explicit product directive). Research table: mac-ocr (npm, prebuilt
+     universal binary → Apple Vision VNRecognizeTextRequest, on-device, MIT, macOS 10.15+, --fast/accurate)
+     = PRIMARY. tesseract.js (npm WASM, 100+ langs, worker/scheduler pool) = FALLBACK. REJECTED:
+     node-tesseract-ocr (shells to the brew tool = the directive wearing an npm hat), RapidOCR/PP-OCRv5 via
+     onnxruntime-node (reintroduces model provisioning + native binary), Scribe.js (its win is PDF — not our
+     kind), cloud OCR (charter). §3.3 CAVEAT: tesseract.js DOWNLOADS traineddata on first run → would make
+     the FALLBACK phone home. MUST vendor tessdata + pin langPath/corePath local (tesseract.js-offline
+     pattern). Non-vendored lang = CONSENTED download (reuse withModelReady), never silent.
+  §4 CHARTER: OCR NEVER uploads. NOT a second network path. Sits on the perceptual-fingerprint side of the
+     line, not describe's. Any network call in modules/ocr/ = charter violation, catch in review.
+  §5 ARTIFACT: <trackingBase(root)>/<rel-dir>/<name.ext>.ocr — OCR_EXT APPENDED (Q3.mp4.ocr ≠ Q3.mov.ocr),
+     kind-keyed base (repo → .lfbridge/, SDL → root, kind BEATS .git/), committed + travels. YAML: source,
+     status, engine, level, generated, kind, language, stride_seconds, frames_sampled, text (may be ""),
+     blocks[] (image: normalized bbox; video: start/end/text/confidence). Same 3-way placement radios.
+  §6 READINESS withOcrReady: the common case is ALWAYS ready (npm dep + OS) — an always-true check must not
+     cost a dialog. Not-ready: (1) no engine at all, (2) non-vendored language. VIDEO additionally needs
+     ffmpeg/ffprobe → failed w/ install hint; IMAGES need NO external tool (state the asymmetry, don't hide).
+  §7 VIEWER = a THIRD SIDE-BY-SIDE COLUMN, *** NOT TABS *** (amends media_viewer.mdx §6). STALE-SPEC TRAP:
+     ai_description.mdx §1 describes a two-TAB strip + default-tab rule; media_viewer.mdx §6 is AUTHORITATIVE
+     and says "Both are shown at once — there are no tabs and no radio buttons". So: AI description ·
+     Transcription · Text (OCR) side by side; audio→1, image→2 (desc+text), video→3; widths divide evenly.
+     ✓ shows even when text EMPTY. GeneratePane = "Read text from this file". Video rows SEEK; image bbox can
+     highlight. "Copy OCR text" joins §6.1's PROPOSED (not built) list.
+  §8 ENTRY POINTS (the directive: "every single part of those UIs"). TWO STALE-SPEC TRAPS, both called out in
+     the spec: (1) there is NO "Actions ▾" dropdown — page_actions.mdx §0 reversed it to a row of blue LINKS
+     + More ▾ overflow (Transcribe.mdx §2.5 / ai_description.mdx §5.1 are stale); (2) menu items are named
+     "Create …" in the `Create` GROUP (menus.mdx §5.2/§5.3), NOT "Transcribe…"/"Work group"/"…all files…"
+     (Transcribe.mdx §2.2/§2.4 describes surfaces that don't exist). dialogs.mdx §6 = the authoritative FOUR
+     producing entry points: metric tile · header primary · page action-link · ⋮/right-click. OCR item =
+     "Create OCR text" (file AND dir), directly after Create Transcription(s)/Create AI description(s) —
+     always adjacent, always that order. SINGLE-file menu item ALSO opens the popup (1 checked, "OCR 1 file")
+     — not a silent run. §8.4: repo ⋮ gets NOTHING (menus §5.1 has no producing actions; adding one would
+     give OCR a surface neither sibling has). §8.9 FILE SYSTEM inventory (6 rows) + §8.10 ONE-REPO inventory
+     (8 rows). No multi-select item: the CHECKED SET is Rule 1's scope for the action-link.
+     Hotkey: T=transcribe, describe has NONE → OCR claims none by default; R/X/G/I/E/Q free (O is taken).
+  §9 THE ONE unified batch popup (dialogs.mdx §5 owns it) — OCR is the 3rd LAUNCHER, gets no popup of its
+     own. It IS WarningPopup + an OCR WarningDef whose targets are the candidates (warnings.mdx §4), 2-pane
+     ~80%, all rows checked at open, confirm = solid-blue "OCR N files" (disabled at 0, applies visible ∩
+     checked). Plan-fed (POST /api/ocr/plan), excludedClause(alreadyDone,"OCR text") omitted at 0,
+     "Opening window…" spinner synchronous + generation token — BUT ONLY for scope-walking opens; the metric
+     tile + header primary build from in-memory RepoDetail.files → NO spinner. §9.1 the "Filter:" kind row
+     (warnings §4.5.4) Videos/Images is MORE load-bearing here than anywhere: ~250ms image vs 40-min video =
+     extraction + 160 recognitions. Confirm → api.ocrEnqueue, NEVER ocrBatch inline (the locked-closed
+     ai_description §12.4 defect).
+  §10 PARALLELIZATION: OCR is LOCAL CPU → MASS-COMPUTE budget (NOT describe's ~24 network fan-out — that
+     premise is false here). Images wide (budget × 1 thread). Video frames wide but extraction acquires the
+     SHARED transcode slot (describe's acquireTranscodeSlot, coreBudget()/VIDEO_THREADS_PER_ENCODE) — the
+     §12.6.1 lesson taken as a STARTING CONDITION since OCR's CPU branch is unconditional. Two-level fan-out
+     (files × frames) shares ONE limiter (pin_process §4 pattern) else cores². Gate released BEFORE
+     recognition. §10.4 ASYNC: no spawnSync/readFileSync (P-27/T3); tesseract.js MUST run in a POOLED WORKER
+     (CPU-bound WASM freezes the loop just as hard, with no child process to blame; workers are memory-heavy
+     → pool, never per-file). Queue buckets ocr:image / ocr:video; ProgressKind += "ocr" (no new UI needed).
+  §11 Task tab (All/IPFS/Compress/Transcribe/AI descriptions/OCR) + the 4th SKIN of the ONE shared
+     StatusActionIcon: glyph TextSelect (NOT ScanText — that's describe's, and the two are the easiest pair
+     to confuse), done-color VIOLET --lfb-ocr-done (transcribe=blue, describe=teal, compress=green). "Could"
+     edge + N/A hairline identical across all four; only the filled done swatch differs. LEADING header-less
+     column LEFT of File (PO instruction). Empty-text = DONE (§2.3) → big green 0.
+  §12 Metrics OCRable (amber when >0, click→popup) / OCRed (INERT — buildMetricWarning returns null for every
+     done-metric; ocred joins transcribed/described/alreadyCompressed in that null list). Blue "OCR ›" primary
+     ranked LAST of SEVEN: ipfs-down→pull-down→undecided→transcribe→describe→compress→ocr (compress EXISTS in
+     the locked order — don't drop it). Search convenience never outranks data-loss/decision/content/disk.
+     Scan-stale still wins; all-clear = no button. §12.4 never re-offer.
+  §13 Warnings go in TWO homes (the siblings set OPPOSITE precedents: describe HAS a category §10.6;
+     transcribe has NONE, scattered at §10.10.11/§10.3.14 — OCR follows DESCRIBE):
+     (a) NEW §10.11 "OCR warnings": ocr-no-engine, ocr-video-needs-ffmpeg (say images are unaffected!),
+         ocr-failed, ocr-language-not-vendored, ocr-fallback-engine-in-use, ocr-frames-truncated.
+     (b) NEW §11.1.4 repo-ocrable-work — the METRIC-TILE popup lives in §11.1 (with .1 transcribe/.2
+         describe/.3 compress), NOT §10. Don't merge the two homes.
+  §14 Calc engine (sibling ocr_calc_engine.mdx): on-demand ONLY (never the scheduled scan), candidate =
+     image/video w/o done artifact, engine capability NOT part of the test (describe_calc §2.1 mirror),
+     per-storage batches + slug. §14.3 cost/safety is LIGHT — no upload, no billing → don't borrow describe's
+     gravity. This is the sibling it's safe to say yes to.
+  §15 VIDEO PERF: EXTRACTION DOMINATES ~3× (the counter-intuitive fact — don't optimize recognition first).
+     ONE ffmpeg pass, NEVER N × -ss. Downscale ≤1920 IN the extraction. -an. JPEG q3. max_frames 1000 +
+     truncated:true said out loud (no silent caps). fps=1/15 saves the ENCODE, not the decode → halving the
+     stride does NOT double cost. 40-min deck ≈ 26s; 2,000 videos ≈ 1.6h wall at 90% of 10 cores, app
+     responsive throughout. No provider ⇒ no 429/timeout/transient-vs-permanent (contrast §3.5's cascade).
+  §16 IMAGE PERF: ~150–400ms, no ffmpeg/temp/gate. Accurate always. Correction ON. Fan WIDE. Do NOT pre-scale
+     (looks contradictory vs §15.2 rule 2 and is NOT: 160 redundant frames vs the ONE frame asked about).
+     HEIC via magick "f.heic[0]". Reuse worker pool. Empty is the COMMON case — no "does it look texty?"
+     pre-filter (costs what the recognition costs, wrong in the direction that matters).
+  §17 Settings → Tools: engine status + "runs entirely on this computer, nothing uploaded", stride (15),
+     max_frames (1000), language, engine (auto). NO credentials section — there is nothing to configure.
+  §18 REST /api/ocr: engines, file GET/POST, batch, tree, plan, enqueue. Status: ocred | skipped | no_engine
+     | needs_ffmpeg | unsupported | failed. plan returns frames? per video row (the one field the siblings'
+     plans lack) to feed §9.2's per-row cost.
+  §18.1 THE ENUMS (a 3rd transaction is mostly enum work; a missed member = a silent hole): ProgressKind
+     +"ocr" (this alone makes dock card/Processing rows/Waiting/queuedByOp work with NO new UI) · JobOp ·
+     Bucket/bucketOf/capFor (ocr:image, ocr:video) · QueueTask.ocr? · FileRow.ocr · TaskMetrics.{ocrable,
+     ocred} · OcrResult/OcrBatchResult/OcrView · AppConfigSchema.ocr · RepoSettings.ocr.placement ·
+     transactions_log §3.2 op enum + §5 instrument ocrOne()/extractFrames + §6 HEARTBEAT per-op count ocr=N
+     (else a 2,000-file run is invisible) · storages §6 analysis:[…] +"ocr" + analyzeFile · placement_radios
+     §2 parameterized noun "OCR text".
+  §18.1.1 TO-DO BATCH ENUMS = a THREE-WAY GAP, flag don't paper over: describe_calc_engine §0/§3 declares
+     kind:describe but it was NEVER REGISTERED — TodoBatchSummary.kind is only "todo"|"transcribe",
+     TodoCategory has no describe_*, TodoBatchPattern no describe, TodoApplyResult no described. So §14.4's
+     ocr kind is spec'd KNOWING it isn't registered. Whoever registers one registers ALL THREE
+     ("todo"|"transcribe"|"describe"|"ocr"). NEVER add ocr alongside a still-missing describe.
+  Code: modules/ocr/{ocr.router,ocr.service,engines,frames}.ts, lib/ocr.ts, batchPopup.ts openOcrBatch,
+  pageActions.ts createOcrText, MediaViewer MediaAnalysis (3 tabs), OcrStatusIcon.tsx, jobqueue capFor()
+  ocr:image/ocr:video, shared/types.ts ProgressKind+"ocr"/FileRow.ocr/TaskMetrics.{ocrable,ocred},
+  schemas.ts AppConfigSchema.ocr, assets/tessdata/. Keep in sync with: ai_description.mdx §0 (the triple),
+  media_viewer.mdx (3 tabs), parallelization.mdx §3 (the map row), dialogs.mdx §5–6 (3rd launcher),
+  menus.mdx §5.2/§5.3, page_actions.mdx, task_tabs.mdx, warnings.mdx §10.11, job_queue.mdx §3,
+  artifact_placement_policy.mdx §0, one_repo.mdx §3.1.
+-->
+</content>

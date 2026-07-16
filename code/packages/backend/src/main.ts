@@ -24,6 +24,7 @@ import { communitiesRouter } from "./modules/communities/communities.router.js";
 import { compressRouter } from "./modules/compress/compression.router.js";
 import { transcribeRouter } from "./modules/transcribe/transcribe.router.js";
 import { describeRouter } from "./modules/describe/describe.router.js";
+import { ocrRouter } from "./modules/ocr/ocr.router.js";
 import { gitRouter } from "./modules/git/gitignore.router.js";
 import { todoRouter } from "./modules/todo/todo.router.js";
 import { healthRouter } from "./modules/health/health.router.js";
@@ -220,6 +221,7 @@ async function main(): Promise<void> {
   app.use("/api/compress", compressRouter); // compression engine: tools/settings/check/file/batch (compression.mdx)
   app.use("/api/transcribe", transcribeRouter); // transcription engine: tools/file/batch/tree/storage (Transcribe.mdx)
   app.use("/api/describe", describeRouter); // AI description: providers/file/prompt (ai_description.mdx)
+  app.use("/api/ocr", ocrRouter); // OCR: read the text out of image/video pixels — 100% local (ocr.mdx)
   app.use("/api/git", gitRouter); // Git Ignore engine: /ignore/plan + /ignore/apply (git_ignore.mdx §6)
   app.use("/api/todo", todoRouter); // To Do page: per-storage batches, dismiss, apply, transcribe-scan (to_do.mdx)
   app.use("/api/internal", internalRouter);

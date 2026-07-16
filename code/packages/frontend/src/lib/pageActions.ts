@@ -6,7 +6,7 @@
 // popup's Confirm (in lib/batchPopup.ts). Only WHERE the enqueue happens changed (click → Confirm); Rules
 // 1–3 and the first-time-storage gate are unchanged (they run at Apply).
 import { toast } from "sonner";
-import { openTranscribeBatch, openDescribeBatch, type BatchScope } from "./batchPopup.js";
+import { openTranscribeBatch, openDescribeBatch, openOcrBatch, type BatchScope } from "./batchPopup.js";
 
 // The page's set for an action (page_actions.mdx §1.1): a non-empty `paths` = the CHECKED subset; otherwise
 // `root` is walked recursively. Callers pass one or the other. (Alias of batchPopup's BatchScope.)
@@ -29,4 +29,9 @@ export async function createTranscriptions(scope: ActionScope): Promise<void> {
 /** Open the unified batch-confirm popup for AI descriptions over the page's scope (dialogs.mdx §5–§6). */
 export async function createDescriptions(scope: ActionScope): Promise<void> {
   await openDescribeBatch(scope);
+}
+
+/** Open the unified batch-confirm popup for OCR text over the page's scope (ocr.mdx §8.5). */
+export async function createOcrText(scope: ActionScope): Promise<void> {
+  await openOcrBatch(scope);
 }

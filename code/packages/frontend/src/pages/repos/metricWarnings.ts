@@ -17,6 +17,8 @@ export type MetricId =
   | "transcribed"
   | "describable"
   | "described"
+  | "ocrable"
+  | "ocred"
   | "bigNotIgnored";
 
 export interface MetricDef {
@@ -82,6 +84,16 @@ export const METRIC_CATALOG: Record<MetricId, MetricDef> = {
     hint: "Images and videos that already have an AI description. Nothing to do.",
     positive: "ok",
   },
+  ocrable: {
+    label: "OCRable",
+    hint: "Images and videos whose on-screen text hasn't been read yet. Large File Bridge can read it on this computer — nothing is uploaded, and nothing runs until you ask.",
+    positive: "warn",
+  },
+  ocred: {
+    label: "OCRed",
+    hint: "Images and videos whose text has already been read. Files with no text on screen count here too — that is a finished answer, not a to-do.",
+    positive: "ok",
+  },
   bigNotIgnored: {
     label: "Big, not git-ignored",
     hint: "Large files that aren't git-ignored yet. Git-ignore them so Git never commits the big binaries (they sync over IPFS instead).",
@@ -115,6 +127,10 @@ export function metricCount(id: MetricId, detail: RepoDetail): number {
       return m.describable;
     case "described":
       return m.described;
+    case "ocrable":
+      return m.ocrable;
+    case "ocred":
+      return m.ocred;
     case "bigNotIgnored":
       return m.bigNotIgnored;
     default:

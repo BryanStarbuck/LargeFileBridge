@@ -23,6 +23,7 @@ import { HotkeyProvider } from "./lib/hotkeys.js";
 import { ErrorBoundary } from "./components/ErrorBoundary.js";
 import { leftBar } from "./config/left_bar.js";
 import { clientLog, errMessage } from "./lib/clientLog.js";
+import { isTransientNetworkError } from "./lib/transientError.js";
 import "./styles.css";
 
 // The bottom-left offset that clears the left bar for BOTH the toast stack and the progress dock
@@ -44,21 +45,9 @@ function isTranslationDomError(err: unknown): boolean {
   return isNotFound && /removeChild|insertBefore/.test(msg) && /not a child of this node/.test(msg);
 }
 
-// Axios raises a plain "Network Error" (or ECONNABORTED/ERR_CANCELED) whenever a request can't
-// complete for a reason that isn't an app bug: the backend is mid-restart (`just run` reload, an
-// IPFS daemon (re)install bouncing the API), a request got aborted by navigation/unmount, or the
-// dev server itself is cycling. None of those are exceptions in OUR code, but every one of them
-// surfaces as an unhandled promise rejection wherever a query/call site doesn't attach onError. A
-// request that DID reach the backend and got a real HTTP response (4xx/5xx) is a genuine failure —
-// only the no-response/aborted shape is treated as transient here.
-function isTransientNetworkError(err: unknown): boolean {
-  const e = err as { isAxiosError?: boolean; code?: string; message?: string; response?: unknown } | null;
-  if (!e || typeof e !== "object") return false;
-  const isAxios = e.isAxiosError === true || (err instanceof Error && err.name === "AxiosError");
-  if (!isAxios || e.response) return false;
-  const transientCodes = new Set(["ERR_NETWORK", "ECONNABORTED", "ERR_CANCELED"]);
-  return (e.code !== undefined && transientCodes.has(e.code)) || e.message === "Network Error";
-}
+// "Is the backend absent, or did it answer?" — the one predicate behind the retry gate, the boot gate, and
+// the fault trail below. It lives in lib/transientError.ts (with its own tests) because a proxy's 502 used to
+// be misread here as an authoritative answer, which is what put a mid-restart app on the boot-error card.
 
 // Rate-limit: log the 1st occurrence and then every Nth, so the signal stays visible without spam.
 let translationDomHits = 0;

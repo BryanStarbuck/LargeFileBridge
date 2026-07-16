@@ -208,11 +208,29 @@ never silently indistinguishable from "signed out":
 
 Error handling and logging that make these debuggable:
 
-* **Transient vs. real is an explicit predicate.** `isTransientNetworkError()` (no HTTP response =
-  transient; any response = real) is what routes state 0 vs. state 1, and it rate-limits transient
-  noise in the fault trail instead of logging one line per retry.
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/main.tsx` — `isTransientNetworkError()`,
-  `reportGlobal()`.
+* **Transient vs. real is an explicit predicate.** `isTransientNetworkError()` routes state 0 vs. state 1,
+  and it rate-limits transient noise in the fault trail instead of logging one line per retry.
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/transientError.ts` —
+  `isTransientNetworkError()`; consumed by `main.tsx` — `retryWhileBackendDown()`, `reportGlobal()`.
+
+* **A RESPONSE IS NOT PROOF THE BACKEND ANSWERED (LOCKED).** This spec previously stated the rule as "no
+  HTTP response = transient; any response = real", and that premise is FALSE whenever a proxy sits in
+  front — one always does. Vite proxies `/api` → `:8787` in dev (nginx/Caddy in server mode) and, when the
+  backend is down, does **not** raise a network error: it synthesizes its **own HTTP 502**. Under the old
+  rule "the backend is mid-restart" — precisely the case state 0 exists for — arrived carrying a response,
+  was judged authoritative, and sent the app to the state-1 boot-error card *with retry refused*, where it
+  sat until a manual Retry. A single `tsx watch` reload was enough. Reported 2026-07-16 as
+  *"Large File Bridge ran into a problem starting up. Request failed with status code 502."*
+  So the test is on the **status**, never on the existence of a response:
+  * **502 / 504 are transient** — gateway statuses spoken by a proxy *about* an upstream that isn't there.
+    This app emits neither (grep: zero sites), so either one can only mean "backend unreachable".
+  * **503 is NOT transient** — the app issues it itself (`transcode.service.ts`: "ffmpeg not installed"),
+    and retrying it forever would bury a genuine, actionable answer behind an infinite spinner.
+  * The rule in one line: **a status a proxy invents on our behalf is transient; a status we say ourselves
+    never is.** Guarded by `frontend/src/lib/transientError.spec.ts` (both directions asserted).
+  * Debugging tell: axios says `"Request failed with status code 502"` only when a real response arrived —
+    a genuinely unreachable host reads `"Network Error"`. That string next to `[vite] http proxy error:`
+    in `launcher.log` proves the proxy answered, not the app.
 * **The backend logs every auth decision** through the OpenAuthFederated logger wired into LFB's rolling
   log, so a rejected cookie, a verify failure, or a missing record is visible in
   `~/T/_large_files_bridge/log.log` (and faults in `error.err`). The logger is passed in

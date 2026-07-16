@@ -2,3 +2,8 @@ packages:
   - "packages/*"
 allowBuilds:
   esbuild: true
+  # tesseract.js (the OCR fallback engine — ocr.mdx §3.2). Its only install script is
+  # `opencollective-postinstall`, a donation-banner printer: it contributes nothing to the library working,
+  # so there is no reason to run third-party code at install time for it. The WASM core and our vendored
+  # tessdata (assets/tessdata/) are plain files — nothing needs building.
+  tesseract.js: false

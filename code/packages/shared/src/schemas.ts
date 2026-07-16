@@ -95,6 +95,21 @@ export const AppConfigSchema = z.object({
       model_consent: z.enum(["approved", "declined", "use_fallback"]).nullable().default(null),
     })
     .prefault({}),
+  // OCR — read the text out of the pixels (ocr.mdx §17). `engine`: auto (Apple Vision when available, else
+  // the vendored tesseract.js fallback — §3.2) / vision / tesseract. `video_stride_seconds` (default 15) is
+  // the LOCKED sampling stride (§2.2.1): a slide lives 30s–5min and a chyron 10–30s, so 15s catches them
+  // while sampling 0.07% of a 30fps stream. `max_frames` (default 1000) bounds a pathological input (a
+  // 10-hour stream would emit 2,400 frames at 15s); when it bites, the artifact records truncated:true and
+  // the UI SAYS so — no silent caps (§15.2 rule 7). `language` is BCP-47; a language whose data is not
+  // vendored is a PERMISSIONED download, never silent (§3.3).
+  ocr: z
+    .object({
+      engine: z.enum(["auto", "vision", "tesseract"]).default("auto"),
+      video_stride_seconds: z.number().min(1).max(600).default(15),
+      max_frames: z.number().int().min(1).max(10000).default(1000),
+      language: z.string().default("en-US"),
+    })
+    .prefault({}),
   // `threshold_bytes` (100 MB = GitHub's hard limit) gates the bridge payload — a git-ignored file the
   // user already chose to keep out of git. `checked_in_threshold_bytes` (50 MB = GitHub's *warning* line)
   // is the separate, lower gate for the opposite case: a file that IS checked in and probably shouldn't
@@ -350,12 +365,15 @@ export const RepoUnitConfigSchema = z.object({
       participants: z.array(z.string()).default([]),
     })
     .prefault({}),
-  // Where this repo's transcripts / AI descriptions are written (repo_settings.mdx §4/§5,
-  // placement_radios.mdx). Frozen wire enum lfbridge | beside | sync_repo; both default to lfbridge.
+  // Where this repo's transcripts / AI descriptions / OCR text are written (repo_settings.mdx §4/§5,
+  // placement_radios.mdx, ocr.mdx §5.3). Frozen wire enum lfbridge | beside | sync_repo; all default to
+  // lfbridge. All three are Category-A content artifacts under the same kind-resolved tracking base, so they
+  // share one radio SHAPE — the OCR instance's parameterized noun is "OCR text".
   artifacts: z
     .object({
       transcription_placement: z.enum(["lfbridge", "beside", "sync_repo"]).default("lfbridge"),
       ai_description_placement: z.enum(["lfbridge", "beside", "sync_repo"]).default("lfbridge"),
+      ocr_placement: z.enum(["lfbridge", "beside", "sync_repo"]).default("lfbridge"),
     })
     .prefault({}),
   // Whether THIS repo additionally mirrors its Category-B tracking state (repo_storage.yaml, sidecars,

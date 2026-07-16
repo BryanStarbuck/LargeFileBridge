@@ -15,7 +15,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 import {
   ChevronLeft, UploadCloud, DownloadCloud, FolderOpen, Copy, FileText, ExternalLink, Zap,
-  Move, Trash2, Music, Captions, Sparkles, Monitor, Ban, RefreshCw,
+  Move, Trash2, Music, Captions, Sparkles, TextSelect, Monitor, Ban, RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { EntityView, Decision, MediaKind, PlatformInfo } from "@lfb/shared";
@@ -29,6 +29,7 @@ import { useTranscribeFile } from "@/lib/useTranscribeFile";
 import { useHotkeys } from "@/lib/hotkeys";
 import { TranscribeSetupCard } from "@/components/TranscribeSetupCard";
 import { runDescribeFile } from "@/lib/describe";
+import { runOcrFile } from "@/lib/ocr";
 import { CredentialsMissingDialog } from "@/components/describe/CredentialsMissingDialog";
 import { runOsOpen } from "@/lib/os";
 import { confirmModal, promptModal } from "@/lib/modals";
@@ -415,6 +416,7 @@ function MediaAnalysis({
   const qc = useQueryClient();
   const canTranscribe = kind === "video" || kind === "audio"; // has (or may have) audio to transcribe
   const canDescribe = kind === "video" || kind === "image"; // AI-describable media
+  const canOcr = kind === "video" || kind === "image"; // has PIXELS that may contain text (ocr.mdx §7)
   // The credentials-missing popup (ai_credentials.mdx §2): null = closed, else the honest reason string.
   const [credsReason, setCredsReason] = useState<string | null>(null);
 
@@ -430,11 +432,25 @@ function MediaAnalysis({
   const { data: providers } = useQuery({
     queryKey: ["describe-providers"], queryFn: () => api.describeProviders(), enabled: canDescribe, staleTime: 60 * 1000,
   });
+  const { data: ocrText } = useQuery({
+    queryKey: ["ocr", v.path], queryFn: () => api.ocr(v.path), enabled: canOcr,
+  });
+  // The OCR engine matrix (ocr.mdx §6). Unlike describe's provider probe this is almost always "ready" —
+  // there is no key. The one thing worth knowing up front is whether a VIDEO can run at all: images need no
+  // external tool, videos need ffmpeg to sample frames, and that asymmetry must be SAID, not papered over.
+  const { data: ocrEngines } = useQuery({
+    queryKey: ["ocr-engines"], queryFn: () => api.ocrEngines(), enabled: canOcr, staleTime: 60 * 1000,
+  });
+  const [ocrBusy, setOcrBusy] = useState(false);
   // Async, non-blocking transcription with an instant pending state (Transcribe.mdx §5.1).
   const transcribe = useTranscribeFile(v.path, v.name);
 
-  if (!canTranscribe && !canDescribe) return null;
-  const both = canTranscribe && canDescribe;
+  if (!canTranscribe && !canDescribe && !canOcr) return null;
+  // How many analysis columns this kind actually shows (ocr.mdx §7): audio → 1 (Transcription), image → 2
+  // (AI description + Text), video → 3 (all). The band divides evenly among the columns SHOWN, so it never
+  // reserves dead space for an inapplicable analysis.
+  const columnCount = (canDescribe ? 1 : 0) + (canTranscribe ? 1 : 0) + (canOcr ? 1 : 0);
+  const gridCols = columnCount >= 3 ? "grid-cols-1 md:grid-cols-3" : columnCount === 2 ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1";
 
   // Whether we already know (from the providers probe) that no vision key resolves on this machine.
   const noProviderKnown = !!providers && !providers.anyAvailable;
@@ -483,6 +499,78 @@ function MediaAnalysis({
     </AnalysisColumn>
   ) : null;
 
+  // Run (or re-run) OCR on this file. No credentials branch — OCR is 100% local (ocr.mdx §4). The only
+  // not-ready case worth pre-empting is a video on a machine without ffmpeg, which the pane states as a hint.
+  const onRunOcr = (overwrite: boolean) => {
+    setOcrBusy(true);
+    runOcrFile(v.path, v.name, {
+      overwrite,
+      onDone: () => qc.invalidateQueries({ queryKey: ["ocr", v.path] }),
+      // Clear the pending flag on EVERY terminal outcome, not just success: a failed run never reaches
+      // onDone, and the button would stay "Reading…" forever.
+      onSettled: () => setOcrBusy(false),
+    });
+  };
+
+  const videoNeedsFfmpeg = kind === "video" && !!ocrEngines && !ocrEngines.videoToolsPresent;
+  const noOcrEngine = !!ocrEngines && !ocrEngines.anyAvailable;
+
+  // Third column — Text (OCR) (image + video). ocr.mdx §7.
+  const ocrColumn = canOcr ? (
+    <AnalysisColumn title="Text (OCR)" present={!!ocrText}>
+      {ocrText ? (
+        ocrText.text.trim() === "" ? (
+          // EMPTY IS A RESULT, NOT A MISSING ARTIFACT (ocr.mdx §2.3). Most images have no text. Showing the
+          // generate pane here would invite the user to re-run it forever; the ✓ and this line say "done, and
+          // the answer is none".
+          <div className="rounded-lg border border-[var(--lfb-border)] p-4 text-sm text-black/50">
+            No text found in this {kind}.
+            <button className="ml-2 text-[var(--lfb-primary)] hover:underline" onClick={() => onRunOcr(true)} disabled={ocrBusy}>
+              Read again
+            </button>
+          </div>
+        ) : (
+          <AnalysisBody
+            mono
+            body={ocrText.text}
+            meta={
+              <>
+                OCR{ocrText.engine ? ` · ${ocrText.engine}` : ""}{ocrText.level ? ` · ${ocrText.level}` : ""}
+                {ocrText.framesSampled ? ` · ${ocrText.framesSampled} frames` : ""}
+                {ocrText.truncated ? " · truncated" : ""}
+                {ocrText.generatedAt ? ` · ${relativeTime(ocrText.generatedAt)}` : ""}
+              </>
+            }
+            busy={ocrBusy}
+            onRegenerate={() => onRunOcr(true)}
+          />
+        )
+      ) : (
+        <GeneratePane
+          icon={<TextSelect className="h-8 w-8 text-black/30" />}
+          title="No OCR text yet"
+          blurb={
+            kind === "video"
+              ? "Read the words visible on screen — slides, chyrons, signs. A frame is sampled every 15 seconds and read locally; nothing is uploaded and your original file is never changed."
+              : "Read the words visible in this image — an error message, a receipt, a sign. It runs entirely on this computer; nothing is uploaded and your original file is never changed."
+          }
+          hint={
+            noOcrEngine
+              ? "No OCR engine is available on this computer."
+              : videoNeedsFfmpeg
+                ? "Reading text from a video needs ffmpeg — install it with `brew install ffmpeg`. Images are unaffected."
+                : undefined
+          }
+          disabled={noOcrEngine || videoNeedsFfmpeg}
+          cta="Read text from this file"
+          busy={ocrBusy}
+          busyLabel="Reading…"
+          onGenerate={() => onRunOcr(false)}
+        />
+      )}
+    </AnalysisColumn>
+  ) : null;
+
   // Right column — Transcription (video + audio).
   const transcriptionColumn = canTranscribe ? (
     <AnalysisColumn title="Transcription" present={!!transcript}>
@@ -514,10 +602,13 @@ function MediaAnalysis({
 
   return (
     <>
-      <div className={`mt-6 grid gap-6 ${both ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1"}`}>
-        {/* Left half = AI description, right half = Transcription (media_viewer.mdx §6). */}
+      <div className={`mt-6 grid gap-6 ${gridCols}`}>
+        {/* AI description · Transcription · Text (OCR), SIDE BY SIDE — all shown at once, no tabs and no
+            radio buttons (media_viewer.mdx §6, ocr.mdx §7). A video shows all three; an image shows AI
+            description + Text; an audio file shows Transcription alone. */}
         {descriptionColumn}
         {transcriptionColumn}
+        {ocrColumn}
       </div>
       {/* Credentials-missing popup — Close / Instructions (ai_credentials.mdx §2). */}
       {credsReason !== null && (

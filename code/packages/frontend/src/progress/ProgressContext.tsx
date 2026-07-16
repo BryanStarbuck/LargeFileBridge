@@ -182,6 +182,9 @@ const VERBS: Record<ProgressKind, string> = {
   compress: "Compressing",
   transcribe: "Transcribing",
   describe: "Describing",
+  // The third analysis transaction (ocr.mdx). "Reading text" rather than "OCR-ing": the dock card is read
+  // by a person watching their files, and the verb should say what is happening to them.
+  ocr: "Reading text in",
   hash: "Hashing",
   fingerprint: "Fingerprinting",
   ignore: "Ignoring",

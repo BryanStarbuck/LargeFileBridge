@@ -3,14 +3,15 @@
 // point opens — the page action-links row (Create Transcriptions / Create AI descriptions) and the
 // directory/file ⋮ kebab / right-click menu item. Those surfaces are NOT inside MetricsStrip (which mounts
 // its own WarningPopup for the tiles), so they need a GLOBAL popup host: requestBatchPopup(def) opens the
-// app-root-mounted BatchPopupHost. openTranscribeBatch / openDescribeBatch fetch the /plan preview for the
-// scope and build the same transcribe/describe WarningDef the tiles use, then open it.
+// app-root-mounted BatchPopupHost. openTranscribeBatch / openDescribeBatch / openOcrBatch fetch the /plan
+// preview for the scope and build the same transcribe/describe/ocr WarningDef the tiles use, then open it.
 import { toast } from "sonner";
 import type { PreviewPlan } from "@lfb/shared";
 import { formatBytes, mediaKindForName } from "@lfb/shared";
 import { api } from "../api/client.js";
 import { clientLog } from "./clientLog.js";
 import { DESCRIBE_KIND_FILTERS } from "./describe.js";
+import { OCR_KIND_FILTERS } from "./ocr.js";
 import { requestStorageSetup } from "./setupWizard.js";
 import { withModelReady } from "./transcribe.js";
 import type { WarningDef } from "../components/ui/warnings/registry.js";
@@ -289,4 +290,102 @@ export async function openDescribeBatch(scope: BatchScope): Promise<void> {
     },
   };
   requestBatchPopup(def, gen);
+}
+
+/**
+ * Open the unified batch popup for OCR over a scope (ocr.mdx §9) — the THIRD launcher. OCR gets no popup of
+ * its own; it fills in this one.
+ *
+ * Unlike describe there is no provider/account to gate on (ocr.mdx §4), so Apply has no credentials branch —
+ * the only not-ready cases are "no engine at all" and "a video without ffmpeg", which the per-file jobs report
+ * honestly as Failed rows rather than blocking the whole batch.
+ */
+export async function openOcrBatch(scope: BatchScope): Promise<void> {
+  // dialogs.mdx §5.4 — spinner FIRST, synchronously, then the walk. A recursive OCR scope can be thousands of
+  // files, and the plan additionally ffprobes video rows for their frame counts.
+  const gen = beginBatchOpen("Opening window…", openingSub(scope, "images & videos"));
+  let plan: PreviewPlan;
+  try {
+    plan = await api.ocrPlan(scope);
+  } catch (e) {
+    clientLog.error("batchPopup.ocrPlan", e);
+    closeBatchPopup(gen);
+    toast.error(e instanceof Error ? e.message : "Could not scan for files to OCR");
+    return;
+  }
+  const n = plan.files.length;
+  const videos = plan.files.filter((f) => mediaKindForName(f.path) === "video").length;
+  const images = n - videos;
+  const def: WarningDef = {
+    id: "batch-ocr",
+    state: "warn",
+    scope: "file",
+    headline: n === 0 ? "Nothing to read text from here" : `${n} file${n === 1 ? " is" : "s are"} ready to have their text read`,
+    sub:
+      n === 0
+        ? `All ${plan.considered} image/video file${plural(plan.considered)} here already have OCR text.`
+        : `Large File Bridge can read the text out of each image/video locally — nothing runs until you apply.${excludedClause(plan.alreadyDone, "OCR text")}`,
+    popup: {
+      whatThisIs:
+        n === 0
+          ? "Every image/video file in this scope already has OCR text, so there is nothing to do here."
+          : // The per-kind COST asymmetry, stated honestly up front (ocr.mdx §9.1). This is the sentence that
+            // lets a user decide to take the images now and leave the videos for later.
+            `Large File Bridge found ${countsClause(images, videos)} with no OCR text yet. It reads the words that are visible on screen — a screenshot's error message, a slide's figures, a sign — so you can search for them later.`,
+      whyItMatters:
+        "OCR text makes the words inside your images and videos searchable without opening them. It runs entirely on this computer — nothing is uploaded. Images finish in seconds; each video is sampled every 15 seconds, so it takes about a minute per hour of footage. Use the Videos / Images filter to narrow the list, and uncheck any you want to skip.",
+      // ocr.mdx §9.1 — the Videos/Images filter row, load-bearing here because of the cost gap above.
+      kindFilters: OCR_KIND_FILTERS,
+      targets: plan.files.map((f) => {
+        const kind = mediaKindForName(f.path) ?? undefined;
+        // The frame count the plan resolved for a video row (ocr.mdx §9.2) — the one field OCR's plan has
+        // that its siblings' don't. It is WHY one row is expensive, shown before the user commits to it.
+        const frames = f.frames;
+        return {
+          id: f.path,
+          label: labelForPath(f.path),
+          name: basename(f.path),
+          kind,
+          sizeText: formatBytes(f.sizeBytes),
+          pathText: labelForPath(f.path),
+          sublabel: kind === "video" && frames ? `${frames} frame${frames === 1 ? "" : "s"} to read` : undefined,
+        };
+      }),
+      targetNoun: "file",
+      actionLabel: "OCR",
+      canApply: () => n > 0,
+      progress: {
+        kind: "ocr",
+        target: "your files",
+        doneLabel: (_sel, count) =>
+          count === 1 ? "1 file will have its OCR text created" : `${count} files will have their OCR text created`,
+        invalidate: [["repos"], ["fs"]],
+      },
+      apply: async (_sel, checkedPaths) => {
+        try {
+          const enq = await api.ocrEnqueue({ paths: checkedPaths });
+          if (enq.needsSetup) {
+            requestStorageSetup({
+              mediaPath: enq.setupPath ?? checkedPaths[0] ?? "",
+              actionLabel: "read the text from",
+              retry: () => void openOcrBatch({ paths: checkedPaths }),
+            });
+          }
+        } catch (e) {
+          clientLog.error("batchPopup.ocrEnqueue", e);
+          toast.error(e instanceof Error ? e.message : "Could not queue OCR");
+        }
+      },
+    },
+  };
+  requestBatchPopup(def, gen);
+}
+
+/** "1,204 images and 86 videos" / "86 videos" / "1 image" — the honest per-kind count for the OCR popup's
+ *  cost sentence (ocr.mdx §9.1). Omits a kind entirely at zero rather than saying "0 videos". */
+function countsClause(images: number, videos: number): string {
+  const i = `${images.toLocaleString()} image${images === 1 ? "" : "s"}`;
+  const v = `${videos.toLocaleString()} video${videos === 1 ? "" : "s"}`;
+  if (images > 0 && videos > 0) return `${i} and ${v}`;
+  return images > 0 ? i : v;
 }

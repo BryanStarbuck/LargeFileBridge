@@ -427,11 +427,18 @@ async function fitImageUnderLimit(src: string, limitBytes: number): Promise<{ ou
 // So the fan-out stays wide for the NETWORK (the spec's real intent) and is gated here for the CPU: many
 // describes may be in flight, but only a core-budgeted few may be transcoding at any moment. The rest wait
 // their turn at the gate instead of fighting for cores.
+//
+// SHARED WITH OCR (ocr.mdx §10.3). OCR's video path always shells out to ffmpeg to sample frames — its CPU
+// branch is unconditional, where describe's is only taken by an oversize file — so it takes this SAME slot.
+// One semaphore, one core budget: an OCR extraction and a describe transcode compete with each other rather
+// than each believing it owns the machine. This gate is the module's export precisely because a second,
+// parallel gate would silently double the real cap and re-create the defect it exists to prevent.
 let transcodeActive = 0;
 const transcodeWaiters: Array<() => void> = [];
 
-/** Reserve a transcode slot, waiting when the core budget is already spent. Always release in a finally. */
-async function acquireTranscodeSlot(): Promise<() => void> {
+/** Reserve a transcode slot, waiting when the core budget is already spent. Always release in a finally.
+ *  Shared by describe's compress-to-fit and OCR's frame extraction (ocr.mdx §10.3). */
+export async function acquireTranscodeSlot(): Promise<() => void> {
   const cap = Math.max(1, Math.floor(coreBudget() / VIDEO_THREADS_PER_ENCODE));
   if (transcodeActive >= cap) {
     log.info("describe", `fit: core budget full (${transcodeActive}/${cap} transcodes) — queueing behind it`);

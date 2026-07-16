@@ -121,16 +121,18 @@ export function folderForRepoId(repoId: string): string | null {
   return null;
 }
 
-/** The per-repo placement choice for its transcripts / AI descriptions (repo_settings.mdx §4-5). Resolved
- *  from the repo unit config keyed by the artifact's owning root; defaults to "lfbridge" when the root isn't
- *  a registered repo or on any read failure. Consumed by transcribe.service / describe.service to decide
- *  WHERE the artifact is written (via artifactPathForPlacement). */
-export function repoArtifactPlacement(root: string, which: "transcription" | "aiDescription"): PlacementChoice {
+/** The per-repo placement choice for its transcripts / AI descriptions / OCR text (repo_settings.mdx §4-5,
+ *  ocr.mdx §5.3). Resolved from the repo unit config keyed by the artifact's owning root; defaults to
+ *  "lfbridge" when the root isn't a registered repo or on any read failure. Consumed by transcribe.service /
+ *  describe.service / ocr.service to decide WHERE the artifact is written (via artifactPathForPlacement). */
+export function repoArtifactPlacement(root: string, which: "transcription" | "aiDescription" | "ocr"): PlacementChoice {
   try {
     const folder = folderForRepoId(repoIdFromPath(root));
     if (!folder) return "lfbridge";
     const a = getRepoConfig(folder).artifacts;
-    return which === "transcription" ? a.transcription_placement : a.ai_description_placement;
+    if (which === "transcription") return a.transcription_placement;
+    if (which === "aiDescription") return a.ai_description_placement;
+    return a.ocr_placement;
   } catch {
     return "lfbridge";
   }
@@ -328,6 +330,7 @@ function composeFileRows(
       compress: compressStatusFor(cand.path),
       transcribe: transcribeStatusFor(cand.path, repoRootAbs),
       describe: describeStatusFor(cand.path, repoRootAbs),
+      ocr: ocrStatusFor(cand.path, repoRootAbs),
     };
   });
 }
@@ -397,6 +400,24 @@ function describeStatusFor(relPath: string, repoRootAbs: string | null): TaskSta
   return "could";
 }
 
+// OCR task status (ocr.mdx §11.2) — the third sibling. "na" unless the file is IMAGE or VIDEO (audio has no
+// pixels); then "done" iff a `.ocr` artifact exists, else "could". Any failure degrades to "could" so an
+// OCR-able file is never hidden.
+//
+// "done" keys on the ARTIFACT, never on the text being non-empty (ocr.mdx §2.3). A photo of a beach OCRs to
+// "" and is DONE — a tree of text-free holiday photos settles at a big green 0 rather than presenting an
+// eternal wall of candidates.
+function ocrStatusFor(relPath: string, repoRootAbs: string | null): TaskStatus {
+  const kind = mediaKindForName(path.basename(relPath));
+  if (kind !== "image" && kind !== "video") return "na";
+  try {
+    if (repoRootAbs && analysisOutputs(repoRootAbs, relPath).includes("ocr")) return "done";
+  } catch {
+    /* artifact check unavailable → treat as not-yet-OCR'd */
+  }
+  return "could";
+}
+
 // Roll up the per-tab "what could be done" metric counts (task_tabs.mdx §2.5) from the composed rows.
 // `pullDown` is intentionally omitted — it comes from RepoDetail.missingPinned.length (router-computed).
 // The git-ignore nudge counts at the CHECKED-IN threshold (50 MB default), not the 100 MB payload
@@ -422,6 +443,8 @@ function computeTaskMetrics(files: FileRow[]): TaskMetrics {
     transcribed: 0,
     describable: 0,
     described: 0,
+    ocrable: 0,
+    ocred: 0,
     bigNotIgnored: 0,
   };
   for (const f of files) {
@@ -437,6 +460,8 @@ function computeTaskMetrics(files: FileRow[]): TaskMetrics {
     if (f.transcribe === "done") m.transcribed++;
     if (f.describe === "could") m.describable++;
     if (f.describe === "done") m.described++;
+    if (f.ocr === "could") m.ocrable++;
+    if (f.ocr === "done") m.ocred++;
     if (!f.gitignore && f.sizeBytes >= bigFileMetricThreshold) m.bigNotIgnored++;
   }
   return m;

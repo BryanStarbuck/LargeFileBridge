@@ -237,15 +237,20 @@ const ActionLink = forwardRef<
   );
 });
 
-// ── Shared builders for the two producing actions (page_actions.mdx §4) ─────────────────────────────
-import { Captions, Sparkles } from "lucide-react";
-import { createTranscriptions, createDescriptions, type ActionScope } from "../../lib/pageActions.js";
+// ── Shared builders for the three producing actions (page_actions.mdx §4, ocr.mdx §8.5) ─────────────
+import { Captions, Sparkles, TextSelect } from "lucide-react";
+import { createTranscriptions, createDescriptions, createOcrText, type ActionScope } from "../../lib/pageActions.js";
 
 /**
- * The two producing page actions every file-list page carries (Create Transcriptions / Create AI
- * descriptions). `scope()` is evaluated at click time so it always reflects the CURRENT checked set: return
- * `{ paths }` for the checked subset, or `{ root }` to walk the page's root recursively when nothing is
- * checked (page_actions.mdx §1.1). Both append the checked count to their label when a selection exists.
+ * The three producing page actions every file-list page carries (Create Transcriptions / Create AI
+ * descriptions / Create OCR text). `scope()` is evaluated at click time so it always reflects the CURRENT
+ * checked set: return `{ paths }` for the checked subset, or `{ root }` to walk the page's root recursively
+ * when nothing is checked (page_actions.mdx §1.1). All append the checked count to their label when a
+ * selection exists.
+ *
+ * ORDER IS THE CONTRACT (ocr.mdx §0/§8.2): transcription → AI description → OCR, everywhere, at every scale,
+ * so the trio is learnable as one thing. OCR is last, which also makes it the first to overflow into `More ▾`
+ * on a narrow page (page_actions.mdx §3.1) — correct, since it is the lowest-priority of the three.
  */
 export function producingActions(scope: () => ActionScope): Action[] {
   return [
@@ -264,6 +269,14 @@ export function producingActions(scope: () => ActionScope): Action[] {
       group: "Create",
       countWhenSelected: true,
       onSelect: () => createDescriptions(scope()),
+    },
+    {
+      id: "create-ocr-text",
+      label: "Create OCR text",
+      icon: <TextSelect className="h-3.5 w-3.5" />,
+      group: "Create",
+      countWhenSelected: true,
+      onSelect: () => createOcrText(scope()),
     },
   ];
 }

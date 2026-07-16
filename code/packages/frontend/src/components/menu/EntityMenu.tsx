@@ -24,12 +24,13 @@ import {
   Trash2,
   Captions,
   Sparkles,
+  TextSelect,
 } from "lucide-react";
 import type { EntityView, Decision } from "@lfb/shared";
 import { mediaKindForName, viewerRouteForName } from "@lfb/shared";
 import { api } from "@/api/client";
 import { patchEntityBadges } from "@/lib/patchEntityBadges";
-import { openTranscribeBatch, openDescribeBatch } from "@/lib/batchPopup";
+import { openTranscribeBatch, openDescribeBatch, openOcrBatch } from "@/lib/batchPopup";
 import { confirmModal, promptModal } from "@/lib/modals";
 import { openCompressInside } from "@/lib/compressInside";
 import { copyText } from "@/lib/clipboard";
@@ -356,6 +357,13 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
       a.push({ id: "create-description", label: "Create AI description", group: "Create", icon: <Sparkles className="h-4 w-4" />,
         onSelect: () => openDescribeBatch({ paths: [v.path] }) });
     }
+    // Create OCR text — image/video only, ALWAYS directly after Create AI description (ocr.mdx §8.2: the three
+    // siblings are adjacent and in the same order at every scale, so the trio is learnable as one thing).
+    // Same popup, "OCR 1 file" confirm. No provider gate — OCR is 100% local (ocr.mdx §4).
+    if (mkind === "image" || mkind === "video") {
+      a.push({ id: "create-ocr-text", label: "Create OCR text", group: "Create", icon: <TextSelect className="h-4 w-4" />,
+        onSelect: () => openOcrBatch({ paths: [v.path] }) });
+    }
     // Move… — guarded rename of the file (media_viewer.mdx §4.4). Explicit; relocates real bytes.
     a.push({ id: "move", label: "Move…", group: "Work", icon: <Move className="h-4 w-4" />, onSelect: move });
   } else {
@@ -378,6 +386,8 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
       onSelect: () => openTranscribeBatch({ root: v.path }) });
     a.push({ id: "create-descriptions", label: "Create AI descriptions", group: "Create", icon: <Sparkles className="h-4 w-4" />,
       onSelect: () => openDescribeBatch({ root: v.path }) });
+    a.push({ id: "create-ocr-text", label: "Create OCR text", group: "Create", icon: <TextSelect className="h-4 w-4" />,
+      onSelect: () => openOcrBatch({ root: v.path }) });
   }
 
   // Sticky flags (menus.mdx §6.6) — same on file and directory.

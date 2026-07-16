@@ -79,6 +79,10 @@ import type {
   DescribeProvidersStatus,
   DescribeView,
   DescribeResult,
+  OcrView,
+  OcrResult,
+  OcrBatchResult,
+  OcrEnginesStatus,
   DescribeBatchResult,
   DescribePromptView,
   DescribeAiConfig,
@@ -349,6 +353,26 @@ export const api = {
   // Reads return the key SOURCE (config/env), never the raw key; a "" apiKey clears the config key.
   aiConfig: () => unwrap<DescribeAiConfig>(http.get("/describe/config")),
   setAiConfig: (patch: DescribeAiConfigPatch) => unwrap<DescribeAiConfig>(http.patch("/describe/config", patch)),
+
+  // ── OCR — read the text out of image/video pixels (ocr.mdx §18) ─────────────────────────────────────
+  // The third analysis transaction. Note what is ABSENT next to describe*: no providers, no credentials, no
+  // config, no resume. OCR is 100% LOCAL (ocr.mdx §4) — there is no account to configure or to be dead.
+  ocrEngines: () => unwrap<OcrEnginesStatus>(http.get("/ocr/engines")),
+  // `text: ""` on a real artifact is a SUCCESS, not a null (ocr.mdx §2.3) — most images have no text.
+  ocr: (path: string) => unwrap<OcrView | null>(http.get("/ocr/file", { params: { path } })),
+  ocrFile: (path: string, opts?: { overwrite?: boolean; engine?: "auto" | "vision" | "tesseract" }) =>
+    unwrap<OcrResult>(http.post("/ocr/file", { path, ...(opts ?? {}) })),
+  ocrBatch: (paths: string[], opts?: { overwrite?: boolean; engine?: "auto" | "vision" | "tesseract" }) =>
+    unwrap<OcrBatchResult>(http.post("/ocr/batch", { paths, ...(opts ?? {}) })),
+  ocrTree: (path: string, opts?: { overwrite?: boolean; engine?: "auto" | "vision" | "tesseract" }) =>
+    unwrap<OcrBatchResult>(http.post("/ocr/tree", { path, ...(opts ?? {}) })),
+  // "Create OCR text" page action (ocr.mdx §8.5): plan + background-queue; returns the plan immediately.
+  ocrEnqueue: (body: { paths?: string[]; root?: string; overwrite?: boolean; engine?: "auto" | "vision" | "tesseract" }) =>
+    unwrap<EnqueuePlan>(http.post("/ocr/enqueue", body)),
+  // Preview-only (dialogs.mdx §5.2): the eligible candidates under a scope, nothing queued. Video rows carry
+  // `frames` so the popup can show why one row is expensive before the user commits (ocr.mdx §9.2).
+  ocrPlan: (body: { paths?: string[]; root?: string; overwrite?: boolean }) =>
+    unwrap<PreviewPlan>(http.post("/ocr/plan", body)),
   // Move (guarded rename) + Delete (recoverable move-to-trash) a single file — media_viewer.mdx §4.4.
   moveEntity: (path: string, dest: string) =>
     unwrap<{ moved: boolean; path: string }>(http.post("/entity/move", { path, dest })),

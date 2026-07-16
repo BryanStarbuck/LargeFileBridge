@@ -34,10 +34,11 @@ const ANALYSIS_DIR = "analysis";
 const ANALYSIS_FILES: Record<string, string> = {
   visuals_by_time: "visuals_by_time.yaml",
 };
-// Keep consistent with TRANSCRIPTION_EXT / AI_DESCRIPTION_EXT in storage/artifact-placement.service.ts.
+// Keep consistent with TRANSCRIPTION_EXT / AI_DESCRIPTION_EXT / OCR_EXT in storage/artifact-placement.service.ts.
 // Inlined (not imported) to avoid an import cycle — artifact-placement imports LFBRIDGE_DIR from here.
 const TRANSCRIPTION_EXT = ".transcription";
 const AI_DESCRIPTION_EXT = ".ai_description";
+const OCR_EXT = ".ocr";
 const MAX_FILES = 5000; // a safety cap so an enormous tree can't run the index unbounded (logged if hit).
 const FINGERPRINT_CHUNK = 64 * 1024;
 // Phase-1 walk responsiveness: hand the event loop back every N processed entries, exactly like the flat
@@ -100,6 +101,10 @@ export function analysisOutputs(root: string, rel: string, type?: StorageType): 
   ];
   if (bases.some((b) => isFileAt(b + TRANSCRIPTION_EXT))) out.push("transcript");
   if (bases.some((b) => isFileAt(b + AI_DESCRIPTION_EXT))) out.push("description");
+  // OCR text (ocr.mdx §5.2) — the third artifact, detected in the same three layouts. Existence IS the
+  // signal: an artifact whose text is empty still counts as done, because most images have no text and a
+  // text-free file must never be re-offered forever (ocr.mdx §2.3).
+  if (bases.some((b) => isFileAt(b + OCR_EXT))) out.push("ocr");
   const analysisDirs = [
     path.join(trackingBaseDir(root, t), ANALYSIS_DIR, rel),
     ...(legacy ? [path.join(legacy, ANALYSIS_DIR, rel)] : []),

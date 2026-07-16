@@ -3,11 +3,11 @@
 // first"), which files the table shows (rowFilter), which metric panels the strip shows, and the
 // hover-region default hint. OneRepoPage reads TASK_TABS[activeTab] and projects its table + strip.
 import type { SortingState } from "@tanstack/react-table";
-import { LayoutGrid, Pin, Archive, Captions, ScanText, type LucideIcon } from "lucide-react";
+import { LayoutGrid, Pin, Archive, Captions, ScanText, TextSelect, type LucideIcon } from "lucide-react";
 import { mediaKindForName, type FileRow } from "@lfb/shared";
 import type { MetricId } from "./metricWarnings.js";
 
-export type TaskTabId = "all" | "ipfs" | "compress" | "transcribe" | "ai-descriptions";
+export type TaskTabId = "all" | "ipfs" | "compress" | "transcribe" | "ai-descriptions" | "ocr";
 
 export interface TaskTabDef {
   id: TaskTabId;
@@ -105,6 +105,22 @@ export const TASK_TABS: Record<TaskTabId, TaskTabDef> = {
     metrics: ["describable", "described"],
     defaultHint: "AI descriptions: images and videos. Files with no AI description yet are on top.",
   },
+  // OCR — the third analysis tab (ocr.mdx §11.1). Same media axis as AI descriptions (images + video) but a
+  // different question: describe says what is SEEN, OCR quotes what it SAYS on screen. Audio never appears
+  // here — it has no pixels.
+  ocr: {
+    id: "ocr",
+    label: "OCR",
+    icon: TextSelect,
+    columnIds: ["ocr", "path", "size", "kind", "changed"],
+    defaultSort: [
+      { id: "ocr", desc: false },
+      { id: "size", desc: true },
+    ],
+    rowFilter: (f) => f.ocr === "could" || f.ocr === "done",
+    metrics: ["ocrable", "ocred"],
+    defaultHint: "OCR: the text visible inside images and videos. Files whose text hasn't been read yet are on top.",
+  },
 };
 
-export const TASK_TAB_ORDER: TaskTabId[] = ["all", "ipfs", "compress", "transcribe", "ai-descriptions"];
+export const TASK_TAB_ORDER: TaskTabId[] = ["all", "ipfs", "compress", "transcribe", "ai-descriptions", "ocr"];

@@ -12,6 +12,7 @@ import { formatBytes, mediaKindForName } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { clientLog } from "../../lib/clientLog.js";
 import { DESCRIBE_KIND_FILTERS } from "../../lib/describe.js";
+import { OCR_KIND_FILTERS } from "../../lib/ocr.js";
 import { withModelReady } from "../../lib/transcribe.js";
 import type { WarningDef } from "../../components/ui/warnings/registry.js";
 import type { MetricId } from "./metricWarnings.js";
@@ -334,6 +335,66 @@ export function buildDescribeWarning(detail: RepoDetail, repoId: string): Warnin
   };
 }
 
+/**
+ * OCRable — image/video with no OCR text yet (ocr.mdx §12.2, warnings.mdx §11.1.4 `repo-ocrable-work`).
+ * The third sibling of buildTranscribeWarning / buildDescribeWarning.
+ *
+ * Built from the IN-MEMORY `detail.files`, so — unlike the ⋮ / action-link launchers — there is no `/plan`
+ * call and therefore NO "Opening window…" spinner (dialogs.mdx §5.4: the spinner is only for scope-walking
+ * opens).
+ */
+export function buildOcrWarning(detail: RepoDetail, repoId: string): WarningDef | null {
+  const files = detail.files.filter((f) => f.ocr === "could");
+  if (files.length === 0) return null;
+  const n = files.length;
+  return {
+    id: "repo-ocrable-work",
+    state: "warn",
+    scope: "file",
+    headline: `${n} file${n === 1 ? " is" : "s are"} ready to have their text read`,
+    sub: "Large File Bridge can read the text out of each image/video on this computer — nothing runs until you apply.",
+    popup: {
+      whatThisIs: `Large File Bridge found ${n} image/video file${n === 1 ? "" : "s"} in this repo whose on-screen text hasn't been read yet. It reads the words visible in the pixels — a screenshot's error message, a slide's figures, a sign — so you can search for them later.`,
+      whyItMatters:
+        "OCR text makes the words inside your images and videos searchable without opening them. It runs entirely on this computer — nothing is uploaded, and no API key is needed. Images finish in seconds; each video is sampled every 15 seconds, so it takes about a minute per hour of footage. Use the Videos / Images filter to narrow the list, and uncheck any you want to skip.",
+      // ocr.mdx §9.1 — the Videos/Images filter row. More load-bearing here than for describe: the two kinds
+      // differ in cost by two orders of magnitude, so "just the screenshots" must be one click.
+      kindFilters: OCR_KIND_FILTERS,
+      targets: files.map((f) => ({
+        id: absPath(detail, f),
+        label: f.path,
+        name: basename(f.path),
+        kind: mediaKindForName(f.path) ?? undefined,
+        sizeText: formatBytes(f.sizeBytes),
+        pathText: f.path,
+      })),
+      targetNoun: "file",
+      actionLabel: "OCR",
+      canApply: () => true,
+      progress: {
+        kind: "ocr",
+        target: detail.name,
+        doneLabel: (_sel, count) => `${count} file${count === 1 ? "" : "s"} queued to OCR`,
+        invalidate: [["repo", repoId]],
+      },
+      // BACKGROUND-ENQUEUED (ocr.mdx §9, the locked-closed ai_description.mdx §12.4 defect). Never
+      // api.ocrBatch here: that would OCR every file inline inside ONE HTTP request, which stays open for
+      // minutes, dies on a blip, and never surfaces per-file rows on the Processing page.
+      apply: async (_sel, checkedPaths) => {
+        try {
+          const plan = await api.ocrEnqueue({ paths: checkedPaths });
+          if (plan.needsSetup) {
+            toast.error("Set up Personal storage first — Settings → Storages");
+          }
+        } catch (e) {
+          clientLog.error("ocr.enqueue", e);
+          toast.error(e instanceof Error ? e.message : "Could not queue OCR");
+        }
+      },
+    },
+  };
+}
+
 /** Compressible media (video and/or image) — the "N compressible" tile's educate-and-fix popup
  *  (compression.mdx / task_tabs.mdx §6). `kind` narrows to just videos or just images so the videos-tile and
  *  the images-tile each scope to their own files; undefined targets all compressible media (used by the
@@ -398,10 +459,14 @@ export function buildMetricWarning(id: MetricId, detail: RepoDetail, repoId: str
       return buildTranscribeWarning(detail, repoId);
     case "describable":
       return buildDescribeWarning(detail, repoId);
+    case "ocrable":
+      return buildOcrWarning(detail, repoId);
     case "compressibleVideos":
       return buildCompressWarning(detail, repoId, "video");
     case "compressibleImages":
       return buildCompressWarning(detail, repoId, "image");
+    // NOTE `ocred` is deliberately absent → null, like `transcribed` / `described` / `alreadyCompressed`.
+    // A DONE metric has nothing to fix, so its tile is inert (ocr.mdx §12.1).
     default:
       return null;
   }
@@ -418,13 +483,23 @@ export function topRecommendation(
   if (pull) return { metricId: "pullDown", warning: pull };
   const undecided = buildUndecidedWarning(detail, repoId);
   if (undecided) return { metricId: "undecided", warning: undecided };
-  // Then the content-work recommendations (task_tabs.mdx §2.4): transcribe → compress. These make the header
-  // primary a blue "Transcribe ›" / "Compress ›" when a fresh scan found work and nothing worse is pending.
+  // Then the content-work recommendations (task_tabs.mdx §2.7, ocr.mdx §12.3). The LOCKED worst-first order:
+  //
+  //   ipfs-down → pull-down → undecided → transcribe → describe → compress → ocr
+  //     (bad)      (bad)       (warn)      (warn)       (warn)     (warn)   (warn)
+  //
+  // OCR RANKS LAST, and the reasoning is worth stating so nobody "promotes" it later: an un-pinned file is a
+  // DATA-LOSS risk; an undecided file is an UNMADE DECISION; a missing transcript or description is MISSING
+  // CONTENT; an uncompressed video is WASTED DISK. Missing OCR text is a SEARCH CONVENIENCE — the cheapest of
+  // the seven to fix and the least costly to lack. It must never outrank a backup problem. On a repo where it
+  // is the only outstanding item it is, correctly, the whole recommendation.
   const transcribe = buildTranscribeWarning(detail, repoId);
   if (transcribe) return { metricId: "transcribable", warning: transcribe };
   const describe = buildDescribeWarning(detail, repoId);
   if (describe) return { metricId: "describable", warning: describe };
   const compress = buildCompressWarning(detail, repoId);
   if (compress) return { metricId: "compressibleVideos", warning: compress };
+  const ocr = buildOcrWarning(detail, repoId);
+  if (ocr) return { metricId: "ocrable", warning: ocr };
   return null;
 }
