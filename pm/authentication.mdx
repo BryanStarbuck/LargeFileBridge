@@ -291,6 +291,16 @@ The lifetime policy is set in code:
   the OAuth callback to https and break sign-in). `constructAuthFrontend()` computes this from
   `server.mode`.
 * **No anonymous account** (charter): every session record belongs to an allow-listed email.
+* **The one exception — the loopback dev bypass (`LFB_DEV_AUTH`).** For local development the backend can
+  fabricate an authenticated principal **without a Google round-trip**, behind **five simultaneous gates**:
+  local mode **AND** the request is **loopback** **AND** `LFB_DEV_AUTH === "true"` **AND** security is
+  configured **AND** **no Google credentials are present**. It mints an `admin`-role user with
+  `sessionId: "dev"` and no session record, and `auth.router.ts` refuses to disclose it to a non-loopback
+  caller. It is documented **here** because an undisclosed exception to a charter invariant is the worst
+  kind: the rule reads absolute, so the next reader either trusts a guarantee the code does not make, or
+  finds the bypass and assumes it is a bug. **The last gate is the important one** — the moment real Google
+  credentials exist, the bypass is dead, so it cannot silently shadow a real deployment.
+  Implemented in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/identify.ts`.
 
 ---
 
@@ -328,6 +338,8 @@ The lifetime policy is set in code:
    config backup must never carry a live session.
 5. **The Bearer is disposable and short-lived** (15 min), minted from the cookie, refreshed proactively;
    it is never persisted client-side.
-6. **No anonymous account.** Every session belongs to an allow-listed Google email; `hd` is required.
+6. **No anonymous account in any reachable deployment.** Every session belongs to an allow-listed Google
+   email; `hd` is required. The **loopback-only `LFB_DEV_AUTH` bypass** (§8) is the sole, explicitly
+   opted-in exception, and it self-disables the moment real Google credentials are configured.
 7. **The auth session is not the web session** ([sessions.mdx](./sessions.mdx)); never gate access on the
    web session or derive identity from it.

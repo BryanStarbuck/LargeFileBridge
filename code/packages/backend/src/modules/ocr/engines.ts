@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
 import type { OcrResult as MacOcrResult } from "mac-ocr";
 import type { OcrBlock, OcrEngineId, OcrLevel, OcrEngineStatus } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
-import { coreBudget } from "../../shared/concurrency.js";
+import { coreBudget, memoryBudget } from "../../shared/concurrency.js";
 import { log } from "../../shared/logging.js";
 
 /** One engine's recognition of ONE image. `text` may legitimately be "" — most images have no text, and
@@ -192,6 +192,27 @@ function normalizeVision(r: MacOcrResult): Recognition {
 // one definition of "how parallel", no second drifting core math (parallelization.mdx §1).
 type TessScheduler = ReturnType<typeof import("tesseract.js").createScheduler>;
 
+/**
+ * How many tesseract workers the pool may hold — bounded by CORES **and** MEMORY (memory.mdx §2.5).
+ *
+ * Cores alone is the wrong axis, and this app has the scar: the describe queue admitted 24 uploads purely by
+ * COUNT on the theory that a network-bound job has "no hardware bottleneck" — true for CPU, false for memory,
+ * and 24 × ~66-90MB of pinned base64 is what reached a 4.1GB heap and killed the process (jobqueue.service.ts
+ * header, crash_recovery.mdx §2). A tesseract.js worker is a WASM instance carrying its own heap and a loaded
+ * ~4MB language model; on a 24-core box, `coreBudget()` alone would spin up ~21 of them the first time a
+ * single Linux image fell back to tesseract. Same mistake, different units.
+ *
+ * So the pool takes the MIN of the two budgets: never more workers than the mass-compute budget allows, and
+ * never more than the memory budget can hold at TESS_WORKER_HEAP_BYTES each. Always at least 1 — a pool of
+ * zero would make the fallback engine silently unavailable on a small machine, which is worse than slow.
+ */
+const TESS_WORKER_HEAP_BYTES = 200 * 1024 * 1024; // ~200MB per WASM worker (model + scratch), measured coarsely
+function tessPoolSize(): number {
+  const byCores = coreBudget();
+  const byMemory = Math.floor(memoryBudget() / TESS_WORKER_HEAP_BYTES);
+  return Math.max(1, Math.min(byCores, byMemory));
+}
+
 // Keyed by language: a scheduler's workers are initialized for ONE language, and a second language is a
 // second pool rather than a reinitialize storm.
 const schedulerPool = new Map<string, Promise<TessScheduler>>();
@@ -204,7 +225,7 @@ async function tessSchedulerFor(lang: string): Promise<TessScheduler> {
     // never fires and this whole block stays cold.
     s = (async () => {
       const { createScheduler, createWorker } = await import("tesseract.js");
-      const size = coreBudget();
+      const size = tessPoolSize();
       log.info("ocr", `starting tesseract.js scheduler (lang=${lang}, ${size} workers, vendored data at ${VENDORED_LANG_DIR})`);
       const scheduler = createScheduler();
       // langPath pinned to the VENDORED directory + cacheMethod "none" — the fallback MUST work with the

@@ -793,9 +793,16 @@ _Mirror/  .git/  .gitattributes  .gitignore  .lfbridge/  .transcribe/  devices/ 
   on **every pass** (`[migrate] conflict: … already exists — keeping it and LEAVING … in place`) — an
   un-actioned, infinitely repeating warning.
 * **`.transcribe/` exists at the root**, which [Transcribe.mdx §3.4](./Transcribe.mdx) rule B says must not.
-* **`devices/` holds an ORPHAN**: `bryanstarbuck-macbook-pro.yaml` (14:59) alongside this machine's current
-  `bryan-mac-pro.yaml` (15:30). One physical computer, two device files — the machine's nice name changed
-  and **v1 has no rule that retires the old file** (§22.7).
+* **`devices/` holds TWO files, and that is CORRECT — the registry is working.** An earlier draft of this
+  audit called `bryanstarbuck-macbook-pro.yaml` an **orphan** left by a rename. **That was wrong**, and the
+  correction is worth keeping as a caution about reading a filesystem too quickly: the two files carry
+  **different minted ids** (`bryan-mac-pro.yaml` → `fdc6e91d…`, which matches this machine's local
+  `config.yaml → computer.id`; `bryanstarbuck-macbook-pro.yaml` → `11e17378…`), and the second one's
+  `updated_at` advances **every ~10 minutes**. It is not a stale duplicate of this computer — it is **the
+  user's other computer**, alive and pushing. Two files, two ids, two machines: §4.1 and §4.3 doing exactly
+  what they promise, which makes this the one piece of the two-computer story that is fully **BUILT** and
+  demonstrably working. **The id is the identity; the filename is a convenience** (§22.7) — reasoning from
+  the filename is what produced the false reading.
 
 **j) `LargeFilesBridge_SyncList.yaml` does not exist.** It is named in `UNION_MERGE_PATHS`
 (git.service.ts:31) and in §1's tree, but **no code writes it**. It is vestigial. Either build it or strike
@@ -1269,7 +1276,7 @@ selects the reconciliation rule in §22.
 
 | # | Path in the SDL | Writer (`file:line`) | v1 reality | v2 class |
 |---|---|---|---|---|
-| 1 | `devices/<slug>.yaml` | `devices.service.ts:115` `writeSelfDevice` | self-owned; `updated_at` auto-stamped; **orphans on rename** (v1(i)) | **A** (+§22.7) |
+| 1 | `devices/<slug>.yaml` | `devices.service.ts:115` `writeSelfDevice` | self-owned; `updated_at` auto-stamped; a rename would orphan the old file (a HAZARD, §22.7 — **not** observed live: the two live files are two real machines, v1(i)) | **A** (+§22.7) |
 | 2 | `storage.yaml` | `storage.service.ts:130` `writeDescriptor` | shared; **`created` only, NO `updated_at`**; raw `writeFileSync` (`:141`) bypasses the stamping store; **absent in the live repo** | **D** |
 | 3 | `mapped_dirs.yaml` | `storage-settings.service.ts` `setMappedDirs` (`:294`) | shared; `updated_at` auto | **D** (§22.5.2 — set-union) |
 | 4 | `files.yaml` | `tracking.service.ts:154` `indexStorageFiles` (write `:252`) | shared; **NO timestamp, NO device id, NOT in `UNION_MERGE_PATHS`, full rewrite every scan** | **C** (§22.4.2 — **the sharpest hazard**) |
@@ -1473,8 +1480,11 @@ resolve it once** — the root file wins (§1.1), the `.lfbridge/` copy is retir
 
 ### 22.7 Device identity permutations (`devices/`)
 
-The live repo has **two files for one computer** — `bryanstarbuck-macbook-pro.yaml` (14:59) and
-`bryan-mac-pro.yaml` (15:30) — because the nice name changed and **nothing retires the old file** (v1(i)).
+The rename permutation below is a **hazard to close, not a live defect**. An earlier draft opened this
+section by asserting the live repo had "two files for one computer" from a rename — **it does not**: the two
+files are two real machines with different minted ids, both advancing (v1(i)). The rule stands on its own
+merits regardless, because **the id is the identity and the filename is only a convenience** — which is
+precisely why the false reading was possible, and why a peer must never infer identity from a filename.
 
 | Permutation | Resolution |
 |---|---|
@@ -1621,7 +1631,7 @@ be able to answer "what did the other computer say?"** This is invariant 1 (§16
 ## 25. Observability and failure modes (LOCKED)
 
 Per v1, this engine's failures are **silent** — a 100-minute stall, a forever-repeating migration warning,
-a discarded push error, a device orphan nobody noticed, and six SDL files that were never written at all.
+a discarded push error, and six SDL files that were never written at all.
 **Silence is the defect.**
 
 ### 25.1 Every pass emits a structured record
@@ -1649,7 +1659,7 @@ problem: null
 | Any `.conflict-*` file exists | A human owes a decision (§23.3). |
 | Clock skew **> 24 h** | Reconciliation is compromised (§20.3). |
 | A Class E path is committed | The live `.lfbridge/` + `.transcribe/` defect (v1(i), §22.6). |
-| A device file orphaned by rename | The live two-files-one-computer defect (v1(i), §22.7). |
+| A device file orphaned by rename | §22.7. A HAZARD, not a live defect — the two device files in the live repo are two real computers (v1(i)). |
 | Push failed **after all retries** | Ordinary (offline) — but must be **visible**, not swallowed (v1(g)). |
 | **Uncommitted files at the SDL root** older than 30 min | The direct, checkable form of *"files are not getting checked in."* |
 
@@ -1730,7 +1740,7 @@ storage forever (invariant 2, §16.3).
     **`window_ms`** metric; warnings fire for a blown window, an outbox stuck **> 30 min** (*the reported
     symptom, now detected*), failed entries, a stalled pass (the live **100-minute** gap, v1(e)), any
     `.conflict-*`, clock skew, a committed **Class E** path (the live `.lfbridge/` + `.transcribe/`,
-    v1(i)), an orphaned device file (the live duplicate, v1(i)), a push that failed all retries (v1(g)
+    v1(i)), an orphaned device file (§22.7 — a hazard; the live repo's two device files are two real machines), a push that failed all retries (v1(g)
     swallows it today), and **uncommitted SDL-root files older than 30 min**. **A repeating,
     never-actioned warning is a defect** (§22.6).
 28. **One cross-process lock per working copy** (§25.3): a file lock at `<state>/sync/<storage-id>/git.lock`
@@ -1772,9 +1782,11 @@ storage forever (invariant 2, §16.3).
     (`pin.service.ts:580-584`) does not gate the device path at all.
 34. **The live Personal repo is brought into compliance** (v1(i)): `storage.yaml`, `files.yaml`,
     `manifest.yaml`, `mapped_dirs.yaml`, `bookmarks.yaml`, and `analysis/` are **written at the root** as
-    §1 and AC-2 already assert (they are **absent today**); the stray `.lfbridge/` and `.transcribe/` are
-    **retired once** (not warned about forever); and the orphaned `bryanstarbuck-macbook-pro.yaml` is
-    retired by its owner (§22.7).
+    §1 and AC-2 already assert (they are **absent today**); and the stray `.lfbridge/` and `.transcribe/` are
+    **retired once** (not warned about forever). **`devices/` is NOT part of this** — its two files are the
+    user's two real computers (different minted ids, both advancing), i.e. the registry working as specified
+    (§4.1/§4.3). An earlier draft listed it here as an orphan-from-rename; that was a misreading of a
+    filename, corrected in v1(i).
 
 <!--
   PART II = THE SYNCHRONIZATION ENGINE v2 (§16-§26). The shipped code is v1; every v1 claim below is
@@ -1814,8 +1826,13 @@ storage forever (invariant 2, §16.3).
    (i) LIVE REPO OUT OF COMPLIANCE: root = _Mirror/.git/.gitattributes/.gitignore/.lfbridge/.transcribe/
        devices/README.md. storage.yaml, files.yaml, manifest.yaml, mapped_dirs.yaml, bookmarks.yaml,
        analysis/ ARE ABSENT (§1/AC-2 assert they exist — they were NEVER WRITTEN). Stray .lfbridge/ warns
-       EVERY PASS forever. .transcribe/ violates Transcribe §3.4. devices/ has an ORPHAN
-       (bryanstarbuck-macbook-pro.yaml + bryan-mac-pro.yaml = ONE computer, renamed) → §22.7, AC-29.
+       EVERY PASS forever. .transcribe/ violates Transcribe §3.4. devices/ is NOT a defect: an earlier draft
+       called bryanstarbuck-macbook-pro.yaml an ORPHAN-FROM-RENAME — WRONG, and corrected. The two files
+       carry DIFFERENT minted ids (bryan-mac-pro=fdc6e91d matches config.yaml computer.id;
+       bryanstarbuck-macbook-pro=11e17378) and the second advances every ~10 min: it is the USER'S OTHER
+       COMPUTER, alive and pushing. Two files, two ids, two machines = §4.1/§4.3 WORKING — the one part of
+       the two-computer story that is fully BUILT. The id is the identity, the FILENAME is a convenience
+       (§22.7); reasoning from the filename produced the false reading. Do not "fix" this.
    (j) LargeFilesBridge_SyncList.yaml is VESTIGIAL — in UNION_MERGE_PATHS (git.service.ts:31) + §1's tree
        but NO CODE WRITES IT. Build or strike.
   §16.3 MODEL: convergent replica; merge fn must be TOTAL + HEADLESS. Invariants, LOWER NUMBER WINS:
@@ -1896,7 +1913,7 @@ storage forever (invariant 2, §16.3).
    §24.4 the engine may CHOOSE, never DESTROY — loser always recoverable.
   §25 OBSERVABILITY: SILENCE IS THE DEFECT. last_pass.yaml + window_ms (THE metric). Warn on: blown window,
    outbox stuck >30min (THE REPORTED SYMPTOM, now detected), failed entries, stalled pass (the live 100-min
-   gap), any .conflict-*, clock skew, committed Class E, orphaned device file, push failed all retries,
+   gap), any .conflict-*, clock skew, committed Class E, orphaned device file (a HAZARD per §22.7, not a live one),
    uncommitted SDL-root files >30min. A repeating never-actioned warning IS a defect.
   §25.3 ONE cross-process file lock per working copy (10-min stale takeover) — every git path incl. owner
    propagation + CLI.
