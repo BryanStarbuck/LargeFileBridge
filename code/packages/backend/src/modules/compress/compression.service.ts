@@ -32,6 +32,7 @@ import { restampOnTransform } from "../storage/decisions.service.js";
 import { repoIdFromPath, folderForRepoId } from "../store-model/units.service.js";
 import { HARD_SKIP, isMacPackageDir } from "../../shared/scan-filters.js";
 import { enqueue, createBatch } from "../jobqueue/jobqueue.service.js";
+import { writeManifest, trackBatch } from "../jobqueue/batch-manifest.service.js";
 import { log } from "../../shared/logging.js";
 
 // ── settings (compression.mdx §7) ─────────────────────────────────────────────
@@ -858,6 +859,16 @@ function imageCommand(plan: Plan, abs: string, out: string, prefs: CompressMedia
   return { bin: magickBin(), args: [...limit, abs, "-quality", q, "-set", "comment", markerPayload(plan.targetKey), out] };
 }
 
+/** Byte size for the batch manifest, or 0 if unreadable. Distinct from `safeSize()` above, which answers
+ *  "is this file readable and non-empty?" and returns a BOOLEAN. */
+function statSizeOrZero(p: string): number {
+  try {
+    return fs.statSync(p).size;
+  } catch {
+    return 0;
+  }
+}
+
 function safeSize(p: string): boolean {
   try {
     return fs.statSync(p).size > 0;
@@ -909,12 +920,30 @@ export function enqueueCompressInside(req: CompressInsideRequest): CompressInsid
     if (mediaOf(path.basename(f)) === "images") images++;
     else videos++;
   }
+  // The BATCH MANIFEST, before the enqueue — the durable record of the click (to_fix.mdx §4.1). Compress
+  // was the ONE producer that opened a live batch but wrote NO manifest, and `createBatch` minted its own
+  // id: so its tasks carried a registry id no manifest had ever heard of, and a crashed compress run left
+  // nothing on disk to reconstruct. The manifest now mints the id and the batch ADOPTS it
+  // (processing_batches.mdx §1) — one id, one run, joinable across the live row, the disk record, and every
+  // log line.
+  const manifest = writeManifest({
+    op: "compress",
+    scope: collapseHome(root),
+    counts: { eligible: files.length, images, videos },
+    // NOTE: this module's `safeSize()` is a BOOLEAN validity check, not a byte count (name collision with
+    // the other producers' helper) — read the size directly rather than shipping `true` as a file size.
+    files: files.map((p) => ({ path: p, sizeBytes: statSizeOrZero(p) })),
+  });
   const batchId = createBatch({
+    batchId: manifest.batchId,
     kind: "compress",
-    label: `Compress inside ${collapseHome(root)}`,
+    label: `Compress · ${collapseHome(root)} · ${files.length} files`,
+    scope: collapseHome(root),
     total: files.length,
     deleteOriginal: req.deleteOriginal,
+    manifestPath: manifest.file,
   });
+  trackBatch(manifest.batchId, files.length);
   const { queued } = enqueue(
     files.map((p) => ({
       op: "compress" as const,

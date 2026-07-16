@@ -10,7 +10,7 @@ import { Router } from "express";
 import type { ProgressJob, ProgressListResult } from "@lfb/shared";
 import { requireAllowListed } from "../auth/identify.js";
 import { list } from "./progress.registry.js";
-import { queueDepth, queueDepthByOp, listBatches, workerUtilization, listQueuedItems, listRecentFailures } from "../jobqueue/jobqueue.service.js";
+import { queueDepth, queueDepthByOp, listBatches, workerUtilization, listQueuedItems, listRecentFailures, stopBatch } from "../jobqueue/jobqueue.service.js";
 import { lastRestoreSummary } from "../jobqueue/queue-restore.js";
 import { getScanJob } from "../scanner/scan-job.js";
 import { sessionState } from "../../shared/session.js";
@@ -82,5 +82,22 @@ progressRouter.get("/", (_req, res) => {
   } catch (e) {
     log.error("progress", `list failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+/**
+ * POST /api/progress/batches/:id/stop — stop a batch (processing_batches.mdx §6.2).
+ *
+ * Drains that batch's PENDING tasks to `halted` and lets the in-flight ones finish. A halted file was NEVER
+ * ATTEMPTED, so it costs nothing to re-run — which is why this is safe to expose as a one-click action and
+ * why the halted files must never read as failures.
+ */
+progressRouter.post("/batches/:id/stop", (req, res) => {
+  try {
+    const halted = stopBatch(req.params.id);
+    res.json({ halted });
+  } catch (e) {
+    log.warn("progress", `stop batch ${req.params.id} failed: ${(e as Error).message}`);
+    res.status(500).json({ error: (e as Error).message });
   }
 });

@@ -26,7 +26,7 @@ import { markDurableArtifact } from "../storage/tracking-root.service.js";
 import { noteArtifactWritten } from "../pin/sync-trigger.service.js";
 import { repoArtifactPlacement } from "../store-model/units.service.js";
 import { track } from "../progress/progress.registry.js";
-import { enqueue } from "../jobqueue/jobqueue.service.js";
+import { enqueue, createBatch } from "../jobqueue/jobqueue.service.js";
 import { writeManifest, trackBatch } from "../jobqueue/batch-manifest.service.js";
 import { getPrompt } from "./prompts.js";
 import {
@@ -602,6 +602,21 @@ export async function enqueueDescribe(opts: {
   // dedups against in-flight work and can refuse at the journal ceiling, and a tally seeded too high
   // would never reach zero, leaving a finished batch's manifest permanently open (i.e. reading as a
   // crash). Count what happened, never what was intended.
+  // Open the LIVE batch row (processing_batches.mdx §1) — ADOPTING the manifest's batchId, never minting a
+  // second. Until this existed, only "Compress inside" ever created a row, so a 1,440-file describe run showed
+  // ZERO batches on the Processing page. `total` is what ACTUALLY queued (never `eligible`): enqueue dedups
+  // against in-flight work and can refuse at the journal ceiling, and a denominator seeded too high would
+  // never be reached, leaving the row stuck "running" forever. Called synchronously after enqueue — no
+  // `await` in between, so no task can settle before the row exists.
+  createBatch({
+    batchId: manifest.batchId,
+    kind: "describe",
+    label: `Describe · ${scopeLabel(opts)} · ${queued} files`,
+    scope: scopeLabel(opts),
+    provider: opts.provider ?? "auto",
+    total: queued,
+    manifestPath: manifest.file,
+  });
   trackBatch(manifest.batchId, queued);
   log.info("describe", `enqueue [${scopeLabel(opts)}]: ${candidates.length} considered → ${queued} queued (${alreadyDone} already done, ${unsupported} unsupported)`);
   return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued, willProcess: queued, needsSetup: false, setupPath: null, blocked: false, blockedReason: null };

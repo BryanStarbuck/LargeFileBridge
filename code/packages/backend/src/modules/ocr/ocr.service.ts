@@ -21,7 +21,7 @@ import { markDurableArtifact } from "../storage/tracking-root.service.js";
 import { noteArtifactWritten } from "../pin/sync-trigger.service.js";
 import { repoArtifactPlacement } from "../store-model/units.service.js";
 import { track } from "../progress/progress.registry.js";
-import { enqueue } from "../jobqueue/jobqueue.service.js";
+import { enqueue, createBatch } from "../jobqueue/jobqueue.service.js";
 import { writeManifest, trackBatch } from "../jobqueue/batch-manifest.service.js";
 import { selectEngine, engineStatus, ocrLanguage } from "./engines.js";
 import { extractFrames, videoToolsPresent, probeVideo, frameCountFor, collapseDuplicates } from "./frames.js";
@@ -395,6 +395,20 @@ export async function enqueueOcr(opts: { paths?: string[]; root?: string; overwr
     files: eligible.map((p) => ({ path: p, sizeBytes: safeSize(p) })),
   });
   const { queued } = enqueue(eligible.map((p) => ({ op: "ocr" as const, path: p, overwrite, batchId: manifest.batchId })));
+  // Open the LIVE batch row (processing_batches.mdx §1) — ADOPTING the manifest's batchId, never minting a
+  // second. Until this existed, only "Compress inside" ever created a row, so a 1,440-file OCR run showed
+  // ZERO batches on the Processing page. `total` is what ACTUALLY queued (never `eligible`): enqueue dedups
+  // against in-flight work and can refuse at the journal ceiling, and a denominator seeded too high would
+  // never be reached, leaving the row stuck "running" forever. Called synchronously after enqueue — no
+  // `await` in between, so no task can settle before the row exists.
+  createBatch({
+    batchId: manifest.batchId,
+    kind: "ocr",
+    label: `OCR · ${scopeLabel(opts)} · ${queued} files`,
+    scope: scopeLabel(opts),
+    total: queued,
+    manifestPath: manifest.file,
+  });
   trackBatch(manifest.batchId, queued);
   log.info("ocr", `enqueue [${scopeLabel(opts)}]: ${candidates.length} considered → ${queued} queued (${alreadyDone} already done, ${unsupported} unsupported)`);
   return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued, willProcess: queued, needsSetup: false, setupPath: null, blocked: false, blockedReason: null };

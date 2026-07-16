@@ -325,7 +325,9 @@ export function queueDepthByOp(): Partial<Record<ProgressKind, number>> {
 // can show one progress bar and, when it finishes, the ERROR LIST for that run. Finished batches are
 // kept for a retention window so their errors stay visible if the user opens the page after the fact.
 const batches = new Map<string, ProcessingBatch>();
-const BATCH_RETENTION_MS = 30 * 60 * 1000;
+// §5 — 24h, superseding the old 30-MINUTE window. A user who opened the Processing page an hour after a
+// long run found the row already swept and the errors they came to read gone. Bounded by MAX_BATCHES too.
+const BATCH_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Open a batch, ADOPTING the manifest's `batchId` (processing_batches.mdx §1 — LOCKED).
@@ -586,6 +588,11 @@ function haltPending(match: (t: QueueTask) => boolean, reason: string, context: 
     recordFailure({ op: t.op, path: t.path, reason, state: "halted" });
     if (t.id) appendTerminal(t.id, "halted");
     settleOne(t.batchId, t.path, "halted", reason);
+    // The live batch row too. These tasks are SPLICED OUT of `pending`, so `runTask`'s `finally` — the
+    // choke point that folds every other outcome — will never run for them. Without this the halted files
+    // are never counted, `ok + rejected + failed + halted` never reaches `total`, and the row hangs
+    // "running" forever: the §4.1 identity broken by the very path that exists to end a doomed batch.
+    recordBatchResult(t.batchId, { state: "halted", path: t.path, reason });
   }
   // ONE line for the whole drain, never one per file — the flood of identical lines is the very thing that
   // buried the signal and rotated the evidence away last time (to_fix.mdx §4.5).
@@ -804,11 +811,23 @@ function queueFailureLog(op: JobOp, filePath: string, reason: string): void {
  * circuit was open), and recording it as `failed` would tell the user 1,440 files were tried and
  * rejected when in fact none were touched — the exact lie invariant §10.5 exists to forbid.
  */
+/** Map a task's terminal reason onto the batch's five-way taxonomy (processing_batches.mdx §4). */
+function batchResultState(reason: TerminalReason): "ok" | "rejected" | "failed" | "halted" {
+  if (reason === "rejected") return "rejected"; // a verdict — slate, never red (§4.2)
+  if (reason === "halted") return "halted"; // never attempted — amber, costs nothing to re-run (§4.3)
+  if (reason === "failed" || reason === "quarantined") return "failed";
+  return "ok"; // "done" | "skipped" — the output is present and correct
+}
+
 function manifestOutcome(op: JobOp, reason: TerminalReason): BatchOutcome {
   if (reason === "halted") return "halted";
   if (reason === "failed" || reason === "quarantined") return "failed";
   if (reason === "skipped") return "skipped";
-  return op === "describe" ? "described" : op === "transcribe" ? "transcribed" : "compressed";
+  // A REFUSAL is its own outcome (processing_batches.mdx §4.2). It used to reach here as "done" and be
+  // recorded on disk as "described" — the durable manifest asserting a description exists for a file that
+  // has only a `.ai_description_rejected`.
+  if (reason === "rejected") return "rejected";
+  return op === "describe" ? "described" : op === "transcribe" ? "transcribed" : op === "ocr" ? "ocred" : "compressed";
 }
 
 /**
@@ -849,6 +868,11 @@ async function runTask(t: QueueTask): Promise<void> {
       // The manifest's per-file outcome (to_fix.mdx §4.2), recorded at the SAME choke point as the
       // journal terminal so the two can never disagree about what happened to a file.
       settleOne(t.batchId, t.path, manifestOutcome(t.op, reason), failReason);
+      // …and the LIVE batch row (processing_batches.mdx §4). Hoisted here from the compress branch: every
+      // op folds into its batch at the one choke point, which is what makes `describe`/`transcribe`/`ocr`
+      // produce a batch row at all. `skipped` counts as `ok` — the file is present and correct, which is
+      // the question the Done column answers.
+      recordBatchResult(t.batchId, { state: batchResultState(reason), path: t.path, reason: failReason });
       // …and count it against the batch's retry budget (§2.7). Ordered AFTER settleOne so that, if this
       // outcome is the one that trips the ceiling, the halted remainder settles into a manifest whose
       // earlier outcomes are already recorded.
@@ -918,8 +942,9 @@ async function runTaskInner(t: QueueTask): Promise<TerminalReason> {
       );
       // "compressed" / "skipped" (no-gain, already-compressed) are both fine — the file is safe and
       // present. "blocked" / "failed" are errors surfaced in the batch's final error list.
+      // NOTE: no recordBatchResult here — runTask's `finally` folds EVERY op into its batch at one choke
+      // point (§4). Counting here too would double-count every compressed file.
       const ok = r.status === "compressed" || r.status === "skipped";
-      recordBatchResult(t.batchId, { ok, path: t.path, reason: r.reason ?? undefined });
       if (!ok) {
         outcome = "failed";
         recordFailure({ op: "compress", path: t.path, reason: r.reason ?? r.status });
@@ -928,8 +953,8 @@ async function runTaskInner(t: QueueTask): Promise<TerminalReason> {
     }
     return outcome;
   } catch (e) {
-    // A thrown compress task must still be counted against its batch, else the batch never finishes.
-    if (t.op === "compress") recordBatchResult(t.batchId, { ok: false, path: t.path, reason: (e as Error).message });
+    // A throw needs no recordBatchResult here: runTask's `finally` folds the "failed" terminal for EVERY
+    // op, including this one. (It used to be needed because only compress was counted.)
     // Any thrown op surfaces as a Failed row on the Processing table (processing.mdx §4.3).
     recordFailure({ op: t.op, path: t.path, reason: (e as Error).message });
     log.error("jobqueue", `${t.op} failed for ${t.path}: ${(e as Error).message}`);
