@@ -18,6 +18,7 @@ import { expandHome } from "../fs/badges.js";
 import { getAppConfig } from "../store-model/config.service.js";
 import { resolveArtifactPlacement, artifactPathForPlacement, OCR_EXT } from "../storage/artifact-placement.service.js";
 import { markDurableArtifact } from "../storage/tracking-root.service.js";
+import { noteArtifactWritten } from "../pin/sync-trigger.service.js";
 import { repoArtifactPlacement } from "../store-model/units.service.js";
 import { track } from "../progress/progress.registry.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
@@ -208,6 +209,9 @@ export async function ocrOne(input: string, opts: { overwrite?: boolean; engine?
       // An OCR artifact ALONE is a durable user artifact, so this repo's tracking placement is justified from
       // here on (artifact_placement_policy.mdx §2 — the same one-way latch a transcript/description trips).
       markDurableArtifact(root);
+      // THE WRITE IS THE TRIGGER (storage_personal.mdx §18.5.3.1 / AC-29) — producing a durable artifact
+      // schedules its own sync, so OCR text never again depends on the device worker's `git add -A`.
+      noteArtifactWritten(ocrPath, "OCR texts");
       // `chars`, never the text itself — recognized text never enters a ledger line (transactions_log §9).
       end({ chars: doc.text.length, blocks: doc.blocks.length, ...(kind === "video" ? { frames: doc.framesSampled } : {}) });
       log.info("ocr", `${abs} → ${ocrPath} (${engine.id}/${level}, ${doc.text.length} chars${kind === "video" ? `, ${doc.framesSampled} frames` : ""})`);

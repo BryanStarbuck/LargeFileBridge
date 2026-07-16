@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Personal Storage
-description: The Personal storage spec. A user's own personal large files, tracked as a directory-based storage whose Syncable Data Location is a Git repo the user configures — conventionally ~/BGit/Bryan_git/personal_large_files_bridge/. This is the CANONICAL Git-backbone use case: one user with two (or more) computers, each running LFB, each pointed at the same Personal repo. On each computer the user opens Personal storage settings, turns Git ON, and supplies the repo either as a LOCAL FILE PATH (a checkout already on that box) or as an HTTP(S) URL (a Git server not mapped to the local filesystem, which LFB clones into a machine-local working-copy cache). Turning Git on GRANTS LFB permission to run git fetch, git merge (automatic), git add/commit, and git push on every backbone pass, carried by the git_backbone.mdx engine using simple-git over the system git binary. Each computer registers itself as a UNIQUE device: it writes a devices/<device-id>.yaml at the Personal repo ROOT — its stable minted id plus a hardware fingerprint (model, year, disk, screen, RAM, chip, OS user) collected from OS APIs, falling back to a composed fingerprint — into the Personal repo, and reads the OTHER devices' files to discover the user's other computers, which then appear in the Devices left-bar tab. There is exactly one Personal storage per user. The Personal SDL repo has NO .lfbridge/ directory AT ALL — .lfbridge/ is a working-repo-only concept and the SDL ROOT *is* the .lfbridge area (artifact_placement_policy.mdx §0 owns that rule) — so storage.yaml (name + type: personal), mapped_dirs.yaml, the files.yaml fingerprint index, the IPFS manifest.yaml, bookmarks.yaml, the media-analysis outputs (analysis/), the path-mirrored artifacts, and the devices/ registry ALL sit at the repo root (~/BGit/Bryan_git/personal_large_files_bridge/devices/<device-id>.yaml, NOT .lfbridge/devices/…); big files stay in their natural home directories, git-ignored, moving over IPFS while the small SDL text moves over Git. Personal's settings page also lists the repos owned by Personal — including the auto-defaulted no-org repos — with a per-row reassign dropdown (Personal | each company | + New company…) to move any to a company (§14.1 → storage_settings.mdx §4c); moving a repo to a company with a sync repo records a travelling ownership assertion (repo_owner_propagation.mdx) that applies on the company members' machines only via review-and-consent, moves NO bytes, and re-targets the repo's tracking mirror from Personal's sync repo to the company's. Sibling of storage_repo / storage_company / storage_community (shared storage.yaml + tracking-area layout in storages.mdx), artifact_placement_policy.mdx §0 (the storage-kind rule that says an SDL has no .lfbridge/), storage_settings.mdx (where Git is turned on and the Owned-repos list renders), git_backbone.mdx (the Git engine), devices.mdx (the device registry + graft), syncable_data_location.mdx (the SDL that travels), repo_company_mapping.mdx (the owner mapping), and repo_owner_propagation.mdx (how a company reassignment travels + is consent-gated).
+description: The Personal storage spec. A user's own personal large files, tracked as a directory-based storage whose Syncable Data Location is a Git repo the user configures — conventionally ~/BGit/Bryan_git/personal_large_files_bridge/. This is the CANONICAL Git-backbone use case: one user with two (or more) computers, each running LFB, each pointed at the same Personal repo. On each computer the user opens Personal storage settings, turns Git ON, and supplies the repo either as a LOCAL FILE PATH (a checkout already on that box) or as an HTTP(S) URL (a Git server not mapped to the local filesystem, which LFB clones into a machine-local working-copy cache). Turning Git on GRANTS LFB permission to run git fetch, git merge (automatic), git add/commit, and git push on every backbone pass, carried by the git_backbone.mdx engine using simple-git over the system git binary. Each computer registers itself as a UNIQUE device: it writes a devices/<device-id>.yaml at the Personal repo ROOT — its stable minted id plus a hardware fingerprint (model, year, disk, screen, RAM, chip, OS user) collected from OS APIs, falling back to a composed fingerprint — into the Personal repo, and reads the OTHER devices' files to discover the user's other computers, which then appear in the Devices left-bar tab. There is exactly one Personal storage per user. The Personal SDL repo has NO .lfbridge/ directory AT ALL — .lfbridge/ is a working-repo-only concept and the SDL ROOT *is* the .lfbridge area (artifact_placement_policy.mdx §0 owns that rule) — so storage.yaml (name + type: personal), mapped_dirs.yaml, the files.yaml fingerprint index, the IPFS manifest.yaml, bookmarks.yaml, the media-analysis outputs (analysis/), the path-mirrored artifacts, and the devices/ registry ALL sit at the repo root (~/BGit/Bryan_git/personal_large_files_bridge/devices/<device-id>.yaml, NOT .lfbridge/devices/…); big files stay in their natural home directories, git-ignored, moving over IPFS while the small SDL text moves over Git. Personal's settings page also lists the repos owned by Personal — including the auto-defaulted no-org repos — with a per-row reassign dropdown (Personal | each company | + New company…) to move any to a company (§14.1 → storage_settings.mdx §4c); moving a repo to a company with a sync repo records a travelling ownership assertion (repo_owner_propagation.mdx) that applies on the company members' machines only via review-and-consent, moves NO bytes, and re-targets the repo's tracking mirror from Personal's sync repo to the company's. Sibling of storage_repo / storage_company / storage_community (shared storage.yaml + tracking-area layout in storages.mdx), artifact_placement_policy.mdx §0 (the storage-kind rule that says an SDL has no .lfbridge/), storage_settings.mdx (where Git is turned on and the Owned-repos list renders), git_backbone.mdx (the Git engine), devices.mdx (the device registry + graft), syncable_data_location.mdx (the SDL that travels), repo_company_mapping.mdx (the owner mapping), and repo_owner_propagation.mdx (how a company reassignment travels + is consent-gated). PART II (§16–§26) specifies the SYNCHRONIZATION ENGINE v2 for dedicated LFB file repos (the Personal SDL + company sync repos) — the repos where LFB is the sole author, which is the license for headless auto-merge. It opens with a cited v1 audit whose central finding is the STOWAWAY DEFECT: no code path in LFB has committing artifacts as its purpose, so transcripts/AI-descriptions reach the server only as stowaways on the device-registration worker's pathspec-less `git add -A` (proven live: a HEAD commit of 12 .ai_description files + one devices/*.yaml, titled "LFB: backbone device state"), the pin worker is not installed at all, and six silent forever-cases (F1–F6) can sever the ride with no diagnostic anywhere. v2 fixes it structurally: producing a durable artifact schedules its own sync via an on-disk crash-survivable OUTBOX (producers never write into the working copy, which is what makes the pull stage's clean-tree precondition true); a four-stage pass (PULL → WRITE+RECONCILE → RESOLVE → PUSH) with unbounded IPFS byte work EVICTED from between pull and push, holding the conflict window to a 60-second budget (v1's window exceeds its own interval on a first sync, where P(collision) ≈ (N−1)·W/T > 100% and convergence is impossible); a mandatory reconciliation header (schema/updated_at/updated_by) on LOGICAL time, with clocks as a hint and never an authority; a five-class taxonomy (self-owned / append-log / derived / shared-mutable / local-only) that assigns every one of the ~23 kinds of synced data an exhaustive permutation table; a deterministic 9-rung headless resolution ladder that ends in KEEP-BOTH quarantine and never asks a user, never force-pushes, and never resolves by discarding; a priority ladder where no device has standing and fidelity beats newness; and an observability contract where silence is the defect.
 ---
 
 # LargeFileBridge — Personal Storage
@@ -599,6 +599,1312 @@ The Owned-repos read (`getOwnedRepos("personal")`) and the reassign endpoint (`P
     **only via review-and-consent** — and **moves no bytes**, only re-targeting the repo's tracking mirror from
     Personal's sync repo to the company's `<syncRepo>/repos/<repoKey>/`. Same `getOwnedRepos` +
     `POST /api/repos/:repoId/owner` code as [storage_settings.mdx §4c](./storage_settings.mdx#4c-owned-repos--the-repos-mapped-to-this-storage).
+
+---
+
+# PART II — THE SYNCHRONIZATION ENGINE (v2)
+
+> **Status.** §§1–15 above describe the Personal storage as a *place*. Everything from here down
+> describes it as a **synchronization engine** — the v2 design. **The shipped code is v1.** Every v1
+> behavior below is cited at `file:line` and every v2 rule states plainly whether it is **BUILT**,
+> **CHANGED**, or **NEW**. Read §16.2 first: the v1 audit is what motivates every rule that follows.
+
+## 16. The engine model — a network of parties, one site of convergence
+
+### 16.1 Which repos this part governs (LOCKED)
+
+Part II applies **only** to a **dedicated LFB file repo** — a repo whose entire reason to exist is to hold
+LFB's own text:
+
+* **The Personal SDL** — one per user, turned on in Personal storage settings (§5), conventionally
+  `~/BGit/Bryan_git/personal_large_files_bridge/`.
+* **A company sync repo** — one per company the user added ([storage_company.mdx §7](./storage_company.mdx#7-the-company-sync-repo)),
+  e.g. `~/BGit/Bryan_git/act3_large_files_bridge/`.
+
+**Why the distinction is the whole license.** In a **working repo** LFB is a **guest**: someone else's
+code lives there, the user commits to it by hand, and LFB must never run `git commit`/`push` on their
+branch. In a **dedicated file repo** LFB is effectively the **only author** — *"since it's only going to
+be used by Large File Bridge, we're allowed to fully synchronize it and use it as we want."* That is what
+makes an **automatic, headless, no-user-interface** merge policy (§23) legitimate here and **nowhere
+else**. A working repo NEVER gets the Part II engine — it is governed by
+[git_backbone.mdx](./git_backbone.mdx) and [git_ignore.mdx](./git_ignore.mdx).
+
+**The kind decides, not the path** — the same rule as §1.1, keyed on the resolved storage kind via
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` —
+`usesLfbridgeDir(kind)` / `trackingBaseDir(root, kind)`.
+
+### 16.2 The v1 audit — what is actually true today (evidence, 2026-07-16)
+
+Everything here was **verified against the shipped code and the live Personal repo**, not inferred. It is
+recorded because most of it contradicts what a reader would reasonably assume.
+
+**a) Staging is NOT the bug — there is no allow-list.** The engine stages the whole tree:
+
+```ts
+// git.service.ts:491
+await this.git.add(["-A"]); // .gitignore keeps the big bytes out; only SDL text is staged
+```
+
+`simpleGit` is constructed with `baseDir: workingDir` (git.service.ts:241-246), so this is a
+pathspec-less `git add -A` from the repo root. **Every** non-ignored file is staged, artifacts included.
+`SDL_ROOT_PAYLOAD` (git.service.ts:41-51) is **not** a staging filter — it is consulted only by
+`ignoresSdlPayload()` (git.service.ts:349-353) to decide which `.gitignore` *lines to delete*.
+
+Live proof: the Personal repo has **1,612 `.ai_description` files tracked and committed**, `.gitignore`
+contains only `.DS_Store`, and `git ls-files --others -i --exclude-standard` returns **0**. The **332
+uncommitted** `.ai_description` files that prompted this spec were **all created after the previous
+commit** (oldest mtime 15:10:02 vs. HEAD 15:09:35) and were swept in by the very next pass at 15:30:41.
+
+> **The reported symptom — "files are not getting checked in" — was a LATENCY artifact, not a loss.**
+> Nothing was excluded. The engine simply had not ticked yet. **That finding does not exonerate the
+> engine; it relocates the defect.** The rest of this audit is why the latency is unbounded, and §17–§19
+> are the fix.
+
+**b) Nothing an artifact writer does ever triggers a sync (NEW gap).** The job queue has **zero**
+references to `pin.service` / `git.service`. Its batch-completion hook only logs:
+
+```ts
+// jobqueue.service.ts:362-365
+if (b.done + b.failed >= b.total && !b.finishedAt) {
+  b.finishedAt = new Date().toISOString();
+  log.info("jobqueue", `batch "${b.label}" finished: ${b.done} ok, ${b.failed} failed`);
+}
+```
+
+The full caller list of `pinAll` / `pushDeviceBackbone` is `cli.ts:14`, `repos.router.ts:356`,
+`watchdog.service.ts:36,40`, `internal.router.ts:32,36`, `sessions.service.ts:140` — **none** is a job or
+batch completion path. So **1,933 AI descriptions rode to the server as a side effect of the DEVICE
+worker's `git add -A`.** The engine has no idea artifacts exist. That is the true defect behind (a), and
+§18.5 is its full statement.
+
+Confirmed by grep — **the artifact writers contain no git or pin call of any kind**:
+
+```
+grep -riE "pin\.service|git\.service|pinAll|ensureDeviceRegistered|commitAndPush|GitBackbone|pushDeviceBackbone" \
+  modules/describe/ modules/transcribe/ modules/ocr/
+EXIT: 1     (zero matches)
+```
+
+And `describe.service.ts:398-431` — the write, and everything after it — notifies **nothing**:
+
+```ts
+// The description lands in the COMMITTED .lfbridge/ area (Transcribe.mdx §3.1), so it travels with the
+// repo — no `*.ai_description` gitignore nudge; the media itself stays git-ignored and rides IPFS.
+fs.mkdirSync(path.dirname(descriptionPath), { recursive: true });
+fs.writeFileSync(descriptionPath, YAML.stringify({...}), "utf8");
+…
+markDurableArtifact(root);   // a PLACEMENT LATCH — not a commit
+```
+
+That comment is **aspirational, and doubly wrong**: it names `.lfbridge/`, which an SDL does not have
+(§1.1), and *"so it travels with the repo"* is true only if some **unrelated** worker happens to tick
+later. `markDurableArtifact(root)` decides *where* the file goes, not that anyone will ever commit it.
+
+**(b2) The pin worker is NOT INSTALLED — the device worker is carrying everything alone.** Live
+`~/T/_large_files_bridge/config.yaml`:
+
+```yaml
+pin_process:     { installed: false, enabled: false, interval_minutes: 15 }   # ← NOT RUNNING AT ALL
+device_process:  { installed: true,  enabled: true,  interval_minutes: 10, last_run_ok: true }
+scan_process:    { installed: true,  enabled: true,  interval_hours: 2 }
+```
+
+`launchctl list`: `com.largefilebridge.device` → `runs = 16, last exit code = 0`, `StartInterval 600`.
+**So `pinStorageUnit` — the function that spec §7 describes as "the backbone loop" — never runs on a
+schedule on this machine.** The *entire* synchronization of 1,933 AI descriptions to the server is carried
+by the **device-registration worker**, whose stated job is to write one small YAML file.
+
+**c) The commit message is a lie of omission.** Every commit — whatever it contains — is titled:
+
+```ts
+// git.service.ts:496
+if (hasStaged) { await this.git.commit("LFB: backbone device state"); result.committed = true; }
+```
+
+The live log is 1,900+ commits reading `LFB: backbone device state`, most of which are **almost entirely
+`.ai_description` files**. The history is unreadable and unauditable.
+
+**d) The conflict window is UNBOUNDED, not one minute.** `pinStorageUnitInner` orders the pass:
+
+| step | line | what |
+|---|---|---|
+| **`git fetch` + `merge`** | pin.service.ts:411-416 | `gitBackbone.pull(gitResult)` |
+| `writeSelfDevice(root)` | pin.service.ts:422-426 | |
+| **IPFS byte work — the long middle** | pin.service.ts:431-455 | `runUnitPin({ fetchMissing: true, … })` |
+| **`git add`/`commit`/`push`** | pin.service.ts:461-467 | `gitBackbone.commitAndPush(gitResult)` |
+
+Nothing caps the middle. `ipfs.service.ts:85` sets `timeoutMs: 0` on `add` ("no timeout"), and
+`catToFile` streams with **no abort** (ipfs.service.ts:100-105). `PIN_CONCURRENCY` bounds *parallelism*,
+never *duration*. **A first-sync storage holds the window open from `pull` to `push` for as long as the
+byte transfer takes — hours.** The hoped-for one-minute window is real only for
+`ensureDeviceRegistered` (pin.service.ts:492-527), which has no byte work in its middle.
+
+**e) The schedule is not reliable, and the watchdog is the only reason it works.** Live log:
+
+```
+20:18:33Z  device-reg storage personal git: pushed device info to remote
+21:58:59Z  [watchdog] device worker overdue (last ok 2026-07-16T20:18:33.983Z, every 10 min)
+           — running it in-process and repairing its OS schedule
+```
+
+**A 100-minute gap on a 10-minute worker.** launchd stopped firing; only the in-process watchdog
+(`watchdog.service.ts:20-24`, 5-min check, overdue = `interval*2 + 120s`) noticed and repaired it. The
+Personal repo's *entire* sync cadence rests on that backstop.
+
+**f) The two locks do not know about each other.** `withStorageGitLock` (pin.service.ts:371-383) is an
+**in-process** keyed promise chain — no lockfile, so a second backend process or the user's own `git`
+races it. Worse, `owner-propagation.service.ts:59-64` defines a **separate** `withCompanyGitLock` with its
+own map and drives `bb.pull()` / `bb.commitAndPush()` on the **same** working copy. Two independent chains,
+one git index. Note also that the 10-minute device worker **queues behind** an in-flight multi-hour
+`pinStorageUnitInner` for the same storage — the lock is fair, but it converts (d) into device-registration
+latency too.
+
+**g) The non-fast-forward retry swallows its cause.** `commitAndPush` retries on **any** push failure, not
+a classified NFF, exactly once — and the original error is captured and never used:
+
+```ts
+// git.service.ts:514-527
+} catch (e) {                       // ← `e` is NEVER logged or inspected
+  const retry: GitCycleResult = { ran: true };
+  await this.pull(retry);
+  …
+  try { await this.git.push("origin", branch); result.pushed = true; }
+  catch (e2) { result.problem = classifyRemoteError(e2 as Error); }
+```
+
+**h) The merge has no strategy flags at all.** `git merge --no-edit origin/<branch>` (git.service.ts:394)
+— default `ort`, no `-X`. On conflict it runs `git merge --abort` (git.service.ts:424) and surfaces
+`result.problem`, **except** for the one special case `autoResolveRepoStorageConflicts` (git.service.ts:450),
+which `git rm -f`'s the conflicted `repo_storage.yaml` and commits
+`"LFB: auto-resolved repo_storage.yaml merge conflict (regenerated from Local Storage)"`. **That one
+file is the ONLY headless resolution that exists today.** Everything else halts the storage until a human
+opens a terminal — which, for a repo LFB is the sole author of, is a product failure (§23).
+
+**i) The live Personal repo is already out of compliance with §1 and §1.1.** Its root is:
+
+```
+_Mirror/  .git/  .gitattributes  .gitignore  .lfbridge/  .transcribe/  devices/  README.md
+```
+
+* **`storage.yaml`, `files.yaml`, `manifest.yaml`, `mapped_dirs.yaml`, `bookmarks.yaml`, `analysis/` are
+  ABSENT.** §1 and AC-2 assert they are committed at the root. They were never written. The Personal SDL
+  is, today, a device registry plus an artifact tree — nothing else.
+* **A stray `.lfbridge/devices/bryanstarbuck-macbook-pro.yaml` survives**, and the migration warns about it
+  on **every pass** (`[migrate] conflict: … already exists — keeping it and LEAVING … in place`) — an
+  un-actioned, infinitely repeating warning.
+* **`.transcribe/` exists at the root**, which [Transcribe.mdx §3.4](./Transcribe.mdx) rule B says must not.
+* **`devices/` holds an ORPHAN**: `bryanstarbuck-macbook-pro.yaml` (14:59) alongside this machine's current
+  `bryan-mac-pro.yaml` (15:30). One physical computer, two device files — the machine's nice name changed
+  and **v1 has no rule that retires the old file** (§22.7).
+
+**j) `LargeFilesBridge_SyncList.yaml` does not exist.** It is named in `UNION_MERGE_PATHS`
+(git.service.ts:31) and in §1's tree, but **no code writes it**. It is vestigial. Either build it or strike
+it — see §21's inventory, which treats it as **NOT PRESENT**.
+
+### 16.3 The v2 mental model (LOCKED)
+
+Model the Personal/company repo as a **network of multiple parties checking in changes**, with **exactly
+one site of convergence**: the local working copy, during a pass. Not a database, not a lock server — a
+**convergent replica** whose merge function must be **total** (defined for every input) and **headless**
+(§23).
+
+Three invariants, in priority order. When they conflict, the **lower number wins**:
+
+1. **Never lose data.** No pass may destroy a byte another party produced. Conflict → **keep both** (§23);
+   the last resort is quarantine, never `--force`, never a silent overwrite.
+2. **Always converge.** Every pass must end with the working copy either **fully pushed** or **explicitly
+   reported as blocked** (§25). "Quietly dirty forever" — the live state that motivated this spec — is a
+   **defect**, not a resting state.
+3. **Converge fast.** Target: a change is on the server within **10 minutes**; the exposed window in which
+   a conflict can even form is **≤ 60 seconds** (§18).
+
+The engine is **not** "commit whatever is dirty when a timer happens to fire" (v1(a)+(b)). It is a
+**four-stage transaction** (§17) over an explicit **outbox** (§19).
+
+---
+
+## 17. The four stages of a synchronization pass (LOCKED, NEW)
+
+Every pass over a dedicated file repo runs these four stages **in this order**. The stage boundaries are
+the contract; the work inside them may change.
+
+```
+   ┌── STAGE 1 ── PULL ─────────────────────────────────────────────┐
+   │  fetch + merge from the server. MUST NOT conflict (§17.1).     │
+   └────────────────────────────────────────────────────────────────┘
+   ┌── STAGE 2 ── WRITE + RECONCILE ────────────────────────────────┐
+   │  drain the outbox into the tree; reconcile by schema (§22).    │
+   └────────────────────────────────────────────────────────────────┘
+   ┌── STAGE 3 ── RESOLVE ──────────────────────────────────────────┐
+   │  headless resolution of anything left (§23). No UI. Ever.      │
+   └────────────────────────────────────────────────────────────────┘
+   ┌── STAGE 4 ── PUSH ─────────────────────────────────────────────┐
+   │  commit + push. On NFF: re-enter STAGE 1. Bounded retries.     │
+   └────────────────────────────────────────────────────────────────┘
+```
+
+### 17.1 Stage 1 — PULL: a clean-tree precondition (CHANGED)
+
+*"We pull down from the server side, and there should be no merge conflict at this point."*
+
+That is a **precondition to enforce**, not a hope. It holds **if and only if the working tree is clean
+when the merge runs** — a merge into a clean tree cannot conflict on files the local side has not touched.
+v1 cannot promise this: `pull()` merges into whatever the artifact writers have strewn about
+(v1(b)), because writers write **straight into the working copy**.
+
+**v2 rule (NEW).** Stage 1 requires **`git status --porcelain` to be empty** before `git merge` runs. It
+is empty because **producers never write into the working copy** — they write to the **outbox** (§19), and
+the outbox drains in **Stage 2**, *after* the merge. This is the structural reason §19 exists.
+
+* **Clean tree** → `git fetch origin <branch>` then `git merge --no-edit origin/<branch>`
+  (git.service.ts:389-394, BUILT). A fast-forward or a clean ort merge. **Conflict here is a bug**, and is
+  reported as one (§25).
+* **Dirty tree** → this is v1 residue or an outside actor (the user's own editor; the "Bryan 26 Tower"
+  auto-committer, [backbone_resilience.mdx](./backbone_resilience.mdx)). **Do not abort the pass.** Take the
+  dirty paths into the outbox as **`observed`** entries (§19.3), restore the tree to `HEAD`, merge clean,
+  then let Stage 2 re-apply them through the normal reconciliation. Never `git stash` (it strands data in a
+  ref no one reads); never `git checkout --` a file whose content is not already captured in the outbox.
+* **`.gitattributes` first.** `ensureMergeAttributes()` must run **before** the merge, or the union drivers
+  don't apply to the merge that needs them (git.service.ts:378-382, BUILT — and correct).
+
+### 17.2 Stage 2 — WRITE + RECONCILE (NEW)
+
+*"We have data to synchronize into it, and we write that data in there."*
+
+Now — and **only** now, with the server's state merged in and visible — the outbox drains:
+
+1. **Refresh self-owned state**: `writeSelfDevice(root)` (devices.service.ts:115). Self-owned files can be
+   written blind — no other party writes them (§22.1).
+2. **Drain the outbox in commit order** (§19.4). For each entry, apply the **reconciliation rule for its
+   data class** (§21) using the **merged** tree as the base. This is where "what's the newest change" is
+   decided (§20), and it is decided **in our code, against merged content** — not by git, and not by
+   whichever timer fired last.
+3. **Byte work does NOT happen here (CHANGED — this is the fix for v1(d)).** IPFS add/pin/fetch is
+   **evicted from between pull and push**. See §18.2.
+
+### 17.3 Stage 3 — RESOLVE (NEW)
+
+Anything Stage 2 could not fold cleanly is resolved **here**, **headlessly**, by §23's ladder. Stage 3 is
+allowed to be a no-op — and on a healthy single-writer machine it always is.
+
+### 17.4 Stage 4 — PUSH (CHANGED)
+
+1. `git add -A` (git.service.ts:491, BUILT — keep it; it is why artifacts travel at all).
+2. **Commit with a descriptive message (CHANGED — fixes v1(c)).** The message must state what the commit
+   actually carries, composed from the staged set:
+
+   ```
+   LFB: 47 AI descriptions, 3 transcripts, device state  (bryan-mac-pro)
+   LFB: device state  (bryan-mac-pro)
+   LFB: manifest +12 pins, 2 decisions  (bryan-mac-pro)
+   ```
+
+   Format: `LFB: <comma-separated counted categories>  (<device nice name>)`. Categories are derived from
+   the staged paths by the same classifier that assigns data classes in §21. `LFB: backbone device state`
+   remains legal **only** when device state is genuinely all that changed.
+3. **Push, and on failure re-enter Stage 1** (git.service.ts:511-527, BUILT — but CHANGED in three ways):
+   * **Log the original error** — v1 discards `e` (v1(g)). It must be logged at WARN with its
+     classification before the retry.
+   * **Retry up to 3 times with backoff** (0s, 2s, 8s), not once. A busy repo with three parties can lose
+     two races legitimately.
+   * **Never `--force`, never `--force-with-lease`.** Non-negotiable (§23.0).
+4. **Push when ahead even with nothing committed** (git.service.ts:506-509, BUILT — correct and important:
+   it is what heals a previous pass that committed but failed to push).
+
+---
+
+## 18. Timing, and the honest conflict-window estimate (LOCKED)
+
+### 18.1 The cadences (v1: BUILT)
+
+| Trigger | Interval | Source | Calls | Byte work? |
+|---|---|---|---|---|
+| **Device worker** (launchd) | **10 min** | `schemas.ts:234` `device_process.interval_minutes` | `pushDeviceBackbone()` → `ensureDeviceRegistered` | **No** |
+| **Pin worker** (launchd) | **15 min** | `schemas.ts:216` `pin_process.interval_minutes` | `pinAll()` → `pinStorageUnit` | **Yes — unbounded** |
+| **Scan worker** (launchd) | **2 h** | `schemas.ts:248` `scan_process.interval_hours` | `startScan("scheduled")` | No git at all |
+| **Watchdog** (in-process) | **5 min** check | `watchdog.service.ts:20` | re-runs an **overdue** worker in-process | inherits |
+| **Session return** | on new session if `>48 h` stale | `sessions.service.ts:18` | `pinAll()` | Yes |
+| **Manual "Pin now"** | user click | `repos.router.ts:356` | `pinAll()` | Yes |
+
+Overdue = `age > interval*2 + 120s` (`schedule.service.ts:94-101`): device at **>20 min 2 s**, pin at
+**>30 min 2 s**. Per v1(e), that backstop is **load-bearing**, not belt-and-braces.
+
+### 18.2 The window — v1 vs. v2 (CHANGED)
+
+The **conflict window** is the interval during which a *remote* change can land that our pass has not
+seen: from the **end of Stage 1's merge** to the **completion of Stage 4's push**. Anything a peer pushes
+inside that window costs us a non-fast-forward (cheap, retried) or a real conflict (expensive, §23).
+
+**v1, `pinStorageUnit` — the window contains the byte work (v1(d)):**
+
+```
+   pull ──┤                                                          ├── push
+          └────────── runUnitPin: IPFS add/pin/cat, UNBOUNDED ───────┘
+          pin.service.ts:412                            pin.service.ts:462
+          window = seconds … HOURS  (first sync of a 500 GB storage)
+```
+
+**v2 — byte work is evicted from the window (NEW, the core timing fix):**
+
+```
+   pull ─┤ drain outbox · reconcile · commit · push ├─   ~1–5 s typical, ≤ 60 s BUDGET
+         └───────────────────────────────────────────┘
+                        …then, OUTSIDE the transaction, the IPFS byte work runs…
+```
+
+**The rule (LOCKED):** *No unbounded operation may sit between Stage 1 and Stage 4.* Concretely:
+
+* **IPFS add/pin/fetch moves out of `pinStorageUnitInner`'s git window.** The pass does git-only, then
+  hands byte work to the job queue ([job_queue.mdx](./job_queue.mdx)) as ordinary background jobs. Byte
+  results (a new CID, a `pinned_by` entry) are **outbox writes** (§19) picked up by the **next** pass —
+  which is what the outbox is *for*. This decouples "our text is on the server" from "our bytes finished
+  transferring", and those two have no reason to be coupled.
+* **Anything in the window is bounded by the WINDOW BUDGET: 60 seconds.** Exceeding it is a logged WARN
+  with the stage breakdown (§25). A pass that cannot finish inside the budget is a pass whose scope is
+  wrong.
+
+### 18.3 Window-of-conflict estimation (the math the design rests on)
+
+With `N` parties each syncing on interval `T`, each holding the window open for `W`, the probability that
+a given pass overlaps another party's window is approximately:
+
+```
+   P(collision per pass)  ≈  (N − 1) × W / T
+```
+
+| Case | N | T | W | P(collision) | Verdict |
+|---|---|---|---|---|---|
+| **v2, two computers** | 2 | 600 s | 5 s | **≈ 0.8 %** | Negligible. NFF retry absorbs it. |
+| **v2, budget worst case** | 2 | 600 s | 60 s | **≈ 10 %** | Acceptable — NFF retry, no conflict. |
+| **v2, five-person company** | 5 | 600 s | 5 s | **≈ 3.3 %** | Fine. |
+| **v1, steady state** | 2 | 600 s | ~2 s | ≈ 0.3 % | Fine — **by luck**, no byte work pending. |
+| **v1, first sync / big pull** | 2 | 900 s | **3600 s+** | **> 100 % — collision is CERTAIN** | The window exceeds the interval. Every pass collides; the retry re-pulls and re-collides. |
+
+**That last row is the point.** When `W > T` the engine cannot converge — passes overlap continuously and
+the storage is permanently behind. v1 reaches that state on any first sync. **v2's `W ≤ 60 s` budget with
+`T = 600 s` keeps `W/T ≤ 10 %` structurally**, and it is the byte-work eviction (§18.2) that buys it.
+
+**Corollary — a collision is not a conflict.** Overlapping windows cost a non-fast-forward, which Stage
+4's retry absorbs silently. A *conflict* additionally requires **both parties to have edited the same
+file** in that window. Since almost every file is self-owned or append-only (§21), the real conflict rate
+is far below even these numbers — **except** for the shared, rewrite-in-place, non-union files, which is
+exactly why §21 classifies them and §22 gives each one a rule.
+
+### 18.4 Event-driven sync — closing the latency gap (NEW, fixes v1(b))
+
+Timers alone gave us 1,933 artifacts riding on the device worker's coattails, and a 100-minute gap when
+that worker died. v2 adds an **event trigger**:
+
+* **On outbox commit** (§19.2), schedule a pass with a **20-second debounce** and a **120-second maximum
+  delay**. A describe batch writing 300 descriptions produces **one** pass ~20 s after the last write, not
+  300 passes and not a 10-minute wait.
+* **The 10-minute timer stays** as the floor — it catches whatever the event path missed and is the only
+  thing that pulls *in* remote changes when this machine is producing nothing.
+* **The watchdog stays** and is promoted from backstop to **first-class**: per v1(e) it is already what
+  keeps the product working.
+* **Batch completion enqueues a pass.** The `jobqueue.service.ts:362-365` completion hook — which today
+  only logs — commits the batch's outbox entries and schedules the pass. This is the single wire that was
+  missing.
+
+### 18.5 The stowaway defect — there is NO purposeful commit path (LOCKED, the root cause)
+
+This section is the direct answer to *"files are left modified locally but never checked in
+automatically — why?"* It is the most important finding in Part II.
+
+#### 18.5.1 What actually happens today
+
+**No code in LFB has "commit the user's finished work" as its purpose.** Not one function. The artifact
+writers (`describe.service.ts:400`, `Transcribe.ts:217`, `ocr.service.ts:192`) write a file and return.
+Nothing observes them, nothing counts them, nothing schedules anything.
+
+Artifacts reach the server **only** as **stowaways** on a commit made for an unrelated reason: the
+**device-registration worker** wakes every 10 minutes to update one small YAML — `devices/<self>.yaml` —
+and on its way past runs the pathspec-less `git add -A` (`git.service.ts:491`), which happens to sweep up
+whatever else is lying in the tree.
+
+**Caught live, and this is the whole spec in one diff.** `git show --stat HEAD` after the 15:40:45 pass:
+
+```
+ 12 × _Mirror/…/*.ai_description        | 2385 ++++++++++++++++++++++
+ devices/bryan-mac-pro.yaml             |    2 +-      ← the ONLY file the pass INTENDED to commit
+ 13 files changed, 2386 insertions(+), 1 deletion(-)
+```
+
+Commit message: **`LFB: backbone device state`**. Two thousand three hundred and eighty-five lines of the
+user's AI descriptions, committed under the title *"device state"*, by a worker that does not know they
+exist, because a wildcard caught them.
+
+**That is the defect.** Not the latency it produces — the **architecture**. The observed 10–30 minute
+delay, the uneven gaps (14:22 → 14:52 = **30 min**, 15:09 → 15:30 = **21 min** on a *10-minute* worker),
+and the "modified but never checked in" symptom are all downstream of one fact: **the commit is a side
+effect, so its timing is governed by something with no relationship to the work.**
+
+#### 18.5.2 Why this is fragile, not merely slow
+
+A stowaway's survival depends on its carrier. **Every one of these severs the ride, and the artifacts then
+sit uncommitted forever with no error anywhere:**
+
+| # | Cause | Evidence | Diagnostic today |
+|---|---|---|---|
+| **F1** | `getGitBackboneRemote(id)` returns `null` → `gitBackbone = null`, `result.ran = false`, `writeSelfDevice` still runs, **nothing is ever committed** | `pin.service.ts:497-499` | **NONE — completely silent.** No log, no warning. `ran:false` is indistinguishable from "not attempted". |
+| **F2** | Storage drops out of `safeStorageIds()` → the worker never visits it | `pin.service.ts:554-561` — `catch { return [] }` | **NONE — `[]` is a silent success.** |
+| **F3** | Discovery loses the root. `discoverRoots` **hardcodes** `~/BGit/Bryan_git/personal_large_files_bridge` and types it by `basename` (`classifyByConvention`, `storage.service.ts:240`) — **and the live SDL has no `storage.yaml`** (v1(i)), so the *name* is the only identity. **Rename the directory → the storage ceases to exist.** | `storage.service.ts:248-271` | **NONE.** |
+| **F4** | `resolveWorkingCopy` / `hasOrigin` returns null (no `.git`, clone failed) | `git.service.ts:260-273` | INFO only — invisible in practice. |
+| **F5** | The device plist's `StandardOutPath` / `StandardErrorPath` point into a **stale session scratchpad** (`…/49a4b75c-…/scratchpad/bootstate/`). **If launchd cannot create those paths it refuses to spawn the job at all.** The directory still exists — today. | `launchd.ts` render | **NONE** — the job simply never runs. The in-process watchdog is the only backstop, **and only while the app is running.** |
+| **F6** | `getDedicatedRepoRemote` has a **bare `catch { return null }`** — a corrupt `pin/s/<id>/config.yaml` silently disables the backbone | `storage-settings.service.ts:248-256` | **NONE.** |
+
+**The live storage survives on two accidents**: a hardcoded path in `discoverRoots`, and the auto-adopt
+fallback at `storage-settings.service.ts:281-284` (personal/company whose root happens to contain `.git`).
+Neither is a decision anyone made about *this* user's data. **This is the definition of working by luck.**
+
+#### 18.5.3 The v2 rule (LOCKED)
+
+> **Producing a durable artifact is what schedules its own synchronization. The commit is the
+> WORK'S event, never another worker's side effect.**
+
+Concretely — and these are requirements, not preferences:
+
+1. **The write IS the trigger.** Every durable-artifact writer — describe, transcribe, OCR, compress,
+   analysis, manifest, decisions — commits an **outbox entry** (§19.2) as the final, atomic step of its
+   own operation. `markDurableArtifact(root)` is the natural seam: it already fires exactly where "this
+   file is real and must persist" is known. **A writer that does not commit an outbox entry has not
+   finished.**
+2. **The outbox entry schedules the pass** (§18.4): 20 s debounce, 120 s max delay. A 300-file describe
+   batch → **one** pass ~20 s after the last write. Not 300 passes. Not a 10-minute wait. Not a
+   30-minute one.
+3. **Batch completion forces a pass**, bypassing the debounce (`jobqueue.service.ts:362-365`).
+4. **The device worker is decoupled from artifact sync.** It goes back to doing its own small job. It may
+   still `git add -A` — that is a fine safety net — but **no artifact's delivery may depend on it.** If
+   the device worker were deleted tomorrow, artifacts must still reach the server on time. **That
+   sentence is the acceptance test for this whole section.**
+5. **The pin worker's absence must be visible.** `pin_process: installed:false` (v1(b2)) is today an
+   invisible, unremarked hole in the product's stated §7 behavior. Any worker that is `installed:false`
+   while its storages have pending work **raises a warning** (§25.2).
+6. **Every F1–F6 silent-null becomes loud.** A storage that is discovered but has **no resolvable
+   backbone** is not a quiet no-op — it is a **warning** naming the storage and the reason
+   (§25.2). `catch { return [] }` and `catch { return null }` on a **discovery** path are forbidden: an
+   empty list must mean "there are none", never "something broke". **The engine may not confuse
+   'nothing to do' with 'I failed to find out'.**
+7. **Nothing is left dirty at the end of a pass.** A pass that ends with uncommitted SDL-root files it
+   *could* have committed is a **failed pass** and says so (§25.2). "Modified locally, not checked in" is
+   the state this engine exists to prevent, and it must be **impossible to reach silently**.
+
+#### 18.5.4 Lock coalescing — the queue must not thrash (CHANGED)
+
+`withStorageGitLock` (`pin.service.ts:371-383`) is an **unbounded FIFO, not a mutex with drop
+semantics.** Under a long hold, every 10-minute tick **appends another closure**; nothing coalesces them.
+When the lock frees they **all run**, back-to-back, each paying a full fetch + push. The watchdog then
+sees the worker as overdue and calls `pushDeviceBackbone()` **in-process every 5 minutes**, appending yet
+more waiters to the same starved chain — its single-flight (`ticking`) prevents overlapping *ticks*, not
+accumulating *lock waiters*. `passInFlight` does **not** help: it is scoped to `pinAll` only
+(`pin.service.ts:580-584`); **the device path has zero in-flight collapsing.** And `run-worker.mjs`
+aborting its fetch at 60 s does **not** stop the work — Express does not propagate client disconnect, so
+`internal.router.ts:31-35` keeps running and keeps enqueueing.
+
+**v2:** the lock is **coalescing**. At most **one** pass may run and **one** may be queued per storage; a
+request arriving when one is already queued **collapses into it** and returns the same promise. A pass is
+a *reconciliation to current state*, not a work item — **running it twice is never more correct than
+running it once.** With §18.2's window budget the hold is seconds, so the queue rarely forms at all.
+
+---
+
+## 19. The outbox — the queue-up directory (LOCKED, NEW)
+
+*"When changes happen, we might well queue them up, so we might end up having a queue-up directory."*
+
+Yes — and it is what makes §17.1's clean-tree precondition true. **This does not exist in v1** (verified:
+no staging area, no pending-sync queue, no debounce on the git path; the "staging area" is git's own index
+computed fresh at push time from whatever is dirty).
+
+### 19.1 Where it lives
+
+```
+~/T/_large_files_bridge/outbox/<storage-id>/
+├── 000000001737054012341-a3f2.entry.yaml
+├── 000000001737054012389-b7c1.entry.yaml
+└── payload/
+    └── b7c1/_Mirror/Politics/.../Foo.mp4.ai_description
+```
+
+**Machine-local state root, never inside the SDL repo** — the same rule as the TO DO batches (§12). The
+outbox is **this machine's private intent**; it must never be committed, never travel, and never appear in
+a peer's tree. Its filename is `<zero-padded epoch-ms><short-random>.entry.yaml`, so a lexical sort **is**
+commit order (§19.4) and two writers in the same millisecond cannot collide.
+
+### 19.2 The producer contract (LOCKED)
+
+**Producers never write into the SDL working copy.** A producer — the describe service, the transcriber,
+OCR, the compressor, the decisions ledger, the manifest — writes its output as an **outbox entry**:
+
+1. Write the payload to `outbox/<storage-id>/payload/<id>/<rel-path>` (a real file, on the same volume, so
+   the drain is a rename).
+2. Write the `.entry.yaml` **atomically last** (write-temp + `rename`). The entry's existence **is** the
+   commit record; a crash mid-write leaves an orphan payload and no entry, which is harmless and swept
+   (§19.5).
+3. Signal the debounced pass (§18.4).
+
+This inverts v1, where `describe.service.ts:400` writes straight into the SDL and hopes a timer notices.
+
+### 19.3 Entry schema
+
+```yaml
+# outbox/personal/000000001737054012341-a3f2.entry.yaml
+id: a3f2
+seq: 1737054012341            # epoch-ms; the ordering key (§19.4)
+storage_id: personal
+device_id: fdc6e91d           # WHO produced it — becomes the tiebreak (§24.3)
+class: artifact               # the DATA CLASS — selects the reconciliation rule (§21)
+op: upsert                    # upsert | delete | append | observed
+path: _Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4.ai_description
+payload: payload/a3f2/_Mirror/Politics/Charlie_Kirk_Mi/CIA/FINAL_CIA_Drones.mp4.ai_description
+produced_at: 2026-07-16T22:20:12.341Z    # LOGICAL time of production (§20.2)
+content_hash: sha256:9f2c…    # dedupe + idempotence (§19.4)
+source_hash: sha256:1a4b…     # the MEDIA file's hash this was derived from (§22.4)
+attempts: 0
+```
+
+* **`op: observed`** is the Stage-1 escape hatch (§17.1): "this appeared in the working copy and I did not
+  put it there." It carries the salvaged content so the tree can be reset to `HEAD` without data loss.
+* **`produced_at` is the reconciliation clock (§20.2)** — the moment the work *happened*, not the moment
+  it syncs. This is the whole reason the outbox can safely sit for minutes.
+
+### 19.4 Draining (Stage 2)
+
+* **In `seq` order, ascending.** Later work wins over earlier work from the **same** device
+  deterministically, without consulting a clock.
+* **Idempotent.** If the merged tree already holds `content_hash`, the entry is a **no-op** and is
+  retired. This is what makes crash-and-retry free: a pass that dies after writing but before deleting
+  simply re-drains and finds nothing to do.
+* **Fail-closed per entry.** A failing entry increments `attempts`, stays in the outbox, and **does not
+  block** the others. At `attempts >= 5` it moves to `outbox/<storage-id>/failed/` and raises a warning
+  ([warnings.mdx](./warnings.mdx)). **Never silently dropped.**
+* **Retire on success**, after the payload is in the tree — not after the push. The commit is git's job; a
+  drained entry that fails to push is recovered by push-when-ahead (§17.4.4).
+
+### 19.5 Durability (LOCKED — learned from a real defect)
+
+The job queue is **in-memory with no persistence**, and a 4.1 GB V8 OOM once vaporized a 1,440-file
+describe backlog silently. **The outbox must not repeat that mistake.** It is **on-disk, atomic, and
+crash-survivable by construction**: entries are files, the rename is the commit, and startup **re-drains
+whatever is there**. Orphan payloads with no entry (crash between step 1 and 2) are swept on startup after
+a 1-hour grace. An outbox that is non-empty at boot is **normal**, not an error.
+
+---
+
+## 20. Schema requirements for reconcilable data (LOCKED)
+
+*"Think of when you do data synchronization with timestamps. You can find out what's the newest."*
+
+Only if the schema **carries** one. Per the v1 audit, most do not.
+
+### 20.1 The mandatory reconciliation header (NEW)
+
+**Every shared YAML the engine writes into a dedicated file repo must carry:**
+
+```yaml
+schema: 2                                  # schema version — REQUIRED for forward compat (§20.4)
+updated_at: 2026-07-16T22:20:12.341Z       # UTC, ISO-8601, millisecond precision, ALWAYS 'Z'
+updated_by: fdc6e91d                       # the device id that wrote it — the deterministic tiebreak
+```
+
+Absent that header, "who is newest" is **unanswerable** and the only honest resolution is keep-both (§23).
+This header is what makes §22's matrix decidable.
+
+**Self-owned** files (§22.1) need it too — not to arbitrate (nobody contends) but so a peer can render
+"last seen 4 minutes ago" and detect a stale device.
+
+### 20.2 Logical time, not wall time (LOCKED)
+
+`updated_at` is the **`produced_at` of the outbox entry that produced the value** (§19.3) — *when the work
+happened*, not when it drained. A description generated at 22:20 and synced at 22:31 carries **22:20**.
+Otherwise a machine that syncs late would fraudulently "win" against fresher work from a machine that
+synced promptly, and **the slowest machine would dominate the network** — precisely backwards.
+
+### 20.3 Clocks are not trusted (LOCKED)
+
+Two computers **will** disagree, by seconds normally and by hours after a BIOS reset, a bad VM restore, or
+a timezone-mangled write. **Timestamps are a HINT, never an authority.** Therefore:
+
+* **Never** "newest timestamp wins" on data we cannot regenerate. Time only breaks ties **after** the
+  content-based rules of §22 have run.
+* **Reject the impossible.** An `updated_at` more than **24 h in the future** relative to local time is
+  **not trusted**; it sorts as its *received* time and raises a clock-skew warning (§25). This defeats the
+  "one machine's clock is set to 2038 and wins forever" failure mode.
+* **Prefer content over time.** Equal `content_hash` → not a conflict at all, regardless of timestamps.
+  This resolves the overwhelming majority of apparent conflicts before time is ever consulted.
+
+### 20.4 Schema version and forward compatibility (NEW)
+
+Two computers **will** run different LFB versions — one updates, the other is a tower that has been on for
+a month. So:
+
+* **`schema:` is required on every shared file.** A reader seeing `schema:` **greater** than it understands
+  must **not** rewrite the file. It reads what it can, and treats the file as **read-only** until upgraded,
+  raising a warning. **A newer peer's data is never downgraded by an older peer** — an older writer
+  round-tripping a newer file would silently drop the fields it does not know, which is data loss wearing a
+  merge's clothes.
+* **Unknown keys are PRESERVED on rewrite.** Any writer that must rewrite a file it partially understands
+  round-trips unknown keys verbatim. This is the single cheapest forward-compat guarantee available and it
+  is mandatory.
+* `schema: 1` is assumed when the key is absent (every v1 file on disk today).
+
+---
+
+## 21. The full inventory — every kind of information that syncs (LOCKED)
+
+Every distinct kind of data written into a dedicated file repo, its v1 truth, and its v2 class. **Class**
+selects the reconciliation rule in §22.
+
+**The five data classes:**
+
+| Class | Meaning | Rule |
+|---|---|---|
+| **A — Self-owned** | Exactly one device ever writes it | §22.1 — no contention possible |
+| **B — Append-log** | Grows at the end; order is not semantic | §22.2 — union / merge=union |
+| **C — Derived** | Regenerable from a source file | §22.4 — content-addressed; regenerate on doubt |
+| **D — Shared-mutable** | Multiple devices rewrite the same keys | §22.5 — the hard case; field-level LWW |
+| **E — Local-only** | Must never enter the repo | §22.6 — excluded, not merged |
+
+### 21.1 The inventory
+
+| # | Path in the SDL | Writer (`file:line`) | v1 reality | v2 class |
+|---|---|---|---|---|
+| 1 | `devices/<slug>.yaml` | `devices.service.ts:115` `writeSelfDevice` | self-owned; `updated_at` auto-stamped; **orphans on rename** (v1(i)) | **A** (+§22.7) |
+| 2 | `storage.yaml` | `storage.service.ts:130` `writeDescriptor` | shared; **`created` only, NO `updated_at`**; raw `writeFileSync` (`:141`) bypasses the stamping store; **absent in the live repo** | **D** |
+| 3 | `mapped_dirs.yaml` | `storage-settings.service.ts` `setMappedDirs` (`:294`) | shared; `updated_at` auto | **D** (§22.5.2 — set-union) |
+| 4 | `files.yaml` | `tracking.service.ts:154` `indexStorageFiles` (write `:252`) | shared; **NO timestamp, NO device id, NOT in `UNION_MERGE_PATHS`, full rewrite every scan** | **C** (§22.4.2 — **the sharpest hazard**) |
+| 5 | `bookmarks.yaml` | `storage.service.ts:~455` `setBookmark` | shared; `updated_at` auto; in-process set-union only | **D** (§22.5.2 — set-union) |
+| 6 | `manifest.yaml` | `manifest.service.ts:124` `writeCommittedManifest` | shared; **deliberately no timestamp** (`:1-7` — for byte-identical re-serialization); union-merged ✓ | **B** (§22.3 — special) |
+| 7 | `decisions.yaml` | `decisions.service.ts:172` `writeLedger` | shared; per-event `decided_at`; append log; union-merged ✓; folds by **path alone** (`:139`) | **B** ✓ |
+| 8 | `decisions_policy.yaml` | `decisions.service.ts:405` `writeDecisionPolicy` | shared; `set_at`; rewrite-in-place | **D** |
+| 9 | `analysis/<rel>/visuals_by_time.yaml` | `analysis.service.ts:39` `analyzeFile` | shared; **`generated: null`** | **C** |
+| 10 | `analysis/<rel>/compression.yaml` | `analysis.service.ts:66` `writeCompressionRecord` | shared; `compressed.at` | **C** |
+| 11 | `<rel>.transcription` | `Transcribe.ts:217`, `qwen-asr.ts:114`, `speech-analyzer.ts:143` | write-once; timestamp is **prose in a header line** | **C** |
+| 12 | `<rel>.ai_description` | `describe.service.ts:400` | write-once; `generated` field. **The 1,933-file case.** | **C** |
+| 13 | `<rel>.ai_description_rejected` | `describe.service.ts:150` `writeRejection` | write-once; `generated` | **C** |
+| 14 | `<rel>.ocr` | `ocr.service.ts:192` | write-once; `generated`. Empty text = **success** | **C** |
+| 15 | `owner_map.yaml` (company only) | `owner-propagation.service.ts:133` `mutateOwnerMap` | shared; `updated_at` + per-key `asserted_at`; union-merged ✓ | **B** (+ consent gate, §22.8) |
+| 16 | `repos/<k>/repo_storage.yaml` | `repo-storage.service.ts:97` → mirror | shared; `last_scan.at` **re-stamped every scan** (`:213`) → **guaranteed conflict**; v1's only headless resolution is to `git rm -f` it | **C** (§22.4.3) |
+| 17 | `repos/<k>/files/<rel>.yaml` | `file-sidecar.service.ts:175` → mirror | append `events[]`; per-event `at`/`on_device` — **but the mirror `copyFileSync`s, dropping peer events** | **B** (§22.2.1) |
+| 18 | `repos/<k>/history/<device>.txt` | `history-log.service.ts:73` `appendHistory` | self-owned, append-only ✓ | **A** |
+| 19 | `repos/<k>/decisions.yaml`, `manifest.yaml` | mirror copies of #6/#7 | as above | **B** |
+| 20 | `.gitattributes` | `git.service.ts:356-370` `ensureMergeAttributes` | append-if-missing | **B** |
+| 21 | `.gitignore` | `git.service.ts:332-345` `ensureSdlCommittable` | strips ignores of SDL payload | **D** |
+| 22 | `LargeFilesBridge_SyncList.yaml` | **NOTHING** | **vestigial** — named in `UNION_MERGE_PATHS` (`git.service.ts:31`) and §1's tree, but **no code writes it** (v1(j)) | **— (strike or build)** |
+| 23 | `_do_batches/*_2_do.yaml`, logs, `.lfbridge/` in an SDL, `.transcribe/` | — | **must never be in the SDL** — yet `.lfbridge/` and `.transcribe/` **are, live** (v1(i)) | **E** |
+
+### 21.2 The timestamp gap, stated plainly
+
+`writeYaml` stamps `updated_at` on every write it performs:
+
+```ts
+// yaml-store.ts:63
+export function writeYaml<T extends Record<string, unknown>>(file: string, value: T): void {
+  ensureDir(path.dirname(file));
+  const stamped = { ...value, updated_at: new Date().toISOString() };
+```
+
+**That covers only #1, #3, #5, #15.** Everything git-tracked deliberately **bypasses** it, for a good
+reason — `manifest.service.ts:1-7` explains that a volatile `updated_at` would make an unchanged list
+re-serialize to different bytes, producing spurious commits and conflicts on every pass.
+
+**That reason is sound and v2 keeps it (§22.3): a volatile timestamp on a union-merged append log is
+actively harmful.** But it was applied too broadly. The correct split is:
+
+* **Class B (append-log)** — **no** file-level `updated_at`. Per-**entry** timestamps only. A stable file
+  serialization is what lets `merge=union` work. (#6, #7, #17, #19)
+* **Class D (shared-mutable)** — **must** carry the §20.1 header. Stamped only when content **actually
+  changed** (compare `content_hash` before writing; unchanged → don't write, don't stamp). This gets
+  reconcilability **without** reintroducing churn. (#2, #3, #5, #8, #21)
+* **Class C (derived)** — the **source** hash matters, the write time does not (§22.4).
+
+---
+
+## 22. Reconciliation — every permutation (LOCKED)
+
+The complete matrix. `L` = our local value, `R` = the peer's (merged-in) value, `B` = the merge base.
+
+### 22.0 The universal pre-checks (run first, in order, for every class)
+
+| # | Condition | Outcome |
+|---|---|---|
+| 0.1 | `hash(L) == hash(R)` | **Not a conflict.** Identical content. Keep either. Never consult time. Resolves most apparent conflicts. |
+| 0.2 | `L == B` (we didn't touch it) | **Take R.** Fast-forward. |
+| 0.3 | `R == B` (they didn't touch it) | **Keep L.** |
+| 0.4 | `schema(R) > schema(ours)` | **Take R untouched, do not rewrite.** Warn. (§20.4) |
+| 0.5 | `schema(L) > schema(R)` | **Keep L.** The peer is stale; it will catch up. |
+| 0.6 | Both changed, both understood | → the class rule below. |
+
+### 22.1 Class A — self-owned (`devices/<self>.yaml`, `history/<device>.txt`)
+
+| Permutation | Resolution |
+|---|---|
+| Only we wrote it | Keep ours. **Contention is impossible by construction.** |
+| A peer edited **our** file | **They violated the contract.** Ours wins — we are the sole authority on our own hardware. Overwrite, log a WARN. |
+| Two devices minted the **same** id | **Pathological** (a cloned disk). Detect via a differing hardware fingerprint under one id; the device that notices **re-mints** its id, writes the new file, and retires the old (§22.7). |
+| Their file, our tree | **Never touch it.** Read-only to us. |
+
+**No timestamps needed.** This is why the device registry has "never conflicted" — and why so much rides
+on it (v1(a)): the registry is the only thing v1 reliably syncs.
+
+### 22.2 Class B — append-log (`decisions.yaml`, `owner_map.yaml`, sidecar `events[]`, `.gitattributes`)
+
+| Permutation | Resolution |
+|---|---|
+| Both appended different entries | **Union.** Both survive. `merge=union` handles it in git; our fold handles semantics. |
+| Both appended the **same** entry | Union yields a duplicate → **the fold dedupes** by entry identity. |
+| Same **key**, different **values**, different times | Both entries survive in the log; **the FOLD picks the winner** — latest `decided_at`, ties broken by `device_id` (§24.3). **The log is never lossy; only the projection chooses.** This is the property that makes Class B safe. |
+| One party **deleted** a line | Union **resurrects** it — a known `merge=union` behavior. **Therefore: never delete from an append log.** Append a **tombstone** entry; the fold honors the newest. |
+| Log grows unboundedly | Compaction is **allowed only** when this device is the sole party with unpushed work and only for entries older than **90 days** superseded by a later entry. **Compaction is a rewrite (Class D) and must be pushed as its own commit**, never bundled. |
+
+#### 22.2.1 The sidecar mirror bug (v1 defect, must fix)
+
+`mirrorToSyncRepo` (`tracking-sync.service.ts:68`) uses `copyFileSync` — whole-file last-writer-wins — and
+the code concedes it (`:83`): *"Append-only sidecars / history and union-mergeable decisions/manifest
+tolerate a last-writer copy for the common case; a richer per-file merge is a later refinement."*
+
+**It does not tolerate it.** A sidecar's `events[]` is Class B; a whole-file copy **silently drops a
+peer's events** — real data loss, in the one direction (invariant 1, §16.3) v2 forbids. **v2: the mirror
+must union `events[]` by entry identity, not copy the file.** This is the "later refinement", now due.
+
+### 22.3 Class B special — `manifest.yaml` (the IPFS pin state)
+
+The manifest is an append log whose entries mutate (`pinned_by` grows as computers pin). Its "no volatile
+timestamp" rule (`manifest.service.ts:1-7`) is **correct** and stays.
+
+| Permutation | Resolution |
+|---|---|
+| Two devices pin the **same** file → same CID | **Not a conflict.** Content-addressing means agreement is automatic. `pinned_by` **unions**. |
+| Two devices pin the same file → **different** CIDs | The file genuinely differs (one compressed it). **Both CIDs survive** as separate entries; §22.4's derived rules decide which is current. **Never drop a CID** — a dropped CID is an unpinnable, unrecoverable file. |
+| One **unpins** while another **pins** | **Pin wins.** Asymmetric on purpose: a spurious pin costs disk, a spurious unpin costs **the file**. |
+| `pinned_by` diverges | **Union.** It is a set of facts, each asserted by one device about itself. |
+| One removes an entry | **Only its own `pinned_by` membership.** No device may remove another's, or the entry itself. |
+
+### 22.4 Class C — derived artifacts (transcripts, descriptions, OCR, analysis, `files.yaml`)
+
+The most common class (1,933 files and counting) and, happily, the **easiest**: derived data is
+**regenerable**, so "losing" a conflict costs CPU, not data.
+
+**The keying rule (LOCKED):** a derived artifact is identified by `(source_path, source_hash, generator,
+generator_version)`. Two artifacts with the same key are **interchangeable regardless of content** — a
+transcript re-run is nondeterministic in wording but equivalent in meaning.
+
+| Permutation | Resolution |
+|---|---|
+| Same key, different bytes (both re-ran the same source) | **Keep either — deterministically the same one on every machine.** Lowest `device_id` lexically wins (§24.3). **Never both**, or the tree ping-pongs forever. Not a conflict; a duplicate. |
+| Different `source_hash` (the media changed) | **Newest `source_hash` wins** — matched against the media file **as it exists now**. If neither matches the current media, both are **stale**: keep the newer, mark the artifact for **regeneration**. |
+| Different `generator_version` (`qwen3-asr` vs. `whisper-base`) | **Higher-fidelity generator wins**, by the engine ranking in [transcribe_engine.mdx](./transcribe_engine.mdx) — *not* by timestamp. A tower's qwen3 transcript must not lose to a laptop's later whisper fallback. **This permutation is why "newest wins" is wrong as a global rule.** |
+| One party has it, the other doesn't | **Take it.** The entire value proposition: *generate once, reuse everywhere.* |
+| One party **deleted** it | Deletion of a derived artifact is a **local** act (disk pressure), **never a network assertion**. **The surviving copy wins and is restored.** To truly remove one, use a Class B decision, not `rm`. |
+| Both empty | **Empty is success** for OCR (a text-free image). Byte-identical → §22.0.1. |
+
+#### 22.4.2 `files.yaml` — the sharpest hazard (v1 defect, must fix)
+
+Per §21: shared, rewritten wholesale every scan, **no `updated_at`, no device id, no fold rule, and
+absent from `UNION_MERGE_PATHS`** (which lists only SyncList/manifest/decisions/owner_map,
+`git.service.ts:30-38`). **Two devices indexing the same SDL produce a straight textual conflict with
+nothing to reconcile on** — and its per-entry `modified`/`created` are the **media's filesystem mtimes**,
+not write times, so they are useless for LWW. It survives today only because it is **never written** in
+the live repo (v1(i)) — a defect masking a defect.
+
+**v2:** `files.yaml` is **Class C — a per-device index of what THIS device sees**, not a shared truth.
+Either (**preferred**) split it per device — `files/<device-id>.yaml`, promoting it to **Class A** where
+contention is impossible — or keep one file and merge **per-entry, keyed by path**, taking the entry whose
+`source_hash` matches local reality and unioning the rest. **Never** whole-file LWW.
+
+#### 22.4.3 `repo_storage.yaml` — stop the churn at the source
+
+`refreshCounts` (`repo-storage.service.ts:213`) re-stamps `last_scan.at` on **every** scan and the mirror
+carries it up — a **guaranteed** conflict on a file whose content did not meaningfully change. v1 concedes
+this with `autoResolveRepoStorageConflicts` (`git.service.ts:450`), which `git rm -f`'s the file. That
+works, but it treats a symptom.
+
+**v2:** `last_scan.at` is **per-device state and does not belong in a shared file** — it moves to
+`last_scan: { <device-id>: { at, counts } }` (Class B, union by device key). The remaining content is
+stable, so the file stops conflicting. **Keep the `git rm -f` escape hatch** — it is correct, cheap, and
+right (the file is Class C, regenerable from Local Storage) — but it should stop firing.
+
+### 22.5 Class D — shared-mutable (`storage.yaml`, `mapped_dirs.yaml`, `bookmarks.yaml`, `decisions_policy.yaml`)
+
+The genuinely hard class: multiple devices rewrite the same keys, and the content is **not** regenerable.
+Small, rare, and human-set — which is exactly why losing a write here is unacceptable.
+
+#### 22.5.1 Field-level, not file-level (LOCKED)
+
+**Never resolve a Class D file as a blob.** Merge **field by field**; two devices editing *different*
+fields of the same file is **not a conflict** and must never be treated as one.
+
+| Permutation | Resolution |
+|---|---|
+| Different fields changed | **Merge both.** No conflict. The common case. |
+| **Same** field, same value | Not a conflict (§22.0.1). |
+| **Same** field, different values, different `updated_at` | **Later `updated_at` wins**, subject to §20.3's skew rejection. The loser's value is **recorded in the file's `superseded[]` log** — never vanished (§23.3). |
+| Same field, `updated_at` within **2 s** (a genuine race) | **Deterministic tiebreak by `device_id`** (§24.3), *not* by clock. Sub-2-second clock deltas are noise. |
+| Same field, one side's `updated_at` **> 24 h in the future** | **Untrusted.** The other side wins; clock-skew warning (§20.3, §25). |
+| Neither has `updated_at` (a v1 file, e.g. `storage.yaml`) | **Cannot arbitrate.** Fall to **keep-both** (§23.3) and stamp both going forward. **This is why §20.1 is mandatory.** |
+| One side **deleted** a field | Deletion is a **tombstone** (`field: null` + `updated_at`), never an absence. **Absence means "I don't know", not "delete it"** — an older peer that doesn't know a field must not delete it (§20.4). |
+
+#### 22.5.2 Set-valued fields are unions, not scalars
+
+`mapped_dirs.yaml` and `bookmarks.yaml` hold **sets**. A set is Class B in Class D clothing:
+
+* **Add + add** → **union**. Two computers mapping two different directories both win. Treating this as
+  LWW would silently unmap a directory — a top-tier data-loss bug.
+* **Add + remove** → **add wins** (asymmetric like §22.3's pin/unpin: a spurious mapped dir costs a scan,
+  a spurious unmap costs *visibility of the files*).
+* **Real removal** → a **tombstone** entry with `removed_at`, honored by the fold, garbage-collected after
+  90 days.
+
+### 22.6 Class E — local-only (must never enter the repo)
+
+TO DO batches, logs, the outbox, `.lfbridge/` **inside an SDL**, `.transcribe/`, `/tmp` scratch.
+
+| Permutation | Resolution |
+|---|---|
+| A Class E path appears in the SDL | **Not a merge — a bug.** Remove it locally, log it, do not commit it. |
+| It is already **committed** (the live state, v1(i)) | **Remove in a dedicated commit**, `LFB: retire local-only path <p>`. This is the **only** sanctioned deletion the engine performs unprompted, and it is legitimate **only** because the path can never have been anyone's data. |
+| A peer commits one | Same. Removal is safe: it was never shared state. |
+
+**The live `.lfbridge/` migration warning must stop repeating.** v1 logs the same
+`[migrate] conflict: … already exists — keeping it and LEAVING … in place` on **every pass**, forever
+(v1(i)). Warning without resolving is not caution; it is noise that trains people to ignore warnings. **v2:
+resolve it once** — the root file wins (§1.1), the `.lfbridge/` copy is retired via the rule above — or
+**escalate it once** to a real warning ([warnings.mdx](./warnings.mdx)) and stay quiet thereafter.
+
+### 22.7 Device identity permutations (`devices/`)
+
+The live repo has **two files for one computer** — `bryanstarbuck-macbook-pro.yaml` (14:59) and
+`bryan-mac-pro.yaml` (15:30) — because the nice name changed and **nothing retires the old file** (v1(i)).
+
+| Permutation | Resolution |
+|---|---|
+| Device **renamed** (`nice_name` changed) | The **id** is the identity, the filename is a **convenience**. On rename, write the new file **and `git rm` the old one in the same commit**. Peers see a rename, not a birth. |
+| An orphan file with **our** id, different filename | **We own it — retire it.** Only the device itself may do this (Class A). |
+| An orphan whose device hasn't reported in **90 days** | **Do not delete.** Mark `stale: true`, surface it in the Devices tab ([devices.mdx](./devices.mdx)), let the **user** decide. A tower off for a season is not a dead tower. |
+| Same **hardware fingerprint**, two ids | A restored/cloned disk. Surface as a **possible duplicate**; never auto-merge — the ids may be legitimately distinct machines from one image. |
+| Device file for an id **we have never seen** | **Normal.** That is discovery working (§4.3). |
+
+### 22.8 `owner_map.yaml` — the consent-gated exception (company repos)
+
+Class B, union-merged, **but the fold does not auto-apply**. An ownership assertion travels; it applies on
+another member's machine **only via review-and-consent** ([repo_owner_propagation.mdx](./repo_owner_propagation.mdx),
+§14.1). **This is the one place where "the engine converges automatically" stops at the security boundary**
+— convergence of the *assertion* is automatic; convergence of the *effect* requires a human. Merging it is
+never a decision to obey it.
+
+---
+
+## 23. Headless conflict resolution — no user interface, ever (LOCKED)
+
+*"How do you resolve conflicts without a user interface?"*
+
+**Requirement.** These repos are LFB's own (§16.1). There is no branch a human is nursing, no PR, no
+reviewer. A pass runs from launchd at 03:00 with nobody logged in. **A resolution path that requires a
+human is not a resolution path** — it is the storage silently stopping, which is the exact failure the
+watchdog exists to paper over. v1 has **exactly one** headless resolution (`repo_storage.yaml`, v1(h));
+every other conflict runs `git merge --abort` (`git.service.ts:424`) and waits for a terminal that may
+never open.
+
+### 23.0 The two absolute prohibitions
+
+1. **Never `git push --force` / `--force-with-lease`.** Not on retry, not on "obviously stale", not ever.
+   v1 honors this (verified: no force push anywhere) — **keep it that way.**
+2. **Never resolve by discarding.** No `git checkout --theirs/--ours` on data we did not author, no
+   `reset --hard` on unpushed work, no `stash` (it strands data in a ref nothing reads). The **one**
+   exception is Class E (§22.6), where the path can never have held anyone's data.
+
+### 23.1 The resolution ladder
+
+Applied in order. **Every rung is deterministic** — two computers running it on the same inputs reach the
+same answer without talking, which is what makes convergence possible at all.
+
+| Rung | Test | Action |
+|---|---|---|
+| **1** | Identical content (§22.0.1) | **Not a conflict.** Most cases die here. |
+| **2** | One side unchanged from base (§22.0.2-3) | **Take the changed side.** |
+| **3** | Class B (append-log) | **Union**, then fold. Structurally cannot conflict. |
+| **4** | Class A (self-owned) | **Owner wins.** No arbitration. |
+| **5** | Class C (derived) | **Key comparison** (§22.4) → keep one, or **regenerate** and be certain. Costs CPU, never data. |
+| **6** | Class D, different fields | **Field-level merge** (§22.5.1). |
+| **7** | Class D, same field, trustworthy timestamps | **Later `produced_at` wins**; loser → `superseded[]`. |
+| **8** | Class D, same field, untrustworthy/absent timestamps | **Deterministic tiebreak** by `device_id` (§24.3); loser → `superseded[]`. |
+| **9** | Nothing above applies | **KEEP BOTH — quarantine** (§23.3). |
+
+**Rung 9 is the floor, and it is why the ladder is total.** There is no rung 10 and no "ask the user"
+branch. Every conflict has a defined, terminating answer.
+
+### 23.2 Regeneration beats arbitration (Class C)
+
+For derived data, the **cheapest correct** answer is often "stop arguing and recompute." If two transcripts
+conflict and the ladder can't cleanly pick, **regenerate from the source media** and write a fresh
+artifact with a current `source_hash`. Deterministic, requires no peer agreement, costs CPU — and CPU is
+the thing we have. This is available **only** for Class C, which is precisely why the classification in
+§21 is load-bearing.
+
+### 23.3 Quarantine — the floor (NEW)
+
+When rung 9 is reached, **both versions survive**:
+
+```
+<path>                          ← the ladder's best guess (deterministic: lowest device_id, §24.3)
+<path>.conflict-<device-id>-<ts>   ← the other version, committed alongside
+```
+
+* **Both are committed and pushed.** The conflict travels; every machine sees the same two files and the
+  same winner. **Convergence is preserved even though the semantic question is unanswered** — this is the
+  key move that makes headless operation safe.
+* **A warning is raised** ([warnings.mdx](./warnings.mdx)) with both versions and a one-click resolution.
+  The **user is informed, never blocked** — the difference between "no UI" and "no transparency".
+* **The engine never opens a `.conflict-*` file again.** It is inert data awaiting a human.
+* **`git merge --abort` is no longer a resting state.** v1 aborts and stops (`git.service.ts:424`); v2
+  aborts only to take control, then resolves via the ladder and **always** ends Stage 4 pushed or
+  quarantined.
+
+### 23.4 Why this is safe here and nowhere else
+
+Every rung's authority — union-merge, deterministic overwrite, regeneration, quarantine commits — rests on
+**LFB being the sole author** (§16.1). In a **working repo** the same rungs would be vandalism: rung 4
+would overwrite a colleague's work, rung 9 would litter their tree. **The classification of the repo is the
+license for the algorithm.** A bug that misclassifies a working repo as a dedicated one is a **Sev-1**, not
+a papercut.
+
+---
+
+## 24. Priority — who wins (LOCKED)
+
+*"Who has priority to win?"*
+
+### 24.1 The priority ladder (in order, first applicable wins)
+
+1. **The truth on disk beats every claim about it.** If the media file's hash contradicts a YAML, **the
+   filesystem wins** and the YAML is stale. No timestamp overrides physical reality.
+2. **The owner wins for self-owned data** (§22.1). Your computer is the sole authority on its own hardware.
+3. **The user's explicit decision beats any engine inference.** A folded decision
+   ([decisions.mdx](./decisions.mdx)) beats a recommendation, always, on every machine.
+4. **Safety-asymmetric operations beat their inverse.** Pin beats unpin; add beats remove; keep beats
+   delete (§22.3, §22.5.2). Always resolve toward **more data retained**.
+5. **Higher fidelity beats newer** for derived data (§22.4): a qwen3 transcript beats a later whisper one.
+6. **Later logical time beats earlier** (§20.2) — *only* among trustworthy timestamps (§20.3), *only* for
+   Class D, and *only* after 1–5.
+7. **Deterministic tiebreak** (§24.3) — never a coin flip, never wall-clock arrival order.
+
+**No device has standing.** There is no primary, no server-of-record, no "the tower wins." Every party is
+equal; the **data class** decides, not the machine. A laptop that syncs once a week is exactly as
+authoritative about its own facts as the tower that syncs every ten minutes.
+
+### 24.2 Explicitly rejected priority rules
+
+* ❌ **"Newest wins"** globally — breaks §24.5 (a stale machine's late sync would beat fresh work) and
+  §22.4's fidelity rule.
+* ❌ **"The pushing device wins"** — makes the *fastest network* authoritative. Absurd, and it is
+  effectively v1's accidental behavior under `git add -A` + LWW mirrors.
+* ❌ **"The biggest/most complete file wins"** — a truncated 5 GB write would beat a correct 2 KB YAML.
+* ❌ **"Ask the user"** — not available (§23).
+
+### 24.3 The deterministic tiebreak (LOCKED)
+
+When the ladder reaches rung 7, compare **`device_id` lexically; the LOWEST wins.**
+
+Arbitrary — deliberately. Its virtues are the only ones that matter here: **total** (any two ids compare),
+**stable** (same answer forever, so no ping-pong), and **agreed without communication** (both machines
+compute the same winner in isolation). The loser is **never discarded** — it lands in `superseded[]`
+(§22.5.1) or quarantine (§23.3).
+
+### 24.4 The loser is always recoverable
+
+The engine may **choose**; it may not **destroy**. Every rung that picks a winner **records the loser** —
+`superseded[]`, a `.conflict-*` file, or an append-log entry that survives the fold. **A user must always
+be able to answer "what did the other computer say?"** This is invariant 1 (§16.3) made operational.
+
+---
+
+## 25. Observability and failure modes (LOCKED)
+
+Per v1, this engine's failures are **silent** — a 100-minute stall, a forever-repeating migration warning,
+a discarded push error, a device orphan nobody noticed, and six SDL files that were never written at all.
+**Silence is the defect.**
+
+### 25.1 Every pass emits a structured record
+
+```yaml
+# ~/T/_large_files_bridge/sync/<storage-id>/last_pass.yaml
+started: 2026-07-16T22:20:12.341Z
+stages: { pull_ms: 412, drain_ms: 88, resolve_ms: 0, push_ms: 640 }
+window_ms: 1140                 # merge → push. THE metric (§18.2). Budget: 60000.
+outbox: { drained: 47, failed: 0, remaining: 0 }
+merged: { fetched: true, took_remote: 3, conflicts: 0, quarantined: 0 }
+committed: "LFB: 47 AI descriptions, device state  (bryan-mac-pro)"
+pushed: true
+problem: null
+```
+
+### 25.2 The conditions that must raise a warning
+
+| Condition | Why it matters |
+|---|---|
+| `window_ms > 60000` | The §18.2 budget is blown; collision probability is climbing (§18.3). |
+| Outbox non-empty for **> 30 min** | Convergence has stopped. **This is the reported symptom** (v1(a)) — v2 must *say so* instead of quietly deferring. |
+| Any entry in `outbox/*/failed/` | Data is stuck and will never sync unaided. |
+| A pass **stalled > 3 × interval** | The v1(e) 100-minute gap. The watchdog already detects it; it must also **warn the user**, not just self-heal quietly. |
+| Any `.conflict-*` file exists | A human owes a decision (§23.3). |
+| Clock skew **> 24 h** | Reconciliation is compromised (§20.3). |
+| A Class E path is committed | The live `.lfbridge/` + `.transcribe/` defect (v1(i), §22.6). |
+| A device file orphaned by rename | The live two-files-one-computer defect (v1(i), §22.7). |
+| Push failed **after all retries** | Ordinary (offline) — but must be **visible**, not swallowed (v1(g)). |
+| **Uncommitted files at the SDL root** older than 30 min | The direct, checkable form of *"files are not getting checked in."* |
+
+### 25.3 The cross-process lock (CHANGED — fixes v1(f))
+
+`withStorageGitLock` (`pin.service.ts:371-383`) is in-process, and
+`owner-propagation.service.ts:59-64` runs a **second, uncoordinated** chain over the same working copy.
+
+**v2:** one **file-based** lock per working copy — `<state>/sync/<storage-id>/git.lock` holding pid +
+started-at, with a **10-minute stale takeover**. Every git-touching path acquires it: the pin cycle, the
+device worker, owner propagation, and the CLI. A stale lock from a crashed process must never wedge the
+storage forever (invariant 2, §16.3).
+
+---
+
+## 26. Acceptance criteria — the v2 synchronization engine
+
+14. **Scope.** Part II governs **only** dedicated LFB file repos — the Personal SDL and company sync repos
+    (§16.1), keyed on the resolved **storage kind**, never on a path or name. A **working repo** never runs
+    this engine; misclassifying one is a **Sev-1** (§23.4).
+15. **Four stages, in order** (§17): **PULL** (into a **clean tree** — a conflict here is a bug) →
+    **WRITE+RECONCILE** (drain the outbox against the merged tree) → **RESOLVE** (headless) → **PUSH**
+    (commit + push; on non-fast-forward, re-enter Stage 1; **≤ 3 retries** with backoff; **never
+    `--force`**).
+16. **Producers never write into the working copy** (§19.2). They write **outbox** entries to
+    `~/T/_large_files_bridge/outbox/<storage-id>/` — machine-local, **never committed**, atomic
+    (write-payload → rename-entry), **crash-survivable and re-drained at boot** (§19.5), drained in `seq`
+    order, idempotent by `content_hash`, **failing entries quarantined at 5 attempts and never silently
+    dropped** (§19.4).
+17. **The conflict window excludes byte work** (§18.2). No unbounded operation may sit between Stage 1 and
+    Stage 4; IPFS add/pin/fetch moves **out** of the git window into background jobs, with results
+    returning via the outbox. **Window budget: 60 s**; exceeding it warns. This repeals the v1 shape where
+    `pull` (pin.service.ts:412) and `commitAndPush` (pin.service.ts:462) straddle an unbounded
+    `runUnitPin` (v1(d)) — the case where `W > T` and convergence becomes **impossible** (§18.3).
+18. **Sync is event-driven with a timer floor** (§18.4): an outbox commit schedules a pass with a **20 s
+    debounce / 120 s max delay**; **batch completion enqueues a pass** (the missing wire — today
+    `jobqueue.service.ts:362-365` only logs, v1(b)); the **10-minute** device timer and the **watchdog**
+    remain as the floor. A change reaches the server within **10 minutes**.
+19. **Every shared file carries the reconciliation header** (§20.1): `schema`, `updated_at` (UTC ISO-8601
+    ms, `Z`), `updated_by` (device id). `updated_at` is **logical time** — the `produced_at` of the work,
+    not the sync time (§20.2), so a late-syncing machine can never dominate. **Class B append-logs are
+    exempt** at file level and stamp **per entry** (§21.2) — a volatile file-level stamp would break
+    `merge=union` and re-churn (`manifest.service.ts:1-7`, correct and retained).
+20. **Clocks are a hint, never an authority** (§20.3): content-equality is checked **before** time; an
+    `updated_at` **> 24 h** in the future is untrusted and warns; **never** "newest wins" on data that
+    cannot be regenerated.
+21. **Schema versioning is enforced** (§20.4): a reader seeing a **higher** `schema` **must not rewrite**
+    the file and treats it read-only; **unknown keys are preserved verbatim** on any rewrite. **An older
+    peer may never downgrade a newer peer's data.**
+22. **Every kind of synced data is classified** (§21) as **A** self-owned / **B** append-log / **C**
+    derived / **D** shared-mutable / **E** local-only, and the class selects the reconciliation rule.
+    Named v1 defects that **must** be fixed: **`files.yaml`** (shared, timestamp-less, non-union, whole-file
+    rewrite → per-device or per-entry merge, §22.4.2); **`repo_storage.yaml`** churn (`last_scan.at`
+    re-stamped every scan → per-device key, §22.4.3); the **sidecar mirror** `copyFileSync` that drops peer
+    `events[]` (§22.2.1); **`storage.yaml`** written raw with no `updated_at` (§21); and
+    **`LargeFilesBridge_SyncList.yaml`**, named in `UNION_MERGE_PATHS` but **written by nothing** — build it
+    or strike it (v1(j)).
+23. **Reconciliation is total** (§22): the universal pre-checks (§22.0) run first for every class, and
+    every permutation has a defined answer — including deletes (**tombstones, never absence**), sets
+    (**union, add beats remove**), pin/unpin (**pin wins**), device rename (**`git rm` the old file in the
+    same commit**, §22.7), and the **consent-gated** `owner_map.yaml` where the assertion converges
+    automatically but the **effect never applies without a human** (§22.8).
+24. **Conflicts resolve headlessly** (§23): the deterministic 9-rung ladder ends in **KEEP BOTH —
+    quarantine** (`<path>.conflict-<device>-<ts>`, committed and pushed so every machine agrees on the same
+    winner and the same leftover). **No rung asks a user; every rung terminates.** `git merge --abort` is
+    no longer a resting state (v1(h)). **Never force-push; never resolve by discarding** — the sole
+    exception is a **Class E** path, which can never have held anyone's data (§22.6, §23.0).
+25. **Priority is by data class, not by device** (§24): filesystem truth > self-owned ownership > the
+    user's explicit decision > safety-asymmetric (pin/add/keep wins) > **higher fidelity beats newer** >
+    later logical time (trustworthy only) > **deterministic tiebreak on lowest `device_id`**. **No device
+    has standing** — no primary, no server-of-record. **The loser is always recoverable** (`superseded[]`,
+    `.conflict-*`, or a surviving log entry): the engine may choose, it may **not** destroy (§24.4).
+26. **Commits are descriptive** (§17.4.2): `LFB: 47 AI descriptions, 3 transcripts, device state
+    (bryan-mac-pro)`. The blanket `"LFB: backbone device state"` (`git.service.ts:496`) is legal **only**
+    when device state is genuinely all that changed — today it titles 1,900+ commits that are almost
+    entirely `.ai_description` files (v1(c)).
+27. **The engine is observable** (§25): every pass writes `last_pass.yaml` with per-stage timings and the
+    **`window_ms`** metric; warnings fire for a blown window, an outbox stuck **> 30 min** (*the reported
+    symptom, now detected*), failed entries, a stalled pass (the live **100-minute** gap, v1(e)), any
+    `.conflict-*`, clock skew, a committed **Class E** path (the live `.lfbridge/` + `.transcribe/`,
+    v1(i)), an orphaned device file (the live duplicate, v1(i)), a push that failed all retries (v1(g)
+    swallows it today), and **uncommitted SDL-root files older than 30 min**. **A repeating,
+    never-actioned warning is a defect** (§22.6).
+28. **One cross-process lock per working copy** (§25.3): a file lock at `<state>/sync/<storage-id>/git.lock`
+    with pid + started-at and a **10-minute stale takeover**, acquired by **every** git-touching path — the
+    pin cycle, the device worker, **owner propagation** (today a second, uncoordinated in-process chain over
+    the same index, v1(f)), and the CLI.
+29. **Producing an artifact schedules its own sync — the commit is never a side effect** (§18.5.3). Every
+    durable-artifact writer (describe / transcribe / OCR / compress / analysis / manifest / decisions)
+    commits an **outbox entry as the final atomic step of its own operation** — `markDurableArtifact(root)`
+    is the seam. **A writer that does not commit an outbox entry has not finished.** Today **no code path
+    exists whose purpose is to commit artifacts** (verified: zero git/pin references in `modules/describe/`,
+    `modules/transcribe/`, `modules/ocr/`); they ride as **stowaways** on the device worker's
+    `git add -A` — proven live by a HEAD commit of `13 files changed` = **12 `.ai_description` files (2,385
+    lines) + one `devices/bryan-mac-pro.yaml`**, titled `"LFB: backbone device state"` (v1(b), v1(c),
+    §18.5.1).
+30. **The acceptance test for §18.5: if the device worker were deleted tomorrow, artifacts must still reach
+    the server on time.** No artifact's delivery may depend on the device worker (§18.5.3.4). Today the
+    **pin worker is not installed at all** (`pin_process: installed:false`, v1(b2)) — so the device worker
+    is carrying 100 % of artifact synchronization, and spec §7's "backbone loop" **never runs on a
+    schedule** on that machine. A worker that is `installed:false` while its storages have pending work
+    **raises a warning** (§18.5.3.5, §25.2).
+31. **No silent nulls on a discovery or backbone-resolution path** (§18.5.3.6). Each of the six
+    **forever-cases F1–F6** (§18.5.2) — `getGitBackboneRemote` → null (`pin.service.ts:497-499`, **logs
+    nothing**), `safeStorageIds` `catch { return [] }` (`:554-561`), `discoverRoots`' **hardcoded path +
+    basename-only identity** (`storage.service.ts:248-271`, so a **directory rename silently destroys the
+    storage** — the live SDL has no `storage.yaml` to identify it by), a null working copy
+    (`git.service.ts:260-273`, INFO only), the device plist's **stale-scratchpad `StandardOutPath`**
+    (launchd **refuses to spawn** if it cannot create the path), and `getDedicatedRepoRemote`'s bare
+    `catch { return null }` (`storage-settings.service.ts:248-256`) — **must raise a warning naming the
+    storage and the reason.** An empty list must mean "there are none", never "I failed to find out".
+32. **A pass never ends dirty** (§18.5.3.7). A pass that finishes with uncommitted SDL-root files it could
+    have committed is a **failed pass** and reports as one. *"Modified locally, never checked in"* — the
+    reported symptom — must be **impossible to reach silently**.
+33. **The storage lock coalesces** (§18.5.4). At most **one** pass running and **one** queued per storage;
+    further requests **collapse into the queued one and share its promise**. A pass is a *reconciliation to
+    current state*, not a work item — running it twice is never more correct than running it once. This
+    repeals v1's unbounded FIFO (`pin.service.ts:371-383`), where every tick appends a closure, all of them
+    run back-to-back on release, the watchdog adds more every 5 minutes, and `passInFlight`
+    (`pin.service.ts:580-584`) does not gate the device path at all.
+34. **The live Personal repo is brought into compliance** (v1(i)): `storage.yaml`, `files.yaml`,
+    `manifest.yaml`, `mapped_dirs.yaml`, `bookmarks.yaml`, and `analysis/` are **written at the root** as
+    §1 and AC-2 already assert (they are **absent today**); the stray `.lfbridge/` and `.transcribe/` are
+    **retired once** (not warned about forever); and the orphaned `bryanstarbuck-macbook-pro.yaml` is
+    retired by its owner (§22.7).
+
+<!--
+  PART II = THE SYNCHRONIZATION ENGINE v2 (§16-§26). The shipped code is v1; every v1 claim below is
+  CITED at file:line and was VERIFIED against the live repo on 2026-07-16 — do not "correct" these from
+  memory, re-verify.
+  §16.1 SCOPE (LOCKED): Part II governs ONLY dedicated LFB file repos (Personal SDL + company sync repos)
+  where LFB is the SOLE AUTHOR — that is the LICENSE for headless auto-merge. A WORKING repo never gets
+  this engine (LFB is a guest there); misclassification = Sev-1. Keyed on storage KIND (storage-type.service
+  usesLfbridgeDir/trackingBaseDir), never path/name.
+  §16.2 THE V1 AUDIT — the load-bearing evidence:
+   (a) THE REPORTED BUG IS NOT REAL. Staging is `git add -A` (git.service.ts:491), NO allow-list.
+       SDL_ROOT_PAYLOAD (git.service.ts:41) is NOT a staging filter — only ignoresSdlPayload() consults it
+       to delete .gitignore LINES. Live: 1612 .ai_description TRACKED, .gitignore = only .DS_Store,
+       ls-files --others -i = 0. The 332 "missing" files were all mtime > HEAD's commit time and were swept
+       by the next pass at 15:30:41. It was LATENCY, not loss. Relocates the defect → (b).
+   (b) NOTHING AN ARTIFACT WRITER DOES TRIGGERS A SYNC. jobqueue has ZERO pin/git refs; its completion hook
+       (jobqueue.service.ts:362-365) only LOGS. grep of modules/describe|transcribe|ocr for any git/pin
+       symbol = EXIT 1, ZERO MATCHES. describe.service.ts:398-431 writes + markDurableArtifact (a PLACEMENT
+       LATCH, not a commit) + returns; its comment "so it travels with the repo" is ASPIRATIONAL and names
+       .lfbridge/ which an SDL doesn't have. 1,933 AI descriptions rode the DEVICE worker's git add -A by
+       luck. THE missing wire → §18.4 + §18.5.
+   (b2) THE PIN WORKER IS NOT INSTALLED. Live config.yaml: pin_process {installed:false, enabled:false};
+       device_process {installed:true, enabled:true, 10min, last_run_ok:true}; launchctl device runs=16,
+       exit 0, StartInterval 600. So pinStorageUnit — spec §7's "backbone loop" — NEVER RUNS on a schedule
+       here, and the DEVICE worker carries 100% of artifact sync. → AC-30.
+   (c) Commit msg is always "LFB: backbone device state" (git.service.ts:496) — 1900+ commits, mostly
+       .ai_description. Unauditable → §17.4.2.
+   (d) WINDOW IS UNBOUNDED: pull (pin.service.ts:412) → runUnitPin (431-455, ipfs.service.ts:85 timeoutMs:0,
+       catToFile no abort) → commitAndPush (462). PIN_CONCURRENCY bounds parallelism NOT duration → §18.2.
+   (e) SCHEDULE UNRELIABLE: live 100-MINUTE gap on a 10-min worker (20:18:33Z → 21:58:59Z); only the
+       in-process watchdog noticed+repaired. The watchdog is LOAD-BEARING, not belt-and-braces.
+   (f) TWO UNCOORDINATED LOCKS: withStorageGitLock (pin.service.ts:371-383, in-process only) vs
+       owner-propagation.service.ts:59-64 withCompanyGitLock — same working copy, two chains → §25.3.
+   (g) NFF retry (git.service.ts:514-527) fires on ANY push error, once, and DISCARDS the original `e`.
+   (h) merge has NO -X flags (git.service.ts:394); conflict → merge --abort (424). The ONLY headless
+       resolution in v1 is autoResolveRepoStorageConflicts (450, git rm -f) → §23.
+   (i) LIVE REPO OUT OF COMPLIANCE: root = _Mirror/.git/.gitattributes/.gitignore/.lfbridge/.transcribe/
+       devices/README.md. storage.yaml, files.yaml, manifest.yaml, mapped_dirs.yaml, bookmarks.yaml,
+       analysis/ ARE ABSENT (§1/AC-2 assert they exist — they were NEVER WRITTEN). Stray .lfbridge/ warns
+       EVERY PASS forever. .transcribe/ violates Transcribe §3.4. devices/ has an ORPHAN
+       (bryanstarbuck-macbook-pro.yaml + bryan-mac-pro.yaml = ONE computer, renamed) → §22.7, AC-29.
+   (j) LargeFilesBridge_SyncList.yaml is VESTIGIAL — in UNION_MERGE_PATHS (git.service.ts:31) + §1's tree
+       but NO CODE WRITES IT. Build or strike.
+  §16.3 MODEL: convergent replica; merge fn must be TOTAL + HEADLESS. Invariants, LOWER NUMBER WINS:
+   1 never lose data, 2 always converge ("quietly dirty forever" = DEFECT), 3 converge fast.
+  §17 FOUR STAGES: PULL (clean-tree PRECONDITION — true only because producers write to the OUTBOX, not the
+   tree; dirty tree → salvage as op:observed, reset to HEAD, merge, re-apply — NEVER git stash) → WRITE+
+   RECONCILE (drain outbox against MERGED tree; byte work EVICTED) → RESOLVE (headless) → PUSH (descriptive
+   msg; log the original error; 3 retries w/ backoff 0/2/8s; push-when-ahead is BUILT+correct — it heals a
+   committed-but-unpushed pass).
+  §18 TIMING: cadences BUILT (device 10min schemas.ts:234, pin 15min :216, scan 2h :248, watchdog 5min
+   check + overdue=interval*2+120s). §18.3 MATH: P(collision) ≈ (N−1)·W/T. v2 two computers W=5s T=600s ≈
+   0.8%. v1 FIRST SYNC W=3600s+ > T=900s → collision CERTAIN, CANNOT CONVERGE. That row is the point.
+   A collision ≠ a conflict (needs BOTH to edit the same file). §18.4 event-driven: 20s debounce/120s max +
+   batch-completion enqueue; timer+watchdog = the floor.
+  §18.5 THE STOWAWAY DEFECT = THE ROOT CAUSE of "modified locally but never checked in". NO CODE PATH HAS
+   COMMITTING ARTIFACTS AS ITS PURPOSE — not one. Artifacts ride as STOWAWAYS on the DEVICE worker's
+   pathspec-less git add -A. PROOF (live HEAD after the 15:40:45 pass): "13 files changed" = 12
+   .ai_description (2385 lines) + devices/bryan-mac-pro.yaml — the ONLY file the pass INTENDED to commit —
+   titled "LFB: backbone device state". The DEFECT IS THE ARCHITECTURE, not the latency: the commit is a
+   SIDE EFFECT, so its timing is governed by something with no relationship to the work (hence the uneven
+   gaps: 14:22→14:52 = 30min, 15:09→15:30 = 21min, on a 10-MINUTE worker).
+   §18.5.2 SIX FOREVER-CASES, each SILENT (F1 getGitBackboneRemote→null pin.service.ts:497-499 logs NOTHING
+   and ran:false ≡ "not attempted"; F2 safeStorageIds catch{return []} :554-561; F3 discoverRoots HARDCODES
+   the personal path + classifyByConvention types by BASENAME (storage.service.ts:240,248-271) and the live
+   SDL has NO storage.yaml → RENAME THE DIR = THE STORAGE CEASES TO EXIST; F4 resolveWorkingCopy/hasOrigin
+   null git.service.ts:260-273 INFO-only; F5 the device plist's StandardOutPath points at a STALE SESSION
+   SCRATCHPAD — launchd REFUSES TO SPAWN if it can't create the path, watchdog is the only backstop and only
+   while the app runs; F6 getDedicatedRepoRemote bare catch{return null} storage-settings.service.ts:248-256).
+   THE LIVE STORAGE SURVIVES ON TWO ACCIDENTS: the hardcoded path + the auto-adopt fallback
+   (storage-settings.service.ts:281-284, personal/company whose root happens to have .git). WORKING BY LUCK.
+   §18.5.3 THE RULE (LOCKED): PRODUCING A DURABLE ARTIFACT SCHEDULES ITS OWN SYNC; the commit is the WORK'S
+   event, never another worker's side effect. markDurableArtifact(root) is the SEAM. A writer that didn't
+   commit an outbox entry HASN'T FINISHED. THE ACCEPTANCE TEST: delete the device worker tomorrow →
+   artifacts must STILL reach the server on time. No silent nulls on discovery/resolution paths — an empty
+   list must mean "there are none", NEVER "I failed to find out". A pass that ends dirty is a FAILED pass.
+   §18.5.4 withStorageGitLock is an UNBOUNDED FIFO, not a mutex with drop semantics: every tick appends a
+   closure, ALL run back-to-back on release (thrash, not dedup), the watchdog appends MORE every 5min (its
+   `ticking` single-flights TICKS, not lock WAITERS), passInFlight only gates pinAll (:580-584) so the
+   device path has ZERO in-flight collapsing, and run-worker.mjs's 60s abort does NOT stop the work (Express
+   doesn't propagate client disconnect; internal.router.ts:31-35 keeps enqueueing). v2 = COALESCING lock:
+   1 running + 1 queued, extras collapse into the queued one and SHARE ITS PROMISE. A pass is a
+   RECONCILIATION TO CURRENT STATE, not a work item — running it twice is never more correct than once.
+  §19 OUTBOX (NEW; does NOT exist in v1 — verified: no staging area, no pending queue, no debounce on the
+   git path). ~/T/_large_files_bridge/outbox/<storage-id>/ — MACHINE-LOCAL, NEVER committed. Filename
+   <padded-epoch-ms><rand> so lexical sort = commit order. Producer contract: payload first, .entry.yaml
+   ATOMICALLY LAST (rename = the commit record). §19.5 DURABILITY is LOCKED and learned from the real
+   4.1GB-OOM/1440-file loss: on-disk, atomic, re-drained at boot; non-empty at boot is NORMAL.
+  §20 SCHEMA: mandatory header schema/updated_at/updated_by. §20.2 LOGICAL TIME (produced_at, not sync
+   time) — else the SLOWEST machine dominates. §20.3 clocks are a HINT (content BEFORE time; >24h future =
+   untrusted). §20.4 higher schema = read-only, unknown keys PRESERVED — an older peer must never downgrade
+   a newer one (silent field-drop = data loss wearing a merge's clothes).
+  §21 INVENTORY (23 rows) + the 5 CLASSES A/B/C/D/E. §21.2 THE TIMESTAMP SPLIT: writeYaml (yaml-store.ts:63)
+   stamps ONLY #1/#3/#5/#15; git-tracked files bypass it DELIBERATELY (manifest.service.ts:1-7 — volatile
+   stamp ⇒ non-byte-identical ⇒ spurious commits/conflicts). That reason is SOUND and v2 KEEPS it — it was
+   just applied too broadly. B = no file stamp/per-entry; D = MUST stamp but only on real content change;
+   C = source hash matters, write time doesn't.
+  §22 PERMUTATIONS. §22.0 universal pre-checks FIRST (identical content kills most "conflicts"). A owner
+   wins; B union+fold (NEVER delete from a log — union RESURRECTS; use tombstones); B-special manifest
+   (pin BEATS unpin; never drop a CID); C derived = keyed (source_path, source_hash, generator, version),
+   FIDELITY BEATS NEWER (qwen3 > later whisper) — THIS is why "newest wins" is wrong globally; deletion of
+   derived = LOCAL act, never a network assertion. D = FIELD-LEVEL never blob; sets UNION (add beats
+   remove); absence ≠ delete. E = not a merge, a BUG.
+   MUST-FIX v1 defects: §22.2.1 sidecar mirror copyFileSync DROPS peer events (tracking-sync.service.ts:68,
+   and :83 CONCEDES it — "a later refinement", now DUE); §22.4.2 files.yaml (no ts/no device id/not in
+   UNION_MERGE_PATHS/whole rewrite; its modified/created are MEDIA mtimes = useless for LWW; survives only
+   because it's never written = a defect MASKING a defect); §22.4.3 repo_storage.yaml last_scan.at churn
+   (keep the git rm -f hatch — correct, it's Class C — but it should STOP FIRING).
+  §23 HEADLESS (LOCKED): launchd at 03:00, nobody logged in ⇒ a resolution needing a human is NOT one.
+   TWO PROHIBITIONS: never force-push (v1 honors — KEEP), never resolve by discarding (no checkout
+   --theirs/--ours, no reset --hard, NO STASH — strands data in an unread ref); sole exception = Class E.
+   9-RUNG LADDER, every rung DETERMINISTIC (both machines agree WITHOUT talking = why convergence works).
+   Rung 9 = KEEP BOTH/quarantine <path>.conflict-<device>-<ts>, COMMITTED+PUSHED so convergence survives an
+   unanswered semantic question. §23.2 REGENERATION BEATS ARBITRATION (Class C only — why §21 is
+   load-bearing). §23.4 the repo classification IS the license for the algorithm.
+  §24 PRIORITY: filesystem truth > self-owned owner > user's explicit decision > safety-asymmetric >
+   FIDELITY > later logical time > lowest device_id. NO DEVICE HAS STANDING (no primary/server-of-record).
+   §24.2 REJECTED: newest-wins, pusher-wins (= v1's accidental behavior), biggest-wins, ask-the-user.
+   §24.4 the engine may CHOOSE, never DESTROY — loser always recoverable.
+  §25 OBSERVABILITY: SILENCE IS THE DEFECT. last_pass.yaml + window_ms (THE metric). Warn on: blown window,
+   outbox stuck >30min (THE REPORTED SYMPTOM, now detected), failed entries, stalled pass (the live 100-min
+   gap), any .conflict-*, clock skew, committed Class E, orphaned device file, push failed all retries,
+   uncommitted SDL-root files >30min. A repeating never-actioned warning IS a defect.
+  §25.3 ONE cross-process file lock per working copy (10-min stale takeover) — every git path incl. owner
+   propagation + CLI.
+  §26 AC 14-29. Keep aligned with git_backbone.mdx (engine), job_queue.mdx (byte work + batch hook),
+   devices.mdx (identity/§22.7), decisions.mdx (Class B fold), warnings.mdx (§25), backbone_resilience.mdx
+   (watchdog/foreign committer), repo_owner_propagation.mdx (§22.8 consent gate), artifact_placement_policy
+   §0 (the kind rule §16.1 leans on).
+-->
 
 <!--
   Personal storage = the user's OWN private big files, and the CANONICAL Git-backbone use case: one user,

@@ -15,6 +15,7 @@ import { HARD_SKIP } from "../../shared/scan-filters.js";
 import { expandHome } from "../fs/badges.js";
 import { resolveArtifactPlacement, artifactPathForPlacement, TRANSCRIPTION_EXT } from "../storage/artifact-placement.service.js";
 import { markDurableArtifact } from "../storage/tracking-root.service.js";
+import { noteArtifactWritten } from "../pin/sync-trigger.service.js";
 import { repoArtifactPlacement } from "../store-model/units.service.js";
 import { getStorageDetail } from "../storage/storage.service.js";
 import { track } from "../progress/progress.registry.js";
@@ -144,6 +145,9 @@ export async function transcribeOne(input: string, overwrite = false): Promise<T
         // Cross the content threshold (artifact_placement_policy.mdx §2): this repo has now produced a durable
         // user artifact, so its `.lfbridge/` tracking placement is justified from here on (a one-way latch).
         markDurableArtifact(root);
+        // THE WRITE IS THE TRIGGER (storage_personal.mdx §18.5.3.1 / AC-29) — producing a durable artifact
+        // schedules its own sync, so a transcript never again depends on the device worker's `git add -A`.
+        noteArtifactWritten(transcriptPath, "transcripts");
         log.info("transcribe", `${abs} → ${transcriptPath} (${r.words ?? 0} words, ${r.engineUsed})`);
       } else if (status === "tool_missing" || status === "failed") {
         // Report truthfully to the durable fault trail (Transcribe.mdx §1 "report truthfully" + charter logging):

@@ -339,15 +339,22 @@ export interface NodePosture {
 
 const LOOPBACK = /\/ip4\/127\.0\.0\.1\/|\/ip6\/::1\//;
 
-/** Read the live node config for the card; falls back to app-config values when unreachable. */
+/**
+ * Read the live node config for the card. Reports ONLY what the node itself says — app config is our
+ * INTENT and is never substituted for evidence about the node (see the unreachable branch below).
+ */
 export async function nodePosture(): Promise<NodePosture> {
-  const cfg = getAppConfig();
   try {
     const strat = await readReprovideStrategy();
+    // NEVER READ SILENCE AS SAFETY (charter; ipfs.mdx §3.2). An UNSET strategy is not "whatever we intended"
+    // — it is Kubo's own default, which is `all`: the node announces EVERY block it holds, including
+    // incidentally-cached third-party content. Falling back to `cfg.ipfs.reprovide_strategy` (default
+    // "pinned") made an untouched node render "Reprovide: pinned ✓" and pass `compliant` while it was in
+    // fact announcing everything — the exact silence-is-safety bug §3.2 exists to kill, surviving on the
+    // CONTENT vector after it was fixed on the two TRAFFIC vectors. App config is our INTENT; only the
+    // node's live config is the truth, and when the node is silent the truth is Kubo's default.
     const reprovideStrategy =
-      strat === "pinned" || strat === "roots" || strat === "all"
-        ? (strat as "pinned" | "roots" | "all")
-        : cfg.ipfs.reprovide_strategy;
+      strat === "pinned" || strat === "roots" || strat === "all" ? (strat as "pinned" | "roots" | "all") : "all";
     const gwAddr = await getConfigKey("Addresses.Gateway");
     const gateways = (Array.isArray(gwAddr) ? gwAddr.map(String) : gwAddr ? [String(gwAddr)] : []).filter(Boolean);
     // NO gateway is the safest state (nothing served publicly) → local-only. A configured gateway is
@@ -365,15 +372,17 @@ export async function nodePosture(): Promise<NodePosture> {
       dhtClientOnly: await readDhtClientOnly(),
     };
   } catch (e) {
-    // Node unreachable — report the configured intent for the card rather than nothing.
-    log.debug("ipfs", `nodePosture falling back to config (node unreachable): ${(e as Error).message}`);
+    // Node unreachable — CLAIM NOTHING (ipfs.mdx §3.2; ipfs_ui.mdx §13.1 "don't report what you didn't
+    // verify"). We cannot read ANY vector, so none may render a reassuring ✓. Kubo's defaults are the
+    // NON-compliant direction on every one of the four, and our app config is our INTENT, never evidence
+    // about the node: `reprovide_strategy` defaults to "pinned" and `public_gateway` to false, so reporting
+    // intent here painted a fully green card for a node we could not even reach. The rule was already
+    // applied to the two traffic vectors; it applies to all four.
+    log.debug("ipfs", `nodePosture cannot read the node (unreachable): ${(e as Error).message}`);
     return {
-      reprovideStrategy: cfg.ipfs.reprovide_strategy,
-      gatewayLocalOnly: !cfg.ipfs.public_gateway,
-      gcOn: true,
-      // Can't read the node → can't claim these. Kubo's defaults are the NON-compliant direction, so
-      // an unknown must never render as a reassuring ✓ (the same "don't report what you didn't verify"
-      // rule as ipfs_ui.mdx §13.1).
+      reprovideStrategy: "all",
+      gatewayLocalOnly: false,
+      gcOn: false,
       relayServiceOff: false,
       dhtClientOnly: false,
     };
@@ -439,12 +448,23 @@ async function readReprovideStrategy(): Promise<string> {
   return String((await getConfigKey("Reprovider.Strategy")) ?? "").toLowerCase();
 }
 
-/** True if the running node announces only our own pinned content and runs no public gateway. */
+/**
+ * True if the running node announces only our own pinned content, runs no public gateway, AND carries none
+ * of other people's traffic — ALL FOUR charter vectors (ipfs.mdx §3.2).
+ *
+ * ONE SOURCE OF TRUTH. This used to check the reprovide strategy ALONE, while `nodeStatus()`
+ * (ipfs-node.service.ts) and `computeIpfsPage()` checked all four — so the Settings page, which reads this,
+ * would render a green "compliant ✓" for a node that was relaying strangers' connections and serving their
+ * DHT queries. Two compliance predicates that disagree is worse than either one: the user sees whichever
+ * page happens to be kinder. The verdict now folds the same four vectors everywhere, from the same posture.
+ */
 export async function isCompliant(): Promise<boolean> {
   try {
-    const strat = await readReprovideStrategy();
-    // "pinned" or "roots" are compliant; empty defaults to "all" which is NOT.
-    return strat === "pinned" || strat === "roots";
+    const p = await nodePosture();
+    // `nodePosture` already resolves an UNSET strategy to Kubo's real default ("all" → non-compliant) and
+    // never reads our app-config intent as if it were the node's state.
+    const contentOnlyOurs = p.reprovideStrategy === "pinned" || p.reprovideStrategy === "roots";
+    return contentOnlyOurs && p.gatewayLocalOnly && p.relayServiceOff && p.dhtClientOnly;
   } catch (e) {
     // Node unreachable -> we can't verify; treat as non-blocking (health handles the red pill).
     log.debug("ipfs", `compliance check skipped (node unreachable): ${(e as Error).message}`);
@@ -452,13 +472,19 @@ export async function isCompliant(): Promise<boolean> {
   }
 }
 
-/** Bring the node into compliance (unless the user opted out on this machine). */
+/**
+ * Bring the node into compliance with the charter's only-our-content / no-relay default.
+ *
+ * SCOPE OF THE OPT-OUT (charter; ipfs.mdx §3.1/§3.2). The `public_gateway` setting opts this machine out of
+ * ONE thing — the loopback-only GATEWAY — and nothing else. It used to `return` from this whole function,
+ * so flipping that one setting silently disabled relay AND DHT AND reprovide enforcement too: the machine
+ * stayed a circuit-relay v2 server and a DHT server for strangers (both default ON in Kubo), the card
+ * correctly showed red because the READ path is independent, and the Fix button became a no-op. Serving our
+ * own content on a public gateway is a choice a user can make; carrying OTHER people's traffic is the thing
+ * the charter bans outright, and the two were never the same decision.
+ */
 export async function enforceCompliance(): Promise<void> {
   const cfg = getAppConfig();
-  if (cfg.ipfs.public_gateway) {
-    log.warn("ipfs", "public_gateway is ON — machine opted out of only-our-content default.");
-    return;
-  }
   try {
     const strat = await readReprovideStrategy();
     if (strat !== "pinned" && strat !== "roots") {
@@ -495,7 +521,12 @@ export async function enforceCompliance(): Promise<void> {
       const gwAddr = await getConfigKey("Addresses.Gateway");
       const gateways = (Array.isArray(gwAddr) ? gwAddr.map(String) : gwAddr ? [String(gwAddr)] : []).filter(Boolean);
       const exposesPublic = gateways.some((a) => !LOOPBACK.test(a));
-      if (exposesPublic) {
+      // THE OPT-OUT LIVES HERE, AND ONLY HERE — it governs the gateway rebind, never the traffic vectors below.
+      if (cfg.ipfs.public_gateway) {
+        if (exposesPublic) {
+          log.warn("ipfs", "public_gateway is ON — leaving the public gateway in place (machine opted out of the loopback-only default).");
+        }
+      } else if (exposesPublic) {
         // Kubo's Addresses.Gateway is a single multiaddr string; rebind it to our loopback default.
         await setConfigKey("Addresses.Gateway", cfg.ipfs.gateway_addr);
         log.info("ipfs", `Rebound Addresses.Gateway = ${cfg.ipfs.gateway_addr} (loopback-only, no public gateway).`);

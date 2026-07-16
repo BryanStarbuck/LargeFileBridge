@@ -493,7 +493,7 @@ export class GitBackbone {
       const hasStaged =
         staged.staged.length > 0 || staged.created.length > 0 || staged.renamed.length > 0 || staged.deleted.length > 0;
       if (hasStaged) {
-        await this.git.commit("LFB: backbone device state"); // -m message → no editor invoked
+        await this.git.commit(composeCommitMessage(staged)); // -m message → no editor invoked
         result.committed = true;
       }
     } catch (e) {
@@ -513,6 +513,10 @@ export class GitBackbone {
       result.pushed = true;
     } catch (e) {
       // Likely a non-fast-forward reject: pull (fetch+merge) then push once more (git_backbone.mdx §6).
+      // LOG THE CAUSE (storage_personal.mdx §16.2(g) / §17.4.3): this error was previously captured and
+      // never read, so an auth failure and a routine NFF race were indistinguishable in the log — and if the
+      // retry then SUCCEEDED, the fact that anything went wrong vanished entirely.
+      log.warn("git", `push rejected (${classifyRemoteError(e as Error)}) — re-pulling and retrying once`);
       const retry: GitCycleResult = { ran: true };
       await this.pull(retry);
       if (retry.conflicts?.length) {
@@ -538,6 +542,56 @@ export class GitBackbone {
  * The single canonical impl (badges.ts re-exports this) so "which repo owns this path" is answered
  * one way everywhere.
  */
+/**
+ * Compose an HONEST commit message from what is actually staged (storage_personal.mdx §17.4.2 / AC-26).
+ *
+ * Every LFB commit used to be titled "LFB: backbone device state" — including the ones that were almost
+ * entirely the user's work. Proven live on 2026-07-16: a HEAD commit of `13 files changed` = 12
+ * `.ai_description` files (2,385 lines) + one `devices/*.yaml`, all labelled "device state" (§16.2(c)).
+ * 1,900+ such commits made the history unreadable and unauditable. The blanket title stays legal ONLY when
+ * device state is genuinely all that changed.
+ *
+ * Format: `LFB: <comma-separated counted categories>` — categories derived from the staged paths by the same
+ * classification the spec's §21 inventory uses.
+ */
+export function composeCommitMessage(staged: {
+  staged: string[];
+  created: string[];
+  renamed: Array<{ from: string; to: string }>;
+  deleted: string[];
+}): string {
+  const paths = [
+    ...staged.staged,
+    ...staged.created,
+    ...staged.deleted,
+    ...staged.renamed.map((r) => r.to),
+  ];
+  const counts = new Map<string, number>();
+  const bump = (k: string): void => void counts.set(k, (counts.get(k) ?? 0) + 1);
+
+  for (const p of new Set(paths)) {
+    if (p.endsWith(".ai_description")) bump("AI descriptions");
+    else if (p.endsWith(".ai_description_rejected")) bump("AI refusals");
+    else if (p.endsWith(".transcription")) bump("transcripts");
+    else if (p.endsWith(".ocr")) bump("OCR texts");
+    else if (p.startsWith("devices/") || p.includes("/devices/")) bump("device state");
+    else if (p.endsWith("manifest.yaml")) bump("manifest");
+    else if (p.endsWith("decisions.yaml")) bump("decisions");
+    else if (p.endsWith("files.yaml") || p.endsWith("repo_storage.yaml")) bump("tracking");
+    else if (p.startsWith("analysis/") || p.includes("/analysis/")) bump("analysis");
+    else bump("other files");
+  }
+  if (counts.size === 0) return "LFB: backbone device state";
+
+  // Device state is the ambient noise of every pass — name it last so the user's work leads the subject.
+  const order = (k: string): number => (k === "device state" ? 1 : 0);
+  const parts = [...counts.entries()]
+    .sort((a, b) => order(a[0]) - order(b[0]) || b[1] - a[1])
+    .map(([k, n]) => (k === "device state" || k === "manifest" || k === "tracking" ? k : `${n} ${k}`));
+
+  return `LFB: ${parts.join(", ")}`;
+}
+
 export function nearestGitAtOrAbove(dir: string): string | null {
   let cur = path.resolve(dir);
   for (;;) {

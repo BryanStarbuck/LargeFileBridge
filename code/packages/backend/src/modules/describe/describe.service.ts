@@ -23,6 +23,7 @@ import {
   AI_DESCRIPTION_REJECTED_EXT,
 } from "../storage/artifact-placement.service.js";
 import { markDurableArtifact } from "../storage/tracking-root.service.js";
+import { noteArtifactWritten } from "../pin/sync-trigger.service.js";
 import { repoArtifactPlacement } from "../store-model/units.service.js";
 import { track } from "../progress/progress.registry.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
@@ -422,6 +423,12 @@ export async function describeOne(
         // Cross the content threshold (artifact_placement_policy.mdx §2): an AI description ALONE is a durable
         // user artifact, so this repo's `.lfbridge/` tracking placement is justified from here on (one-way latch).
         markDurableArtifact(root);
+        // THE WRITE IS THE TRIGGER (storage_personal.mdx §18.5.3.1 / AC-29): scheduling this storage's sync is
+        // the final step of producing the artifact. Before this, an AI description reached the server only as a
+        // STOWAWAY on the device worker's `git add -A` — so it sat uncommitted for 10-30 min, or forever if any
+        // of the six §18.5.2 forever-cases applied. Fire-and-forget: the description IS written; a sync fault is
+        // reportable (it warns inside), never a reason to fail the call the user is waiting on.
+        noteArtifactWritten(descriptionPath, "AI descriptions");
         // The provider just SERVED a real call — date its last-known-good (to_fix.mdx §2.6). The mirror of the
         // `noteProviderFailure` in the catch below: every describe folds into health exactly once, so Settings
         // → AI can say "Gemini last worked at 19:47" instead of only "a key is configured".

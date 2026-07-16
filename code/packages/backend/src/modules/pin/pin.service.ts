@@ -363,23 +363,71 @@ function resolveStorageAbs(root: string, rel: string, mappedKeys: Set<string>): 
   return path.join(root, rel); // pre-mapped-dir model: the file lives under the SDL root
 }
 
-// Serialize all Git-cycle work PER STORAGE. The every-10-min device worker and the every-15-min pin pass
-// (plus a manual Pin now) all hit THIS one backend process over loopback, and their cadences coincide —
-// two of them running git add/commit/push in the SAME working copy at once corrupts the index. This keyed
-// chain guarantees at most one pass touches a given storage's repo at a time; different storages still run
-// concurrently. In-process is sufficient because every trigger routes through this single process.
-const storageGitChain = new Map<string, Promise<unknown>>();
+// Serialize all Git-cycle work PER STORAGE. The every-10-min device worker, the every-15-min pin pass, a
+// manual Pin now, and the artifact sync trigger (sync-trigger.service.ts) all hit THIS one backend process
+// over loopback, and their cadences coincide — two of them running git add/commit/push in the SAME working
+// copy at once corrupts the index. This guarantees at most one pass touches a given storage's repo at a
+// time; different storages still run concurrently.
+//
+// COALESCING, not an unbounded FIFO (storage_personal.mdx §18.5.4 / AC-33 — CHANGED). The previous
+// implementation chained EVERY caller: `prev.then(fn, fn)`. Under a long hold (a first-sync pin pass doing
+// unbounded IPFS work) every 10-min tick appended another closure, nothing coalesced them, and when the lock
+// finally freed they ALL ran back-to-back — each paying a full fetch + push. The watchdog, seeing the worker
+// overdue, appended MORE every 5 minutes; its single-flight guards overlapping TICKS, not accumulating lock
+// WAITERS. That is thrash, not dedup.
+//
+// A pass is a RECONCILIATION TO CURRENT STATE, not a work item: running it twice is never more correct than
+// running it once. So we keep at most ONE running + ONE queued per storage, and any further request while one
+// is already queued COLLAPSES into it and shares its promise.
+interface GitLockState {
+  /** The in-flight holder — resolves when the current pass settles. */
+  running: Promise<unknown>;
+  /** The single queued successor, if any. Further callers share this exact promise. */
+  queued: Promise<unknown> | null;
+}
+const storageGitLocks = new Map<string, GitLockState>();
+
 function withStorageGitLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
-  const prev = storageGitChain.get(id) ?? Promise.resolve();
-  const run = prev.then(fn, fn); // run after the previous holder settles, success or failure
-  storageGitChain.set(
-    id,
-    run.then(
-      () => {},
-      () => {},
-    ), // keep the chain alive; swallow errors so one failure never poisons the next waiter
+  const state = storageGitLocks.get(id);
+
+  // Nothing running — take the lock immediately.
+  if (!state) {
+    const running = (async () => fn())();
+    const entry: GitLockState = { running, queued: null };
+    storageGitLocks.set(id, entry);
+    void running.then(
+      () => releaseStorageGitLock(id, entry),
+      () => releaseStorageGitLock(id, entry),
+    );
+    return running as Promise<T>;
+  }
+
+  // Something is queued already — collapse into it. The queued pass has not started, so it will observe
+  // everything this caller wanted synced. Returning its promise means N callers await ONE pass.
+  if (state.queued) return state.queued as Promise<T>;
+
+  // One is running, none queued — queue exactly one successor.
+  const queued = state.running.then(
+    () => fn(),
+    () => fn(), // a failed holder must not poison its successor
   );
-  return run;
+  state.queued = queued;
+  return queued as Promise<T>;
+}
+
+/** Promote the queued pass (if any) to running when the current holder settles; else drop the lock entry. */
+function releaseStorageGitLock(id: string, entry: GitLockState): void {
+  if (storageGitLocks.get(id) !== entry) return; // superseded already
+  if (!entry.queued) {
+    storageGitLocks.delete(id);
+    return;
+  }
+  const promoted: GitLockState = { running: entry.queued, queued: null };
+  storageGitLocks.set(id, promoted);
+  void promoted.running.then(
+    () => releaseStorageGitLock(id, promoted),
+    () => releaseStorageGitLock(id, promoted),
+  );
 }
 
 /**
@@ -486,10 +534,26 @@ async function pinStorageUnitInner(id: string): Promise<void> {
  * on the same repo.
  */
 export function ensureDeviceRegistered(id: string): Promise<GitCycleResult> {
-  return withStorageGitLock(id, () => ensureDeviceRegisteredInner(id));
+  return withStorageGitLock(id, () => syncStorageTextInner(id, "device-reg"));
 }
 
-async function ensureDeviceRegisteredInner(id: string): Promise<GitCycleResult> {
+/**
+ * Commit + push ONE storage's SDL text — the GIT-ONLY cycle, with no IPFS byte work in the middle
+ * (storage_personal.mdx §18.2: no unbounded operation may sit between the pull and the push, so the
+ * conflict window stays inside its 60s budget instead of spanning an unbounded `runUnitPin`).
+ *
+ * This is the entry point for THE WRITE IS THE TRIGGER (§18.5.3.1): sync-trigger.service.ts calls it a
+ * debounced ~20s after an artifact lands. It is deliberately the SAME cycle the device worker runs, exposed
+ * under an honest name — before this existed, transcripts and AI descriptions reached the server only as
+ * STOWAWAYS on `ensureDeviceRegistered`, a function whose stated purpose is to write one small YAML
+ * (§18.5.1). Artifacts must never again depend on the device worker: AC-30's test is that deleting the
+ * device worker tomorrow leaves artifact delivery intact.
+ */
+export function syncStorageText(id: string): Promise<GitCycleResult> {
+  return withStorageGitLock(id, () => syncStorageTextInner(id, "sync"));
+}
+
+async function syncStorageTextInner(id: string, tag: string): Promise<GitCycleResult> {
   const result: GitCycleResult = { ran: false };
   const row = getStorageRow(id);
   if (!row || row.type === "local" || row.type === "repo") return result;
@@ -499,12 +563,26 @@ async function ensureDeviceRegisteredInner(id: string): Promise<GitCycleResult> 
   const gitBackbone = gitRemote ? await GitBackbone.resolve(id, gitRemote.remote) : null;
   result.ran = gitBackbone !== null;
 
+  // §18.5.2 F1 / AC-31 — NO SILENT NULLS. A storage that is discovered but has no resolvable backbone used
+  // to return here having written a device file that nothing would ever commit: no log, no warning, and a
+  // `ran:false` indistinguishable from "not attempted". That is the first and worst of the six forever-cases
+  // — artifacts accumulate on disk forever with no diagnostic anywhere. Say so, once it matters.
+  if (!gitBackbone) {
+    log.warn(
+      "pin",
+      `${tag} storage ${id} (${row.type}) has NO resolvable git backbone — its text (device file, transcripts, ` +
+        `AI descriptions) is written locally but will NEVER be committed or pushed. ` +
+        `${gitRemote ? `The remote "${gitRemote.remote}" did not resolve to a working copy.` : `No dedicated repo is configured and ${root} has no .git directory.`}`,
+    );
+    // Still refresh the local device file below so it is ready the moment a backbone is turned on.
+  }
+
   // 1. PULL first — fetch + auto-merge before we modify anything (never on a storage without a backbone).
   if (gitBackbone) {
     await gitBackbone.pull(result).catch((e) => {
       result.problem = `Git pull failed: ${(e as Error).message}`;
     });
-    if (result.problem) log.warn("pin", `device-reg storage ${id} git: ${result.problem}`);
+    if (result.problem) log.warn("pin", `${tag} storage ${id} git: ${result.problem}`);
   }
 
   // 2. WRITE/UPDATE this device's own file (self-owned). Runs even without a backbone so the local file
@@ -512,7 +590,7 @@ async function ensureDeviceRegisteredInner(id: string): Promise<GitCycleResult> 
   try {
     writeSelfDevice(root);
   } catch (e) {
-    log.warn("pin", `device-reg writeSelfDevice for storage ${id} failed: ${(e as Error).message}`);
+    log.warn("pin", `${tag} writeSelfDevice for storage ${id} failed: ${(e as Error).message}`);
   }
 
   // 3. COMMIT + PUSH this device's own SDL text (skips an empty commit; non-fast-forward retry inside).
@@ -520,8 +598,8 @@ async function ensureDeviceRegisteredInner(id: string): Promise<GitCycleResult> 
     await gitBackbone.commitAndPush(result).catch((e) => {
       result.problem = `Git push failed: ${(e as Error).message}`;
     });
-    if (result.problem) log.warn("pin", `device-reg storage ${id} git: ${result.problem}`);
-    else if (result.pushed) log.info("pin", `device-reg storage ${id} git: pushed device info to remote`);
+    if (result.problem) log.warn("pin", `${tag} storage ${id} git: ${result.problem}`);
+    else if (result.pushed) log.info("pin", `${tag} storage ${id} git: pushed SDL text to remote`);
   }
   return result;
 }
