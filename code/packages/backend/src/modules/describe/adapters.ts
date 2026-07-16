@@ -8,6 +8,7 @@
 // description UPLOADS the chosen file's bytes to the selected provider. It is ALWAYS an explicit,
 // user-initiated action (a Generate click), never automatic, and it is entirely separate from the
 // charter's local-only perceptual-fingerprint feature (which must never phone home).
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import type { MediaKind, DescribeProvider } from "@lfb/shared";
@@ -15,6 +16,7 @@ import { getAppConfig } from "../store-model/config.service.js";
 import { loadGoogleApiKey, hasGoogleApiKeyFile } from "../../config/google-apikey-file.js";
 import { DEFAULT_GEMINI_MODEL, DEFAULT_GROK_MODEL, DEFAULT_OPENAI_MODEL, looksLikeModelRetired } from "./models.js";
 import { log } from "../../shared/logging.js";
+import { txnBegin, txnEnd } from "../../shared/transactions.js";
 
 export type ProviderId = "gemini" | "grok" | "openai";
 
@@ -23,6 +25,9 @@ export interface DescribeInput {
   kind: MediaKind; // "image" | "video" (audio is not described here)
   mimeType: string;
   prompt: string;
+  /** The owning `describe` txn id, so this call's `provider_call` ledger pair carries `parent=` and one
+   *  `grep <txn>` reconstructs the file's whole story out of 24 interleaved siblings (transactions_log.mdx §4). */
+  parent?: string;
 }
 export interface DescribeAdapter {
   id: ProviderId;
@@ -33,6 +38,16 @@ export interface DescribeAdapter {
   available(): boolean;
   /** Describe the file. Returns the description text + the exact model id used. Throws on any failure. */
   describe(input: DescribeInput): Promise<{ text: string; model: string }>;
+  /**
+   * PREFLIGHT (to_fix.mdx §2.5): the cheapest call that proves this account can actually serve work RIGHT
+   * NOW. Throws on failure, exactly like `describe`, so `classifyProviderFault` reads its error the same way.
+   *
+   * It must exercise the **quota/billing path**, not merely the auth path — that is the whole point. A
+   * models-list call 200s on a credit-dead account and would have cheerfully waved the 2026-07-15 batch
+   * through; a real (tiny) generation is the only thing that gets a truthful answer, and it costs a handful
+   * of tokens once per batch rather than 1,440 doomed uploads.
+   */
+  probe(): Promise<void>;
 }
 
 // Inline-upload byte cap. Gemini/OpenAI/Grok inline (base64) requests are bounded (~20MB); base64
@@ -47,17 +62,46 @@ function firstEnv(...names: string[]): string | null {
   return null;
 }
 
+// ── the upload payload path — MEMORY DISCIPLINE (memory.mdx P-29) ────────────────────────────────────
+// One file used to be resident THREE to FOUR times over at once here, and that is what killed the backend on
+// 2026-07-15: an 18MB file became ~18MB of raw Buffer + ~24MB of base64 + ~24MB of data-URL (a second full
+// copy made by a template concat) + ~24MB of stringified JSON — ~66-90MB per in-flight file, times the
+// queue's ~24-way concurrency (job_queue.mdx §3) ≈ 1.6-2.2GB, against a 4.1GB heap ceiling. P-28 and P-29
+// are one bug seen from two ends: the multiplier is what made the concurrency lethal rather than merely wide.
+//
+// The rule from here down: BUILD THE PAYLOAD ONCE.
+//   * The raw Buffer dies the moment the base64 string exists — the two are never co-resident (below).
+//   * Nothing holds a `data` local ALONGSIDE the body that embeds it. The base64 goes straight into the
+//     body literal, so there is exactly one root keeping it alive.
+//   * The data-URL prefix is concatenated onto that same single string rather than copied into a second one.
+// The honest floor: an INLINE base64 API forces ONE copy of the encoded bytes plus JSON.stringify's
+// serialization of it (postJson, below). We kill copies 2-4; copy 1 and the stringify are structural.
+// FOLLOW-UP (the real fix): switching to a STREAMING / multipart upload — Gemini's resumable Files API, a
+// multipart body fed from a read stream — removes the JSON.stringify copy and the base64 inflation both, and
+// would take the per-file resident cost from ~4x the file size to ~a fixed buffer. That is a wire-contract
+// change and deliberately NOT done here.
+
 // ASYNC read (fs.promises) so encoding an up-to-18MB file to base64 never blocks the Node event loop —
 // under the describe queue's ~24-way concurrency (job_queue.mdx §3) a synchronous read per in-flight file
 // would stall GET /api/progress and every other request (ai_description.mdx §3.3.1, performance.mdx P-27).
-async function readBase64Capped(absPath: string): Promise<string> {
+//
+// `prefix` (optional) is prepended to the encoded bytes as part of the SAME string. The OpenAI-compatible
+// adapters need a `data:<mime>;base64,` header on their payload; building it here means the caller never
+// holds the bare base64 and the prefixed copy at the same time (memory.mdx P-29 — this was copy #3).
+async function readBase64Capped(absPath: string, prefix = ""): Promise<string> {
   const size = fs.statSync(absPath).size; // one fast stat — the gate before the big read
   if (size > INLINE_MAX_BYTES) {
     throw new Error(
       `file is ${(size / (1024 * 1024)).toFixed(1)}MB — over the ${INLINE_MAX_BYTES / (1024 * 1024)}MB inline limit for AI description. Compress it first, then try again.`,
     );
   }
-  return (await fs.promises.readFile(absPath)).toString("base64");
+  // The raw Buffer and the base64 string must NOT both stay reachable across the return (memory.mdx P-29):
+  // holding both is ~42MB of live heap for an 18MB file, per in-flight job. Null the Buffer out the instant
+  // the encode is done so it is collectable before the caller ever assembles the request body.
+  let buf: Buffer | null = await fs.promises.readFile(absPath);
+  const encoded = prefix + buf.toString("base64");
+  buf = null;
+  return encoded;
 }
 
 /** Rewrite a provider's raw HTTP error into an actionable one when it looks like the configured model was
@@ -89,6 +133,70 @@ const MAX_ATTEMPTS = 4;
 /** Base backoff; doubled per attempt and jittered, so 24 in-flight jobs don't retry in lockstep. */
 const RETRY_BASE_MS = 2_000;
 
+// ── the 429 that is NOT a rate limit (to_fix.mdx §2.3) ────────────────────────────────────────────────
+// On 2026-07-15 the Gemini account's prepayment credits ran out at 19:49. Every call after that returned
+// `429 RESOURCE_EXHAUSTED`. The old classifier below matched `\b429\b|RESOURCE_EXHAUSTED|quota` and called
+// it TRANSIENT, so a 1,440-file batch queued at 21:35 — 106 minutes after the account died — retried every
+// single file 4× with backoff against an account that could not possibly answer. ~5,760 doomed calls.
+//
+// That was not merely wasteful, it was the CRASH: every retry re-enters describe(), re-reads, re-encodes,
+// and holds a fresh ~48MB payload, while backoff keeps the slot occupied ~4× longer. The queue therefore
+// sat PINNED at 24-in-flight at maximum residency — precisely the condition memory.mdx P-28 computes as
+// fatal. The byte budget makes that survivable; this classifier makes it not happen.
+//
+// TWO faults arrive as the SAME HTTP 429 and only the BODY tells them apart:
+//   * rate limit      — "too fast". TRANSIENT. Wait, retry, succeed. Retrying is CORRECT.
+//   * credits gone    — "account empty". PERMANENT until a human tops up. Retrying is pure waste.
+//
+// BIAS (to_fix.mdx §2.3): when ambiguous, prefer TRANSIENT. A false "permanent" strands a recoverable
+// batch, which is worse than a few wasted retries. So this pattern is deliberately NARROW — it matches
+// only unmistakable account-level language, never a bare "quota exceeded" (which Gemini also uses for
+// ordinary per-minute rate limits on the free tier).
+const ACCOUNT_DEAD_RE =
+  /prepayment credits? (are|is) depleted|credits? (are|is) depleted|insufficient (funds|credits?|balance)|billing account|account (is )?(not active|suspended|disabled)|payment (required|method)/i;
+
+/** What KIND of fault a provider call hit. The adapter CLASSIFIES; the queue DECIDES what to do about it
+ *  (to_fix.mdx §13) — which is why this returns a verdict instead of reaching for the circuit breaker. */
+export type ProviderFaultKind = "transient" | "permanent" | "account_dead";
+
+/**
+ * Classify a provider failure (to_fix.mdx §2.3).
+ *
+ * * `account_dead` — the ACCOUNT cannot serve any request: credits depleted, billing disabled, suspended.
+ *   Permanent for every file, not just this one, so it must halt the whole batch (§2.4) rather than burn
+ *   1,440 files discovering the same fact 1,440 times.
+ * * `permanent` — this FILE will fail identically forever: safety refusal, retired model, bad key.
+ * * `transient` — would likely succeed moments later: timeout, socket drop, rate limit, 5xx, empty-200.
+ */
+export function classifyProviderFault(e: unknown): ProviderFaultKind {
+  const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+
+  // A real refusal — an explicit safety verdict. Permanent for this file, but the account is fine.
+  if (/blocked the request|blockReason|SAFETY|PROHIBITED/i.test(msg)) return "permanent";
+
+  // The account-level fault. Gated on rate-limit-shaped status AND unmistakable billing language, so an
+  // ordinary "429 quota exceeded" rate limit can never be mistaken for a dead account.
+  const rateLimitShaped = /\b429\b|rate limit|RESOURCE_EXHAUSTED|quota/i.test(msg);
+  if (rateLimitShaped && ACCOUNT_DEAD_RE.test(msg)) {
+    // A provider that sends Retry-After is telling us to WAIT — i.e. it expects to serve us later. That is
+    // a rate limit wearing billing words; believe the header over the prose and keep retrying.
+    if ((e as { retryAfterMs?: number })?.retryAfterMs == null) return "account_dead";
+  }
+  // A 401/403 is an auth/permission fault: a bad or revoked key. No amount of retrying fixes it, and it is
+  // account-level (every file fails), so it halts the batch exactly like depleted credits does.
+  if (/\b401\b|\b403\b|API key not valid|invalid api key|PERMISSION_DENIED|UNAUTHENTICATED/i.test(msg)) {
+    return "account_dead";
+  }
+
+  const transient =
+    /AbortError|timed out|This operation was aborted/i.test(msg) ||
+    /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|network/i.test(msg) ||
+    rateLimitShaped ||
+    /\b5\d\d\b\s|internal error|unavailable|overloaded/i.test(msg) ||
+    /returned no description|returned non-JSON/i.test(msg);
+  return transient ? "transient" : "permanent";
+}
+
 /**
  * True when an error is worth trying again — a timeout, a socket-level fetch failure, a 429, or a 5xx…
  * …and ALSO the provider's **empty 200**: a well-formed response that simply carries no description text.
@@ -97,17 +205,11 @@ const RETRY_BASE_MS = 2_000;
  * STOP`, 1,877 tokens of text. An empty candidate is the provider having a bad moment, so it retries like
  * any other blip. (A genuine refusal is different and stays permanent: it arrives as an explicit
  * `blockReason` / safety verdict, which does NOT match here.)
+ *
+ * Now a thin read of `classifyProviderFault` so there is exactly ONE place that decides what a fault is.
  */
 function isTransient(e: unknown): boolean {
-  const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-  if (/blocked the request|blockReason|SAFETY|PROHIBITED/i.test(msg)) return false; // a real refusal — permanent
-  return (
-    /AbortError|timed out|This operation was aborted/i.test(msg) ||
-    /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|network/i.test(msg) ||
-    /\b429\b|rate limit|RESOURCE_EXHAUSTED|quota/i.test(msg) ||
-    /\b5\d\d\b\s|internal error|unavailable|overloaded/i.test(msg) ||
-    /returned no description|returned non-JSON/i.test(msg)
-  );
+  return classifyProviderFault(e) === "transient";
 }
 
 /** The provider's own "wait this long" hint, in ms, when it sent one (Retry-After: seconds | HTTP-date). */
@@ -133,10 +235,71 @@ function timeoutForBytes(bytes: number): number {
   return Math.min(10 * 60_000, 120_000 + Math.floor((bytes / (1024 * 1024)) * perMb));
 }
 
-/** One fetch attempt with a hard timeout so a hung provider call can't wedge the request forever. */
-async function postJsonOnce(url: string, payload: string, headers: Record<string, string>, timeoutMs: number): Promise<unknown> {
+/** Everything a `provider_call` ledger line is allowed to know about the call it is describing
+ *  (transactions_log.mdx §3.4 — a FIXED allow-list; a value not on it does not reach the file). */
+interface CallMeta {
+  provider: ProviderId;
+  model: string;
+  parent?: string;
+}
+
+/** URL **host only** — NEVER the full URL. Gemini accepts `?key=` in the query string, so logging a URL
+ *  would leak the API key by accident (transactions_log.mdx §9). This is the reason §3.4 mandates `host`. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
+ * The retry attempt currently in flight, carried across the awaits between `withProviderRetry` and the
+ * `fetch` it eventually drives. An AsyncLocalStorage rather than a parameter because the attempt number has
+ * to cross `adapter.describe()` — a public seam whose signature belongs to the adapter contract, not to the
+ * ledger. Instrumentation must not reshape the API it observes (transactions_log.mdx §5.4).
+ */
+const attemptCtx = new AsyncLocalStorage<number>();
+
+/** A failure reason SLUG for the ledger — status/shape only. NEVER the response body: the body is the
+ *  provider's error text and may echo the request (transactions_log.mdx §3.3, §9). */
+function callFailureReason(status: number, e: unknown): string {
+  const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+  if (/abort|timed out/i.test(msg)) return "timeout";
+  if (status >= 400) return `http_${status}`;
+  if (/non-JSON/i.test(msg)) return "non_json";
+  return "network";
+}
+
+/** One fetch attempt with a hard timeout so a hung provider call can't wedge the request forever.
+ *  This is ALSO the single site where every outbound provider request is ledgered — one `provider_call`
+ *  BEGIN/END pair per attempt, covering gemini/grok/openai and every future adapter for free
+ *  (transactions_log.mdx §5.3). Before this, a Gemini call that SUCCEEDED logged absolutely nothing; the
+ *  only log statement in this file fired on a transient retry, so you learned a call had happened only if
+ *  it went wrong. Host + sizes + status only — never the key, never the payload, never the response text. */
+async function postJsonOnce(
+  url: string,
+  payload: string,
+  headers: Record<string, string>,
+  timeoutMs: number,
+  meta: CallMeta,
+): Promise<unknown> {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs);
+  // txnBegin/txnEnd by hand rather than txn(): txn()'s failure path would put the thrown error's MESSAGE in
+  // `reason=`, and this call's error message carries a 400-char slice of the provider's response body. The
+  // ledger must never hold a body (§9), so we END with our own slug instead.
+  const tx = txnBegin("provider_call", {
+    parent: meta.parent,
+    host: hostOf(url),
+    provider: meta.provider,
+    model: meta.model,
+    attempt: attemptCtx.getStore() ?? 1,
+    maxAttempts: MAX_ATTEMPTS,
+    reqBytes: Buffer.byteLength(payload),
+  });
+  let status = 0; // stays 0 when the fetch never got one — a timeout/DNS/socket failure (§3.4)
+  let respBytes = 0;
   try {
     const res = await fetch(url, {
       method: "POST",
@@ -144,7 +307,9 @@ async function postJsonOnce(url: string, payload: string, headers: Record<string
       body: payload,
       signal: ac.signal,
     });
+    status = res.status;
     const text = await res.text();
+    respBytes = Buffer.byteLength(text);
     if (!res.ok) {
       const hint = retryAfterMs(res);
       const err = new Error(`${res.status} ${res.statusText}: ${text.slice(0, 400)}`) as Error & { retryAfterMs?: number };
@@ -152,11 +317,14 @@ async function postJsonOnce(url: string, payload: string, headers: Record<string
       throw err;
     }
     try {
-      return JSON.parse(text);
+      const json = JSON.parse(text);
+      txnEnd(tx, "ok", { status, respBytes });
+      return json;
     } catch {
       throw new Error(`provider returned non-JSON: ${text.slice(0, 200)}`);
     }
   } catch (e) {
+    txnEnd(tx, "failed", { status, respBytes, reason: callFailureReason(status, e) });
     // Name the real failure. Node's bare "This operation was aborted" told the user nothing about WHY a
     // file was skipped — it is a timeout, and the message should say so, with the deadline it blew.
     if (e instanceof Error && /abort/i.test(`${e.name}: ${e.message}`)) {
@@ -171,9 +339,12 @@ async function postJsonOnce(url: string, payload: string, headers: Record<string
 /** ONE POST attempt with a size-scaled timeout. The retry lives at the adapter seam (`withProviderRetry`),
  *  not here — because the provider's **empty 200** is thrown by the adapter AFTER this call returns fine,
  *  and it deserves a retry just as much as a dropped socket does. Retrying here would miss it. */
-async function postJson(url: string, body: unknown, headers: Record<string, string>): Promise<unknown> {
+async function postJson(url: string, body: unknown, headers: Record<string, string>, meta: CallMeta): Promise<unknown> {
+  // The unavoidable second copy (memory.mdx P-29): an inline base64 API means the encoded bytes exist once
+  // inside `body` and once again serialized here, both live for the whole round-trip. Killing THIS copy is
+  // the streaming/multipart follow-up noted at the payload path above — it is not a comment-away problem.
   const payload = JSON.stringify(body);
-  return postJsonOnce(url, payload, headers, timeoutForBytes(payload.length));
+  return postJsonOnce(url, payload, headers, timeoutForBytes(payload.length), meta);
 }
 
 /**
@@ -187,7 +358,11 @@ export async function withProviderRetry<T>(label: string, fn: () => Promise<T>):
   let lastErr: unknown;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      return await fn();
+      // Each attempt is its OWN provider_call BEGIN/END pair carrying attempt=N maxAttempts=M
+      // (transactions_log.mdx §5.4) — a retried call is N pairs, never one long line, so 3 × 30s of wall
+      // time spent on one file is countable instead of merely suspected. The number rides an
+      // AsyncLocalStorage down to the fetch; the adapter seam in between never sees it.
+      return await attemptCtx.run(attempt, fn);
     } catch (e) {
       lastErr = e;
       if (!isTransient(e) || attempt === MAX_ATTEMPTS) break;
@@ -219,21 +394,37 @@ const gemini: DescribeAdapter = {
   available() {
     return !!this.apiKey();
   },
-  async describe({ absPath, mimeType, prompt }) {
+  /** A 1-token generation — the cheapest call that still touches billing/quota (to_fix.mdx §2.5). */
+  async probe() {
     const key = this.apiKey();
     if (!key) throw new Error("no Gemini API key");
     const model = getAppConfig().ai.gemini.model || DEFAULT_GEMINI_MODEL;
-    const data = await readBase64Capped(absPath);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
+    // We never read the answer — a 200 of ANY shape means the account is alive and funded. Only the THROW
+    // matters here, and `postJson` throws on every non-2xx, carrying the body that classifyProviderFault reads.
+    await postJson(
+      url,
+      { contents: [{ parts: [{ text: "hi" }] }], generationConfig: { maxOutputTokens: 1 } },
+      {},
+      { provider: "gemini", model },
+    );
+  },
+  async describe({ absPath, mimeType, prompt, parent }) {
+    const key = this.apiKey();
+    if (!key) throw new Error("no Gemini API key");
+    const model = getAppConfig().ai.gemini.model || DEFAULT_GEMINI_MODEL;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
+    // The base64 goes STRAIGHT into the body — no `data` local held alongside it, so the encoded bytes have
+    // exactly one root and the raw Buffer is already gone by the time we get here (memory.mdx P-29).
     const body = {
-      contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: mimeType, data } }] }],
+      contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: mimeType, data: await readBase64Capped(absPath) } }] }],
     };
     let json: {
       candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
       promptFeedback?: { blockReason?: string };
     };
     try {
-      json = (await postJson(url, body, {})) as typeof json;
+      json = (await postJson(url, body, {}, { provider: "gemini", model, parent })) as typeof json;
     } catch (e) {
       // Turn Google's raw 404 ("... is no longer available ... NOT_FOUND") into an actionable message
       // that names the retired model and the current recommended one (ai_description.mdx §5.1).
@@ -263,11 +454,26 @@ function chatVisionAdapter(cfg: {
     available() {
       return !!cfg.key();
     },
-    async describe({ absPath, mimeType, prompt }) {
+    /** A 1-token completion — the cheapest call that still touches billing/quota (to_fix.mdx §2.5). */
+    async probe() {
       const key = cfg.key();
       if (!key) throw new Error(`no ${cfg.label} API key`);
       const model = cfg.model();
-      const data = await readBase64Capped(absPath);
+      await postJson(
+        cfg.endpoint,
+        { model, messages: [{ role: "user", content: "hi" }], max_tokens: 1 },
+        { authorization: `Bearer ${key}` },
+        { provider: cfg.id, model },
+      );
+    },
+    async describe({ absPath, mimeType, prompt, parent }) {
+      const key = cfg.key();
+      if (!key) throw new Error(`no ${cfg.label} API key`);
+      const model = cfg.model();
+      // The data-URL prefix is built INTO the encode (readBase64Capped's `prefix`) and dropped straight into
+      // the body. The old `` `data:${mime};base64,${data}` `` template made a SECOND full copy of the base64
+      // while the bare `data` local kept the first one alive for the whole call — ~24MB × 24 jobs of pure
+      // duplicate (memory.mdx P-29, copy #3). Same bytes on the wire; one copy instead of two.
       const body = {
         model,
         messages: [
@@ -275,14 +481,14 @@ function chatVisionAdapter(cfg: {
             role: "user",
             content: [
               { type: "text", text: prompt },
-              { type: "image_url", image_url: { url: `data:${mimeType};base64,${data}` } },
+              { type: "image_url", image_url: { url: await readBase64Capped(absPath, `data:${mimeType};base64,`) } },
             ],
           },
         ],
       };
       let json: { choices?: Array<{ message?: { content?: string } }> };
       try {
-        json = (await postJson(cfg.endpoint, body, { authorization: `Bearer ${key}` })) as typeof json;
+        json = (await postJson(cfg.endpoint, body, { authorization: `Bearer ${key}` }, { provider: cfg.id, model, parent })) as typeof json;
       } catch (e) {
         throw explainModelError(e as Error, model, cfg.label);
       }

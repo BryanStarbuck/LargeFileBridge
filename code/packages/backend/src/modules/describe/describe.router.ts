@@ -103,13 +103,15 @@ describeRouter.post("/tree", async (req, res) => {
 // POST /api/describe/enqueue — the "Create AI descriptions" PAGE ACTION (page_actions.mdx §5). Plans the
 // eligible set (checked `paths`, else the recursive `root`, minus already-described), background-queues it
 // (job_queue.mdx), and returns the PLAN immediately — the request never waits for the work.
-describeRouter.post("/enqueue", (req, res) => {
+// Now async: it PREFLIGHTS the provider account before queuing a batch (to_fix.mdx §2.5). That is one cheap
+// call, not a wait for the work — the request still returns the plan immediately.
+describeRouter.post("/enqueue", async (req, res) => {
   const body = z
     .object({ paths: z.array(z.string().min(1)).optional(), root: z.string().min(1).optional(), overwrite: z.boolean().optional(), provider: Provider.optional() })
     .safeParse(req.body);
   if (!body.success) return res.status(400).json({ ok: false, error: "paths[] or root required" });
   try {
-    res.json({ ok: true, data: enqueueDescribe(body.data) });
+    res.json({ ok: true, data: await enqueueDescribe(body.data) });
   } catch (e) {
     res.status(400).json({ ok: false, error: (e as Error).message });
   }

@@ -45,6 +45,36 @@ many symptoms disappear at once.
 - **T4 — We over-fetch and over-invalidate.** A global 5s poll runs on every page
   forever; single actions invalidate broad query keys that trigger full-filesystem
   re-walks; the sidebar subscribes to the entire IPFS payload to read one field.
+- **T5 — We budget cores and ignore bytes.** Every admission decision asks "is a core
+  free?" and none asks "does this fit in the heap?" The `describe` bucket admits **24**
+  jobs by count on the theory that a network-bound job has no hardware bottleneck —
+  true for CPU, **false for memory**: each in-flight upload pins its full payload
+  (Buffer + base64 + JSON body) for the whole round-trip. 24 × ~66–90MB ≈ **1.6–2.2GB**,
+  which is what reached **4.1GB** and aborted V8 on 2026-07-15. Concurrency has **two**
+  budgets; we built one. Full treatment: **[memory.mdx](./memory.mdx)**.
+- **T6 — Work fails silently, and we cannot see it after the fact.** `describeOne` and
+  `transcribeOne` logged only **terminal outcomes** — no START line — so a job that died
+  mid-flight left **no trace it had ever begun**. `adapters.ts`'s only log statement was a
+  retry warning, so a provider call that *succeeded* was invisible. The progress registry
+  **deletes** each record on completion, so at post-mortem the in-flight map is empty. The
+  queue was **in-memory only**, so a crash vaporized a 1,440-file backlog in silence, and
+  an empty queue rendered identically for "finished" and "annihilated". A performance
+  problem you cannot observe is not a performance problem, it is a mystery. Full
+  treatment: **[transactions_log.mdx](./transactions_log.mdx)**,
+  **[crash_recovery.mdx](./crash_recovery.mdx)**, **[debugging.mdx](./debugging.mdx)**.
+
+### The 2026-07-15 incident — the event that added T5 and T6
+
+The user queued **1,440 AI descriptions** and walked away. At **22:13 PDT** the backend
+died: `FATAL ERROR: Ineffective mark-compacts near heap limit`, V8 heap at **4.1GB**. The
+in-memory queue vaporized the backlog. `tsx watch` restarts on **file change only, never on
+crash**, so the backend stayed dead **~6 hours** while Vite on `:2222` kept serving pages —
+**frontend up ≠ app up**. ~146–149 descriptions completed, all before 19:50; zero after. The
+only evidence was in `launcher.log`, because a V8 abort **cannot run our exit handlers**.
+
+Three of the four themes were already catalogued and fixed *for the UI*; the same diseases
+were alive in the **background pipeline**, where nobody was watching. That asymmetry is the
+lesson, and it is why the catalog now extends past the browser tab.
 
 ### Second pass (P-15…P-21) — the theme leaked past the tables we first hardened
 
@@ -410,6 +440,129 @@ The async compress-to-fit + async base64 read are in code:
 
 ---
 
+## Third pass (P-28…P-34) — the background pipeline · T5/T6
+
+The first two passes hardened what the **browser** does. P-27 was the hinge: it found T3
+(blocking the event loop) alive on the **describe hot path** and fixed the freeze — but it
+fixed *jank*, and left the deeper problem untouched. The 2026-07-15 OOM proved that the
+background pipeline has its own performance surface, with its own two themes: **we admit work
+without counting bytes (T5)**, and **we cannot see what background work did (T6)**.
+
+These entries are **specified in full** in three companion specs; the catalog carries the
+one-paragraph diagnosis and the pointer, so this file stays the index it has always been:
+
+| Spec | Owns |
+|---|---|
+| **[memory.mdx](./memory.mdx)** | The memory budget — P-28…P-34 in full, `estimatedBytes()`, reserve/release, the oversize rule |
+| **[transactions_log.mdx](./transactions_log.mdx)** | `transactions.log` — the work ledger, BEGIN/END, the heartbeat, the format |
+| **[crash_recovery.mdx](./crash_recovery.mdx)** | The durable backlog, boot restore, quarantine, supervision, the ambiguous zero |
+| **[background_processing.mdx](./background_processing.mdx)** | The cross-cutting contract every background op must satisfy (R1–R8) |
+| **[debugging.mdx](./debugging.mdx)** | The operator's manual — the log family, the triage tree, the playbooks |
+
+### 🔴 P-28 — The describe bucket admits by count, never by bytes (the OOM) · T5
+- **Where:** `code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` —
+  `DESCRIBE_CONCURRENCY` (24, env `LFB_DESCRIBE_CONCURRENCY`), returned **unclamped** by
+  `capFor()`. It is the **only** bucket not derived from `coreBudget()`.
+- **Symptom:** 24 in-flight uploads × ~66–90MB of pinned payload ≈ 1.6–2.2GB of live heap
+  against a ~4GB default ceiling → `Ineffective mark-compacts`, the process aborts, the
+  backlog is lost. The code comment justifying the wide fan-out ("network-bound, no hardware
+  bottleneck") is true for cores and **false for memory**.
+- **Fix (done):** Admission is now the **conjunction of both budgets** — a job must find a
+  free slot **and** fit its `estimatedBytes()` reservation inside a live **memory budget**
+  (`heap_size_limit × performance.max_memory_fraction`, default 0.5). Reserve at admission,
+  release in a `finally`. A file bigger than the whole budget **runs alone** rather than
+  deadlocking (memory.mdx §2.4 LOCKED), and per-bucket **head-of-line blocking** stops a
+  stream of small files from starving a large one. Effective concurrency becomes
+  `min(count cap, what fits in bytes)` — the count cap stops being the safety mechanism and
+  becomes what it always should have been: an upper bound.
+
+The two-budget admission test — count AND bytes, with the reservation released in a `finally` — is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `takeRunnable()` / `estimatedBytes()` / `memoryFits()` / `releaseMemory()`, drawing `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `memoryBudget()`
+
+### 🔴 P-29 — One file is resident 3–4× on the upload path · T5
+- **Where:** `code/packages/backend/src/modules/describe/adapters.ts` — `readBase64Capped()`
+  (raw Buffer **and** base64 string live at once), the `data:` URL template concat in
+  `chatVisionAdapter.describe()` (a second full copy), and `postJson()`'s `JSON.stringify(body)`
+  (a third), all held for the duration of a round-trip that `timeoutForBytes()` allows to run
+  **10 minutes**.
+- **Symptom:** The per-job constant behind P-28's arithmetic. An 18MB file costs ~66–90MB.
+- **Fix (done):** Build the payload **once**. The Buffer is released as soon as the base64
+  string exists; the `data:` prefix is built **into** the same string rather than concatenated
+  into a duplicate; each adapter drops the encoded string straight into the body literal. The
+  honest floor: an inline-base64 API forces **one** copy plus serialization — the win is
+  killing copies 2–4, not copy 1. Streaming/multipart (Gemini's resumable Files API) is the
+  follow-up that removes the `JSON.stringify` copy.
+
+The build-the-payload-once discipline on the upload path is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `readBase64Capped()` (prefix-aware) / `gemini.describe()` / `chatVisionAdapter.describe()`
+
+### 🟠 P-30 — A 32MB-per-child stdout ceiling on a path that discards stdout · T5
+- **Where:** `code/packages/backend/src/modules/describe/fit-media.ts` — `runAsync()`'s
+  `out = (out + d.toString()).slice(-32 * 1024 * 1024)`.
+- **Symptom:** Every concurrent ffmpeg/magick child could accumulate **32MB** of output that
+  only `probeVideo()` ever reads, and the `out + d.toString()` concat allocated ~2× transiently
+  before slicing. Under 24-way describe concurrency that is ~0.7GB of ceiling for bytes we throw
+  away.
+- **Fix (done):** `captureStdout` is **opt-in** (default off → stdout is `"ignore"`d, so nothing
+  is allocated and the child cannot block on a full pipe), capped at **1MiB** when on, and
+  accumulated into a chunk array `join()`ed once. Only `probeVideo()` opts in.
+
+The opt-in stdout capture that stops discarding callers from paying a 32MB ceiling is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `runAsync()` (`captureStdout`), set only by `probeVideo()`
+
+### 🟠 P-31 — The heap ceiling was V8's accident, not our decision · T5
+- **Where:** `code/packages/backend/package.json` (`"dev": "tsx watch src/main.ts"`) — no node
+  flags, no `NODE_OPTIONS`, anywhere in the repo.
+- **Symptom:** The process ran on whatever old-space V8 chose. The ceiling that killed us was
+  never a decision anyone made.
+- **Fix (done):** An **explicit** `--max-old-space-size` plus
+  `--heapsnapshot-near-heap-limit=1` so an OOM leaves a snapshot to analyze. The ceiling is a
+  backstop, not the cure — P-28's byte budget is the cure.
+
+### 🟠 P-32 — A V8 OOM is invisible to our own logging · T6
+- **Where:** `code/packages/backend/src/shared/logging.ts` — the handlers are correct and
+  irrelevant: a V8 **abort** runs none of them.
+- **Symptom:** `log.log` and `error.err` showed nothing at all. The only trace of the death was
+  in `launcher.log`, buried in a ~1/sec proxy-error flood.
+- **Fix (done):** Get a **predictive** signal instead of a post-mortem one — sample the heap
+  against `v8.getHeapStatistics().heap_size_limit` and **WARN before the ceiling**, plus a
+  ~30s **HEARTBEAT** into `transactions.log` carrying queue depth, in-flight counts and heap
+  while any work is running. The last heartbeat before a gap is the crash's fingerprint.
+
+The heap-pressure watch that warns before the ceiling, and the heartbeat that makes the climb visible, are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/heap-watch.ts` — `startHeapWatch()`; `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/transactions.ts` — `startHeartbeat()` / `registerHeartbeatSource()`
+
+### 🔴 P-33 — The backlog lived only in memory, and an empty queue was ambiguous · T6
+- **Where:** `code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `pending:
+  QueueTask[]`, a module-level array with no disk write and no restore.
+- **Symptom:** 1,440 queued files became **zero** with no error, no notification, and no way to
+  tell "done" from "destroyed". Nothing restarted the process, so nothing resumed.
+- **Fix (done):** An append-only, fsync'd **journal** (`~/T/_large_files_bridge/queue/queue.jsonl`)
+  with three commit points — enqueue (**one** write for 1,440 tasks), attempt-before-run, and
+  terminal — folded and **restored at boot**, with **quarantine after 2 strikes** so a file that
+  reproducibly kills the runtime cannot resurrect the crash forever. Skip-already-done makes
+  replay cheap and safe.
+
+The durable backlog and its boot restore are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/queue-journal.ts` — `appendEnqueued()` / `appendAttempt()` / `appendTerminal()` / `foldLiveSet()` / `compact()`; `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/queue-restore.ts` — `restoreQueueOnBoot()`
+
+### 🟡 P-34 — Background work announced only its endings · T6
+- **Where:** `code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()`
+  (`log.info` on success, `log.error` on failure, **no start log**);
+  `code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `transcribeOne()` (same);
+  `code/packages/backend/src/modules/describe/adapters.ts` (a retry warning was the file's only
+  log statement); `code/packages/backend/src/modules/progress/progress.registry.ts` — `end()`
+  **deletes** the record.
+- **Symptom:** A job that died mid-flight left no evidence it ever started, and a successful
+  provider call left no evidence at all. The user's report — *"I keep sending it a batch of work,
+  and it keeps failing silently"* — is this entry.
+- **Fix (done):** **Every** unit of background work and **every** outbound API call now writes a
+  **BEGIN** and an **END** line to `transactions.log` with a `txn=` correlation id, the full
+  absolute path, bytes, duration, outcome, provider/model/attempt, and heap — synchronously, so
+  the ledger survives the crash it exists to explain.
+
+---
+
 ## Part III — The architecture transformation (streaming background filesystem index)
 
 Everything above (P-01…P-21) is **client-side triage plus "make the walk yield."** It cut the
@@ -657,6 +810,13 @@ The pub/sub bridge that delivers optimistic per-entity badge patches to the stre
 | P-23 | **Progressive, non-blocking consumption** — fetch/NDJSON reader (Bearer-authed) + `useStreamedFlatListing` (ref accumulate + rAF-coalesced flush); Full Paths fills progressively, time-to-first-row ≈ tens of ms. Kept P-17's optimistic `⋯`-menu badge patch working after the page left React Query via a small pub/sub bridge | `frontend/src/lib/streamNdjson.ts`, `frontend/src/components/table/useStreamedFlatListing.ts`, `frontend/src/pages/fs/FullPathsPage.tsx`, `frontend/src/lib/flatListingPatch.ts`, `frontend/src/lib/patchEntityBadges.ts` |
 | P-24 | **mtime-keyed directory-listing cache** — re-opening a column serves from the index instead of re-walking | `backend/modules/fsindex/fsindex.service.ts`, `backend/modules/fs/fs.service.ts` |
 | P-25 | **`content-visibility`/`contain` on off-screen rows** — browser skips layout+paint for out-of-view content | `frontend/src/pages/fs/FullPathsPage.tsx`, `frontend/src/pages/fs/FileSystemPage.tsx`, `frontend/src/components/table/DataTable.tsx` |
+| P-28 | **The memory budget** — admission is now count AND bytes; reserve at admission, release in `finally`; oversize runs alone; per-bucket head-of-line blocking | `backend/shared/concurrency.ts` (`memoryBudget()`), `backend/modules/jobqueue/jobqueue.service.ts` (`estimatedBytes()`/`memoryFits()`/`takeRunnable()`/`releaseMemory()`), `shared/src/schemas.ts` (`performance.max_memory_fraction`) |
+| P-29 | **Build the payload once** — Buffer released once base64 exists; `data:` prefix built into the same string; no duplicate roots | `backend/modules/describe/adapters.ts` |
+| P-30 | **Opt-in `captureStdout`** (default `"ignore"`, 1MiB cap, chunk-array `join`) — only `probeVideo()` captures | `backend/modules/describe/fit-media.ts` |
+| P-31 | **Explicit heap ceiling** — `--max-old-space-size` + `--heapsnapshot-near-heap-limit=1` | `backend/package.json`, `justfile` |
+| P-32 | **Heap-pressure WARN + 30s HEARTBEAT** — a predictive signal before the abort that can't be logged | `backend/shared/heap-watch.ts`, `backend/shared/transactions.ts`, `backend/src/main.ts` |
+| P-33 | **Durable backlog** — fsync'd append-only journal, 3 commit points, boot restore, 2-strike quarantine | `backend/modules/jobqueue/queue-journal.ts`, `queue-restore.ts`, `jobqueue.service.ts`, `backend/config/state-dir.ts` (`resolveQueueDir()`) |
+| P-34 | **BEGIN/END for every job and every API call** — the work ledger | `backend/shared/transactions.ts`, `backend/modules/describe/describe.service.ts`, `adapters.ts`, `fit-media.ts`, `backend/modules/transcribe/transcribe.service.ts`, `backend/tools/transcribe/engine.ts`, `backend/modules/jobqueue/jobqueue.service.ts` |
 
 Follow-ups (not blocking the hang fix): move the walk into a **worker thread**
 (`backend/modules/fsindex/walker.worker.ts`) so even CPU cost leaves the HTTP loop

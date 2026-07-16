@@ -64,7 +64,9 @@ export function rotateIfOversized(filePath: string, maxBytes = MAX_BYTES, maxBac
 
 // A size-capped, rotating, append-only writer with a CACHED byte counter (no statSync per write).
 // Never throws: a failed write falls back to process.stderr.
-class RollingFileWriter {
+// Exported so the TRANSACTION LEDGER (shared/transactions.ts — transactions_log.mdx) writes transactions.log
+// under the exact same 5 MiB × 5 rotation policy as log.log / error.err. One rotation rule, one implementation.
+export class RollingFileWriter {
   private size = 0;
   private ready = false;
   private queue: string[] = [];

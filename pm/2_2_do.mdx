@@ -1,0 +1,222 @@
+---
+title: 2 — To Do — the code index for the OOM gap work
+status: working
+owner: Bryan
+opened: 2026-07-16
+sibling: to_fix.mdx
+---
+
+# 2_2_do — the code index
+
+The **implementation index** for [to_fix.mdx](./to_fix.mdx). One row per change, each naming the
+**full file path**, the **function/class/method**, and the **spec section** that justifies it — the
+charter's spec↔code linking rule, applied exhaustively.
+
+**Scope guard:** this file indexes ONLY [to_fix.mdx](./to_fix.mdx)'s gaps. The memory budget
+([memory.mdx](./memory.mdx)), the queue journal ([crash_recovery.mdx](./crash_recovery.mdx)), and the
+ledger ([transactions_log.mdx](./transactions_log.mdx)) carry their own indexes. Do not duplicate them
+here.
+
+> **⚠ Concurrency warning (2026-07-16).** A separate session is actively editing the backend —
+> `adapters.ts`, `fit-media.ts`, `jobqueue.service.ts`, `heap-watch.ts`, `package.json`, `main.ts` and
+> others are **modified and uncommitted**, and the backend is **running**. Line numbers below are a
+> snapshot and **will drift**. Anchor on **function names**, never line numbers, and re-read before
+> editing.
+
+Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blocked/conflict
+
+---
+
+## §A — Provider account health (to_fix §2) — **priority 1**
+
+The proximate cause. No spec but [to_fix.mdx](./to_fix.mdx) §2 covers this; no code exists yet.
+
+| # | What | File → symbol | Spec | St |
+|---|---|---|---|---|
+| A1 | Split the 429: credits-depleted → **permanent**, rate-limit → transient | `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `isTransient()` | §2.3 | `[ ]` |
+| A2 | New: classify an account-level fault from a response body | `…/modules/describe/adapters.ts` — **NEW** `classifyProviderFault(status, body): "transient" \| "permanent" \| "account_dead"` | §2.3 | `[ ]` |
+| A3 | Stop retrying a permanent account fault; propagate it typed | `…/modules/describe/adapters.ts` — `withProviderRetry()` | §2.4 | `[ ]` |
+| A4 | New: the circuit breaker (open/close per provider) | **NEW** `…/modules/describe/provider-health.service.ts` — `openCircuit(provider, reason)` / `isCircuitOpen(provider)` / `closeCircuit(provider)` | §2.4 | `[ ]` |
+| A5 | New: preflight probe, cached ~60 s, single-flight | `…/modules/describe/provider-health.service.ts` — `preflightProvider(provider): Promise<{ ok, reason }>` | §2.5 | `[ ]` |
+| A6 | Call preflight before enqueuing; refuse at the click | `…/modules/describe/describe.service.ts` — `enqueueDescribe()` | §2.5 | `[ ]` |
+| A7 | Report preflight in the popup plan | `…/modules/describe/describe.service.ts` — `previewDescribe()` | §2.5 | `[ ]` |
+| A8 | Drain + mark `halted` when a circuit opens | `…/modules/jobqueue/jobqueue.service.ts` — **NEW** `haltBucket(op, reason)`; touches `pending` / `inflight` / `pump()` | §2.4 | `[ ]` |
+| A9 | Check the circuit at admission — never start a doomed task | `…/modules/jobqueue/jobqueue.service.ts` — `takeRunnable()` | §2.4 | `[ ]` |
+| A10 | Batch-level transient-failure ceiling (>20% → pause) | `…/modules/jobqueue/jobqueue.service.ts` — `recordBatchResult()` | §2.7 | `[ ]` |
+| A11 | Surface provider reachability + last-known-good | `…/modules/describe/describe.service.ts` — `describeProviders()` / `getAiConfig()` | §2.6 | `[ ]` |
+| A12 | One banner, not 1,440 cards | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/` (+ `components/ui/WarningArrowButton`) | §2.4 | `[ ]` |
+
+**A2 note.** Gemini returns `429 RESOURCE_EXHAUSTED` for *both* rate-limit and credits-depleted; only
+the **body** distinguishes them (`"prepayment credits are depleted"`). Classify on the body, and when
+ambiguous prefer **transient** (§2.3 bias) — a false "permanent" strands a recoverable batch.
+
+---
+
+## §B — The compress fingerprint bomb (to_fix §3) — **priority 2**
+
+The largest un-gated memory consumer in the backend. ~105 MB live per file, **no size cap**, on a
+bucket that fans out to the **full core budget**.
+
+| # | What | File → symbol | Spec | St |
+|---|---|---|---|---|
+| B1 | Downscale before the raw decode (~96 MB → ~1 MB) | `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/perceptual.service.ts` — `fingerprintImage()` | §3.3.1 | `[ ]` |
+| B2 | Hand `sharp` a **path**, not a Buffer — kill the whole-file read | `…/modules/media/perceptual.service.ts` — `fingerprintImage()` | §3.3.2 | `[ ]` |
+| B3 | Pixel-count ceiling (a 100 MP TIFF must not decode) | `…/modules/media/perceptual.service.ts` — `fingerprintImage()` | §3.3.3 | `[ ]` |
+| B4 | Free `data` before `luminanceQuality` | `…/modules/media/perceptual.service.ts` — `fingerprintImage()` / `luminanceQuality()` | §3.3.6 | `[ ]` |
+| B5 | **`spawnSync` → async** — a 5-min event-loop block (T3 violation) | `…/modules/media/perceptual.service.ts` — `fingerprintVideo()` | §3.3.4 | `[ ]` |
+| B6 | Per-frame re-entry decodes a full-res PNG each time | `…/modules/media/perceptual.service.ts` — `fingerprintVideo()` | §3.3.1 | `[ ]` |
+| B7 | Drop the uncapped sync read | `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `perceptualFingerprint()` | §3.3.2 | `[ ]` |
+| B8 | Called **twice per file** — before + after | `…/modules/compress/compression.service.ts` — `compressFile()` | §3.1 | `[ ]` |
+| B9 | `estimatedBytes()` for compress = **pixels × 4**, NOT file size | `…/modules/jobqueue/jobqueue.service.ts` — `capFor()` / memory.mdx `estimatedBytes()` | §7.4 | `[ ]` |
+| B10 | Fingerprint regression vs. the stored corpus — **gates B1** | **NEW** test | §9 | `[ ]` |
+| B11 | State the "never downscale" non-conflict in both specs | `compression.mdx`, `perceptual_fingerprint.mdx` | §3.4 | `[ ]` |
+
+**B9 is the trap.** memory.mdx's `estimatedBytes()` is `min(fileSize, INLINE_MAX_BYTES)` — correct for
+describe (bytes uploaded), **catastrophic for compress**: a 5 MB JPEG decodes to ~96 MB, so the budget
+would **under-count ~20×** and admit a fatal batch while reporting healthy. **A budget that lies is
+worse than no budget.**
+
+### §B.1 — Related T3 violations found in the same audit (not in to_fix's priorities)
+Same disease, lower risk. Recorded so they aren't rediscovered later.
+
+| # | What | File → symbol | St |
+|---|---|---|---|
+| B12 | `spawnSync(bin, …)` — up to a **10-min** block, 32 MB stdout | `…/modules/compress/compression.service.ts` — `run()` | `[ ]` |
+| B13 | `spawnSync("which", …)` per compress | `…/modules/compress/compression.service.ts` — `onPath()` / `detectTools()` / `magickBin()` | `[ ]` |
+| B14 | `spawnSync("uuidgen")` per file — `fit-media.ts` already fixed this with `randomUUID()` | `…/modules/compress/compression.service.ts` — `tmpOut()` | `[ ]` |
+| B15 | `spawnSync("ffprobe", …)` — 20 s block on an **HTTP request** path | `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/transcode.service.ts` — `probeStream()` / `planStream()` / `streamPlayable()` | `[ ]` |
+
+---
+
+## §C — The batch manifest (to_fix §4) — **priority 3**
+
+| # | What | File → symbol | Spec | St |
+|---|---|---|---|---|
+| C1 | New: write/read/append the manifest | **NEW** `…/modules/jobqueue/batch-manifest.service.ts` — `writeManifest(batch)` / `appendOutcome(id, r)` / `finalizeManifest(id, state)` / `listManifests()` | §4.1 | `[ ]` |
+| C2 | Write it **before** enqueue, with the full file list | `…/modules/describe/describe.service.ts` — `enqueueDescribe()` | §4.1 | `[ ]` |
+| C3 | Same for transcribe | `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `enqueueTranscribe()` | §4.1 | `[ ]` |
+| C4 | Same for compress batches | `…/modules/jobqueue/jobqueue.service.ts` — `createBatch()` | §4.1 | `[ ]` |
+| C5 | Terminal record on done/crash/halt | `…/modules/jobqueue/jobqueue.service.ts` — `recordBatchResult()` | §4.2 | `[ ]` |
+| C6 | `batch_id` threaded onto every task | `…/modules/jobqueue/jobqueue.service.ts` — `QueueTask.batchId` (exists for compress; **extend to describe/transcribe**) | §4.4 | `[ ]` |
+| C7 | `batch_id` on every log line | `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `log.*` / `logError()` | §4.4 | `[ ]` |
+| C8 | Collapse repeated identical errors | `…/shared/logging.ts` — `RollingFileWriter` | §4.5 | `[ ]` |
+| C9 | One-click re-queue from a manifest | `…/modules/describe/describe.router.ts` — **NEW** `POST /api/describe/requeue/:batchId` | §4.3 | `[ ]` |
+| C10 | `_batches/` under the state root | `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveStateDir()` | §4.1 | `[ ]` |
+| C11 | `halted` in the shared type | `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `ProcessingBatch`, `FailedItemView` | §7.3 | `[ ]` |
+| C12 | Render `halted` ≠ `failed` | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/` | §7.3 | `[ ]` |
+
+---
+
+## §D — describe ⊥ transcribe (to_fix §5)
+
+| # | What | File → symbol | Spec | St |
+|---|---|---|---|---|
+| D1 | Import-graph assertion: describe never reaches Whisper | **NEW** test | §5.1 | `[ ]` |
+| D2 | Stamp `op` explicitly on every queue log line | `…/modules/jobqueue/jobqueue.service.ts` — `queueFailureLog()` / `runTask()` | §5.1 | `[ ]` |
+
+**Verified 2026-07-16, no code change needed:** `modules/describe/` has **zero** static or dynamic
+imports of `modules/transcribe/*` or `tools/transcribe/*`. `jobqueue.service.ts` — `runTask()` branches
+on `t.op`; the two are mutually exclusive. Transcription reads **no media** into the heap (every read is
+a `.txt` artifact; media goes to children by path). D1 makes this **enforced** rather than merely true.
+
+---
+
+## §E — Child-process & machine memory (to_fix §6)
+
+| # | What | File → symbol | Spec | St |
+|---|---|---|---|---|
+| E1 | Sample child RSS, attributed to the spawning job | `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/heap-watch.ts` — `sample()` | §6.1 | `[ ]` |
+| E2 | OS pressure / swap (`vm_stat`) — swap = concurrency too high | `…/shared/heap-watch.ts` — `sample()` | §6.1 | `[ ]` |
+| E3 | **Available**, not installed, memory | `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe-concurrency.ts` — `transcribeConcurrency()` (`os.totalmem()` → available) | §6.1 | `[ ]` |
+| E4 | Global budget above the buckets | `…/modules/jobqueue/jobqueue.service.ts` — `capFor()` | §6.1 | `[ ]` |
+| E5 | **RAM table under-counts Whisper 2×** on the Mac path | `…/modules/transcribe/transcribe-concurrency.ts` — `activeTranscribeModelKey()` returns `"base"` (1 GiB) but `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — `Transcriber.runWhisper()` runs `--model small` (2 GiB) | §6.2 | `[ ]` |
+| E6 | **Unbounded stdout/stderr** — apply memory.mdx P-30's cap here too | `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/audio-prep.ts` — `spawnAsync()` | §6.2 | `[ ]` |
+| E7 | Same unbounded capture in the private duplicate | `…/tools/transcribe/Transcribe.ts` — `Transcriber.spawnAsync()` | §6.2 | `[ ]` |
+| E8 | Register a heap-context source so a WARN names the in-flight files | `…/modules/jobqueue/jobqueue.service.ts` → `…/shared/heap-watch.ts` — `registerHeapContextSource()` | §6.1 | `[ ]` |
+
+**E6/E7 note.** `fit-media.ts` — `runAsync()` already caps stdout (1 MiB) and tail-slices stderr.
+Transcribe is the **inconsistent one**: a multi-hour Whisper run holds its entire segment log in one
+string.
+
+---
+
+## §F — Spec contradictions (to_fix §7)
+
+| # | What | File → symbol | Spec | St |
+|---|---|---|---|---|
+| F1 | **P-23 used twice** → renumber the streaming entry to **P-35** | `~/BGit/Bryan_git/LargeFileBridge/pm/performance.mdx` — body ~L370 (pin pass, keeps P-23) vs. remediation log ~L810 (streaming → P-35) | §7.1 | `[ ]` |
+| F2 | P-27: async ≠ small; note **superseded by streaming, not reverted** | `pm/performance.mdx` — P-27 + its log row | §7.2 | `[ ]` |
+| F3 | `halted` needs a home | `pm/processing.mdx`, `pm/job_queue.mdx` | §7.3 | `[ ]` |
+| F4 | `estimatedBytes()` must not use file size for compress | `pm/memory.mdx` §2.2 | §7.4 | `[ ]` |
+| F5 | State the "never downscale" non-conflict | `pm/compression.mdx`, `pm/perceptual_fingerprint.mdx` | §3.4 | `[ ]` |
+
+**F1/F2 are owned by the in-flight session** — it is actively reconciling `performance.mdx` (T5/T6 and
+the P-28…P-34 third pass have already landed). **Coordinate before editing.**
+
+---
+
+## §G — Already landed (do not redo)
+
+Verified present 2026-07-16 — mostly by the concurrent session. Recorded so this index doesn't
+re-propose finished work.
+
+| What | File → symbol | Spec |
+|---|---|---|
+| `--max-old-space-size=6144` + `--heapsnapshot-near-heap-limit=1`, user-overridable | `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/package.json` — `scripts.dev` / `scripts.start` | memory.mdx P-31 |
+| Heap-pressure WARN at 80% of the **real** ceiling, hysteresis + cooldown, `unref()`'d | `…/src/shared/heap-watch.ts` — `startHeapWatch()` / `sample()` / `registerHeapContextSource()` | memory.mdx P-32 |
+| Base64 copies 2–4 removed (Buffer nulled; prefix folded into one string) | `…/modules/describe/adapters.ts` — `readBase64Capped()` | memory.mdx P-29 |
+| `provider_call` ledger span per attempt; host-only (never the `?key=`) | `…/modules/describe/adapters.ts` — `postJsonOnce()` / `hostOf()` / `attemptCtx` | transactions_log.mdx §5.3 |
+| stdout cap 1 MiB + chunk-array join; stderr tail-sliced | `…/modules/describe/fit-media.ts` — `runAsync()` | memory.mdx P-30 |
+| Core-gated transcode slot (the precedent for a byte gate) | `…/modules/describe/fit-media.ts` — `acquireTranscodeSlot()` | parallelization.mdx §3 |
+| Async fit/probe/encode — no `spawnSync` on the describe path | `…/modules/describe/fit-media.ts` — `fitMediaUnderLimit()` / `probeVideo()` / `encodeCrf()` / `encodeTwoPass()` | performance.mdx P-27 |
+| Queue journal + restore-on-boot | `…/modules/jobqueue/queue-restore.ts` — `restoreQueueOnBoot()`, from `…/src/main.ts` — `bootstrapState()` | crash_recovery.mdx D1/D1b |
+
+---
+
+## §H — Verified clean (no action)
+
+From the same audit. Recorded to stop the next audit re-flagging them.
+
+* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/media.router.ts` —
+  `fs.createReadStream(file.abs, { start, end })` piped. **Correct streaming; never buffers.** The model B2 should follow.
+* Bounded stderr tails: `compression.service.ts` — `run()` (4 KB); `transcode.service.ts` (2 KB);
+  `ipfs-node.service.ts` (500 lines).
+* Bounded caches: `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fsindex/fsindex.service.ts` —
+  `putListing()` (`CACHE_MAX = 200`, insertion-order eviction); `modules/fs/badges.ts` — `interestCache` (5000).
+* Capped queue views: `jobqueue.service.ts` — `listQueuedItems()` (500), `recentFailures` (500),
+  `batches` (30-min retention). **Only `pending` itself is uncapped** — see I3.
+* All YAML config reads are small config files — out of scope.
+
+---
+
+## §I — Backlog (found, not prioritized)
+
+Real but below the line. Listed so they are not lost.
+
+| # | What | File → symbol | Risk |
+|---|---|---|---|
+| I1 | `readStorageIndex` materializes YAML text + parsed doc + rows (~12 MB/call), **no memoization**, many concurrent callers | `…/modules/storage/tracking.service.ts` — `readStorageIndex()` | Medium |
+| I2 | Index build holds `collected` (`fs.Stats`/file) + `rows` + `files` — 3 generations co-resident; `walk()` is **recursive sync, no yield** | `…/modules/storage/tracking.service.ts` — `indexStorageFiles()` | Medium |
+| I3 | `pending` is the **one uncapped** queue array (~60 MB for a 200k-file tree, doubled by `inflight`) | `…/modules/jobqueue/jobqueue.service.ts` — `enqueue()` | Medium |
+| I4 | `walkUnit`'s `out` is uncapped (unlike `FLAT_FILE_CAP` / `MAX_FILES`); `scanComputerUnit` concatenates every root | `…/modules/scanner/scanner.service.ts` — `walkUnit()` / `scanComputerUnit()` | Low-Med |
+| I5 | `listFilesFlat` re-buffers what `walkFilesFlatStreaming` streams (the NDJSON route does it right) | `…/modules/fs/fs.service.ts` — `listFilesFlat()` | Low-Med |
+| I6 | Reads the **entire** daemon log before slicing — should be positional | `…/modules/ipfs/ipfs-node.service.ts` — `readDaemonLogTail()` | Low |
+| I7 | Reads the whole file then slices; guard is at the caller and skipped when `sizeBytes` is `null` | `…/modules/fs/badges.ts` — `fileHasIpfsSignal()` / `fileIsIpfsArtifact()` | Low |
+| I8 | Reads the whole transcript, then `charCodeAt` over every char (CPU on the loop) | `…/tools/transcribe/Transcribe.ts` — `Transcriber.looksLikeEnglish()` | Low |
+| I9 | `commandExists` is a sync `which` fork **per file** | `…/tools/transcribe/audio-prep.ts` — `commandExists()` | Low |
+
+---
+
+## §J — Order of work
+
+1. **§A** — the cause. Cheap, self-contained, prevents recurrence tonight.
+2. **§C7 + §C1–C2** — `batch_id` + manifest. Everything after is easier to debug with them in place.
+3. **§B10 first, then §B1–B8** — the regression test **gates** the fingerprint change; write it first
+   or a silent hash change breaks dedup across the corpus.
+4. **§B9 / §F4** — before the byte budget extends to compress, or it admits a fatal batch while
+   reporting healthy.
+5. **§D, §E, §F** — guards, telemetry, spec hygiene.
+6. **§I** — backlog.
+
+**Do not start §B while the concurrent session holds `jobqueue.service.ts`.** §A touches
+`adapters.ts` + `describe.service.ts`, which that session is **also** editing — coordinate or wait.

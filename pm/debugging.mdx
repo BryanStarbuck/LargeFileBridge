@@ -1,0 +1,672 @@
+---
+title: Debugging — the operator's manual (logs, triage, playbooks)
+status: in-progress
+owner: engineering
+scope: code/packages/backend
+---
+
+# Debugging
+
+This spec is the **operator's manual**. It is written to be used at **3am**, by someone who did not
+write the code, against a machine that may have no running process at all.
+
+It is the companion to [transactions_log.mdx](./transactions_log.mdx) (which owns the ledger's format)
+the way a **playbook** is the companion to a **schema**: that spec says what a line looks like; this one
+says *which question to ask, which command to paste, and how to read the answer*.
+
+---
+
+## 1. The thesis — debuggability is a feature
+
+**A batch that fails silently is worse than a batch that fails loudly.** A loud failure costs a user
+one retry. A silent failure costs them six hours, their trust, and — as §4.1 documents — 1,294 files of
+real work that nobody knew had died.
+
+Three rules follow, and every section below is an instance of one of them:
+
+1. **Every question is answerable from a flat file.** No debugger. No rerun. No live process. The
+   post-mortem happens **hours later**, on logs, after the process is already gone. If a question can
+   only be answered by attaching to a running server, we have already lost — the server is the thing
+   that died.
+2. **Every question is answerable in ONE command.** If triage takes a pipeline of five greps and a
+   mental join, nobody runs it at 3am; they guess instead, and guessing is how the 2026-07-15 incident
+   stayed invisible for six hours.
+3. **The work ledger is the product's flight recorder.** `log.log` tells you what the code *said*.
+   `transactions.log` tells you what the app *did* — every job, every API call, BEGIN and END. When
+   those two disagree, the ledger wins.
+
+The durable fault trail every playbook starts from is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `logError()` / `RollingFileWriter.writeSync()`
+
+The state root every log path below resolves against is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveStateDir()` / `resolveLogDir()`
+
+---
+
+## 2. The log family
+
+Everything lives in the state root **`~/T/_large_files_bridge/`** (override `LFB_STATE_DIR`; logs alone
+override with `LFB_LOG_DIR`). **Never `/tmp`.** Six files, six jobs.
+
+| File | What it answers | Durability | Rotation | Written by |
+| --- | --- | --- | --- | --- |
+| `log.log` | *What did the code say?* Everything DEBUG/INFO and above. Noisy — context, not evidence. | **Batched async** — a crash can eat the tail | 5 MiB × 5 | us (`RollingFileWriter`) |
+| `error.err` | *What broke?* WARN/ERROR/FATAL only. The durable fault trail. | **SYNCHRONOUS** — survives a crash | 5 MiB × 5 | us (`logError()`) |
+| `transactions.log` | *What work actually happened?* BEGIN/END per job + per outbound API call, with `txn=`, path, bytes, ms, outcome, heap. | **Synchronous** | 5 MiB × 5 | us ([transactions_log.mdx](./transactions_log.mdx)) |
+| `launcher.log` | *Did the process die?* `pnpm dev` stdout/stderr — **the only place a V8 OOM abort appears**. | raw pipe | 5 MiB × 5 | `log_rotate_pipe.mjs` |
+| `ipfs-daemon.log` | *Is the IPFS daemon healthy?* | raw | 5 MiB × 5 at **reopen boundaries only** | **external process** |
+| `ipfs-autostart.log` / `.err` | *Did launchd start the daemon?* | raw | same | **external process** (launchd) |
+
+**Which log is AUTHORITATIVE for which question — and the trap each hides:**
+
+* **`transactions.log` is authoritative for "did this file get processed?"** Trap: it only knows what
+  we instrumented. An uninstrumented code path (§7) does real work and leaves **no line** — and its
+  silence looks exactly like "never started."
+* **`error.err` is authoritative for "did this throw?"** Trap: **absence of an error is not evidence
+  of success.** A process that is *aborted* — OOM, `SIGKILL` — never runs our handlers, so the most
+  catastrophic failure mode we have writes **nothing** here. `error.err` was clean through the entire
+  2026-07-15 incident.
+* **`launcher.log` is authoritative for "did the process die, and how?"** It is the **only** file that
+  sees a V8 abort, because an abort cannot run our handlers — there is no `process.on('exit')` for
+  `FATAL ERROR: Ineffective mark-compacts`. Trap: it is **flooded with Vite proxy errors** once the
+  backend is down (every frontend poll logs one), so the abort is buried thousands of lines deep. Always
+  grep, never scroll.
+* **`log.log` is authoritative for nothing.** It is context. Its tail is **batched**, so the lines
+  immediately before a crash — the most interesting ones — are exactly the lines most likely lost.
+
+**The rotation contract.** All our logs: **5 MiB × 5 generations** (`LFB_LOG_MAX_BYTES` default
+`5242880`, `LFB_LOG_GENERATIONS` default `5`). `log.log` → `log.log.1` … `log.log.5`, oldest dropped.
+**This is a forensic deadline:** under load, 5 generations is *hours*, not days. A 25 MiB budget at a
+busy 300-file batch's line rate can wrap in an afternoon. **Copy the state root before you investigate**
+— an investigation that takes an hour can destroy the evidence it is looking for.
+
+The size-bounded rotating writer behind `log.log` / `error.err` is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `RollingFileWriter.roll()`
+
+**The external-process exception.** IPFS daemon logs are written by a detached `ipfs daemon` (or by
+launchd via `StandardOut/ErrorPath`) whose fd we do not own — so `RollingFileWriter`'s per-write cap
+can never reach them. They obey the same policy only at the boundary where the writer **reopens** the
+file: each daemon start and each autostart (re)install.
+
+The reopen-boundary rotation for the externally-written IPFS logs is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `rotateIfOversized()`, called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `startDaemon()` and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-autostart.service.ts` — `installAutostart()`
+
+**Residual (known, accepted):** a daemon that runs for months with no restart can exceed the cap until
+its next start. Reboots and app restarts roll it long before then in practice.
+
+**The `/tmp` scratch note.** `/tmp/lfb.webapp.pid` and `/tmp/lfb.web.port` **are not logs** and are in
+`/tmp` **on purpose** — they are ephemeral pid/port files that must be cleared on reboot so stale state
+never lingers. Never look for evidence there; never move them into the state root.
+
+---
+
+## 3. The triage decision tree
+
+**Start here. Every node is one command.** Do not skip a node — the 2026-07-15 incident was misdiagnosed
+for six hours precisely by skipping node 1.
+
+### Node 1 — Is the backend actually alive?
+
+```bash
+lsof -ti :8787 || echo "BACKEND DOWN"
+```
+
+**:8787, not :2222.** **Frontend up ≠ app up.** Vite on :2222 serves pages from disk and will keep
+returning `200` **forever** with a dead backend behind it. Every page renders; nothing works. This is
+the single most expensive misread in the product's history.
+
+Faster, and reports both plus the launchd agents:
+
+```bash
+cd ~/BGit/Bryan_git/LargeFileBridge && just status
+```
+
+* **`backend :8787 down`** → it died. Go to **§4.1** / **§4.4**.
+* **`backend :8787 UP`** → alive. Node 2.
+
+### Node 2 — Did it die and restart, or is it stuck?
+
+```bash
+grep -h "BOOT\|SHUTDOWN" ~/T/_large_files_bridge/transactions.log | tail -5
+```
+
+A **BOOT** marker with no preceding **SHUTDOWN** = it **crashed** (a clean stop always writes SHUTDOWN).
+A BOOT timestamp *younger than your batch* = your work died with the old process. No recent BOOT and the
+port is up = it is **stuck**, not dead → **§4.3** / **§4.8**.
+
+### Node 3 — Did the work start?
+
+```bash
+grep "BEGIN" ~/T/_large_files_bridge/transactions.log | tail -20
+```
+
+No BEGIN lines for your batch = the producer never enqueued (check the popup actually called enqueue —
+[processing.mdx](./processing.mdx)), or the op is **uninstrumented** (§7).
+
+### Node 4 — Did it finish?
+
+```bash
+grep -c BEGIN ~/T/_large_files_bridge/transactions.log; grep -c END ~/T/_large_files_bridge/transactions.log
+```
+
+**BEGIN > END is the whole diagnosis.** The difference is work that started and never reported an
+outcome — i.e. was **killed mid-flight**. A gap in a ledger is evidence. → **§4.2**.
+
+### Node 5 — Where did the output go?
+
+```bash
+fd -H -I -e ai_description --changed-within 24h | wc -l
+```
+
+Disk is the source of truth (§5). → **§4.2**, **§4.7**.
+
+---
+
+## 4. The playbooks
+
+Each: **Symptom → Question → Command → How to read it → What it discriminates.**
+
+### 4.1 — "I queued a batch and nothing happened." (the flagship)
+
+The worked example is the **canonical incident of 2026-07-15**. Walk it end to end; it exercises every
+trap in this spec.
+
+**Symptom.** 1,440 AI descriptions queued in the evening. Next morning: the Processing page is **empty**,
+the app loads fine, and there are no errors anywhere. Did it finish? Did it never start?
+
+**Step 1 — Is the backend alive?** (Node 1. This is the step that was skipped.)
+
+```bash
+lsof -ti :8787 || echo "BACKEND DOWN"
+```
+
+> **`BACKEND DOWN`.** The app had been dead **~6 hours**. Vite on :2222 had been cheerfully serving
+> pages the whole time. **Frontend up ≠ app up.**
+
+**Step 2 — Why is it down? It didn't restart itself?**
+
+`tsx watch` restarts on **file change only — NOT on crash**. Nothing was editing files at 22:13, so the
+backend stayed dead until a human noticed. **Never assume the watcher resurrects anything.**
+
+**Step 3 — Find the death.** It is not in `error.err` (an abort runs no handlers). It is in `launcher.log`:
+
+```bash
+grep -l "FATAL ERROR\|JavaScript heap" ~/T/_large_files_bridge/launcher.log*
+```
+
+Then read the abort itself, filtering the proxy flood:
+
+```bash
+grep -h "FATAL ERROR" ~/T/_large_files_bridge/launcher.log* | head -3
+```
+
+> `packages/backend dev: FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory`
+>
+> V8 heap hit **4.1GB** at **22:13 PDT**. `error.err` was **clean** — absence of an error is not
+> evidence of success.
+
+**Step 4 — Where did the backlog go?** Nowhere. It was **vaporized silently**. The queue is a
+module-level in-memory array with **no disk write and no restore** — an empty queue after a restart
+means **LOST**, not finished.
+
+The in-memory backlog that a crash vaporizes with no trace is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — the module-level `pending: QueueTask[]` (~line 93) / `queueDepth()` (~line 127)
+
+**Step 5 — How much actually got done?** Do **not** trust the empty in-flight map (§4.2 explains why).
+Count artifacts on disk:
+
+```bash
+fd -H -I -e ai_description --changed-within 11h | wc -l
+```
+
+> **146.** Logs said **149** writes. Two independent sources, a gap of 3 — explained by the window
+> boundary, not by a bug (§5). ~**146–149 of 1,440** done, **all before 19:50, zero after**.
+
+**Step 6 — Root cause.** 24-way describe concurrency × ~66–90MB pinned base64 per in-flight file
+≈ **1.6–2.2GB** of live heap — see [memory.mdx](./memory.mdx).
+
+**Discriminates:** crashed vs. stuck vs. never-enqueued vs. finished-quietly.
+
+### 4.2 — "The queue is empty — is it done, or did it die?"
+
+**These look identical** in the UI, and the code actively conspires to make them identical:
+the progress registry **deletes the record on completion**, so at post-mortem the in-flight map is
+**always empty** — for a batch that finished perfectly and for one that was killed mid-flight.
+
+The registry that deletes the job record on completion (why the post-mortem map is empty) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.registry.ts` — `track()` (~line 43) / `end()` (~line 29)
+
+**Question 1 — does the ledger balance?**
+
+```bash
+grep -c BEGIN ~/T/_large_files_bridge/transactions.log; grep -c END ~/T/_large_files_bridge/transactions.log
+```
+
+Equal = every started item reported an outcome → it **finished**. **BEGIN > END** = the difference was
+**killed mid-flight** → it **died**.
+
+**Question 2 — which files were orphaned?** BEGINs whose `txn=` never got an END:
+
+```bash
+awk '/BEGIN/{b[$0]++} /END/{e[$0]++}' ~/T/_large_files_bridge/transactions.log
+grep BEGIN ~/T/_large_files_bridge/transactions.log | grep -oE 'txn=[a-z0-9]+' | sort > /tmp/b.txt
+grep END   ~/T/_large_files_bridge/transactions.log | grep -oE 'txn=[a-z0-9]+' | sort > /tmp/e.txt
+comm -23 /tmp/b.txt /tmp/e.txt
+```
+
+Those `txn=` ids are **exactly the files that were in flight when the process died** — the OOM suspects
+(§4.4), and the re-run list.
+
+**Question 3 — did the process restart under us?**
+
+```bash
+grep -h "BOOT\|SHUTDOWN" ~/T/_large_files_bridge/transactions.log | tail -5
+```
+
+A **BOOT** inside your batch window with no SHUTDOWN = crash.
+
+**Question 4 — what does DISK say?** The only source that owes nothing to a process that no longer exists:
+
+```bash
+fd -H -I -e ai_description --changed-within 11h | wc -l
+fd -H -I -e transcription   --changed-within 11h | wc -l
+```
+
+> **`-H -I` are MANDATORY.** Artifacts live in **hidden, git-ignored** `.lfbridge/` directories. Without
+> both flags `fd` skips them and returns a confident, wrong **0**.
+>
+> **The macOS `find` trap: `find` lacks `-newermt` and silently returns 0** — it does not error, it
+> agrees with you. The repo charter bans macOS `find` outright (filesystem indexing is off); use `fd` /
+> `rg`. A tool that returns 0 because it does not understand the question is worse than one that fails.
+
+**Discriminates:** finished cleanly vs. killed mid-flight vs. never started.
+
+### 4.3 — "The app is up but nothing works."
+
+**Symptom.** Pages render. Buttons do nothing. No errors in the browser console worth reading.
+
+**Question — is the backend actually there?**
+
+```bash
+just status     # or: lsof -ti :8787 || echo "BACKEND DOWN"
+```
+
+**Frontend up ≠ app up.** :2222 is a static file server; it does not know or care whether :8787 exists.
+
+**Confirm from the launcher's flood:**
+
+```bash
+grep -c "ECONNREFUSED\|proxy error" ~/T/_large_files_bridge/launcher.log
+```
+
+A large, growing count = every frontend poll is bouncing off a dead backend. That flood **is** the
+diagnosis — and it is also what buries the abort line in §4.1, so grep for `FATAL ERROR` **specifically**
+rather than reading the tail.
+
+**The 401-to-curl red herring — do not be fooled:**
+
+```bash
+curl -s -o /dev/null -w '%{http_code}' localhost:8787/api/progress   # → 401
+```
+
+**A 401 is NOT evidence the backend is broken.** It is evidence the backend is **alive and correctly
+refusing an unauthenticated request** — dev-auth is off and real Google credentials are in play. A dead
+backend gives **connection refused**, not 401. See [authentication.mdx](./authentication.mdx).
+**401 = healthy. Refused = dead.**
+
+**Discriminates:** dead backend vs. auth gate vs. genuine frontend bug.
+
+### 4.4 — "We ran out of memory."
+
+**Question 1 — did we actually OOM, or just die?**
+
+```bash
+grep -l "FATAL ERROR\|JavaScript heap" ~/T/_large_files_bridge/launcher.log*
+```
+
+A hit = V8 abort. **Only `launcher.log` has this** — an abort cannot run our handlers, so `error.err`
+and `transactions.log` both end mid-sentence with no explanation.
+
+**Question 2 — what was the heap doing before the gap?** Every ledger line carries `heapUsedMB` / `rssMB`:
+
+```bash
+grep HEARTBEAT ~/T/_large_files_bridge/transactions.log | tail -20
+```
+
+Read the **trend, not the peak**. A sawtooth that recovers is healthy GC. A **monotone climb** that never
+recovers is a leak or an over-wide fan-out — and the **last HEARTBEAT before the gap** is your time of
+death, accurate to the heartbeat interval.
+
+**Question 3 — which files were in flight when it died?** The orphaned-BEGIN set from §4.2. Sum their
+`bytes=`: that is (a lower bound on) the live payload at death. On 2026-07-15 that sum was the whole story
+— **24 in-flight × ~66–90MB pinned base64 ≈ 1.6–2.2GB**, against a 4.1GB ceiling.
+
+**Question 4 — was the fan-out the cause?** Compare in-flight count against the budget. `describe` is
+**network-fixed and generous (~24 default, `LFB_DESCRIBE_CONCURRENCY`)** because the wait is a
+round-trip, not CPU — but **each in-flight job pins its base64 payload in heap**, so a budget tuned for
+*latency* silently became a **memory** budget. That is the lesson: concurrency budgets are memory budgets
+whenever the unit of work holds bytes.
+
+The per-bucket admission caps that decide how many payloads can be pinned at once are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` / `bucketOf()` / `pump()`
+
+See [memory.mdx](./memory.mdx) for the fix and [performance.mdx P-27](./performance.mdx) for the
+event-loop sibling of this bug.
+
+**Discriminates:** OOM vs. `SIGKILL` vs. clean exit vs. hang.
+
+### 4.5 — "A transcription / AI description failed."
+
+**Question 1 — find the transaction for that exact file.** Ledger lines carry the **full absolute path**:
+
+```bash
+grep "/Users/bryan/path/to/file.mp4" ~/T/_large_files_bridge/transactions.log
+```
+
+BEGIN with no END = killed mid-flight (§4.2), not "failed". END with `outcome=failed` = a real failure;
+read on.
+
+**Question 2 — was it the provider?** The ledger records `provider=`, `model=`, `attempt=`:
+
+```bash
+grep "txn=<id>" ~/T/_large_files_bridge/transactions.log
+```
+
+`attempt=3` means we retried and still lost. `attempt=1` with a failure means we did **not** retry —
+which means the error was classified **permanent**.
+
+**Question 3 — transient or permanent?** This is the fork that explains most "why didn't it retry?"
+questions. Retries happen **only** for errors the classifier calls transient (timeouts, 429s, 5xx);
+anything else fails immediately and correctly (a 400 will still be a 400 in 8 seconds).
+
+The transient-vs-permanent classification and the retry loop around a provider call are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `isTransient()` (~line 101) / `withProviderRetry()` (~line 186)
+
+The single real `fetch` to a vision provider, and the size-scaled timeout it is given, are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `postJsonOnce()` (~line 137) / `timeoutForBytes()` (~line 131)
+
+> **Today, a provider call that SUCCEEDS is invisible** — `adapters.ts`'s only log statement is a retry
+> **warning**. You can see failure and you can see retry; you cannot see success, latency, or which model
+> answered. That is instrumentation debt (§7), and it is why "it's slow" (§4.6) is currently hard.
+
+**Question 4 — for transcription, which engine ran?** Transcription has an **engine fallback chain**: the
+heavyweight MLX engine, else `whisper-base`. A silent auto-fallback changes quality and runtime, and it is
+a common cause of "why is this transcript worse today?"
+
+The per-file describe runner, and the description path it writes to, are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()` (~line 158) / `resolveDescriptionPath()` (~line 47)
+
+The engine choice and the auto-fallback chain are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/engine.ts` — `pickEngine()` (~line 46) / `transcribeWithEngine()` (~line 72)
+
+**Discriminates:** provider error vs. transient exhaustion vs. permanent rejection vs. engine fallback vs.
+killed mid-flight.
+
+### 4.6 — "It's slow."
+
+**Question 1 — slow at what?** Every END line carries `ms=` and `bytes=`. Get the distribution per op,
+not an anecdote:
+
+```bash
+grep "END.*op=describe" ~/T/_large_files_bridge/transactions.log \
+  | grep -oE 'ms=[0-9]+' | cut -d= -f2 | sort -n \
+  | awk '{a[NR]=$1} END{print "n="NR, "p50="a[int(NR*0.5)], "p95="a[int(NR*0.95)], "max="a[NR]}'
+```
+
+**p95, not mean.** A batch's wall time is set by its tail. A p50 of 3s with a p95 of 90s is not a "3s
+operation" — it is a 90s operation that is sometimes fast.
+
+**Question 2 — is it the queue or the work?** A file waiting is not a file that is slow. Compare BEGIN
+rate against queue depth over time — a flat depth with a healthy END rate means we are **at** the budget
+(working as designed); a growing depth means the producer outruns the drain.
+
+The pending backlog and its head rows (what is waiting, right now) are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `queueDepth()` (~line 127) / `listQueuedItems()` (~line 204)
+
+**Question 3 — did we actually achieve the concurrency we budgeted?** Count BEGINs with no END at each
+instant — the real in-flight number. **Achieved concurrency below the budget** means something is
+serializing us (a shared lock, a blocked event loop, a provider rate limit), and that is the bug — not
+the per-file time.
+
+**Question 4 — is the event loop blocked?** If in-flight is at budget and everything is slow *including*
+`/api/progress`, this is not slowness — it is **T3**, §4.8.
+
+**Discriminates:** slow provider vs. queue starvation vs. under-achieved concurrency vs. blocked loop.
+
+### 4.7 — "A file was processed twice / not at all."
+
+**Question 1 — is the artifact on disk?** Disk beats every other source:
+
+```bash
+fd -H -I -e ai_description --changed-within 24h | grep 'file_basename'
+```
+
+Present = it was done, whatever the UI says. Absent = it was not, whatever the logs say.
+
+**Question 2 — was it skipped as already-done?** `describeOne` reads the existing artifact and returns
+early unless `overwrite` is set. "Nothing happened" is often "everything already happened."
+
+The already-done check that makes re-running a batch safe is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `readDescription()` (~line 68), consulted by `describeOne()` before any work
+
+**Question 3 — was it deduped?** The queue refuses to hold the same `op + path` twice while it is pending
+or running. A double-click reports the second batch as `deduped` — that is correct behavior, not a
+dropped file ([job_queue.mdx §2](./job_queue.mdx)).
+
+**Question 4 — processed twice?** Two BEGINs for one path with two ENDs means dedup did **not** hold —
+either the two enqueues straddled a completion (legal: the first finished and left the in-flight set), or
+they were in **different processes** (a restart clears the set). Check for a BOOT between them:
+
+```bash
+grep -E "BOOT|/exact/path.mp4" ~/T/_large_files_bridge/transactions.log
+```
+
+**Discriminates:** skip-already-done vs. dedup vs. genuine double-run vs. never-enqueued.
+
+### 4.8 — "The process is pinned at 100% CPU / the UI hangs."
+
+**Symptom.** Everything hangs at once — every page, every tab, including pages that touch none of the
+work being done. `/api/progress` never answers.
+
+**This is not slowness. It is a blocked event loop — theme T3.** One synchronous call on a hot path
+freezes the **entire** single-threaded API server. The tell is the **breadth**: a slow *operation* is
+slow; a blocked *loop* takes down `/health` too.
+
+**Question — what ran synchronously?** Look for `spawnSync`, `readFileSync`, `readdirSync`, `statSync` on
+a queue or request path:
+
+```bash
+rg -n "spawnSync|readFileSync|readdirSync|statSync" ~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules
+```
+
+**The standing rule: NEVER `spawnSync` / `readFileSync` on a queue or request path.** This is exactly
+[performance.mdx P-27](./performance.mdx): describe's compress-to-fit used `spawnSync` on the ~24-way hot
+path and the Processing page would not load during a mass run. Cross-read P-04 and P-16 for the same
+disease on filesystem endpoints.
+
+**Discriminates:** blocked event loop (T3) vs. genuine CPU saturation (the core budget, working) vs. a
+hung child process.
+
+---
+
+## 5. The method
+
+Five rules. They are opinionated on purpose; each was paid for.
+
+1. **Believe DISK over LOGS.** Logs describe intent; the filesystem records outcome. On 2026-07-15 the
+   in-flight map said "nothing running" (true, and useless), the queue said "empty" (true, and
+   misleading), and only `fd` said **146 files exist** — the one fact that survived the process.
+2. **Require two independent sources before you believe a count.** Logs said 149 writes; disk said 146
+   files. **A 3-file gap you can explain (the 11h window boundary) is a healthy investigation.** A gap
+   you cannot explain is a bug you have not found yet. One source agreeing with itself is not
+   corroboration.
+3. **A gap in a ledger is evidence.** BEGIN without END is not missing data — it is a **positive finding**
+   that names the exact files that were in flight at death. Read absence as a signal, not as noise.
+4. **Absence of an error is not evidence of success.** The worst failures we have write nothing to
+   `error.err`, because an abort runs no handlers. A clean `error.err` next to a 1,294-file shortfall is
+   not reassurance; it is the shape of the bug.
+5. **Reproduce with the smallest N before the biggest.** If 1,440 files OOM, run **10**. If 10 work, run
+   **100** and watch `heapUsedMB` in the HEARTBEATs. The failure is nearly always in the *scaling*, not
+   the *unit* — and the smallest N that fails is the one you can actually debug.
+
+---
+
+## 6. What we log, and why
+
+**The levels contract — routing is by severity, and durability follows severity:**
+
+| Level | Goes to | Durability | Meaning |
+| --- | --- | --- | --- |
+| `DEBUG` / `INFO` | `log.log` | batched async | Context. Cheap. May be lost on a crash. |
+| `WARN` / `ERROR` / `FATAL` | `error.err` **and** `log.log` | **synchronous** | A fault. Must survive the crash it describes. |
+| `BEGIN` / `END` / `HEARTBEAT` / `BOOT` / `SHUTDOWN` | `transactions.log` | **synchronous** | The work ledger. The flight recorder. |
+
+Errors go to **both** files deliberately: `error.err` is the complete fault trail you grep at 3am;
+`log.log` keeps the same line **in context**, next to the INFO lines that explain what led to it.
+
+The level routing (and the dual write of errors to both files) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — the `log.*` API (`log.debug` / `log.info` / `log.warn` / `log.error`) over `RollingFileWriter.writeSync()`
+
+**The standing rule for engineers — non-negotiable:**
+
+> **Every background op logs a START and a FINISH with the full absolute path, or it is not shipped.**
+
+A START with no FINISH is how §4.2 works at all. An op that logs only on failure is an op whose success
+you must *infer* — and inference is what cost six hours. **Log the path, absolutely and in full**
+([full_paths.mdx](./full_paths.mdx)) — a basename is not greppable, and a relative path is a lie the
+moment the cwd changes.
+
+**Error sites use the structured helper, never a hand-formatted string.** `logError()` takes one object
+and emits a consistent, greppable shape (`op=… expected=… error=… data=…`), routes it to the durable
+path, and runs every interpolated field through `stripControlChars` so an untrusted filename cannot
+**forge a log line**. That last property is why this is a rule and not a style preference.
+
+The required structured shape for every error site is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `logError()` / the `LogErrorFields` interface (`file`, `className?`, `operation`, `expected?`, `error`, `data?`)
+
+The synchronous flush that runs before a clean exit (so the batched tail is not lost) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `flushLogs()`
+
+---
+
+## 7. Instrumentation debt
+
+**These are the blind spots that made the canonical incident invisible.** Each is a place where real work
+happens and the ledger stays silent. This table is the work order for
+[transactions_log.mdx](./transactions_log.mdx).
+
+| Site | Today | Must log | Why it hurts |
+| --- | --- | --- | --- |
+| `modules/describe/describe.service.ts` — `describeOne()` (~158) | **NO start log.** Goes straight to work and returns. | BEGIN (path, bytes, provider) + END (outcome, ms) | The 1,440-file batch left **no record it ever started**. §4.2's BEGIN/END diff is impossible without this. |
+| `modules/transcribe/transcribe.service.ts` — `transcribeOne()` (~86) | **NO start log.** | BEGIN (path, bytes, engine) + END (outcome, ms) | Same blindness as describe, on the other heavy op. |
+| `modules/describe/adapters.ts` — `postJsonOnce()` (~137) | The **only** log statement in the file is a **retry warning**. | BEGIN/END per call: provider, model, attempt, bytes, ms, status | **A provider call that succeeds is invisible.** No latency, no model, no cost basis — §4.6 cannot be answered. |
+| `modules/describe/adapters.ts` — `withProviderRetry()` (~186) | Warns per retry only. | Final attempt count on the END line | Cannot distinguish "worked first try" from "barely survived 3 attempts" — the leading indicator of a provider outage. |
+| `modules/jobqueue/jobqueue.service.ts` — `runTask()` (~297) | Per-item catch; no ledger line. | BEGIN/END around dispatch + HEARTBEAT with depth + heap | Without HEARTBEATs there is **no time of death** (§4.4) and no heap trend. |
+| `modules/jobqueue/jobqueue.service.ts` — `listRecentFailures()` (~220) | In-memory only; dies with the process. | Mirror each failure to the ledger | Post-mortem failures are unreadable — the list is gone exactly when it is needed. |
+| `modules/progress/progress.registry.ts` — `end()` (~29) | **Deletes the record.** | Emit an END line **before** deleting | The delete is correct for the dock and fatal for forensics. The ledger line is the durable twin. |
+| `modules/transcribe` / `tools/transcribe/engine.ts` — `pickEngine()` (~46) | Silent choice. | The chosen engine + whether it was a **fallback** | A silent auto-fallback changes quality and runtime with no trace (§4.5 Q4). |
+| Process lifecycle (`main.ts`) | No markers. | **BOOT** on start, **SHUTDOWN** on clean exit | Node 2 of the triage tree — "did it restart under me?" — depends entirely on these. |
+| `modules/health/health.router.ts` | Liveness only. | Expose queue depth + heap | Makes "is it alive **and working**?" one HTTP call instead of a log dig. |
+| `modules/clientlog/clientlog.router.ts` — `POST /` | Accepts client logs (rate-limited). | Correlate with a `txn=` where one exists | A browser-side symptom cannot currently be joined to the server-side transaction that caused it. |
+
+**The BOOT/SHUTDOWN pair and the `describeOne`/`transcribeOne` BEGIN lines are the highest-value items
+here** — they are what turn §3's tree and §4.2's diff from prose into commands that work.
+
+---
+
+## 8. Field reference
+
+Every field in a `transactions.log` line. Format and emission rules are owned by
+[transactions_log.mdx](./transactions_log.mdx); this is the operator's glossary.
+
+| Field | Meaning | Used by |
+| --- | --- | --- |
+| *(timestamp)* | ISO 8601 with offset. Leads every line. | §4.4 (time of death), §4.6 (rates) |
+| `txn=` | **Correlation id.** Ties a BEGIN to its END, and a job to the API calls it made. The join key. | §4.2, §4.5 |
+| `op=` | The operation: `transcribe` / `describe` / `compress` / `pin`. | §4.6 (per-op p50/p95) |
+| `path=` | **Full absolute path** of the file. Never a basename ([full_paths.mdx](./full_paths.mdx)). | §4.5, §4.7 |
+| `bytes=` | Payload size. On BEGIN, the memory this job is about to pin. | §4.4 (sum in-flight), §4.6 |
+| `ms=` | Duration, END lines only. | §4.6 |
+| `outcome=` | `ok` / `failed` / `skipped` / `blocked` / `unsupported` / `needs_setup`. | §4.2, §4.5, §4.7 |
+| `provider=` | Vision provider for a describe call. | §4.5 |
+| `model=` | The specific model that answered. | §4.5, cost analysis |
+| `attempt=` | Which try this was (`withProviderRetry`). `>1` = we hit a transient. | §4.5 |
+| `heapUsedMB=` | V8 heap live at this line. **The leak/fan-out signal.** | §4.4 |
+| `rssMB=` | Resident set size — total process memory, incl. buffers and child processes. | §4.4 |
+| `BEGIN` | Work started. **A BEGIN with no END is the crown-jewel signal.** | §4.2, §4.4 |
+| `END` | Work reported an outcome. | §4.2 |
+| `HEARTBEAT` | Periodic liveness + heap + queue depth. **The last one before a gap is the time of death.** | §4.4 |
+| `BOOT` | Process started. **A BOOT with no preceding SHUTDOWN = it crashed.** | §3 Node 2 |
+| `SHUTDOWN` | Clean exit. Its **absence** is the diagnosis. | §3 Node 2 |
+
+---
+
+## 9. Acceptance criteria
+
+1. **Every command in §3 and §4 runs as written**, pasteable, against a real state root
+   (`~/T/_large_files_bridge/`), with no editing beyond a path or id — verified against the live machine.
+2. **Every question in §3 is answerable in ONE command** against a flat file, with no debugger, no rerun,
+   and no live process.
+3. **The triage tree's first node is `:8787`, never `:2222`** — `just status` reports both, and the
+   frontend-up-≠-app-up trap is stated wherever liveness is checked.
+4. **BEGIN/END balance is computable in one command** (§3 Node 4), and orphaned `txn=` ids — the exact
+   files in flight at death — are recoverable in one pipeline (§4.2).
+5. **A V8 OOM abort is findable in one grep** over `launcher.log*`, with the proxy-error flood filtered
+   (§4.4). It is never expected in `error.err`.
+6. **The artifact count on disk is obtainable with `fd -H -I`**, and the spec states that both flags are
+   mandatory (hidden, git-ignored `.lfbridge/`) and that macOS `find` **silently returns 0**.
+7. **Every op named in §7 emits a BEGIN with the full absolute path and an END with an outcome** once the
+   debt is paid. New background ops ship with both **or they do not ship** (§6).
+8. **`BOOT` and `SHUTDOWN` markers exist**, so "did it restart under me?" is answerable without guessing.
+9. **Every error site uses `logError()`'s structured shape**, not a hand-formatted string, so error lines
+   are greppable and untrusted filenames cannot forge lines.
+10. **All logs live in the state root, never `/tmp`**, at 5 MiB × 5 generations; `/tmp/lfb.webapp.pid` and
+    `/tmp/lfb.web.port` remain the only `/tmp` residents and are **not** logs.
+11. **The rotation deadline is documented** (§2): 5 generations is hours under load, so an operator is
+    told to **copy the state root before investigating**.
+12. **A 401 to bare `curl` is documented as healthy** (§4.3) — connection-refused, not 401, is the
+    dead-backend signal.
+
+<!--
+  The operator's manual. Companion to transactions_log.mdx (which owns the ledger FORMAT; this owns the
+  PLAYBOOKS). Written for 3am use on a dead machine.
+  THESIS: debuggability is a feature; silent failure > loud failure in cost. Every question = ONE command
+  against a FLAT FILE. No debugger, no rerun, no live process.
+  LOG FAMILY (§2): log.log (batched, noisy, authoritative for nothing) / error.err (SYNC, fault trail;
+  trap: an ABORT runs no handlers so OOM writes NOTHING here) / transactions.log (SYNC work ledger,
+  authoritative for "did this file get processed") / launcher.log (ONLY place a V8 OOM abort appears;
+  trap: buried in the proxy-error flood — grep, never scroll) / ipfs-*.log (EXTERNAL process, rotated
+  only at reopen boundaries via rotateIfOversized()). All 5 MiB × 5 = a FORENSIC DEADLINE (hours under
+  load) → copy the state root before investigating. /tmp/lfb.webapp.pid + lfb.web.port = scratch, NOT logs.
+  CANONICAL INCIDENT (§4.1, verified against launcher.log.3): 2026-07-15, 1,440 AI descriptions, 22:13 PDT
+  V8 4.1GB → "FATAL ERROR: Ineffective mark-compacts near heap limit". In-memory pending[] vaporized
+  silently. tsx watch restarts on FILE CHANGE, NOT on crash → dead ~6h. Vite :2222 kept serving 200s
+  (FRONTEND UP ≠ APP UP — ALWAYS check :8787 FIRST). ~146-149 done, all before 19:50, zero after. Cause:
+  24-way describe × ~66-90MB pinned base64 ≈ 1.6-2.2GB (memory.mdx).
+  CROWN JEWELS (keep verbatim): `fd -H -I -e ai_description --changed-within 11h` — -H -I MANDATORY
+  (hidden, git-ignored .lfbridge/); macOS `find` lacks -newermt and SILENTLY returns 0 (charter bans find
+  outright: FS indexing off). OOM: grep -l "FATAL ERROR\|JavaScript heap" launcher.log*. TWO INDEPENDENT
+  SOURCES before believing a count (logs 149 vs disk 146 = window boundary, explainable = healthy). A 401
+  to bare curl = HEALTHY (dev-auth off + real Google creds); REFUSED = dead (authentication.mdx).
+  METHOD (§5): disk > logs; two sources; a gap in a ledger is EVIDENCE; absence of error ≠ success;
+  smallest N first.
+  TRAP, load-bearing: progress.registry end() DELETES the record on completion → at post-mortem the
+  in-flight map is ALWAYS empty, identically for "finished perfectly" and "killed mid-flight". Only the
+  BEGIN/END diff distinguishes them.
+  INSTRUMENTATION DEBT (§7) = the work order: describeOne (~158) + transcribeOne (~86) have NO start log;
+  adapters.ts's ONLY log statement is a retry WARNING → a provider call that SUCCEEDS is INVISIBLE;
+  BOOT/SHUTDOWN markers don't exist yet (triage Node 2 depends on them). Highest value: BOOT/SHUTDOWN +
+  the two BEGIN lines.
+  STANDING RULES: every background op logs a START and a FINISH with the FULL ABSOLUTE path or it is not
+  shipped; error sites use logError()'s structured shape (stripControlChars → a filename can't FORGE a log
+  line); NEVER spawnSync/readFileSync on a queue/request path (T3, performance.mdx P-27).
+  Code verified 2026-07-16: jobqueue.service.ts (pending[] ~93, queueDepth ~127, listQueuedItems ~204,
+  listRecentFailures ~220, runTask ~297, capFor/bucketOf/pump); progress.registry.ts (track 43, end 29);
+  describe.service.ts (resolveDescriptionPath 47, readDescription 68, describeOne 158); adapters.ts
+  (isTransient 101, timeoutForBytes 131, postJsonOnce 137, withProviderRetry 186); transcribe.service.ts
+  (transcribeOne 86); tools/transcribe/engine.ts (pickEngine 46, transcribeWithEngine 72); shared/logging.ts
+  (rotateIfOversized 56, RollingFileWriter 67, writeSync 119, log.* 184, logError 204, flushLogs);
+  config/state-dir.ts (resolveStateDir 6, resolveLogDir 15); justfile (run 90, stop 125, logs 162, status 166).
+  Keep in sync with transactions_log.mdx (format/emission), memory.mdx (the OOM fix), crash_recovery.mdx,
+  performance.mdx (T3/P-27), processing.mdx, job_queue.mdx (§5 no-persistence posture), authentication.mdx.
+-->

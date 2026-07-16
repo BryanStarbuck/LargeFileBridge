@@ -25,6 +25,7 @@ import path from "node:path";
 import { resolveStateDir, ensureDir } from "../../config/state-dir.js";
 import { coreBudget } from "../../shared/concurrency.js";
 import { log } from "../../shared/logging.js";
+import { txn } from "../../shared/transactions.js";
 
 /** The byte ceiling we compress down to. Held safely under the 18MB inline cap in adapters.ts so the
  *  compressed copy always clears readBase64Capped() with margin. */
@@ -62,29 +63,50 @@ function which(bin: string): boolean {
 // even the shorter ffprobe/magick probes) NEVER block the Node event loop (ai_description.mdx §3.3.1,
 // job_queue.mdx §3, performance.mdx P-27). This is what lets the describe queue run ~24 files in parallel
 // (job_queue.mdx §3) while the web app stays responsive and GET /api/progress keeps answering — the exact
-// freeze that made the Processing page fail to load during a mass AI-description run. Captures stdout too
-// (probeVideo needs the ffprobe JSON), both streams bounded so a chatty tool can't grow memory unbounded.
+// freeze that made the Processing page fail to load during a mass AI-description run.
+//
+// STDOUT CAPTURE IS OPT-IN, and that is a memory decision, not a style one (memory.mdx P-30). This runner
+// used to capture stdout for EVERY caller, bounded at 32MB — which meant every concurrent child reserved a
+// 32MB ceiling, and on the ~24-wide describe path that is up to ~0.7GB of headroom sitting behind payloads
+// that are already the heap hazard. Worse, the bound was applied as `out = (out + d.toString()).slice(-32MB)`,
+// which transiently allocates ~2× the accumulated string on EVERY chunk — quadratic in chunk count for a
+// chatty ffmpeg. And the whole cost bought nothing: only probeVideo() ever reads `out`; encodeCrf(),
+// encodeTwoPass() and fitImageUnderLimit() throw it away. So: capture only when asked, cap at ~1MB (an
+// ffprobe JSON is kilobytes), and accumulate into a chunk ARRAY joined once at close so the concat is linear.
+// When capture is off we hand the child /dev/null for stdout — nothing is allocated, and there is no pipe
+// that could fill and block the child. stderr is unchanged: still captured, still tail-bounded at 4096.
+const STDOUT_CAP_BYTES = 1024 * 1024;
+
 function runAsync(
   bin: string,
   args: string[],
   timeoutMs = 15 * 60 * 1000,
+  opts: { captureStdout?: boolean } = {},
 ): Promise<{ code: number | null; err: string; out: string }> {
   return new Promise((resolve) => {
-    let out = "";
+    const captureStdout = opts.captureStdout === true;
+    const chunks: string[] = [];
+    let captured = 0;
     let err = "";
     let settled = false;
     let child;
     try {
-      child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+      child = spawn(bin, args, { stdio: ["ignore", captureStdout ? "pipe" : "ignore", "pipe"] });
     } catch (e) {
       resolve({ code: null, err: (e as Error).message, out: "" });
       return;
     }
+    // Joined once, at settle — never in the data handler (that concat is the quadratic part of P-30).
+    const finishOut = (): string => (captureStdout ? chunks.join("") : "");
     const timer = setTimeout(() => {
       if (!settled) child!.kill("SIGKILL");
     }, timeoutMs);
+    // Null when capture is off (stdio "ignore") — the optional chain is what makes that a no-op.
     child.stdout?.on("data", (d) => {
-      out = (out + d.toString()).slice(-32 * 1024 * 1024); // bounded (the old maxBuffer)
+      if (captured >= STDOUT_CAP_BYTES) return; // past the cap we drop, we do not grow
+      const s = d.toString();
+      chunks.push(s);
+      captured += s.length;
     });
     child.stderr?.on("data", (d) => {
       err = (err + d.toString()).slice(-4096); // keep only the tail — a long ffmpeg log can be huge
@@ -93,13 +115,13 @@ function runAsync(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ code: null, err: e.message, out });
+      resolve({ code: null, err: e.message, out: finishOut() });
     });
     child.on("close", (code) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ code, err, out });
+      resolve({ code, err, out: finishOut() });
     });
   });
 }
@@ -164,11 +186,14 @@ interface VideoInfo {
   duration: number; // seconds
 }
 async function probeVideo(abs: string): Promise<VideoInfo | null> {
+  // The ONE call site that needs stdout — the ffprobe JSON below is the whole point of the call, and it is
+  // kilobytes, comfortably inside runAsync's 1MB capture cap (memory.mdx P-30). Every other runAsync() in
+  // this file discards stdout and therefore must NOT ask for it.
   const r = await runAsync("ffprobe", [
     "-v", "error", "-select_streams", "v:0",
     "-show_entries", "stream=width,height:format=duration",
     "-of", "json", abs,
-  ], 60_000);
+  ], 60_000, { captureStdout: true });
   if (r.code !== 0) return null;
   try {
     const j = JSON.parse(r.out) as { streams?: Array<{ width?: number; height?: number }>; format?: { duration?: string } };
@@ -425,28 +450,53 @@ const VIDEO_THREADS_PER_ENCODE = 4;
  * untouched when it already fits; otherwise transcodes a temporary compressed copy that fits and returns
  * its path with a cleanup(). Never modifies the original. Throws (with a helpful message) only when the
  * required tool is missing or the file genuinely can't be squeezed under the cap.
+ *
+ * Ledgered as `op=fit_media` (transactions_log.mdx §5.6). This is the most memory-hungry step in the
+ * product — it holds media buffers and shells out to ffmpeg for minutes at a time — so if the OOM lives
+ * anywhere, the heap numbers the ledger stamps on these BEGIN/END lines are what will show it. The END
+ * carries `outBytes` and `transcoded`, which is what distinguishes "this file was already small enough and
+ * we did nothing" from "we burned 14 seconds of ffmpeg on it"; a BEGIN with no END means the process died
+ * mid-transcode on THIS path, and naming that step is the entire reason the pair exists.
+ *
+ * `parent` lets the owning describe txn claim this one (§4) — `grep <describeTxn>` then returns the file's
+ * complete story, fit_media child included, de-interleaved from its ~23 concurrent siblings.
  */
-export async function fitMediaUnderLimit(absPath: string, kind: "image" | "video", limitBytes = FIT_TARGET_BYTES): Promise<FitResult> {
+export async function fitMediaUnderLimit(
+  absPath: string,
+  kind: "image" | "video",
+  limitBytes = FIT_TARGET_BYTES,
+  opts: { parent?: string } = {},
+): Promise<FitResult> {
   const size = sizeOf(absPath);
-  if (size >= 0 && size <= limitBytes) {
-    return { path: absPath, compressed: false, cleanup: NOOP_CLEANUP, note: null };
-  }
-  // Only the oversize path transcodes, so only it pays the core-budget gate (§12.6.1).
-  const release = await acquireTranscodeSlot();
-  let out: string;
-  let note: string;
-  try {
-    ({ out, note } = kind === "video"
-      ? await fitVideoUnderLimit(absPath, limitBytes)
-      : await fitImageUnderLimit(absPath, limitBytes));
-  } finally {
-    release();
-  }
-  log.info("describe", `${absPath} (${(size / 1024 / 1024).toFixed(1)}MB) → ${note}`);
-  return {
-    path: out,
-    compressed: true,
-    cleanup: () => tryUnlink(out),
-    note,
-  };
+  return txn(
+    "fit_media",
+    { parent: opts.parent, file: absPath, bytes: size, kind, limitBytes },
+    async (_t, end): Promise<FitResult> => {
+      if (size >= 0 && size <= limitBytes) {
+        // A pass-through is still a ledger event: it is the cheap, common case, and its absence from the
+        // file is how you would otherwise mistake "never started" for "nothing to do".
+        end({ outcome: "skipped", reason: "already_fits", outBytes: size, transcoded: false });
+        return { path: absPath, compressed: false, cleanup: NOOP_CLEANUP, note: null };
+      }
+      // Only the oversize path transcodes, so only it pays the core-budget gate (§12.6.1).
+      const release = await acquireTranscodeSlot();
+      let out: string;
+      let note: string;
+      try {
+        ({ out, note } = kind === "video"
+          ? await fitVideoUnderLimit(absPath, limitBytes)
+          : await fitImageUnderLimit(absPath, limitBytes));
+      } finally {
+        release();
+      }
+      log.info("describe", `${absPath} (${(size / 1024 / 1024).toFixed(1)}MB) → ${note}`);
+      end({ outBytes: sizeOf(out), transcoded: true });
+      return {
+        path: out,
+        compressed: true,
+        cleanup: () => tryUnlink(out),
+        note,
+      };
+    },
+  );
 }

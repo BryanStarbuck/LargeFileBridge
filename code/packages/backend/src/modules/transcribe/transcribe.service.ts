@@ -20,6 +20,7 @@ import { getStorageDetail } from "../storage/storage.service.js";
 import { track } from "../progress/progress.registry.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
 import { log } from "../../shared/logging.js";
+import { txn } from "../../shared/transactions.js";
 
 // The transcript sidecar extension (Transcribe.mdx §3) is TRANSCRIPTION_EXT, imported above.
 // Directories a "Transcribe all" walk never descends into: the SAME hard-skip set as the discovery scan
@@ -107,29 +108,60 @@ export async function transcribeOne(input: string, overwrite = false): Promise<T
   // Pick the engine (qwen heavyweight → whisper fallback, transcribe_engine.mdx §2) from the app config,
   // with the qwen→mac auto-fallback (§2.1). The transcript header records whichever engine actually ran.
   const cfg = getAppConfig().transcribe;
-  const r = await track("transcribe", name, (report) =>
-    transcribeWithEngine(abs, transcriptPath, {
-      engine: cfg.engine,
-      consent: cfg.model_consent,
-      onProgress: ({ fraction }) => report({ done: Math.round(fraction * 100), total: 100, unit: "%" }),
-    }),
+
+  // The work ledger (transactions_log.mdx §5.5). Until now this runner logged ONLY terminal outcomes — a
+  // log.info on success, a WARN/ERROR on failure — and never a START, which is the same silent-failure gap
+  // that made the 2026-07-15 describe incident un-debuggable: a file whose engine takes the process down
+  // leaves NO trace it ever began, so an overnight batch that stops halfway is indistinguishable from one
+  // that finished. The BEGIN below lands BEFORE the engine runs, and the END fires in txn()'s `finally`, so
+  // an un-ENDed BEGIN followed by a BOOT means exactly one thing: we died transcribing THIS file.
+  //
+  // The ledger is purely ADDITIVE — every log.* call and every return shape below is unchanged, and a
+  // ledger write can never throw (transactions_log.mdx §8). It is a second, durable record, not a rewrite
+  // of the first.
+  return txn(
+    "transcribe",
+    { file: abs, bytes: sizeOf(abs), engine: cfg.engine, overwrite },
+    async (t, end): Promise<TranscribeResult> => {
+      const r = await track("transcribe", name, (report) =>
+        transcribeWithEngine(abs, transcriptPath, {
+          engine: cfg.engine,
+          consent: cfg.model_consent,
+          // The engine run is this transcribe's CHILD (§4) — `grep <txn>` then returns the file's whole
+          // story, engine choice and any fallback included, de-interleaved from its concurrent siblings.
+          parent: t.id,
+          onProgress: ({ fraction }) => report({ done: Math.round(fraction * 100), total: 100, unit: "%" }),
+        }),
+      );
+      const status: TranscribeResult["status"] =
+        r.status === "transcribed" ? "transcribed" : r.status === "no_audio" ? "no_audio" : r.status === "tool_missing" ? "tool_missing" : "failed";
+      // `engineUsed` — NOT the configured preference — is what belongs in the ledger: the fallback chain can
+      // silently degrade qwen → mac, and a batch that ran 900 of 1,000 files on the fallback engine is a
+      // quality incident that is otherwise invisible (§5.5).
+      end({ engine: r.engineUsed, words: r.words ?? 0 });
+      if (status === "transcribed") {
+        // Cross the content threshold (artifact_placement_policy.mdx §2): this repo has now produced a durable
+        // user artifact, so its `.lfbridge/` tracking placement is justified from here on (a one-way latch).
+        markDurableArtifact(root);
+        log.info("transcribe", `${abs} → ${transcriptPath} (${r.words ?? 0} words, ${r.engineUsed})`);
+      } else if (status === "tool_missing" || status === "failed") {
+        // Report truthfully to the durable fault trail (Transcribe.mdx §1 "report truthfully" + charter logging):
+        // a non-success is a WARN/ERROR that must reach error.err, not a silent skip. tool_missing is a
+        // recoverable setup gap (WARN); a genuine failure is an ERROR.
+        const line = `${abs}: ${status} — ${r.reason ?? "no reason given"} (engine ${r.engineUsed})`;
+        if (status === "tool_missing") log.warn("transcribe", `not transcribed: ${line}`);
+        else log.error("transcribe", `transcription failed: ${line}`);
+        // A non-throwing failure is still a failure. txn() defaults an END to outcome=ok, so a status the
+        // engine REPORTED (rather than threw) must say so explicitly or the ledger would read it as a
+        // success. Both land as outcome=failed — matching summarize() below, which also counts tool_missing
+        // as failed — and `reason` is what tells the two apart when you grep the failures.
+        end({ outcome: "failed", reason: status === "tool_missing" ? "tool_missing" : "engine_failed" });
+      } else if (status === "no_audio") {
+        end({ outcome: "skipped", reason: "no_audio" });
+      }
+      return result(abs, status, r.outputPath, r.words, r.reason);
+    },
   );
-  const status: TranscribeResult["status"] =
-    r.status === "transcribed" ? "transcribed" : r.status === "no_audio" ? "no_audio" : r.status === "tool_missing" ? "tool_missing" : "failed";
-  if (status === "transcribed") {
-    // Cross the content threshold (artifact_placement_policy.mdx §2): this repo has now produced a durable
-    // user artifact, so its `.lfbridge/` tracking placement is justified from here on (a one-way latch).
-    markDurableArtifact(root);
-    log.info("transcribe", `${abs} → ${transcriptPath} (${r.words ?? 0} words, ${r.engineUsed})`);
-  } else if (status === "tool_missing" || status === "failed") {
-    // Report truthfully to the durable fault trail (Transcribe.mdx §1 "report truthfully" + charter logging):
-    // a non-success is a WARN/ERROR that must reach error.err, not a silent skip. tool_missing is a
-    // recoverable setup gap (WARN); a genuine failure is an ERROR.
-    const line = `${abs}: ${status} — ${r.reason ?? "no reason given"} (engine ${r.engineUsed})`;
-    if (status === "tool_missing") log.warn("transcribe", `not transcribed: ${line}`);
-    else log.error("transcribe", `transcription failed: ${line}`);
-  }
-  return result(abs, status, r.outputPath, r.words, r.reason);
 }
 
 /** Transcribe a selected set of files (§2.3). Never throws — each file reports its own outcome. */
@@ -208,11 +240,13 @@ export function enqueueTranscribe(opts: { paths?: string[]; root?: string; overw
   // them), queue nothing and tell the UI to open the wizard with a representative path.
   if (eligible.length > 0 && needSetup === eligible.length) {
     log.info("transcribe", `enqueue: ${eligible.length} eligible all need first-time setup — not queuing`);
-    return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued: 0, willProcess: 0, needsSetup: true, setupPath: eligible[0] };
+    return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued: 0, willProcess: 0, needsSetup: true, setupPath: eligible[0], blocked: false, blockedReason: null };
   }
   const { queued } = enqueue(eligible.map((p) => ({ op: "transcribe", path: p, overwrite })));
   log.info("transcribe", `enqueue [${scopeLabel(opts)}]: ${candidates.length} considered → ${queued} queued (${alreadyDone} already done, ${unsupported} unsupported)`);
-  return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued, willProcess: queued, needsSetup: false, setupPath: null };
+  // `blocked` is always false here: transcription runs LOCALLY (Whisper/qwen), so there is no provider
+  // account to preflight and no circuit that can refuse it (to_fix.mdx §2.5 — the gate is describe-only).
+  return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued, willProcess: queued, needsSetup: false, setupPath: null, blocked: false, blockedReason: null };
 }
 
 /**
@@ -334,5 +368,15 @@ function exists(p: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** Input size for the ledger's `bytes` field (transactions_log.mdx §3.3) — the single best predictor of both
+ *  duration and heap. Never throws: an unstattable file must not fail a transcription. */
+function sizeOf(p: string): number {
+  try {
+    return fs.statSync(p).size;
+  } catch {
+    return -1;
   }
 }

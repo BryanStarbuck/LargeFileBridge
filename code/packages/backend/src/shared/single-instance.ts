@@ -89,7 +89,25 @@ function registerCleanup(file: string): void {
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     process.on(sig, () => {
       release();
-      process.exit(0);
+      // Do NOT process.exit() here. Node runs signal listeners in REGISTRATION order, and this one is
+      // registered during early boot — long before main.ts installs the app's own shutdown. An immediate
+      // exit(0) killed the process from inside this listener, so EVERY later listener was skipped: the app
+      // never ran its clean shutdown, and (once the ledger existed) never wrote its SHUTDOWN marker. The
+      // symptom was stark and silent: 29 BOOT lines, 0 SHUTDOWN lines — so every ordinary `just stop` was
+      // indistinguishable from a crash, which is precisely the distinction transactions_log.mdx §3.1 and
+      // crash_recovery.mdx §5 are built on. A lock-release detail was quietly corrupting the crash signal.
+      //
+      // Instead: release the lock (the only thing THIS module must guarantee), then let the app's own
+      // shutdown run. The fallback timer below still guarantees we exit even if nobody else handles the
+      // signal (cli.ts, or any future entry point with no shutdown of its own) — but it is `unref()`d, so
+      // when the app DOES shut down cleanly and the loop drains, the process exits on its own well before
+      // the timer would ever fire. Lock safety is preserved either way: `process.on("exit", release)` above
+      // covers every exit path.
+      setTimeout(() => process.exit(0), FALLBACK_EXIT_MS).unref();
     });
   }
 }
+
+/** How long a signal handler waits for the app's own shutdown before forcing the exit itself. Generous
+ *  enough for an in-flight HTTP response to drain, short enough that a wedged shutdown never hangs a stop. */
+const FALLBACK_EXIT_MS = 3000;

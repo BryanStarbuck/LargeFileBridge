@@ -1,0 +1,555 @@
+---
+title: LargeFileBridge — Memory & the Memory Budget (concurrency's second budget)
+status: proposed
+owner: engineering
+scope: code/packages/backend
+---
+
+# LargeFileBridge — Memory & the Memory Budget
+
+[parallelization.mdx](./parallelization.mdx) answered one half of "how parallel?" — the **core
+budget**. It is a good spec and the code follows it. This spec exists because the **other half was
+never written**, and on **2026-07-15 at 22:13 PDT** the missing half killed the backend:
+
+```
+FATAL ERROR: Ineffective mark-compacts near heap limit — JavaScript heap out of memory
+```
+
+A **1,440-file AI-description batch** was queued. ~146–149 descriptions completed, all of them
+before 19:50. Then V8's old-space reached **4.1 GB** and aborted the process. The job queue is
+**in-memory** ([job_queue.mdx](./job_queue.mdx)), so the entire remaining backlog — ~1,290 files —
+**vaporized silently**. `tsx watch` restarts on **file change**, not on **crash**, so the backend
+stayed dead for roughly **six hours** while Vite on `:2222` kept serving the UI at HTTP 200.
+**Frontend up ≠ app up.**
+
+## The thesis (LOCKED)
+
+> **Concurrency has TWO budgets, not one. Every admission decision must pass BOTH.**
+>
+> * The **core budget** — built, specified, honored. `round(cores × 0.9)` / `cores − 2`.
+> * The **memory budget** — **missing**. Nothing anywhere in the backend counts bytes before
+>   admitting work.
+
+And the corollary that the incident proves:
+
+> **"Network-bound" is not "free."** An in-flight HTTP upload is a **memory reservation held for
+> the duration of the round trip**. The describe bucket fans out to 24 because the comment in
+> `jobqueue.service.ts` says describe is "network-bound, no hardware bottleneck." That is **true
+> for CPU and explicitly false for memory**: every in-flight upload pins its full base64 payload in
+> the heap until the provider answers — up to **ten minutes** later.
+
+Severity legend (matching [performance.mdx](./performance.mdx)): 🔴 critical · 🟠 high ·
+🟡 medium · ⚪ hygiene.
+
+---
+
+## 1. The postmortem — deriving 4.1 GB from first principles
+
+The number is not mysterious. It is arithmetic, and a reader should be able to re-derive it from the
+code. Here is the derivation.
+
+### 1.1 The admission cap is a bare count, and it is the only bucket not derived from cores
+
+The queue's per-op concurrency comes from `capFor()`. Every bucket in it draws from `coreBudget()` —
+**except one**:
+
+```ts
+// jobqueue.service.ts ~L53-57
+// describe is network-bound: no hardware bottleneck, so fan out wide.
+const DESCRIBE_CONCURRENCY = Math.max(1, Number(process.env.LFB_DESCRIBE_CONCURRENCY) || 24);
+```
+
+`capFor()` (~L82) returns that number **unclamped**. It is a count. It knows nothing about the size
+of the files it is admitting.
+
+The media-aware admission cap that decides how many jobs of each op run at once is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` / `bucketOf()` / `pump()`
+
+### 1.2 One file is resident three-to-four times over on the upload path
+
+Follow a single describe job through `describe/adapters.ts`:
+
+| # | Line | What it allocates | Live for |
+| --- | --- | --- | --- |
+| 1 | ~L60 `readBase64Capped()` | the raw `Buffer` — up to `INLINE_MAX_BYTES` = **18 MB** (L40) | until GC notices |
+| 2 | ~L60 same expression | `.toString("base64")` → **~24 MB** of chars; V8 may hold it UTF-16 → **up to ~48 MB** | the whole call |
+| 3 | ~L229 (gemini) | the request body object **embeds `data`** | the whole call |
+| 4 | ~L278 `chatVisionAdapter` | `` `data:${mimeType};base64,${data}` `` — a **second full copy** via template concat | the whole call |
+| 5 | ~L175 `postJson()` | `JSON.stringify(body)` — a **third full copy**, now a single giant string | the whole request |
+| 6 | ~L141-147 `postJsonOnce()` | `fetch()` hands the payload to undici, which **holds it until the round trip ends**; then `await res.text()` allocates the response too | the whole request |
+
+The killer is line 1 + line 2 in one expression: `(await fs.promises.readFile(absPath)).toString("base64")`
+allocates the Buffer **and** the base64 string **simultaneously** — the Buffer cannot be collected
+until the string exists.
+
+The read-and-inline-encode step that pins the Buffer and its base64 string at the same time is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `readBase64Capped()`
+
+The data-URL template concat and the `JSON.stringify` body serialization that make copies two and three are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `chatVisionAdapter.describe()` / `postJson()`
+
+### 1.3 The arithmetic
+
+Take an image near the 18 MB inline cap.
+
+| Representation | Bytes |
+| --- | --- |
+| raw `Buffer` | ~18 MB |
+| base64 string (`4/3` inflation; UTF-16 doubles it in the worst case) | ~24–48 MB |
+| data-URL concat (chat-vision adapter only) | ~24 MB |
+| `JSON.stringify(body)` | ~24 MB |
+| undici request buffer + response text | a few MB |
+| **live heap per in-flight describe job** | **~66–90 MB** |
+
+Now apply the only gate that exists — the count:
+
+| In-flight describe jobs | Live heap |
+| --- | --- |
+| 1 | ~66–90 MB |
+| 8 | ~0.5–0.7 GB |
+| **24 (the default cap)** | **~1.6–2.2 GB steady state** |
+
+…against a **default V8 old-space of ~4 GB**. That is 40–55% of the ceiling consumed by payloads
+alone, **before** GC lag, **before** the rest of the app, and before two multipliers:
+
+* **Retries.** `MAX_ATTEMPTS = 4` (L88). A retried job re-holds its payload for another full attempt.
+* **Slow providers.** `timeoutForBytes()` (~L131) is a **120 s floor + 20 s/MB**, ceiling
+  **10 minutes**. A provider that stalls pins **24 payloads for ten minutes** while the queue keeps
+  the bucket full. Hold time is what turns a survivable peak into an OOM.
+
+Add GC lag: a mark-compact over a heap that is ~2 GB of large, long-lived strings is expensive, and
+V8's "ineffective mark-compacts" abort fires precisely when it can no longer free enough per cycle to
+keep up with allocation. **That is the message we got.**
+
+### 1.4 The 32 MB-per-child stdout ceiling on top
+
+`fit-media.ts` compresses oversized media down under the inline cap before upload — on the same
+24-wide hot path. Its child-process runner does:
+
+```ts
+// fit-media.ts ~L87
+out = (out + d.toString()).slice(-32 * 1024 * 1024);
+```
+
+That is a **32 MB stdout ceiling per concurrent `runAsync()`** — and the `out + d.toString()`
+concat **transiently allocates ~2× before slicing**, making it quadratic in the number of chunks.
+Only `probeVideo()` (~L166) needs stdout at all. `encodeCrf()` (~L187), `encodeTwoPass()` (~L203) and
+`fitImageUnderLimit()` (~L362) pay the same ceiling for output they **discard**.
+
+The child-process runner whose stdout accumulator sets a 32 MB per-child ceiling is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `runAsync()`
+
+### 1.5 The precedent that makes this inexcusable
+
+We have **already built this exact class of gate — for cores**:
+
+```
+transcodeActive / transcodeWaiters / acquireTranscodeSlot()   — fit-media.ts ~L399-421
+```
+
+A counter, a waiter queue, acquire-before, release-in-`finally`. It works. **Nothing gates bytes.**
+
+The core-slot gate whose shape the memory budget must copy is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `acquireTranscodeSlot()` (`transcodeActive` / `transcodeWaiters`)
+
+### 1.6 The asymmetry — we budget *other* processes' RAM and not our own
+
+The **only** RAM-aware code in the repository governs **subprocesses**:
+
+* `MODEL_RAM_PER_JOB_BYTES` (L18) — qwen 6 GB, large 5 GB, medium 3 GB, small 2 GB, base/tiny 1 GB.
+* `RAM_HEADROOM_BYTES` (L47) — 2 GB reserved.
+* `transcribeConcurrency()` (L66) = `clamp(1, cores/threads, usableRAM/modelRAM, gpuStreams)`.
+
+This is **exactly the right pattern** — and it governs **whisper's RSS**, not **our V8 heap**. We
+carefully refuse to OOM the machine with someone else's memory, and then OOM ourselves with our own.
+**That asymmetry is the lesson of this spec.**
+
+The RAM-clamped transcribe concurrency — the right pattern, applied to the wrong process — is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe-concurrency.ts` — `transcribeConcurrency()` (`MODEL_RAM_PER_JOB_BYTES` / `RAM_HEADROOM_BYTES`)
+
+### 1.7 We had no instrumentation and no chance of seeing it coming
+
+A grep across the entire repository for `memoryUsage|max-old-space-size|NODE_OPTIONS|heapUsed|rss`
+returns **ZERO hits**. Not one.
+
+* `code/packages/backend/package.json` L10-12: `"dev": "tsx watch src/main.ts"`,
+  `"start": "tsx src/main.ts"` — **no node flags**.
+* `justfile` ~L96 pipes `pnpm dev` through the log rotator — **no heap sizing**.
+
+So: the backend runs on **V8's default heap** (an implicit ~4 GB nobody chose), **uninstrumented**,
+with a **24-wide bucket holding multi-MB base64 payloads**. The ceiling was an accident, not a
+decision.
+
+And when it aborted, **our logging saw nothing.** A V8 OOM abort **cannot run our exit handlers** —
+`log.log` and `error.err` are silent. The only trace was `launcher.log`, which captures raw
+stdout/stderr from `pnpm dev`. Everything we knew about the incident, we knew from one file we never
+designed to be a crash log.
+
+---
+
+## 2. The memory budget — design
+
+The fix is structurally identical to the core budget. **Reserve before, release in `finally`,
+wait if it doesn't fit.**
+
+### 2.1 The ceiling
+
+* The heap ceiling is **explicit**, set via `--max-old-space-size` in `NODE_OPTIONS` (§4, P-31). It
+  is a **decision**, never V8's default.
+* The **memory budget** is a **fraction** of that ceiling: `performance.max_memory_fraction`,
+  default **0.5**. Half the heap for in-flight payloads leaves half for the app, the fs index, the
+  queue, and GC headroom.
+* Resolved live at admission time from config — same discipline as `coreBudget()`, no restart.
+* Env override for operators: `LFB_DESCRIBE_MEMORY_BUDGET` (absolute bytes) wins over the fraction
+  when set, mirroring how `LFB_DESCRIBE_CONCURRENCY` overrides the count.
+
+The memory budget resolver — ceiling × fraction, read live, env-overridable — belongs in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `memoryBudget()` (sibling of `coreBudget()` / `responsiveBudget()`)
+
+### 2.2 `estimatedBytes(file)` — what a job costs before it runs
+
+We must estimate **before** reading, from `stat` alone:
+
+```
+estimatedBytes(file) = min(fileSize, INLINE_MAX_BYTES) × INFLATION + PER_JOB_OVERHEAD
+```
+
+* **`INFLATION`** — the multiplier covering every representation the payload takes: Buffer +
+  base64 + JSON body. Derived from §1.3: **~4.0** as the honest default (post-P-29 it drops toward
+  ~2.5; the constant is one number to retune, and the spec expects it to be retuned **downward only
+  when P-29 lands**, never optimistically).
+* **`PER_JOB_OVERHEAD`** — a fixed allowance for the response text, headers, adapter scaffolding and
+  transient GC garbage. **~8 MB.**
+* **`min(fileSize, INLINE_MAX_BYTES)`** — because fit-media compresses anything larger down under
+  the cap before upload; a 4 GB video does **not** reserve 16 GB. But note the fit step itself has a
+  cost, so a file that will be transcoded adds the transcode allowance (§2.5).
+
+Estimation is **deliberately conservative**. Over-reserving costs throughput. Under-reserving costs
+the process.
+
+### 2.3 Reservation / release discipline (LOCKED)
+
+```
+async function withMemory(bytes, fn) {
+  await acquireMemory(bytes);        // waits until it fits
+  try { return await fn(); }
+  finally { releaseMemory(bytes); }  // ALWAYS — success, throw, timeout, abort
+}
+```
+
+* `acquireMemory()` maintains `memoryActive` + `memoryWaiters`, exactly like `acquireTranscodeSlot()`.
+* Release is in a **`finally`**. A leaked reservation is a **permanent** budget loss that degrades
+  into a deadlock over a long run — this is the single highest-risk line in the whole design and it
+  must be unit-tested against throw, reject, timeout, and abort paths.
+* Waiters are **FIFO**, so a large job cannot be starved indefinitely by a stream of small ones.
+
+### 2.4 The oversize case — a job bigger than the whole budget (LOCKED)
+
+**This must never deadlock.** If `estimatedBytes(file) > budget`:
+
+* the job is **admitted alone** — it waits until `memoryActive === 0`, then runs as the sole
+  in-flight job, exceeding the budget by design;
+* a **WARN** is logged naming the file and both numbers;
+* it is **never rejected**, and it is **never left waiting forever**.
+
+The rule stated plainly: **the budget shapes concurrency; it never blocks progress.** A budget that
+can refuse the only remaining job is a bug, not a safeguard.
+
+### 2.5 Composition with `capFor()` (LOCKED)
+
+Admission becomes the **conjunction** of both budgets:
+
+```
+admit  ⇔  (in-flight count < capFor(op))  AND  (memoryActive + estimatedBytes(file) ≤ budget
+                                                 OR memoryActive === 0)
+
+effective concurrency = min( count cap , what fits in bytes )
+```
+
+`pump()` no longer asks "is there a free slot?" It asks "is there a free slot **and** does this
+file's reservation fit?" A job whose reservation doesn't fit **waits** — exactly like the core
+budget makes a job wait for a core. The count cap stops being the safety mechanism and becomes what
+it always should have been: an **upper bound**, with bytes as the real governor.
+
+For files routed through fit-media, the reservation is taken **around the fit + upload together**
+(the transcode's own buffers and the upload payload overlap in time), so the gate covers the whole
+in-flight lifetime, not just the HTTP call.
+
+The two-budget admission test — count AND bytes — belongs in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `pump()` (calling `capFor()` and the new `acquireMemory()` / `estimatedBytes()`)
+
+---
+
+## 3. New performance-catalog entries (P-28 … P-34)
+
+These append to [performance.mdx](./performance.mdx)'s catalog and follow its format exactly.
+
+### 🔴 P-28 — The describe bucket admits by count, never by bytes (the OOM) · memory
+
+- **Where:** `code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `DESCRIBE_CONCURRENCY`
+  (~L57, default **24**, `LFB_DESCRIBE_CONCURRENCY`) returned **unclamped** by `capFor()` (~L82). It
+  is the **only** bucket in `capFor()` not derived from `coreBudget()`, justified by the comment at
+  L53-56 that describe is "network-bound, no hardware bottleneck."
+- **Symptom:** True for CPU; **false for memory**. Each in-flight describe pins ~66–90 MB of live
+  heap (§1.3); **24 × that ≈ 1.6–2.2 GB steady state** against V8's default ~4 GB old-space. On
+  2026-07-15 a 1,440-file batch drove the heap to **4.1 GB** → `FATAL ERROR: Ineffective mark-compacts
+  near heap limit`. The in-memory queue lost ~1,290 pending files silently; `tsx watch` never
+  restarted (it watches files, not crashes) and the backend stayed dead ~6 h behind a live Vite.
+- **Fix (architecture):** A **byte-based admission gate**. Every describe job **RESERVES**
+  `estimatedBytes(file)` against a **memory budget** before it starts and **RELEASES** it in a
+  `finally`; a job whose reservation doesn't fit **waits**, exactly like a job waiting for a core.
+  Effective concurrency becomes **`min(count cap, what fits in bytes)`** (§2.5). A single file larger
+  than the whole budget **runs alone, never deadlocks** (§2.4). Copy the shape of the core gate we
+  already built — `acquireTranscodeSlot()` in `fit-media.ts` (~L399-421) — verbatim; it is the same
+  counter + waiter-queue + `finally`-release pattern applied to bytes instead of slots.
+
+The byte-reserving admission gate and its budget resolver belong in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `pump()` / `acquireMemory()` / `estimatedBytes()`, drawing `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `memoryBudget()`
+
+### 🔴 P-29 — One file is resident 3–4× on the upload path · memory
+
+- **Where:** `code/packages/backend/src/modules/describe/adapters.ts` — `readBase64Capped()` (~L60)
+  `(await fs.promises.readFile(absPath)).toString("base64")`; the gemini body embedding `data` (~L229);
+  `chatVisionAdapter`'s `` `data:${mimeType};base64,${data}` `` (~L278); `postJson()`'s
+  `JSON.stringify(body)` (~L175); `postJsonOnce()`'s `fetch` + `await res.text()` (~L141-147).
+- **Symptom:** An 18 MB file becomes ~18 MB of Buffer **plus** ~24–48 MB of base64 **plus** ~24 MB of
+  data-URL **plus** ~24 MB of stringified JSON, all live simultaneously for the whole round trip.
+  ~66–90 MB per file for an 18 MB file — a **3.7–5× resident multiplier**. This is what makes P-28's
+  count of 24 lethal instead of merely wide; the two are one bug seen from two ends.
+- **Fix (architecture):** **Build the payload once.**
+  1. **Drop the raw Buffer before the string exists** — encode in place / let the Buffer go out of
+     scope before the body is assembled, so copies 1 and 2 are never co-resident.
+  2. **Kill the data-URL template concat** — pass `mimeType` and `data` as separate fields where the
+     provider accepts it; where it doesn't, build the prefix into the same single string rather than
+     concatenating a second full copy.
+  3. **Prefer streaming / multipart** where the provider supports it, so `JSON.stringify` **never
+     materializes the payload** — hand `fetch` a stream or a `FormData` part reading from disk.
+  4. Honest constraint, stated plainly: **inline-base64 provider APIs force one copy.** The payload
+     must exist as base64 somewhere. The fix is **eliminating copies 2–4, not copy 1** — that alone
+     takes ~66–90 MB down toward ~28–32 MB per job, roughly a **2.5× reduction in the multiplier**,
+     which also lets `INFLATION` (§2.2) drop from ~4.0 toward ~2.5.
+
+The single-build payload path and the streaming/multipart upload belong in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `readBase64Capped()` / `postJson()` / `chatVisionAdapter.describe()` / `gemini.describe()`
+
+### 🟠 P-30 — `runAsync()` reserves 32 MB of stdout per child on a path that discards stdout · memory
+
+- **Where:** `code/packages/backend/src/modules/describe/fit-media.ts` — `runAsync()` ~L87:
+  `out = (out + d.toString()).slice(-32 * 1024 * 1024)`. Callers: `probeVideo()` (~L166, the **only**
+  one that reads stdout), `encodeCrf()` (~L187), `encodeTwoPass()` (~L203), `fitImageUnderLimit()`
+  (~L362).
+- **Symptom:** Every concurrent `runAsync()` carries a **32 MB ceiling**, and the `out + d.toString()`
+  concat **transiently allocates ~2×** before slicing — quadratic in chunk count for a chatty ffmpeg.
+  Three of the four call sites **throw the output away**. On the 24-wide describe path this is up to
+  another ~0.7 GB of ceiling sitting behind the payloads of P-28.
+- **Fix (architecture):** Make capture **opt-in**: `runAsync(cmd, args, { captureStdout: true })`,
+  set **only by `probeVideo`**, capped at **~1 MB** (an ffprobe JSON is kilobytes). Non-capturing
+  callers pipe stdout to `ignore` and allocate **nothing**. Where we do capture, **accumulate into an
+  array of chunks and `join()` once at close** — never `out + d.toString()` in the data handler. The
+  quadratic concat disappears with the ceiling.
+
+The opt-in, chunk-array stdout capture belongs in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `runAsync()` (`captureStdout` option) / `probeVideo()`
+
+### 🟠 P-31 — No heap instrumentation at all; the V8 ceiling is implicit · observability
+
+- **Where:** `code/packages/backend/package.json` L10-12 (`"dev": "tsx watch src/main.ts"`,
+  `"start": "tsx src/main.ts"`); `justfile` ~L96 (`pnpm dev` through the log pipe). A grep for
+  `memoryUsage|max-old-space-size|NODE_OPTIONS|heapUsed|rss` across the **whole repo** returns
+  **zero hits**.
+- **Symptom:** The 4 GB ceiling we hit was **V8's default** — nobody chose it, nobody knew it, and
+  nothing measured how close we were to it. We could not answer "how much heap does a 24-wide describe
+  batch use?" before the incident, and we could not answer it after, because we never sampled.
+- **Fix (architecture):** (a) Set an **explicit `--max-old-space-size`** via `NODE_OPTIONS` in the
+  `justfile` and in `package.json`'s `dev`/`start` scripts — the ceiling becomes a **decision**, and
+  `memoryBudget()` (§2.1) has a real number to take a fraction of. (b) **Sample
+  `process.memoryUsage()` on the existing heartbeat** (`heapUsed`, `heapTotal`, `rss`, `external`)
+  and write it to [transactions_log.mdx](./transactions_log.mdx) alongside queue depth. (c) Record a
+  **heap high-water mark per batch** and log it at batch end, so every run leaves behind the number
+  that would have predicted the next OOM.
+
+The explicit heap ceiling and the heartbeat memory sample belong in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/package.json` — `scripts.dev` / `scripts.start` (`NODE_OPTIONS=--max-old-space-size=…`); `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — the heartbeat sampler
+
+### 🟠 P-32 — A V8 OOM is invisible to our logging; only `launcher.log` saw it · observability
+
+- **Where:** `code/packages/backend/src/shared/logging.ts` — `RollingFileWriter` / `log.*` /
+  `logError()` write `log.log` and `error.err`. Neither contains a single byte about 2026-07-15
+  22:13 PDT. The only evidence is `~/T/_large_files_bridge/launcher.log`.
+- **Symptom:** A V8 OOM **aborts the process** — it **cannot run our exit handlers**, `process.on`
+  hooks, or flush a final write. Our durable fault trail is structurally blind to the one failure
+  mode that killed us. Worse, the evidence in `launcher.log` is buried under a flood of Vite proxy
+  errors generated **after** the death (grep `FATAL ERROR` / `JavaScript heap` and filter the noise).
+- **Fix (architecture):** Stop trying to log the abort; **log the approach**. (a) A **heap-pressure
+  WARN threshold** — when `heapUsed` exceeds **80% of the explicit ceiling**, emit a WARN to
+  `error.err` **and** `transactions.log` carrying **queue depth**, **in-flight file list**, and
+  **current reservation total**. That is a **predictive** signal minutes before the abort, and it is
+  the thing that would have let us catch this at 21:40 instead of discovering it at 04:00. (b) Add
+  **`--heapsnapshot-near-heap-limit=1`** to `NODE_OPTIONS` so the abort leaves a snapshot behind for
+  postmortem. (c) The **other half of this problem** — that a crash vaporizes the backlog and nothing
+  restarts the process — is owned by [crash_recovery.mdx](./crash_recovery.mdx) and
+  [job_queue.mdx](./job_queue.mdx): queue durability + crash-restart. This spec's job is to make the
+  crash **not happen** and be **seen coming**; that spec's job is to make it **survivable**.
+
+The heap-pressure WARN and the near-limit snapshot flag belong in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — the heap-pressure threshold check; `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/package.json` — `NODE_OPTIONS` (`--heapsnapshot-near-heap-limit=1`)
+
+### 🟡 P-33 — The 10-minute request timeout multiplies memory hold time · memory
+
+- **Where:** `code/packages/backend/src/modules/describe/adapters.ts` — `timeoutForBytes()` (~L131):
+  a **120 s floor + 20 s/MB**, ceiling **10 minutes**; `MAX_ATTEMPTS = 4` (L88).
+- **Symptom:** Memory is `bytes × concurrency × hold-time`. The timeout **is** the hold-time
+  ceiling. A stalled provider pins **24 payloads for ten minutes** while `pump()` — which counts
+  slots, not seconds — keeps the bucket full. Retries multiply it by up to 4. The timeout was tuned
+  for *upload duration on a slow link*; nobody costed it as a **memory reservation term**, which is
+  what it actually is.
+- **Fix (architecture):** Reason about the **interaction** explicitly, and encode it. (a) The
+  timeout and the memory budget are **one system**: `peak ≈ bytes/job × jobs × P(stall)`, and the
+  budget gate (P-28) bounds `bytes × jobs` **regardless** of hold time — which is precisely why the
+  gate is the right primitive and a shorter timeout is only a mitigation. (b) Still, **scale the
+  timeout to the payload we actually send after fit-media**, not the original file. (c) **Log a WARN
+  when any job holds a reservation past ~2× its expected timeout** — a stalled provider should be
+  visible as a memory event, not just a slow one. (d) Consider a **separate, smaller count cap while
+  the p95 latency is elevated**, since a slow provider and a full bucket are the exact OOM recipe.
+
+The payload-scaled timeout and the long-hold WARN belong in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `timeoutForBytes()` / `postJsonOnce()`
+
+### 🟡 P-34 — The in-flight map is empty at postmortem time · observability
+
+- **Where:** `code/packages/backend/src/shared/progress.registry.ts` — `end()` **deletes** the job
+  record.
+- **Symptom:** The registry is a **live view**, correct by design for the dock. But it means that at
+  the moment we most want to know **which 24 files were in flight when the heap hit 4.1 GB**, the map
+  holds only what survived — and after the abort, nothing at all. We had no way to attribute the
+  2.2 GB to specific files.
+- **Fix (architecture):** **Hand off on `end()`.** Before deleting, append a terminal record to
+  [transactions_log.mdx](./transactions_log.mdx) — path, op, bytes reserved, duration, outcome. The
+  registry stays a live map (no growth, no leak); the durable history lives where durable history
+  belongs. Combined with P-31's heartbeat sample, the log then contains **both** the heap curve and
+  the file set that produced it, and the next incident is a five-minute read instead of a six-hour
+  archaeology dig through `launcher.log`.
+
+The terminal-record handoff from the live registry to the durable log belongs in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/progress.registry.ts` — `end()` (append to the transactions log before delete)
+
+---
+
+## 4. Settings surface
+
+The memory budget gets a knob **alongside** the core budget's, and it is read **live at admission** —
+**no restart**, exactly like `performance.max_core_fraction`
+([parallelization.mdx §4](./parallelization.mdx)).
+
+* **`performance.max_memory_fraction`** — a number in `(0, 1]`, **default `0.5`**. The fraction of
+  the **explicit heap ceiling** (§2.1) that in-flight payload reservations may occupy.
+* Surfaced in **Settings** ([settings.mdx](./settings.mdx)) in the same **"Parallelism"** group, as
+  *"Use up to N% of the memory budget for in-flight uploads"*, with the **resolved figures shown
+  live** — e.g. *"≈ 2.0 GB of a 4.0 GB heap ceiling · ≈ 24 files in flight at the current average
+  size"*. Showing the resolved number is the point: the incident happened because nobody could see
+  either number.
+* The **heap ceiling itself is not a UI setting** — it is a launch flag (P-31). A user cannot raise
+  the ceiling from a web page; they can only choose how much of it we spend.
+
+The setting field lives in the app config schema, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — `AppConfigSchema.performance` (`max_memory_fraction`, default `0.5`)
+
+Read live at admission and served/edited over the settings surface, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/settings/settings.router.ts` — the `performance` GET/PUT handlers; edited from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx`
+
+---
+
+## 5. Invariants (LOCKED)
+
+1. **No queue bucket may admit by count alone.** Every admission decision passes **both** the core
+   budget and the memory budget. A cap that is a bare number with no byte term is a bug, and
+   `DESCRIBE_CONCURRENCY` is the proof.
+2. **No request or queue path may hold a full media payload in more than one representation.**
+   Buffer **or** base64 **or** stringified body — never all three co-resident. Build once.
+3. **Every heavy child process caps its captured output**, and captures **only when a caller reads
+   it**. The default is `stdio: ignore`.
+4. **The heap ceiling is explicit, never V8's default.** `--max-old-space-size` is set at launch in
+   every path that starts the backend (`dev`, `start`, the `justfile`, launchd).
+5. **Every reservation is released in a `finally`.** Success, throw, timeout, abort — no exceptions,
+   no early returns that skip it.
+6. **The budget shapes concurrency; it never blocks progress.** A job larger than the entire budget
+   runs **alone**. The system never deadlocks and never rejects work for being big (§2.4).
+7. **"Network-bound" never means "unbudgeted."** An in-flight upload is a memory reservation for the
+   duration of the round trip. Any future op that fans out on the strength of "it's just waiting on
+   I/O" must state its per-job byte cost in this spec first.
+8. **Every OOM-class failure must be preceded by a WARN we wrote.** If the first sign of memory
+   trouble is an abort in `launcher.log`, the instrumentation is broken.
+
+---
+
+## 6. Acceptance criteria
+
+1. **The 1,440-file batch completes.** A full 1,440-file AI-description batch runs to completion
+   with **RSS never exceeding the configured budget** and **zero** `FATAL ERROR` in any log.
+2. **`grep -c "FATAL ERROR" launcher.log` stays 0** across a full overnight run — and stays 0 across
+   a run where a provider is deliberately stalled to the 10-minute ceiling (P-33).
+3. **Heap high-water mark is logged per batch.** Every batch end writes its peak `heapUsed` /
+   `rss` and the byte-budget peak to [transactions_log.mdx](./transactions_log.mdx). The number
+   exists for every run, retroactively answerable.
+4. **A WARN appears before any OOM.** With the budget deliberately misconfigured to provoke
+   pressure, a heap-pressure WARN (>80% of ceiling, carrying queue depth + in-flight files) lands in
+   `error.err` **before** the process is in danger. No abort is ever the first signal.
+5. **Byte-gated admission is observable.** Under a batch of large files the effective describe
+   concurrency drops **below** the count cap and the Processing page's utilization read reflects
+   `min(count cap, what fits)` — proving the byte term is live, not decorative.
+6. **The oversize file never deadlocks.** A single file whose `estimatedBytes()` exceeds the whole
+   budget **runs alone**, completes, logs its WARN, and the queue resumes normal fan-out afterwards.
+   Verified with a synthetic file at the inline cap against a budget set below it.
+7. **No reservation leaks.** After a run containing forced throws, forced timeouts, and a forced
+   abort mid-flight, `memoryActive === 0` and `memoryWaiters` is empty. Unit-tested per failure mode.
+8. **One representation per payload.** A heap snapshot taken mid-upload shows **one** large string
+   per in-flight file, not three or four. Per-job live heap for an 18 MB file measures **≤ ~32 MB**
+   (down from ~66–90 MB).
+9. **Capture is opt-in.** `grep` shows `captureStdout` set at exactly **one** call site
+   (`probeVideo`), and the 32 MB literal is gone from `fit-media.ts`.
+10. **The ceiling is explicit everywhere.** `NODE_OPTIONS` with `--max-old-space-size` and
+    `--heapsnapshot-near-heap-limit=1` is present in `dev`, `start`, and the `justfile` launch path;
+    a grep for `max-old-space-size` no longer returns zero.
+11. **The knob works live.** Changing `performance.max_memory_fraction` in Settings changes the
+    admitted concurrency on the **next** job with **no restart**, and the resolved GB / files-in-flight
+    figures update in the UI.
+
+---
+
+## 7. Cross-links
+
+* [parallelization.mdx](./parallelization.mdx) — the **core budget**, the half that was built. This
+  spec is its missing sibling; §3's map of consumers gains a **byte cost per job** column.
+* [job_queue.mdx](./job_queue.mdx) — `capFor()` / `pump()`, the admission point, and the
+  no-persistence posture that turned a crash into 1,290 lost files.
+* [ai_description.mdx](./ai_description.mdx) — the describe op, its 24-wide fan-out rationale
+  (§12.6), and the fit-media path.
+* [crash_recovery.mdx](./crash_recovery.mdx) — the **other half**: queue durability and
+  crash-restart. This spec prevents and predicts the OOM; that one makes it survivable.
+* [transactions_log.mdx](./transactions_log.mdx) — where the heartbeat memory sample, the per-batch
+  high-water mark, and the P-34 terminal records land.
+* [performance.mdx](./performance.mdx) — the catalog P-28…P-34 append to.
+
+<!--
+  CANONICAL spec for the MEMORY BUDGET — the second half of concurrency, missing until the
+  2026-07-15 22:13 PDT OOM (V8 old-space 4.1GB, "Ineffective mark-compacts", 1,440-file describe
+  batch, ~1,290 files silently lost, backend dead ~6h behind a live Vite :2222).
+  THESIS: two budgets — core (built, parallelization.mdx) + memory (this). Every admission passes BOTH.
+  "Network-bound" ≠ free: an in-flight upload is a memory reservation held for the round trip.
+  ARITHMETIC: DESCRIBE_CONCURRENCY=24 unclamped (jobqueue.service.ts ~L57/L82, only bucket not from
+  coreBudget) × ~66-90MB live heap per job (adapters.ts: Buffer ≤18MB + base64 ~24-48MB + data-URL
+  concat + JSON.stringify + undici) ≈ 1.6-2.2GB vs ~4GB default ceiling; MAX_ATTEMPTS=4 and
+  timeoutForBytes ceiling 10min extend hold time → OOM. Plus fit-media runAsync 32MB stdout/child.
+  PRECEDENT: acquireTranscodeSlot() gates CORES; nothing gates BYTES. ASYMMETRY: transcribe-
+  concurrency.ts budgets whisper's RSS (other processes) but not our own V8 heap.
+  ZERO instrumentation (grep memoryUsage|max-old-space-size|NODE_OPTIONS|heapUsed|rss = 0 hits).
+  P-28 🔴 byte-based admission gate (reserve/release, min(count cap, fits-in-bytes), oversize runs
+  ALONE never deadlocks) · P-29 🔴 3-4× residency, build payload ONCE (fix copies 2-4, not copy 1)
+  · P-30 🟠 opt-in captureStdout ~1MB + chunk array join · P-31 🟠 explicit --max-old-space-size +
+  heartbeat memoryUsage · P-32 🟠 OOM abort can't run handlers → heap-pressure WARN >80% +
+  --heapsnapshot-near-heap-limit=1 · P-33 🟡 10min timeout = memory hold-time term · P-34 🟡
+  registry end() deletes → hand off to transactions.log.
+  KNOB: performance.max_memory_fraction default 0.5, live at admission, alongside max_core_fraction.
+  Keep in sync with parallelization.mdx §1/§3, job_queue.mdx §3, ai_description.mdx §12.6,
+  crash_recovery.mdx, transactions_log.mdx, performance.mdx catalog, settings.mdx.
+-->

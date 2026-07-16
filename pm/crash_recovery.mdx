@@ -1,0 +1,677 @@
+---
+title: LargeFileBridge — Crash Recovery (the backlog must survive the process that hosts it)
+status: proposed
+owner: engineering
+scope: code/packages/backend
+description: The authoritative spec for surviving a backend death mid-batch. Written from the 2026-07-15 incident, in which a user queued 1,440 AI descriptions, walked away, and lost the entire backlog to a V8 out-of-memory abort at 22:13 PDT — silently, with the frontend still serving pages, with nothing restarting the backend for ~6 hours, and with a Processing page that rendered the annihilated queue identically to a finished one. Six separate defects fall out of that one crash and each gets a locked fix here: (1) the in-memory-only queue must become a DURABLE JOURNAL under the state root, written at enqueue and at every terminal transition, with a compaction rule and a bounded size; (1b) a RESTORE ON BOOT that drops already-done work (skip-already-done makes replay safe), announces itself ("Large File Bridge restored N jobs…"), is cancellable, and QUARANTINES a poison task rather than replaying it into a crash loop; (2) an empty queue is NEVER rendered without a cause — finished, empty, and interrupted are three distinct states with distinct copy; (3) SUPERVISION — tsx watch restarts on file change only, never on crash, so the backend must be restarted by a supervisor with backoff and a countable BOOT marker; (4) HEALTH TRUTH — the status surfaces must assert the BACKEND (:8787), because frontend up ≠ app up; (5) FORENSICS — wire what can be wired and accept that a hard V8 abort leaves only launcher.log, which is why the BOOT/SHUTDOWN markers in the transactions log are what make the gap legible; (6) NOTIFICATION — a batch that dies must reach the user. Sibling of job_queue.mdx (the queue whose §5 no-persistence posture this spec overturns), processing.mdx (the surfaces that must stop lying), memory.mdx (the root cause upstream of the crash), transactions_log.mdx (the durable ledger the markers ride), backbone_resilience.mdx (the same never-fail-silent doctrine applied to the git/IPFS flow), performance.mdx.
+---
+
+# LargeFileBridge — Crash Recovery
+
+## 1. The thesis (LOCKED)
+
+> **A background queue that cannot survive the process that hosts it is not a queue. It is a plan.**
+
+The whole feature — the reason the background queue exists at all
+([job_queue.mdx §1](./job_queue.mdx)) — is that the user can point Large File Bridge at 1,440 files, click
+once, close the tab, and **walk away**. Every word of that sentence is a promise about **durability**. The
+user is not present to notice a stall; that is the point. So durability is not an implementation detail we
+may trade away for simplicity — **it is the product requirement**, and the queue's current in-memory-only
+posture ([job_queue.mdx §5](./job_queue.mdx)) violates it.
+
+That posture was argued for in the code itself. The argument is still sitting in the file:
+
+```
+// In-memory only, exactly like the job registry (webapp.mdx §12): the process IS the single API server, so
+// a task that outlived a restart was not "in flight" anymore. On restart the queue is empty; re-invoking a
+// page action re-queues only the still-unfinished files (skip-already-done makes that safe).
+```
+
+The reasoning that a restart makes the backlog moot is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — the module header comment (lines 8–10)
+
+**That reasoning is wrong, and this spec says so plainly.** It rests on two unstated assumptions, and the
+2026-07-15 incident (§2) broke both:
+
+* **It assumes a human is present to re-invoke the page action.** The entire value of the queue is that
+  nobody is. "The user can just click it again" is not a recovery mechanism when the user is asleep.
+* **It assumes the user can tell the difference between "empty because done" and "empty because
+  annihilated."** They cannot — the two render identically. The user's own words:
+  *"How many are left in the queue: zero. The 1,440-file batch is gone, not done."*
+
+**Skip-already-done is not the counter-argument — it is the enabling condition.** Idempotency is what makes
+**restore** cheap and safe (§4). It was never a substitute for restore; it was the missing half of it.
+
+---
+
+## 2. The incident (2026-07-15) — one crash, six defects
+
+**Setup.** The user enqueued **1,440** files for AI description ([ai_description.mdx](./ai_description.mdx))
+and left the machine to run overnight.
+
+**Timeline.**
+
+| Time (PDT) | What happened |
+| --- | --- |
+| ~evening | 1,440 `describe` tasks enqueued; the pool drains at the describe bucket's default ~24-way concurrency ([job_queue.mdx §3](./job_queue.mdx)). |
+| → 19:50 | **~146–149 descriptions completed.** Every one of them landed **before 19:50**. |
+| 19:50 → 22:13 | Throughput is **zero**. Heap climbs; ~24 in-flight files each pin ~66–90MB of base64 payload ([memory.mdx](./memory.mdx)). |
+| **22:13** | **The backend dies.** V8 heap reaches **4.1GB** against a ~4GB default limit: `FATAL ERROR: Ineffective mark-compacts near heap limit — JavaScript heap out of memory`. |
+| 22:13 → ~04:00 | **~6 hours dead.** Nothing restarts it. Vite on :2222 keeps serving the web app and logs a proxy error ~1/sec into `launcher.log`. |
+| morning | The user opens the Processing page. It says nothing is processing. The backlog of ~1,291 files is **gone**, and the page reads exactly as it would if the run had **finished**. |
+
+The crash's **root cause is memory** and belongs to [memory.mdx](./memory.mdx) — ~24-way describe
+concurrency × ~66–90MB of pinned base64 per in-flight file ≈ **1.6–2.2GB** against a ~4GB default heap, plus
+retained slack. **This spec does not own the OOM.** This spec owns everything that made the OOM
+*catastrophic* rather than *annoying*. Fixing the memory alone would leave every defect below intact,
+waiting for the next crash — a power cut, a `kill -9`, an unhandled throw. **The crash is a weather event.
+The data loss is a design defect.**
+
+Six defects, each independent, each with its own locked fix:
+
+| # | Defect | Fix |
+| --- | --- | --- |
+| **D1** | **The backlog vanished silently.** The queue is in-memory only — no disk write, no restore. | §3 durable journal |
+| **D1b** | **Nothing replayed it.** Even the surviving intent (1,440 known paths) was unrecoverable. | §4 restore on boot |
+| **D2** | **An empty queue is ambiguous.** Zero pending renders identically for *finished* and *annihilated*. **The UI lied by omission.** | §5 three states, never a bare zero |
+| **D3** | **Nothing restarted the backend.** `tsx watch` restarts on **file change** only, never on crash. Dead ~6 hours, nobody notified. | §6 supervision |
+| **D4** | **The frontend masked it.** Vite served pages the whole time. **Frontend up ≠ app up.** | §7 health truth |
+| **D5** | **The evidence was nearly invisible.** A V8 OOM abort cannot run our exit handlers, so `log.log` and `error.err` show **nothing**. | §8 forensics |
+| **D6** | **The user was never told.** No banner, no marker, no trace on next load. | §9 notification |
+
+**D2 is the core product defect.** D1 lost the work; D2 hid the loss. Of the two, the one that broke the
+user's trust is D2 — a tool that loses work and *says so* is a tool you can still plan around.
+
+The in-memory FIFO backlog that the crash vaporized is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `pending: QueueTask[]` (line ~93) / `enqueue()` (~109)
+
+The in-flight dedup set and per-bucket slot counts that vanished with it are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `inflight: Set<string>` (~94) / `running: Record<Bucket, number>` (~95)
+
+The progress registry that dies with the same process (an in-memory Map, deleted on completion) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.registry.ts` — `jobs = new Map()` (10) / `track()` (43) / `end()` (29)
+
+---
+
+## 3. D1 — Queue durability: the journal (LOCKED)
+
+The backlog becomes **durable state on disk**, living where every other durable machine-local thing lives:
+the state root, `~/T/_large_files_bridge/`.
+
+The state root the journal is written under is resolved in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveStateDir()`
+
+The precedent for durable machine-local subdirectories under that root (the TO DO batches, the per-repo
+state) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveTodoBatchesDir()` / `resolveRepoStateDir(repoKey)`
+
+### 3.1 The file and the format
+
+* **The file: `~/T/_large_files_bridge/queue/queue.jsonl`** — an **append-only journal**, one JSON object
+  per line, newline-terminated.
+* **Why JSONL and not YAML.** A YAML backlog would have to be **rewritten whole** on every change. At 1,440
+  tasks that is a full serialize-and-fsync per completed file — thousands of rewrites of a growing document,
+  on the hot path of the very batch we are trying to protect. An append-only line log makes the common case
+  (**one task terminated**) a **single small append**, which is the only write discipline that survives
+  `kill -9` without either losing data or costing O(N) per event.
+* **Machine-local, never synced.** The journal is **not** git-tracked, **not** IPFS-pinned, and **never**
+  travels to another computer. A backlog is a fact about *this* process on *this* machine. It sits under the
+  state root, not under `.lfbridge/` — the storage-kind artifact rules ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx))
+  govern user artifacts, and a queue journal is not one.
+
+### 3.2 The record shape — what makes a `QueueTask` replayable
+
+A journal line is one of three record kinds. The `enqueue` record must carry **everything needed to
+reconstruct the task from nothing**, because on restore there is no memory to consult.
+
+```jsonc
+// ENQUEUE — one line per task, written when it is admitted
+{ "t": "enq", "id": "…uuid…", "at": "2026-07-15T19:02:11.004Z",
+  "op": "describe",                    // which per-file runner handles it
+  "path": "/abs/path/to/file.mp4",     // ABSOLUTE — a relative path is not replayable
+  "overwrite": false,                  // re-do even if output exists
+  "provider": "auto",                  // describe only
+  "compress": { "deleteOriginal": "trash", "mediaKind": "video" },  // compress only
+  "batchId": "…uuid…",                 // groups one bulk run
+  "attempts": 0 }                      // §4.3 crash-loop protection
+
+// TERMINAL — one line per task, written when it ends, whatever the outcome
+{ "t": "end", "id": "…uuid…", "at": "…", "r": "done" }   // done | skipped | failed | quarantined
+
+// ATTEMPT — written when a task STARTS, before the runner is called (§4.3)
+{ "t": "try", "id": "…uuid…", "at": "…", "n": 1 }
+```
+
+These fields are exactly the existing task shape plus an identity and an attempt counter. The task shape the
+`enq` record serializes is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `QueueTask` interface (~27)
+
+**Nothing derived is journaled.** The admission bucket, the thread cap, and the concurrency budget are all
+recomputed live at admission time from the task's `op` + `mediaKind` — journaling them would freeze a stale
+budget across a restart. Derived at admission in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `bucketOf()` / `capFor()`
+
+### 3.3 The write discipline — where the commit points are (LOCKED)
+
+The journal is only worth writing if it is **on disk before the thing it describes can be lost**. A `kill -9`
+or a V8 abort gives us **no** chance to flush, so **batched-async writes are wrong for the commit points** —
+a 200ms flush window is a 200ms hole exactly the size of the failure we are defending against.
+
+* **Commit point 1 — enqueue.** `enqueue(tasks)` writes **all** the admitted tasks' `enq` lines and **fsyncs
+  once**, before it returns. **1,440 tasks are ONE write, not 1,440** — the lines are joined into a single
+  buffer and appended in one `writeSync` + `fsyncSync`. This is the honest cost accounting the design must
+  meet: the enqueue path is already a single HTTP request that must return immediately, and one ~200KB
+  append is well inside that budget. **Per-task appends on enqueue are forbidden.**
+* **Commit point 2 — terminal transition.** When a task ends, its `end` line is appended **synchronously**.
+  This is a ~80-byte append per file — at 24-way describe concurrency that is a couple of dozen tiny appends
+  per minute, orders of magnitude below the transcode and network cost of the work itself. **A synchronous
+  append here is affordable; a lost backlog is not.**
+* **Commit point 3 — attempt.** The `try` line is appended synchronously **before** the runner is invoked,
+  because a task that crashes the process must be **known to have been attempted** when we come back (§4.3).
+  This is the one write whose whole purpose is to survive the very next instruction.
+* **Everything else is best-effort.** Nothing outside these three points blocks.
+
+### 3.4 Compaction — the journal is bounded (LOCKED)
+
+An append-only log that only grows is a leak. The live backlog is the **fold** of the journal: every `enq`
+whose `id` has no `end`.
+
+* **Compact when the journal exceeds `LFB_QUEUE_JOURNAL_MAX_BYTES` (default `8388608` = 8 MiB) OR when the
+  queue drains to empty.** Compaction writes the *folded* live set to `queue.jsonl.tmp` and **atomically
+  renames** it over `queue.jsonl` (`writeFileSync` + `fsyncSync` + `renameSync` — the rename is the atomic
+  commit; a crash mid-compaction leaves either the whole old journal or the whole new one, never a torn
+  file).
+* **Drain-to-empty compaction is the common case** and reduces the file to **zero lines**, so a healthy
+  machine's journal is normally empty or tiny. A 1,440-task run's journal peaks around ~400KB and collapses
+  to nothing when the run ends.
+* **The hard ceiling.** If the folded live set itself would exceed `LFB_QUEUE_JOURNAL_MAX_ENTRIES` (default
+  `50000`), `enqueue()` **refuses the excess and reports it** rather than writing an unbounded file — a
+  surfaced refusal, never a silent truncation (§9 and the never-fail-silent doctrine of
+  [backbone_resilience.mdx §1](./backbone_resilience.mdx#1-the-guarantee-locked)).
+* This mirrors the house rotation policy — nothing under the state root grows unbounded (the charter's
+  logging section; `RollingFileWriter` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts`).
+
+The journal writer (single-append enqueue, synchronous terminal/attempt appends, fold, and atomic
+temp+rename compaction) is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/queue-journal.ts` — `appendEnqueued(tasks)` / `appendAttempt(id, n)` / `appendTerminal(id, result)` / `foldLiveSet()` / `compact()`
+
+### 3.5 What is NOT journaled
+
+* **The progress registry.** A running card is a *view* of a running task; on restore the task re-enters as
+  **pending** and gets a fresh card when it starts. The registry stays in-memory and disposable.
+* **The batch registry.** Batches are a 30-minute display convenience, and a batch whose process died is not
+  a batch the user is still watching. A restored task keeps its `batchId` so a **new** batch can be
+  reconstituted for the restored set (§4.2), but the old `ProcessingBatch` object is not resurrected.
+  The batch registry and its retention window are in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `batches: Map` (~142) / `BATCH_RETENTION_MS` (~143) / `createBatch()` / `recordBatchResult()` / `listBatches()` (~145–190)
+* **`recentFailures`.** A 30-minute display buffer, capped at 500. In code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `recentFailures` / `listRecentFailures()` (~212–226)
+
+---
+
+## 4. D1b — Restore on boot (LOCKED)
+
+On startup, before the queue accepts its first new task, Large File Bridge **reads the journal, folds it,
+filters it, and re-admits what is genuinely unfinished.**
+
+### 4.1 The restore pass
+
+1. **Fold.** Read `queue.jsonl`; every `enq` without a matching `end` is a **candidate**. A missing or
+   unreadable journal is not an error — it is an empty backlog.
+2. **Drop the already-done.** For each candidate, ask the op's own skip-already-done check whether the output
+   already exists. **This is what makes replay safe**, and it is cheap — a stat-and-read of a small sidecar,
+   not a re-run.
+   The describe op's skip-already-done check (returns `skipped` when the description exists) is in code:
+   `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()` → `readDescription(abs)` (~175); `transcribeOne()` has the equivalent guard
+3. **Drop the vanished.** A candidate whose `path` no longer exists is dropped (the user deleted or moved it
+   overnight) and counted as such.
+4. **Quarantine the poison.** A candidate whose `attempts` has reached the strike limit is **not re-admitted**
+   (§4.3).
+5. **Re-admit the rest** through the ordinary `enqueue()` path, so dedup, the admission buckets, and the live
+   Core Budget all apply exactly as they would to a fresh batch. **The restore path is not a second queue —
+   it is a producer.**
+6. **Compact** the journal to the restored live set, so the next crash's fold starts clean.
+
+The restore pass, run once at boot before the queue serves any request, is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/queue-restore.ts` — `restoreQueueOnBoot()`, called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts` — `bootstrapState()` (the same boot hook that starts the watchdog, [backbone_resilience.mdx §3](./backbone_resilience.mdx#3-the-in-process-watchdog--the-always-on-backstop-locked))
+
+**Restore never blocks the port.** The fold is O(journal lines) and the existence checks are O(candidates)
+stats — at 1,440 files, milliseconds. But it runs **async** and the backend binds :8787 first regardless: a
+slow restore must never make the app look dead while it recovers from looking dead.
+
+### 4.2 A restore is NEVER silent (LOCKED)
+
+> **The user must be told that a restore happened, in the product, in English, without reading a log.**
+
+* **The Processing page states it.** A restored session renders a banner atop the page:
+  **"Large File Bridge restored 1,291 jobs from the previous session — the app stopped unexpectedly at
+  10:13 PM."** It carries the **restored count**, the **skipped-because-already-done count**, and the
+  **time of the previous session's end** where known (§8's BOOT/SHUTDOWN markers supply it).
+* **It persists until acknowledged.** The banner is not a toast. It survives navigation and reload, and
+  clears when the user dismisses it or when the restored batch completes. A toast that fires while the user
+  is asleep is the same as no notification at all — which is exactly D6.
+* **It is a [dialogs.mdx](./dialogs.mdx) surface**, not a `window.alert`. Native browser dialogs are banned
+  product-wide; the banner and any confirm it offers go through the house `ConfirmDialog` / `ModalHost`
+  path.
+* **A restored batch is cancellable.** The banner offers **"Cancel restored jobs"**, which drains the
+  restored tasks from the queue and truncates the journal. The user who queued 1,440 files and changed their
+  mind overnight must not be forced to watch them run. Cancellation is itself a terminal transition — each
+  cancelled task gets an `end` line — so a crash mid-cancel does not resurrect them.
+* **Zero restored is still a fact.** If the previous session ended abnormally but nothing was left to
+  restore, the banner says so: **"Large File Bridge stopped unexpectedly at 10:13 PM. No unfinished jobs
+  were pending."** That is the difference between an app that knows what happened and one that shrugs.
+
+The restore banner is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingPage.tsx` — `ProcessingPage` (reads `session` from `useProgress()`; renders the restore banner above Running now, per [processing.mdx §4](./processing.mdx))
+
+### 4.3 Crash-loop protection — quarantine the poison task (LOCKED)
+
+**A durable queue is a loaded gun pointed at the boot path.** If the task that killed us is faithfully
+restored on every boot, we have upgraded a one-time data loss into an **infinite crash loop that also
+prevents every other task from ever running**. That would be strictly worse than the incident. So:
+
+* **Every task carries a persisted `attempts` counter.** The `try` line (§3.2) is appended **synchronously
+  before the runner is called** — so a task that takes the process down with it is nonetheless **recorded as
+  having been attempted**. This is the whole reason commit point 3 exists.
+* **`LFB_QUEUE_MAX_ATTEMPTS` (default `2`) strikes and it is quarantined.** A task that has been attempted
+  twice without a terminal record — i.e. **it crashed the process twice** — is **not re-admitted**. It is
+  written an `end` line with `"r": "quarantined"`.
+* **A quarantined task is surfaced, not swallowed.** It appears as a **Failed row** on the Processing table
+  with the reason **"Quarantined — this file crashed Large File Bridge twice and was not retried."** The
+  user can retry it explicitly (which resets its counter) or leave it. It rides the existing failure feed:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `recordFailure()` → `listRecentFailures()` (~212–226), surfaced per [processing.mdx §4.3.1](./processing.mdx#4311-the-four-item-states-locked)
+* **Two strikes, not five.** A file that reproducibly aborts the runtime is not going to succeed on attempt
+  three, and each attempt costs the user another crash. **Bias hard toward quarantine.**
+* **Honesty about the incident.** The 2026-07-15 crash was an **aggregate** memory failure, not a poison
+  file — no single file was at fault, and a naive restore of all 1,440 would very likely have OOMed again.
+  That is why the memory fix ([memory.mdx](./memory.mdx)) is a **prerequisite** for restore, and why
+  quarantine alone is not a substitute for it: quarantine catches the *file-shaped* crash; only bounded
+  memory catches the *batch-shaped* one. If the restored set OOMs again, the strike counter converts an
+  infinite loop into a **bounded, surfaced failure** — a floor, not a cure.
+
+---
+
+## 5. D2 — Never render an ambiguous zero (LOCKED)
+
+> **Zero pending is not a state. It is three states wearing the same coat.**
+
+The Processing page and the dock must **always distinguish** these, and must **never** render an empty queue
+without saying which one it is:
+
+| State | Means | What the user reads |
+| --- | --- | --- |
+| **Finished** | Work ran in this session and completed. | **"All 1,440 files described."** — plus the recent-done rows / the batch's final summary. |
+| **Empty** | Nothing was ever queued in this session; nothing is pending. | **"Nothing is processing right now."** — the existing calm empty state ([processing.mdx §4](./processing.mdx)). |
+| **Interrupted** | The previous session ended abnormally with work outstanding. | **"Large File Bridge stopped unexpectedly at 10:13 PM. 1,291 jobs were restored and are running now."** — or, if restore found nothing to do, the zero-restored variant (§4.2). |
+
+* **The rule (LOCKED).** An empty Processing page is only allowed to render **Empty** when the app can
+  affirmatively assert that nothing was interrupted. If the last session's outcome is **unknown**, the page
+  says **Interrupted**, not Empty. **We fail toward telling the user something happened.** An honest "we're
+  not sure" beats a confident lie, and a confident lie is precisely what shipped.
+* **The dock follows.** The dock is absent while idle ([processing.mdx §3](./processing.mdx)) — that stays
+  true for **Empty** and **Finished**. For **Interrupted**, the conditional **Processing** nav item
+  ([processing.mdx §2](./processing.mdx)) **remains visible** with the restore banner reachable behind it,
+  because there is something the user needs to know.
+
+### 5.1 Where the state comes from
+
+The state is **derived**, from three durable inputs — never guessed:
+
+1. **A boot marker** written to the transactions log at every start, and a **shutdown marker** written on
+   clean exit (§8). **BOOT without a preceding SHUTDOWN ⇒ the previous session died.**
+2. **The restored count** from the boot restore pass (§4.1).
+3. **The last session's unfinished set** — the fold of the journal at boot, before filtering.
+
+These ride the poll as one small object, so all three surfaces read the same truth and cannot disagree
+([processing.mdx §5](./processing.mdx) — the one-source rule):
+
+```ts
+GET /api/progress → {
+  …,
+  session?: {
+    startedAt: string;                 // this session's BOOT
+    previousEnded: "clean" | "abnormal" | "unknown";
+    previousEndedAt?: string;          // from the last SHUTDOWN/BOOT marker pair
+    restored?: number;                 // re-admitted tasks (§4.1)
+    restoreSkipped?: number;           // dropped because the output already existed
+    quarantined?: number;              // §4.3
+  }
+}
+```
+
+The `session` block is folded into the one polled payload in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.router.ts` — `GET /` (alongside the existing `queued` / `queuedByOp` / `batches` / `workers` folds)
+
+The pending backlog count that must never again stand alone as a bare zero is produced in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `queueDepth()` (~127) / `queueDepthByOp()` (~132)
+
+---
+
+## 6. D3 — Supervision: something must restart it (LOCKED)
+
+> **The backend was dead for six hours and the only thing that would have revived it was a source file
+> changing.**
+
+### 6.1 The trap: `tsx watch` restarts on file change, not on crash
+
+`just run` starts `pnpm dev`, which runs the backend under `tsx watch`. Its semantics are **watch the
+filesystem and restart on change**. It is a *development ergonomics* tool, and it has **no opinion about a
+process that exits on its own**. When V8 aborted at 22:13, `tsx watch` did exactly what it was designed to
+do: nothing. The backend stayed dead until a human noticed.
+
+This is the same failure class as a dead launchd trigger — **F1** in
+[backbone_resilience.mdx §2](./backbone_resilience.mdx#2-the-failure-taxonomy--every-way-the-flow-can-stop-locked):
+*"the job crashes on every fire and writes nothing to our own logs — the single most dangerous stall because
+it is perfectly silent."* The doctrine there is already the right one; it simply was never applied to the
+API server itself.
+
+The dev launcher that starts `pnpm dev` under `nohup` with no restart-on-exit is in:
+`~/BGit/Bryan_git/LargeFileBridge/justfile` — the `run` recipe (~line 96, `nohup pnpm dev > >(exec node "{{logpipe}}" "{{log}}") 2>&1 &`)
+
+### 6.2 The fix, in both modes
+
+* **Installed background service → launchd `KeepAlive`.** The hosted/installed backend runs as a launchd job
+  with `KeepAlive` (crash-restart) and `ThrottleInterval`, so the OS restarts it. This is the mechanism the
+  repo **already uses** for the scan/pin workers — the plist writer and the bootout/bootstrap install are in
+  code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/os/launchd.ts` and
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/os/installer.ts` — the plist render + `bootout` / `bootstrap` reload
+* **Dev mode → a supervisor loop in the launcher.** `just run` wraps `pnpm dev` in a **restart-on-exit**
+  loop: when the child exits for **any** reason other than a `just stop`-initiated signal, log the exit code
+  and relaunch. The loop lives in the `justfile` `run` recipe alongside the existing rotating-log sink, so
+  the pid/port discipline `stop` depends on is preserved.
+* **Backoff (LOCKED).** Restarts back off — **1s, 2s, 4s, 8s, 16s, capped at 60s** — resetting the delay
+  after the child has stayed up for **≥ 60s**. A process that dies instantly on boot must **not** spin: a
+  crash loop that pegs a core and floods `launcher.log` is a second incident on top of the first. After
+  **5 consecutive fast failures**, the supervisor **stops and says why**, loudly, on stdout and in
+  `launcher.log`. Give up visibly; never thrash silently.
+* **A BOOT marker every start.** Every start writes a `BOOT` record to the transactions log (§8), so
+  **restarts are countable**. Three BOOTs overnight is a fact the user and we can both see; without it, a
+  supervisor that silently restarts a crashing app is just a quieter version of the same bug.
+* **The watchdog is not this.** The in-process watchdog
+  ([backbone_resilience.mdx §3](./backbone_resilience.mdx#3-the-in-process-watchdog--the-always-on-backstop-locked))
+  runs **inside** the backend and backstops the *OS trigger*. It cannot restart the process that hosts it.
+  Supervision is the missing outer ring:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/watchdog.service.ts` — `startWatchdog()` / `tick()` (in-process; explicitly **not** a supervisor)
+
+---
+
+## 7. D4 — Health truth: frontend up ≠ app up (LOCKED)
+
+> **For six hours the web app looked fine. Every page loaded. Nothing worked.**
+
+Vite on **:2222** serves the frontend from its own process. It kept serving the whole time the backend was
+dead, and proxied every `/api` call into a connection refused — ~1/sec of proxy errors into `launcher.log`,
+and a UI that rendered its chrome perfectly. **A green frontend is evidence of nothing.**
+
+The rules:
+
+* **Health means the BACKEND.** Any status the user or an operator reads must assert **:8787** — the port
+  the API server binds. The frontend's port is a **separate, subordinate** line, and it must never be the
+  thing that makes a status read "UP".
+* **`just status` must not lead with the web port.** Today it prints the web app's port first and the
+  backend second, which invites reading the first line and stopping. The backend line is the **authority**;
+  the recipe reports an overall verdict driven by :8787.
+  `~/BGit/Bryan_git/LargeFileBridge/justfile` — the `status` recipe (~line 166; `lsof -ti tcp:{{be_port}}` is the load-bearing check)
+* **Listening is not healthy.** The probe is an **HTTP request to the health endpoint**, not a port check. A
+  process wedged behind a blocked event loop still holds its port open — exactly the failure
+  [processing.mdx §4.4](./processing.mdx#44-performance-at-scale--thousands-of-items-without-a-slow-page-locked)
+  and [performance.mdx P-27](./performance.mdx) describe — so an unanswered probe **within a timeout** is a
+  failure.
+  The probe target is in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/health/health.router.ts` — `GET /` (returns `{ status: "ok", ipfs }`)
+* **The UI tells the truth when the API is unreachable.** When the poll fails repeatedly, the frontend must
+  render **"Large File Bridge's backend is not responding."** — not an idle Processing page, not a stale
+  render, not silence. **An unreachable backend is a known state, and it is not "nothing is processing."**
+  It reuses the transient-vs-fatal distinction the auth boot-gate already established
+  ([authentication.mdx §5–6](./authentication.mdx)) — a blip shows *Reconnecting*, a sustained outage shows
+  the truth.
+  Rendered in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/progress/ProgressContext.tsx` — `ProgressProvider` (surfaces a sustained poll failure as an explicit unreachable state, not as an empty payload)
+
+---
+
+## 8. D5 — Crash forensics: make the gap legible (LOCKED)
+
+**Wire everything that can be wired, and be honest about what cannot.**
+
+### 8.1 What can be wired
+
+* **`uncaughtException` / `unhandledRejection` → a durable FATAL.** These already exist and already flush;
+  they must also write a **FATAL** record into the transactions log so the death has a durable, structured
+  trace next to the BOOT/SHUTDOWN markers.
+  The handlers are in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts` — `process.on("uncaughtException")` / `process.on("unhandledRejection")` (lines 217–218)
+  The synchronous drain that already hooks the same signals so `error.err` survives a crash is in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `installLogShutdownFlush()` (226)
+* **`--heapsnapshot-near-heap-limit=1`.** Node writes a heap snapshot as the limit is approached, **before**
+  the abort. This is the only artifact that would have explained the 22:13 death from the inside, and it
+  belongs to the memory work ([memory.mdx](./memory.mdx)) — cited here because it is the forensic answer to
+  the one failure our handlers structurally cannot catch.
+* **A SHUTDOWN marker on clean exit**, from the same signal path the log flush uses.
+
+### 8.2 What cannot be wired — and why the markers matter
+
+**A V8 out-of-memory abort does not run our handlers.** It is not an exception; the runtime aborts. No
+`uncaughtException`, no `beforeExit`, no flush. This is why `log.log` and `error.err` show **nothing at
+22:13** — not a bug in our logging, a property of the failure. **We cannot log our own death from inside the
+corpse.**
+
+* **The only in-band trace is `launcher.log`**, because the sink is a *separate process* reading the child's
+  stdout/stderr — it captured V8's dying words verbatim. Finding them means filtering the ~1/sec proxy-error
+  flood the frontend generated for six hours (§10).
+* **Therefore the markers are the mechanism.** We cannot record the crash, but we **can** record every
+  **BOOT** and every clean **SHUTDOWN**. A **BOOT with no preceding SHUTDOWN is a crash** — inferred, durable,
+  timestamped, and machine-readable. **The gap between the last SHUTDOWN and the next BOOT *is* the
+  incident**, and it is what powers the "stopped unexpectedly at 10:13 PM" copy in §4.2 and §5.
+* The markers live in the durable ledger — see [transactions_log.mdx](./transactions_log.mdx). BOOT / SHUTDOWN
+  / FATAL are records there, not log lines, precisely because a log line is not queryable and this must be.
+
+---
+
+## 9. D6 — Notification: a dead batch must reach the user (LOCKED)
+
+The user queued 1,440 files and learned they were gone by **counting files on disk the next morning**. That
+is the defect, stated at its most damning.
+
+* **Minimum bar: the Processing page on next load.** The restore banner (§4.2) is not optional chrome —
+  it is the **notification of record**, and it must be there on the first load after an abnormal end,
+  whether that is thirty seconds or nine hours later.
+* **The banner persists across reloads** until acknowledged or until the restored work completes. Anything
+  ephemeral fails the sleeping-user test, which is the only test that matters here.
+* **It says what happened, not that something happened.** *"Large File Bridge stopped unexpectedly at 10:13
+  PM"* — with a time, a count, and a link to the details. Not *"An error occurred."*
+* **Never silent, ever.** This is the same doctrine as
+  [backbone_resilience.mdx §1](./backbone_resilience.mdx#1-the-guarantee-locked): *"A stall that produces no
+  recovery and no signal is a defect of the highest severity, because its symptom appears far from its cause
+  and only after the user has already lost time."* Nine hours of lost time is exactly the distance that
+  doctrine exists to close.
+* **Future seam (not required now):** a native/OS notification for a batch that ends abnormally while no tab
+  is open. The banner is the floor; it is not the ceiling.
+
+---
+
+## 10. Verification recipes
+
+Literal one-liners. Each answers one question the incident left us unable to answer.
+
+**Is the backend actually up?** (**this first, always** — §7)
+
+```sh
+lsof -ti tcp:8787 >/dev/null && echo "backend UP" || echo "backend DOWN"
+curl -sS -m 5 http://localhost:8787/api/health || echo "backend NOT ANSWERING"
+```
+
+**Count the real output on disk** — the trustworthy count, independent of every log and every UI:
+
+```sh
+fd -H -I -e ai_description --changed-within 11h | wc -l
+```
+
+* **`-H -I` are MANDATORY.** The artifacts live in **hidden, git-ignored** `.lfbridge/` directories; without
+  both flags `fd` skips them and you get a confidently wrong **0**.
+* **Do not reach for macOS `find`.** It has **no `-newermt`** and will **silently return 0** — a false
+  all-clear that looks exactly like a real one. (This is the same class of trap as the charter's
+  no-`find`-on-this-machine rule.)
+
+**Find the OOM** — the only in-band trace of a V8 abort (§8.2), filtered out of the proxy-error flood:
+
+```sh
+grep -aE "FATAL ERROR|JavaScript heap|Ineffective mark-compacts" ~/T/_large_files_bridge/launcher.log*
+```
+
+**Diff BOOT vs SHUTDOWN** — every BOOT without a preceding SHUTDOWN is a crash (§8.2):
+
+```sh
+grep -aE "\"(BOOT|SHUTDOWN|FATAL)\"" ~/T/_large_files_bridge/transactions.log | tail -40
+```
+
+**Inspect the live backlog** — what would be restored right now:
+
+```sh
+wc -l ~/T/_large_files_bridge/queue/queue.jsonl
+grep -ac '"t":"enq"' ~/T/_large_files_bridge/queue/queue.jsonl
+```
+
+---
+
+## 11. Invariants (LOCKED)
+
+1. **The backlog is durable.** Every admitted task is on disk, fsynced, **before `enqueue()` returns**.
+2. **Enqueue is one write.** N tasks cost **one** append + **one** fsync, never N.
+3. **Terminal transitions are synchronous appends.** No batching, no debounce, no flush window at a commit
+   point — a `kill -9` must lose nothing.
+4. **Restore is a producer, not a second queue.** Restored tasks go through the ordinary `enqueue()` path and
+   obey dedup, the admission buckets, and the live Core Budget.
+5. **Restore never re-does completed work.** Skip-already-done is checked per candidate before re-admission.
+6. **Restore is never silent.** A restored session announces itself in the product, in English, persistently.
+7. **A restored batch is cancellable**, and cancelling is itself a durable terminal transition.
+8. **Two strikes and quarantine.** A task attempted `LFB_QUEUE_MAX_ATTEMPTS` (default 2) times without a
+   terminal record is never re-admitted, and is surfaced as Failed with its reason.
+9. **An empty queue is never rendered without a cause.** Finished, Empty, and Interrupted are distinct
+   states with distinct copy; an **unknown** previous outcome renders as **Interrupted**.
+10. **Health means :8787, answered.** Not :2222, not a held port.
+11. **Every start writes a BOOT marker; every clean exit writes a SHUTDOWN marker.** A BOOT without a
+    preceding SHUTDOWN is a crash, durably.
+12. **Restarts back off and give up visibly.** Never an unthrottled crash loop, never a silent one.
+13. **The journal is bounded.** Compacted on drain-to-empty and at a size ceiling, via atomic temp+rename.
+14. **The journal is machine-local.** Never git-tracked, never IPFS-pinned, never travels.
+
+---
+
+## 12. Acceptance criteria
+
+1. **`kill -9` mid-batch, then restart → the backlog resumes.** Enqueue 1,000 describe tasks, let ~100
+   complete, `kill -9` the backend, restart it: the remaining ~900 **re-enter the queue and drain to
+   completion**, and **no file is processed twice** — the ~100 already-done are dropped by
+   skip-already-done at restore, not re-run.
+2. **The journal survives the hardest kill.** After `kill -9` with no chance to flush, `queue.jsonl`
+   contains every admitted task and every task that had terminated — no truncated line, no lost tail.
+3. **Enqueue is one write.** Enqueuing 1,440 tasks produces **one** append + **one** fsync (not 1,440), and
+   the enqueue HTTP handler still returns immediately ([job_queue.mdx §6.1](./job_queue.mdx)).
+4. **The Processing page reports the restore.** After the restart in AC1, the page shows **"Large File
+   Bridge restored N jobs from the previous session — the app stopped unexpectedly at HH:MM."** with the
+   restored count, the skipped count, and the previous session's end time; the banner **persists across
+   reload** until dismissed or drained.
+5. **A restored batch is cancellable.** Clicking **Cancel restored jobs** drains them, and a `kill -9`
+   immediately afterward does **not** resurrect them on the next boot.
+6. **A poison task is quarantined, not looped.** A task that takes the process down is re-attempted **once**;
+   on the second death it is **quarantined**, surfaced as a **Failed row** with the reason
+   *"Quarantined — this file crashed Large File Bridge twice and was not retried"*, and **the rest of the
+   backlog still drains**.
+7. **An empty queue is never rendered without a cause.** With a clean SHUTDOWN and nothing pending the page
+   shows **Empty**; after a completed run it shows **Finished** with the count; after an abnormal end it
+   shows **Interrupted** — including the **zero-restored** variant when nothing was left to do. An
+   **unknown** previous outcome renders **Interrupted**, never Empty.
+8. **Supervision restarts the backend on crash.** Killing the backend (not via `just stop`) causes a restart
+   within the backoff window **without any file changing** — proving the fix is a supervisor and not
+   `tsx watch`. `just stop` still stops it and it stays stopped.
+9. **Backoff and give-up.** A backend that dies immediately on every boot backs off (1s→2s→4s→8s→16s, cap
+   60s) and, after 5 consecutive fast failures, **stops with a loud message** — it never spins.
+10. **Restarts are countable.** Each start appends a **BOOT** record to the transactions log; a clean exit
+    appends **SHUTDOWN**. After AC8 the log shows the BOOT/SHUTDOWN pairing that identifies the crash gap.
+11. **Health asserts the backend.** With :2222 up and :8787 down, `just status` reports the app as **down**
+    and the UI renders **"Large File Bridge's backend is not responding."** — **not** an idle Processing
+    page. Frontend up ≠ app up.
+12. **Forensics.** A thrown `uncaughtException` produces a durable **FATAL** in both `error.err` and the
+    transactions log. A hard V8 abort produces **no** entry in either (accepted, §8.2) — and is still
+    identifiable from `launcher.log` plus the BOOT-without-SHUTDOWN gap.
+13. **The journal is bounded.** After a 1,440-task run drains to empty, `queue.jsonl` is compacted to zero
+    live entries; a journal that crosses the size ceiling mid-run is compacted via atomic temp+rename with
+    no loss and no torn file.
+14. **The 2026-07-15 incident cannot recur as a silent loss.** With [memory.mdx](./memory.mdx)'s bounds in
+    place **and** this spec's journal, restore, supervision, and banner, the same 1,440-file overnight run
+    either **completes**, or **resumes after any crash and says it did** — but it never again ends with the
+    user counting files on disk to discover the work is gone.
+
+<!--
+  AUTHORITATIVE spec for CRASH RECOVERY — the backlog must survive the process that hosts it. Written from the
+  2026-07-15 incident (§2): 1,440 AI descriptions queued; 22:13 PDT the backend died on a V8 OOM (heap 4.1GB,
+  "FATAL ERROR: Ineffective mark-compacts near heap limit"); ~146-149 done, ALL before 19:50; backlog GONE and
+  the UI rendered it as done. Root cause = memory.mdx (24-way describe × ~66-90MB pinned base64 ≈ 1.6-2.2GB vs
+  ~4GB heap) — NOT owned here. This spec owns what made the crash catastrophic instead of annoying.
+  THESIS: a queue that can't survive its process is a plan, not a queue. The code comment (jobqueue.service.ts
+  lines 8-10) arguing no-persistence is fine is PROVEN WRONG: it assumes a human is present to re-invoke, and
+  that the user can tell "empty because done" from "empty because crashed". Skip-already-done is not the
+  counter-argument, it's the ENABLING CONDITION for restore.
+  SIX DEFECTS, each with a locked fix:
+   D1  (§3) queue in-memory only (pending[] ~93, inflight ~94, running ~95) → DURABLE JOURNAL
+       ~/T/_large_files_bridge/queue/queue.jsonl, append-only JSONL (NOT YAML: whole-rewrite per event is O(N)
+       on the hot path). Records: enq (op, ABSOLUTE path, overwrite, provider, compress{deleteOriginal,mediaKind},
+       batchId, attempts) / try / end. THREE SYNC COMMIT POINTS (batched-async is WRONG — must survive kill -9):
+       enqueue = ONE append+fsync for ALL N tasks (1,440 = 1 write, NEVER 1,440); terminal = sync ~80B append;
+       attempt = sync append BEFORE the runner (that's what makes §4.3 possible). Nothing DERIVED is journaled
+       (bucket/cap recomputed live). COMPACT on drain-to-empty OR >8MiB (LFB_QUEUE_JOURNAL_MAX_BYTES) via atomic
+       temp+rename; hard ceiling LFB_QUEUE_JOURNAL_MAX_ENTRIES=50000 → refuse+surface, never silent truncation.
+       Machine-local: never git, never IPFS, state root NOT .lfbridge/. NOT journaled: progress registry, batch
+       registry, recentFailures (all display-only).
+   D1b (§4) RESTORE ON BOOT: fold → drop already-done (readDescription(), describe.service ~175) → drop vanished
+       → quarantine over-strike → re-admit via ordinary enqueue() (restore is a PRODUCER, not a 2nd queue) →
+       compact. Runs from main.ts bootstrapState(), async, never blocks the port bind.
+       §4.2 NEVER SILENT: persistent Processing-page BANNER (not a toast — the user is asleep), "Large File Bridge
+       restored N jobs… stopped unexpectedly at 10:13 PM", restored/skipped counts + prev-end time; dialogs.mdx
+       surface (no window.alert); CANCELLABLE (cancel = durable terminal); ZERO restored still announces.
+       §4.3 CRASH-LOOP PROTECTION: persisted `attempts`, `try` line written BEFORE the runner, LFB_QUEUE_MAX_ATTEMPTS
+       default 2 → quarantined + Failed row (recordFailure/listRecentFailures ~212-226). Two strikes not five.
+       HONEST: 2026-07-15 was an AGGREGATE memory failure, not a poison file — memory.mdx is a PREREQUISITE for
+       restore; quarantine turns an infinite loop into a bounded surfaced failure (a floor, not a cure).
+   D2  (§5) THE CORE DEFECT — ambiguous zero. THREE states: Finished ("All 1,440 files described.") / Empty
+       ("Nothing is processing right now.") / Interrupted ("…stopped unexpectedly at 10:13 PM. 1,291 jobs were
+       restored…"). RULE: unknown previous outcome ⇒ render INTERRUPTED, never Empty — fail toward telling.
+       Derived from (1) BOOT marker w/o preceding SHUTDOWN, (2) restored count, (3) last session's unfinished
+       fold; ships as `session{startedAt, previousEnded, previousEndedAt, restored, restoreSkipped, quarantined}`
+       on the ONE poll (progress.router GET /). Dock stays absent for Empty/Finished; nav item stays for Interrupted.
+   D3  (§6) SUPERVISION. THE TRAP: `tsx watch` restarts on FILE CHANGE only, never on crash → dead ~6h. Same class
+       as backbone_resilience F1. Fix: launchd KeepAlive for the installed service (pattern already in
+       schedule/os/launchd.ts + installer.ts); dev = restart-on-exit loop in justfile `run` (~L96). BACKOFF
+       1/2/4/8/16 cap 60s, reset after 60s up; 5 fast failures → STOP LOUDLY. BOOT marker every start so restarts
+       are COUNTABLE. The in-process watchdog (watchdog.service.ts) is NOT this — it can't restart its own host.
+   D4  (§7) HEALTH TRUTH: frontend up ≠ app up (Vite :2222 served pages for 6h + ~1/sec proxy errors). Assert the
+       BACKEND :8787, via an HTTP probe to health.router GET / (listening ≠ healthy — a blocked event loop still
+       holds the port, performance.mdx P-27). justfile `status` (~L166) must not lead with the web port. UI shows
+       "Large File Bridge's backend is not responding." on sustained poll failure (ProgressContext), reusing the
+       authentication.mdx §5-6 transient-vs-fatal split — NOT an idle page.
+   D5  (§8) FORENSICS. Wireable: main.ts uncaughtException/unhandledRejection (L217-218) → durable FATAL into
+       error.err + transactions log (logging.ts installLogShutdownFlush() L226 already hooks these to flush);
+       --heapsnapshot-near-heap-limit=1 (memory.mdx). NOT wireable: a V8 abort runs NO handlers — that's WHY
+       log.log/error.err were empty at 22:13. Only in-band trace = launcher.log (separate sink process). THEREFORE
+       the BOOT/SHUTDOWN markers in transactions_log.mdx are the mechanism: BOOT w/o SHUTDOWN = a crash, and the
+       gap IS the incident (powers §4.2/§5 copy).
+   D6  (§9) NOTIFICATION: minimum bar = the Processing page on next load, persistent, with a TIME and a COUNT.
+       Same doctrine as backbone_resilience §1. Future seam: OS notification.
+  §10 VERIFY: lsof/curl :8787 FIRST; `fd -H -I -e ai_description --changed-within 11h` (-H -I MANDATORY — hidden
+      git-ignored .lfbridge/; macOS find lacks -newermt and SILENTLY returns 0); grep launcher.log* for
+      FATAL ERROR/JavaScript heap; grep BOOT/SHUTDOWN in transactions.log.
+  §11 INVARIANTS (14, LOCKED) · §12 AC (14) incl. kill -9 mid-batch resumes w/ nothing done twice, restore is
+      reported, poison quarantined after 2, empty never rendered without a cause, supervisor restarts w/ no file
+      change, health asserts :8787.
+  Code seams: jobqueue/queue-journal.ts (appendEnqueued/appendAttempt/appendTerminal/foldLiveSet/compact) +
+  jobqueue/queue-restore.ts (restoreQueueOnBoot) — both NEW; jobqueue.service.ts (enqueue/pump/runTask/queueDepth,
+  pending/inflight/running, batches+recentFailures); config/state-dir.ts resolveStateDir(); main.ts bootstrapState()
+  + the process handlers; shared/logging.ts installLogShutdownFlush(); health/health.router.ts; progress.router GET /
+  (session fold); ProcessingPage.tsx (banner); ProgressContext.tsx (unreachable state); justfile run/status.
+  Keep in sync with job_queue.mdx (§5 no-persistence posture is OVERTURNED here — update it), processing.mdx
+  (§4 states + §4.3 Failed rows + §5 payload), memory.mdx (the root cause + the prerequisite), transactions_log.mdx
+  (BOOT/SHUTDOWN/FATAL records), backbone_resilience.mdx (the never-fail-silent doctrine, F1, the watchdog),
+  performance.mdx (P-27), dialogs.mdx (no native dialogs).
+-->

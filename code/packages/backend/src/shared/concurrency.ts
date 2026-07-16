@@ -8,6 +8,7 @@
 // second, drifting core-count math. The `limit` callers pass to mapLimit/Limiter now comes from these
 // helpers rather than a hardcoded small number.
 import os from "node:os";
+import v8 from "node:v8";
 import { getAppConfig } from "../modules/store-model/config.service.js";
 
 /** Logical cores on this machine — one source, floored at 1 (parallelization.mdx §1). */
@@ -43,6 +44,33 @@ export function coreBudget(fraction?: number): number {
  */
 export function responsiveBudget(): number {
   return Math.max(1, logicalCores() - 2);
+}
+
+/**
+ * The MEMORY BUDGET (memory.mdx §2.1) — concurrency's SECOND budget, and the one whose absence caused the
+ * 2026-07-15 OOM. `coreBudget()` answers "how many jobs may run at once?"; this answers "how many BYTES may
+ * be in flight at once?" A job that waits on a core is throttled; a job that ignores memory kills the process.
+ *
+ * The ceiling is V8's REAL heap limit (`heap_size_limit`) rather than a constant we hope matches reality — it
+ * reflects `--max-old-space-size` whether we set it (memory.mdx P-31) or V8 defaulted it, so the budget stays
+ * truthful on any machine and under any NODE_OPTIONS. The budget is a FRACTION of it (default 0.5), leaving
+ * the other half for the app, the fs index, the queue and GC headroom.
+ *
+ * Read LIVE at admission, exactly like coreBudget(), so a Settings change lands on the next task with no
+ * restart. `LFB_DESCRIBE_MEMORY_BUDGET` (absolute bytes) overrides the fraction for operators, mirroring how
+ * LFB_DESCRIBE_CONCURRENCY overrides the count cap.
+ */
+export function memoryBudget(): number {
+  const override = Number(process.env.LFB_DESCRIBE_MEMORY_BUDGET);
+  if (Number.isFinite(override) && override > 0) return Math.floor(override);
+  let f: number;
+  try {
+    f = getAppConfig().performance.max_memory_fraction;
+  } catch {
+    f = 0.5; // config not readable yet (very early boot) → the documented default
+  }
+  const clamped = Math.min(1, Math.max(0.05, Number.isFinite(f) ? f : 0.5));
+  return Math.max(1, Math.floor(v8.getHeapStatistics().heap_size_limit * clamped));
 }
 
 export async function mapLimit<T, R>(

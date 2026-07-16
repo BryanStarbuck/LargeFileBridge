@@ -26,6 +26,9 @@ logpipe  := justfile_directory() + "/scripts/log_rotate_pipe.mjs"   # dependency
 portfile := "/tmp/lfb.web.port"
 pidfile  := "/tmp/lfb.webapp.pid"
 log      := state_dir + "/launcher.log"
+# The work ledger (transactions_log.mdx) — written by the backend into the same state root, same
+# 5 MiB × 5 rotation. It is the primary debugging surface: what the app DID, not what it said.
+txn_log  := state_dir + "/transactions.log"
 
 # launchd agent labels (schedule.service.ts: scan = 4h discovery, pin = 15m).
 scan_label := "com.largefilebridge.scan"
@@ -162,13 +165,66 @@ stop:
 logs:
     tail -f {{log}}
 
+# log.log is what the app SAID; transactions.log is what it DID: a BEGIN/END pair per unit of work,
+# plus BOOT/SHUTDOWN/HEARTBEAT. A BOOT with no SHUTDOWN above it means the process CRASHED.
+# Follow the work ledger — what the app DID (the primary debugging surface).
+txlog:
+    tail -f {{txn_log}}
+
+# All four logs at once. Each answers a different question and no single file answers them all: log.log =
+# what the app said, error.err = what broke, transactions.log = what it DID, launcher.log = whether the
+# PROCESS died (the ONLY place a V8 OOM abort appears — abort(3) runs no JS, so our writers never fire).
+# Follow all four logs at once (launcher + log.log + error.err + the ledger).
+logs-all:
+    tail -f {{log}} {{state_dir}}/log.log {{state_dir}}/error.err {{txn_log}}
+
 # Report the web app + backend ports and whether the two launchd agents are loaded.
+#
+# The BACKEND is what this recipe exists to assert. On 2026-07-15 the backend OOMed and stayed dead ~6
+# hours while Vite happily served :2222 at HTTP 200 the entire time — `tsx watch` restarts on file change,
+# never on crash. FRONTEND UP ≠ APP UP. So a dead backend is reported as a loud, unmissable failure with
+# the next step attached, and `status` EXITS NON-ZERO on it so a script can tell too.
+# Report the backend (:8787, health-checked), the web app, and the launchd agents.
 status:
-    @p=$(test -f {{portfile}} && cat {{portfile}} || echo {{fe_port}}); \
-      lsof -ti tcp:$p >/dev/null 2>&1 && echo "web app  :$p UP" || echo "web app  :$p down"
-    @lsof -ti tcp:{{be_port}} >/dev/null 2>&1 && echo "backend  :{{be_port}} UP" || echo "backend  :{{be_port}} down"
-    @launchctl list | grep -q {{scan_label}} && echo "agent scan  (4h)  LOADED" || echo "agent scan  (4h)  not loaded"
-    @launchctl list | grep -q {{pin_label}} && echo "agent pin   (15m) LOADED" || echo "agent pin   (15m) not loaded"
+    #!/usr/bin/env bash
+    set -uo pipefail
+    p=$(test -f {{portfile}} && cat {{portfile}} 2>/dev/null || echo {{fe_port}})
+    if lsof -ti tcp:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "web app  :$p UP"; else echo "web app  :$p down"; fi
+    # A listening port is necessary but not sufficient — ask the API to prove it is actually serving.
+    be_up=0
+    if lsof -ti tcp:{{be_port}} -sTCP:LISTEN >/dev/null 2>&1; then
+      if curl -fsS -m 3 -o /dev/null "http://127.0.0.1:{{be_port}}/api/health" 2>/dev/null; then
+        echo "backend  :{{be_port}} UP (health OK)"; be_up=1
+      else
+        echo "backend  :{{be_port}} LISTENING but /api/health did not answer — the process may be wedged."
+      fi
+    fi
+    launchctl list | grep -q {{scan_label}} && echo "agent scan  (4h)  LOADED" || echo "agent scan  (4h)  not loaded"
+    launchctl list | grep -q {{pin_label}} && echo "agent pin   (15m) LOADED" || echo "agent pin   (15m) not loaded"
+    if [ "$be_up" = 0 ]; then
+      printf '\n'
+      # Plain rules, not a boxed frame: ports vary in width and a frame that has to be padded around
+      # them drifts out of alignment. The message has to survive being read at 4am.
+      printf '  ============================================================================\n'
+      printf '   ***  BACKEND :%s IS DOWN — THE APP IS NOT RUNNING.  ***\n' "{{be_port}}"
+      printf '   A live web app on :%s does NOT mean the app works. Vite serves pages fine\n' "$p"
+      printf '   with a dead backend — it did exactly that for 6h on 2026-07-15 after an OOM,\n'
+      printf '   because `tsx watch` restarts on file change and NEVER on crash.\n'
+      printf '  ============================================================================\n\n'
+      # Name the cause if it is the known one. A V8 OOM abort appears ONLY here — it runs no JS, so
+      # log.log / error.err are structurally silent about it (memory.mdx P-32).
+      if [ -f "{{log}}" ] && grep -qE 'FATAL ERROR|JavaScript heap out of memory' "{{log}}" 2>/dev/null; then
+        printf '  Cause found in {{log}} — the backend ran OUT OF HEAP:\n'
+        grep -hE 'FATAL ERROR|JavaScript heap out of memory' "{{log}}" | tail -3 | sed 's/^/    /'
+        printf '\n  Heap pressure before the abort (transactions.log / error.err):\n'
+        grep -hE 'HEAP PRESSURE|heap_pressure|\[HEARTBEAT\]' "{{state_dir}}/error.err" "{{txn_log}}" 2>/dev/null | tail -3 | sed 's/^/    /'
+        printf '\n'
+      fi
+      printf '  Next:  just run          (start it)\n'
+      printf '         just txlog        (the work ledger — what it was doing when it stopped)\n'
+      printf '         just logs         (the launcher catch-all — whether the PROCESS died)\n\n'
+      exit 1
+    fi
 
 # One-shot discovery scan (no waiting for the 4h agent) — same code path the agent runs.
 scan: setup

@@ -3,6 +3,7 @@ import express, { type Request, type Response, type NextFunction } from "express
 import helmet from "helmet";
 import cors from "cors";
 import crypto from "node:crypto";
+import v8 from "node:v8";
 import { getAppConfig, updateAppConfig } from "./modules/store-model/config.service.js";
 import { buildAuthFrontend, allowedRedirectOrigins } from "./modules/auth/auth-frontend.js";
 import { identify } from "./modules/auth/identify.js";
@@ -39,7 +40,11 @@ import { resolveStateDir } from "./config/state-dir.js";
 import { migrateSyncToPin } from "./config/migrate-sync-to-pin.js";
 import { migrateDecisionsToLedger } from "./config/migrate-decisions-to-ledger.js";
 import { migrateSdlLfbridge } from "./config/migrate-sdl-lfbridge.js";
-import { log } from "./shared/logging.js";
+import { log, flushLogs, logError } from "./shared/logging.js";
+import { txnBoot, txnShutdown, startHeartbeat, stopHeartbeat, txnBegin, txnEnd } from "./shared/transactions.js";
+import { startHeapWatch, stopHeapWatch } from "./shared/heap-watch.js";
+import { restoreQueueOnBoot } from "./modules/jobqueue/queue-restore.js";
+import { admitRestored } from "./modules/jobqueue/jobqueue.service.js";
 
 async function bootstrapState(): Promise<void> {
   // Mint a stable computer id on first boot (storage.mdx §3).
@@ -110,6 +115,33 @@ async function main(): Promise<void> {
     );
     process.exit(0);
   }
+
+  // BOOT — the first thing the work ledger sees (transactions_log.mdx §5.9). It goes HERE, immediately
+  // after the single-instance lock is won and before ANY migration or work runs, for two reasons:
+  //   * Earlier would be a lie. The stand-down path above exits(0) when another backend holds the lock;
+  //     a BOOT there would be a BOOT with no SHUTDOWN — which the ledger defines as a CRASH. A healthy
+  //     double-start must never read as a crash, or the one inference this whole file buys us is worthless.
+  //   * Later would be blind. The migrations below touch on-disk state; if one of them ever takes the
+  //     process down, we want the ledger to already have an epoch marker for this attempt.
+  // `heapLimitMB` is recorded once here so every subsequent heapUsedMB in the ledger has a denominator —
+  // the number nobody could produce after the 2026-07-15 OOM, because the ~4 GB we hit was V8's default
+  // that nobody chose (memory.mdx P-31). Reading the port is best-effort: an unreadable config must not
+  // stop the marker, since a boot that then fails is exactly the boot worth having a marker for.
+  let bootPort: number | undefined;
+  try {
+    bootPort = Number(process.env.PORT) || getAppConfig().server.backend_port;
+  } catch {
+    bootPort = undefined;
+  }
+  txnBoot({
+    port: bootPort,
+    heapLimitMB: Math.round(v8.getHeapStatistics().heap_size_limit / (1024 * 1024)),
+    version: process.env.npm_package_version, // set by pnpm when launched via a package script; omitted otherwise
+  });
+
+  // Watch the heap climb toward that ceiling and WARN before V8 aborts (memory.mdx P-32). Started before
+  // any work is admitted; the timer is unref()'d, so it can never hold the process open.
+  startHeapWatch();
 
   // One-time, idempotent compat migration (sync → pin): rewrite legacy on-disk state (the `sync/` unit
   // dirs, `sync_process`/`synced`/`sync:`/`last_sync_at` keys, and the old `com.largefilebridge.sync`
@@ -206,16 +238,71 @@ async function main(): Promise<void> {
   // discovery rescan so tracking + the File System tree refresh in seconds. It lives WITH this process
   // — no scheduler — so release it cleanly on shutdown.
   startWatcher();
+
+  // RESTORE THE BACKLOG the previous session left behind (crash_recovery.mdx §4). This is the line that
+  // makes "I queued 1,440 files and walked away" a promise we can keep: the journal is folded, tasks that
+  // already have their output are cheap no-ops (skip-already-done), and a task that has burned its strikes is
+  // QUARANTINED rather than replayed into the same crash. Runs after the migrations (so the state root is in
+  // its final shape) and before the heartbeat, so restored work is already counted by the first beat.
+  // Best-effort: a corrupt journal must never stop the server from booting — the app coming up is worth more
+  // than the backlog it lost.
+  try {
+    const { tasks, summary } = restoreQueueOnBoot();
+    if (tasks.length) admitRestored(tasks);
+    if (summary.restored || summary.quarantined) {
+      log.warn(
+        "main",
+        `previous session ended with work in flight — restored ${summary.restored} job(s), quarantined ${summary.quarantined}`,
+      );
+    }
+  } catch (e) {
+    logError({ file: "main.ts", operation: "restoreQueueOnBoot", error: e });
+  }
+
+  // The ledger's heartbeat (transactions_log.mdx §6): while work is in flight it writes queue depth and
+  // heap every ~30s, and the LAST heartbeat before a gap is the crash's fingerprint. Started only now,
+  // once the app is actually up. It self-silences when idle and is already unref()'d.
+  startHeartbeat();
+
   const shutdown = (sig: string) => {
     log.info("main", `${sig} received — stopping filesystem watcher and exiting.`);
+    // SHUTDOWN is the ledger's proof of a DELIBERATE exit, so it may only ever be written from here.
+    // Its ABSENCE before the next BOOT is precisely what tells a reader the process died — which means
+    // the marker's value is entirely in the cases where it does NOT appear. Emit it before the async
+    // server.close() so a slow socket drain can't cost us the line (the write is synchronous).
+    txnShutdown({ signal: sig });
+    stopHeartbeat();
+    stopHeapWatch();
     stopWatcher();
     server.close(() => process.exit(0));
   };
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
 
-  process.on("unhandledRejection", (r) => log.error("main", `unhandledRejection: ${String(r)}`));
-  process.on("uncaughtException", (e) => log.fatal("main", `uncaughtException: ${e.stack || e}`));
+  // Durable fault trail for the two "the process is going down and nobody caught it" paths. These
+  // COMPOSE with logging.ts's installLogShutdownFlush(), which registers its own flush-only
+  // uncaughtException listener — Node runs every listener, so both fire; we deliberately do not touch
+  // its flush-only semantics, and we flush again ourselves because ordering between listeners is not
+  // ours to assume.
+  //
+  // Note what these CANNOT catch: a V8 out-of-memory abort. It is not an exception — the runtime prints
+  // its banner and calls abort(3), and no JavaScript runs after that (memory.mdx P-32). That is why
+  // heap-watch.ts warns on the APPROACH instead; these handlers cover ordinary fatal faults, and the
+  // ledger line they write is what distinguishes "threw" from "vanished" the morning after.
+  const fatal = (kind: string, err: unknown): void => {
+    try {
+      logError({ file: "main.ts", operation: kind, error: err });
+      log.fatal("main", `${kind}: ${(err as Error)?.stack || String(err)}`);
+      const t = txnBegin("process_fatal", { kind });
+      txnEnd(t, "failed", { reason: kind });
+    } catch {
+      // A crash reporter that throws inside the crash is worse than no crash reporter.
+    } finally {
+      flushLogs();
+    }
+  };
+  process.on("unhandledRejection", (r) => fatal("unhandledRejection", r));
+  process.on("uncaughtException", (e) => fatal("uncaughtException", e));
 }
 
 main().catch((e) => {

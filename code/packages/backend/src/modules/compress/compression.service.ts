@@ -507,7 +507,12 @@ function exactHashAndSize(abs: string): { hash: string | null; size: number | nu
 // event still records the exact-hash pair (the fp pair is the "content-preserved" proof, best-effort).
 async function perceptualFingerprint(abs: string, media: CompressMedia): Promise<PerceptualFingerprint | null> {
   try {
-    if (media === "images") return await fingerprintImage(fs.readFileSync(abs));
+    // BY PATH, never a Buffer (to_fix.mdx §3.3.2). This used to be `fingerprintImage(fs.readFileSync(abs))`:
+    // the WHOLE file, read SYNCHRONOUSLY, with NO size cap, on a bucket that fans out to the full core
+    // budget — and compressFile calls this TWICE per file (before + after the transcode, §3.1). Handing
+    // sharp the path lets it read incrementally and decode bounded, so the source bytes never enter the
+    // heap; combined with the bounded decode in fingerprintImage this drops ~105 MB live per file to ~1 MB.
+    if (media === "images") return await fingerprintImage(abs);
     if (media === "video") return await fingerprintVideo(abs);
     return null;
   } catch (e) {

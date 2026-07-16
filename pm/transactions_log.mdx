@@ -1,0 +1,608 @@
+---
+title: LargeFileBridge — transactions.log (the work ledger)
+status: proposed
+owner: engineering
+scope: code/packages/backend
+---
+
+# transactions.log — the work ledger
+
+> *"I keep sending it a batch of work, and it keeps failing silently. I need to be able to
+> debug where it's happening."* — the user, 2026-07-15
+
+This spec owns **one new file**: `transactions.log`, written next to `error.err` in the state
+root (`~/T/_large_files_bridge/`), under the same 5 MiB × 5 generations rotation.
+
+`log.log` is **noise**. It is where the app *talks* — DEBUG lines, context, chatter, batched
+asynchronously so it costs nothing. `transactions.log` is the **signal**. It is where the app
+records **what it DID**: every unit of background work and every outbound API call gets a
+**BEGIN** line and an **END** line, with a timestamp, a duration, the **full absolute file
+path**, and the fields you need to reconstruct the run after the fact.
+
+The reader we are writing for is the user at **8am, after an overnight batch**, holding one
+question: *what happened?* Specifically:
+
+1. What **started**?
+2. What **finished**?
+3. What **never finished** — and what was in flight at the moment things stopped?
+4. **How long** did each thing take, and which provider/model served it?
+5. What was the process **doing** — and how much heap was it holding — when it died?
+
+Today none of those questions can be answered. This spec fixes that.
+
+---
+
+## 1. The incident this spec exists to prevent (2026-07-15)
+
+The user queued **1,440 AI-description files**. At **22:13 PDT** the backend died: V8's heap
+reached **4.1 GB** and the runtime aborted with
+`FATAL ERROR: Ineffective mark-compacts near heap limit`.
+
+Everything about the aftermath was invisible:
+
+* **The backlog vaporized.** The job queue is in-memory only — a module-level
+  `pending: QueueTask[]` with no disk write and no restore ([job_queue.mdx §5](./job_queue.mdx)).
+  The crash took the whole queue with it. An empty queue after a restart means **LOST**, not
+  finished — and nothing on disk distinguished the two.
+* **The process stayed dead ~6 hours.** `tsx watch` restarts on **file change** only, never on
+  crash. Meanwhile Vite on `:2222` kept serving pages and logging proxy errors ~1/sec.
+  **Frontend up ≠ app up.**
+* **~146–149 descriptions completed, all before 19:50. Zero after.** Nobody could tell, because
+  no log said "this file started."
+* **The only evidence of the OOM lived in `launcher.log`** (`grep "FATAL ERROR"` /
+  `"JavaScript heap"`), buried under the proxy-error flood. `log.log` and `error.err` had
+  **nothing** — a V8 OOM abort cannot run our handlers, so our writers never fired.
+
+The instrumentation gap is verified and specific:
+
+* `describeOne` logs **only terminal outcomes** — a `log.info` on success, a `log.error` on
+  failure. **There is no start log.** A job that OOMs the process leaves **no trace it ever
+  began**.
+* `transcribeOne` has the identical gap — success/warn/error only, no start line.
+* The provider `fetch()` in `adapters.ts` is **entirely unlogged** except for one `log.warn`
+  inside the transient-retry path. In a 380-line file that is the **only** log statement. You
+  learn a Gemini call happened **only if it failed transiently**.
+* The progress registry **deletes** each job record on completion, so nothing survives for
+  post-hoc analysis.
+
+The per-file AI-description runner that today logs only terminal outcomes — the gap this spec closes — is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()` (line ~158; `log.info` ~228 success, `log.error` ~233 failure, **no BEGIN**)
+
+The in-memory queue whose backlog the crash vaporized is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — module-level `pending: QueueTask[]`, `enqueue()` (~109), `pump()` (~229)
+
+---
+
+## 2. The four-log contract
+
+| File | Answers | Written | Durable across a crash? | Authoritative for |
+| --- | --- | --- | --- | --- |
+| `log.log` | *"What did the app **say**?"* | batched async, DEBUG/INFO+ | ❌ last writes can be lost | context and narrative; **never** for "did X run" |
+| `error.err` | *"What **broke**?"* | **synchronous**, WARN/ERROR/FATAL | ✅ | the fault trail — the exception and its shape |
+| **`transactions.log`** | *"What did the app **DO**?"* | **synchronous**, BEGIN/END/HEARTBEAT | ✅ | **the work ledger** — started, finished, duration, in-flight-at-death |
+| `launcher.log` | *"Did the **process** die?"* | `pnpm dev` stdout/stderr via a pipe sink | ✅ (external writer) | **the only** place a V8 OOM abort appears |
+
+**Why `launcher.log` is irreducibly separate.** A V8 out-of-memory abort is not an exception —
+the runtime prints its own `FATAL ERROR:` banner to **stderr** and calls `abort(3)`. No
+JavaScript runs after that: no `process.on("uncaughtException")`, no shutdown flush, no
+`RollingFileWriter` write. So `transactions.log` can never contain the OOM banner itself. What
+it **can** contain — and this is the whole point — is the **last HEARTBEAT and the set of
+un-ENDed BEGIN lines immediately before the gap**. The banner tells you *the process died*;
+the ledger tells you *what it was carrying when it did*. Read together, the 2026-07-15 incident
+becomes a five-second diagnosis instead of a six-hour blind spot.
+
+The rotating writer and the synchronous fault-trail discipline `transactions.log` reuses are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `RollingFileWriter` class, `roll()` method
+
+The state root that places `transactions.log` beside `error.err` (override `LFB_LOG_DIR`) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveStateDir()` / `resolveLogDir()`
+
+---
+
+## 3. The line format (LOCKED)
+
+One **single line** per event. Stable, greppable by eye, parseable by `awk` without a JSON
+parser. ISO-8601 UTC timestamp, a bracketed verb, a bracketed op family, then flat
+`key=value` pairs separated by single spaces.
+
+```
+[2026-07-15T22:13:04.221Z] [BEGIN] [describe] txn=7f3a2b op=describe file=/Users/bryan/_Mirror/Politics/clip.mp4 bytes=18874368 provider=gemini model=gemini-2.5-flash attempt=1 heapUsedMB=812 rssMB=1204
+[2026-07-15T22:13:39.882Z] [END]   [describe] txn=7f3a2b op=describe file=/Users/bryan/_Mirror/Politics/clip.mp4 outcome=ok ms=35661 chars=1877 heapUsedMB=930 rssMB=1310
+```
+
+### 3.1 Verbs
+
+| Verb | Meaning | Emitted by |
+| --- | --- | --- |
+| `BOOT` | the process started; a fresh ledger epoch begins | backend entrypoint, first line after the writer opens |
+| `BEGIN` | a unit of work or an outbound call **started** | every instrumented site (§5) |
+| `END` | that same `txn` **finished**, with an outcome and a duration | the same site's `finally` |
+| `HEARTBEAT` | periodic liveness + memory + queue depth while work is in flight (§6) | the heartbeat timer |
+| `SHUTDOWN` | a **clean** exit (SIGINT/SIGTERM); the ledger ends deliberately | shutdown hook |
+
+**BOOT and SHUTDOWN make a gap unambiguous.** A `BEGIN` with no `END`, followed by a `BOOT`
+with no intervening `SHUTDOWN`, means exactly one thing: **the process died while that file was
+in flight.** That single inference is worth the entire spec.
+
+### 3.2 Required fields — every line
+
+| Field | Notes |
+| --- | --- |
+| `txn` | 6-hex correlation id (§4). Required on BEGIN/END. |
+| `op` | `describe` · `transcribe` · `compress` · `provider_call` · `fit_media` · `scan` · `pin` · `queue_batch` · `queue_task` |
+| `heapUsedMB` | `process.memoryUsage().heapUsed` / 1MiB, rounded. **On every line.** |
+| `rssMB` | resident set, same units. **On every line.** |
+
+`heapUsedMB`/`rssMB` cost a **single, cheap, synchronous** `process.memoryUsage()` call
+(microseconds — it is not a GC-forcing API). Putting them on *every* line is what makes an OOM
+legible in hindsight: with them, the last 200 lines before the gap **show the heap climbing
+toward the ceiling** and name the op that climbed it. Without them, you have a mystery. This is
+the cheapest diagnostic in the product — cross-reference [memory.mdx](./memory.mdx).
+
+### 3.3 Required fields — work lines (`BEGIN`/`END`)
+
+| Field | On | Notes |
+| --- | --- | --- |
+| `file` | both | **FULL absolute path**, never relative, never a basename. This is the join key against the filesystem. |
+| `bytes` | BEGIN | input size — the single best predictor of both duration and heap. |
+| `ms` | END | wall duration. |
+| `outcome` | END | `ok` \| `failed` \| `skipped` \| `blocked` |
+| `reason` | END when not `ok` | short slug (`no_alpha`, `rate_limited`, `unsupported_kind`, `size_gain`) — **not** a prose sentence. |
+
+### 3.4 Required fields — API lines (`op=provider_call`)
+
+| Field | On | Notes |
+| --- | --- | --- |
+| `host` | BEGIN | URL **host only** — never the full URL (query strings can carry keys, §9). |
+| `provider` / `model` | both | e.g. `gemini` / `gemini-2.5-flash` |
+| `attempt` | both | `attempt=2` of `maxAttempts=4` — each retry is its **own** BEGIN/END pair (§5.4). |
+| `reqBytes` | BEGIN | payload size — the describe upload is the heap hazard. |
+| `status` | END | HTTP status. `status=0` means the fetch never got one (timeout/DNS/socket). |
+| `respBytes` | END | response size. |
+
+### 3.5 Sanitization (MANDATORY)
+
+**Every interpolated value passes through `stripControlChars()` before it reaches the line.**
+Paths are **untrusted input** — a filename containing `\n` would forge a ledger line, and one
+containing `\r` would erase the line you are reading in a terminal. This is log-injection
+defense, not cosmetics. Values containing a space are wrapped in double quotes:
+`file="/Users/bryan/My Movies/a b.mp4"`.
+
+The control-character stripper every interpolated value must pass through is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `stripControlChars()`
+
+---
+
+## 4. The correlation id (`txn`)
+
+Under **~24-way describe concurrency** ([job_queue.mdx §3](./job_queue.mdx)) the ledger is
+**interleaved**. Without a correlation id, 1,440 files produce 2,880+ lines that cannot be
+paired. `txn` is what makes the file **de-interleavable**.
+
+* **One id per unit of work**, minted at `BEGIN`, echoed at `END`. 6 hex chars —
+  short enough to scan by eye, wide enough (16M) that collisions inside one 5 MiB window are a
+  non-issue.
+* **Nesting via `parent=`.** A `describe` txn **owns** the child txns it spawns. A child line
+  carries `parent=<the describe txn>`:
+
+```
+[…T22:13:04.221Z] [BEGIN] [describe]       txn=7f3a2b op=describe file=/…/clip.mp4 bytes=18874368 …
+[…T22:13:05.004Z] [BEGIN] [fit_media]      txn=91c0de parent=7f3a2b op=fit_media file=/…/clip.mp4 …
+[…T22:13:19.771Z] [END]   [fit_media]      txn=91c0de parent=7f3a2b outcome=ok ms=14767 outBytes=17301504 …
+[…T22:13:19.802Z] [BEGIN] [provider_call]  txn=a4b118 parent=7f3a2b op=provider_call host=generativelanguage.googleapis.com provider=gemini model=gemini-2.5-flash attempt=1 reqBytes=23068672 …
+[…T22:13:39.610Z] [END]   [provider_call]  txn=a4b118 parent=7f3a2b outcome=ok status=200 ms=19808 respBytes=4102 …
+[…T22:13:39.882Z] [END]   [describe]       txn=7f3a2b outcome=ok ms=35661 chars=1877 …
+```
+
+That block is one file's complete story: 14.7s of transcode, 19.8s in Gemini, 35.7s total —
+**reconstructable from a `grep 7f3a2b`** even with 23 other files interleaved around it.
+
+* A queue task's txn is minted at **admission**, not at enqueue, so `queued` time and `running`
+  time stay distinct.
+* A batch (`batchId`, [job_queue.mdx §4a](./job_queue.mdx)) carries `batch=<id>` on every task
+  line so one bulk run is greppable as a whole.
+
+---
+
+## 5. What MUST be instrumented (exhaustive)
+
+The rule: **if it can take more than ~100ms, or if it can be the last thing the process ever
+did, it gets a BEGIN and an END.** No exceptions, no "this one's fast."
+
+### 5.1 The job queue
+
+`enqueue` emits one `op=queue_batch` BEGIN with `count`, `deduped`, `op`, and `batch`. Every
+admitted task emits `op=queue_task` BEGIN/END carrying `depth=` (queue depth **at that moment**)
+and `bucket=` (the admission bucket). Depth-on-every-line turns the ledger into a **backlog
+graph** you can plot with `awk` — you can see 1,440 go in and watch it fail to come down.
+
+The enqueue, drain, and per-task dispatch that must emit `queue_batch` / `queue_task` ledger lines are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()` (~109), `pump()` (~229), `takeRunnable()` (~239), `runTask()` (~297)
+
+### 5.2 `describeOne` — the gap that caused the incident
+
+BEGIN at entry (path, bytes, provider, overwrite); END in a `finally` so it fires on the throw
+path too. The **fit-to-limit sub-step** and the **sidecar write** each get their own child txn —
+a 1,440-file batch that dies mid-transcode must say *which* step it died in.
+
+The AI-description runner that gains a BEGIN at entry and an END in `finally` is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()` (~158)
+
+### 5.3 Every outbound provider call
+
+This is the line item the user asked for by name: *log when we start it and when we finish, with
+timestamps.* **Google Gemini is the canonical example** — it is the only video-capable adapter,
+so it carries the heaviest payloads and the longest round-trips, and it is precisely the call
+that today logs **nothing** on the success path.
+
+The instrumentation goes at the **`fetch()` itself**, not at the adapter's `describe()`. One
+site, and every provider — Gemini, Grok, OpenAI, and every future adapter — is covered for free.
+
+The single `fetch()` that must be wrapped in a `provider_call` BEGIN/END pair is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `postJsonOnce()` (~137, the `fetch` at ~141), called via `postJson()` (~174)
+
+The adapters that flow through it — `gemini` (~205, `describe()` ~222, the only video-capable one), the
+`chatVisionAdapter` factory (~250), `grok` (~296), and `openai` (~305) — need **no** logging code of their
+own.
+
+### 5.4 Retries
+
+Each attempt is its **own** BEGIN/END with `attempt=N maxAttempts=M`. A retried call is **not**
+one long line — it is N pairs, so you can see 3 attempts × 30s = 90s of wall time spent on one
+file and understand why the batch was slow. Today the retry wrapper's `log.warn` is the **only**
+log statement in the entire 380-line adapters file; after this spec it is a redundant convenience.
+
+The retry wrapper whose every attempt becomes its own BEGIN/END pair is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `withProviderRetry()` (~186, its lone `log.warn` at ~197)
+
+### 5.5 `transcribeOne` and the engine fallback chain
+
+BEGIN/END on the runner. **The engine choice and the fallback are themselves ledger events** —
+`engine=qwen3-asr` vs `engine=whisper-base`, and a `reason=fallback` END. A batch that silently
+degraded from the heavyweight engine to the fallback for 900 of 1,000 files is a **quality
+incident** that is otherwise invisible.
+
+The transcription runner that gains BEGIN/END is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `transcribeOne()` (~86; `log.info` 123 / `log.warn` 129 / `log.error` 130 today)
+
+The engine selection and fallback that must be ledger events, not silent behavior, are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/engine.ts` — `pickEngine()` (~46), `transcribeWithEngine()` (~72)
+
+### 5.6 fit-media transcodes
+
+The **most memory-hungry step in the product** — it holds media buffers and shells out to
+ffmpeg. BEGIN with `bytes` + target limit; END with `outBytes` + `ms`. Every child process
+spawn gets a child txn with its `exitCode`. If the OOM lives anywhere, the heap numbers on
+these lines will show it.
+
+The compress-to-fit path whose transcodes each need a child txn is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `fitMediaUnderLimit()` (~429), `runAsync()` (~67)
+
+### 5.7 Compression jobs
+
+BEGIN/END per file with `bytes` in, `outBytes` out, `codec`, and the disposition. The compress
+path can **delete or replace originals** ([compress.mdx §8](./compress.mdx)) — a durable,
+synchronous record of *exactly which absolute path we touched and what came out* is a
+**data-safety** requirement, not just a debugging nicety.
+
+The per-file compressor that must ledger its input, output, and disposition is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile()`
+
+### 5.8 Scans, pin passes, and scheduled runs
+
+Scans and pin passes get a BEGIN/END per pass with counts. The **launchd 15-minute background
+sync** gets them too — that is work that runs when **nobody is watching**, which is exactly the
+work a ledger is for. A `BEGIN [scan]` with no `END` and no `SHUTDOWN` is how you learn the
+background run has been dying silently for a week.
+
+### 5.9 BOOT / SHUTDOWN
+
+First line the writer emits after open: `BOOT` with `pid`, `version`, `nodeVersion`,
+`heapLimitMB` (from `v8.getHeapStatistics().heap_size_limit` — the **4.1 GB ceiling** the
+incident hit, recorded so the heap numbers on every subsequent line have a denominator).
+`SHUTDOWN` on clean exit. **A `BOOT` not preceded by a `SHUTDOWN` is a crash. Full stop.**
+
+The shutdown hook the SHUTDOWN marker must ride is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `installLogShutdownFlush()` / `flushLogs()`
+
+### 5.10 The instrumentation checklist
+
+| # | Site | BEGIN | END | Child txns |
+| --- | --- | --- | --- | --- |
+| 1 | `enqueue()` | ✅ `queue_batch` | ✅ | task txns |
+| 2 | `runTask()` | ✅ `queue_task` + `depth` | ✅ | the op's txn |
+| 3 | `describeOne()` | ✅ **new** | ✅ | fit_media, provider_call, sidecar |
+| 4 | `postJsonOnce()` | ✅ **new** | ✅ | — |
+| 5 | `withProviderRetry()` | ✅ per attempt | ✅ per attempt | — |
+| 6 | `transcribeOne()` | ✅ **new** | ✅ | engine txn |
+| 7 | `pickEngine()` / fallback | ✅ | ✅ + `reason=fallback` | — |
+| 8 | `fitMediaUnderLimit()` | ✅ | ✅ | per `runAsync()` spawn |
+| 9 | `compressFile()` | ✅ | ✅ | per spawn |
+| 10 | scan / pin / launchd pass | ✅ | ✅ | per-unit |
+| 11 | process boot / shutdown | ✅ `BOOT` | ✅ `SHUTDOWN` | — |
+
+---
+
+## 6. The heartbeat
+
+**While any work is in flight**, emit a `HEARTBEAT` every **~30s**:
+
+```
+[2026-07-15T22:12:44.000Z] [HEARTBEAT] queued=1291 running=24 heapUsedMB=3980 rssMB=4402 heapLimitMB=4144 describe=24 transcribe=0 compress=0 uptimeS=27140
+```
+
+**The last heartbeat before a gap is the crash's fingerprint.** Read the 2026-07-15 sequence
+back: heartbeats stepping `812 → 1650 → 2900 → 3980` against `heapLimitMB=4144`, then silence.
+That is not a mystery — that is a **memory leak in the describe path, diagnosed in one grep**,
+with the exact backlog depth at the moment of death (`queued=1291` — the number that vaporized).
+
+* Timer only runs when there is work. An idle backend writes **nothing**; a 1,440-file overnight
+  batch writes ~120 lines/hour. Both correct.
+* Per-bucket running counts mirror the queue's admission buckets ([job_queue.mdx §3](./job_queue.mdx)).
+* `heapLimitMB` repeats on the heartbeat so **any window of the file is self-contained** after
+  rotation drops the `BOOT` line.
+* See [memory.mdx](./memory.mdx) for what to do once the heartbeat tells you the heap is climbing.
+
+The queue depth and per-bucket running counts the heartbeat reads are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `queueDepth()`, plus the live registry in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.registry.ts` — `jobs` Map (line 10), `track()` (43), `end()` (29)
+
+---
+
+## 7. Durability — synchronous writes (LOCKED)
+
+**Every `transactions.log` line is written synchronously**, exactly like `error.err`. Not
+batched. Not async. Not "flushed on an interval."
+
+The reasoning is not stylistic — it is the **entire point of the file**. These lines matter
+**only across a crash**. A batched async write is precisely what a crash eats: the buffered
+lines describing the final seconds — the only seconds anyone cares about — die in the buffer
+with the process. An async ledger is a ledger that is empty exactly when you open it.
+
+**The cost is acceptable, and here is the arithmetic.** A saturated 24-way describe batch, with
+each file taking ~35s and emitting ~8 lines (describe + fit_media + provider_call + sidecar,
+BEGIN and END each), produces roughly **330 lines/minute** — about **5–6 writes/second**. A
+synchronous ~200-byte `writeSync` to a local SSD is single-digit microseconds. That is
+**~0.005% of one second**, against a workload whose unit of work is a 35-second network
+round-trip. This is not a hot loop and must never become one:
+
+* **Never ledger inside a per-chunk, per-row, or per-byte loop.** The unit of a ledger line is a
+  **unit of work**, never an iteration.
+* If a future op would emit thousands of lines/second, that op is **wrong about its unit** —
+  ledger the batch, not the item.
+* `log.log` remains async and batched. Nothing here changes it. Chatter is cheap because it is
+  allowed to be lossy; the ledger is durable because it is not.
+
+The synchronous fault-trail writer whose durability posture the ledger adopts is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `logError()` (the sync `error.err` path) and the `log.{debug,info,warn,error,fatal}(ctx,msg)` API
+
+---
+
+## 8. Rotation and never-throws
+
+* **Same policy as every other log: 5 MiB × 5 generations** — `transactions.log` →
+  `transactions.log.1` … `.5`, oldest dropped. Tunable by the **same** env vars,
+  `LFB_LOG_MAX_BYTES` (default `5242880`) and `LFB_LOG_GENERATIONS` (default `5`). No new
+  knobs. A new log family member that invented its own rotation policy would be a bug.
+* **Reuse `RollingFileWriter`** — its cached byte counter and `roll()` are already correct and
+  already exercised. We add an instance, not a mechanism.
+* At ~200 bytes/line, 5 MiB ≈ **26,000 lines** per generation and ~130,000 across all five —
+  comfortably several full 1,440-file batches. The ledger survives the weekend.
+* **Logging must never throw and must never crash the app.** Every ledger write is wrapped so a
+  full disk, an EACCES, or a rotation race **degrades to silence**, never to a failed
+  description. *A diagnostic that can take down the thing it diagnoses is worse than no
+  diagnostic.* The `RollingFileWriter` contract already holds this; the ledger inherits it and
+  must not weaken it.
+* `transactions.log` is written **by us**, in-process, so the per-write cap reaches it directly.
+  It needs **none** of the `rotateIfOversized()` machinery that exists for externally-written
+  logs (`ipfs-daemon.log`) whose fds we do not own.
+
+The oversize-rotation helper the ledger deliberately does **not** need (it is for external writers only) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `rotateIfOversized()`
+
+---
+
+## 9. Privacy and security
+
+`transactions.log` is a **local diagnostic file**. It never networks, never uploads, and is never
+served by the web app. But it *is* a plain-text file a user may paste into a bug report, so the
+redaction rule is **absolute**.
+
+**Always allowed:**
+* Absolute file paths (`file=/Users/bryan/…`) — the ledger is **useless** without them; a
+  basename cannot identify a file across a 300-repo machine.
+* Provider and model names (`provider=gemini model=gemini-2.5-flash`).
+* Sizes, durations, HTTP statuses, memory figures, attempt counts, URL **hosts**.
+
+**NEVER, under any circumstance:**
+* **API keys or tokens** — not in a URL, not in a header dump, not truncated, not "just the last
+  four." A truncated key is still a leaked key.
+* **Full request URLs** — log `host=` only. Several vision APIs accept `?key=` in the query
+  string; logging a full URL leaks the key by accident. This is why §3.4 mandates `host`.
+* **Request or response bodies** — log `reqBytes` / `respBytes` / `chars`, never the content. The
+  request body **is the user's media**; the response body **is the description**. Neither belongs
+  in a log.
+* **File contents**, transcript text, or description text. `chars=1877` — never the 1,877 chars.
+* **Auth headers.** Never dump a headers object; the ledger constructs its fields explicitly from
+  an allow-list. **Never** reflect an object into the line.
+
+The credential stores whose values must never reach a ledger line are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/google-apikey-file.ts` and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/credentials-file.ts`
+
+**The rule, stated once:** the ledger's field set is a **fixed allow-list** (§3.2–3.4). A value
+that is not on that list does not go in the file. Adding a field is a spec change, reviewed for
+this section — never an ad-hoc interpolation at a call site.
+
+---
+
+## 10. Acceptance criteria
+
+1. **The file exists.** `~/T/_large_files_bridge/transactions.log` is created at boot next to
+   `error.err`, honoring `LFB_STATE_DIR` / `LFB_LOG_DIR`.
+2. **Conservation of work.** After a 1,440-file batch,
+   `grep -c '\[BEGIN\]' transactions.log` minus `grep -c '\[END\]'` equals **exactly** the number
+   of jobs still in flight — zero when the batch has drained.
+3. **No silent starts.** Every file that started has **either** a matching `END` **or** is the
+   last thing before a `BOOT` marker. There is no third case. A `BEGIN` that is neither ENDed nor
+   followed by a `BOOT` is a **bug in the instrumentation**, not an ambiguity in the data.
+4. **No unlogged API calls.** Every outbound provider request produces a matched
+   `op=provider_call` BEGIN/END pair with `host`, `provider`, `model`, `attempt`, `reqBytes`, and
+   (on END) `status`, `ms`, `respBytes`. **A successful Gemini call is as loudly logged as a
+   failed one** — this is the specific defect being closed.
+5. **Retries are countable.** N attempts produce N pairs, each with `attempt=N maxAttempts=M`.
+6. **Zero secrets.** `grep -riE 'AIza|sk-|xai-|Bearer|api[_-]?key' transactions.log` returns
+   **nothing**, for any run, ever. This is a **hard gate**.
+7. **Memory on every line.** `heapUsedMB` and `rssMB` appear on **every** BEGIN, END, and
+   HEARTBEAT. No line is exempt.
+8. **Heartbeat while busy, silence while idle.** A HEARTBEAT lands every ~30s ±5s whenever work
+   is in flight, carrying `queued`, per-bucket running counts, and memory. An idle backend for one
+   hour writes **zero** heartbeat lines.
+9. **Crash legibility (the incident replayed).** Given the 2026-07-15 conditions, the ledger must
+   show: the climbing heap across heartbeats, `queued=` at the moment of death, the exact set of
+   files in flight, and a `BOOT` with no preceding `SHUTDOWN`. **All four, without opening
+   `launcher.log`.**
+10. **Correlation.** `grep <txn>` returns one unit of work's complete story — its own pair plus
+    every child pair via `parent=` — de-interleaved from 23 concurrent siblings.
+11. **Rotation.** At 5 MiB, `transactions.log` rolls to `.1`…`.5` and drops the oldest, honoring
+    `LFB_LOG_MAX_BYTES` / `LFB_LOG_GENERATIONS`. No unbounded growth.
+12. **Durability.** Ledger writes are **synchronous**. A `kill -9` mid-batch loses **zero** lines
+    already emitted. (Verifiable: enqueue, `kill -9`, read the file — the in-flight BEGINs are
+    there.)
+13. **Never throws.** With the log directory made read-only, the app **still describes files
+    normally**. Logging failure degrades to silence, never to work failure.
+14. **Injection-proof.** A file literally named `evil\n[END] txn=deadbe outcome=ok.mp4` produces
+    **one** line, not two. `stripControlChars()` is applied to every interpolated value.
+15. **Absolute paths.** Every `file=` is absolute. No relative paths, no basenames, no `~`.
+
+---
+
+## 11. Debug recipes
+
+Paste-ready. This section is the spec's **user interface** — if these one-liners don't work, the
+format is wrong.
+
+**Which files started but never finished** (the 8am question):
+```sh
+cd ~/T/_large_files_bridge
+join -v1 \
+  <(grep '\[BEGIN\]' transactions.log | grep -o 'txn=[0-9a-f]*' | sort -u) \
+  <(grep '\[END\]'   transactions.log | grep -o 'txn=[0-9a-f]*' | sort -u) \
+| sed 's/txn=//' | while read t; do grep "txn=$t" transactions.log | head -1; done
+```
+
+**The last heartbeat before the gap — the crash fingerprint:**
+```sh
+grep '\[HEARTBEAT\]' transactions.log | tail -5
+```
+
+**Did the process crash, or exit cleanly?** (a BOOT with no SHUTDOWN above it = crash):
+```sh
+grep -E '\[(BOOT|SHUTDOWN)\]' transactions.log
+```
+
+**What was in flight at the moment of death** — every BEGIN in the 60s before the last BOOT:
+```sh
+awk '/\[BOOT\]/{b=NR} {l[NR]=$0} END{for(i=b-400;i<b;i++) if(l[i]~/\[BEGIN\]/) print l[i]}' transactions.log
+```
+
+**Per-provider p50 / p95 duration:**
+```sh
+grep 'op=provider_call' transactions.log | grep '\[END\]' \
+| sed -E 's/.*provider=([^ ]+).*ms=([0-9]+).*/\1 \2/' | sort -k1,1 -k2,2n \
+| awk '{a[$1][++n[$1]]=$2} END{for(p in a){c=n[p];
+    printf "%-8s n=%-5d p50=%-7d p95=%d\n", p, c, a[p][int(c*0.5)+1], a[p][int(c*0.95)+1]}}'
+```
+
+**Is the backlog actually draining?** (plot queue depth over time):
+```sh
+grep '\[HEARTBEAT\]' transactions.log | sed -E 's/^\[([^]]+)\].*queued=([0-9]+).*/\1 \2/'
+```
+
+**Everything that happened to one file:**
+```sh
+grep -F 'file=/Users/bryan/_Mirror/Politics/clip.mp4' transactions.log
+```
+
+**One unit of work's full story, children included:**
+```sh
+grep -E 'txn=7f3a2b|parent=7f3a2b' transactions.log
+```
+
+**Watch the heap climb toward the ceiling in real time:**
+```sh
+tail -f transactions.log | grep -E '\[HEARTBEAT\]|heapUsedMB=[3-9][0-9]{3}'
+```
+
+**Failures grouped by reason:**
+```sh
+grep '\[END\]' transactions.log | grep -v 'outcome=ok' \
+| grep -o 'reason=[^ ]*' | sort | uniq -c | sort -rn
+```
+
+**Confirm zero secrets (AC-6):**
+```sh
+grep -riE 'AIza|sk-|xai-|Bearer|api[_-]?key' transactions.log && echo "LEAK" || echo "clean"
+```
+
+---
+
+## 12. Non-goals
+
+* **Not a replacement for `log.log` or `error.err`.** Three files, three jobs (§2). The ledger
+  does not absorb the chatter and does not absorb the stack traces.
+* **Not a metrics system.** No aggregation, no counters, no time series, no exporter. It is a
+  flat text file you `grep`. Aggregation is `awk`'s job (§11).
+* **Not queue persistence.** The ledger records that 1,291 tasks were lost; it does **not**
+  restore them. Making the queue durable is [job_queue.mdx §5](./job_queue.mdx)'s decision to
+  revisit, and this spec is what will finally make the case for it with evidence.
+* **Not a UI surface.** The Processing page ([processing.mdx](./processing.mdx)) shows what is
+  running **now**. The ledger answers what happened **then**. Different questions, different
+  tools.
+* **Not networked.** Never uploaded, never served, never phoned home.
+
+<!--
+  transactions.log — the WORK LEDGER. Written next to error.err in resolveLogDir()
+  (~/T/_large_files_bridge/), 5 MiB × 5 generations via RollingFileWriter (LFB_LOG_MAX_BYTES /
+  LFB_LOG_GENERATIONS — no new knobs).
+  LOCKED:
+   - THE CONTRACT: log.log = what the app SAID (async, lossy, noise). error.err = what BROKE (sync,
+     durable). transactions.log = what the app DID (sync, durable, SIGNAL). launcher.log = the ONLY
+     place a V8 OOM abort appears (abort(3) runs no JS => our handlers never fire).
+   - LINE FORMAT: [ISO] [VERB] [op] key=value… single line, space-separated, quoted if spaces.
+     VERBS: BOOT | BEGIN | END | HEARTBEAT | SHUTDOWN. Required everywhere: txn, op, heapUsedMB,
+     rssMB. Work lines: file (FULL ABSOLUTE PATH), bytes (BEGIN), ms + outcome{ok|failed|skipped|
+     blocked} + reason (END). API lines (op=provider_call): host (NOT full URL — ?key= leaks),
+     provider, model, attempt, reqBytes, status, respBytes. stripControlChars() on EVERY
+     interpolated value (log-injection; paths are untrusted).
+   - txn = 6-hex correlation id, minted at BEGIN, echoed at END; children carry parent=<txn>.
+     De-interleaves ~24-way describe concurrency. Task txn minted at ADMISSION, not enqueue.
+   - INSTRUMENT (11 sites, §5.10): enqueue/runTask (+depth, bucket), describeOne (NO BEGIN today —
+     THE gap), postJsonOnce fetch (adapters.ts ~137/141 — one site covers gemini/grok/openai),
+     withProviderRetry (per-attempt pairs), transcribeOne + pickEngine/fallback (fallback is a
+     LEDGER EVENT), fitMediaUnderLimit/runAsync, compressFile (data-safety), scan/pin/launchd,
+     BOOT/SHUTDOWN (+heapLimitMB from v8.getHeapStatistics).
+   - HEARTBEAT every ~30s ONLY while work in flight: queued, per-bucket running, heap, rss,
+     heapLimitMB. Last heartbeat before a gap = the crash's fingerprint (812→1650→2900→3980 vs
+     limit 4144). Idle => zero lines.
+   - SYNCHRONOUS WRITES (like error.err). Async batching is exactly what a crash eats, and these
+     lines only matter ACROSS a crash. ~330 lines/min at 24-way saturation ≈ 5-6 writes/s ≈ 0.005%
+     of a second. NEVER ledger inside a per-chunk/per-row loop — the unit is a UNIT OF WORK.
+   - NEVER THROWS: full disk / EACCES degrades to SILENCE, never to a failed description.
+   - PRIVACY (hard gate): absolute paths YES, model names YES, host YES. Keys/tokens NEVER (not
+     truncated), full URLs NEVER, bodies NEVER, file content NEVER, header dumps NEVER. Field set
+     is a FIXED ALLOW-LIST; adding a field is a spec change.
+   - THE INCIDENT (2026-07-15, cite it): 1,440 describes queued; 22:13 PDT V8 heap 4.1GB "FATAL
+     ERROR: Ineffective mark-compacts near heap limit"; in-memory pending[] vaporized; tsx watch
+     restarts on FILE CHANGE ONLY, never on crash => dead ~6h while Vite :2222 kept serving 200s
+     (frontend up ≠ app up); ~146-149 done, all before 19:50, zero after; evidence ONLY in
+     launcher.log. User: "I keep sending it a batch of work, and it keeps failing silently."
+  Code touched: shared/logging.ts (RollingFileWriter/roll/stripControlChars/logError/flushLogs/
+  installLogShutdownFlush), config/state-dir.ts (resolveStateDir/resolveLogDir), jobqueue.service.ts
+  (enqueue ~109/pump ~229/takeRunnable ~239/runTask ~297/queueDepth), describe.service.ts
+  (describeOne ~158), describe/adapters.ts (postJsonOnce ~137/postJson ~174/withProviderRetry ~186/
+  gemini ~205/chatVisionAdapter ~250/grok ~296/openai ~305), describe/fit-media.ts
+  (fitMediaUnderLimit ~429/runAsync ~67), transcribe.service.ts (transcribeOne ~86),
+  tools/transcribe/engine.ts (pickEngine ~46/transcribeWithEngine ~72), compress/
+  compression.service.ts (compressFile), progress/progress.registry.ts (jobs Map 10/track 43/end 29).
+  Keep in sync with job_queue.mdx §3/§5, performance.mdx P-27, memory.mdx, processing.mdx,
+  ai_description.mdx, compress.mdx §8.
+-->

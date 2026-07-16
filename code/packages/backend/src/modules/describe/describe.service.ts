@@ -23,8 +23,11 @@ import { track } from "../progress/progress.registry.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
 import { getPrompt } from "./prompts.js";
 import { selectAdapter, providerStatus, providerKeySources, providerMeta, mimeForMedia, withProviderRetry, type ProviderId } from "./adapters.js";
+// The provider-account gate (to_fix.mdx §2): preflight before a batch, circuit breaker on an account fault.
+import { preflightProvider, noteProviderFailure } from "./provider-health.service.js";
 import { fitMediaUnderLimit } from "./fit-media.js";
 import { log } from "../../shared/logging.js";
+import { txn, txnBegin, txnEnd, type TxnOutcome, type TxnFields } from "../../shared/transactions.js";
 
 // Directories a "describe all" walk never descends into: the SAME hard-skip set as the discovery scan
 // and FS browser (scan.mdx §4 invariant — build/, dist/, node_modules, … duplicate source media), plus
@@ -91,6 +94,25 @@ function result(
   reason: string | null,
 ): DescribeResult {
   return { path: p, status, descriptionPath, model, reason };
+}
+
+/** The file's size for the ledger's `bytes=` — the single best predictor of both duration and heap
+ *  (transactions_log.mdx §3.3). Best-effort: a stat that fails must never cost us the description. */
+function sizeOf(abs: string): number {
+  try {
+    return fs.statSync(abs).size;
+  } catch {
+    return 0;
+  }
+}
+
+/** A describe that produces NOTHING still gets a ledger pair (transactions_log.mdx §5.2). A file the user
+ *  asked for that leaves no line is exactly the invisibility this ledger exists to end — "it did nothing"
+ *  and "it never started" must never look the same on disk. These gates fire before any real work, so the
+ *  pair is a short BEGIN/END with an outcome and a reason SLUG rather than a wrapped body. */
+function ledgerNoWork(abs: string, fields: TxnFields, outcome: TxnOutcome, reason: string): void {
+  const t = txnBegin("describe", { file: abs, ...fields });
+  txnEnd(t, outcome, { reason });
 }
 
 /** Provider matrix + the default provider — drives the viewer/settings "which AIs are available" surface. */
@@ -161,18 +183,27 @@ export async function describeOne(
 ): Promise<DescribeResult> {
   const abs = path.resolve(expandHome(input.trim()));
   const name = path.basename(abs);
-  if (!exists(abs)) return result(abs, "failed", null, null, "file not found");
+  if (!exists(abs)) {
+    ledgerNoWork(abs, {}, "failed", "file_not_found");
+    return result(abs, "failed", null, null, "file not found");
+  }
+  const bytes = sizeOf(abs);
 
   const kind = describeKindFor(name);
-  if (!kind) return result(abs, "unsupported", null, null, "only images and videos can be AI-described");
+  if (!kind) {
+    ledgerNoWork(abs, { bytes }, "blocked", "unsupported_kind");
+    return result(abs, "unsupported", null, null, "only images and videos can be AI-described");
+  }
 
   const { root, descriptionPath, needsSetup } = resolveDescriptionPath(abs);
   // First-time gate (Transcribe.mdx §3.5): no Personal storage owns this file — route to the setup wizard
   // rather than writing a description in a surprising place.
   if (needsSetup) {
+    ledgerNoWork(abs, { bytes, kind }, "blocked", "needs_setup");
     return result(abs, "needs_setup", null, null, "no storage is set up for this file — configure Personal storage first");
   }
   if (!opts.overwrite && readDescription(abs)) {
+    ledgerNoWork(abs, { bytes, kind }, "skipped", "already_described");
     return result(abs, "skipped", descriptionPath, null, "already described");
   }
 
@@ -180,57 +211,80 @@ export async function describeOne(
   if (!adapter) {
     const need = kind === "video" ? "Gemini (only Gemini describes video)" : "Gemini, Grok, or OpenAI";
     const reason = `no AI provider configured for ${kind} — add an API key for ${need}`;
+    ledgerNoWork(abs, { bytes, kind }, "blocked", "no_provider");
     log.error("describe", `describe skipped for ${abs}: ${reason}`);
     return result(abs, "no_provider", null, null, reason);
   }
 
   try {
-    const prompt = getPrompt(kind);
-    // Ensure the bytes we upload fit under the inline cap. Oversized videos/images are transcoded to a
-    // TEMPORARY compressed copy (the original is never touched); we upload that copy and delete it after.
-    // (ai_description.mdx §3.3 — compress-to-fit instead of hard-failing over the cap.) The whole run is
-    // wrapped in a track("describe", …) progress-registry job so the dock shows a live card while it uploads
-    // — including for a file the background queue started (job_queue.mdx §3).
-    const { text, model } = await track("describe", name, async () => {
-      const fit = await fitMediaUnderLimit(abs, kind);
-      try {
-        const mimeType = mimeForMedia(fit.path, kind);
-        // Bounded retry on TRANSIENT provider failures (ai_description.mdx §3.5) — a timeout, a 429/5xx, a
-        // dropped socket, or an empty-200 must never permanently burn a file. Wrapped OUTSIDE the fit so a
-        // retry re-sends the already-compressed copy instead of re-running the whole ffmpeg transcode.
-        return await withProviderRetry(`${adapter.id} describe ${name}`, () =>
-          adapter.describe({ absPath: fit.path, kind, mimeType, prompt }),
-        );
-      } finally {
-        fit.cleanup();
-      }
-    });
+    // The WORK LEDGER pair for this file (transactions_log.mdx §5.2). This BEGIN is the line whose absence
+    // caused the 2026-07-15 incident: describeOne logged only terminal outcomes, so the 1,291 files still in
+    // flight when V8 aborted at 4.1GB left no trace they had ever started, and "lost" was indistinguishable
+    // from "finished". BEGIN lands here — BEFORE the fit-to-limit transcode and before a single byte is
+    // uploaded — and the END fires from txn()'s `finally`, so the only thing that can suppress it is the
+    // process dying, which is exactly the signal a missing END must carry.
+    return await txn(
+      "describe",
+      { file: abs, bytes, provider: adapter.id, kind, overwrite: !!opts.overwrite },
+      async (t, end) => {
+        const prompt = getPrompt(kind);
+        // Ensure the bytes we upload fit under the inline cap. Oversized videos/images are transcoded to a
+        // TEMPORARY compressed copy (the original is never touched); we upload that copy and delete it after.
+        // (ai_description.mdx §3.3 — compress-to-fit instead of hard-failing over the cap.) The whole run is
+        // wrapped in a track("describe", …) progress-registry job so the dock shows a live card while it uploads
+        // — including for a file the background queue started (job_queue.mdx §3).
+        const { text, model } = await track("describe", name, async () => {
+          // TODO(parent): fitMediaUnderLimit() takes no `parent` yet, so its child fit_media txn can't
+          // parent to this describe (transactions_log.mdx §5.6 owns that seam — fit-media.ts).
+          const fit = await fitMediaUnderLimit(abs, kind);
+          try {
+            const mimeType = mimeForMedia(fit.path, kind);
+            // Bounded retry on TRANSIENT provider failures (ai_description.mdx §3.5) — a timeout, a 429/5xx, a
+            // dropped socket, or an empty-200 must never permanently burn a file. Wrapped OUTSIDE the fit so a
+            // retry re-sends the already-compressed copy instead of re-running the whole ffmpeg transcode.
+            // `parent: t.id` hangs every attempt's provider_call pair off this file's txn (§4).
+            return await withProviderRetry(`${adapter.id} describe ${name}`, () =>
+              adapter.describe({ absPath: fit.path, kind, mimeType, prompt, parent: t.id }),
+            );
+          } finally {
+            fit.cleanup();
+          }
+        });
 
-    // The description lands in the COMMITTED .lfbridge/ area (Transcribe.mdx §3.1), so it travels with the
-    // repo — no `*.ai_description` gitignore nudge; the media itself stays git-ignored and rides IPFS.
-    fs.mkdirSync(path.dirname(descriptionPath), { recursive: true });
-    fs.writeFileSync(
-      descriptionPath,
-      YAML.stringify({
-        source: path.relative(root, abs),
-        status: "done",
-        engine: model,
-        provider: adapter.id,
-        generated: new Date().toISOString(),
-        kind,
-        description: text,
-      }),
-      "utf8",
+        // The description lands in the COMMITTED .lfbridge/ area (Transcribe.mdx §3.1), so it travels with the
+        // repo — no `*.ai_description` gitignore nudge; the media itself stays git-ignored and rides IPFS.
+        fs.mkdirSync(path.dirname(descriptionPath), { recursive: true });
+        fs.writeFileSync(
+          descriptionPath,
+          YAML.stringify({
+            source: path.relative(root, abs),
+            status: "done",
+            engine: model,
+            provider: adapter.id,
+            generated: new Date().toISOString(),
+            kind,
+            description: text,
+          }),
+          "utf8",
+        );
+        // Cross the content threshold (artifact_placement_policy.mdx §2): an AI description ALONE is a durable
+        // user artifact, so this repo's `.lfbridge/` tracking placement is justified from here on (one-way latch).
+        markDurableArtifact(root);
+        // `chars`, never the 1,877 chars themselves — the description text never enters a ledger line (§9).
+        end({ chars: text.length, model });
+        log.info("describe", `${abs} → ${descriptionPath} (${adapter.id}/${model}, ${text.length} chars)`);
+        return result(abs, "described", descriptionPath, model, null);
+      },
     );
-    // Cross the content threshold (artifact_placement_policy.mdx §2): an AI description ALONE is a durable
-    // user artifact, so this repo's `.lfbridge/` tracking placement is justified from here on (one-way latch).
-    markDurableArtifact(root);
-    log.info("describe", `${abs} → ${descriptionPath} (${adapter.id}/${model}, ${text.length} chars)`);
-    return result(abs, "described", descriptionPath, model, null);
   } catch (e) {
     const msg = (e as Error).message;
+    // Fold the fault into the provider's circuit BEFORE reporting it (to_fix.mdx §2.4). If this was an
+    // account-level fault — credits depleted, key revoked — the circuit opens here, and the queue halts the
+    // rest of the batch at admission instead of letting 1,439 more files rediscover the same dead account
+    // one doomed upload at a time. That rediscovery is what pinned 24 payloads in the heap on 2026-07-15.
+    const fault = noteProviderFailure(adapter.id, e);
     // The complete fault trail lands in error.err (shared/logging.ts writes WARN/ERROR/FATAL there).
-    log.error("describe", `describe failed for ${abs} [provider=${adapter.id}, kind=${kind}]: ${msg}`);
+    log.error("describe", `describe failed for ${abs} [provider=${adapter.id}, kind=${kind}, fault=${fault}]: ${msg}`);
     return result(abs, "failed", null, null, msg);
   }
 }
@@ -270,12 +324,12 @@ export async function describeTree(
  * non-image/-video files (skip-already-done, page_actions.mdx §1.2), hands the eligible remainder to the
  * background queue ([job_queue.mdx](../jobqueue)), and returns the PLAN immediately — never the results.
  */
-export function enqueueDescribe(opts: {
+export async function enqueueDescribe(opts: {
   paths?: string[];
   root?: string;
   overwrite?: boolean;
   provider?: ProviderId | "auto";
-}): EnqueuePlan {
+}): Promise<EnqueuePlan> {
   const overwrite = opts.overwrite ?? false;
   const candidates = describeCandidates(opts);
   let alreadyDone = 0;
@@ -309,11 +363,49 @@ export function enqueueDescribe(opts: {
   // them), queue nothing and tell the UI to open the wizard with a representative path.
   if (eligible.length > 0 && needSetup === eligible.length) {
     log.info("describe", `enqueue: ${eligible.length} eligible all need first-time setup — not queuing`);
-    return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued: 0, willProcess: 0, needsSetup: true, setupPath: eligible[0] };
+    return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued: 0, willProcess: 0, needsSetup: true, setupPath: eligible[0], blocked: false, blockedReason: null };
   }
+
+  // ── PREFLIGHT the provider account (to_fix.mdx §2.5) ────────────────────────────────────────────────
+  // ONE cheap call before we queue N. This is the whole fix for the 2026-07-15 incident: that batch was
+  // queued 106 minutes after the Gemini credits died, and every one of its 1,440 files was doomed before
+  // the first byte moved. A single probe here answers in about a second.
+  //
+  // Only worth paying for a real batch — a one-file describe from the viewer discovers the same fault just
+  // as fast by simply trying, and shouldn't wait on a probe first.
+  const PREFLIGHT_MIN_BATCH = 2;
+  if (eligible.length >= PREFLIGHT_MIN_BATCH) {
+    // Which provider will actually run? Resolve it the same way describeOne will, using a representative
+    // eligible file — asking about a provider that would never be chosen would be a meaningless gate.
+    const repKind = describeKindFor(path.basename(eligible[0]));
+    const adapter = repKind ? selectAdapter(repKind, opts.provider) : null;
+    if (adapter) {
+      const health = await preflightProvider(adapter.id);
+      if (!health.ok) {
+        log.error(
+          "describe",
+          `enqueue [${scopeLabel(opts)}] BLOCKED before queuing ${eligible.length} file(s): ${health.reason} ` +
+            `(to_fix.mdx §2.5 — the account cannot serve this batch, so nothing was queued).`,
+        );
+        return {
+          considered: candidates.length,
+          eligible: eligible.length,
+          alreadyDone,
+          unsupported,
+          queued: 0,
+          willProcess: 0,
+          needsSetup: false,
+          setupPath: null,
+          blocked: true,
+          blockedReason: health.reason,
+        };
+      }
+    }
+  }
+
   const { queued } = enqueue(eligible.map((p) => ({ op: "describe", path: p, overwrite, provider: opts.provider })));
   log.info("describe", `enqueue [${scopeLabel(opts)}]: ${candidates.length} considered → ${queued} queued (${alreadyDone} already done, ${unsupported} unsupported)`);
-  return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued, willProcess: queued, needsSetup: false, setupPath: null };
+  return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued, willProcess: queued, needsSetup: false, setupPath: null, blocked: false, blockedReason: null };
 }
 
 /**

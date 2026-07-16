@@ -1,0 +1,451 @@
+---
+title: To Fix — the gaps around the 2026-07-15 OOM
+status: working
+owner: Bryan
+opened: 2026-07-16
+incident: 2026-07-15 22:13 PDT — 1,440-file AI-description batch lost to a V8 OOM
+---
+
+# To Fix — the gaps around the 2026-07-15 OOM
+
+This is a **working file** and a **gap spec**. It deliberately does **not** re-tell the memory story:
+[memory.mdx](./memory.mdx) owns that, and owns it well. This file exists because a review of the
+incident found **three failure axes that no spec covers**, plus a set of **contradictions** between
+the specs that do.
+
+## §0 — What this file owns (and what it must never duplicate)
+
+The incident spawned a family of specs. The boundary matters — duplicated specs drift, and drifted
+specs are worse than none.
+
+| Spec | Owns | Status |
+|---|---|---|
+| [memory.mdx](./memory.mdx) | The **memory budget** — P-28…P-34, `estimatedBytes()`, reserve/release, the oversize rule, the heap ceiling | ✅ Comprehensive |
+| [crash_recovery.mdx](./crash_recovery.mdx) | **Queue durability** — the journal, restore-on-boot, ambiguous-zero, supervision, health truth | ✅ Comprehensive |
+| [transactions_log.mdx](./transactions_log.mdx) | The **ledger** — `provider_call` spans, per-batch records | ✅ Comprehensive |
+| [performance.mdx](./performance.mdx) | The **catalog** — T1…T6, P-01…P-34 | ✅ Being reconciled |
+| **this file** | **The gaps below.** Nothing else covers them. | 🔴 Open |
+
+**Rule: if a topic appears in the table above, this file cross-links it and says nothing more.**
+
+### §0.1 — The gaps this file owns
+1. **§2 — Provider account health.** A dead account's 429 is classified *transient* and retried 4× ×
+   1,440 files. **Zero coverage in any spec** (`grep -niE "credit|depleted|circuit|preflight"` across
+   `memory.mdx` + `transactions_log.mdx` → no hits).
+2. **§3 — The compress fingerprint path.** An **un-gated** whole-file read + raw RGBA decode on the
+   `compress:image` bucket. `memory.mdx`'s budget is describe-shaped; `compression.mdx` is about
+   codecs; `perceptual_fingerprint.mdx` is about the algorithm. **Nobody owns its memory.**
+3. **§4 — The batch manifest.** The file list captured at click time, for debugging a batch later.
+4. **§5…§7** — smaller gaps: the describe⊥transcribe guard, child-process memory, spec contradictions.
+
+### §0.2 — Why the gaps share a shape
+`memory.mdx` asks *"how many bytes may be in flight?"* — the right question, brilliantly answered.
+It never asks **"why is this work in flight at all?"** The incident's 1,440 uploads were **all
+doomed before the first byte moved**: the account had been dead for 106 minutes. A perfect byte
+budget would have made the OOM survivable — it would **not** have described a single file.
+
+> **The memory budget makes the failure survivable. §2 makes it not happen.**
+
+Both are needed. Only one is written.
+
+---
+
+## §1 — Incident timeline (the shared record)
+
+Facts, so every sibling spec cites one timeline. Interpretation lives in the specs.
+
+| Time (PDT) | Event | Evidence |
+|---|---|---|
+| 19:49 | Gemini prepayment credits deplete → `429 RESOURCE_EXHAUSTED` | `error.err`: "prepayment credits are depleted" |
+| ~19:50 | Last successful `.ai_description` write | 146–149 on disk; none after |
+| 21:35 | **1,440-file batch enqueued — 106 min after credits died** | `log.log` enqueue line |
+| 21:35–22:13 | 38 min retry storm. ~4,070 × 429 across error logs | `error.err`, `error.err.1` |
+| 22:13 | `FATAL ERROR: Ineffective mark-compacts near heap limit` | `launcher.log.3` |
+| 22:13–~04:00 | Backend dead ~6 h. Vite `:2222` still 200s | `launcher.log` |
+| ~04:00 | Manual restart | — |
+
+**Work completed in 11 hours: ~146–149 descriptions, all before 19:50. Zero after.**
+
+### §1.1 — The five stacked faults, and who owns each
+| # | Fault | Owner |
+|---|---|---|
+| 1 | Credits ran out at 19:49 | **§2 (this file)** |
+| 2 | Credits-depleted 429 classified **transient** → 4× retry | **§2 (this file)** |
+| 3 | V8 heap capped ~4.1 GB on a 192 GB box | memory.mdx P-31 ✅ |
+| 4 | ~90 MB × 24 in-flight ≈ 2.2 GB | memory.mdx P-28/P-29 ✅ |
+| 5 | In-memory queue → silent loss | crash_recovery.mdx D1 ✅ |
+
+**Three of five are owned. Faults 1 and 2 — the ones that started it — are not.**
+
+---
+
+## §2 — GAP 1: Provider account health (the proximate cause)
+
+**Nothing anywhere covers this.** It is the reason the incident happened *at all*.
+
+### §2.1 — The bug
+`isTransient()` matches `/\b429\b|rate limit|RESOURCE_EXHAUSTED|quota/i` → **transient** → retried
+`MAX_ATTEMPTS = 4` with backoff.
+
+Two different faults arrive as **HTTP 429**:
+* **Rate limit** — "too fast." *Transient.* Wait, retry, succeed. Retrying is **correct**.
+* **Credits depleted** — "account empty." **Permanent.** It will 429 identically until a human tops
+  up. Retrying is **pure waste**.
+
+We treat them as one. Across 1,440 files that is ≈5,760 doomed calls (~4,070 observed), each holding
+its byte reservation for the whole backoff.
+
+### §2.2 — Why this is not merely wasteful — it is the crash
+The retry policy is a **memory-demand multiplier**. Each retry re-enters `adapter.describe()` →
+re-reads → re-encodes → holds a fresh payload, and backoff **holds the slot open ~4× longer**. The
+queue therefore sits **pinned at 24 in-flight, indefinitely**, at maximum residency — the exact
+condition memory.mdx P-28 computes as fatal.
+
+> memory.mdx says the heap died because 24 payloads were resident.
+> **This section says they were resident *because* the retry policy would not let go of work that
+> could never succeed.**
+
+A byte budget alone would have converted the OOM into a **slow, permanent, silent failure**: 1,440
+files failing forever at a safe memory level. **Better, and still completely broken.**
+
+### §2.3 — Fix: classify the 429 sub-type
+Split on the response body, not the status code:
+* `RESOURCE_EXHAUSTED` + credits/billing/prepayment-depleted language → **permanent**
+* Rate-limit / per-minute quota / a `Retry-After` header present → **transient** (unchanged)
+
+**Bias:** when ambiguous, prefer **transient** (retry a few times) — a false "permanent" strands a
+recoverable batch. But `RESOURCE_EXHAUSTED` + "credits are depleted" is **unambiguous**.
+
+### §2.4 — Fix: a circuit breaker (batch-level fail-fast)
+Per-file classification is necessary but **not sufficient** — 1,440 files each independently
+discovering the account is empty is still 1,440 wasted calls and 1,440 failed dock cards.
+
+* On a **permanent account-level fault**, open a circuit for that provider.
+* **Drain** that provider's pending tasks; mark them **`halted`** — *not* `failed`. They were never
+  attempted and must be re-queueable in one click.
+* Surface **one** actionable message: *"AI descriptions stopped — Gemini credits are depleted. Top
+  up at ai.studio, then Resume."* Not 1,440 dock cards.
+* Close on user Resume or a successful probe.
+
+**`halted` is a new state.** Without it "never attempted" renders as "tried and failed," and the user
+re-runs 1,440 files believing they were attempted. See §7.3.
+
+### §2.5 — Fix: preflight the account
+Before queuing N files, **one** cheap probe. Dead account → tell the user **at the click**.
+
+**This alone would have prevented the entire incident.** The batch was queued 106 minutes after the
+account died; a single probe at 21:35 would have said so in one second.
+
+Cache the result briefly (~60 s) so a probe per batch, not per file. Single-flight it.
+
+### §2.6 — Fix: surface account health continuously
+Credits dying is **not** an exceptional event — it is a Tuesday. The Settings → AI surface should
+show provider reachability and last-known-good, so "why did nothing happen last night" is answerable
+**before** the overnight run, not after.
+
+### §2.7 — Retry budget per batch (defence in depth)
+Even correctly-classified transient retries deserve a **batch-level** ceiling: if >20% of files fail
+transiently, something systemic is wrong. **Pause the batch and ask — don't grind.** This catches the
+*next* account-level fault we failed to enumerate (revoked key, region block, model retired
+mid-run), without needing to have predicted it.
+
+---
+
+## §3 — GAP 2: The compress fingerprint path (an un-gated memory bomb)
+
+`memory.mdx` fixed the path we **knew** was hot. The audit found a **worse one nobody has looked at**
+— and it is the *same disease the codebase has already diagnosed and fixed twice*.
+
+### §3.1 — The bug
+`compressFile` calls `perceptualFingerprint` **twice per file** (before + after). That does:
+1. `fs.readFileSync(abs)` — the **whole file**, **synchronously**, with **no size cap**.
+2. `fingerprintImage(buf)` → `sharp(buf).ensureAlpha().raw().toBuffer()` — a **raw RGBA decode**:
+   `width × height × 4` bytes, co-resident with the source buffer.
+
+A 24 MP photo (6000×4000) = **~96 MB raw RGBA + ~8 MB source + sharp scratch ≈ 105 MB live**, and
+`luminanceQuality(data, …)` keeps `data` alive past the hash, so **both roots persist**.
+
+### §3.2 — Why it is worse than the describe path
+| | describe | **compress fingerprint** |
+|---|---|---|
+| Size gate | ✅ `INLINE_MAX_BYTES` = 18 MB | ❌ **none — any size** |
+| Read | ✅ async | ❌ **`readFileSync`** |
+| Per-job live | ~48 MB (post-fix) | **~105 MB, uncapped** |
+| Concurrency | 24 (being byte-gated) | **full core budget, "fan WIDE"** |
+| Memory contract | ✅ written (memory.mdx) | ❌ **none** |
+| Video path | — | ❌ **`spawnSync` ffmpeg, 5-min block** |
+
+At a 12-core budget: **~1.2 GB live**, uncapped, against the same ceiling — and a **T3 charter
+violation** (`spawnSync` on a queue path) that can freeze the event loop for **5 minutes**. The video
+path re-enters `fingerprintImage` **per sampled frame**, each a full-res PNG → raw RGBA.
+
+**The describe bucket got a byte budget. The compress bucket, which can hold twice the bytes per job
+with no cap at all, did not.** memory.mdx invariant 1 ("no bucket may admit by count alone") is
+**already violated** by the bucket its own spec doesn't mention.
+
+### §3.3 — Fix
+1. **Downscale before decode.** PDQ hashes a small normalized image; a full-res RGBA decode is waste.
+   `sharp(...).resize(512, 512, { fit: "inside" }).raw()` cuts ~96 MB → **~1 MB** and changes the hash
+   negligibly (verify against the existing corpus first — §9).
+2. **Stream the read.** Hand `sharp` the **path**, not a Buffer — it reads incrementally. Deletes the
+   `readFileSync` entirely.
+3. **Size-gate.** Refuse/downsample beyond a pixel-count ceiling; a 100 MP TIFF must not decode.
+4. **Kill the `spawnSync`.** Use the async `runAsync` pattern `fit-media.ts` already established.
+5. **Bring compress under the byte budget** — `estimatedBytes()` for a compress job is
+   `~pixels × 4`, **not** file size. A 5 MB JPEG can decode to 96 MB: **file size is a terrible proxy
+   for memory, and the budget must not use it for this bucket.**
+6. Free `data` before `luminanceQuality`, or make it consume a downscaled copy.
+
+### §3.4 — A contradiction to *avoid* creating
+`compression.mdx` states an invariant: **"we never downscale."** That governs the **compressed
+output file** — a user's file must never lose resolution. §3.3's downscale is **internal to the
+fingerprint's decode**, touches no output, and is invisible to the user. **These do not conflict.**
+State it explicitly in both specs, because a future reader *will* mistake §3.3 for a violation and
+"fix" it back into a memory bomb.
+
+---
+
+## §4 — GAP 3: The batch manifest (debug the batch later)
+
+**Requirement:** pressing *"Describe 1,400 files"* must produce a durable, timestamped record —
+**including the file list** — so the run is debuggable afterwards.
+
+`crash_recovery.mdx` journals **tasks** (for replay). `transactions_log.mdx` ledgers **calls** (for
+audit). Neither captures **the intent at click time**: *this scope, these 1,440 files, this provider,
+this config, this moment*. When the batch vanished, **nothing on disk knew what had been in it** —
+which is exactly why reconstruction took hours.
+
+### §4.1 — Written at click time, before enqueuing
+`~/T/_large_files_bridge/_batches/2026-07-15_21-35-02_describe_1440.yaml`:
+
+```yaml
+batch_id: <uuid>
+op: describe                 # EXPLICIT, never inferred (§5)
+started: 2026-07-15T21:35:02-07:00
+scope: "root ~/BGit/Bryan_git/charlie-kirk"
+provider: gemini
+model: gemini-2.5-flash
+provider_preflight: ok       # §2.5 — what we knew at click time
+counts: { considered: 1612, eligible: 1440, already_done: 146, unsupported: 26 }
+concurrency: { describe: 24, byte_budget_mb: 2048 }
+environment: { heap_limit_mb: 6144, machine_ram_gb: 192, node: v22.x }
+files:                       # THE FULL LIST — the whole point
+  - { path: /Users/bryan/.../a.mp4, size_bytes: 734003200 }
+```
+
+The **file list is mandatory**. Without it a lost batch cannot be reconstructed.
+
+### §4.2 — A terminal record
+On completion/crash/halt, append per-file outcome (`described` / `failed`+reason / `halted` /
+`never_attempted`) + `finished:` + final counts. **A manifest with no terminal record = it crashed**
+— which is the durable signal `crash_recovery.mdx` D2 needs and cannot otherwise get for *this* batch.
+
+### §4.3 — One-click re-queue
+Manifest + terminal record is sufficient to re-queue exactly the unfinished remainder. Turns "the
+batch is gone" into a button. **This is what makes §2.4's `halted` state actionable.**
+
+### §4.4 — `batch_id` on every log line
+Nothing joins `log.log`, `error.err`, `launcher.log`, `transactions.log`, and the manifest today.
+Stamp `batch_id` on every line from a batch; then **one grep reconstructs a whole run**. Highest-value
+observability change here — without it, every future incident is archaeology again.
+
+### §4.5 — Deduplicate repeated errors
+4,070 near-identical 429s is **one fact repeated** — it buried the signal and rotated `error.err.1`
+past 5 MiB, **destroying earlier evidence**. Collapse: `[×4070 since 19:49] 429 …`. §2.4's breaker
+makes this mostly moot: **fail fast and there is no storm to collapse.**
+
+---
+
+## §5 — GAP 4: describe ⊥ transcribe (verified, unguarded)
+
+**Verified: describe never invokes transcription.** Full static import-graph trace of
+`modules/describe/` → zero imports of `modules/transcribe/*` or `tools/transcribe/*`; zero dynamic
+imports; the only `transcrib` hits are comments and the `".transcribe"` skip-dir literal. The queue
+imports both and branches on `t.op` — mutually exclusive.
+
+**Transcription reads no media into the heap either** — every read is a `.txt` artifact; media goes to
+children **by path**.
+
+### §5.1 — But nothing enforces it
+It holds by **convention**. A future edit could couple them silently, and the symptom (huge local
+memory during a "cloud" job) is exactly what a hidden Whisper run looks like — indistinguishable from
+§3's bomb without a trace.
+
+**Fix:** an import-graph assertion test + stamp `op` explicitly on every queue log line (§4.1). Cheap,
+permanent, and removes a recurring doubt.
+
+---
+
+## §6 — GAP 5: Child-process and machine memory
+
+`memory.mdx` governs the **V8 heap** — correctly, since that is what aborted. But the heap is one of
+four layers, and **transcription's memory is almost entirely invisible to it**:
+
+| Layer | What | In `heapUsed`? |
+|---|---|---|
+| V8 heap | our base64, JS objects | ✅ memory.mdx |
+| External | Buffers, fetch bodies | ⚠️ `external` only |
+| **Child processes** | ffmpeg, **Whisper 5–6 GB/instance** | ❌ **invisible** |
+| OS | swap, pressure | ❌ |
+
+`heap-watch.ts` samples `heapUsed` only, so it reports **healthy** during a transcription-driven
+memory crisis. Meanwhile `transcribeConcurrency()` sizes Whisper against **`os.totalmem()`
+(installed)** — never `os.freemem()` — so it is blind to what describe, ffmpeg, IPFS, and the page
+cache already hold. A flat 2 GiB `RAM_HEADROOM_BYTES` is the only concession, and describe's ~1 GB
+of base64 fits inside it **unnoticed**.
+
+**Two blind halves facing each other:** transcribe budgets *other* processes' RAM but not ours;
+heap-watch measures *ours* but not theirs. **Neither can see the other, and they can peak
+simultaneously.**
+
+### §6.1 — Fixes
+* Track child-process RSS (`ps -o rss= -p <pid>`), attributed to the spawning job.
+* Sample OS pressure (`vm_stat` / `memory_pressure`). **Swap is the signal concurrency is too high
+  even when nothing OOMs.**
+* Use **available**, not installed, memory in `transcribeConcurrency()`.
+* A **global** memory budget above the buckets — describe (24) and transcribe (RAM-clamped) are
+  independent today and can each be "within budget" while together over.
+
+### §6.2 — Two known defects found while auditing
+1. **The RAM table under-counts Whisper 2×** on the Mac path: `activeTranscribeModelKey()` returns
+   `"base"` (1 GiB in the table) but `runWhisper` actually runs `--model small` (2 GiB).
+2. **`spawnAsync` in `audio-prep.ts` accumulates stdout/stderr unbounded** — a multi-hour Whisper run
+   holds its entire segment log in one string. `fit-media.ts` already caps this (memory.mdx P-30);
+   **transcribe is the inconsistent one.** P-30's fix should be applied there too.
+
+---
+
+## §7 — Contradictions to resolve
+
+### §7.1 — 🔴 `performance.mdx` uses **P-23 twice**
+* line ~370: **P-23** = "pin pass pinned units one-at-a-time"
+* line ~810 (remediation log): **P-23** = "Progressive, non-blocking consumption / streaming NDJSON"
+
+Two problems, one ID — citations are ambiguous, and the catalog now runs to P-34, so this will only
+get harder to untangle.
+**RESOLUTION:** the pin-pass entry keeps **P-23** (defined first, in the diagnosis body). The
+streaming entry becomes **P-35** (appending is safer than renumbering into the occupied P-28…P-34
+range). Audit for stale citations.
+
+### §7.2 — 🟠 "Async" was mistaken for "small"
+`performance.mdx` P-27 lists `readBase64Capped()`'s `fs.promises.readFile` as the **fix**.
+`memory.mdx` P-29 shows that same call materializing the buffer that OOMed us. **Both are right:**
+async fixed **T3** (event loop); it did nothing for **T5** (bytes). P-27's remediation entry should
+note it is **superseded by streaming, not reverted**.
+**The general lesson, worth stating once in `performance.mdx`:** *"make it async"* and *"make it
+small"* are different fixes for different problems. **We did the first and assumed we'd done the
+second** — and then wrote "LOCKED" next to it.
+
+### §7.3 — 🟠 `halted` has no home
+§2.4 needs a state distinct from `failed`. It must land in `ProcessingBatch`, the Processing table,
+and the manifest's terminal record (§4.2) — otherwise "never attempted" reads as "tried and failed."
+Touches `processing.mdx` + `job_queue.mdx`; **neither knows about it yet.**
+
+### §7.4 — 🟡 `estimatedBytes()` must not use file size for compress
+memory.mdx's `estimatedBytes()` is `min(fileSize, INLINE_MAX_BYTES)` — right for describe (upload
+bytes), **wrong for compress**, where a 5 MB JPEG decodes to 96 MB (§3.3.5). If the byte budget
+extends to the compress bucket using file size, it will **under-count by ~20×** and admit a fatal
+batch while reporting itself healthy. **A budget that lies is worse than no budget.**
+
+---
+
+## §8 — Acceptance criteria (gaps only)
+
+memory.mdx §6 and crash_recovery.mdx §12 own theirs. These are **additional**.
+
+| # | Criterion | Verified by |
+|---|---|---|
+| G-1 | A 1,440-file describe with **dead credits** stops in <30 s, halts the batch, shows **one** banner | Revoke key, run |
+| G-2 | 429 **rate-limit** still retries; 429 **credits-depleted** does not | Unit test both bodies |
+| G-3 | Preflight rejects a dead-account batch **at the click** | Revoke key, click |
+| G-4 | `halted` ≠ `failed` in UI, manifest, and re-queue | Inspect all three |
+| G-5 | A 24 MP photo compress holds **≤ ~5 MB**, not ~105 MB | Heap snapshot |
+| G-6 | `grep -rn "spawnSync" perceptual.service.ts` → **0** | grep |
+| G-7 | Fingerprints match the pre-downscale corpus | Regression vs. stored hashes |
+| G-8 | Every batch writes a manifest **with its file list** before enqueuing | Inspect `_batches/` |
+| G-9 | One `batch_id` grep reconstructs a run across all logs | Run + grep |
+| G-10 | Describe **never** invokes transcription | Import-graph test |
+| G-11 | Whisper child RSS is visible in telemetry | Sample during transcribe |
+| G-12 | `transcribeConcurrency()` uses **available** memory | Unit test |
+
+---
+
+## §9 — Test plan
+
+* **Unit** — `isTransient()` truth table (rate-limit vs credits-depleted vs safety vs timeout vs
+  empty-200); preflight cache/single-flight; manifest round-trip.
+* **Integration** — mock provider returning credits-depleted → **exactly one** attempt per file,
+  circuit opens, queue halts, one banner, tasks `halted`.
+* **Memory** — 24 MP photo through `compressFile`; assert peak heap ≤ budget. **This is the test that
+  catches §3.**
+* **Fingerprint regression** — hash the existing corpus pre/post downscale; assert Hamming distance
+  within threshold. **Gates §3.3.1** — a fingerprint change silently breaks dedup.
+* **Regression** — import-graph assertion (§5.1).
+* **Soak** — 1,440 files with live credits; watch for sawtooth (healthy GC) vs. ramp (a leak).
+
+---
+
+## §10 — Invariants (candidates)
+
+Extending memory.mdx §5 and crash_recovery.mdx §11:
+
+1. **Account-level provider faults halt the batch.** Only per-file faults retry per file.
+2. **Never queue N files against an unverified account.** Preflight once, cheaply.
+3. **`estimatedBytes()` models what a job *decodes to*, not what it reads.** File size is a proxy
+   only where bytes-in = bytes-resident (§7.4).
+4. **Every batch writes a manifest with its file list before enqueuing.**
+5. **An un-attempted task is `halted`, never `failed`.**
+6. **Every log line from a batch carries its `batch_id`.**
+7. **Async ≠ small.** Non-blocking and memory-bounded are separate properties needing separate fixes.
+8. **A memory gate belongs to the *decode*, not the *download*.** Anything that decodes media states
+   its pixel cost before it runs.
+
+---
+
+## §11 — Non-goals
+
+* **Not** re-specifying the memory budget, the queue journal, or the ledger — owned elsewhere (§0).
+* **Not** a new provider. Gemini stays; the fault was our handling of its 429.
+* **Not** removing retry. Retry is correct for transient faults; §2 makes it *discriminate*.
+* **Not** a broker (Redis/BullMQ). The state root suffices for a local-first app.
+
+---
+
+## §12 — Work plan
+
+Ordered per the priorities set 2026-07-16. **Code is owned by the in-flight session** —
+this file specifies; it does not implement. See [2_2_do.mdx](./2_2_do.mdx) for the code index.
+
+| # | Fix | §ref | Value | Risk |
+|---|---|---|---|---|
+| 1 | Credits-depleted → permanent; circuit breaker; `halted` state | §2.3–2.4 | **Removes the cause** | Low |
+| 2 | Preflight probe before a big batch | §2.5 | Would have prevented the incident | Low |
+| 3 | Compress fingerprint: downscale-before-decode + stream + size gate | §3.3 | **Biggest un-gated bomb** | Medium |
+| 4 | Kill `spawnSync` in `perceptual.service.ts` | §3.3.4 | T3 charter violation | Low |
+| 5 | Batch manifest + file list + terminal record | §4.1–4.2 | Debuggability | Low |
+| 6 | `batch_id` on every log line | §4.4 | Ends the archaeology | Low |
+| 7 | One-click re-queue from a manifest | §4.3 | Makes `halted` actionable | Medium |
+| 8 | `estimatedBytes()` pixel-cost for compress | §7.4 | Stops the budget lying | Medium |
+| 9 | Resolve P-23 collision → P-35 | §7.1 | Two specs stop colliding | Low |
+| 10 | Import-graph guard | §5.1 | Enforces a load-bearing assumption | Low |
+| 11 | Child-process RSS + available-memory clamp | §6.1 | Closes the blind half | Medium |
+| 12 | Whisper RAM-table 2× under-count; `audio-prep` stdout cap | §6.2 | Two known defects | Low |
+| 13 | Retry budget per batch | §2.7 | Catches the *next* account fault | Medium |
+
+---
+
+## §13 — Open questions
+
+* **Where does the circuit breaker live?** The queue (knows the batch) or the adapter (knows the
+  fault)? *Leaning:* the adapter classifies, the queue decides — mirroring how `isTransient()` already
+  splits classification from policy.
+* **Does the preflight cost a real API call?** A tiny generate is honest but costs credits; a models
+  list may 200 on a credit-dead account and prove nothing. **Must verify Gemini's actual behaviour
+  before relying on it** — a preflight that passes on a dead account is worse than none.
+* **Does downscale-before-decode change PDQ hashes?** PDQ normalizes internally, so it *should* be
+  negligible — but existing stored fingerprints are a **corpus we must not silently invalidate**.
+  Gate on the §9 regression.
+* **Should compress share describe's byte budget or hold its own?** Shared is safer (one global
+  ceiling); separate is simpler. §6.1's global budget argues shared.
+* **Is `halted` sticky across restarts?** crash_recovery's journal restores `pending` — a halted task
+  must not silently resume against a still-dead account on the next boot.

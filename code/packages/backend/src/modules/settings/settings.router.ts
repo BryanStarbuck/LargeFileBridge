@@ -1,5 +1,6 @@
 // Global settings (settings.mdx) + allow-list (admin only, settings.mdx §4).
 import { Router } from "express";
+import v8 from "node:v8";
 import { z } from "zod";
 import { toBytes, type GlobalSettings } from "@lfb/shared";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
@@ -37,7 +38,15 @@ async function toGlobalSettings(): Promise<GlobalSettings> {
     },
     allowedEmails: c.access.allowed_emails,
     access: getSecurityAccess(),
-    performance: { maxCoreFraction: c.performance.max_core_fraction, cores: logicalCores() },
+    performance: {
+      maxCoreFraction: c.performance.max_core_fraction,
+      cores: logicalCores(),
+      // The memory budget's inputs, so the UI can show the resolved ceiling rather than a bare fraction
+      // (memory.mdx §5). heap_size_limit is V8's REAL limit — it reflects --max-old-space-size whether we set
+      // it or V8 defaulted it, so what the user sees is what admission actually enforces.
+      maxMemoryFraction: c.performance.max_memory_fraction,
+      heapCeilingMB: Math.round(v8.getHeapStatistics().heap_size_limit / (1024 * 1024)),
+    },
   };
 }
 
@@ -60,7 +69,14 @@ const SettingsPatch = z.object({
   // The user's own forge accounts (repo_company_mapping.mdx §4) — repos owned by these derive to Personal.
   personalAccounts: z.array(z.object({ host: z.string().optional(), owner: z.string().min(1) })).optional(),
   // Parallelism knob (parallelization.mdx §4) — the mass-compute core fraction (0.01–1, default 0.9).
-  performance: z.object({ maxCoreFraction: z.number().min(0.01).max(1) }).optional(),
+  performance: z
+    .object({
+      maxCoreFraction: z.number().min(0.01).max(1).optional(),
+      // memory.mdx §5 — bounds mirror the config schema (0.05–1). Both knobs are optional so a PATCH may
+      // carry either one alone.
+      maxMemoryFraction: z.number().min(0.05).max(1).optional(),
+    })
+    .optional(),
   ipfs: z
     .object({
       apiAddr: z.string(),
@@ -97,7 +113,13 @@ settingsRouter.patch("/", async (req, res) => {
             return true;
           });
       }
-      if (p.performance) c.performance.max_core_fraction = p.performance.maxCoreFraction;
+      if (p.performance) {
+        if (p.performance.maxCoreFraction !== undefined) c.performance.max_core_fraction = p.performance.maxCoreFraction;
+        // Read LIVE at admission (shared/concurrency.ts memoryBudget()), so a change lands on the very next
+        // task with no restart — same discipline as the core fraction.
+        if (p.performance.maxMemoryFraction !== undefined)
+          c.performance.max_memory_fraction = p.performance.maxMemoryFraction;
+      }
       if (p.ipfs) {
         if (p.ipfs.apiAddr !== undefined) c.ipfs.api_addr = p.ipfs.apiAddr;
         if (p.ipfs.gatewayAddr !== undefined) c.ipfs.gateway_addr = p.ipfs.gatewayAddr;

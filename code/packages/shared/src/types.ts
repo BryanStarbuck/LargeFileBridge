@@ -589,7 +589,11 @@ export interface GlobalSettings {
   // fraction of CPU cores the mass-compute Core Budget may use for background compression & processing
   // (0.01–1, default 0.9 = 90%); `cores` is this machine's logical-core count (read-only) so the UI can
   // show the resolved budget, e.g. "≈ 14 of 16 cores".
-  performance: { maxCoreFraction: number; cores: number };
+  // `maxMemoryFraction` is concurrency's SECOND budget (memory.mdx §2.1 / performance.mdx P-28): the fraction
+  // of the V8 heap ceiling that in-flight job payloads may reserve (0.05–1, default 0.5). `heapCeilingMB` is
+  // this process's real `heap_size_limit` (read-only) so the UI can show the resolved budget, e.g. "≈ 3.0 GB
+  // of 6.0 GB". This is the knob that governs how many AI descriptions may upload at once.
+  performance: { maxCoreFraction: number; cores: number; maxMemoryFraction: number; heapCeilingMB: number };
 }
 
 // ── Security allow-list (security.mdx) ──────────────────────────────────────
@@ -808,6 +812,11 @@ export interface FailedItemView {
   coveredSec?: number;
   durationSec?: number;
   at: string; // ISO
+  // "halted" ≠ "failed" (to_fix.mdx §2.4/§7.3). A halted item was NEVER ATTEMPTED — the provider's circuit
+  // opened (credits depleted, key revoked) and the queue dropped it rather than burn a doomed upload.
+  // Rendering it as "failed" tells the user their files are bad when nothing was ever tried. Optional so
+  // every existing producer keeps its meaning: absent = a real, attempted failure.
+  state?: "failed" | "halted";
 }
 
 // The plan a producing PAGE ACTION returns (page_actions.mdx §5): after resolving scope (checked set or
@@ -825,6 +834,12 @@ export interface EnqueuePlan {
   // file to show in the wizard (null unless needsSetup).
   needsSetup: boolean;
   setupPath: string | null;
+  // Provider-account gate (to_fix.mdx §2.5): true when a PREFLIGHT probe found the provider cannot serve
+  // work right now — credits depleted, key revoked — so NOTHING was queued and the UI shows one actionable
+  // banner instead of N failing cards. On 2026-07-15 a 1,440-file batch was queued 106 minutes after the
+  // account died; every file was doomed before the first byte moved. This is the field that stops that.
+  blocked: boolean;
+  blockedReason: string | null;
 }
 
 // One eligible candidate file in a producing-action PREVIEW (dialogs.mdx §5.2 / page_actions.mdx §5).

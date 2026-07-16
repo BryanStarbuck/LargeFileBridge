@@ -1,0 +1,663 @@
+---
+title: LargeFileBridge — Background Processing (the operational contract every background op must obey)
+status: proposed
+owner: engineering
+scope: code/packages/backend
+---
+
+# Background Processing — the operational contract
+
+> *"I keep sending it a batch of work, and it keeps failing silently. I need to be able to
+> debug where it's happening."* — the user, 2026-07-15
+
+This spec is **cross-cutting**. It does not own the queue, and it does not own a page. It owns the
+**rules every piece of background work in Large File Bridge must satisfy** — the contract that sits
+above the mechanism.
+
+The division of labour, so nothing here is duplicated:
+
+* [job_queue.mdx](./job_queue.mdx) owns the **mechanism** — `QueueTask`, dedup, the admission
+  buckets, the batch registry. When this spec says "the queue admits," that is the spec that
+  defines how.
+* [processing.mdx](./processing.mdx) owns the **Processing page** and the three surfaces
+  (`/processing`, the dock, the conditional nav item) and the `GET /api/progress` payload.
+* [parallelization.mdx](./parallelization.mdx) owns the **Core Budget** — the numbers.
+* [transactions_log.mdx](./transactions_log.mdx) owns the **`transactions.log` line format** — the
+  BEGIN/END verbs, the field list, the correlation id, the heartbeat's shape.
+* [ai_description.mdx](./ai_description.mdx) / [Transcribe.mdx](./Transcribe.mdx) /
+  [compression.mdx](./compression.mdx) own their **per-file runners**.
+
+This spec is what all of those must **agree to**.
+
+---
+
+## 1. The thesis — background work is a promise (LOCKED)
+
+Every background operation in this product is a **promise made to a user who then walked away**:
+
+> *"I queued 1,440 files and went to bed."*
+
+That sentence is the whole product surface of background work. The user is not watching. They will
+not see a toast. They will come back in the morning and ask one question — **what happened?** —
+and the app owes them a true answer.
+
+Everything in this spec exists to make that promise **keepable**, and — when it cannot be kept —
+to make the failure **loud, legible, and resumable**. Three properties, **none optional**:
+
+1. **It must not lie.** An empty queue must not mean two different things. A stalled batch must say
+   it stalled. A count on screen must be a count of reality.
+2. **It must not vanish.** Work the user handed us is a debt. If the process dies, the debt
+   survives the process, or the user is told the debt was written off.
+3. **It must not take the app down with it.** One file, one op, one provider timeout must never
+   cost the user the other 1,439 files — or the web app itself.
+
+The 2026-07-15 incident (§2) violated **all three at once**. That is not three bugs; it is one
+missing contract.
+
+---
+
+## 2. The incident (2026-07-15) — the case that motivates every rule
+
+Verified facts, cited here because every rule below traces to one of them
+([transactions_log.mdx §1](./transactions_log.mdx#1-the-incident-this-spec-exists-to-prevent-2026-07-15)
+tells the same story from the logging side):
+
+* **1,440 AI-description files** were queued from the unified batch popup.
+* At **22:13 PDT** V8's heap hit **4.1 GB** →
+  `FATAL ERROR: Ineffective mark-compacts near heap limit`. The process aborted.
+* **The cause was arithmetic, not a bug in any one file.** `describe` admits **24** concurrent
+  jobs. Each in-flight file pins roughly **66–90 MB** of base64 in the heap
+  ([ai_description.mdx §3.3.1](./ai_description.mdx)). 24 × ~80 MB ≈ **1.6–2.2 GB** of live,
+  non-collectable bytes against a **~4 GB** default heap. The bucket admitted by **count** and was
+  blind to the resource it was actually consuming.
+* **The backlog vaporized silently.** `pending: QueueTask[]` is module-level, in-memory, with no
+  write and no restore ([job_queue.mdx §5](./job_queue.mdx)). ~1,290 files ceased to exist as work.
+* **The process stayed dead ~6 hours.** `tsx watch` restarts on **file change**, never on crash.
+* **Vite on `:2222` kept serving pages the whole time.** *Frontend up ≠ app up.*
+* **~146–149 descriptions completed, all before 19:50, zero after** — and nothing said so.
+* **The only evidence lived in `launcher.log`**, buried under a proxy-error flood. `log.log` and
+  `error.err` had nothing: a V8 OOM abort cannot run our handlers.
+
+**Nothing in the product told the user any of this.** Not the Processing page (which showed an
+empty, innocent queue). Not a banner. Not a log the user could read. The app's answer to *"what
+happened?"* was silence that looked exactly like success.
+
+### 2.1 Two lessons already paid for (precedent — do not re-litigate)
+
+Both are settled. They are cited because R2 and R3 are the same lesson at a different scale.
+
+* **P-27** ([performance.mdx](./performance.mdx)) — `fit-media.ts` used `spawnSync` on the describe
+  hot path. 24 concurrent jobs each blocking the event loop froze the single API server, and *the
+  Processing page would not load* — the monitoring surface died with the thing it monitored. Rule
+  born: **never `spawnSync`/`readFileSync` on a queue or request path.** → **R2**.
+* **P-26** — the queue drained at a fixed cap of 2/3/2 regardless of the machine, so a 16-core box
+  ran at ~12% utilization. Rule born: **caps derive from the machine, not a constant.** →
+  [parallelization.mdx](./parallelization.mdx), and the generalization in **R3**: *derive from the
+  machine* means **every** scarce dimension of the machine, not just the one we noticed first.
+
+P-26 taught us to look at cores. The OOM taught us that cores were never the only axis.
+
+---
+
+## 3. The lifecycle of a unit of work (LOCKED)
+
+Every background item — a describe, a transcribe, a compress, a pin — travels the **same eight
+stages**. A stage is not just a state; it is a **set of obligations**. The last column is the one
+the incident skipped every time: *what happens if we die right here?*
+
+```
+planned → enqueued → admitted → started → running → terminal → recorded → surfaced
+```
+
+| Stage | Persisted | Logged | User sees | If the process dies here |
+| --- | --- | --- | --- | --- |
+| **planned** | Nothing. The plan is a **preview**, computed on demand and thrown away. | Nothing (a plan is not work). | The unified batch popup's counts — *"1,440 files · ~2h"* ([dialogs.mdx](./dialogs.mdx), [page_actions.mdx §0.1](./page_actions.mdx)). | Nothing lost. The user re-opens the popup and re-plans. **This stage is free to lose.** |
+| **enqueued** | **MUST** hit disk before `enqueue()` returns (R8). Today: **nothing** — the module-level `pending[]` only. | One `BEGIN op=batch_enqueue` with the batch id + count. | The **"+ N queued"** dock footer and the **Waiting** region ([processing.mdx §4](./processing.mdx)). | **Today: total loss, silently.** Required: the backlog reloads on boot and drains. |
+| **admitted** | Nothing new — admission is a scheduling decision, not a fact about the world. | Nothing (too chatty; the heartbeat covers it, §7). | The `busy / budget` worker read ([processing.mdx §3a](./processing.mdx)). | Item returns to **enqueued**. Idempotent by construction. |
+| **started** | The dedup key + the in-flight slot (in memory, correctly). | **`BEGIN`** with the **full absolute path** — mandatory, R1. | A **live dock card**, via `track()`. | **This is the stage the incident died in, and the one with no BEGIN line today.** With R1, the reader knows exactly which 24 files were in flight at 22:13. |
+| **running** | Any partial output goes to a **temp path**, never the final path. | The **heartbeat** (§7) while anything is in flight. | The card's determinate % (compress/transcribe) or spinner (describe). | Temp artifacts orphaned; the item re-runs whole on restart. **A half-written final artifact would break R5 — hence temp-then-rename.** |
+| **terminal** | The artifact (`.ai_description` / `.transcription` / the compressed file) is `rename`d into place — **atomic**. | **`END`** with `outcome=` + `ms=`. | The card clears (`end()`). | If the rename completed, the work is **done and will be skipped** on replay (R5). If not, it re-runs. Either way: correct. |
+| **recorded** | Failures **must** outlive the item (`recordFailure()` — in memory + 30-min retention today). | `END outcome=failed reason=…`. | A **Failed row** on the Processing table ([processing.mdx §4.3](./processing.mdx)). | Failure list lost on restart. Acceptable **only** because `transactions.log` is durable and holds the same fact (R6). |
+| **surfaced** | — | — | The poll renders it within ≤ ~1.2 s ([processing.mdx §4.1](./processing.mdx)). | The **honesty contract** (§8) applies: on restart the user is told what was restored and what was lost. |
+
+Two lifecycle rules that fall out of the table and are **LOCKED**:
+
+* **Terminal outcomes are a closed set:** `ok` · `skipped` · `failed` · `blocked`. There is no
+  fifth, and there is **no absence** — an item that leaves `running` **always** produces exactly
+  one terminal outcome and exactly one `END` line. An item with a `BEGIN` and no `END` in
+  `transactions.log` is, by definition, **an item that was in flight when the process died** — that
+  is the entire diagnostic value of the pair, and it only works if `END` is unconditional.
+* **Never write the final artifact in place.** Write to temp, `rename` on success. The rename is
+  the commit point; it is what makes R5's skip-already-done a *correct* resume rather than a
+  hopeful one.
+
+The eight-stage transit is driven in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()` (planned→enqueued) / `takeRunnable()` (→admitted) / `start()` (→started) / `runTask()` (running→terminal→recorded)
+
+The dock card that makes `started`/`running` visible is registered per item in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.registry.ts` — `track(kind, target, body)` / `end()`
+
+---
+
+## 4. The eight rules of a background op (LOCKED)
+
+These are the contract. Every op — existing or future — satisfies all eight. Each rule names where
+it is honored, or where it is **violated today**.
+
+### R1 — Announce yourself
+
+Before any work: a **START** log carrying the **full absolute path**. After: a **FINISH** log with
+the **outcome** and the **duration**. **No exceptions, no op exempt.**
+
+A job that logs only its ending is a job that, when the process dies mid-flight, leaves **no trace
+it ever began**. That is not a small gap — it is the difference between "1,290 files never started"
+and "we cannot know." Terminal-only logging can describe a **successful** past and is structurally
+incapable of describing a **crash**.
+
+The line format, verbs, and required fields are **not** defined here — see
+[transactions_log.mdx §3](./transactions_log.mdx#3-the-line-format-locked).
+
+**OPEN VIOLATION.** `describeOne()` logs **only terminal outcomes** — a `log.info` on success, a
+`log.error` on failure. **There is no start log.** `transcribeOne()` is the same. These two are the
+highest-volume ops in the product and the exact ops the incident killed.
+
+The runners that must gain a START/BEGIN line are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()` (~158) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `transcribeOne()` (~86)
+
+### R2 — Never block the event loop
+
+No `spawnSync`, no `readFileSync`, no synchronous directory walk on **any** queue path or request
+path. Heavy child processes are `spawn`; file bytes are `fs.promises`.
+
+This is **P-27**, already paid for. The single API server that serves `GET /api/progress` is the
+same process that drains the queue: **the monitoring surface shares a thread with the thing being
+monitored.** A synchronous call at 24-way concurrency does not slow the page — it *stops* it, and
+the user loses the only instrument they had. Any new op inherits this rule on day one.
+
+The async transcode + base64 read on the describe hot path is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — the `spawn` + `fs.promises` path (formerly `spawnSync`/`readFileSync` — [performance.mdx P-27](./performance.mdx))
+
+### R3 — Admit by every scarce resource, not just cores
+
+Admission answers *"may this job start?"* It must consider **every** resource the job consumes to
+exhaustion — **cores AND bytes**, and for some ops RAM, GPU streams, or a provider's rate limit.
+A bucket that admits by **count alone** is not a limiter; it is a **countdown to the first resource
+it forgot**.
+
+The Core Budget ([parallelization.mdx §1](./parallelization.mdx)) is the **cores** axis and is
+correct and settled. This rule adds the **bytes** axis. See [memory.mdx](./memory.mdx) for the byte
+budget's definition and the reservation model.
+
+**OPEN VIOLATION — this is the OOM.** `describe` admits at `DESCRIBE_CONCURRENCY = 24`, a fixed
+count, deliberately **uncapped by cores** because "the wait is a network round-trip, not local CPU."
+That reasoning is **correct about cores and silent about memory**. The bucket is correctly exempt
+from the *core* budget and must not therefore be exempt from *all* budgets: 24 in-flight uploads ×
+~80 MB of pinned base64 ≈ 1.6–2.2 GB. The number 24 was never wrong for the network; it was
+unbounded on the axis nobody was counting.
+
+The count-only describe cap and the budget-aware admission scan that must gain a byte term are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `DESCRIBE_CONCURRENCY` (~57) / `capFor()` (~68) / `takeRunnable()` (~239)
+
+### R4 — Isolate per item
+
+One bad file never stalls the queue, never kills a worker slot, never poisons its neighbours. A
+throw is caught, recorded, and the worker moves on.
+
+`runTask()`'s try/catch **is** the correct shape and already ships: it catches the throw,
+`recordFailure()`s it, `queueFailureLog()`s it, and `start()`'s `.finally()` frees the slot and
+re-pumps — so a thrown task and a clean task cost the queue exactly the same.
+
+**Its limit is a hard boundary and must be stated plainly: a try/catch cannot catch an OOM.** V8's
+`FATAL ERROR: Ineffective mark-compacts` is a **process abort**, not a JavaScript exception. No
+handler runs. No `finally` fires. No line is written. Per-item isolation protects against **bad
+items**; it offers **zero** protection against a **bad aggregate**. That is precisely why R3
+(don't create the aggregate) and R8 (survive it anyway) are separate, non-negotiable rules and not
+restatements of R4. **R4 is the reason a bad file is cheap; it is not a reason the queue is safe.**
+
+The per-item isolation and the non-thrown-failure ledger are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `runTask()` (~297) / `queueFailureLog()` (~293) / `start()` (~256, the `.finally()` slot release + re-pump)
+
+### R5 — Be idempotent and resumable
+
+Re-running a completed item is **free and harmless**. Skip-already-done is what makes replay safe —
+and replay is what makes crash recovery, restart, and re-Apply all reduce to the same cheap
+operation. **Idempotency is not an optimization; it is the load-bearing beam under R8.**
+
+This one already holds and is the product's quietest strength: `readDescription()` short-circuits a
+file whose `.ai_description` exists, so re-queuing 1,440 files after 149 finished costs 149 stats
+and 1,291 real jobs. Combined with the temp-then-rename rule (§3), an item is either **fully done**
+or **fully absent** — never half. See [crash_recovery.mdx](./crash_recovery.mdx).
+
+The skip-already-done short-circuit that makes replay safe is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `readDescription()` (~175), consulted by `describeOne()` before any work
+
+### R6 — Report truthfully
+
+**Every** non-thrown failure status is recorded and surfaced. A runner that returns
+`{ status: "failed" }` and logs nothing is a **silent failure**, and a silent failure **is a bug** —
+of the same severity as a crash, because it produces the same user experience: work that did not
+happen and did not say so.
+
+This holds today, and the design is deliberately belt-and-braces: `runTask()` inspects each
+runner's returned status and calls `recordFailure()` + `queueFailureLog()` **at the queue level**,
+so the queue is self-sufficient even if a future op's runner forgets to self-log. Duplicate lines
+are harmless; a missing line is not. Failures surface as **Failed rows** with their reason
+([processing.mdx §4.3](./processing.mdx)).
+
+The queue-level truthful-failure recording is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `recordFailure()` (~215) / `listRecentFailures()` (~226, 30-min retention prune)
+
+### R7 — Be cancellable and bounded
+
+Nothing runs forever. Every op declares a **timeout**; every child process is **hard-killed** on
+timeout or cancel (`SIGKILL` after a grace `SIGTERM` — a hung ffmpeg holds its whole thread slice,
+so a soft kill that is ignored is a leaked slot). Every retained record has a **retention window**.
+
+Bounded also means **bounded in memory**: `listQueuedItems()` and `listRecentFailures()` cap at
+**500** rows so the poll is O(cap), not O(N) ([processing.mdx §4.4](./processing.mdx)); the batch
+registry prunes finished batches at 30 min.
+
+**GAP:** there is no per-item timeout on `describe` or `transcribe` today. A provider that accepts
+a connection and never answers holds an admission slot — and, under R3's byte accounting, its
+memory reservation — **forever**. One hung upload is a slot; 24 are a dead queue that looks busy.
+
+The bounded-payload caps and the batch retention prune are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `listQueuedItems()` (~204) / `listBatches()` (~190, the 30-min prune)
+
+### R8 — Survive the process
+
+**The backlog is durable.** A restart — clean or violent — **resumes**. It never silently drops.
+
+This is the rule the product does not yet have, and its absence is what turned a memory bug into a
+**data-loss event**. [job_queue.mdx §5](./job_queue.mdx) argues the in-memory posture is safe
+because *"a task that outlives a restart was not in flight anymore"* and skip-already-done makes
+re-invoking cheap. **That argument holds for a clean restart and fails for a crash.** Its own
+premise is that the **user** is present to re-invoke — and the entire promise of background work
+(§1) is that the user **left**. An overnight batch has no one to re-invoke it.
+
+The required posture, in full, is owned by [crash_recovery.mdx](./crash_recovery.mdx). The contract
+this spec asserts is narrower and absolute: **an empty queue after a restart must never be
+ambiguous.** Either the backlog was restored, or the user is told it was lost (§8). "Empty" as a
+value that means both *finished* and *destroyed* is a lie by omission, and it is the specific lie
+the user woke up to.
+
+The in-memory-only backlog that must become durable is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — the module-level `pending: QueueTask[]` (~93) / `inflight` Set (~94) / `running` Record (~95)
+
+---
+
+## 5. Per-op contracts
+
+Each op is a different animal. What follows is what each **costs**, which budget **governs** it,
+how it **fails**, and what it **owes**.
+
+### 5.1 `describe` — the network op that eats RAM
+
+* **Cost.** CPU: low (an occasional fit-media transcode). **RAM: very high** — ~66–90 MB of pinned
+  base64 per in-flight file. Network: one large upload + one round-trip per file.
+* **Budget.** `DESCRIBE_CONCURRENCY = 24`, fixed, env `LFB_DESCRIBE_CONCURRENCY`, **not** core-bound
+  ([parallelization.mdx §3](./parallelization.mdx)). Correct on the core axis, **unbounded on the
+  byte axis** — R3's open violation.
+* **Failure modes.** Provider 429 / 5xx / timeout; a file over the ~18 MB inline bound needing
+  fit-media; a hung upload holding a slot forever (R7); **the aggregate OOM** (§2).
+* **Owes.** A `BEGIN` with the absolute path (**missing today**, R1); an `END` with outcome +
+  duration + provider + model; a `provider_call` BEGIN/END per outbound request
+  ([transactions_log.mdx §5.3](./transactions_log.mdx)).
+* **Known gaps.** No start log (R1) · admits by count alone (R3) · no per-item timeout (R7) ·
+  backlog not durable (R8).
+
+The describe runner and its producer/planner pair are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()` (~158) / `enqueueDescribe()` (~273) / `previewDescribe()` (~324)
+
+### 5.2 `transcribe` — the local op that eats the machine
+
+* **Cost.** **CPU: very high** (Whisper, multi-threaded). **RAM: high** — multi-GB per model
+  instance. Network: **none** (fully local, by charter).
+* **Budget.** `transcribeConcurrency()` — mass-compute, narrow, **already RAM- and GPU-clamped**:
+  `clamp(1, floor(budget / WHISPER_THREADS), floor(usableRAM / modelRamPerJob), gpuStreams)`.
+  **This op is R3's reference implementation** — it was designed multi-axis from the start, which is
+  exactly why it has never OOM'd. Describe should look like this.
+* **Failure modes.** Engine/model missing → the fallback chain; a transcript **short of the full
+  duration** (a truthful `failed`, [transcribe_engine.mdx §4](./transcribe_engine.mdx)); a wedged
+  child process.
+* **Owes.** A `BEGIN` with the absolute path (**missing today**, R1); an `END` carrying the engine
+  actually used and the covered-vs-total duration on a truncation failure.
+* **Known gaps.** No start log (R1) · no per-item timeout (R7) · backlog not durable (R8).
+
+The transcribe runner and its producer/planner pair are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `transcribeOne()` (~86) / `enqueueTranscribe()` (~176) / `previewTranscribe()` (~225)
+
+### 5.3 `compress` — the op that rewrites the user's data
+
+* **Cost.** CPU: high (ffmpeg, thread-capped to `VIDEO_THREADS = 4`) or moderate (image tools,
+  1 thread). RAM: bounded. Disk: a full temp copy. Network: none.
+* **Budget.** Media-aware, mass-compute: `compress:image` fans **wide** (`budget`, 1 thread each);
+  `compress:video` fans **narrow** (`floor(budget / 4)`, threads capped).
+* **Failure modes.** Tool missing; unprobeable output; **a corrupt/tiny output that must never
+  replace an original** — the fail-closed integrity gate ([compress.mdx §8.1](./compress.mdx)).
+* **Owes.** BEGIN/END with before/after bytes; `blocked` recorded distinctly from `failed`
+  (`blocked` = we refused, on purpose — a *safety success*, and conflating it with a failure would
+  train the user to ignore the one outcome that protects their data).
+* **Note.** This is the **only** op that destroys input. R5's temp-then-rename and the integrity
+  gate are not conveniences here; they are the data-safety contract.
+
+The compress runner and its per-job thread cap are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile()` (the `CompressFileOpts.threads` cap → `ffmpeg -threads`; the fail-closed dimension gate)
+
+### 5.4 The scheduled passes — scan, pin, fs index, sync
+
+These run **unattended, every 15 minutes, with no user watching at all** — the promise of §1 in its
+purest form. They draw the **responsive** budget (`cores − 2`), never mass-compute, because they
+share the box with interactive use.
+
+* **The scan is the reference shape and should be copied, not re-invented.** It is **detached**,
+  **single-flight** (a second scan never races the first), and **persists to `status.yaml`** — so a
+  scan that dies leaves a readable last-known state on disk instead of a hole in memory.
+  [performance.mdx](./performance.mdx) cites it as the right shape; §9's durable-backlog work should
+  follow it rather than invent a second pattern.
+* **The pin pass** fans two levels against one shared limiter (`responsiveBudget()`), already
+  shipped ([pin_process.mdx §4](./pin_process.mdx)).
+* **The scheduled runner** is launchd, every 15 min, with a watchdog
+  ([backbone_resilience.mdx](./backbone_resilience.mdx)). **It is the natural home for a crash
+  watchdog** (§9): it already wakes every 15 minutes and already knows how to check whether the app
+  is alive — the ~6-hour dead window is a gap it is positioned to close.
+
+The reference detached/single-flight/persisted background pass is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scan-job.ts` — the detached single-flight runner persisting to `status.yaml` (`~/…/modules/scanner/scanner.service.ts` — the unit walk)
+
+The responsive-budget pin pass and the fs index are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinAll()` / `runPool()` / `ipfsLimiter` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fsindex/fsindex.service.ts`
+
+The scheduled every-15-min runner and its watchdog are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` / `watchdog.service.ts` / `os/launchd.ts` / `installer.ts`
+
+---
+
+## 6. Concurrency doctrine — network-parallel is not free (LOCKED)
+
+The Core Budget is settled and **not restated here** — see
+[parallelization.mdx §1–§2](./parallelization.mdx): two budgets (mass-compute
+`round(cores × 0.9)`, responsive `cores − 2`) from one core count, and the invariant
+`concurrentJobs × threadsPerJob ≈ budget`, **never `cores²`**.
+
+This spec adds **one new rule**, and it is the rule the incident bought:
+
+> **An in-flight network request is a memory reservation.**
+
+The reasoning that exempted `describe` from the core budget was **right**: the wait is a round-trip,
+so burning a core per file would be absurd, and P-26 taught us not to under-fan work that has no
+hardware bottleneck. The error was the **inference drawn from it** — that an op with no *CPU*
+bottleneck therefore has **no bottleneck at all**, and can be capped by a number chosen for the
+provider's rate limit alone.
+
+But an upload is not free while it waits. It holds:
+
+* the **file's bytes**, base64-encoded (~1.33× the original) and **pinned live** for the whole
+  round-trip — unreachable by GC precisely *because* the request still needs them;
+* a socket, a TLS buffer, the response buffer.
+
+So the arithmetic that governs `describe` is not `jobs × threads ≤ cores`. It is:
+
+```
+concurrentJobs × bytesPinnedPerJob  ≤  the heap budget
+        24      ×      ~80 MB       ≈   1.9 GB       vs a ~4 GB default heap
+```
+
+That is not a safety margin; it is a **coin flip against the GC**, and on 2026-07-15 it came up
+tails. **Network parallelism is bounded by memory the same way CPU parallelism is bounded by
+cores** — and `describe`, being the widest bucket in the product (24 vs ~14), is the op where the
+bytes axis binds *hardest*, not the one where it is safe to ignore.
+
+**The doctrine, generalized:** every bucket declares **every** resource one job consumes to
+exhaustion, and admission is the **minimum** across all of them. `transcribe` already does this
+(§5.2) — cores **and** RAM **and** GPU streams. `describe` must too; its cap becomes
+`min(24, floor(byteBudget / bytesPerJob))`, dynamic in the file's actual size, per
+[memory.mdx](./memory.mdx). A bucket that names only one axis is asserting the others are infinite.
+
+The single-axis admission scan that must become multi-axis is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` (~68) / `takeRunnable()` (~239); the cores axis it draws from is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()` (~26)
+
+---
+
+## 7. The observability contract
+
+**What every op emits, without exception.** The line format is
+[transactions_log.mdx §3](./transactions_log.mdx#3-the-line-format-locked)'s to define; this is the
+list of *obligations*.
+
+| Emission | When | Where |
+| --- | --- | --- |
+| **`BEGIN`** + full absolute path + op + txn id | Before the first byte of work (R1) | `transactions.log` |
+| **`END`** + outcome + `ms=` + op-specific fields | On **every** exit path, including caught throws (R1) | `transactions.log` |
+| **`provider_call` BEGIN/END** | Around each outbound request — provider, model, status, bytes | `transactions.log` |
+| **`WARN`/`ERROR`** | Any failure, thrown or returned (R6) | `error.err` (synchronous — it must survive the crash that caused it) |
+| **The heartbeat** | Every ~30 s **while any work is in flight**; silent when idle | `transactions.log` |
+| **`BOOT` / `SHUTDOWN`** | Process start / clean stop — the bracket that makes "it died" *visible* | `transactions.log` |
+
+**The heartbeat** is the single line that would have made the incident diagnosable **in advance**
+rather than forensically. It carries, at minimum:
+
+* **queue depth** (pending),
+* **running by bucket** (`describe:24 compress:video:3 …`),
+* **heap used / heap limit**.
+
+With it, the run's last heartbeat reads `heap=3.9G/4.0G describe:24` at 22:12 and the story tells
+itself in one line. Without it, the same fact costs a `launcher.log` archaeology dig through a
+proxy-error flood ([debugging.mdx](./debugging.mdx) collects those recipes). **A rising heap under
+a fixed concurrency is a fully predictable death** — the heartbeat is what makes it *observed*
+before it is *fatal*, which is the difference between an alert and an autopsy.
+
+Note the asymmetry that makes the heartbeat load-bearing: a V8 OOM **cannot** write its own
+epitaph — no handler runs. The only account of an OOM the app can ever produce is the one it wrote
+**before** it died. That is not a nice-to-have; it is the only mechanism available.
+
+The rotating writers these obligations land in are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `RollingFileWriter` / `log.*` / `logError()` (5 MiB × 5 generations, `error.err` written synchronously)
+
+---
+
+## 8. The honesty contract (the product surface)
+
+R1–R8 are engineering. This is what the user is **owed on screen**. Each line below is a direct
+inversion of something the incident did.
+
+1. **An empty queue is never ambiguous.** *Nothing is processing right now.*
+   ([processing.mdx §4](./processing.mdx)) is a **true statement only when the work finished**. If a
+   backlog was lost, the page must say so — *"1,291 items were lost when the app stopped
+   unexpectedly at 22:13. Resume?"* — not render the same calm empty state that success renders.
+   **Success and catastrophe must never share a pixel.**
+2. **A restore is announced.** When a durable backlog reloads on boot (R8), the user is told:
+   *"Resumed 1,291 queued items from before the restart."* Silent recovery is better than silent
+   loss and still worse than the truth — a user who does not know work resumed cannot trust the
+   counts they are watching.
+3. **A batch that died says so.** A batch whose process vanished mid-run is **not** left showing a
+   frozen progress bar at 149/1,440 forever. It is marked **interrupted**, with what finished, what
+   was lost, and a **Resume**.
+4. **Progress that stops says why.** A queue with depth > 0 and zero running for more than a beat is
+   a **stall**, and a stall is reported — blocked on a resource budget, waiting on a provider, or
+   wedged. *"Waiting for memory (24 describes in flight)"* is a fine thing to show; a motionless
+   spinner is not.
+5. **Frontend up ≠ app up.** The web app must detect a **dead backend** and say so plainly, rather
+   than serve a page that renders an empty, healthy-looking queue while the API is a corpse. This
+   is the one the user personally experienced for **six hours**.
+
+All banners/dialogs follow [dialogs.mdx](./dialogs.mdx) — the app's own components, never a native
+`window.confirm`/`alert`.
+
+---
+
+## 9. Instrumentation & hardening debt
+
+The concrete work, drawn from the pointers above. Ordered by what the incident actually cost.
+
+| Site | Gap | Required change |
+| --- | --- | --- |
+| `describe.service.ts` — `describeOne()` (~158) | **No START log** (R1). A file that OOMs leaves no trace it began. | `BEGIN`/`END` with the absolute path, outcome, `ms=`, provider, model. |
+| `transcribe.service.ts` — `transcribeOne()` (~86) | **No START log** (R1). | `BEGIN`/`END` with the absolute path, outcome, `ms=`, engine used. |
+| `jobqueue.service.ts` — `capFor()` (~68) / `DESCRIBE_CONCURRENCY` (~57) | **Admits by count alone** (R3) — the OOM. | Add the byte axis: `min(24, floor(byteBudget / bytesPerJob))`, per [memory.mdx](./memory.mdx). |
+| `jobqueue.service.ts` — `pending: QueueTask[]` (~93) | **In-memory only** (R8). A crash vaporizes the backlog silently. | Durable backlog in the state root; restore on boot; announce the restore (§8.2). See [crash_recovery.mdx](./crash_recovery.mdx). |
+| `jobqueue.service.ts` — `takeRunnable()` (~239) | Budget snapshot is cores-only. | Snapshot **all** axes once per admission pass (keep the O(N)-not-O(N²) discipline already there). |
+| `jobqueue.service.ts` — `runTask()` (~297) | No **heartbeat**; no `BEGIN`/`END` bracket at queue level. | Emit the §7 heartbeat (~30 s) while `inflight` is non-empty; bracket every task. |
+| `runTask()` / the runners | **No per-item timeout** (R7). A hung provider holds a slot forever. | Per-op timeout + `SIGTERM`→`SIGKILL` on children; a timeout is a `failed` outcome with a reason. |
+| `schedule/watchdog.service.ts` | Watches the schedule, **not the app**. The backend was dead ~6 h. | Detect a dead/OOM'd backend and restart it; record the death in `transactions.log`. |
+| Backend boot | No `BOOT`/`SHUTDOWN` bracket. | Log both; on boot, a missing `SHUTDOWN` since the last `BOOT` **means a crash** — say so (§8). |
+| Frontend | Renders "nothing processing" against a dead API. | Distinguish **idle** from **unreachable**; surface §8.5. |
+| Dev runtime | `tsx watch` restarts on file change, never on crash. | Restart-on-crash in the dev runner; the ~6-h dead window must be impossible. |
+
+---
+
+## 10. Invariants (LOCKED)
+
+**I1.** Every unit of background work has exactly one `BEGIN` and exactly one `END` in
+`transactions.log`. A `BEGIN` without an `END` **means** *in flight when the process died* — that is
+the pair's whole diagnostic value, and it holds only if `END` is unconditional.
+
+**I2.** No `spawnSync`, `readFileSync`, or synchronous walk on any queue or request path. (P-27)
+
+**I3.** No admission bucket limits by **count alone**. Every bucket names every resource one job
+consumes to exhaustion; the cap is the **minimum** across them.
+
+**I4.** `concurrentJobs × resourcePerJob ≈ budget`, for **every** resource — never `cores²`, never
+an unbounded byte total. (Generalizes [parallelization.mdx §2](./parallelization.mdx).)
+
+**I5.** A terminal outcome is one of `ok` · `skipped` · `failed` · `blocked`. Every non-thrown
+failure is `recordFailure()`d **and** logged. Silence is a bug.
+
+**I6.** Final artifacts are written to temp and `rename`d. An item is fully done or fully absent —
+never half.
+
+**I7.** Re-running a done item is free (skip-already-done). Idempotency is the beam under resume.
+
+**I8.** The user is never shown an ambiguous empty. Finished and destroyed do not share a screen.
+
+**I9.** One item's failure — including a throw — costs the queue one slot for one item's duration
+and nothing more.
+
+**I10.** Nothing runs unbounded: every op has a timeout, every child a hard kill, every retained
+record a retention window.
+
+---
+
+## 11. Acceptance criteria
+
+1. **The 1,440 test.** A 1,440-file AI-description batch enqueued at night is **complete in the
+   morning**, unattended, with no user intervention and no restart. Heap stays bounded throughout.
+   *(This is the incident, re-run. It must simply work.)*
+2. **Every job brackets.** For every item in that run, `transactions.log` contains a `BEGIN` with
+   the **full absolute path** and a matching `END` with outcome + duration. Count of `BEGIN` ==
+   count of `END` + count in flight. (I1, R1)
+3. **`kill -9` mid-batch resumes.** Killing the backend at file ~700 and restarting: the remaining
+   ~740 items **resume and drain** without the user re-clicking anything, and the app **announces**
+   the restore. (R8, §8.2)
+4. **The crash is legible.** After a `kill -9`, `transactions.log` shows a `BOOT` with no preceding
+   `SHUTDOWN`, plus the exact set of items with a `BEGIN` and no `END` — the in-flight set at death,
+   reconstructable in one grep. (I1, §7)
+5. **The Processing page loads instantly at full concurrency.** With 24 describes and a wide
+   compress batch in flight, `/processing` loads promptly in a **second browser that did nothing**
+   and the poll answers on cadence. (I2 / P-27 — the regression that must stay closed.)
+6. **No bucket admits by count alone.** Every bucket's cap is a `min()` over its declared resources.
+   `describe`'s cap is memory-aware and **drops below 24** when files are large. (I3, R3)
+7. **The heartbeat tells the story.** While work is in flight, a line every ~30 s carries queue
+   depth, running-by-bucket, and heap used/limit. The last heartbeat before any death explains it.
+   (§7)
+8. **A hung provider cannot wedge the queue.** A request that never answers hits its timeout, is
+   recorded `failed` with a reason, and **frees its slot**. 24 hung uploads do not equal a dead
+   queue. (R7, I10)
+9. **Silence is a bug, and there is none.** Every non-thrown failure status produces a Failed row
+   **and** a log line. A run where 12 files fail shows 12 Failed rows with 12 reasons. (R6, I5)
+10. **A dead backend is visible.** With the API stopped and Vite serving, the app says the backend
+    is unreachable — it does **not** render "Nothing is processing right now." (§8.5, §8.1)
+11. **No half-artifacts.** Killing the process mid-describe leaves **no** `.ai_description` for the
+    interrupted file; on resume it re-runs cleanly and the 1,439 finished ones are skipped. (I6, I7)
+12. **A batch that died says so.** A batch interrupted by a crash renders as **interrupted** with a
+    Resume — never a frozen bar. (§8.3)
+
+---
+
+## 12. Non-goals
+
+* **This spec defines no log line format** — that is
+  [transactions_log.mdx §3](./transactions_log.mdx#3-the-line-format-locked).
+* **It defines no queue mechanics** — no task shape, no dedup, no bucket internals. That is
+  [job_queue.mdx](./job_queue.mdx).
+* **It defines no UI** — the Processing page, dock, and nav item are
+  [processing.mdx](./processing.mdx)'s.
+* **It does not re-derive the Core Budget** — [parallelization.mdx](./parallelization.mdx) owns the
+  numbers; §6 adds only the bytes axis.
+* **It is not a distributed job system.** One process, one machine, local-first. Durability here
+  means *survives a restart of this process*, not *survives this machine*.
+
+<!--
+  CROSS-CUTTING operational contract for ALL background work. NOT the queue (job_queue.mdx), NOT the
+  page (processing.mdx), NOT the log format (transactions_log.mdx), NOT the budget numbers
+  (parallelization.mdx). This is the RULES those must all obey.
+  §1 THESIS: background work = a PROMISE to a user who walked away. 3 properties, none optional:
+     must not LIE · must not VANISH · must not TAKE THE APP DOWN. The 2026-07-15 incident broke all 3.
+  §2 THE INCIDENT (verified): 1,440 describes; 22:13 PDT V8 heap 4.1GB → FATAL ERROR: Ineffective
+     mark-compacts. Cause = 24-way describe × ~66-90MB pinned base64 ≈ 1.6-2.2GB vs ~4GB heap; bucket
+     admits by COUNT. Backlog (module-level pending[]) vaporized silently. tsx watch restarts on file
+     change NOT crash → dead ~6h. Vite :2222 kept serving (frontend up ≠ app up). ~146-149 done, all
+     before 19:50. Only evidence = launcher.log (grep FATAL ERROR / JavaScript heap). §2.1 PRECEDENT
+     (settled, don't re-litigate): P-27 spawnSync on describe hot path froze the loop → Processing page
+     wouldn't load → R2. P-26 fixed cap 2/3/2 → 12% util on 16 cores → caps derive from the MACHINE →
+     generalized by R3 to EVERY axis, not just cores.
+  §3 LIFECYCLE (LOCKED): planned→enqueued→admitted→started→running→terminal→recorded→surfaced. Per stage:
+     persisted / logged / user sees / what if we die HERE. Terminal set CLOSED: ok|skipped|failed|blocked,
+     exactly one END per BEGIN. Final artifacts = temp-then-RENAME (rename is the commit point; makes R5
+     correct not hopeful).
+  §4 THE EIGHT RULES (LOCKED):
+     R1 ANNOUNCE — START log w/ FULL ABS PATH before work + FINISH w/ outcome+duration. OPEN VIOLATION:
+        describeOne (~158) + transcribeOne (~86) log terminal outcomes ONLY, no start log.
+     R2 NEVER BLOCK — no spawnSync/readFileSync/sync walk on queue|request path (P-27). Monitoring surface
+        shares a thread with the monitored thing.
+     R3 ADMIT BY EVERY SCARCE RESOURCE — cores AND bytes (memory.mdx). OPEN VIOLATION = the OOM:
+        DESCRIBE_CONCURRENCY=24 (~57) correctly exempt from CORES, wrongly exempt from ALL budgets.
+     R4 ISOLATE PER ITEM — runTask() try/catch (~297) is the right shape; STATE PLAINLY it CANNOT catch an
+        OOM (process abort, no handler runs). Protects vs bad ITEMS, zero protection vs bad AGGREGATE →
+        that's why R3+R8 are separate rules.
+     R5 IDEMPOTENT + RESUMABLE — readDescription() (~175) skip-already-done; the beam under R8.
+     R6 REPORT TRUTHFULLY — recordFailure() (~215) at QUEUE level = self-sufficient even if a runner
+        forgets. Dup lines harmless, missing line is not. Silence IS a bug.
+     R7 CANCELLABLE + BOUNDED — timeouts, SIGTERM→SIGKILL, retention windows, 500-row caps. GAP: no
+        per-item timeout on describe/transcribe → hung provider holds a slot (and its byte reservation).
+     R8 SURVIVE THE PROCESS — durable backlog. job_queue.mdx §5's in-memory argument holds for a CLEAN
+        restart, FAILS for a crash: its premise is the user is present to re-invoke, but the promise (§1)
+        is that they LEFT. Empty-after-restart must never be ambiguous.
+  §5 PER-OP: describe (RAM-heavy network, 24 fixed, the OOM) · transcribe (CPU/RAM heavy, LOCAL, already
+     RAM+GPU clamped = R3's REFERENCE IMPL, why it never OOM'd) · compress (only op that DESTROYS input;
+     blocked ≠ failed, blocked = safety success) · scheduled passes (responsive budget; scan-job.ts =
+     detached/single-flight/persists-to-status.yaml = the RIGHT SHAPE to copy for §9's durable backlog;
+     watchdog is the natural home for crash detection — already wakes every 15 min).
+  §6 DOCTRINE — NETWORK-PARALLEL IS NOT FREE: an in-flight upload is a MEMORY RESERVATION. The core-exempt
+     reasoning was right about cores, wrong to infer "no bottleneck at all". 24 × ~80MB ≈ 1.9GB vs ~4GB =
+     a coin flip vs the GC. describe is the WIDEST bucket (24 vs ~14) so bytes bind HARDEST there.
+     Generalized: admission = min() over EVERY declared resource. describe → min(24, floor(byteBudget/
+     bytesPerJob)). Don't restate the Core Budget.
+  §7 OBSERVABILITY: BEGIN/END/provider_call/WARN-ERROR/HEARTBEAT/BOOT-SHUTDOWN. HEARTBEAT (~30s while
+     in flight) = queue depth + running by bucket + heap used/limit. KEY ASYMMETRY: a V8 OOM cannot write
+     its own epitaph — the only account is the one written BEFORE death. Format owned by transactions_log.
+  §8 HONESTY CONTRACT (product surface, each inverts an incident behavior): (1) empty never ambiguous —
+     success + catastrophe must never share a pixel; (2) a restore is ANNOUNCED; (3) a dead batch says
+     INTERRUPTED + Resume, never a frozen bar; (4) a stall says WHY; (5) frontend up ≠ app up — detect a
+     dead backend. Dialogs per dialogs.mdx (no native window.confirm).
+  §9 DEBT TABLE: site → gap → required change (describeOne/transcribeOne START logs · capFor byte axis ·
+     pending[] durability · heartbeat · timeouts · watchdog watches the APP · BOOT/SHUTDOWN bracket ·
+     frontend unreachable state · tsx-watch restart-on-crash).
+  §10 INVARIANTS I1-I10. §11 AC 1-12 (the 1,440 test · BEGIN==END · kill -9 resumes · crash legible ·
+     Processing loads at full concurrency (P-27 stays closed) · no count-only bucket · heartbeat ·
+     hung provider frees its slot · no silence · dead backend visible · no half-artifacts · dead batch
+     says so). §12 NON-GOALS.
+  Code: jobqueue.service.ts (JobOp ~24, bucketOf ~60, capFor ~68, DESCRIBE_CONCURRENCY ~57, pending ~93,
+  inflight ~94, running ~95, enqueue ~109, createBatch/recordBatchResult/listBatches ~145-190,
+  listQueuedItems ~204, recordFailure ~215, listRecentFailures ~226, pump ~229, takeRunnable ~239,
+  start ~256, workerUtilization ~274, queueFailureLog ~293, runTask ~297) · shared/concurrency.ts
+  (coreBudget ~26) · describe.service.ts (describeOne ~158, readDescription ~175, enqueueDescribe ~273,
+  previewDescribe ~324) · transcribe.service.ts (transcribeOne ~86, enqueueTranscribe ~176,
+  previewTranscribe ~225) · compress/compression.service.ts (compressFile) · describe/fit-media.ts ·
+  progress/progress.registry.ts (track ~43, end ~29) · scanner/scan-job.ts + scanner.service.ts ·
+  pin/pin.service.ts (pinAll/runPool/ipfsLimiter) · fsindex/fsindex.service.ts · schedule/
+  {schedule,watchdog}.service.ts + os/launchd.ts + installer.ts · shared/logging.ts (RollingFileWriter).
+  Keep in sync with job_queue.mdx (mechanism), processing.mdx (surfaces), parallelization.mdx (budgets),
+  transactions_log.mdx (line format), memory.mdx (byte budget), crash_recovery.mdx (durable backlog),
+  debugging.mdx (recipes), performance.mdx (P-26/P-27), ai_description.mdx, backbone_resilience.mdx.
+-->

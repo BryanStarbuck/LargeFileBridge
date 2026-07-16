@@ -15,7 +15,7 @@
 // on decoded pixel/frame buffers plus a local ffmpeg process for frame extraction. This module opens no
 // network connection of any kind — no client import, no remote fetch — enforced by the guard test
 // perceptual.no-network.spec.ts.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -44,24 +44,82 @@ const QUALITY_FLOOR = 8;
 const VIDEO_SAMPLE_FPS = 1;
 const VIDEO_MAX_FRAMES = 16;
 
+// ── the decode memory gate (to_fix.mdx §3.3) ────────────────────────────────────
+// THE BUG THIS FIXES: this module used to decode every image at FULL RESOLUTION to raw RGBA —
+// `width × height × 4` bytes — co-resident with a `readFileSync` of the whole source file. A 24 MP photo
+// (6000×4000) is ~96 MB of raw RGBA + ~8 MB of source ≈ 105 MB live, PER FILE, with no size cap, on the
+// `compress:image` bucket that fans out to the full core budget (~12–24 wide) ≈ ~1.2 GB live. That is the
+// single largest un-gated memory consumer in the backend (to_fix.mdx §3.2), and it is charged twice per
+// file (compressFile fingerprints before AND after — §3.1).
+//
+// ⚠️ READ THIS BEFORE "FIXING" THE DOWNSCALE BELOW ⚠️ (to_fix.mdx §3.4)
+// compression.mdx states the invariant "we never downscale". That invariant governs the COMPRESSED OUTPUT
+// FILE — a user's file must never lose resolution, and nothing here writes a user file. The downscale in
+// `decodeForHash()` is INTERNAL to the fingerprint's own decode: it produces a throwaway pixel buffer that
+// is hashed and freed, touches no output, and is invisible to the user. THESE DO NOT CONFLICT. A future
+// reader will mistake this for a violation of that invariant and "fix" it back into the memory bomb
+// described above — do not. See to_fix.mdx §3.4 and perceptual_fingerprint.mdx.
+//
+// WHY IT IS ALSO CORRECT, not just cheap: blockhash reduces the image to a 16×16 grid of block medians
+// (BLOCKHASH_BITS) — i.e. it normalizes to ~256 samples internally. Every pixel beyond that grid's
+// resolution is averaged away by the algorithm itself, so decoding 24 MP to hash 256 blocks is pure waste.
+// Pre-shrinking to 512px is the SAME averaging done earlier and ~96× cheaper. This is exactly why the
+// fingerprint survives a resize at all (perceptual_fingerprint.mdx §3): resize-invariance is the property
+// the algorithm is built on, and it is what makes this optimization hash-stable.
+const HASH_DECODE_MAX_EDGE = 512;
+
+// Pixel-count ceiling (to_fix.mdx §3.3.3). `resize()` lets sharp/libvips shrink-on-load for JPEG/WebP, so
+// those never materialize full-res — but a PNG/TIFF is decoded whole by libvips before the resize, so the
+// resize alone does NOT bound them. A 100 MP TIFF must never decode: 100e6 × 4 = ~400 MB in one buffer.
+// Above this ceiling we refuse and return no fingerprint (the caller logs and continues — a missing
+// fingerprint is a lost signal, an OOM is a lost batch). 64 MP (8000×8000) sits far above any real photo.
+const MAX_DECODE_PIXELS = 64_000_000;
+
 // ── image fingerprint (§3) ──────────────────────────────────────────────────────
 /**
- * Compute the 256-bit perceptual fingerprint of an image buffer. Decodes with `sharp` (any format sharp
- * reads), then blockhash-core at bits:16. Returns { algo:"blockhash", value:<64-hex>, quality:0..100 }.
+ * Compute the 256-bit perceptual fingerprint of an image. Accepts a PATH (preferred — sharp reads it
+ * incrementally and never materializes the file in the heap) or a Buffer (kept for callers that already
+ * hold bytes, e.g. the tests). Decodes with `sharp` (any format sharp reads) at a bounded size, then
+ * blockhash-core at bits:16. Returns { algo:"blockhash", value:<64-hex>, quality:0..100 }.
  * Pure local computation — no network.
+ *
+ * Memory: bounded at ~1 MB of pixels regardless of the source's resolution (to_fix.mdx §3.3.1–3.3.3),
+ * down from an uncapped ~105 MB. Throws for an image beyond MAX_DECODE_PIXELS rather than decode it.
  */
-export async function fingerprintImage(buf: Buffer): Promise<PerceptualFingerprint> {
+export async function fingerprintImage(src: Buffer | string): Promise<PerceptualFingerprint> {
+  // Scoped so the raw pixel buffer is unreachable the moment we have the two numbers we want (§3.3.6).
+  // `luminanceQuality` reads the SAME downscaled buffer (~1 MB), so nothing large outlives this call —
+  // the old code kept a ~96 MB `data` alive across both the hash and the quality pass, rooting it twice.
+  const { value, quality } = await decodeForHash(src);
+  return PerceptualFingerprintSchema.parse({ algo: "blockhash", value, quality });
+}
+
+/** Decode → hash → quality, all inside one scope so the pixel buffer dies here and never escapes. */
+async function decodeForHash(src: Buffer | string): Promise<{ value: string; quality: number }> {
+  // A header-only read (no pixels decoded) — this is what makes the ceiling cheap to enforce.
+  const meta = await sharp(src, { failOn: "none", limitInputPixels: MAX_DECODE_PIXELS }).metadata();
+  const pixels = (meta.width ?? 0) * (meta.height ?? 0);
+  if (pixels > MAX_DECODE_PIXELS) {
+    throw new Error(
+      `image is ${(pixels / 1e6).toFixed(0)}MP — beyond the ${(MAX_DECODE_PIXELS / 1e6).toFixed(0)}MP ` +
+        `fingerprint decode ceiling; skipping its perceptual fingerprint rather than decoding it`,
+    );
+  }
+
   // Decode to raw RGBA (4 channels) — blockhash-core indexes pixels as `(y*w + x) * 4` and treats a 0
   // alpha as white, so it REQUIRES an alpha channel. `failOn:"none"` keeps a slightly-corrupt image usable.
-  const { data, info } = await sharp(buf, { failOn: "none" })
+  // `withoutEnlargement` means an image already under 512px is decoded EXACTLY as before — so every small
+  // image's stored fingerprint is bit-identical across this change; only oversize decodes are bounded.
+  // `fit:"inside"` preserves the aspect ratio, which blockhash's block geometry depends on.
+  const { data, info } = await sharp(src, { failOn: "none", limitInputPixels: MAX_DECODE_PIXELS })
+    .resize(HASH_DECODE_MAX_EDGE, HASH_DECODE_MAX_EDGE, { fit: "inside", withoutEnlargement: true })
     .ensureAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true });
 
   const value = bmvbhash({ width: info.width, height: info.height, data }, BLOCKHASH_BITS);
   const quality = luminanceQuality(data, info.width, info.height);
-
-  return PerceptualFingerprintSchema.parse({ algo: "blockhash", value, quality });
+  return { value, quality };
 }
 
 // A 0..100 "is this frame worth trusting" proxy: the standard deviation of luminance across a sub-sample of
@@ -118,9 +176,9 @@ export async function fingerprintVideo(pathToVideo: string): Promise<PerceptualF
       "-y",
       outPattern,
     ];
-    const r = spawnSync("ffmpeg", args, { encoding: "utf8", timeout: 5 * 60 * 1000, maxBuffer: 16 * 1024 * 1024 });
-    if (r.status !== 0) {
-      throw new Error(`ffmpeg frame sampling failed (code ${r.status}): ${(r.stderr ?? "").slice(-300)}`);
+    const r = await runAsync("ffmpeg", args, 5 * 60 * 1000);
+    if (r.code !== 0) {
+      throw new Error(`ffmpeg frame sampling failed (code ${r.code}): ${(r.err || "").slice(-300)}`);
     }
 
     const frameFiles = fs
@@ -133,9 +191,13 @@ export async function fingerprintVideo(pathToVideo: string): Promise<PerceptualF
     }
 
     // Hash each sampled frame, then pick the highest-quality one as the representative fingerprint.
+    // Each frame is handed to fingerprintImage BY PATH (to_fix.mdx §3.3.1–3.3.2): the old code read the
+    // whole full-res PNG into a Buffer and then decoded it at full resolution — up to VIDEO_MAX_FRAMES (16)
+    // times per video, each a fresh ~96 MB raw RGBA for a 4K frame. By path + the bounded decode above,
+    // each frame now costs ~1 MB and the source PNG never enters the heap at all.
     let best: PerceptualFingerprint | null = null;
     for (const frame of frameFiles) {
-      const fp = await fingerprintImage(fs.readFileSync(frame));
+      const fp = await fingerprintImage(frame);
       if (best === null || (fp.quality ?? 0) > (best.quality ?? 0)) best = fp;
     }
     // best is non-null here (frameFiles is non-empty).
@@ -152,13 +214,79 @@ export async function fingerprintVideo(pathToVideo: string): Promise<PerceptualF
 }
 
 // `which ffmpeg` — the exact detection the compress/transcode modules use; ffmpeg is invoked by name on
-// PATH (no hardcoded path). Local process only.
+// PATH (no hardcoded path). Local process only. This one STAYS synchronous, deliberately: it is a
+// near-instant detection probe (a few ms), the same precedent fit-media.ts `which()` sets. Only the HEAVY
+// call — the ffmpeg frame sampling below — must be async (to_fix.mdx §3.3.4).
 function ffmpegOnPath(): boolean {
   try {
     return spawnSync("which", ["ffmpeg"], { encoding: "utf8" }).status === 0;
   } catch {
     return false;
   }
+}
+
+// The heavy process runner — ASYNC (child_process.spawn). This REPLACES a `spawnSync("ffmpeg", …)` with a
+// 5-MINUTE timeout, which was a T3 charter violation on a queue path (to_fix.mdx §3.2/§3.3.4,
+// performance.mdx P-27, job_queue.mdx §3): it could freeze the Node event loop for the full five minutes
+// while sampling frames from a large video — the web app unresponsive, GET /api/progress unanswered, the
+// Processing page unable to load. NEVER reintroduce spawnSync on this path (acceptance criterion G-6:
+// `grep -rn "spawnSync" perceptual.service.ts` must find only the `which` probe above).
+//
+// This mirrors the runner fit-media.ts already proved (memory.mdx P-30): stdout capture is OPT-IN and
+// bounded at STDOUT_CAP_BYTES, accumulated into a chunk ARRAY joined once at settle (never
+// `out = (out + chunk).slice(-cap)`, which transiently allocates ~2× the accumulation on EVERY chunk —
+// quadratic for a chatty ffmpeg); stderr is tail-sliced at 4096; the timeout hard-kills. No caller here
+// reads stdout — the frames are written to files, not piped — so capture stays off and the child is handed
+// /dev/null, allocating nothing and leaving no pipe that could fill and stall it.
+const STDOUT_CAP_BYTES = 1024 * 1024;
+
+function runAsync(
+  bin: string,
+  args: string[],
+  timeoutMs = 5 * 60 * 1000,
+  opts: { captureStdout?: boolean } = {},
+): Promise<{ code: number | null; err: string; out: string }> {
+  return new Promise((resolve) => {
+    const captureStdout = opts.captureStdout === true;
+    const chunks: string[] = [];
+    let captured = 0;
+    let err = "";
+    let settled = false;
+    let child;
+    try {
+      child = spawn(bin, args, { stdio: ["ignore", captureStdout ? "pipe" : "ignore", "pipe"] });
+    } catch (e) {
+      resolve({ code: null, err: (e as Error).message, out: "" });
+      return;
+    }
+    // Joined once, at settle — never in the data handler (that concat is the quadratic part of P-30).
+    const finishOut = (): string => (captureStdout ? chunks.join("") : "");
+    const timer = setTimeout(() => {
+      if (!settled) child!.kill("SIGKILL");
+    }, timeoutMs);
+    // Null when capture is off (stdio "ignore") — the optional chain is what makes that a no-op.
+    child.stdout?.on("data", (d) => {
+      if (captured >= STDOUT_CAP_BYTES) return; // past the cap we drop, we do not grow
+      const s = d.toString();
+      chunks.push(s);
+      captured += s.length;
+    });
+    child.stderr?.on("data", (d) => {
+      err = (err + d.toString()).slice(-4096); // keep only the tail — a long ffmpeg log can be huge
+    });
+    child.on("error", (e) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ code: null, err: e.message, out: finishOut() });
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ code, err, out: finishOut() });
+    });
+  });
 }
 
 // ── matching (§4) ────────────────────────────────────────────────────────────────

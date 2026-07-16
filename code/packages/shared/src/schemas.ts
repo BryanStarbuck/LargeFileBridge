@@ -69,9 +69,16 @@ export const AppConfigSchema = z.object({
   // (compression, fingerprinting, batch transcode). Default 0.9 = "use up to ~90% of cores". Read LIVE
   // by shared/concurrency.ts coreBudget(), so a change takes effect on the next bulk run with no restart.
   // The responsive budget (cores − 2) for pin/scan is a fixed safety floor and is NOT configured here.
+  // `max_memory_fraction` ∈ (0,1] is concurrency's SECOND budget (memory.mdx §2.1) — the fraction of the V8
+  // heap ceiling that in-flight job payloads may reserve. Default 0.5: half the heap for payloads leaves half
+  // for the app, the fs index, the queue and GC headroom. This is the knob that would have prevented the
+  // 2026-07-15 OOM — 24 concurrent describes each pinning a multi-MB base64 upload reached 4.1GB and V8
+  // aborted. Read LIVE by shared/concurrency.ts memoryBudget() at admission, so a change lands on the next
+  // task with no restart.
   performance: z
     .object({
       max_core_fraction: z.number().min(0.01).max(1).default(0.9),
+      max_memory_fraction: z.number().min(0.05).max(1).default(0.5),
     })
     .prefault({}),
   // Transcription engine + parallelism (transcribe_engine.mdx §5.4/§6). `engine`: auto (Apple SpeechAnalyzer

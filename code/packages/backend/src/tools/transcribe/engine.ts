@@ -7,6 +7,7 @@
 import os from "node:os";
 import type { TranscribeEngineId } from "@lfb/shared";
 import { log } from "../../shared/logging.js";
+import { txn, type TxnFields } from "../../shared/transactions.js";
 import { Transcriber, type TranscribeEngineResult, type ProgressSink } from "./Transcribe.js";
 import { Qwen3AsrTranscriber } from "./qwen-asr.js";
 import { SpeechAnalyzerTranscriber } from "./speech-analyzer.js";
@@ -72,7 +73,14 @@ function runOne(id: TranscribeEngineId, inputFile: string, outputPath: string, o
 export async function transcribeWithEngine(
   inputFile: string,
   outputPath: string,
-  opts: { engine: EnginePreference; consent?: string | null; allowFallback?: boolean; onProgress?: ProgressSink },
+  opts: {
+    engine: EnginePreference;
+    consent?: string | null;
+    allowFallback?: boolean;
+    onProgress?: ProgressSink;
+    /** The owning transcribe txn, so this engine run reads as its child in the ledger (§4). */
+    parent?: string;
+  },
 ): Promise<TranscribeEngineRunResult> {
   const picked = pickEngine(opts.engine, opts.consent);
   const allowFallback = opts.allowFallback !== false;
@@ -82,31 +90,56 @@ export async function transcribeWithEngine(
   const startIdx = Math.max(0, ENGINE_PREFERENCE.indexOf(picked));
   const chain = allowFallback ? ENGINE_PREFERENCE.slice(startIdx) : [picked];
 
-  let lastReason: string | null = null;
-  for (let i = 0; i < chain.length; i++) {
-    const id = chain[i]!;
-    if (i > 0) log.warn("transcribe", `${ENGINE_PREFERENCE[startIdx + i - 1]} failed (${lastReason ?? ""}) — falling back to ${id} for ${inputFile}`);
-    try {
-      const r = await runOne(id, inputFile, outputPath, opts.onProgress);
-      // A clean transcript (or a genuine no-audio) is authoritative — stop here.
-      if (r.status === "transcribed" || r.status === "no_audio") return { ...r, engineUsed: id };
-      // tool_missing / failed → try the next engine when allowed; otherwise this IS the final outcome.
-      lastReason = r.reason ?? r.status;
-      if (i === chain.length - 1) {
-        if (!allowFallback) log.error("transcribe", `${id} ${r.status} for ${inputFile} (${r.reason ?? "no reason given"}) — fallback disabled (engine pinned to ${picked})`);
-        return { ...r, engineUsed: id };
+  // THE ENGINE CHOICE AND THE FALLBACK ARE THEMSELVES LEDGER EVENTS (transactions_log.mdx §5.5). The
+  // fallback below is deliberately transparent — a file is never lost to a dead engine — but transparency
+  // to the CALLER is exactly what makes it invisible to the OPERATOR: `engineUsed` is returned and then
+  // dropped, so a batch that silently degraded from the heavyweight qwen to the whisper fallback for 900 of
+  // 1,000 files produced 900 second-rate transcripts and no evidence. That is a QUALITY incident, not a
+  // debugging nicety. So the ledger records `picked` (what we chose) at BEGIN and `engine` (what actually
+  // produced the text) plus `reason=fallback` at END — and the two disagreeing is the whole signal.
+  return txn(
+    "transcribe_engine",
+    { parent: opts.parent, file: inputFile, pref: opts.engine, picked, chain: chain.join(">"), allowFallback },
+    async (_t, end): Promise<TranscribeEngineRunResult> => {
+      /** Stamp the END with the engine that actually ran, and say so when it was not the one we picked. */
+      const endWith = (id: TranscribeEngineId, fields: TxnFields = {}): void => {
+        end({ engine: id, ...(id === picked ? {} : { reason: "fallback" }), ...fields });
+      };
+      let lastReason: string | null = null;
+      for (let i = 0; i < chain.length; i++) {
+        const id = chain[i]!;
+        if (i > 0) log.warn("transcribe", `${ENGINE_PREFERENCE[startIdx + i - 1]} failed (${lastReason ?? ""}) — falling back to ${id} for ${inputFile}`);
+        try {
+          const r = await runOne(id, inputFile, outputPath, opts.onProgress);
+          // A clean transcript (or a genuine no-audio) is authoritative — stop here.
+          if (r.status === "transcribed" || r.status === "no_audio") {
+            endWith(id, { words: r.words ?? 0, ...(r.status === "no_audio" ? { outcome: "skipped", reason: "no_audio" } : {}) });
+            return { ...r, engineUsed: id };
+          }
+          // tool_missing / failed → try the next engine when allowed; otherwise this IS the final outcome.
+          lastReason = r.reason ?? r.status;
+          if (i === chain.length - 1) {
+            if (!allowFallback) log.error("transcribe", `${id} ${r.status} for ${inputFile} (${r.reason ?? "no reason given"}) — fallback disabled (engine pinned to ${picked})`);
+            // The chain is spent. A reported (non-thrown) failure must say outcome=failed explicitly —
+            // txn() would otherwise default this END to ok and the ledger would lie.
+            endWith(id, { outcome: "failed", reason: r.status });
+            return { ...r, engineUsed: id };
+          }
+        } catch (e) {
+          lastReason = (e as Error).message;
+          if (i === chain.length - 1) {
+            log.error("transcribe", `${id} threw for ${inputFile} (${lastReason}) — no engines left`);
+            // txn()'s catch writes the failed END (with the throw's message as `reason`); the throw is
+            // rethrown unchanged so the caller's behavior is exactly what it was.
+            throw e;
+          }
+        }
       }
-    } catch (e) {
-      lastReason = (e as Error).message;
-      if (i === chain.length - 1) {
-        log.error("transcribe", `${id} threw for ${inputFile} (${lastReason}) — no engines left`);
-        throw e;
-      }
-    }
-  }
 
-  // Unreachable (chain is always non-empty), but keeps the type checker honest.
-  throw new Error(`all transcription engines failed for ${inputFile}: ${lastReason ?? "unknown"}`);
+      // Unreachable (chain is always non-empty), but keeps the type checker honest.
+      throw new Error(`all transcription engines failed for ${inputFile}: ${lastReason ?? "unknown"}`);
+    },
+  );
 }
 
 /** Whether a name is a transcribable audio/video by extension (either engine handles it). */

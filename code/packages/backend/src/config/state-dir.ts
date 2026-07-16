@@ -27,6 +27,17 @@ export function resolveTodoBatchesDir(): string {
   return dir;
 }
 
+// The BACKGROUND QUEUE journal directory (crash_recovery.mdx §3.1): ~/T/_large_files_bridge/queue/ — the
+// machine-local, append-only backlog that lets a queued batch survive the process that hosts it. A backlog is
+// a fact about THIS process on THIS machine: never git-tracked, never IPFS-pinned, never travels. It lives
+// under the state root, not under `.lfbridge/`, because the artifact placement rules govern USER artifacts
+// and a queue journal is not one. Created on demand.
+export function resolveQueueDir(): string {
+  const dir = path.join(resolveStateDir(), "queue");
+  ensureDir(dir);
+  return dir;
+}
+
 // The machine-local per-repo tracking directory (artifact_placement_policy.mdx §3):
 // ~/T/_large_files_bridge/repos/<repoKey>/ — the PRE-THRESHOLD home for a repo's noisy tracking state
 // (repo_storage.yaml, sidecars, history) so a repo that has never been transcribed/described NEVER gets a
