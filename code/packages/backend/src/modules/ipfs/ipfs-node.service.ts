@@ -349,14 +349,50 @@ async function ensureInit(): Promise<boolean> {
   return false;
 }
 
-/** Read only THIS run's daemon output — the bytes appended to the log after `fromOffset`. */
+// The most daemon output we will ever pull into memory for one diagnosis (2_2_do §I item I6). A failed
+// start prints a handful of lines, so this never bites in practice — it is the backstop that keeps a
+// chatty/looping daemon from handing us the whole (rotation-capped, 5 MiB) log to diagnose.
+const DAEMON_TAIL_MAX_BYTES = 512 * 1024;
+
+/**
+ * Read only THIS run's daemon output — the bytes appended to the log after `fromOffset`.
+ *
+ * POSITIONAL on purpose (2_2_do §I item I6): this used to `readFileSync` the ENTIRE log (up to the
+ * 5 MiB rotation cap) and only then slice off the tail — buffering megabytes to show a few lines, the
+ * same "read more than needed" disease as to_fix. We now stat the size and read just the bytes we want
+ * through a file handle, so the read is bounded by what this run actually printed (and by
+ * DAEMON_TAIL_MAX_BYTES), not by how big the log has grown.
+ *
+ * The old slice was also subtly wrong: `fromOffset` is a BYTE offset (statSync().size) but it was
+ * applied to a decoded UTF-8 STRING, so any non-ASCII earlier in the log shifted the cut. Reading at a
+ * byte position removes that mismatch — do not "simplify" this back to readFileSync + slice.
+ */
 function readDaemonLogTail(outPath: string, fromOffset: number): string[] {
+  let fd: number | null = null;
   try {
-    const buf = fs.readFileSync(outPath, "utf8");
-    const slice = buf.length > fromOffset ? buf.slice(fromOffset) : buf;
-    return slice.split("\n").map((l) => l.replace(/\s+$/, "")).filter(Boolean);
+    const size = fs.statSync(outPath).size;
+    // Start at this run's first byte; if it printed more than the cap, keep the END (the fatal reason
+    // is in the last lines — diagnoseStartFailure and the progress log both read from the tail).
+    const start = Math.max(fromOffset > size ? 0 : fromOffset, size - DAEMON_TAIL_MAX_BYTES);
+    const length = size - start;
+    if (length <= 0) return [];
+    const buf = Buffer.allocUnsafe(length);
+    fd = fs.openSync(outPath, "r");
+    const read = fs.readSync(fd, buf, 0, length, start);
+    const lines = buf.subarray(0, read).toString("utf8").split("\n");
+    // A capped start can land mid-line; drop that partial first line rather than diagnose on a fragment.
+    if (start > fromOffset && lines.length > 1) lines.shift();
+    return lines.map((l) => l.replace(/\s+$/, "")).filter(Boolean);
   } catch {
+    // Defensive by contract: a missing/unreadable log must never throw into a start attempt — the
+    // caller degrades to an "unknown cause" diagnosis rather than losing the real failure path.
     return [];
+  } finally {
+    try {
+      if (fd !== null) fs.closeSync(fd);
+    } catch {
+      /* ignore */
+    }
   }
 }
 

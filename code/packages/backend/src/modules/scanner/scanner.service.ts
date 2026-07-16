@@ -127,7 +127,7 @@ export async function scanAll(
     const threshold = resolveThreshold(rc.big_file_override, cfg.big_file.threshold_bytes);
     const ig = rc.large_files.follow_gitignore ? buildRepoIgnore(repoPath) : null;
     // ig === null means "no real .gitignore to follow" → size-gate only, no media-bypass.
-    const candidates = await walkUnit(repoPath, threshold, {
+    const { candidates } = await walkUnit(repoPath, threshold, {
       ignore: ig,
       includeGlobs: rc.large_files.include_globs,
       excludeGlobs: rc.large_files.exclude_globs,
@@ -248,16 +248,31 @@ async function scanComputerUnit(
 ): Promise<number> {
   const cc = readYaml(unitConfigPath(computerUnitDir()), ComputerUnitConfigSchema);
   const scanRoots = (cc.roots.length ? cc.roots.map(expandHome) : roots).filter(safeIsDir);
+  // The computer unit concatenates one walk per root, so the cap has to apply to the TOTAL, not per
+  // root — otherwise N roots would hold N × the cap (2_2_do §I item I4). Each root gets whatever the
+  // budget has left; a root that exhausts it still counts (and warns about) what it dropped.
   const all: Candidate[] = [];
+  let dropped = 0;
   for (const root of scanRoots) {
-    all.push(
-      ...(await walkUnit(root, globalThreshold, {
+    const res = await walkUnit(
+      root,
+      globalThreshold,
+      {
         ignore: null,
         includeGlobs: [],
         excludeGlobs: cc.exclude_globs,
         maskPaths,
         rootLabelAbsolute: true,
-      })),
+      },
+      UNIT_CANDIDATE_CAP - all.length,
+    );
+    for (const c of res.candidates) all.push(c);
+    dropped += res.dropped;
+  }
+  if (dropped > 0) {
+    log.warn(
+      "scan",
+      `computer unit hit the ${UNIT_CANDIDATE_CAP}-candidate cap across ${scanRoots.length} root(s) — ${dropped} candidate(s) dropped`,
     );
   }
   const dir = computerUnitDir();
@@ -278,6 +293,19 @@ interface WalkOpts {
   checkedInThreshold?: number;
 }
 
+// The most candidate rows one unit walk will hold in memory (2_2_do §I item I4). Matches the house
+// number used by the other two walks — fsindex.service FLAT_FILE_CAP and tracking.service MAX_FILES,
+// both 5000 — so all three bound the same way. Without it `out` was the one unbounded accumulator here,
+// and scanComputerUnit then concatenated one per root, multiplying it.
+//
+// NO SILENT TRUNCATION (charter): on hitting the cap we keep WALKING and keep COUNTING — we just stop
+// PUSHING — so the warning we log carries the exact number of candidates dropped, not a vague "some".
+// That also keeps this a memory-only fix: the walk covers the same tree it always did, so nothing about
+// which files are discovered changes below the cap. Reported via log.warn to the durable fault trail,
+// exactly how tracking.service reports its MAX_FILES cap. (UnitStatus has no truncation field and
+// adding one would change the on-disk format.)
+const UNIT_CANDIDATE_CAP = 5000;
+
 // Yield control back to the event loop so a long, CPU-bound synchronous walk does not FREEZE the whole
 // web app. The walk is fs.readdirSync/statSync in a tight loop; without cooperative yields it starves
 // the HTTP server for the whole scan — scan-status polls, page loads, everything hangs, which reads as
@@ -286,9 +314,23 @@ interface WalkOpts {
 const YIELD_EVERY = 400;
 const yieldToLoop = () => new Promise<void>((r) => setImmediate(r));
 
-// Recursive stat-only walk. Returns files >= threshold that pass the ignore/mask rules.
-async function walkUnit(root: string, threshold: number, opts: WalkOpts): Promise<Candidate[]> {
+/** What one unit walk found: the (capped) candidate rows, plus how many the cap dropped. */
+interface WalkResult {
+  candidates: Candidate[];
+  dropped: number;
+}
+
+// Recursive stat-only walk. Returns files >= threshold that pass the ignore/mask rules, capped at
+// `cap` rows (default UNIT_CANDIDATE_CAP) with an exact count of what the cap dropped — see the
+// constant for why we keep walking past it (2_2_do §I item I4).
+async function walkUnit(
+  root: string,
+  threshold: number,
+  opts: WalkOpts,
+  cap: number = UNIT_CANDIDATE_CAP,
+): Promise<WalkResult> {
   const out: Candidate[] = [];
+  let dropped = 0;
   const stack: string[] = [root];
   const excl = ignore().add(opts.excludeGlobs);
   const incl = opts.includeGlobs.length ? ignore().add(opts.includeGlobs) : null;
@@ -355,6 +397,11 @@ async function walkUnit(root: string, threshold: number, opts: WalkOpts): Promis
         forced || gitIgnoredMedia || (bigEnough && (followsGitignore ? gitIgnored : true));
       const isCandidate = isPayload || checkedInBig;
       if (!isCandidate) continue;
+      // At the cap: stop accumulating, but keep counting so the warning below is exact (§I item I4).
+      if (out.length >= cap) {
+        dropped++;
+        continue;
+      }
       out.push({
         path: opts.rootLabelAbsolute ? abs : rel,
         size: st.size,
@@ -364,7 +411,13 @@ async function walkUnit(root: string, threshold: number, opts: WalkOpts): Promis
       void relForIgnore;
     }
   }
-  return out;
+  if (dropped > 0) {
+    log.warn(
+      "scan",
+      `walk of ${root} hit the ${cap}-candidate cap — ${dropped} candidate(s) dropped from this unit's scan`,
+    );
+  }
+  return { candidates: out, dropped };
 }
 
 function writeStatus(

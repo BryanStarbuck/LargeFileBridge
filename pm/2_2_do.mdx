@@ -277,19 +277,34 @@ From the same audit. Recorded to stop the next audit re-flagging them.
 
 ## §I — Backlog (found, not prioritized)
 
-Real but below the line. Listed so they are not lost.
+Real but below the line. Listed so they are not lost. **Mostly cleared 2026-07-16** — I1/I2/I4/I6/I7
+landed, I5 was a false positive. I3/I8/I9 remain, all three in files a concurrent session held.
 
-| # | What | File → symbol | Risk |
-|---|---|---|---|
-| I1 | `readStorageIndex` materializes YAML text + parsed doc + rows (~12 MB/call), **no memoization**, many concurrent callers | `…/modules/storage/tracking.service.ts` — `readStorageIndex()` | Medium |
-| I2 | Index build holds `collected` (`fs.Stats`/file) + `rows` + `files` — 3 generations co-resident; `walk()` is **recursive sync, no yield** | `…/modules/storage/tracking.service.ts` — `indexStorageFiles()` | Medium |
-| I3 | `pending` is the **one uncapped** queue array (~60 MB for a 200k-file tree, doubled by `inflight`) | `…/modules/jobqueue/jobqueue.service.ts` — `enqueue()` | Medium |
-| I4 | `walkUnit`'s `out` is uncapped (unlike `FLAT_FILE_CAP` / `MAX_FILES`); `scanComputerUnit` concatenates every root | `…/modules/scanner/scanner.service.ts` — `walkUnit()` / `scanComputerUnit()` | Low-Med |
-| I5 | `listFilesFlat` re-buffers what `walkFilesFlatStreaming` streams (the NDJSON route does it right) | `…/modules/fs/fs.service.ts` — `listFilesFlat()` | Low-Med |
-| I6 | Reads the **entire** daemon log before slicing — should be positional | `…/modules/ipfs/ipfs-node.service.ts` — `readDaemonLogTail()` | Low |
-| I7 | Reads the whole file then slices; guard is at the caller and skipped when `sizeBytes` is `null` | `…/modules/fs/badges.ts` — `fileHasIpfsSignal()` / `fileIsIpfsArtifact()` | Low |
-| I8 | Reads the whole transcript, then `charCodeAt` over every char (CPU on the loop) | `…/tools/transcribe/Transcribe.ts` — `Transcriber.looksLikeEnglish()` | Low |
-| I9 | `commandExists` is a sync `which` fork **per file** | `…/tools/transcribe/audio-prep.ts` — `commandExists()` | Low |
+| # | What | File → symbol | Risk | St |
+|---|---|---|---|---|
+| I1 | `readStorageIndex` materialized YAML text + parsed doc + rows (~12 MB/call), **no memoization**, many callers | `…/modules/storage/tracking.service.ts` — `readStorageIndex()` — stat-validated cache (**inode + size + mtimeMs**) + 5 s TTL + explicit `invalidateStorageIndexCache()` at both writers; bounded (16, insertion-order) so the cache can't become its own leak; stores/returns **copies** so a caller mutating rows can't corrupt the next | Medium | `[x]` |
+| I2 | Index build held `collected` (`fs.Stats`/file) + `rows` + `files` — 3 generations co-resident; `walk()` was **recursive sync, no yield** | `…/modules/storage/tracking.service.ts` — `indexStorageFiles()` — `walk()` now async (`fs.promises`) + yields every 200 entries; `fs.Stats` no longer retained (primitives only); phase 2 fingerprints in slices of 512, releasing consumed entries — generations never co-resident, emitted YAML order identical | Medium | `[x]` |
+| I3 | `pending` is the **one uncapped** queue array (~60 MB for a 200k-file tree, doubled by `inflight`) | `…/modules/jobqueue/jobqueue.service.ts` — `enqueue()` | Medium | `[ ]` |
+| I4 | `walkUnit`'s `out` was uncapped (unlike `FLAT_FILE_CAP` / `MAX_FILES`); `scanComputerUnit` concatenated every root | `…/modules/scanner/scanner.service.ts` — `walkUnit()` / `scanComputerUnit()` — `UNIT_CANDIDATE_CAP = 5000` applied to the **total across roots** (the concat was the real multiplier). **No silent cap:** at the ceiling it stops *pushing* but keeps walking and counting, so the `log.warn` carries an **exact** dropped count — better than `MAX_FILES`, which stops the walk and can only say "some files" | Low-Med | `[x]` |
+| I5 | ~~`listFilesFlat` re-buffers what `walkFilesFlatStreaming` streams~~ — **FALSE POSITIVE, no change** | `…/modules/fs/fs.service.ts` — `listFilesFlat()` | — | `[x]` |
+| I6 | Read the **entire** daemon log before slicing — now positional | `…/modules/ipfs/ipfs-node.service.ts` — `readDaemonLogTail()` — positional `readSync` from a handle, `DAEMON_TAIL_MAX_BYTES = 512 KiB` backstop clamped to keep the **end** (the fatal reason is in the last lines); a capped start can land mid-line, so the partial first line is dropped | Low | `[x]` |
+| I7 | Read the whole file then sliced; the guard sat at the **caller** and was skipped when `sizeBytes` was `null` | `…/modules/fs/badges.ts` — `fileHasIpfsSignal()` — guard moved **inside** (cannot be bypassed); bounded positional read sized `min(fstat.size, IPFS_READ_CAP)` rather than always allocating the cap. `fileIsIpfsArtifact()` delegates, no read | Low | `[x]` |
+| I8 | Reads the whole transcript, then `charCodeAt` over every char (CPU on the loop) | `…/tools/transcribe/Transcribe.ts` — `Transcriber.looksLikeEnglish()` | Low | `[ ]` |
+| I9 | `commandExists` is a sync `which` fork **per file** — the same defect **B13** fixed by memoizing; apply that fix here | `…/tools/transcribe/audio-prep.ts` — `commandExists()` | Low | `[ ]` |
+| I10 | **NEW (found 2026-07-16 while fixing I1/I2).** `analysisOutputs()` does a sync `statSync` probe **per file** inside the index fan-out — real sync-IO on the index path. Wider ripple than I1/I2 (exported, called from `repo-storage.service.ts`), so scoped out | Low-Med | `[ ]` |
+
+**I5 — why it is a false positive, so the next audit doesn't re-flag it.** The refactor it asks for already
+landed (performance.mdx P-19/P-22): `walkFilesFlatStreaming` retains nothing (it flushes each batch through
+`onBatch` and resets `batch = []`), and `listFilesFlat` copies element **references** into one array bounded by
+`FLAT_FILE_CAP` (5000 rows). There is no second materialization to remove. Its only caller is the
+`GET /api/fs/flat` JSON route, which genuinely needs an array for `res.json`. Note for a **product** decision,
+not a memory one: **no frontend code calls it any more** — `api.fsFlat` is defined but unused since Full Paths
+moved to `/fs/flat/stream` via `useStreamedFlatListing`. It is a dead-but-supported buffered entry point;
+deleting it is a separate call.
+
+**I6 — a latent bug fixed as a side effect.** `fromOffset` is a **byte** offset (`statSync().size`) but was
+being applied to a decoded UTF-8 **string** — any non-ASCII earlier in the log shifted the cut. Reading at a
+byte position removes the mismatch. Commented in place so nobody "simplifies" it back.
 
 ---
 

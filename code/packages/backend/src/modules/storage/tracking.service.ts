@@ -40,6 +40,16 @@ const TRANSCRIPTION_EXT = ".transcription";
 const AI_DESCRIPTION_EXT = ".ai_description";
 const MAX_FILES = 5000; // a safety cap so an enormous tree can't run the index unbounded (logged if hit).
 const FINGERPRINT_CHUNK = 64 * 1024;
+// Phase-1 walk responsiveness: hand the event loop back every N processed entries, exactly like the flat
+// walk in fs/fsindex (performance.mdx P-16, charter T3). A recursive SYNC walk with no yield pins the single
+// Node thread and starves every concurrent request on a large tree.
+const WALK_YIELD_EVERY = 200;
+// Phase 2 fingerprints in SLICES rather than one mapLimit over everything, so the intermediate result rows
+// are folded into `files` and released a slice at a time instead of all co-existing with `collected` (2_2_do
+// §I2 — three co-resident generations). Comfortably above any realistic core budget, so the fan-out is still
+// saturated within a slice.
+const FINGERPRINT_SLICE = 512;
+const trackingYield = (): Promise<void> => new Promise<void>((r) => setImmediate(r));
 
 /** The legacy in-repo index location — `<root>/.lfbridge/files.yaml`. Still READ as a fallback in two cases:
  *  a working repo indexed before the Local-Storage migration (SWEPT afterward — § sweepLegacyRepoIndex), and
@@ -103,21 +113,21 @@ export function analysisOutputs(root: string, rel: string, type?: StorageType): 
 /** A cheap-but-robust fingerprint: hash of size + mtime + the head and tail bytes. ASYNC (fs.promises) so
  *  that MANY files' head/tail reads OVERLAP when fingerprinting fans out under mapLimit (the disk I/O is
  *  the cost, and async reads let the event loop drive several at once — parallelization.mdx §3). */
-async function fingerprint(abs: string, st: fs.Stats): Promise<string | null> {
+async function fingerprint(abs: string, size: number, mtimeMs: number): Promise<string | null> {
   let fh: fs.promises.FileHandle | null = null;
   try {
     const h = crypto.createHash("sha256");
-    h.update(String(st.size));
-    h.update(String(Math.round(st.mtimeMs)));
+    h.update(String(size));
+    h.update(String(Math.round(mtimeMs)));
     fh = await fs.promises.open(abs, "r");
-    const headLen = Math.min(FINGERPRINT_CHUNK, st.size);
+    const headLen = Math.min(FINGERPRINT_CHUNK, size);
     const head = Buffer.alloc(headLen);
     await fh.read(head, 0, headLen, 0);
     h.update(head);
-    if (st.size > FINGERPRINT_CHUNK) {
-      const tailLen = Math.min(FINGERPRINT_CHUNK, st.size);
+    if (size > FINGERPRINT_CHUNK) {
+      const tailLen = Math.min(FINGERPRINT_CHUNK, size);
       const tail = Buffer.alloc(tailLen);
-      await fh.read(tail, 0, tailLen, Math.max(0, st.size - tailLen));
+      await fh.read(tail, 0, tailLen, Math.max(0, size - tailLen));
       h.update(tail);
     }
     return h.digest("hex").slice(0, 32);
@@ -141,13 +151,18 @@ export async function indexStorageFiles(root: string, type?: StorageType): Promi
   const threshold = getAppConfig().big_file.threshold_bytes;
 
   // Phase 1 — metadata-only walk: collect the eligible large files (bounded by MAX_FILES). No hashing yet.
-  interface Entry { rel: string; name: string; abs: string; st: fs.Stats; }
+  // ASYNC + cooperatively yielding (charter T3): the walk touches every directory under the root, so run
+  // recursive-sync it pins the event loop for the whole traversal of a large tree. Entries keep only the
+  // PRIMITIVES they need — never the `fs.Stats` object itself, which would hold one Stats per file alive for
+  // the whole of phase 2 alongside the rows (2_2_do §I2).
+  interface Entry { rel: string; name: string; abs: string; size: number; mtimeMs: number; modified: string; created: string | null; }
   const collected: Entry[] = [];
-  const walk = (dir: string): void => {
+  let sinceYield = 0;
+  const walk = async (dir: string): Promise<void> => {
     if (collected.length >= MAX_FILES) return;
     let entries: fs.Dirent[];
     try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
+      entries = await fs.promises.readdir(dir, { withFileTypes: true });
     } catch {
       return;
     }
@@ -161,41 +176,67 @@ export async function indexStorageFiles(root: string, type?: StorageType): Promi
       if (name === LFBRIDGE_DIR || name === ".git" || name === "node_modules" || HARD_SKIP.has(name)) continue;
       if (atSdlRoot && RESERVED_SDL_ROOT_NAMES.has(name)) continue;
       const abs = path.join(dir, name);
+      if (++sinceYield >= WALK_YIELD_EVERY) {
+        sinceYield = 0;
+        await trackingYield();
+      }
       if (ent.isDirectory()) {
-        walk(abs);
+        await walk(abs);
         continue;
       }
       if (!ent.isFile()) continue;
       let st: fs.Stats;
       try {
-        st = fs.statSync(abs);
+        st = await fs.promises.stat(abs);
       } catch {
         continue;
       }
       if (st.size < threshold) continue;
-      collected.push({ rel: path.relative(root, abs), name, abs, st });
+      collected.push({
+        rel: path.relative(root, abs),
+        name,
+        abs,
+        size: st.size,
+        mtimeMs: st.mtimeMs,
+        modified: st.mtime.toISOString(),
+        created: st.birthtime && st.birthtimeMs ? st.birthtime.toISOString() : null,
+      });
     }
   };
-  walk(root);
+  await walk(root);
   const capped = collected.length >= MAX_FILES;
+  const total = collected.length;
 
   // Phase 2 — fingerprint IN PARALLEL across files (bounded by the responsive budget). Each result carries
   // its rel key so the map is assembled deterministically after; per-file failure yields a null fingerprint.
-  const rows = await mapLimit(collected, responsiveBudget(), async (e) => {
-    const comp = compressInfo(e.name);
-    return [
-      e.rel,
-      {
-        size: e.st.size,
-        modified: e.st.mtime.toISOString(),
-        created: e.st.birthtime && e.st.birthtimeMs ? e.st.birthtime.toISOString() : null,
-        fingerprint: await fingerprint(e.abs, e.st),
-        compressible: comp.compressible,
-        analysis: analysisOutputs(root, e.rel),
-      },
-    ] as const;
-  });
-  const files: Record<string, unknown> = Object.fromEntries(rows);
+  // Done a SLICE at a time and folded straight into `files`: the slice's rows are the only intermediate
+  // generation alive, and each consumed slice is dropped out of `collected` as we go, so the three
+  // generations (entries / rows / files) are never all co-resident (2_2_do §I2). Insertion order — and
+  // therefore the emitted YAML — is identical to the previous single mapLimit over `collected`.
+  const files: Record<string, unknown> = {};
+  const budget = responsiveBudget();
+  for (let i = 0; i < total; i += FINGERPRINT_SLICE) {
+    const slice = collected.slice(i, i + FINGERPRINT_SLICE);
+    // Release the walk's entries for this slice — `slice` now holds the only references we still need.
+    for (let j = i; j < i + slice.length; j++) collected[j] = undefined as unknown as Entry;
+    const rows = await mapLimit(slice, budget, async (e) => {
+      const comp = compressInfo(e.name);
+      return [
+        e.rel,
+        {
+          size: e.size,
+          modified: e.modified,
+          created: e.created,
+          fingerprint: await fingerprint(e.abs, e.size, e.mtimeMs),
+          compressible: comp.compressible,
+          analysis: analysisOutputs(root, e.rel),
+        },
+      ] as const;
+    });
+    for (const [rel, row] of rows) files[rel] = row;
+    await trackingYield();
+  }
+  collected.length = 0;
 
   // Write to the KIND-correct location: a working repo indexes into Local Storage (never its own `.lfbridge/`,
   // so the walk above never has to create one); an SDL commits into `<root>/.lfbridge/`. mkdir the index file's
@@ -204,12 +245,15 @@ export async function indexStorageFiles(root: string, type?: StorageType): Promi
   const outPath = filesYamlPath(root, t);
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
   fs.writeFileSync(outPath, YAML.stringify({ files }), "utf8");
+  // We are the index's only in-process writer — drop any cached read of it immediately, so no reader can be
+  // served a pre-build view even within the stat-check's mtime resolution (see readStorageIndex's cache).
+  invalidateStorageIndexCache();
   // Now that a repo's index lives in Local Storage, remove any stale Category-B state a prior build left in the
   // working repo's `.lfbridge/` (and drop the folder if it's left empty) — the one-time on-disk migration.
   if (tracksIndexInLocalStorage(t)) sweepLegacyRepoTracking(root);
   if (capped) log.warn("storage", `index for ${root} hit the ${MAX_FILES}-file cap — some files not indexed`);
-  else log.info("storage", `indexed ${collected.length} large file(s) in ${root}`);
-  return collected.length;
+  else log.info("storage", `indexed ${total} large file(s) in ${root}`);
+  return total;
 }
 
 // Category-B files/dirs a PRIOR build may have written into a working repo's `.lfbridge/` before they were all
@@ -231,6 +275,8 @@ export function sweepLegacyRepoTracking(root: string): void {
     return;
   }
   let removed = 0;
+  // This removes a legacy `files.yaml` that readStorageIndex may have cached under its in-repo path.
+  invalidateStorageIndexCache(path.join(lfb, FILES_YAML));
   for (const f of LEGACY_CATEGORY_B_FILES) {
     try {
       fs.rmSync(path.join(lfb, f), { force: true });
@@ -281,11 +327,82 @@ function indexReadPath(root: string, type?: StorageType): string {
   return canonical;
 }
 
+// ── files.yaml read cache (2_2_do §I1) ────────────────────────────────────────────────────────────────────
+// `readStorageIndex` had NO memoization and many callers (pin, communities, decisions, repo-storage, the two
+// To-Do engines, the Storages page), each materializing the YAML TEXT + the parsed doc + rows — ~12 MB a call
+// on a large index, all garbage a moment later.
+//
+// CORRECTNESS FIRST. This index mirrors files on disk that really do change (a re-index, a compression, a new
+// transcript), and a cache that outlives a real change is a worse bug than the bytes it saves. So the cache is
+// never trusted on its own:
+//   1. Every read `stat`s the index file (one cheap syscall, orders of magnitude below a parse) and serves the
+//      cache ONLY when inode + size + mtimeMs all still match what was parsed. Any real rewrite moves at least
+//      one of them, so a changed index can't be served from cache.
+//   2. A short TTL bounds the one theoretical hole in (1) — a rewrite landing within the same mtime tick AND
+//      at a byte-identical size. Worst case staleness is TTL, not forever.
+//   3. `indexStorageFiles` — our only in-process writer — invalidates explicitly right after its write, so in
+//      the case that matters (we just rebuilt it) staleness is zero and doesn't depend on (1) or (2) at all.
+// The cache is BOUNDED (a handful of storages, oldest evicted) so it can't become its own leak.
+const INDEX_CACHE_TTL_MS = 5000;
+const INDEX_CACHE_MAX = 16;
+interface IndexCacheEntry { ino: number; size: number; mtimeMs: number; at: number; rows: StorageFileRow[]; }
+const indexCache = new Map<string, IndexCacheEntry>();
+
+/** Cached rows for this index path when the file on disk is provably the one we parsed; null otherwise. */
+function cachedRows(p: string): StorageFileRow[] | null {
+  const hit = indexCache.get(p);
+  if (!hit) return null;
+  if (Date.now() - hit.at > INDEX_CACHE_TTL_MS) {
+    indexCache.delete(p);
+    return null;
+  }
+  let st: fs.Stats;
+  try {
+    st = fs.statSync(p);
+  } catch {
+    indexCache.delete(p); // gone (or unreadable) → never serve the old view
+    return null;
+  }
+  if (st.ino !== hit.ino || st.size !== hit.size || st.mtimeMs !== hit.mtimeMs) {
+    indexCache.delete(p);
+    return null;
+  }
+  return hit.rows;
+}
+
+/** Cache the rows just parsed from `p`, stamped with that file's identity. The rows stored here are the
+ *  cache's OWN copy and are never handed out directly — readStorageIndex returns a per-call copy, so a caller
+ *  that mutates its rows (or the array) can't corrupt what the next caller sees. */
+function storeRows(p: string, rows: StorageFileRow[]): void {
+  let st: fs.Stats;
+  try {
+    st = fs.statSync(p);
+  } catch {
+    return; // can't prove what we parsed → don't cache it
+  }
+  indexCache.delete(p);
+  indexCache.set(p, { ino: st.ino, size: st.size, mtimeMs: st.mtimeMs, at: Date.now(), rows: rows.map((r) => ({ ...r })) });
+  while (indexCache.size > INDEX_CACHE_MAX) {
+    const oldest = indexCache.keys().next().value; // insertion order = eviction order
+    if (oldest === undefined) break;
+    indexCache.delete(oldest);
+  }
+}
+
+/** Drop cached index reads — all of them, or just this path's. Called by every writer/remover of a
+ *  `files.yaml` in this module. Exported so a future out-of-module writer can do the same. */
+export function invalidateStorageIndexCache(p?: string): void {
+  if (p) indexCache.delete(p);
+  else indexCache.clear();
+}
+
 /** Read the storage's `files.yaml` index into rows (empty when absent). For a working repo this reads Local
  *  Storage (with a one-migration fallback to the legacy in-repo index); for an SDL it reads its committed
  *  `.lfbridge/`. Pass the known `type` to skip a descriptor read on hot paths. */
 export function readStorageIndex(root: string, type?: StorageType): StorageFileRow[] {
   const p = indexReadPath(root, type);
+  const cached = cachedRows(p);
+  if (cached) return cached.map((r) => ({ ...r }));
   let doc: { files?: Record<string, Record<string, unknown>> };
   try {
     doc = YAML.parse(fs.readFileSync(p, "utf8")) ?? {};
@@ -299,7 +416,7 @@ export function readStorageIndex(root: string, type?: StorageType): StorageFileR
     return [];
   }
   const files = doc.files ?? {};
-  return Object.entries(files).map(([rel, f]) => ({
+  const rows: StorageFileRow[] = Object.entries(files).map(([rel, f]) => ({
     path: rel,
     sizeBytes: Number(f.size ?? 0),
     modifiedAt: (f.modified as string) ?? null,
@@ -308,6 +425,9 @@ export function readStorageIndex(root: string, type?: StorageType): StorageFileR
     compressible: (f.compressible as "video" | "image" | null) ?? null,
     analysis: Array.isArray(f.analysis) ? (f.analysis as string[]) : [],
   }));
+  storeRows(p, rows);
+  // Hand back a copy for the same reason the cache stores its own: callers own their rows (see storeRows).
+  return rows.map((r) => ({ ...r }));
 }
 
 /** File count from the index without materializing rows; null when the storage was never indexed. Reads the
@@ -315,6 +435,11 @@ export function readStorageIndex(root: string, type?: StorageType): StorageFileR
  *  {@link readStorageIndex}. Pass the known `type` to skip a descriptor read on the Storages/Repos list. */
 export function countStorageIndex(root: string, type?: StorageType): number | null {
   const p = indexReadPath(root, type);
+  // Same stat-validated cache as readStorageIndex — this parses the WHOLE YAML just to count its keys, so a
+  // hit saves exactly as much as it does there. A miss falls through to the original read/parse untouched
+  // (its null-on-anything-unreadable contract differs from readStorageIndex's empty-on-corrupt one).
+  const hit = cachedRows(p);
+  if (hit) return hit.length;
   try {
     const doc = YAML.parse(fs.readFileSync(p, "utf8")) ?? {};
     return Object.keys(doc.files ?? {}).length;

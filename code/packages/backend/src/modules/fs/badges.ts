@@ -255,6 +255,8 @@ function fileIsIpfsArtifact(fileAbs: string, name: string, sizeBytes: number | n
   if (IPFS_ARTIFACT_NAMES.has(lower)) return true; // ipfs.sh (also IPFS.sh) / ipfs.txt / get_videos.sh
   const ext = path.extname(lower);
   // A public manifest.yaml or an IPFS-list markdown → read a capped slice and look for signals.
+  // The size pre-check stays here as a cheap skip when the caller already has the stat, but it is NOT
+  // the guard — fileHasIpfsSignal enforces the cap itself (see there, 2_2_do §I item I7).
   if (lower === "manifest.yaml" || MARKDOWN_EXT.has(ext)) {
     if (sizeBytes !== null && sizeBytes > IPFS_READ_CAP) return false;
     return fileHasIpfsSignal(fileAbs);
@@ -262,14 +264,40 @@ function fileIsIpfsArtifact(fileAbs: string, name: string, sizeBytes: number | n
   return false;
 }
 
+/**
+ * Peek at most IPFS_READ_CAP bytes for an IPFS-list signal.
+ *
+ * The cap is enforced INSIDE this function on purpose (2_2_do §I item I7). It used to live only at the
+ * caller, which skips it whenever `sizeBytes` is null — and null is exactly what the column browser
+ * carries when statSync failed (fs.service keeps the nulls) — so a huge file could still be read whole.
+ * This also used to `readFileSync` the entire file and only THEN slice to the cap, buffering everything
+ * we were about to throw away. Now it is a bounded, positional read: never more than the cap, whatever
+ * the caller knows or doesn't know about the size. Do not move this guard back out to the caller.
+ */
 function fileHasIpfsSignal(fileAbs: string): boolean {
+  let fd: number | null = null;
   try {
-    const text = fs.readFileSync(fileAbs, "utf8").slice(0, IPFS_READ_CAP);
-    return IPFS_TEXT_SIGNAL.test(text);
+    fd = fs.openSync(fileAbs, "r");
+    // Size the buffer to min(file, cap) off the fd's own stat: most peeked files are a few KB, and a
+    // listing peeks many of them — always allocating the full cap would churn 512 KB per row.
+    const size = fs.fstatSync(fd).size;
+    const want = Math.min(size, IPFS_READ_CAP);
+    if (want <= 0) return false; // empty file → nothing to match
+    const buf = Buffer.allocUnsafe(want);
+    const read = fs.readSync(fd, buf, 0, want, 0);
+    // A multi-byte character can straddle the cap; the trailing partial decodes to U+FFFD, which no
+    // signal pattern matches — harmless, and the alternative (a decoder) buys nothing here.
+    return IPFS_TEXT_SIGNAL.test(buf.subarray(0, read).toString("utf8"));
   } catch (e) {
     // Couldn't peek the file for an IPFS signal — treat as "no signal", but leave a trace.
     log.warn("fs", `ipfs-signal peek failed for ${fileAbs}: ${(e as Error).message}`);
     return false;
+  } finally {
+    try {
+      if (fd !== null) fs.closeSync(fd);
+    } catch {
+      /* ignore */
+    }
   }
 }
 
