@@ -145,13 +145,16 @@ describeRouter.post("/enqueue", async (req, res) => {
 // POST /api/describe/plan — PREVIEW the eligible candidates for the "Create AI descriptions" batch popup
 // (dialogs.mdx §5.2). Same narrowing as /enqueue but QUEUES NOTHING — returns the candidate file list so
 // the popup can list them checked-by-default. The popup's Confirm calls /enqueue.
-describeRouter.post("/plan", (req, res) => {
+// Now async: the plan carries the provider PREFLIGHT verdict (to_fix.mdx §2.5) so the popup can show a dead
+// account instead of a normal-looking plan. That probe is the SAME cached/single-flighted one /enqueue uses,
+// so the pair costs one call, not two — the request still returns promptly.
+describeRouter.post("/plan", async (req, res) => {
   const body = z
     .object({ paths: z.array(z.string().min(1)).optional(), root: z.string().min(1).optional(), overwrite: z.boolean().optional() })
     .safeParse(req.body);
   if (!body.success) return res.status(400).json({ ok: false, error: "paths[] or root required" });
   try {
-    res.json({ ok: true, data: previewDescribe(body.data) });
+    res.json({ ok: true, data: await previewDescribe(body.data) });
   } catch (e) {
     res.status(400).json({ ok: false, error: (e as Error).message });
   }

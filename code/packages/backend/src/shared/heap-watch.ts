@@ -378,7 +378,11 @@ function sample(): void {
   const heapUsedMB = Math.round(heapUsed / MIB);
   const ceilingMB = Math.round(ceiling / MIB);
   const pct = Math.round(fraction * 1000) / 10;
-  const ctx = context();
+  // The queue context (what we were doing) PLUS the machine context (what the rest of the box was holding).
+  // heapUsed alone has never been enough to act on: "4.8 GB of 6 GB" reads the same whether the heap is the
+  // whole story or whether children are holding another 4 GB on top of it and the machine is already paging
+  // (to_fix.mdx §6). These are cached numbers from probeSystem() — reading them costs nothing.
+  const ctx = { ...context(), ...machineContext() };
   const ctxText = Object.entries(ctx)
     .filter(([, v]) => v !== undefined && v !== null)
     .map(([k, v]) => `${k}=${String(v)}`)
@@ -428,9 +432,19 @@ export function startHeapWatch(): void {
     }
   }, SAMPLE_MS);
   timer.unref?.();
+
+  // The external probes (child RSS + OS pressure) on their own slower cadence — they fork, so they must not
+  // ride the 12s heap tick. void'd deliberately: probeSystem() never rejects, and the sampler must not await
+  // a fork. Both timers are unref()'d — a diagnostic that holds the event loop open breaks `just stop`.
+  probeTimer = setInterval(() => {
+    void probeSystem();
+  }, PROBE_MS);
+  probeTimer.unref?.();
 }
 
 export function stopHeapWatch(): void {
   if (timer) clearInterval(timer);
   timer = null;
+  if (probeTimer) clearInterval(probeTimer);
+  probeTimer = null;
 }
