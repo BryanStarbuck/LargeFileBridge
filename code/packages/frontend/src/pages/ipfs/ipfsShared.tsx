@@ -234,6 +234,11 @@ export function SecurityCard({ node, onFix }: { node: IpfsNodeStatus; onFix: () 
         </span>
         <Posture label="Reprovide" ok={node.reprovideStrategy !== "all"} value={node.reprovideStrategy} />
         <Posture label="Gateway" ok={node.gatewayLocalOnly} value={node.gatewayLocalOnly ? "local-only" : "public"} />
+        {/* The charter bans bouncing other people's content OR TRAFFIC (ipfs.mdx §3.2). Reprovide and
+            Gateway cover content; these two cover traffic — and both default ON in Kubo, so leaving
+            them off the card meant reporting "Only your content ✓" for a node relaying strangers. */}
+        <Posture label="Relay" ok={node.relayServiceOff} value={node.relayServiceOff ? "off" : "relaying"} />
+        <Posture label="Routing" ok={node.dhtClientOnly} value={node.dhtClientOnly ? "client-only" : "serving"} />
         <Posture label="GC" ok={node.gcOn} value={node.gcOn ? "on" : "off"} />
       </div>
       {nonCompliant && (

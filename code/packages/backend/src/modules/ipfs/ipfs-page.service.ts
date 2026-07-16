@@ -157,12 +157,17 @@ export async function computeIpfsPage(): Promise<IpfsPageData> {
   const trackedCount = rows.filter((r) => r.tracked !== "import").length;
   const untrackedCount = rows.length - trackedCount;
   const publicGateway = getAppConfig().ipfs.public_gateway;
-  // Compliant = only-our-content posture (knowledge/ipfs.mdx §6): announce pinned/roots AND keep the
-  // gateway loopback-only. The publicGateway SETTING doesn't make a public node compliant — it only
-  // downgrades the card's flag from red error to amber "acknowledged" (§3.1, handled in the UI).
+  // Compliant = only-our-content posture (knowledge/ipfs.mdx §6, ipfs.mdx §3.2). The charter bans
+  // bouncing other people's CONTENT *or TRAFFIC*, so all FOUR vectors must be clean: announce
+  // pinned/roots + gateway loopback-only (content), AND relay-service off + DHT client-only (traffic).
+  // The last two default to ON in Kubo, so omitting them meant rendering "Only your content ✓" for a
+  // node relaying strangers' traffic. The publicGateway SETTING doesn't make a public node compliant —
+  // it only downgrades the card's flag from red error to amber "acknowledged" (§3.1, handled in the UI).
   const compliant =
     (posture.reprovideStrategy === "pinned" || posture.reprovideStrategy === "roots") &&
-    posture.gatewayLocalOnly;
+    posture.gatewayLocalOnly &&
+    posture.relayServiceOff &&
+    posture.dhtClientOnly;
 
   const node: IpfsNodeCard = {
     health,
@@ -170,6 +175,8 @@ export async function computeIpfsPage(): Promise<IpfsPageData> {
     reprovideStrategy: posture.reprovideStrategy,
     gatewayLocalOnly: posture.gatewayLocalOnly,
     publicGateway,
+    relayServiceOff: posture.relayServiceOff,
+    dhtClientOnly: posture.dhtClientOnly,
     compliant: health === "ok" ? compliant : false,
     gcOn: posture.gcOn,
     pinnedCount: rows.length,

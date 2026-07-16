@@ -330,6 +330,11 @@ export interface NodePosture {
   reprovideStrategy: "pinned" | "roots" | "all";
   gatewayLocalOnly: boolean;
   gcOn: boolean;
+  // The charter bans becoming "a gateway that bounces or caches other people's content OR TRAFFIC".
+  // Gateway + reprovide cover CONTENT. These two cover TRAFFIC — and both default to ON in Kubo, so
+  // silence here is non-compliance, not safety (ipfs.mdx §3.2).
+  relayServiceOff: boolean; // we do NOT relay other peers' traffic (Swarm.RelayService.Enabled=false)
+  dhtClientOnly: boolean; // we do NOT answer other peers' DHT queries (Routing.Type=autoclient)
 }
 
 const LOOPBACK = /\/ip4\/127\.0\.0\.1\/|\/ip6\/::1\//;
@@ -352,7 +357,13 @@ export async function nodePosture(): Promise<NodePosture> {
     // cache (knowledge/ipfs.mdx §4). RPC can't observe whether the daemon was launched with
     // --enable-gc, so this reads the intent, not the runtime flag.
     const gcPeriod = String((await getConfigKey("Datastore.GCPeriod")) ?? "").trim();
-    return { reprovideStrategy, gatewayLocalOnly, gcOn: gcPeriod.length > 0 };
+    return {
+      reprovideStrategy,
+      gatewayLocalOnly,
+      gcOn: gcPeriod.length > 0,
+      relayServiceOff: await readRelayServiceOff(),
+      dhtClientOnly: await readDhtClientOnly(),
+    };
   } catch (e) {
     // Node unreachable — report the configured intent for the card rather than nothing.
     log.debug("ipfs", `nodePosture falling back to config (node unreachable): ${(e as Error).message}`);
@@ -360,8 +371,42 @@ export async function nodePosture(): Promise<NodePosture> {
       reprovideStrategy: cfg.ipfs.reprovide_strategy,
       gatewayLocalOnly: !cfg.ipfs.public_gateway,
       gcOn: true,
+      // Can't read the node → can't claim these. Kubo's defaults are the NON-compliant direction, so
+      // an unknown must never render as a reassuring ✓ (the same "don't report what you didn't verify"
+      // rule as ipfs_ui.mdx §13.1).
+      relayServiceOff: false,
+      dhtClientOnly: false,
     };
   }
+}
+
+/**
+ * Are we refusing to relay OTHER peers' traffic? (`Swarm.RelayService.Enabled`)
+ *
+ * DEFAULT IS ON. Kubo docs: "Starting with go-ipfs v0.11, every publicly dialable go-ipfs will start a
+ * limited RelayService" — i.e. an unset/`{}` RelayService block means we ARE a circuit-relay v2 server
+ * for strangers. So `undefined` resolves to NOT compliant; only an explicit `false` counts.
+ *
+ * Scope, stated honestly: the limited v2 relay carries other peers' low-bandwidth connection traffic
+ * (identify/ping/holepunch) — NOT their file bytes (bitswap needs a v1 relay). It is still "traffic
+ * bounced through our machine", which the charter names outright, so we turn it off.
+ */
+async function readRelayServiceOff(): Promise<boolean> {
+  const v = await getConfigKey("Swarm.RelayService.Enabled");
+  return v === false;
+}
+
+/**
+ * Are we refusing to serve OTHER peers' DHT queries? (`Routing.Type`)
+ *
+ * DEFAULT IS `auto`, which becomes a DHT SERVER once we're publicly dialable — storing and serving
+ * provider records for content that isn't ours. `autoclient` keeps every ability we actually need
+ * (finding peers, fetching our files, AND publishing provider records so our OWN pinned files stay
+ * findable) while never answering someone else's query.
+ */
+async function readDhtClientOnly(): Promise<boolean> {
+  const v = String((await getConfigKey("Routing.Type")) ?? "").toLowerCase();
+  return v === "autoclient" || v === "dhtclient";
 }
 
 // ── Compliance (knowledge/ipfs.mdx §6) ──────────────────────────────────────
@@ -462,7 +507,44 @@ export async function enforceCompliance(): Promise<void> {
         throw e;
       }
     }
+
+    // ── Don't bounce OTHER people's traffic through this machine (charter no-relay policy) ──
+    // The gateway/reprovide fixes above stop us serving other people's CONTENT. These two stop us
+    // carrying their TRAFFIC — the charter bans both, and BOTH default to ON in Kubo, so a node we
+    // never touched is non-compliant by default. That is why this is enforced, not just measured.
+    if (!(await readRelayServiceOff())) {
+      // `Swarm.RelayService.Enabled` defaults to true for any publicly dialable node (Kubo ≥0.11):
+      // we become a circuit-relay v2 server for strangers without ever opting in.
+      await setBoolConfigKey("Swarm.RelayService.Enabled", false, "relay service");
+    }
+    if (!(await readDhtClientOnly())) {
+      // `Routing.Type` defaults to `auto` → DHT SERVER when publicly dialable, answering other peers'
+      // routing queries. `autoclient` still finds peers and still publishes OUR provider records, so
+      // our own pinned files stay findable from our other computers — we just stop serving strangers.
+      await setConfigKey("Routing.Type", "autoclient");
+      log.info("ipfs", "Set Routing.Type = autoclient (we don't serve other peers' DHT queries).");
+    }
   } catch (e) {
     log.warn("ipfs", `Could not enforce compliance: ${(e as Error).message}`);
+  }
+}
+
+/**
+ * Write a BOOLEAN config key. Kubo's `config` RPC takes values as strings unless told otherwise, and
+ * REJECTS a bare "false" for a flag: `failed to unmarshal "\"false\"" into a flag: must be
+ * null/undefined, true, or false (maybe use --json?)`. That error would be swallowed by
+ * enforceCompliance's catch and logged as a warning — leaving the relay ON while nothing obvious
+ * broke. `?json=true` is what makes it a real boolean (verified against a live Kubo 0.42 daemon).
+ */
+async function setBoolConfigKey(key: string, value: boolean, label: string): Promise<void> {
+  try {
+    await rpc("config", { args: [key, String(value)], query: { json: "true" } });
+    log.info("ipfs", `Set ${key} = ${value} (${label} — only-our-content).`);
+  } catch (e) {
+    if (/not found/i.test((e as Error).message)) {
+      log.info("ipfs", `${key} not settable on this Kubo build — skipping ${label} enforcement.`);
+      return;
+    }
+    throw e;
   }
 }

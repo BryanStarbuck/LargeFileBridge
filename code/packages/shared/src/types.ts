@@ -330,7 +330,11 @@ export interface IpfsNodeCard {
   reprovideStrategy: "pinned" | "roots" | "all";
   gatewayLocalOnly: boolean; // gateway bound to loopback only (compliant)
   publicGateway: boolean; // the deliberate opt-out setting (settings.mdx) — turns a red flag amber
-  compliant: boolean; // reprovide ∈ {pinned,roots} AND no public/recursive gateway (knowledge/ipfs.mdx §6)
+  // The charter bans bouncing other people's content OR TRAFFIC. Reprovide/gateway cover content;
+  // these cover traffic, and both default ON in Kubo (ipfs.mdx §3.2).
+  relayServiceOff: boolean; // we don't relay other peers' traffic (Swarm.RelayService.Enabled=false)
+  dhtClientOnly: boolean; // we don't answer other peers' DHT queries (Routing.Type=autoclient)
+  compliant: boolean; // ALL FOUR vectors clean — content (reprovide+gateway) AND traffic (relay+routing)
   gcOn: boolean; // garbage collection enabled (incidental third-party cache stays transient)
   pinnedCount: number;
   pinnedBytes: number;
@@ -510,6 +514,11 @@ export interface IpfsNodeStatus {
   gatewayLocalOnly: boolean;
   publicGateway: boolean; // the deliberate opt-out setting (amber, not red)
   gcOn: boolean;
+  // The charter bans bouncing other people's CONTENT *or TRAFFIC*. The two above cover content; these
+  // cover traffic — and both are ON by default in Kubo, so their absence was a default-state gap, not
+  // an edge case (ipfs.mdx §3.2).
+  relayServiceOff: boolean; // Swarm.RelayService.Enabled=false — we don't relay strangers' traffic
+  dhtClientOnly: boolean; // Routing.Type=autoclient — we don't answer strangers' DHT queries
   compliant: boolean;
   autostart: IpfsAutostartStatus; // will IPFS come back on its own after a reboot? (ipfs_ui.mdx §13)
   configHealth: IpfsConfigHealth; // is the node config sane / repairable? (ipfs_ui.mdx §14)

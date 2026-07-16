@@ -147,10 +147,16 @@ export async function nodeStatus(): Promise<IpfsNodeStatus> {
   }
 
   const publicGateway = getAppConfig().ipfs.public_gateway;
+  // Compliance is the CHARTER's question — "are we serving/bouncing anyone else's content or traffic?"
+  // It used to answer using only the two CONTENT vectors (reprovide + gateway), so a node happily
+  // relaying strangers' traffic and answering their DHT queries still rendered "compliant ✓". Both of
+  // those default to ON in Kubo, so omitting them wasn't a small gap — it was the default state.
   const compliant =
     running &&
     (posture.reprovideStrategy === "pinned" || posture.reprovideStrategy === "roots") &&
-    posture.gatewayLocalOnly;
+    posture.gatewayLocalOnly &&
+    posture.relayServiceOff &&
+    posture.dhtClientOnly;
 
   // Will IPFS come back on its own after a reboot? (ipfs_ui.mdx §13) — reads the OS (launchd) state.
   const autostart = await autostartStatus().catch((e) => {
@@ -202,6 +208,8 @@ export async function nodeStatus(): Promise<IpfsNodeStatus> {
     gatewayLocalOnly: posture.gatewayLocalOnly,
     publicGateway,
     gcOn: posture.gcOn,
+    relayServiceOff: posture.relayServiceOff,
+    dhtClientOnly: posture.dhtClientOnly,
     compliant,
     autostart,
     configHealth: cfgHealth,

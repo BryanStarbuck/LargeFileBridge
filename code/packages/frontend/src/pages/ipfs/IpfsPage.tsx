@@ -506,6 +506,13 @@ function NodeDetails({ node }: { node: IpfsNodeCard }) {
           <Field label="Gateway">
             <Posture ok={node.gatewayLocalOnly} label={node.gatewayLocalOnly ? "local-only" : "public"} />
           </Field>
+          {/* Traffic vectors — the other half of the charter (ipfs.mdx §3.2). Both default ON in Kubo. */}
+          <Field label="Relay for others">
+            <Posture ok={node.relayServiceOff} label={node.relayServiceOff ? "off" : "relaying"} />
+          </Field>
+          <Field label="DHT routing">
+            <Posture ok={node.dhtClientOnly} label={node.dhtClientOnly ? "client-only" : "serving others"} />
+          </Field>
           <Field label="Garbage collection">
             <Posture ok={node.gcOn} label={node.gcOn ? "on" : "off"} />
           </Field>

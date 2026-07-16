@@ -106,8 +106,8 @@ Surveyed from the live tree. **"Auto-install"** means we run a package manager o
 | --- | --- | --- | --- | --- |
 | **`ipfs` (Kubo)** | The whole IPFS node: pin, add, pinset, daemon | brew, **auto-install**, + a LaunchAgent we own | **A** | **Helia** (§4.1) |
 | **`brew`** | Installing `ipfs` and `pipx` for us | invoked directly | **gone** | — |
-| **`ffmpeg`** | Video compression, audio extraction, OCR frames, transcode | brew, required | **B** | `ffmpeg-static` (§4.2) |
-| **`ffprobe`** | Duration / resolution / codec probing | brew, required | **B** | `ffprobe-static` |
+| **`ffmpeg`** | Video compression, audio extraction, OCR frames, transcode | brew, required | **C — KEEP** | **none — deliberate exception (§4.2)** |
+| **`ffprobe`** | Duration / resolution / codec probing | brew, required | **C — KEEP** | **none — ships with ffmpeg** |
 | **`magick`/`convert`** | Image compression, PNG→compressible, HEIC | brew, required | **A** *(partial)* | `sharp` — **already a dep** (§4.3) |
 | **`oxipng`** | Lossless PNG optimization | brew, required | **B** | evaluate |
 | **`cwebp`** | WebP encoding | brew, required | **A** | `sharp` covers WebP |
@@ -168,22 +168,100 @@ upgrade job, and the config-health repair flow.
 **Gate:** §6. We do not delete the Kubo path until Helia demonstrably serves a real file to a real
 second computer.
 
-### 4.2 ffmpeg — Tier B, and no pretending
+#### 4.1.1 The no-relay charter is a HARD gate on Helia (not a detail)
 
-**There is no honest in-process ffmpeg.** `@ffmpeg/ffmpeg` (WASM) exists and is far too slow to
-transcode the GB-scale video this product is built for. `fluent-ffmpeg` is a *command builder*, not an
-implementation — it still spawns the same binary.
+The charter is unambiguous: *"the local computer must NOT act as a public IPFS gateway or relay… We do
+not want our computer to become a gateway that bounces or caches **other people's content or traffic**."*
+Restated by the user: **"I can have my local files that are IPFS-pinned shared out to the internet, but
+not share other people's files, even as a bridge bound through."**
 
-The real, achievable win is **Tier B**: `ffmpeg-static` / `ffprobe-static` vendor a pinned binary
-through `pnpm install`. We still spawn a subprocess — but **brew is gone**, the version is **pinned and
-identical on every machine**, the PATH probe is gone, the preflight rows are gone, and ~12 `brew install
-ffmpeg` hint strings are gone.
+**Four distinct vectors — only two were ever enforced.** See [ipfs.mdx §3.2](./ipfs.mdx) for the live
+Kubo enforcement; the point *here* is that **Helia must satisfy all four structurally, or it does not
+ship**:
 
-**Do not oversell this as "a library."** It is a vendored binary, and the spec should say so.
+| Vector | Shares | Kubo default | Must be |
+| --- | --- | --- | --- |
+| **HTTP gateway** | Other people's **file bytes** | loopback `:8080` | off / loopback |
+| **Provide/reprovide strategy** | Announces other people's **cached blocks** | `all` | `pinned` |
+| **Circuit relay v2 service** | Other people's **connection traffic** ("a bridge bound through") | **ON when publicly dialable** | **off** |
+| **DHT server mode** | Other people's **routing records** | **ON when publicly dialable** (`Routing.Type=auto`) | **client-only** |
 
-*Verify before committing:* license posture (ffmpeg-static ships an LGPL/GPL build — confirm which, and
-that the codecs we use are present), Apple-Silicon binary availability, and that our `-vf`/codec flags
-work unchanged against the pinned build.
+**This is the strongest argument for Helia, and it is not the one you'd expect.** Under Kubo, these are
+**config keys on a daemon we don't own** — the user, Homebrew, or `ipfs init` on a new machine can
+reset them, so compliance is something we must **re-enforce forever and re-verify every start**. Under
+Helia the node is **constructed in our own code**: no relay service unless we instantiate one, no
+gateway unless we mount one, DHT client-mode by construction. **Compliance stops being a config we
+police and becomes a property of the program.**
+
+**But it must be asserted, not assumed.** libp2p's defaults are not our charter, and they change
+between versions. The Helia spike (§6 step 1) must **prove, with a test**, that a running node:
+* runs **no** circuit-relay **service** (relay *client* — using someone else's relay to be reachable —
+  is fine and is not what the charter bans; **being** the relay is),
+* runs **no** HTTP gateway on a non-loopback address,
+* is a **DHT client**, not a server,
+* announces **only** our pinned CIDs.
+
+**The one honest residual, which Helia does not fix.** Bitswap serves any block in our blockstore to
+any peer that asks for it by CID. If we ever fetch someone else's content, those blocks are cacheable
+and therefore serveable — `Provide.Strategy=pinned` only stops us **announcing** them, not answering a
+direct request. In practice our blockstore only ever holds **the user's own files** (we fetch our own
+content from our own machines), and **GC** (`--enable-gc`) reclaims incidental cache — which is exactly
+why GC is part of the posture. **This is a real limit and the spec states it rather than implying a
+guarantee we don't have.**
+
+### 4.2 ffmpeg — **KEEP IT, and keep it user-provisioned** (the deliberate exception)
+
+**FFmpeg stays. It is not replaced, not wrapped, and not vendored.** This is the one dependency where
+the policy in §0 is **overruled on the merits**, and the spec says so out loud rather than quietly
+exempting it.
+
+**There is no honest in-process ffmpeg.** `@ffmpeg/ffmpeg` (WASM) is far too slow for the GB-scale video
+this product exists for. `fluent-ffmpeg` is a *command builder*, not an implementation — it spawns the
+same binary. **Tier A is not on the table.**
+
+**Why not even Tier B (vendored via npm) — three reasons, in order:**
+
+1. **Licensing.** Highest quality means **libx264 / libx265**, which make an ffmpeg build **GPL**.
+   Today the user installs ffmpeg themselves, so we **distribute nothing** and incur **no obligation**.
+   **Vendoring a GPL binary into an app we ship** ([public repo](https://github.com/BryanStarbuck/LargeFileBridge))
+   pulls that obligation onto the whole product. Convenience is not worth a licensing posture the user
+   didn't choose.
+2. **Codec breadth.** The user's Homebrew build (`ffmpeg 8.1.2`) carries the full set — `libx264`,
+   `libx265`, `libsvtav1`, **`h264_videotoolbox`**, **`hevc_videotoolbox`**, `aac_at`. A generic static
+   build is not guaranteed to carry the Apple **VideoToolbox** encoders, and losing them would forfeit
+   the fastest/most memory-efficient path (§4.2.1) permanently.
+3. **The win is small here.** ffmpeg is *stable, ubiquitous, and one `brew install`*. It is not a
+   daemon, has no lifecycle, no launchd agent, and **no second owner** — so it cannot produce the class
+   of bug in §1. **The policy's target is ownership ambiguity, not subprocesses.**
+
+**So ffmpeg is graded Tier C (accept, document)**, and [tools.mdx](./tools.mdx) **keeps its ffmpeg /
+ffprobe rows permanently**. That page shrinks — it does not disappear.
+
+> **The rule this establishes:** the policy exists to remove **things we half-own that can silently
+> compete with us**. A well-behaved, user-installed encoder we merely *call* is not that. **Apply §0
+> where it removes ambiguity — not as a purity contest.**
+
+#### 4.2.1 The real quality/speed lever (independent of brew)
+
+Worth separating from the packaging question: **the current encoder settings are already the
+highest-quality choice**, and the speed/memory opportunity is a **different decision**.
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile()` (the `VIDEO_TARGETS` table + `videoCrf()`)
+
+* **Today:** `libx264` / `libx265` with **`-crf`** — *software* encoding. This is the **best
+  quality-per-byte** available, and CRF is the right knob for it. **Keep this as the default.**
+* **Available but unused:** `h264_videotoolbox` / `hevc_videotoolbox` are present in the installed
+  build. Hardware encoding is **dramatically faster** and **far lighter on CPU and memory** — but at
+  **lower quality per bit** than x264/x265 at a comparable size.
+* **These goals genuinely conflict.** "Highest quality" and "fastest + most memory efficient" cannot
+  both be maximized by one setting. The honest resolution is a **user-facing choice**, not a silent
+  default swap: keep CRF software encoding as the **quality** default, and offer hardware encoding as
+  an explicit **"fast" mode** for bulk work. **Do not switch the default to VideoToolbox** — it would
+  quietly downgrade quality to buy speed the user didn't ask to buy.
+* **Memory efficiency is mostly already handled** and is not an encoder choice: the compress path is
+  async-spawn (never `spawnSync`), streams rather than buffers, and is capped by the mass-compute core
+  budget ([parallelization.mdx](./parallelization.mdx)). The dominant memory risk is **concurrency**, not
+  the codec.
 
 ### 4.3 Images — `sharp` is already in the tree
 
@@ -238,19 +316,19 @@ Each step is independently shippable and independently valuable. **No step is a 
 | 2 | **Backend becomes a launchd service** (`com.largefilebridge.webapp`) | Survives reboot; one agent, fully ours |
 | 3 | **Helia default; delete the Kubo daemon path** | Step 1 green + pinset migration proven |
 | 4 | **`sharp` replaces cwebp/cjpeg/jpegoptim/oxipng** | HEIC + animated-GIF verification (§4.3) |
-| 5 | **Vendored ffmpeg/ffprobe** | License + Apple-Silicon + flag-compat check (§4.2) |
-| 6 | **Transcription** | Last, and may honestly stop at Tier B/C |
+| — | ~~Vendored ffmpeg/ffprobe~~ | **DROPPED — ffmpeg stays user-provisioned by decision (§4.2)** |
+| 5 | **Transcription** | Last, and may honestly stop at Tier B/C |
 
 **What each step deletes** is the measure of success — not what it adds:
 
 * Step 3 deletes: `ipfs-node.service.ts`, `ipfs-autostart.service.ts`, `ipfs-config-health.service.ts`,
   ipfs_ui.mdx §13/§14/§15, the IPFS-off page, the install/upgrade/repair jobs, the auto-start LaunchAgent,
   **and this entire class of bug.**
-* Steps 4–5 delete: the Tools preflight's compression rows, `detectTools()`, and ~40 `brew install`
+* Step 4 deletes: the Tools preflight's **image** rows, most of `detectTools()`, and ~25 `brew install`
   strings.
-* **[tools.mdx](./tools.mdx) shrinks toward nothing.** A preflight page is a **symptom** of this
-  policy being unmet. When the policy is fully met, the page has nothing left to check — and that is
-  the point.
+* **[tools.mdx](./tools.mdx) shrinks — but does NOT disappear.** A preflight page is a **symptom** of
+  this policy being unmet, and most of it is. **ffmpeg / ffprobe are the permanent residue** (§4.2), and
+  a page with two honest rows is the goal state, not a failure. Do not chase zero for its own sake.
 
 ---
 

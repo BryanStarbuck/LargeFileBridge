@@ -136,6 +136,8 @@ The **Node** reachability verdict and the **PeerID** shown on the card are read 
 | **PeerID** | This computer's IPFS identity ([storage §3/§11](./storage_local.mdx#11-peersyaml--the-users-other-computers)). | shown, click-to-copy. |
 | **Reprovide** | `Reprovider/Provide.Strategy` — what the node announces. | **`pinned`** ✓. `all` renders **red** with a **Fix** action (§3.1). |
 | **Gateway** | Is a public/recursive gateway exposed? | **local-only** (127.0.0.1) ✓. A public/recursive gateway renders **red** with **Fix**. |
+| **Relay** | `Swarm.RelayService.Enabled` — do we bounce **other peers' traffic** through this machine? | **off** ✓. Anything else renders **red** with **Fix** (§3.2). |
+| **Routing** | `Routing.Type` — do we answer **other peers' DHT queries**? | **`autoclient`** ✓ (client-only). `auto`/`dhtserver` renders **red** with **Fix** (§3.2). |
 | **GC** | Garbage collection on, sane `StorageMax`? | **on** ✓ (so incidental third-party cache is transient, [ipfs.mdx §4](../knowledge/ipfs.mdx#4-garbage-collection-and-the-local-cache)). |
 | **Pinned totals** | count + bytes of pins; **Tracked** vs **Untracked** split. | the Untracked number is the import backlog. |
 
@@ -151,6 +153,57 @@ default — then the banner is an amber *acknowledged* note, not a red error.
 
 Restoring the only-our-content defaults when the user clicks **Fix** is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `enforceCompliance()` (exposed by the `POST /enforce` handler in `ipfs.router.ts`)
+
+### 3.2 Content is only HALF the charter — traffic is the other half (LOCKED)
+
+The charter bans becoming *"a gateway that bounces or caches other people's content **or traffic**."*
+Restated by the user: **"I can have my local files that are IPFS-pinned shared out to the internet, but
+not share other people's files, even as a bridge bound through."**
+
+Compliance originally measured only the **content** vectors — reprovide + gateway — and **`compliant`
+was computed from those two alone**. So a node that was **relaying strangers' traffic** and **answering
+strangers' DHT queries** still rendered **"compliant ✓"**. That was not an edge case. **Both of those
+are ON by default in Kubo**, so the card was reassuring the user about the *default* state:
+
+| Vector | What it shares | Kubo default | Verified |
+| --- | --- | --- | --- |
+| Gateway | other people's **file bytes** | loopback `:8080` | was ✓ |
+| Provide.Strategy | announces **cached blocks** | `all` | was ✓ |
+| **`Swarm.RelayService.Enabled`** | other people's **connection traffic** | **ON** when publicly dialable (Kubo ≥0.11) | **was not measured** |
+| **`Routing.Type`** | other people's **routing records** (DHT server) | **`auto`** → server when publicly dialable | **was not measured** |
+
+**The rule now: all four are enforced AND measured, and `compliant` requires all four.**
+
+* **Silence is non-compliance, not safety.** An unset `Swarm.RelayService` (`{}`) means *default ON*.
+  So `undefined` must resolve to **not compliant** — only an explicit `false` counts. Likewise an unset
+  `Routing.Type` means `auto`, not client. **Never read "unconfigured" as "safe."**
+* **When the node can't be read, claim nothing.** The unreachable-node fallback reports both as
+  **false**. An unknown must never render as a reassuring ✓ — the same rule as
+  [ipfs_ui.mdx §13.1](./ipfs_ui.mdx).
+* **Scope, stated honestly.** Kubo's *limited* relay v2 carries low-bandwidth connection traffic
+  (identify/ping/holepunch), **not** other people's file bytes (that needs a v1 relay). We turn it off
+  anyway: the charter names **traffic** explicitly, and "a bridge bound through" is precisely this.
+* **`autoclient` costs us nothing we need.** We still find peers, still fetch our own files, and still
+  **publish our own provider records** — so our pinned files stay findable from our other computers. We
+  simply stop answering *other people's* queries.
+* **The residual we do NOT paper over.** Bitswap serves any block in our blockstore on request by CID;
+  `Provide.Strategy=pinned` stops us **announcing** third-party blocks, not **answering** for them. In
+  practice the blockstore only holds the user's own files, and **GC is what reclaims incidental
+  cache** — which is why GC is part of the posture rather than a nicety.
+
+Measuring the two traffic vectors (treating unset as NON-compliant) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `readRelayServiceOff()`, `readDhtClientOnly()`, surfaced via `nodePosture()`
+
+Enforcing them (`Swarm.RelayService.Enabled=false`, `Routing.Type=autoclient`) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `enforceCompliance()`, using `setBoolConfigKey()` (the `?json=true` write — Kubo REJECTS a bare string for a boolean flag, and that error would otherwise be swallowed into a warning, leaving the relay ON)
+
+Requiring all four for the green verdict is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `nodeStatus()` (the `compliant` computation)
+
+> **Under an in-process node ([Helia](./external_tools_policy.mdx) §4.1.1) this section largely
+> evaporates**: there is no relay service unless we construct one and no gateway unless we mount one, so
+> compliance stops being a config we must police on a daemon we don't own and becomes a **property of
+> the program**. Until then, §3.2 is the contract.
 
 ---
 
