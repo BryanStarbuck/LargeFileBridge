@@ -225,12 +225,19 @@ export function Sidebar({ user }: { user: CurrentUser }) {
       </nav>
 
       {/* External product links (left_bar.mdx §4.2): outbound links to our other products, in the space
-          between the bottom of the nav list and the account slot, evenly spaced + centered. Each opens in a
-          NEW browser tab (target=_blank, rel=noopener) — the ONLY bar entries that leave the app. Data-driven
-          from left_bar.yaml `external_links`; an empty list renders nothing. Not part of the active-route
-          machinery — they never highlight as active. */}
+          between the bottom of the nav list and the account slot. Each opens in a NEW browser tab
+          (target=_blank, rel=noopener) — the ONLY bar entries that leave the app. Data-driven from
+          left_bar.yaml `external_links`; an empty list renders nothing. Not part of the active-route
+          machinery — they never highlight as active.
+
+          LEFT-ALIGNED, on the SAME grid as the nav items above (§4.2). These used to be `justify-center`,
+          which made them the only rows in the bar whose text floated to a different x on every label — a
+          ragged edge against an otherwise straight column. They now carry the nav item's exact geometry
+          (mx-2 / px-3 / py-2 / gap-2.5 with a LEADING h-4 icon), so the label starts at the identical x as
+          "Repos" or "Devices / Peers". The ExternalLink glyph moves to the leading icon slot: it is still
+          the outbound hint §4.2 asks for, now doing double duty as the icon every other row has. */}
       {leftBar.externalLinks.length > 0 && (
-        <div className="border-t px-2 py-1.5" style={{ borderColor: "var(--lfb-border)" }}>
+        <div className="border-t py-1.5" style={{ borderColor: "var(--lfb-border)" }}>
           {leftBar.externalLinks.map((link) => (
             <a
               key={link.id}
@@ -238,10 +245,10 @@ export function Sidebar({ user }: { user: CurrentUser }) {
               target="_blank"
               rel="noopener noreferrer"
               title={`${link.label} — opens in a new tab`}
-              className="mx-1 my-0.5 flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm text-black hover:bg-slate-100"
+              className="mx-2 my-0.5 flex items-center gap-2.5 rounded-md px-3 py-2 text-sm text-black hover:bg-slate-100"
             >
-              <span>{link.label}</span>
-              <NavIcon name="ExternalLink" className="h-3.5 w-3.5 text-black/40" />
+              <NavIcon name="ExternalLink" className="h-4 w-4 text-black/40" />
+              <span className="flex-1 truncate">{link.label}</span>
             </a>
           ))}
         </div>

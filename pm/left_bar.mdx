@@ -5,7 +5,7 @@ description: The left navigation bar specification — the human companion to pm
 
 # LargeFileBridge — Left Bar
 
-The **left bar** is the fixed 256px navigation column on every screen. There is **one** left bar —
+The **left bar** is the fixed **200px** navigation column on every screen — sized to its widest item plus a small gap (§5), never wider. There is **one** left bar —
 the **app bar** — data-driven from **`pm/left_bar.yaml`**, which the frontend imports raw
 (`src/config/left_bar.ts`, via Vite `?raw`). There is no second code copy of the nav content.
 
@@ -214,27 +214,50 @@ that **opens in a new browser tab**, not an in-app route.
   * **ACT 3 Filmmaking** → `https://ACT3ai.com/`
 * **New tab, safely.** Each renders as a real `<a target="_blank" rel="noopener noreferrer">` — clicking
   opens the URL in a **new tab** and never navigates the app itself away.
-* **Placement & spacing.** The block sits **centered/evenly spaced** in the gap between the last nav item
-  and the account slot: the links are laid out with even vertical spacing (and horizontally centered),
-  visually balanced between the top list and the signed-in-user slot at the bottom. It is a normal-flow
-  block above the account slot — it must **not** overlap the account slot and it shares the region with the
-  hover-info panel (§4.1) without crowding it.
-* **Styling.** Black text like the rest of the bar (§2), an outbound/external hint is acceptable (a small
-  `↗` glyph), light-grey hover fill (`hover:bg-slate-100`) matching the nav items. They are **not** part of
-  the active-route machinery (they never highlight as "active" — they are external).
+* **Placement.** The block sits in the gap between the last nav item and the account slot. It is a
+  normal-flow block above the account slot — it must **not** overlap the account slot and it shares the
+  region with the hover-info panel (§4.1) without crowding it.
+* **LEFT-ALIGNED, on the same grid as the nav items (LOCKED).** These links are **left-aligned exactly like
+  the nav items above them** — same `mx-2` / `px-3` / `py-2` / `gap-2.5` geometry, same leading `h-4` icon
+  slot — so **every label in the bar starts at the identical x**. They were previously **centered**, which
+  made them the only rows whose text floated to a different x on each label, breaking the straight left edge
+  the rest of the column holds. **The bar has one text column, and these rows are in it.**
+* **Styling.** Black text like the rest of the bar (§2), light-grey hover fill (`hover:bg-slate-100`)
+  matching the nav items. The outbound hint is the **`ExternalLink` glyph in the LEADING icon slot** — it
+  still says "this leaves the app" while being the icon every other row already has, which is what lets the
+  labels share the nav grid. They are **not** part of the active-route machinery (they never highlight as
+  "active" — they are external).
 * **Data-driven, add/remove in the yaml.** Adding or removing a product link is a `pm/left_bar.yaml` edit
   (`external_links`), never a code change — the same "no code copy of the nav content" rule as the nav items
   (§AC4). An empty/absent `external_links` list renders nothing (no empty block).
 
-Rendering the external-links block from the yaml (new-tab anchors, centered/evenly-spaced, between the nav list and the account slot) is handled in code:
+Rendering the external-links block from the yaml (new-tab anchors, left-aligned on the nav grid with a leading `ExternalLink` icon, between the nav list and the account slot) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (an `external_links` block rendered above the account slot), fed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/config/left_bar.ts` — `parse()` (which reads `external_links` into `leftBar.externalLinks`).
 
 ---
 
 ## 5. Layout & behavior
 
-* Fixed width **256px** (`w-64`), full height, white background, right border `--lfb-border`;
-  the nav list scrolls independently if it overflows.
+* **Width: as narrow as the content allows, never wider (LOCKED).** The bar is **200px** — full height,
+  white background, right border `--lfb-border`; the nav list scrolls independently if it overflows.
+
+  **The rule is "widest item + a small gap", not a round number.** The width is sized to the widest thing the
+  bar actually renders, plus a modest right-hand gap — every pixel beyond that is dead space stolen from the
+  content area, on every screen, forever. Measured in the rendered system font at the real type sizes:
+
+  | Item | Type | Text | + chrome | Total |
+  |---|---|---|---|---|
+  | **"ACT 3 Filmmaking"** (external link, §4.2) | 14px regular | 116.6 | 66 | **182.6** ← widest |
+  | "Large File Bridge" (wordmark, §1) | 18px semibold | 140.7 | 32 | 172.7 |
+  | "Devices / Peers" (nav item) | 14px medium | 101.4 | 66 | 167.4 |
+
+  **200px** leaves ~17px of breathing room past the widest item. It was **256px**, which left **~75px of
+  dead space** — the bar was a third wider than its own content ever needed.
+
+  The value lives in `pm/left_bar.yaml` (`sidebar_width`) and is applied by `Sidebar.tsx`; it is **not** a
+  Tailwind `w-*` class, so it is not pinned to that scale's round numbers. **Variable-length content never
+  drives the width**: repo names and the account block **truncate** inside the bar rather than widen it. If a
+  future label is longer than the ones above, re-measure and re-set the yaml — do not round up "to be safe".
 * Permission gates come from OpenAuthFederated claims (e.g. `role:admin`); a gated item is
   **hidden**, not disabled, when the claim is absent.
 * Icons resolve by lucide name in `NavIcon.tsx`; an unknown icon name renders no icon rather than
@@ -277,7 +300,9 @@ Resolving a nav item's lucide icon by name (unknown name renders nothing) is han
    it is a reopen affordance and nothing is applied silently.
 10. **External product links (§4.2):** a block of outbound links — **JFK Social.com** (`https://JFKSocial.com/`)
     and **ACT 3 Filmmaking** (`https://ACT3ai.com/`) — renders **between the bottom of the nav list and the
-    account slot**, evenly spaced/centered; each is an `<a target="_blank" rel="noopener noreferrer">` that
+    account slot**, **left-aligned on the same grid as the nav items** (same mx-2/px-3/py-2/gap-2.5 with a
+    leading `ExternalLink` icon, so every label in the bar starts at the identical x); each is an
+    `<a target="_blank" rel="noopener noreferrer">` that
     opens in a **new tab** (never navigating the app away); the list comes from `pm/left_bar.yaml`
     `external_links` (add/remove without a code change), and an empty list renders nothing.
 
@@ -295,7 +320,8 @@ Resolving a nav item's lucide icon by name (unknown name renders nothing) is han
   The nav list is therefore NOT a bare flex-1 down to the slot; the panel block is carved out above it.
   §4.2: EXTERNAL PRODUCT LINKS — a block of OUTBOUND links (JFK Social.com → https://JFKSocial.com/, ACT 3
   Filmmaking → https://ACT3ai.com/) rendered between the bottom of the nav list and the account slot, evenly
-  spaced/centered, each an <a target="_blank" rel="noopener noreferrer"> (new tab, never navigates the app).
+  LEFT-ALIGNED on the nav grid (leading ExternalLink icon; they were centered — the only ragged rows in the
+  bar), each an <a target="_blank" rel="noopener noreferrer"> (new tab, never navigates the app).
   Content source of truth = left_bar.yaml `external_links` (add/remove without code, like nav_items — §AC4);
   parsed by left_bar.ts parse() into leftBar.externalLinks, rendered by Sidebar.tsx above the account slot.
   §3.2 (repo_company_mapping.mdx): each repo GROUPS UNDER ITS OWNER — the Personal child and each Company child are

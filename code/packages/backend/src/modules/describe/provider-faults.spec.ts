@@ -98,12 +98,24 @@ describe("classifyProviderFault — the faults the refusal rule must not swallow
 // The seam that makes §2.3 work at all: a refusal now RETRIES (it is sampled), so the evidence has to
 // survive all 4 attempts and still be on the error that finally escapes — otherwise the record that the
 // provider refused could never be written for the ~2.6% of files that genuinely exhaust their retries.
+// These two exercise the RETRY LOOP, not the backoff clock, so they pin `retryAfterMs: 1` — the same hint
+// a provider's `Retry-After` rides in on (`adapters.ts`: `const backoff = hinted ?? RETRY_BASE_MS * 2 ** …`).
+// Without it each `withProviderRetry` sleeps for REAL through 2s→4s→8s of jittered backoff; this block calls
+// it twice, so a worst-case jitter roll needs ~42s against vitest's 30s limit. It passed alone and failed in
+// a loaded full run — a test that fails on CPU contention rather than on a defect. The hint makes the loop's
+// behavior (4 attempts, rejection intact) deterministic without weakening a single assertion.
+const fast = (over: Partial<ProviderRejection> = {}) => {
+  const e = refusal(over) as Error & { retryAfterMs?: number };
+  e.retryAfterMs = 1;
+  return e;
+};
+
 describe("withProviderRetry — the refusal evidence survives the retries", () => {
   it("retries a refusal, then rethrows it with the rejection intact", async () => {
     let attempts = 0;
     const always = () => {
       attempts++;
-      return Promise.reject(refusal({ finishReason: "RECITATION" }));
+      return Promise.reject(fast({ finishReason: "RECITATION" }));
     };
     await expect(withProviderRetry("test", always)).rejects.toThrow(/RECITATION/);
     expect(attempts).toBe(4); // sampled → worth 4 rolls of the dice, not 1
@@ -112,7 +124,7 @@ describe("withProviderRetry — the refusal evidence survives the retries", () =
 
   it("succeeds on a later attempt — the 6-in-10 case that must not be recorded as a refusal", async () => {
     let n = 0;
-    const flaky = () => (++n < 3 ? Promise.reject(refusal()) : Promise.resolve({ text: "a description", model: "m" }));
+    const flaky = () => (++n < 3 ? Promise.reject(fast()) : Promise.resolve({ text: "a description", model: "m" }));
     await expect(withProviderRetry("test3", flaky)).resolves.toEqual({ text: "a description", model: "m" });
   });
 });

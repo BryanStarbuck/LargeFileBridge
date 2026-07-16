@@ -780,6 +780,7 @@ export type ProgressKind =
   | "transcribe"
   | "describe"
   | "ocr" // read the text out of an image/video's pixels (ocr.mdx) — the third analysis transaction
+  | "mixed" // a TO DO Apply fan-out: ONE batch spanning several ops (processing_batches.mdx §1.2)
   | "hash"
   | "fingerprint"
   | "ignore"
@@ -1289,18 +1290,46 @@ export interface CompressInsidePlan {
 export interface ProcessingBatchError {
   path: string;    // the file that failed/was blocked
   reason: string;  // why (ffmpeg error, blocked-alpha, no-gain-is-not-an-error, …)
+  state: "failed" | "halted"; // processing_batches.mdx §5 — a halt is NOT a failure and must not read red
 }
+
+/**
+ * ONE bulk action's roll-up (processing_batches.mdx §2).
+ *
+ * THE FIVE-WAY TAXONOMY (§4) — the middle three are routinely mistaken for each other, and each mistake
+ * costs the user real money or real work:
+ *   ok       — the work ran, output written                       → green
+ *   rejected — the provider CONSIDERED it and said no (a verdict, → slate/violet, NEVER red
+ *              survived every retry; .ai_description_rejected written)
+ *   failed   — attempted and errored                              → red
+ *   halted   — NEVER attempted (circuit opened, or user stopped)  → amber, "Not attempted"
+ *   running  — in flight
+ *
+ * "done" is a FORBIDDEN word for four of these five — it is the name of `ok` alone. Folding `rejected`
+ * into it is the exact defect this taxonomy closes: it paints a tree of copyrighted slides red when
+ * nothing is broken, and feeds the retry ceiling — which is what halted 483 files on 2026-07-16.
+ * SETTLED ("will this file be touched again?" — drives the bar) and DONE ("did the work succeed?" —
+ * drives the counters) are different questions; a refusal is settled but not done.
+ */
 export interface ProcessingBatch {
-  id: string;
-  kind: ProgressKind;              // "compress" for now
-  label: string;                  // e.g. "Compress inside ~/Movies/Trip"
-  total: number;                  // eligible files in the run
-  done: number;                   // finished OK (compressed or skipped-no-gain)
-  failed: number;                 // finished with an error/blocked (each also in `errors`)
-  errors: ProcessingBatchError[]; // the list shown when the run finishes (compress_inside.mdx §4)
-  deleteOriginal: DeleteOriginalMode; // how originals were disposed (shown for transparency)
-  startedAt: string;              // ISO
-  finishedAt: string | null;      // ISO once total === done + failed; null while running
+  batchId: string;                // ADOPTED from the manifest — never a second minted id (§1)
+  kind: ProgressKind;             // compress | describe | transcribe | ocr | mixed
+  label: string;                  // human title (§3)
+  scope: string;                  // the resolved root, or "N checked paths"
+  provider?: string;              // describe only — drives the Rejected column
+  engine?: string;                // transcribe/ocr only
+  total: number;                  // files enqueued at Confirm — the denominator that NEVER moves (§4.1)
+  ok: number;                     // completed, output written
+  rejected: number;               // the provider REFUSED — a verdict, not a fault (§4.2)
+  failed: number;                 // attempted and errored (§4.3)
+  halted: number;                 // never attempted (§4.3)
+  running: number;                // in flight right now
+  errors: ProcessingBatchError[]; // capped at 200 (§5)
+  deleteOriginal?: DeleteOriginalMode; // compress only — how originals were disposed
+  startedAt: string;              // ISO — when Confirm was pressed (§1.1)
+  finishedAt: string | null;      // ISO once settled; null while running
+  stoppedBy?: "user" | "circuit"; // why a batch ended early (§6)
+  manifestPath?: string;          // the durable record on disk (§5)
 }
 
 // ── Transcribe (Transcribe.mdx) ─────────────────────────────────────────────

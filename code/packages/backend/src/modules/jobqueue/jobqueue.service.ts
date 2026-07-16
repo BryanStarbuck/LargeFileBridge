@@ -327,49 +327,128 @@ export function queueDepthByOp(): Partial<Record<ProgressKind, number>> {
 const batches = new Map<string, ProcessingBatch>();
 const BATCH_RETENTION_MS = 30 * 60 * 1000;
 
+/**
+ * Open a batch, ADOPTING the manifest's `batchId` (processing_batches.mdx §1 — LOCKED).
+ *
+ * It must never mint its own id. `writeManifest()` already mints one and stamps it on every task; a second
+ * id here meant the durable manifest on disk and the live row on the Processing page were describing the
+ * same run under two different names, with nothing to join them.
+ */
 export function createBatch(input: {
+  batchId: string;
   kind: ProgressKind;
   label: string;
+  scope: string;
   total: number;
-  deleteOriginal: DeleteOriginalMode;
+  provider?: string;
+  engine?: string;
+  deleteOriginal?: DeleteOriginalMode;
+  manifestPath?: string;
 }): string {
-  const id = randomUUID();
-  batches.set(id, {
-    id,
+  batches.set(input.batchId, {
+    batchId: input.batchId,
     kind: input.kind,
     label: input.label,
+    scope: input.scope,
+    provider: input.provider,
+    engine: input.engine,
     total: input.total,
-    done: 0,
+    ok: 0,
+    rejected: 0,
     failed: 0,
+    halted: 0,
+    running: 0,
     errors: [],
     deleteOriginal: input.deleteOriginal,
     startedAt: new Date().toISOString(),
     finishedAt: null,
+    manifestPath: input.manifestPath,
   });
-  return id;
+  return input.batchId;
 }
 
-/** Fold one task's outcome into its batch; stamp finishedAt once every task has reported. */
-function recordBatchResult(batchId: string | undefined, r: { ok: boolean; path: string; reason?: string }): void {
+/** §5 — the error list is capped so a 1,440-file failure run can't ship 1,440 rows on every 1-2s poll. */
+const MAX_BATCH_ERRORS = 200;
+
+/**
+ * Fold ONE task's terminal outcome into its batch (processing_batches.mdx §4) and stamp `finishedAt` once
+ * every file has settled.
+ *
+ * Called from `runTask`'s `finally` — the SAME choke point as the journal terminal and the manifest settle,
+ * so the three can never disagree about what happened to a file. It used to be called only from the compress
+ * branch, which is why a 1,440-file describe run produced NO batch row at all.
+ *
+ * The counters are the five-way taxonomy, not a boolean. `ok + rejected + failed + halted + running +
+ * pending === total` is the identity that makes the table trustworthy (§4.1) — a two-way fold could not even
+ * express it, so a batch containing a refusal or a halt could never reach `finishedAt` and hung "running"
+ * forever.
+ */
+function recordBatchResult(
+  batchId: string | undefined,
+  r: { state: "ok" | "rejected" | "failed" | "halted"; path: string; reason?: string },
+): void {
   if (!batchId) return;
   const b = batches.get(batchId);
   if (!b) return;
-  if (r.ok) b.done++;
+
+  if (r.state === "ok") b.ok++;
+  else if (r.state === "rejected") b.rejected++; // a verdict — never `failed`, never `ok` (§4.2)
   else {
-    b.failed++;
-    b.errors.push({ path: r.path, reason: r.reason ?? "failed" });
+    if (r.state === "failed") b.failed++;
+    else b.halted++;
+    // `failed`/`halted` stay EXACT even when the list is capped — the count is the truth, the list is the
+    // sample. Dropping the oldest keeps the most recent (usually most relevant) reasons visible.
+    if (b.errors.length >= MAX_BATCH_ERRORS) b.errors.shift();
+    b.errors.push({ path: r.path, reason: r.reason ?? r.state, state: r.state });
   }
-  if (b.done + b.failed >= b.total && !b.finishedAt) {
+
+  const settled = b.ok + b.rejected + b.failed + b.halted;
+  if (settled >= b.total && !b.finishedAt) {
     b.finishedAt = new Date().toISOString();
-    log.info("jobqueue", `batch "${b.label}" finished: ${b.done} ok, ${b.failed} failed`);
+    log.info(
+      "jobqueue",
+      `batch "${b.label}" finished: ${b.ok} ok, ${b.rejected} rejected, ${b.failed} failed, ${b.halted} halted (of ${b.total})`,
+    );
   }
 }
 
-/** Active + recently-finished batches (finished ones pruned past the retention window). */
+/**
+ * Stop a batch (processing_batches.mdx §6.2): drain its PENDING tasks to `halted` and let the in-flight
+ * ones finish. A halted file was never attempted, so it costs nothing to re-run.
+ */
+export function stopBatch(batchId: string): number {
+  const b = batches.get(batchId);
+  const n = haltPending((t) => t.batchId === batchId, "Stopped by the user", "jobqueue");
+  if (b) {
+    b.stoppedBy = "user";
+    // A stop with nothing left pending (everything already in flight) must still settle the row rather
+    // than leave it "running" until the last task drains it.
+    const settled = b.ok + b.rejected + b.failed + b.halted;
+    if (settled >= b.total && !b.finishedAt) b.finishedAt = new Date().toISOString();
+  }
+  return n;
+}
+
+/**
+ * Active + recently-finished batches (§5 — retention is PROCESS LIFETIME bounded by count and age, which
+ * supersedes the old 30-minute window: a user who opened the page an hour after a 1,440-file run found the
+ * row already swept, so the errors they came to read were gone).
+ */
+const MAX_BATCHES = 200;
 export function listBatches(): ProcessingBatch[] {
   const now = Date.now();
   for (const [id, b] of batches) {
     if (b.finishedAt && now - Date.parse(b.finishedAt) > BATCH_RETENTION_MS) batches.delete(id);
+  }
+  // FIFO ceiling on top of the age bound — oldest finished first, so a live batch is never evicted.
+  if (batches.size > MAX_BATCHES) {
+    const finished = [...batches.values()]
+      .filter((b) => b.finishedAt)
+      .sort((a, z) => Date.parse(a.finishedAt!) - Date.parse(z.finishedAt!));
+    for (const b of finished) {
+      if (batches.size <= MAX_BATCHES) break;
+      batches.delete(b.batchId);
+    }
   }
   return [...batches.values()];
 }
@@ -804,6 +883,13 @@ async function runTaskInner(t: QueueTask): Promise<TerminalReason> {
         outcome = "failed";
         recordFailure({ op: "describe", path: t.path, reason: dr.reason ?? dr.status });
         queueFailureLog("describe", t.path, dr.reason ?? dr.status);
+      } else if (dr.status === "rejected") {
+        // Carry the verdict THROUGH to the settle point (processing_batches.mdx §4.2). This used to fall
+        // through to `done`, which destroyed the signal one line before `settleOne`/`recordBatchResult`
+        // could see it — so the Rejected column had nothing to count and the manifest on disk recorded a
+        // refusal as "described". Still NOT a failure: it never calls recordFailure, never logs a queue
+        // failure, and never feeds the §2.7 ceiling.
+        outcome = "rejected";
       } else if (dr.status === "skipped") outcome = "skipped";
     } else if (t.op === "ocr") {
       // OCR (ocr.mdx §10.5). ocrOne registers its own track("ocr", …), so the dock card comes for free.

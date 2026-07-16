@@ -28,7 +28,14 @@ Left_Nav:
       name: "LargeFileBridge — Main Left Bar"
       description: "Primary navigation: Repos, Storages, File System, Devices / Peers, Communities, IPFS, Scans, Settings."
       auth_system: "openauth_federated"
-      sidebar_width: 256px
+      # Sized to the WIDEST item + a small gap, never a round number for its own sake (left_bar.mdx §5).
+      # Measured in the rendered system font (SF, macOS) at the real type sizes:
+      #   "ACT 3 Filmmaking" (external link, 14px) 116.6 + 66 chrome = 182.6  ← the widest item in the bar
+      #   "Large File Bridge" (wordmark, 18px semibold) 140.7 + 32 padding = 172.7
+      #   "Devices / Peers"   (nav item, 14px medium)   101.4 + 66 chrome   = 167.4
+      # 200px leaves ~17px of breathing room to the right of the widest item. The old 256px left ~75px of
+      # dead space — the bar was far wider than its content ever needed.
+      sidebar_width: 200px
 
       header:
         kind: logo

@@ -108,7 +108,9 @@ function parse(): LeftBar {
       navItems,
       externalLinks,
       accountMenu,
-      sidebarWidth: app.sidebar_width ?? "256px",
+      // Fallback must match the yaml's own value (left_bar.mdx §5: widest item + a small gap). A stale
+      // default here would silently restore the old, too-wide bar the moment the yaml key went missing.
+      sidebarWidth: app.sidebar_width ?? "200px",
     };
   } catch (e) {
     // Malformed / missing YAML — log and fall back so the app still boots with a bare sidebar.

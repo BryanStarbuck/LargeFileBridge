@@ -29,7 +29,16 @@ import { resolveBatchesDir } from "../../config/state-dir.js";
 import { log } from "../../shared/logging.js";
 
 /** What a batch did to each file. `halted` and `never_attempted` are NOT failures (§4.2, §7.3). */
-export type BatchOutcome = "described" | "transcribed" | "compressed" | "failed" | "halted" | "never_attempted" | "skipped";
+export type BatchOutcome =
+  | "described"
+  | "transcribed"
+  | "compressed"
+  | "ocred"
+  | "rejected" // the provider REFUSED this file — a verdict, not a fault (processing_batches.mdx §4.2)
+  | "failed"
+  | "halted"
+  | "never_attempted"
+  | "skipped";
 
 /** How a batch ended. The absence of any of these on disk means it crashed (§4.2). */
 export type BatchTerminalState = "completed" | "halted" | "crashed";

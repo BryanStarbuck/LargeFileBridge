@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — CLI Tools & the Install-Tools Preflight
-description: SUPERSEDED IN DIRECTION BY external_tools_policy.mdx — that spec is the product-wide rule (a capability arrives via `pnpm install`, never a `brew install` the user must provision), and this preflight page is the SYMPTOM of that rule being unmet, shrinking toward nothing as the migration lands (IPFS→Helia in-process, cwebp/cjpeg/jpegoptim/oxipng→sharp, ffmpeg/ffprobe→vendored via npm). The brew posture here is what broke reboot auto-start: Homebrew's own homebrew.mxcl.kubo agent raced our LaunchAgent for the IPFS repo lock every login (ipfs_ui.mdx §13.2) — a tool we don't own can have a second owner we can't see. Until the migration lands, this remains the contract for what is still brew-provisioned: the spec for the external command-line tools LargeFileBridge depends on (IPFS/Kubo, ffmpeg/ffprobe, image tooling) and the PREFLIGHT page that appears when any REQUIRED tool is missing. Before a scan/scheduleTask (or any action that shells out to one of these tools) runs, LFB checks whether the tools it needs are present on PATH; if a required one is missing it routes the user to this page instead of failing silently. The page lists each tool with its live status (installed + version, or missing), what LFB uses it for, the exact install command, and a one-click Install that runs the package-manager install (Homebrew on Mac — `brew install <formula>` — primary; apt/dnf/pacman on Linux, winget/choco on Windows) with progress shown in the dock. Homebrew itself may be absent — LFB detects that and shows the official install instructions rather than auto-installing a system package manager. Nothing is installed without an explicit click (charter consent posture). Cross-links scan.mdx (the preflight gates the scan), ipfs.mdx (needs the ipfs CLI), the charter's compression value (needs ffmpeg/ffprobe for the duration×resolution size baselines), webapp.mdx §11 (the `install` progress op), menus.mdx, and settings.mdx.
+description: SUPERSEDED IN DIRECTION BY external_tools_policy.mdx — that spec is the product-wide rule (a capability arrives via `pnpm install`, never a `brew install` the user must provision), and this preflight page is the SYMPTOM of that rule being unmet, shrinking as the migration lands (IPFS→Helia in-process, cwebp/cjpeg/jpegoptim/oxipng→sharp) — but NOT to zero: ffmpeg/ffprobe are the PERMANENT residue, deliberately kept USER-PROVISIONED and NEVER vendored (policy §4.2 — GPL licensing we'd pull onto a public repo, VideoToolbox codec breadth, and no second owner to cause the bug class this policy targets), so a page with two honest rows is the goal state. The brew posture here is what broke reboot auto-start: Homebrew's own homebrew.mxcl.kubo agent raced our LaunchAgent for the IPFS repo lock every login (ipfs_ui.mdx §13.2) — a tool we don't own can have a second owner we can't see. Until the migration lands, this remains the contract for what is still brew-provisioned: the spec for the external command-line tools LargeFileBridge depends on (IPFS/Kubo, ffmpeg/ffprobe, image tooling) and the PREFLIGHT page that appears when any REQUIRED tool is missing. Before a scan/scheduleTask (or any action that shells out to one of these tools) runs, LFB checks whether the tools it needs are present on PATH; if a required one is missing it routes the user to this page instead of failing silently. The page lists each tool with its live status (installed + version, or missing), what LFB uses it for, the exact install command, and a one-click Install that runs the package-manager install (Homebrew on Mac — `brew install <formula>` — primary; apt/dnf/pacman on Linux, winget/choco on Windows) with progress shown in the dock. Homebrew itself may be absent — LFB detects that and shows the official install instructions rather than auto-installing a system package manager. Nothing is installed without an explicit click (charter consent posture). Cross-links scan.mdx (the preflight gates the scan), ipfs.mdx (needs the ipfs CLI), the charter's compression value (needs ffmpeg/ffprobe for the duration×resolution size baselines), webapp.mdx §11 (the `install` progress op), menus.mdx, and settings.mdx.
 ---
 
 # LargeFileBridge — CLI Tools & the Install-Tools Preflight
@@ -20,9 +20,20 @@ description: SUPERSEDED IN DIRECTION BY external_tools_policy.mdx — that spec 
 > is safe to run across an entire tree.
 >
 > As the migration lands (policy §6), rows leave this page and **do not come back**: IPFS → Helia
-> in-process; cwebp/cjpeg/jpegoptim/oxipng → `sharp` (already a dependency); ffmpeg/ffprobe → vendored
-> via npm. **The goal state is that this page has nothing left to check.** Until then it remains the
-> contract for what is still brew-provisioned.
+> in-process; cwebp/cjpeg/jpegoptim/oxipng → `sharp` (already a dependency).
+>
+> **ffmpeg / ffprobe are the PERMANENT RESIDUE — they stay here, user-provisioned, forever**
+> ([policy §4.2](./external_tools_policy.mdx), the one place §0 is overruled **on the merits**). They are
+> **not vendored via npm**: (1) **licensing** — libx264/libx265 make a build **GPL**, and today the user
+> installs it themselves so we distribute nothing and owe nothing; vendoring it into an app we ship from a
+> **public repo** pulls that obligation onto the whole product. (2) **Codec breadth** — a generic static
+> build may lack the Apple **VideoToolbox** encoders, forfeiting the fastest path permanently. (3) **The win
+> is small** — ffmpeg is stable, ubiquitous, one `brew install`, and has **no second owner**, so it cannot
+> cause the class of bug this policy targets. **The policy's target is ownership ambiguity, not subprocesses.**
+>
+> **The goal state is therefore a page with two honest rows — not zero.** ([policy §6](./external_tools_policy.mdx):
+> "tools.mdx shrinks — but does NOT disappear… Do not chase zero for its own sake.") Until the rest lands,
+> this remains the contract for what is still brew-provisioned.
 
 LargeFileBridge (LFB) is TypeScript-on-Node, but some of its work is **still** done by **external
 command-line tools**: IPFS itself is the **Kubo** CLI, video/image compression and the size baselines

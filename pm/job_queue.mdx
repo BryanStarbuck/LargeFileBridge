@@ -251,18 +251,58 @@ The To-Do batch Apply that fans decisions out into `enqueue()` is served in code
 
 ---
 
-## 5. Persistence & crash posture (LOCKED)
+## 5. Persistence & crash posture — the queue is DURABLE (LOCKED)
 
-The queue is **in-memory only**, exactly like the job registry ([webapp.mdx §12](./webapp.mdx)):
+> **This section previously mandated the opposite, and was wrong.** It is retained with its history intact
+> because the reversal is the lesson. **[crash_recovery.mdx](./crash_recovery.mdx) §3 (D1 — the journal) and
+> §4 (D1b — restore on boot) OWN this behavior**; this section defers to them and does not restate the
+> mechanism.
 
-* The process **is** the single API server; a task that outlives a restart was **not** "in flight" anymore,
-  so re-running it on boot would be wrong (it might duplicate work the user never re-requested).
-* On restart the queue is simply **empty**. Nothing was lost that mattered: any output already written to
-  disk stays; the user can re-invoke the page action, and **skip-already-done** ([page_actions.mdx §1.2](./page_actions.mdx))
-  means only the genuinely-unfinished files re-queue. That idempotency is what makes no-persistence safe.
-* There is **no** cross-process or on-disk queue file, and the queue never networks (it only calls the
-  same local runners the per-file paths call — transcribe is fully local; describe's one deliberate upload
-  is the runner's concern, [ai_description.mdx §7](./ai_description.mdx), not the queue's).
+**The queue is journaled to disk and restored at boot.** The backlog survives a crash, a restart, and an OOM
+kill.
+
+### 5.1 What this section used to say, and why it was wrong (LOCKED — do not "restore" it)
+
+The original design was in-memory only, on this reasoning:
+
+> *"The process **is** the single API server; a task that outlives a restart was not 'in flight' anymore, so
+> re-running it on boot would be wrong. On restart the queue is simply empty. **Nothing was lost that
+> mattered** — any output already on disk stays, and the user can re-invoke the page action, where
+> skip-already-done means only the genuinely-unfinished files re-queue. That idempotency is what makes
+> no-persistence safe."*
+
+Every sentence of that is quoted here because it is **seductive and false**, and it is exactly what a future
+reader will re-derive from first principles. It smuggles in two assumptions:
+
+1. **That a human is present to re-invoke.** The queue's whole purpose is unattended bulk work — a
+   1,440-file describe run started at night. "The user can just re-invoke it" is not a recovery story; it is
+   the absence of one.
+2. **That the user can tell an EMPTY queue from an ANNIHILATED one.** They cannot — the two render
+   identically. Idempotency makes re-running *safe*; it does not make silent loss *visible*.
+
+**What it cost:** on **2026-07-15** a 1,440-file batch died with the process at 22:13 (V8 heap 4.1 GB,
+`Ineffective mark-compacts near heap limit`) and **vanished in silence** — the UI still showed "queued" for
+hours ([crash_recovery.mdx §2](./crash_recovery.mdx)). No log in the app's own files; the OOM is only in
+`launcher.log`, because a process cannot log its own death.
+
+### 5.2 The posture now
+
+* **Journaled** — three commit points: `enqueue` (one batched fsync), attempt-before-run, and a terminal
+  write in `finally` ([crash_recovery.mdx §3](./crash_recovery.mdx)).
+* **Restored at boot** — `admitRestored()` re-admits the surviving backlog ([crash_recovery.mdx §4](./crash_recovery.mdx)).
+* **Poison-task safe** — `QUEUE_MAX_ATTEMPTS` quarantines a task that keeps killing the process, surfaced as
+  a Failed row rather than an infinite crash loop. **Durability must never become a boot-loop.**
+* **Admission is TWO budgets, not one** — a count cap **AND** a byte reservation (`memoryFits()`). The old
+  code admitted `describe` purely by count (24) on the theory that a network-bound job has no hardware
+  bottleneck: true for CPU, **false for memory** — every in-flight upload pins its full base64 payload, and
+  24 × ~66-90 MB is what reached 4.1 GB ([memory.mdx §2.5](./memory.mdx)).
+* **Never networks** — it only calls the same local runners the per-file paths call; describe's one
+  deliberate upload is the runner's concern ([ai_description.mdx §7](./ai_description.mdx)), not the queue's.
+
+Implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/queue-journal.ts` (the journal + `appendTerminal()`),
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/queue-restore.ts` (boot restore), and
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `admitRestored()` / `memoryFits()` / `recordQuarantined()`.
 
 ---
 
@@ -285,8 +325,13 @@ The queue is **in-memory only**, exactly like the job registry ([webapp.mdx §12
 5. A task that fails is **caught, logged, and skipped** — one bad file never stalls the queue.
 6. `GET /api/progress` returns a **`queued`** count of not-yet-started tasks; the dock shows a
    **"+ N queued"** footer that drains to nothing. No fabricated cards for pending items.
-7. The queue is **in-memory only** (no persistence); on restart it is empty, and re-invoking a page action
-   re-queues only the still-unfinished files (skip-already-done makes this safe).
+7. The queue is **DURABLE** (§5): journaled to disk at three commit points and **restored at boot**, so a
+   crash/OOM/restart no longer annihilates the backlog. A poison task is **quarantined** after
+   `QUEUE_MAX_ATTEMPTS` and surfaced as a Failed row — durability must never become a boot-loop. Admission
+   is a **count cap AND a byte reservation**, never count alone. Owner: [crash_recovery.mdx](./crash_recovery.mdx)
+   §3/§4. **The former "in-memory only, nothing was lost that mattered" rule is REPEALED** — it assumed a
+   human was present to re-invoke and that an empty queue was distinguishable from an annihilated one
+   (§5.1); it cost a 1,440-file batch on 2026-07-15.
 8. **Batches (§4a):** **every bulk run** — a "Compress inside", and each `transcribe` / `describe` / `ocr`
    popup Confirm — opens a batch (`createBatch`) that **adopts the manifest's existing `batchId`** (never
    mints a second) and whose per-file tasks carry it. `recordBatchResult` routes each result into **exactly
@@ -348,8 +393,14 @@ The queue is **in-memory only**, exactly like the job registry ([webapp.mdx §12
      transcribe_calc_engine.mdx, processing.mdx §4.6.
    - GET /api/progress gains `queued` (pending count); dock shows "+N queued" footer. No fake cards for
      pending items (webapp.mdx §13).
-   - IN-MEMORY ONLY, no persistence (same rationale as the registry). Restart => empty queue; re-invoking a
-     page action re-queues only unfinished files (skip-already-done makes no-persistence safe). Never networks.
+   - DURABLE, NOT in-memory (§5 — REVERSED 2026-07-16). Journaled (3 commit points) + restored at boot;
+     poison tasks quarantined at QUEUE_MAX_ATTEMPTS so durability never becomes a boot-loop; admission =
+     count cap AND byte reservation (memory.mdx §2.5). Owner = crash_recovery.mdx §3/§4. The OLD rule
+     ("in-memory only; restart => empty queue; skip-already-done makes no-persistence safe") is REPEALED and
+     is quoted verbatim in §5.1 precisely because it is seductive and a future reader will re-derive it: it
+     assumed a HUMAN is present to re-invoke (the queue exists for UNATTENDED bulk work) and that an empty
+     queue is distinguishable from an annihilated one (it is not). Cost: the 1,440-file batch, 2026-07-15.
+     Still true: never networks.
   Code: modules/jobqueue/jobqueue.service.ts (enqueue/pump/runTask/queueDepth, capFor()/bucketOf() drawing
   shared/concurrency.ts coreBudget(), pending[] + inflight Set, createBatch/recordBatchResult/listBatches),
   shared/concurrency.ts (logicalCores/coreBudget/responsiveBudget), progress.router.ts (fold `queued`+`batches` into

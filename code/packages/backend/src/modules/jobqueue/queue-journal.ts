@@ -37,7 +37,11 @@ export const QUEUE_MAX_ATTEMPTS = Math.max(1, Number(process.env.LFB_QUEUE_MAX_A
 // against a still-dead account (to_fix.mdx §13); the user re-queues via the page action, which preflights
 // first (§2.5). Recording it as "failed" would be a lie the user acts on — they would see 1,440 failures and
 // conclude the files are bad, when nothing was ever tried.
-export type TerminalReason = "done" | "skipped" | "failed" | "quarantined" | "halted";
+// `rejected` is a VERDICT, not a fault (processing_batches.mdx §4.2): the provider considered the file and
+// said no, after every retry was spent, and a `.ai_description_rejected` record was written. It is SETTLED
+// but not DONE — folding it into "done" is what made a batch of copyrighted slides look like clean successes
+// while the Rejected column had nothing to count.
+export type TerminalReason = "done" | "rejected" | "skipped" | "failed" | "quarantined" | "halted";
 
 /** The `enq` record — everything needed to reconstruct a task from nothing (§3.2). Nothing DERIVED is
  *  journaled: the bucket, thread cap and budgets are recomputed live at admission, so a restart never
