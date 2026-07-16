@@ -82,6 +82,26 @@ narrow). The producer stamps it from the file's extension when it plans the batc
 The FIFO queue, `enqueue()`, and the in-flight dedup set are implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()` / the module-level `pending[]` + `inflight` Set.
 
+### 2.1 A task can leave the queue **without ever running** — `halted` (LOCKED)
+
+A task leaves the queue three ways, not two: **done**, **failed**, or **`halted`**.
+
+* **`halted` ≠ `failed`.** A **failed** task **ran** and errored. A **halted** task was **NEVER ATTEMPTED**
+  — the provider's **circuit opened** ([to_fix.mdx §2.4](./to_fix.mdx)) and the queue **drained** it out of
+  `pending` rather than spend a round-trip it already knew would be rejected.
+* **Why the distinction is load-bearing.** These two facts imply **opposite** user actions. A failure means
+  the work was really lost; a halt means nothing was spent and the file is still exactly where it started.
+  Collapsing `halted` into `failed` makes a user **re-run work believing it was attempted** and hides the
+  actual fix — wait for the provider, then re-queue.
+* **One-click re-queue (required).** Because a halted task was never tried, restoring it is pure re-enqueue.
+  The surface must offer that in **one click**, grouped **one banner per circuit** — never a per-row retry
+  ([processing.mdx §4.3.1](./processing.mdx)).
+* **Terminal record.** A halt is recorded terminally like any other outcome, so the manifest and the
+  transactions ledger show the batch **stopped**, not that N files broke.
+
+Draining the doomed tasks and recording the distinct terminal state is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `haltDoomedTasks()` (splices `pending`, `recordFailure({ state: "halted" })`, `appendTerminal(id, "halted")`), called from `pump()`; the wire shape is `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FailedItemView.state?: "failed" | "halted"`.
+
 ---
 
 ## 3. The workers — the CORE BUDGET, media-aware (LOCKED)

@@ -37,7 +37,7 @@ mediaRouter.get("/probe", requireAllowListed, (req, res) => {
 // GET /api/media/stream?path=&e=&s=&t= — a live, browser-SAFE fragmented MP4 (H.264 yuv420p + AAC)
 // for a video whose real codec the browser can't decode (codecs.mdx §6). Same signed-token gate as
 // /raw (a plain <video> can't send a Bearer header). No Range: this is a forward-only transcode pipe.
-mediaRouter.get("/stream", (req, res) => {
+mediaRouter.get("/stream", async (req, res) => {
   const p = typeof req.query.path === "string" ? req.query.path : undefined;
   const e = typeof req.query.e === "string" ? req.query.e : undefined;
   const s = typeof req.query.s === "string" ? req.query.s : undefined;
@@ -53,7 +53,9 @@ mediaRouter.get("/stream", (req, res) => {
     return res.status(code).json({ ok: false, error: msg });
   }
 
-  streamPlayable(file.abs, res, (cb) => req.on("close", cb));
+  // streamPlayable is async now (its ffprobe plan step must not block the event loop — to_fix.mdx §3.3.4).
+  // It resolves once ffmpeg is piping, not when the stream ends, and reports its own faults onto `res`.
+  await streamPlayable(file.abs, res, (cb) => req.on("close", cb));
 });
 
 // GET /api/media/raw?path=&e=&t= — stream the bytes with Range (token-gated, NOT allow-list-gated).

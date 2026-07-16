@@ -21,6 +21,7 @@ import { markDurableArtifact } from "../storage/tracking-root.service.js";
 import { repoArtifactPlacement } from "../store-model/units.service.js";
 import { track } from "../progress/progress.registry.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
+import { writeManifest, trackBatch } from "../jobqueue/batch-manifest.service.js";
 import { getPrompt } from "./prompts.js";
 import { selectAdapter, providerStatus, providerKeySources, providerMeta, mimeForMedia, withProviderRetry, type ProviderId } from "./adapters.js";
 // The provider-account gate (to_fix.mdx §2): preflight before a batch, circuit breaker on an account fault.
@@ -451,7 +452,27 @@ export async function enqueueDescribe(opts: {
     }
   }
 
-  const { queued } = enqueue(eligible.map((p) => ({ op: "describe", path: p, overwrite, provider: opts.provider })));
+  // ── The BATCH MANIFEST (to_fix.mdx §4.1, invariant §10.4) ───────────────────────────────────────────
+  // Written BEFORE the enqueue, with the full file list. On 2026-07-15 this batch's contents were
+  // unknowable after the crash; from here on, the click itself is a durable fact. The manifest's
+  // batch_id then rides every task (C6) and, via runTask's withLogContext, every LOG LINE the batch
+  // emits (C7) — so one grep on that id reconstructs the whole run across log.log and error.err.
+  const manifest = writeManifest({
+    op: "describe",
+    scope: scopeLabel(opts),
+    provider: opts.provider ?? "auto",
+    providerPreflight: eligible.length >= PREFLIGHT_MIN_BATCH ? "ok" : "not_probed",
+    counts: { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported },
+    files: eligible.map((p) => ({ path: p, sizeBytes: safeSize(p) })),
+  });
+  const { queued } = enqueue(
+    eligible.map((p) => ({ op: "describe", path: p, overwrite, provider: opts.provider, batchId: manifest.batchId })),
+  );
+  // Seed the outstanding count with what ACTUALLY entered the queue, not what was eligible — `enqueue`
+  // dedups against in-flight work and can refuse at the journal ceiling, and a tally seeded too high
+  // would never reach zero, leaving a finished batch's manifest permanently open (i.e. reading as a
+  // crash). Count what happened, never what was intended.
+  trackBatch(manifest.batchId, queued);
   log.info("describe", `enqueue [${scopeLabel(opts)}]: ${candidates.length} considered → ${queued} queued (${alreadyDone} already done, ${unsupported} unsupported)`);
   return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued, willProcess: queued, needsSetup: false, setupPath: null, blocked: false, blockedReason: null };
 }
@@ -543,6 +564,16 @@ function describeCandidates(opts: { paths?: string[]; root?: string }): string[]
 function scopeLabel(opts: { paths?: string[]; root?: string }): string {
   if (opts.paths && opts.paths.length > 0) return `${opts.paths.length} checked path(s)`;
   return opts.root ? `root ${path.resolve(expandHome(opts.root.trim()))}` : "no scope";
+}
+
+/** A file's size for the manifest, or undefined if it can't be read. The manifest is a record, not a
+ *  gate: a file we cannot stat is still enqueued, it just carries no size. */
+function safeSize(p: string): number | undefined {
+  try {
+    return fs.statSync(p).size;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Recursively collect image/video file paths under `root`, skipping hidden/tracking/heavy dirs. */

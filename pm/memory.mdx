@@ -227,6 +227,24 @@ estimatedBytes(file) = min(fileSize, INLINE_MAX_BYTES) × INFLATION + PER_JOB_OV
 Estimation is **deliberately conservative**. Over-reserving costs throughput. Under-reserving costs
 the process.
 
+* **File size is only a valid proxy where bytes-in = bytes-resident.** That holds for **describe**: the
+  file's bytes *are* the payload we pull into this heap. It is **wrong for compress**, where the input is
+  **decoded**, not uploaded — a **5 MB JPEG decodes to ~96 MB** of raw pixels
+  ([to_fix.mdx §3.3.5](./to_fix.mdx)), so file size under-counts the real cost by **~20×**.
+* **Today this trap is latent, not live** — and must stay that way. `estimatedBytes()` returns **0** for
+  every non-describe op, so the budget does **not** lie about compress; it simply **does not cover that
+  bucket** (compress streams file→file through child processes, so its cost is subprocess RSS, governed by
+  the thread caps rather than by the V8 heap budget).
+* **The guard, for whoever extends the budget upward.** When the global budget grows to sit **above** the
+  buckets ([to_fix.mdx §6.1](./to_fix.mdx)) and compress starts reserving, it must **not** reserve on
+  `fileSize`. A budget wired that way would admit a fatal batch **while reporting itself healthy** — and a
+  budget that lies is worse than no budget. Compress needs its own estimator, priced on **decoded
+  dimensions** (`width × height × channels`), not on the bytes on disk.
+
+The describe-only scope of the reservation — and the `if (t.op !== "describe") return 0` that keeps the
+compress bucket out of the byte budget for now — is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `estimatedBytes()`
+
 ### 2.3 Reservation / release discipline (LOCKED)
 
 ```

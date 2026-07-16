@@ -438,6 +438,18 @@ fan-out — is in code:
 The async compress-to-fit + async base64 read are in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `runAsync()` + the `async` fit/probe/encode functions; `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `readBase64Capped()` (`await fs.promises.readFile`), awaited in `gemini.describe()` / `chatVisionAdapter.describe()`.
 
+- **What this fix did *not* do.** The `fs.promises.readFile` above fixed **T3** — the read stopped
+  blocking the event loop — and did **nothing** for **T5**: it still materializes the entire
+  up-to-18MB buffer in the heap. [memory.mdx P-29](./memory.mdx) catalogues that same call as copy 1
+  of the 3–4× residency that OOMed us on 2026-07-15. Both entries are right, and P-27 is **superseded
+  by streaming, not reverted** — the async form stays; the follow-up (multipart / Gemini's resumable
+  Files API, memory.mdx P-29) removes the buffer, not the `await`.
+
+**The general lesson, and the reason it is stated here once:** *"make it async"* and *"make it small"*
+are **different fixes for different problems** — async moves work off the event loop (T3), small stops
+the heap filling (T5). Neither implies the other. We did the first, assumed we had done the second, and
+wrote **LOCKED** next to it. Before locking any hot-path fix, ask **both** questions separately.
+
 ---
 
 ## Third pass (P-28…P-34) — the background pipeline · T5/T6
@@ -807,9 +819,9 @@ The pub/sub bridge that delivers optimistic per-entity badge patches to the stre
 | P-20 | `React.memo(FsRow)` (folded into P-15) | `pages/fs/FileSystemPage.tsx` |
 | P-21 | `loading="lazy"` on the media `<img>` (completes P-13) | `MediaViewer.tsx` |
 | P-22 | **Streaming background filesystem index** — flat walk refactored to push row batches; new NDJSON stream endpoint; the walk no longer produces one 5000-row blob | `backend/modules/fsindex/fsindex.service.ts`, `backend/modules/fs/fs.service.ts`, `backend/modules/fs/fs.router.ts`, `shared/src/types.ts` (`FlatStreamEvent`) |
-| P-23 | **Progressive, non-blocking consumption** — fetch/NDJSON reader (Bearer-authed) + `useStreamedFlatListing` (ref accumulate + rAF-coalesced flush); Full Paths fills progressively, time-to-first-row ≈ tens of ms. Kept P-17's optimistic `⋯`-menu badge patch working after the page left React Query via a small pub/sub bridge | `frontend/src/lib/streamNdjson.ts`, `frontend/src/components/table/useStreamedFlatListing.ts`, `frontend/src/pages/fs/FullPathsPage.tsx`, `frontend/src/lib/flatListingPatch.ts`, `frontend/src/lib/patchEntityBadges.ts` |
 | P-24 | **mtime-keyed directory-listing cache** — re-opening a column serves from the index instead of re-walking | `backend/modules/fsindex/fsindex.service.ts`, `backend/modules/fs/fs.service.ts` |
 | P-25 | **`content-visibility`/`contain` on off-screen rows** — browser skips layout+paint for out-of-view content | `frontend/src/pages/fs/FullPathsPage.tsx`, `frontend/src/pages/fs/FileSystemPage.tsx`, `frontend/src/components/table/DataTable.tsx` |
+| P-27 | **Async compress-to-fit + async base64 read** — `spawnSync`/`readFileSync` off the ~24-way describe hot path, so the event loop stays free and `GET /api/progress` keeps answering. Fixed **T3 only**: `readBase64Capped()`'s `fs.promises.readFile` still materializes the whole buffer (P-29's copy 1) — **superseded by streaming, not reverted** | `backend/modules/describe/fit-media.ts`, `backend/modules/describe/adapters.ts` |
 | P-28 | **The memory budget** — admission is now count AND bytes; reserve at admission, release in `finally`; oversize runs alone; per-bucket head-of-line blocking | `backend/shared/concurrency.ts` (`memoryBudget()`), `backend/modules/jobqueue/jobqueue.service.ts` (`estimatedBytes()`/`memoryFits()`/`takeRunnable()`/`releaseMemory()`), `shared/src/schemas.ts` (`performance.max_memory_fraction`) |
 | P-29 | **Build the payload once** — Buffer released once base64 exists; `data:` prefix built into the same string; no duplicate roots | `backend/modules/describe/adapters.ts` |
 | P-30 | **Opt-in `captureStdout`** (default `"ignore"`, 1MiB cap, chunk-array `join`) — only `probeVideo()` captures | `backend/modules/describe/fit-media.ts` |
@@ -817,6 +829,7 @@ The pub/sub bridge that delivers optimistic per-entity badge patches to the stre
 | P-32 | **Heap-pressure WARN + 30s HEARTBEAT** — a predictive signal before the abort that can't be logged | `backend/shared/heap-watch.ts`, `backend/shared/transactions.ts`, `backend/src/main.ts` |
 | P-33 | **Durable backlog** — fsync'd append-only journal, 3 commit points, boot restore, 2-strike quarantine | `backend/modules/jobqueue/queue-journal.ts`, `queue-restore.ts`, `jobqueue.service.ts`, `backend/config/state-dir.ts` (`resolveQueueDir()`) |
 | P-34 | **BEGIN/END for every job and every API call** — the work ledger | `backend/shared/transactions.ts`, `backend/modules/describe/describe.service.ts`, `adapters.ts`, `fit-media.ts`, `backend/modules/transcribe/transcribe.service.ts`, `backend/tools/transcribe/engine.ts`, `backend/modules/jobqueue/jobqueue.service.ts` |
+| P-35 | **Progressive, non-blocking consumption** (completes P-22; formerly numbered P-23, which the pin-pass entry owns) — fetch/NDJSON reader (Bearer-authed) + `useStreamedFlatListing` (ref accumulate + rAF-coalesced flush); Full Paths fills progressively, time-to-first-row ≈ tens of ms. Kept P-17's optimistic `⋯`-menu badge patch working after the page left React Query via a small pub/sub bridge | `frontend/src/lib/streamNdjson.ts`, `frontend/src/components/table/useStreamedFlatListing.ts`, `frontend/src/pages/fs/FullPathsPage.tsx`, `frontend/src/lib/flatListingPatch.ts`, `frontend/src/lib/patchEntityBadges.ts` |
 
 Follow-ups (not blocking the hang fix): move the walk into a **worker thread**
 (`backend/modules/fsindex/walker.worker.ts`) so even CPU cost leaves the HTTP loop

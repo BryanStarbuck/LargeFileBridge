@@ -27,6 +27,20 @@ export function resolveTodoBatchesDir(): string {
   return dir;
 }
 
+// The BATCH MANIFEST directory (to_fix.mdx §4.1): ~/T/_large_files_bridge/_batches/ — one durable,
+// timestamped YAML per bulk run, written BEFORE anything is enqueued and carrying the full file list.
+//
+// WHY IT IS NOT the queue journal: `queue/` records TASKS, for replay by the machine. A manifest records
+// INTENT, for a human — this scope, these 1,440 files, this provider, this moment. On 2026-07-15 a batch
+// vanished into an OOM and nothing on disk knew what had been in it, which is why reconstructing it took
+// hours. Distinct from `_do_batches` (the To Do page's disposable recommendation bundles) despite the
+// similar name. Machine-local and never travels; under the state root so it honors LFB_STATE_DIR.
+export function resolveBatchesDir(): string {
+  const dir = path.join(resolveStateDir(), "_batches");
+  ensureDir(dir);
+  return dir;
+}
+
 // The BACKGROUND QUEUE journal directory (crash_recovery.mdx §3.1): ~/T/_large_files_bridge/queue/ — the
 // machine-local, append-only backlog that lets a queued batch survive the process that hosts it. A backlog is
 // a fact about THIS process on THIS machine: never git-tracked, never IPFS-pinned, never travels. It lives

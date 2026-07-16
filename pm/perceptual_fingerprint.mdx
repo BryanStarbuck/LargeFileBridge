@@ -42,6 +42,25 @@ The fingerprint is judged against the transforms the product actually performs a
 | **Codec re-encode** (ProRes→H.264, etc.) | ✅ yes (video) | Our compress pass targets a smaller codec. |
 | **Frame-rate change** (video) | ✅ yes (video) | Re-timed exports. |
 | **Format conversion** (PNG→JPEG, HEIC→JPEG) | ✅ yes (image) | The PNG→compressible and HEIC→JPEG conversions ([compression.mdx](./compression.mdx), [charter](../CLAUDE.md)). |
+
+**"Resize" here does not contradict compression.mdx's "we never downscale."** They govern different
+things, and the two specs say so on purpose ([to_fix.mdx §3.4](./to_fix.mdx)):
+
+* **"Never downscale"** ([compression.mdx §1](./compression.mdx)) governs the **compressed output file** —
+  a **user's file** must never lose resolution.
+* The row above is the opposite direction: it is the **input variety** the fingerprint must **survive** —
+  someone *else's* 1080p export of our 4K master must still match.
+* The fingerprint's **own** downscale is **internal to its decode** — `sharp.resize(512, 512, { fit:
+  "inside" })` shrinks a throwaway pixel buffer purely to bound what we hash. It **writes no file**,
+  **touches no output**, and is **invisible to the user**; resize-invariance (the row above) is precisely
+  what makes hashing the shrunken copy legitimate.
+
+The internal, output-free downscale is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/perceptual.service.ts` — `decodeForHash()`
+
+**Do not "fix" this into agreement with compression.mdx.** A reader who mistakes `decodeForHash()`'s
+resize for a violation of "never downscale" will delete it — which decodes every image at **full
+resolution** and restores a **~105 MB-per-file memory bomb** on a path that runs many files at once.
 | **Heavy crop / large arbitrary rotation** | ⚠️ best-effort | Degrades for *every* global perceptual hash; we do not rely on it. |
 
 The fingerprint's job is to let LFB say *"the compressed `trees.mov` is the same content as the original

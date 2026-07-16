@@ -18,15 +18,76 @@ import type { Response } from "express";
 import { log } from "../../shared/logging.js";
 
 // ── tool presence ────────────────────────────────────────────────────────────────
+// Memoized per binary for the life of the process — this is on the HTTP request path (every /stream hit
+// called it), and a tool cannot appear or vanish mid-process, so one fork per tool is all we ever need
+// (to_fix.mdx §3.3.4 / T3). Same shape as compression.service.ts onPath().
+const _onPath = new Map<string, boolean>();
 function onPath(bin: string): boolean {
+  const hit = _onPath.get(bin);
+  if (hit !== undefined) return hit;
+  let found = false;
   try {
-    return spawnSync("which", [bin], { encoding: "utf8" }).status === 0;
+    found = spawnSync("which", [bin], { encoding: "utf8" }).status === 0;
   } catch {
-    return false;
+    found = false;
   }
+  _onPath.set(bin, found);
+  return found;
 }
 export function hasFfmpeg(): boolean {
   return onPath("ffmpeg");
+}
+
+// The probe runner — ASYNC (child_process.spawn), never spawnSync. probeStream() sits on the /stream HTTP
+// request path, and its 20 s timeout as a SYNC call was a 20 s freeze of the WHOLE app: the event loop
+// stops, so every other request (the Processing page poll included) hangs behind one slow ffprobe. Same
+// class of bug as the describe/fit-media freeze (to_fix.mdx §3.3.4 / T3); this mirrors that file's
+// runAsync() — capped stdout joined once at settle, tail-only stderr, timeout that SIGKILLs.
+const STDOUT_CAP_BYTES = 1024 * 1024; // 1 MiB — ffprobe key=value output is bytes; a runaway is a fault
+function runAsync(
+  bin: string,
+  args: string[],
+  timeoutMs: number,
+): Promise<{ code: number | null; out: string; err: string }> {
+  return new Promise((resolve) => {
+    const chunks: string[] = [];
+    let captured = 0;
+    let err = "";
+    let settled = false;
+    let child;
+    try {
+      child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    } catch (e) {
+      resolve({ code: null, out: "", err: (e as Error).message });
+      return;
+    }
+    // Joined once, at settle — never in the data handler (that concat is the quadratic part of P-30).
+    const finishOut = (): string => chunks.join("");
+    const timer = setTimeout(() => {
+      if (!settled) child!.kill("SIGKILL");
+    }, timeoutMs);
+    child.stdout?.on("data", (d) => {
+      if (captured >= STDOUT_CAP_BYTES) return; // past the cap we drop, we do not grow
+      const s = d.toString();
+      chunks.push(s);
+      captured += s.length;
+    });
+    child.stderr?.on("data", (d) => {
+      err = (err + d.toString()).slice(-4096); // keep only the tail
+    });
+    child.on("error", (e) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ code: null, out: finishOut(), err: e.message });
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ code, out: finishOut(), err });
+    });
+  });
 }
 
 // ── browser-playability decision (codecs.mdx §2) ──────────────────────────────────
@@ -59,15 +120,15 @@ interface ProbeStreams {
 /** Run ffprobe for one selected stream and return its fields as a key→value map. `key=value` output
  *  (default=nw=1) is used deliberately: ffprobe's `csv` writer emits fields in its own fixed internal
  *  order, NOT the order you list in -show_entries, so positional parsing silently misreads. */
-function probeStream(abs: string, select: string, entries: string): Record<string, string> | null {
-  const r = spawnSync(
+async function probeStream(abs: string, select: string, entries: string): Promise<Record<string, string> | null> {
+  const r = await runAsync(
     "ffprobe",
     ["-v", "error", "-select_streams", select, "-show_entries", `stream=${entries}`, "-of", "default=nw=1", abs],
-    { encoding: "utf8", timeout: 20_000, maxBuffer: 4 * 1024 * 1024 },
+    20_000, // unchanged 20 s budget — but it now yields instead of freezing the loop
   );
-  if (r.status !== 0 || r.stdout == null) return null;
+  if (r.code !== 0) return null;
   const out: Record<string, string> = {};
-  for (const line of r.stdout.trim().split("\n")) {
+  for (const line of r.out.trim().split("\n")) {
     const eq = line.indexOf("=");
     if (eq > 0) out[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
   }
@@ -75,11 +136,11 @@ function probeStream(abs: string, select: string, entries: string): Record<strin
 }
 
 /** ffprobe the first video + first audio stream. Returns null when ffprobe is absent or fails. */
-function probeStreams(abs: string): ProbeStreams | null {
+async function probeStreams(abs: string): Promise<ProbeStreams | null> {
   if (!onPath("ffprobe")) return null;
-  const v = probeStream(abs, "v:0", "codec_name,pix_fmt");
+  const v = await probeStream(abs, "v:0", "codec_name,pix_fmt");
   if (!v) return null; // ffprobe present but errored on this file → let caller transcode to be safe
-  const a = probeStream(abs, "a:0", "codec_name");
+  const a = await probeStream(abs, "a:0", "codec_name");
   return {
     vcodec: v.codec_name || null,
     pixFmt: v.pix_fmt || null,
@@ -89,8 +150,8 @@ function probeStreams(abs: string): ProbeStreams | null {
 }
 
 /** Decide the cheapest browser-safe streaming path for a file (codecs.mdx §6). */
-export function planStream(abs: string): StreamPlan {
-  const p = probeStreams(abs);
+export async function planStream(abs: string): Promise<StreamPlan> {
+  const p = await probeStreams(abs);
   if (!p) {
     return { mode: "transcode", reason: "ffprobe unavailable — transcoding to be safe", vcodec: null, pixFmt: null, acodec: null };
   }
@@ -137,13 +198,25 @@ function ffmpegArgs(abs: string, plan: StreamPlan): string[] {
 }
 
 /** Pipe a live browser-safe fragmented MP4 for `abs` into `res`. Caller has already verified the grant
- *  and that the file is a real video. Returns immediately; streaming continues on the ffmpeg process. */
-export function streamPlayable(abs: string, res: Response, onClose: (cb: () => void) => void): void {
+ *  and that the file is a real video. Resolves once ffmpeg is spawned and piping; streaming then continues
+ *  on the ffmpeg process. Async because the ffprobe plan step must not block the event loop (§3.3.4). */
+export async function streamPlayable(abs: string, res: Response, onClose: (cb: () => void) => void): Promise<void> {
   if (!hasFfmpeg()) {
     res.status(503).json({ ok: false, error: "ffmpeg not installed — install it (brew install ffmpeg) to stream this codec" });
     return;
   }
-  const plan = planStream(abs);
+  // The plan step now awaits ffprobe, so the browser can hang up BEFORE we ever spawn ffmpeg. Subscribe to
+  // the close event up front — registering it after the await would miss an already-fired close and leave
+  // an orphaned encoder behind, the very leak the onClose handler at the bottom exists to prevent.
+  let aborted = false;
+  let killChild: (() => void) | null = null;
+  onClose(() => {
+    aborted = true;
+    killChild?.();
+  });
+
+  const plan = await planStream(abs);
+  if (aborted) return; // client gave up during the probe — never start the encoder
   log.info("media", `stream ${plan.mode} (${plan.reason}) for ${abs}`);
 
   res.setHeader("Content-Type", "video/mp4");
@@ -176,9 +249,11 @@ export function streamPlayable(abs: string, res: Response, onClose: (cb: () => v
   ff.stdout.pipe(res);
 
   // Kill ffmpeg when the browser drops the connection (seek, navigate away, tab close) so we don't
-  // leave orphaned encoder processes behind.
-  onClose(() => {
+  // leave orphaned encoder processes behind. Wired through the flag set above rather than a second
+  // onClose subscription, so a close that arrived during the probe is honoured too.
+  killChild = () => {
     ff.stdout.unpipe(res);
     if (!ff.killed) ff.kill("SIGKILL");
-  });
+  };
+  if (aborted) killChild(); // closed between the probe check and the spawn
 }

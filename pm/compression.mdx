@@ -53,6 +53,18 @@ Siblings this builds on and does not repeat:
 3. **Never change the pixels' size.** The output MUST keep the **same aspect ratio** and the **same pixel
    resolution** as the input — for **both images and video**. **We never downscale.** This is verified
    after encoding (§5) — a size change aborts the operation.
+   * **Scope: this governs the OUTPUT FILE — not every `resize()` in the codebase.** "Never downscale"
+     means **a user's file must never lose resolution**. The **perceptual fingerprint** downscales
+     **internally, before decode** (`sharp.resize(512, 512, { fit: "inside" })` in
+     `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/perceptual.service.ts` —
+     `decodeForHash()`), to bound the pixel buffer it hashes. That downscale **touches no output**, is
+     internal to the hash's own decode, and is **invisible to the user** — the throwaway buffer is
+     discarded once the hash exists. **These do not conflict**
+     ([perceptual_fingerprint.mdx §1](./perceptual_fingerprint.mdx), [to_fix.mdx §3.4](./to_fix.mdx)).
+   * **Stated plainly because a future reader will otherwise "fix" it.** Read as a violation of this
+     principle, `decodeForHash()`'s resize looks like a bug to remove — and removing it decodes every
+     image at full resolution, restoring a **~105 MB-per-file memory bomb** on a path that runs many
+     files at once. Do not remove it.
 4. **Alpha safety first.** Before compressing we run the **alpha-channel safety check** (§6). If real
    transparency would be lost, we refuse (or steer to an alpha-preserving codec).
 5. **Recoverable.** Compression replaces the file via a **temp file**, and the original is moved to the

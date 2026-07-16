@@ -11,7 +11,11 @@
 //   3. logError({...}) structured helper so error sites call one function with a consistent shape.
 //   4. stripControlChars() log-injection guard for untrusted values.
 //   5. flush-on-shutdown — SIGINT/SIGTERM/beforeExit/uncaughtException drain the async batch to disk.
-// Zero dependencies (node:fs only) — the one thing that must never fail carries no supply-chain surface.
+//   6. BATCH CONTEXT — an AsyncLocalStorage scope stamps [batch=… op=…] on every line (to_fix.mdx §4.4).
+//   7. COLLAPSE — repeated near-identical fault lines fold into [×N since HH:MM] (to_fix.mdx §4.5).
+// Zero dependencies (node: builtins only) — the one thing that must never fail carries no supply-chain
+// surface.
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveLogDir } from "../config/state-dir.js";
@@ -31,9 +35,61 @@ function envInt(name: string, fallback: number): number {
 const MAX_BYTES = envInt("LFB_LOG_MAX_BYTES", 5 * 1024 * 1024);
 const BACKUPS = envInt("LFB_LOG_GENERATIONS", 5);
 
+// Collapse policy (to_fix.mdx §4.5). The window bounds how long a repeat can sit un-summarized; the
+// key cap bounds how much memory the dedupe table can hold before it force-flushes.
+const COLLAPSE_WINDOW_MS = envInt("LFB_LOG_COLLAPSE_MS", 60_000);
+const COLLAPSE_MAX_KEYS = envInt("LFB_LOG_COLLAPSE_KEYS", 500);
+
 const logDir = resolveLogDir();
 const LOG_FILE = path.join(logDir, "log.log");
 const ERR_FILE = path.join(logDir, "error.err");
+
+// ── Batch context (to_fix.mdx §4.4, invariant §10.6) ────────────────────────────────────────────
+// "Nothing joins log.log, error.err, launcher.log, transactions.log, and the manifest today." An
+// AsyncLocalStorage scope carries the batch_id (and, where known, the op) through every async
+// continuation, so NO call site has to pass it and no line inside the batch can be forgotten. One
+// grep on `batch=<id>` then reconstructs a whole run.
+interface LogContext {
+  batchId?: string;
+  op?: string;
+}
+
+const contextStore = new AsyncLocalStorage<LogContext>();
+
+// Run fn with every log line inside it (including async continuations) stamped `[batch=<id>]`.
+// An undefined batchId is a no-op — today's behavior, unchanged.
+export function withBatchContext<T>(batchId: string | undefined, fn: () => T): T {
+  if (!batchId) return fn();
+  return contextStore.run({ ...contextStore.getStore(), batchId }, fn);
+}
+
+// Same scope, but also stamps `op=` (to_fix.mdx §5 / 2_2_do row D2 — op is EXPLICIT, never inferred).
+// Fields left undefined inherit from the enclosing scope.
+export function withLogContext<T>(ctx: LogContext, fn: () => T): T {
+  const parent = contextStore.getStore();
+  const merged: LogContext = {
+    batchId: ctx.batchId ?? parent?.batchId,
+    op: ctx.op ?? parent?.op,
+  };
+  if (!merged.batchId && !merged.op) return fn();
+  return contextStore.run(merged, fn);
+}
+
+// The batch_id in scope, if any — for call sites that must put it somewhere other than a log line
+// (a manifest, a ledger span, an API response).
+export function currentBatchId(): string | undefined {
+  return contextStore.getStore()?.batchId;
+}
+
+// Render the in-scope context as the `[batch=… op=…]` field of a log line, or "" when unscoped.
+function contextTag(): string {
+  const ctx = contextStore.getStore();
+  if (!ctx) return "";
+  const parts: string[] = [];
+  if (ctx.batchId) parts.push(`batch=${stripControlChars(ctx.batchId, 200)}`);
+  if (ctx.op) parts.push(`op=${stripControlChars(ctx.op, 100)}`);
+  return parts.length ? ` [${parts.join(" ")}]` : "";
+}
 
 // Roll filePath's .N chain in place: drop .maxBackups, shift .n → .(n+1) … .1 → .2, live file → .1.
 // Best-effort — a failed rename/remove is swallowed so a rotation never throws. Shared by
@@ -62,6 +118,33 @@ export function rotateIfOversized(filePath: string, maxBytes = MAX_BYTES, maxBac
   }
 }
 
+// Fold a fault line down to what makes it "the same fact repeated" (to_fix.mdx §4.5): drop the leading
+// timestamp, then blank out the parts that vary between otherwise-identical faults — absolute paths, any
+// number (attempt counters, sizes, ids, ports), and hex blobs. `429 rate limited on /a/b.mp4 (attempt 3)`
+// and `429 rate limited on /c/d.mp4 (attempt 1)` therefore share a key and collapse together.
+function collapseKey(line: string): string {
+  return line
+    .replace(/^\[[^\]]*\]\s*/, "") // leading ISO timestamp
+    .replace(/\[batch=[^\]]*\]\s*/, "") // batch/op tag — same fault, different batch still folds
+    .replace(/\/[^\s'"]+/g, "<path>")
+    .replace(/\b[0-9a-f]{8,}\b/gi, "<hex>")
+    .replace(/\d+/g, "#")
+    .trim()
+    .slice(0, 300);
+}
+
+function hhmm(d: Date): string {
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+// One suppressed-repeat group: how many folded, when the run started, and the most recent raw line
+// (so the summary shows a real, current example rather than the normalized key).
+interface CollapseEntry {
+  count: number;
+  since: Date;
+  lastLine: string;
+}
+
 // A size-capped, rotating, append-only writer with a CACHED byte counter (no statSync per write).
 // Never throws: a failed write falls back to process.stderr.
 // Exported so the TRANSACTION LEDGER (shared/transactions.ts — transactions_log.mdx) writes transactions.log
@@ -71,11 +154,15 @@ export class RollingFileWriter {
   private ready = false;
   private queue: string[] = [];
   private scheduled = false;
+  // Collapse state (to_fix.mdx §4.5) — only populated when constructed with { collapseRepeats: true }.
+  private readonly collapsing: Map<string, CollapseEntry> = new Map();
+  private collapseTimer: NodeJS.Timeout | undefined;
 
   constructor(
     private readonly filePath: string,
     private readonly maxBytes = MAX_BYTES,
     private readonly maxBackups = BACKUPS,
+    private readonly collapseRepeats = false,
   ) {}
 
   // Seed the in-memory byte counter once from the file's current size (or 0 if absent).
@@ -118,8 +205,65 @@ export class RollingFileWriter {
 
   // Durable, synchronous write — used for WARN/ERROR/FATAL so the fault trail is on disk immediately
   // (and before a process.exit(1) after an uncaughtException).
+  //
+  // With collapseRepeats on (to_fix.mdx §4.5), a line whose normalized key we have already written in
+  // this window is FOLDED instead of appended: 4,070 near-identical 429s become one line plus an
+  // `[×4070 since 19:49]` summary. Two guarantees are preserved deliberately:
+  //   * The FIRST occurrence of a key is always written straight through, synchronously — collapse
+  //     never delays a fault reaching disk, it only suppresses the repeats behind it.
+  //   * Every suppressed run is summarized on a bounded timer and again at exit — a suppressed error
+  //     that is never summarized would be worse than a noisy one.
   writeSync(line: string): void {
-    this.writeNow(line.endsWith("\n") ? line : `${line}\n`);
+    const withNewline = line.endsWith("\n") ? line : `${line}\n`;
+    if (!this.collapseRepeats) {
+      this.writeNow(withNewline);
+      return;
+    }
+    const key = collapseKey(withNewline);
+    const entry = this.collapsing.get(key);
+    if (entry) {
+      // Seen this fact already in this window — fold it, write nothing.
+      entry.count++;
+      entry.lastLine = withNewline;
+      return;
+    }
+    // First of its kind in this window: through to disk now, and open a fold group behind it.
+    this.writeNow(withNewline);
+    if (this.collapsing.size >= COLLAPSE_MAX_KEYS) this.flushCollapsed(); // bound the table
+    this.collapsing.set(key, { count: 0, since: new Date(), lastLine: withNewline });
+    this.armCollapseTimer();
+  }
+
+  // One unref'd timer per writer — it summarizes on a bounded window and never holds the event loop
+  // (or the process) open on its own.
+  private armCollapseTimer(): void {
+    if (this.collapseTimer) return;
+    try {
+      this.collapseTimer = setTimeout(() => {
+        this.collapseTimer = undefined;
+        this.flushCollapsed();
+      }, COLLAPSE_WINDOW_MS);
+      this.collapseTimer.unref?.();
+    } catch {
+      // a timer we cannot arm must not break logging — the exit flush still summarizes
+    }
+  }
+
+  // Emit `[×N since HH:MM] <last example>` for every group that folded repeats, then clear the table so
+  // the next occurrence of a fact prints in full again. Called on the window timer and at process exit.
+  flushCollapsed(): void {
+    if (!this.collapsing.size) return;
+    const groups = [...this.collapsing.values()];
+    this.collapsing.clear();
+    if (this.collapseTimer) {
+      clearTimeout(this.collapseTimer);
+      this.collapseTimer = undefined;
+    }
+    for (const g of groups) {
+      if (g.count < 1) continue; // written in full already, nothing was suppressed
+      const body = g.lastLine.replace(/^\[[^\]]*\]\s*/, "").trimEnd();
+      this.writeNow(`[${new Date().toISOString()}] [×${g.count} since ${hhmm(g.since)}] ${body}\n`);
+    }
   }
 
   // High-performance async path — batch on the next tick so the caller never blocks on I/O.
@@ -141,8 +285,12 @@ export class RollingFileWriter {
   }
 }
 
-const outWriter = new RollingFileWriter(LOG_FILE);
-const errWriter = new RollingFileWriter(ERR_FILE);
+// Collapse is enabled on BOTH writers (to_fix.mdx §4.5). It only ever engages on the writeSync path,
+// which carries WARN/ERROR/FATAL — exactly the storm that buried the signal on 2026-07-15 and rotated
+// error.err.1 past 5 MiB, destroying the earlier evidence. The batched async DEBUG/INFO path is
+// untouched: those lines are progress, not repeated faults, and folding them would hide real work.
+const outWriter = new RollingFileWriter(LOG_FILE, MAX_BYTES, BACKUPS, true);
+const errWriter = new RollingFileWriter(ERR_FILE, MAX_BYTES, BACKUPS, true);
 
 // Log-injection defense: strip control chars (incl. newlines/CR) from untrusted values so an attacker
 // can't forge log lines, and cap length so one value can't blow out a log.
@@ -164,7 +312,7 @@ function safeStringify(v: unknown): string {
 }
 
 function write(level: Level, context: string, message: string): void {
-  const line = `[${new Date().toISOString()}] [${level}] [${context}] ${message}\n`;
+  const line = `[${new Date().toISOString()}] [${level}] [${context}]${contextTag()} ${message}\n`;
   if (ERROR_LEVELS.has(level)) {
     // Durable: synchronous to BOTH files so the fault trail is never lost across a crash/exit.
     errWriter.writeSync(line); // error.err is the complete fault trail
@@ -216,7 +364,13 @@ export function logError(fields: LogErrorFields): void {
 
 // Flush any queued async lines synchronously — called on exit and before a crash-exit so nothing in
 // the batch buffer is lost.
+//
+// flushCollapsed() runs FIRST and is why this order matters: a folded run only exists in memory until
+// it is summarized, so a crash between the last fold and the window timer would silently discard the
+// count of an ongoing fault storm — the exact evidence an incident needs most. Summarize, then drain.
 export function flushLogs(): void {
+  errWriter.flushCollapsed();
+  outWriter.flushCollapsed();
   outWriter.flush();
   errWriter.flush();
 }

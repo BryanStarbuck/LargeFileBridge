@@ -33,7 +33,9 @@ import type { DeleteOriginalMode, ProcessingBatch, ProgressKind, QueuedItemView,
 import { mediaKindForName } from "@lfb/shared";
 import { coreBudget, memoryBudget } from "../../shared/concurrency.js";
 import { transcribeConcurrency, activeTranscribeModelKey } from "../transcribe/transcribe-concurrency.js";
-import { log } from "../../shared/logging.js";
+import { log, withLogContext } from "../../shared/logging.js";
+import { registerHeapContextSource } from "../../shared/heap-watch.js";
+import { settleOne, type BatchOutcome } from "./batch-manifest.service.js";
 import { txnBegin, txnEnd, registerHeartbeatSource, startHeartbeat } from "../../shared/transactions.js";
 import {
   appendEnqueued,
@@ -428,6 +430,11 @@ function haltDoomedTasks(): void {
     recordFailure({ op: t.op, path: t.path, reason, state: "halted" });
     // End it in the journal so the restore fold does not resurrect it (crash_recovery.mdx §3.3).
     if (t.id) appendTerminal(t.id, "halted");
+    // …and in the manifest, as `halted` — never `failed` (to_fix.mdx §4.2 / invariant §10.5). These tasks
+    // never reach runTask (they are spliced straight out of `pending`), so this is their ONLY chance to
+    // settle; without it the batch's outstanding count never drains and its manifest never closes,
+    // making a cleanly-halted batch indistinguishable on disk from a crashed one.
+    settleOne(t.batchId, t.path, "halted", reason);
   }
   // ONE line for the whole drain, never one per file — the flood of identical lines is the very thing that
   // buried the signal and rotated the evidence away last time (to_fix.mdx §4.5).
@@ -506,6 +513,30 @@ function releaseMemory(t: QueueTask): void {
   memoryActive = Math.max(0, memoryActive - est);
 }
 
+// ── Tell heap-watch what the queue is doing (to_fix.mdx §6.1, row E8) ──────────────────────────────────
+// heap-watch is a LEAF and must never import this module (a warning that fires because memory is
+// exhausted must not depend on the subsystem that exhausted it), so the dependency is inverted: the
+// queue pushes a context reader in at module load and heap-watch pulls from it when it warns.
+//
+// This is what turns "heap at 82% of 6144MB" — true, and useless — into a line that names the 24
+// in-flight describes and the 2.1 GB they reserved. memory.mdx §1.7: the numbers say you are dying, the
+// queue fields say why.
+registerHeapContextSource(() => ({
+  queued: pending.length,
+  running: running.transcribe + running.describe + running["compress:image"] + running["compress:video"],
+  runningDescribe: running.describe,
+  runningTranscribe: running.transcribe,
+  runningCompressImage: running["compress:image"],
+  runningCompressVideo: running["compress:video"],
+  reservedMB: Math.round(memoryActive / (1024 * 1024)),
+  // The actual in-flight FILES, newest reservations last — capped, because a heap warning that dumps 24
+  // absolute paths into one line is a line nobody reads.
+  inflightFiles: [...reserved.keys()]
+    .slice(0, 5)
+    .map((t) => `${t.op}:${path.basename(t.path)}`)
+    .join(", "),
+}));
+
 function start(t: QueueTask): void {
   const b = bucketOf(t);
   running[b]++;
@@ -562,6 +593,20 @@ function queueFailureLog(op: JobOp, filePath: string, reason: string): void {
 }
 
 /**
+ * Map the queue's terminal reason onto the manifest's outcome vocabulary (to_fix.mdx §4.2).
+ *
+ * The `halted` mapping is the load-bearing one: a halted task was NEVER ATTEMPTED (its provider's
+ * circuit was open), and recording it as `failed` would tell the user 1,440 files were tried and
+ * rejected when in fact none were touched — the exact lie invariant §10.5 exists to forbid.
+ */
+function manifestOutcome(op: JobOp, reason: TerminalReason): BatchOutcome {
+  if (reason === "halted") return "halted";
+  if (reason === "failed" || reason === "quarantined") return "failed";
+  if (reason === "skipped") return "skipped";
+  return op === "describe" ? "described" : op === "transcribe" ? "transcribed" : "compressed";
+}
+
+/**
  * Run one task inside its ledger transaction and close its journal record whatever happens.
  *
  * The `finally` is the load-bearing line: COMMIT POINT 2 (crash_recovery.mdx §3.3) must fire on success, on
@@ -569,24 +614,38 @@ function queueFailureLog(op: JobOp, filePath: string, reason: string): void {
  * signal a missing `end` record carries to the next boot's restore.
  */
 async function runTask(t: QueueTask): Promise<void> {
-  const ledger = txnBegin("queue_task", {
-    op: t.op,
-    file: t.path,
-    attempt: t.attempts,
-    maxAttempts: QUEUE_MAX_ATTEMPTS,
-    depth: pending.length,
-    batch: t.batchId,
+  // withLogContext wraps the WHOLE task (to_fix.mdx §4.4 + invariant §10.6, row C7/D2). Every log line
+  // written anywhere beneath this — including from async continuations deep inside describeOne/
+  // compressFile and their children — is stamped `[batch=<id> op=<op>]`, so ONE grep on a batch_id
+  // reconstructs a run across log.log and error.err. It is wired HERE, at the single choke point every
+  // task passes through, rather than at each call site: a call site can be forgotten, this cannot.
+  // `op` is stamped EXPLICITLY (to_fix.mdx §5.1) so a "why is this run eating memory" question is
+  // answered by the line itself instead of being inferred from surrounding context.
+  return withLogContext({ batchId: t.batchId, op: t.op }, async () => {
+    const ledger = txnBegin("queue_task", {
+      op: t.op,
+      file: t.path,
+      attempt: t.attempts,
+      maxAttempts: QUEUE_MAX_ATTEMPTS,
+      depth: pending.length,
+      batch: t.batchId,
+    });
+    let reason: TerminalReason = "done";
+    let failReason: string | undefined;
+    try {
+      reason = await runTaskInner(t);
+      txnEnd(ledger, reason === "failed" ? "failed" : "ok", { reason });
+    } catch (e) {
+      reason = "failed";
+      failReason = (e as Error)?.message ?? String(e);
+      txnEnd(ledger, "failed", { reason: failReason });
+    } finally {
+      if (t.id) appendTerminal(t.id, reason);
+      // The manifest's per-file outcome (to_fix.mdx §4.2), recorded at the SAME choke point as the
+      // journal terminal so the two can never disagree about what happened to a file.
+      settleOne(t.batchId, t.path, manifestOutcome(t.op, reason), failReason);
+    }
   });
-  let reason: TerminalReason = "done";
-  try {
-    reason = await runTaskInner(t);
-    txnEnd(ledger, reason === "failed" ? "failed" : "ok", { reason });
-  } catch (e) {
-    reason = "failed";
-    txnEnd(ledger, "failed", { reason: (e as Error)?.message ?? String(e) });
-  } finally {
-    if (t.id) appendTerminal(t.id, reason);
-  }
 }
 
 async function runTaskInner(t: QueueTask): Promise<TerminalReason> {

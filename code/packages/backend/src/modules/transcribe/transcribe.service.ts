@@ -19,6 +19,7 @@ import { repoArtifactPlacement } from "../store-model/units.service.js";
 import { getStorageDetail } from "../storage/storage.service.js";
 import { track } from "../progress/progress.registry.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
+import { writeManifest, trackBatch } from "../jobqueue/batch-manifest.service.js";
 import { log } from "../../shared/logging.js";
 import { txn } from "../../shared/transactions.js";
 
@@ -242,7 +243,18 @@ export function enqueueTranscribe(opts: { paths?: string[]; root?: string; overw
     log.info("transcribe", `enqueue: ${eligible.length} eligible all need first-time setup — not queuing`);
     return { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported, queued: 0, willProcess: 0, needsSetup: true, setupPath: eligible[0], blocked: false, blockedReason: null };
   }
-  const { queued } = enqueue(eligible.map((p) => ({ op: "transcribe", path: p, overwrite })));
+  // The BATCH MANIFEST, before the enqueue (to_fix.mdx §4.1, invariant §10.4). Transcribe has no
+  // provider to preflight, but a lost transcribe batch is exactly as unreconstructable as a lost
+  // describe one — the manifest requirement is about the CLICK, not about the provider.
+  const manifest = writeManifest({
+    op: "transcribe",
+    scope: scopeLabel(opts),
+    counts: { considered: candidates.length, eligible: eligible.length, alreadyDone, unsupported },
+    files: eligible.map((p) => ({ path: p, sizeBytes: safeSize(p) })),
+  });
+  const { queued } = enqueue(eligible.map((p) => ({ op: "transcribe", path: p, overwrite, batchId: manifest.batchId })));
+  // Seed with what actually queued, not what was eligible (see the note in describe's enqueue).
+  trackBatch(manifest.batchId, queued);
   log.info("transcribe", `enqueue [${scopeLabel(opts)}]: ${candidates.length} considered → ${queued} queued (${alreadyDone} already done, ${unsupported} unsupported)`);
   // `blocked` is always false here: transcription runs LOCALLY (Whisper/qwen), so there is no provider
   // account to preflight and no circuit that can refuse it (to_fix.mdx §2.5 — the gate is describe-only).
@@ -368,6 +380,15 @@ function exists(p: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** A file's size for the batch manifest, or undefined if it can't be read (to_fix.mdx §4.1). */
+function safeSize(p: string): number | undefined {
+  try {
+    return fs.statSync(p).size;
+  } catch {
+    return undefined;
   }
 }
 

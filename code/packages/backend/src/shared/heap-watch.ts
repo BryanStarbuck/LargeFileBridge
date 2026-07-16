@@ -164,6 +164,8 @@ interface OsMemSnapshot {
   compressedBytes: number | null;
   /** Cumulative pages swapped out since boot; only the DELTA between probes is meaningful. */
   swapouts: number | null;
+  /** vm_stat's OWN page size — 16 KB on Apple Silicon, 4 KB on Intel. Never assume one (see probeOsMem). */
+  pageSize: number;
 }
 
 let lastChildRss: ChildRssSnapshot | null = null;
@@ -256,12 +258,13 @@ async function probeChildRss(): Promise<ChildRssSnapshot | null> {
  * Silicon and 4 KB on Intel, and hardcoding either would silently mis-scale every number by 4×.
  */
 async function probeOsMem(): Promise<OsMemSnapshot> {
-  const snap: OsMemSnapshot = { freeBytes: os.freemem(), compressedBytes: null, swapouts: null };
+  const snap: OsMemSnapshot = { freeBytes: os.freemem(), compressedBytes: null, swapouts: null, pageSize: 4096 };
   if (os.platform() !== "darwin") return snap;
   const out = await probeCmd("vm_stat", []);
   if (out == null) return snap;
 
   const pageSize = Number(out.match(/page size of (\d+) bytes/)?.[1]) || 4096;
+  snap.pageSize = pageSize;
   const field = (name: string): number | null => {
     const m = out.match(new RegExp(`^${name}:\\s+(\\d+)\\.?`, "m"));
     return m ? Number(m[1]) : null;
@@ -294,8 +297,9 @@ async function probeSystem(): Promise<void> {
     lastSwapouts = osMem.swapouts;
     if (prev == null || osMem.swapouts <= prev) return; // first probe (no baseline), or no new swapping
 
-    // Pages → bytes uses the same 4 KB floor as probeOsMem's fallback; we only need the order of magnitude.
-    const swappedBytes = (osMem.swapouts - prev) * 4096;
+    // Pages → bytes via vm_stat's OWN page size, never an assumed 4 KB: this Mac reports 16 KB pages, so a
+    // hardcoded 4096 would under-report every swap event by 4× and hold the warning below its threshold.
+    const swappedBytes = (osMem.swapouts - prev) * osMem.pageSize;
     const now = Date.now();
     if (swappedBytes < SWAPOUT_WARN_BYTES || now - lastSwapWarnAt < SWAP_REWARN_MS) return;
     lastSwapWarnAt = now;

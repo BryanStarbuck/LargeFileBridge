@@ -88,12 +88,23 @@ function normExt(e: string): string {
 }
 
 // ── tool detection (compression.mdx §2) ────────────────────────────────────────
+// Memoized per binary, for the life of the process. detectTools() and magickBin() are called PER FILE, so
+// an un-cached `which` forked ~8 children for every file in a batch and blocked the event loop each time
+// (to_fix.mdx §3.3.4 / T3). A tool does not appear or vanish mid-process, so the first answer is the only
+// answer we need — one fork per tool, ever. Kept synchronous on purpose: the callers below are sync, and a
+// single cached probe at first use is not the defect; the per-file repetition was.
+const _onPath = new Map<string, boolean>();
 function onPath(bin: string): boolean {
+  const hit = _onPath.get(bin);
+  if (hit !== undefined) return hit;
+  let found = false;
   try {
-    return spawnSync("which", [bin], { encoding: "utf8" }).status === 0;
+    found = spawnSync("which", [bin], { encoding: "utf8" }).status === 0;
   } catch {
-    return false;
+    found = false;
   }
+  _onPath.set(bin, found);
+  return found;
 }
 
 // Does ImageMagick (or a standalone libheif converter) know how to READ HEIC/HEIF? On macOS,
@@ -438,8 +449,9 @@ export function checkFile(input: string): CompressCheck {
 function tmpOut(ext: string): string {
   const dir = path.join(resolveStateDir(), "tmp");
   ensureDir(dir);
-  const rand = spawnSync("uuidgen", [], { encoding: "utf8" }).stdout?.trim() || String(process.hrtime.bigint());
-  return path.join(dir, `compress-${rand}${ext}`);
+  // In-process UUID — never `uuidgen`. Shelling out here forked a child PER FILE and blocked the event
+  // loop on a batch of thousands for no benefit (to_fix.mdx §3.3.4 / T3). fit-media.ts made this same fix.
+  return path.join(dir, `compress-${crypto.randomUUID()}${ext}`);
 }
 
 function trashOriginal(abs: string): void {

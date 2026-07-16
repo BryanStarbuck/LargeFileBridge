@@ -239,7 +239,9 @@ export class Transcriber {
    *  so a reader can confirm the transcript spans the whole file. */
   private header(originalName: string, opts?: { model?: string; durationSec?: number | null; coveredSec?: number | null }): string {
     const ts = new Date().toISOString().replace("T", " ").substring(0, 19);
-    const engine = `whisper-${opts?.model ?? "small"}`;
+    // Same constant as the runner and the RAM table — a header that NAMES the model must not be the third
+    // place that guesses it (to_fix.mdx §6.2). The caller normally passes the model it actually ran.
+    const engine = `whisper-${opts?.model ?? whisperModel()}`;
     const device = this.isMac && os.arch() === "arm64" ? "mps/cpu" : "cpu";
     const lines = [
       `Transcription of: ${originalName}`,
