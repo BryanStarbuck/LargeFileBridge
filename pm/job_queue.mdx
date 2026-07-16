@@ -49,7 +49,7 @@ process path for "many".
 The queue is an in-process **FIFO** of small task records:
 
 ```ts
-export type JobOp = "transcribe" | "describe" | "compress";
+export type JobOp = "transcribe" | "describe" | "compress" | "ocr";
 
 export interface QueueTask {
   op: JobOp;             // which per-file runner handles it
@@ -84,7 +84,17 @@ The FIFO queue, `enqueue()`, and the in-flight dedup set are implemented in code
 
 ### 2.1 A task can leave the queue **without ever running** — `halted` (LOCKED)
 
-A task leaves the queue three ways, not two: **done**, **failed**, or **`halted`**.
+A task leaves the queue **four** ways, not two: **`ok`**, **`rejected`**, **`failed`**, or **`halted`**
+([processing_batches.mdx §4](./processing_batches.mdx) — the authoritative taxonomy).
+
+**"Done" is not one of those four**, and must not be used as if it were. It is the name of **`ok` alone**.
+All four exits are **settled** — the task is off the queue and will not be retried — but only `ok` is
+**done**. A **`rejected`** task *ran*, and the provider **refused** it
+([ai_description.mdx §2.3](./ai_description.mdx)): it is settled, it is **not** a failure (§4a), and it is
+**not** a success. Letting it exit as "done" is the exact fold
+[processing_batches.mdx §4.2](./processing_batches.mdx) exists to prevent.
+
+The rest of this section is about the distinction between the two exits that are easiest to confuse:
 
 * **`halted` ≠ `failed`.** A **failed** task **ran** and errored. A **halted** task was **NEVER ATTEMPTED**
   — the provider's **circuit opened** ([to_fix.mdx §2.4](./to_fix.mdx)) and the queue **drained** it out of
@@ -176,22 +186,36 @@ The `queued` count is exposed by the queue and folded into the progress payload 
 
 ## 4a. Batches — grouping one bulk run's tasks
 
-A **batch** groups the per-file tasks of **one bulk run** — today, a **"Compress inside"** run
-([compression.mdx §12](./compression.mdx)) — so a surface can show that run's **progress bar** and, when
-it finishes, its **final error list**. Each enqueued `compress` task carries the run's `batchId` (§2).
+A **batch** groups the per-file tasks of **one bulk run** — **one popup Confirm**
+([processing_batches.mdx §1](./processing_batches.mdx)) — so a surface can show that run's **progress**, its
+**outcome counters**, and its **error list**. Each enqueued task carries the run's `batchId` (§2).
 
-* **`createBatch(label, total): batchId`** — opens a batch when the bulk producer plans the set; records its
-  label (e.g. *Compress inside ~/Movies/Trip_2026*), the total file count, and `startedAt`.
-* **`recordBatchResult(batchId, path, result)`** — called by `runTask()` as each `compress` task returns. A
-  `compressed` / `skipped` result counts as **OK** (advances `done`); a `blocked` / `failed` result is
-  appended to the batch's **error list** (`errors[]` as `{ path, reason }`) and counts as `failed`. A task
-  that *throws* is caught (§3) and still recorded, so the batch always finishes.
-* **`listBatches()`** — the active + recently-finished batches, folded into `GET /api/progress` as `batches`
-  ([processing.mdx §5](./processing.mdx)). **Finished batches linger for a 30-min retention window** (then
-  are pruned) so the user can still read the error list after the run ended.
+**[processing_batches.mdx](./processing_batches.mdx) is the authoritative spec** for the batch **record**,
+its **five-way outcome taxonomy**, the **rejection rate**, retention, and the batch actions. This section
+owns only the **registry mechanism** the queue provides.
+
+* **`createBatch({ batchId, kind, label, scope, total }): batchId`** — opens a batch when the bulk producer
+  plans the set. **It adopts the `batchId` the batch manifest already minted** ([to_fix.mdx §4.1](./to_fix.mdx))
+  rather than generating a second one, so **one id** spans the manifest on disk, the log context, the tasks,
+  and the UI row.
+* **`recordBatchResult(batchId, path, result)`** — called by `runTask()` as each task returns, routing the
+  result into **exactly one** counter ([processing_batches.mdx §4](./processing_batches.mdx)):
+  `ok` · `rejected` · `failed` · `halted`. **`rejected` gets its own counter — it is neither `ok` nor
+  `failed`** ([ai_description.mdx §2.3](./ai_description.mdx) — a refusal is *"an answer, not a breakdown"*;
+  it is **settled**, so it advances progress, but it is **not** a success and must never be folded into
+  `done`). `failed` / `halted` also append to `errors[]` as `{ path, reason, state }`. A task that *throws*
+  is caught (§3) and still recorded, so the batch always finishes and the identity
+  `ok + rejected + failed + halted + running + pending === total` always holds.
+* **`listBatches()`** — the batches, folded into `GET /api/progress` as `batches`
+  ([processing.mdx §5](./processing.mdx)). **Retention is [processing_batches.mdx §5](./processing_batches.mdx)'s**
+  — the **row** survives the **process lifetime** (pruned at 200 batches / 24 h) and `errors[]` caps at 200
+  per batch. **This supersedes the 30-minute window** this section previously specified, which was written
+  when a batch was only ever a "Compress inside" run whose sole post-run value was its error list.
+* **`stopBatch(batchId)`** — drains that batch's **pending** tasks to `halted` (reusing `haltDoomedTasks()`),
+  leaves **running** tasks to finish ([processing_batches.mdx §6.2](./processing_batches.mdx)).
 
 The batch registry is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `createBatch()` / `recordBatchResult()` / `listBatches()` (the 30-min prune of finished batches). The producer that opens a batch is `compression.service.ts` — `enqueueCompressInside()` ([compression.mdx §12.6](./compression.mdx)); the surfaces that render batch progress + the error list are the [Processing page](./processing.mdx) (processing.mdx §4).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `createBatch()` / `recordBatchResult()` / `listBatches()` / `stopBatch()` (and the retention prune). The producers that open a batch are `compression.service.ts` — `enqueueCompressInside()` ([compression.mdx §12.6](./compression.mdx)) and the `transcribe` / `describe` / `ocr` enqueue endpoints ([page_actions.mdx §5](./page_actions.mdx)), each adopting its manifest's `batchId`; the surface that renders the batches is the [Processing page](./processing.mdx)'s batches table (processing.mdx §4.1).
 
 ## 4b. TO DO batch Apply is a queue producer (LOCKED)
 
@@ -200,7 +224,7 @@ from the [To Do page](./to_do.mdx) is a producer that **reuses this same queue**
 never running the effects inline in the apply request. When the user hits **Apply** in a batch popup, the
 `apply` handler writes each row's decision(s) to the shared ledger and then **enqueues the effects** as
 ordinary `QueueTask`s, so they drain against the **same** core-budgeted, media-aware worker pool (§3) and
-surface as ordinary dock/Processing cards ([processing.mdx §4.2](./processing.mdx#42-applying-a-to-do-batch-is-a-processing-producer-locked)):
+surface as ordinary dock/Processing cards ([processing.mdx §4.6](./processing.mdx#46-applying-a-to-do-batch-is-a-processing-producer-locked)):
 
 * **`compress_video` / `compress_image` recommendations** → **`compress`** tasks — identical to the
   Compress-inside producer's tasks, drawing the `compress:video` / `compress:image` admission buckets (§3),
@@ -263,10 +287,17 @@ The queue is **in-memory only**, exactly like the job registry ([webapp.mdx §12
    **"+ N queued"** footer that drains to nothing. No fabricated cards for pending items.
 7. The queue is **in-memory only** (no persistence); on restart it is empty, and re-invoking a page action
    re-queues only the still-unfinished files (skip-already-done makes this safe).
-8. **Batches (§4a):** a bulk **"Compress inside"** run opens a batch (`createBatch`) whose per-file
-   `compress` tasks carry its `batchId`; `recordBatchResult` counts `compressed`/`skipped` as OK and records
-   `blocked`/`failed` in the batch's `errors[]`; `listBatches()` (30-min retention for finished batches) is
-   folded into `GET /api/progress` for the [Processing page](./processing.mdx) progress bar + error list.
+8. **Batches (§4a):** **every bulk run** — a "Compress inside", and each `transcribe` / `describe` / `ocr`
+   popup Confirm — opens a batch (`createBatch`) that **adopts the manifest's existing `batchId`** (never
+   mints a second) and whose per-file tasks carry it. `recordBatchResult` routes each result into **exactly
+   one** counter — `ok` / **`rejected`** / `failed` / `halted` — so
+   `ok + rejected + failed + halted + running + pending === total` always holds; **`rejected` is neither
+   `ok` nor `failed`** ([processing_batches.mdx §4.2](./processing_batches.mdx)) and must never be folded into
+   `done`. `failed`/`halted` also append to `errors[]` as `{ path, reason, state }`. `listBatches()` is folded
+   into `GET /api/progress` for the [Processing page](./processing.mdx)'s batches table; **retention is
+   [processing_batches.mdx §5](./processing_batches.mdx)'s** — the row lives the **process lifetime** (200
+   batches / 24 h), superseding this section's old 30-min window. `stopBatch()` drains pending → `halted` and
+   lets running tasks finish.
 9. **TO DO batch Apply (§4b):** Applying a [TO DO Batch](./to_do_batches.mdx) is a producer that **reuses
    this queue** — it writes decisions then `enqueue()`s the effects and returns immediately;
    `compress_video`/`compress_image` → `compress` tasks, a transcribe slug's Apply → `transcribe` tasks (the
@@ -276,9 +307,15 @@ The queue is **in-memory only**, exactly like the job registry ([webapp.mdx §12
 <!--
   The server-side background queue between "a page action fires" and "the registry shows a running card".
   LOCKED:
-   - QueueTask { op: transcribe|describe|compress, path, overwrite, provider?, compress?{deleteOriginal},
-     batchId? }; enqueue(tasks) => {queued,deduped}, appends + kicks drain + RETURNS IMMEDIATELY. Producers =
-     page_actions.mdx enqueue endpoints + compression.mdx §12 enqueueCompressInside().
+   - QueueTask { op: transcribe|describe|compress|ocr, path, overwrite, provider?,
+     compress?{deleteOriginal, mediaKind}, batchId? }; enqueue(tasks) => {queued,deduped}, appends + kicks
+     drain + RETURNS IMMEDIATELY. compress.mediaKind is LOAD-BEARING — it picks the §3 admission bucket.
+     Producers = page_actions.mdx enqueue endpoints (transcribe/describe/ocr) + compression.mdx §12
+     enqueueCompressInside() + todo.router apply (§4b).
+   - A TASK LEAVES THE QUEUE **FOUR** WAYS (§2.1): ok | rejected | failed | halted (processing_batches.mdx §4
+     = the authoritative taxonomy). ALL FOUR are SETTLED; only `ok` is DONE. "done" is NOT one of the four
+     and must never name `rejected` (a rejected task RAN and the provider REFUSED — settled, not a failure,
+     not a success; folding it into done is the exact defect processing_batches §4.2 exists to prevent).
    - DEDUP by op+path already pending/running (not the same as skip-already-DONE, which is the producer's).
    - CORE-BUDGETED, MEDIA-AWARE worker loops (parallelization.mdx): mass-compute budget = round(cores ×
      max_core_fraction), default 0.9 (~90% of cores). compress splits into buckets compress:image (WIDE =
@@ -291,16 +328,24 @@ The queue is **in-memory only**, exactly like the job registry ([webapp.mdx §12
      (passed the threads cap) — those already track() a registry job => started item = live dock card.
      compress's heavy transcode is ASYNC (spawn) so it never blocks the event loop. Queue writes NO dock
      code. Per-item try/catch: one bad file never stalls the queue.
-   - BATCHES (§4a): createBatch/recordBatchResult/listBatches group one bulk "Compress inside" run's compress
-     tasks (batchId). compressed/skipped => OK (done++); blocked/failed => errors[] {path,reason}. Finished
-     batches linger 30 min (retention) then prune; folded into GET /api/progress as `batches` (processing.mdx).
+   - BATCHES (§4a): createBatch/recordBatchResult/listBatches/stopBatch group ONE BULK RUN = ONE POPUP CONFIRM
+     (compress-inside AND transcribe/describe/ocr — no longer compress-only). *** processing_batches.mdx is the
+     AUTHORITATIVE spec for the RECORD + the COUNTING; this section owns only the registry MECHANISM. ***
+     createBatch ADOPTS the manifest's existing batchId (to_fix §4.1) — NEVER mints a second (one id spans
+     manifest + log context + tasks + UI row). recordBatchResult routes each result into EXACTLY ONE counter:
+     ok | REJECTED | failed | halted, so ok+rejected+failed+halted+running+pending === total ALWAYS holds.
+     *** rejected is NEITHER ok NOR failed *** (ai_description §2.3: a refusal is "an answer, not a breakdown"
+     — SETTLED so it advances progress, but NOT a success => never fold into done). failed/halted also append
+     errors[] {path,reason,state}. RETENTION IS NOW processing_batches.mdx §5's — row = PROCESS LIFETIME
+     (prune 200 batches / 24h), errors[] cap 200/batch — SUPERSEDING the old 30-min window (written when a
+     batch was only ever Compress-inside + its error list). Folded into GET /api/progress as `batches`.
    - TO DO BATCH APPLY (§4b): Applying a TO DO Batch (to_do.mdx) is a producer that REUSES this queue — writes
      decisions then enqueue()s effects and returns. compress_video/image => compress tasks (same buckets as
      Compress-inside); a transcribe slug's Apply => transcribe tasks (MAIN producer of transcribe work);
      pull_down => pin/fetch work (pin op dock card). Dedup + skip-already-done hold; recalc-and-replace drops
      done files from the next batch; a MIXED batch fans out compress+transcribe+pin into the one queue. Served
      by todo.router POST /api/todo/batches/:id/apply → enqueue(). Keep in sync with to_do.mdx, to_do_batches.mdx,
-     transcribe_calc_engine.mdx, processing.mdx §4.2.
+     transcribe_calc_engine.mdx, processing.mdx §4.6.
    - GET /api/progress gains `queued` (pending count); dock shows "+N queued" footer. No fake cards for
      pending items (webapp.mdx §13).
    - IN-MEMORY ONLY, no persistence (same rationale as the registry). Restart => empty queue; re-invoking a

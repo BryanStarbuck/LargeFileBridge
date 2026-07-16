@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import path from "node:path";
 import fs from "node:fs";
 import type {
+  IpfsAutostartStatus,
   IpfsNodeStatus,
   IpfsInstallJob,
   IpfsJobKind,
@@ -154,7 +155,7 @@ export async function nodeStatus(): Promise<IpfsNodeStatus> {
   // Will IPFS come back on its own after a reboot? (ipfs_ui.mdx §13) — reads the OS (launchd) state.
   const autostart = await autostartStatus().catch((e) => {
     log.warn("ipfs", `autostart status read failed: ${(e as Error).message}`);
-    return { supported: process.platform === "darwin", installed: false, enabled: false };
+    return unknownAutostart();
   });
 
   // Config health (ipfs_ui.mdx §14) — is the node config sane / repairable? Reads $IPFS_PATH/config;
@@ -217,11 +218,7 @@ export async function liveness(): Promise<IpfsLiveness> {
   const health = await ipfs.health();
   const running = health === "ok";
   const installed = (await hasBinary("ipfs")) || running;
-  const autostart = await autostartStatus().catch(() => ({
-    supported: process.platform === "darwin",
-    installed: false,
-    enabled: false,
-  }));
+  const autostart = await autostartStatus().catch(() => unknownAutostart());
   const cfg = await configHealth().catch(() => ({ hasBlocker: false }) as { hasBlocker: boolean });
   return {
     installed,
@@ -230,6 +227,19 @@ export async function liveness(): Promise<IpfsLiveness> {
     autostartEnabled: autostart.enabled,
     // A config blocker only matters when the node isn't already running.
     configBlocker: !running && cfg.hasBlocker,
+  };
+}
+
+/** The "we couldn't read launchd" fallback. Reports nothing as working — never a cheerful default. */
+function unknownAutostart(): IpfsAutostartStatus {
+  return {
+    supported: process.platform === "darwin",
+    installed: false,
+    enabled: false,
+    lastExitCode: null,
+    lastRunFailed: false,
+    failureReason: null,
+    conflict: null,
   };
 }
 

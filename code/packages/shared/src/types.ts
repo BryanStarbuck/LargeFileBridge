@@ -400,7 +400,23 @@ export interface IpfsNodeMetrics {
 export interface IpfsAutostartStatus {
   supported: boolean; // this OS can auto-start IPFS on reboot (macOS/launchd today)
   installed: boolean; // the LaunchAgent (plist) exists on disk
-  enabled: boolean; // it is loaded in launchd — i.e. it WILL run at the next reboot/login
+  enabled: boolean; // it is loaded in launchd AND not disabled — i.e. it WILL run at the next reboot/login
+  // `enabled` only means launchd will TRY. These say whether it actually WORKED at the last boot —
+  // without them the UI reported "on ✓" for an agent that had died with exit code 1 (ipfs_ui.mdx §13.1).
+  lastExitCode: number | null; // launchd's "last exit code" (null = never ran / unknown)
+  lastRunFailed: boolean; // it ran at the last boot and exited non-zero
+  failureReason: string | null; // the daemon's own last error line, e.g. the repo.lock message
+  conflict: IpfsAutostartConflict | null; // a FOREIGN agent also auto-starts `ipfs daemon` (the race, §13.2)
+}
+
+// A non-LFB launchd job that also runs `ipfs daemon` — e.g. Homebrew's `brew services start kubo`
+// (homebrew.mxcl.kubo). Two agents racing for ~/.ipfs/repo.lock is why auto-start silently failed:
+// the loser exits 1 and, with KeepAlive off, is never retried (ipfs_ui.mdx §13.2).
+export interface IpfsAutostartConflict {
+  label: string; // launchd label, e.g. "homebrew.mxcl.kubo"
+  source: string; // human name, e.g. "Homebrew (brew services)"
+  path: string; // the plist backing it
+  running: boolean; // it currently owns the daemon / repo lock
 }
 
 // POST /api/ipfs/autostart — install (set up reboot auto-start) or remove it.

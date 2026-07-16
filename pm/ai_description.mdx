@@ -1403,7 +1403,7 @@ The invariants, each cross-referenced to where it is owned:
 5. **Any tab, any browser, wakes on its own.** Because the queue/registry state is **process-global** and
    every surface polls the one `GET /api/progress`, an **idle** Processing page opened in a **different
    browser** that did nothing itself **starts moving within one poll interval**
-   ([processing.mdx §4.1](./processing.mdx)) — the behavior the product owner exercised by refreshing the
+   ([processing.mdx §4.5](./processing.mdx)) — the behavior the product owner exercised by refreshing the
    page in a second browser.
 
 The end-to-end async path (enqueue-and-return → async ~24-way drain → registry cards → bounded, windowed

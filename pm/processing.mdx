@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Background Processing (the conditional left-bar item, the bottom-left progress window, and the Processing page)
-description: The three surfaces that show background work while it runs. (1) A CONDITIONAL "Processing" left-bar item that appears as the LAST item of the top nav list (below Settings, above the empty space before the account slot) ONLY while background work is running, and disappears when it is done — clicking it opens the Processing page. (2) The bottom-left PROGRESS WINDOW in the main area (the existing progress dock) — a small stack of live cards for the items running right now, plus a "+ N queued" backlog footer; now clickable to open the Processing page. (3) The PROCESSING PAGE (route /processing) — the full queue view: the items running now, the per-op pending backlog, and the "Compress inside" BATCHES with a progress bar each and, when a batch finishes, its ERROR LIST. All three read one polled source, GET /api/progress, extended with a per-op backlog split and the batches. Sibling of webapp.mdx §10–§14 (the dock + registry the window reuses), job_queue.mdx (the queue + batches this surfaces), left_bar.mdx / left_bar.yaml (the nav the conditional item joins), and compression.mdx §12 (the batch producer whose error list lands here).
+description: The three surfaces that show background work while it runs. (1) A CONDITIONAL "Processing" left-bar item that appears as the LAST item of the top nav list (below Settings, above the empty space before the account slot) ONLY while background work is running, and disappears when it is done — clicking it opens the Processing page. (2) The bottom-left PROGRESS WINDOW in the main area (the existing progress dock) — a small stack of live cards for the items running right now, plus a "+ N queued" backlog footer; now clickable to open the Processing page. (3) The PROCESSING PAGE (route /processing) — TWO STACKED TABLES: a SHORT BATCHES table on top (one row per popup Confirm — Started · Progress · Done · Rejected · Problems, often one row, sometimes several) over the FULL-HEIGHT ITEMS table beneath it (every item of every batch together — running, pending, rejected, failed, halted), linked by a visible Batch facet so clicking a batch narrows the items below it. All three surfaces read one polled source, GET /api/progress. Sibling of processing_batches.mdx (the batch RECORD + the rejection-rate math the top table renders), webapp.mdx §10–§14 (the dock + registry the window reuses), job_queue.mdx (the queue + batches this surfaces), left_bar.mdx / left_bar.yaml (the nav the conditional item joins), and dialogs.mdx §5–§6 (the popup Confirm that mints a batch).
 ---
 
 # LargeFileBridge — Background Processing
@@ -13,19 +13,25 @@ that make that work visible and reachable:
 
 1. **§2 — a conditional "Processing" left-bar item** that appears only while work is running.
 2. **§3 — the bottom-left progress window** in the main area (the existing dock), now clickable.
-3. **§4 — the Processing page** (`/processing`): the full queue, with per-batch progress + the error list.
+3. **§4 — the Processing page** (`/processing`): **two stacked tables** — the **batches** the user started,
+   over **every item** of every batch together.
 
 All three are driven by **one** polled endpoint, `GET /api/progress` (§5), so they never disagree.
 
 Siblings this builds on and does not repeat:
 
+* [processing_batches.mdx](./processing_batches.mdx) — the **batch record**: what a batch is (one popup
+  Confirm), its label, its **five-way outcome taxonomy**, and the **rejection rate** math (`rejected /
+  answered`) the top table renders. **This file owns the page; that file owns the counting.**
 * [webapp.mdx §10–§14](./webapp.mdx) — the **progress dock**, the in-process **job registry**, the
   operation **taxonomy** (verbs per `ProgressKind`), and the poll. §3 here is that dock, enhanced.
-* [job_queue.mdx](./job_queue.mdx) — the **background queue** (the `compress` / `transcribe` / `describe`
-  ops), the pending backlog count, and the **batch** grouping (`createBatch` / `recordBatchResult`).
+* [job_queue.mdx](./job_queue.mdx) — the **background queue** (the `compress` / `transcribe` / `describe` /
+  `ocr` ops), the pending backlog count, and the **batch** grouping (`createBatch` / `recordBatchResult`).
+* [dialogs.mdx §5–§6](./dialogs.mdx) — the **unified batch-confirm popup** whose blue **"Describe N files"**
+  Confirm is the moment a batch is born.
 * [left_bar.mdx](./left_bar.mdx) / [left_bar.yaml](./left_bar.yaml) — the nav the **Processing** item joins
   as a runtime-conditional entry.
-* [compression.mdx §12](./compression.mdx) — the batch **producer**; its per-file error list is shown
+* [compression.mdx §12](./compression.mdx) — one of the batch **producers**; its per-file error list is shown
   on the Processing page (§4).
 
 ---
@@ -116,7 +122,7 @@ screen. The dock is therefore **capped**:
   the full stack.
 * The cap is a **display** limit only — nothing about the queue, the batch, or the `workers` read
   ([§3a](#3a-worker-utilization--the-parallelism-read-locked)) changes; every running job is still counted,
-  and the **full** running list is one click away on the Processing page (§4, "Running now").
+  and the **full** running list is one click away on the Processing page (§4.3, the items table).
 * This mirrors the two backlog/summary rows the dock already uses (the "+ N queued" footer and sonner's
   default 3-toast cap), so it reads as one consistent house pattern, not a special case.
 
@@ -134,7 +140,8 @@ to **see the mass parallelization working**. A single running card no longer imp
 16-core box may be chewing through **14 files at once**. This subsection adds a small **utilization read** so
 the busyness of the machine is visible, not inferred.
 
-* **The surface.** A compact line at the top of the **Running now** region (§4) reads how many of the
+* **The surface.** A compact line **at the top of the Processing page — above the batches table** (§4.0)
+  reads how many of the
   budget's slots are **busy** vs. the **budget total**, with the resolved fraction — e.g.
   **"12 / 14 workers busy (~90% of cores)"**. It is a plain read of live state, not a control (the knob that
   sets the budget lives in **Settings** → *Parallelism*, [parallelization.mdx §4](./parallelization.mdx)); it
@@ -151,46 +158,434 @@ the busyness of the machine is visible, not inferred.
   `performance.max_core_fraction`. When the field is absent (idle), the read simply does not render.
 
 The worker-utilization read (busy/budget of the core budget, with the resolved fraction) is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingPage.tsx` — `ProcessingPage` (reads `workers` from `useProgress()`; renders the "{busy} / {budget} workers busy (~{pct}% of cores)" line atop Running now, and passes the same figure to the dock/nav badge). The figure is assembled server-side from the queue's live in-flight slot count and `coreBudget()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.router.ts` — `GET /` (§5), sourcing `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — the in-flight slot count + `coreBudget()`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingPage.tsx` — `ProcessingPage` (reads `workers` from `useProgress()`; renders the "{busy} / {budget} workers busy (~{pct}% of cores)" line atop the page — above the batches table (§4.1) — and passes the same figure to the dock/nav badge). The figure is assembled server-side from the queue's live in-flight slot count and `coreBudget()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.router.ts` — `GET /` (§5), sourcing `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — the in-flight slot count + `coreBudget()`.
 
 ---
 
-## 4. The Processing page (`/processing`) (LOCKED)
+## 4. The Processing page (`/processing`) — two stacked tables (LOCKED)
 
 Clicking the nav item or the dock opens the **Processing page** — the full, correctly-described view of
 what is being processed. The user's words: *"go to the correctly described screen to see what's being
 processed. As a [batch] queue is built up, we want to show the right appropriate UI there."*
 
-The page is a standard list screen ([tables.mdx](./tables.mdx) house style, [PageHeader](./page_actions.mdx))
-with three stacked regions, each shown only when it has content:
+The page answers **two different questions**, and the redesign is built on the observation that they are
+different:
 
-1. **Running now** — one row per **running job** (the registry cards, [webapp.mdx §12](./webapp.mdx)):
-   the verb + target + a determinate bar/percent where the job reports it (a compress file's %, a pin's
-   MB). This is the same data the dock shows, given room to breathe. Atop this region sits the
-   **worker-utilization read** (§3a) — **"12 / 14 workers busy (~90% of cores)"** — so the user sees the mass
-   parallelization ([parallelization.mdx](./parallelization.mdx)) actually filling the Core Budget.
-2. **Waiting** — the **pending backlog**, labeled **per op** from the per-op split (§5): e.g.
-   **"18 compressing · 4 transcribing"** waiting to start. Drains to nothing as workers pick tasks up.
-3. **Batches** — one **card per batch** ([job_queue.mdx](./job_queue.mdx)) — today, each **"Compress
-   inside"** run:
-   * a **title** (the batch label, e.g. *Compress inside ~/Movies/Trip_2026*) and how originals were
-     handled (*Originals: hard-deleted* / *…moved to trash*);
-   * a **progress bar** — `done + failed` of `total` — that fills as the run drains;
-   * on **finish**, the **error list** ([compression.mdx §12.4](./compression.mdx)): every file that
-     failed/was blocked, with its reason. A clean finish shows **"All {done} files compressed"** and no
-     list. Finished batches linger for a **retention window** (30 min) so the user can still read the
-     errors after the run ended (and after the conditional nav item has vanished, §2) — the finish toast
-     ([compression.mdx §12.7](./compression.mdx)) is the pointer back here.
+* **"What did I set running, and how is it going?"** → the **batches table** (§4.1) — **short**, on top,
+  **often one row**.
+* **"What is happening to my files right now?"** → the **items table** (§4.3) — **long**, beneath,
+  **full-height**, holding **every batch's items together**.
 
-When the whole page has nothing to show (no jobs, no backlog, no batches), it renders a calm empty state —
-**"Nothing is processing right now."** — rather than a blank screen (a user can reach `/processing`
-directly).
+The user's words: *"a short table at the top, which is the list of processing batches, often only one, and
+then the main list underneath that, which is the items that are being downloaded currently or pending. That
+bottom list is all the processing batches together."*
 
-The Processing page (the three regions, the per-batch progress bar, and the finished-batch error list) is
-rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingPage.tsx` — `ProcessingPage` (subscribes to `useProgress()`; maps `jobs` → Running, `queuedByOp` → Waiting, `batches` → the batch cards with `done/failed/total` bars and the `errors[]` list). The route is registered in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/router.tsx` — `processingRoute` (`path: "/processing"`, code-split).
+### 4.0 The layout
 
-### 4.1 An idle page starts moving when work appears elsewhere (LOCKED)
+```
+┌─ Processing ─────────────────────────────────────────────────────────────────┐
+│                                                            12 / 14 workers   │  §3a — pinned
+│                                                        busy (~90% of cores)  │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  Batches                                                    2 running · 1 done│  §4.1 — bounded, shrinks to fit
+│ ┌──────────────────────────────────────────────────────────────────────────┐ │
+│ │ Batch                      Started    Progress          Done  Rej  Prob ⋮ │ │
+│ │ ● AI descriptions          8 min ago  ▓▓▓▓▓▓▓▓░░  84%   1,163  41 · 3%  3 ⋮│ │
+│ │   …/Movies/Trip_2026 · 1,440 files               1,207/1,440   ~4 min left │ │
+│ │ ● Transcriptions           2 min ago  ▓░░░░░░░░░  11%      12    —      0 ⋮│ │
+│ │   …/Podcasts/2026 · 108 files                        12/108               │ │
+│ │ ✓ Compress · …/Trip · 322  1 hr ago   ▓▓▓▓▓▓▓▓▓▓ 100%     318   —       4 ⋮│ │
+│ └──────────────────────────────────────────────────────────────────────────┘ │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  Items    [search…]                                       ⛛   ↕  Sort:[Status↓]│  §4.3 — control row, pinned
+│  Batch: [2 of 3 ▾][All]   Status: [4 of 5 ▾][All]   Kind: [3 of 3 ▾][All]     │  §4.3.1b — facet rail, pinned
+│ ┌──────────────────────────────────────────────────────────────────────────┐ │
+│ │ Status     File               Progress   Batch        Kind   Size    …    │ │
+│ │ ● Running  trip_014.mp4       ▓▓▓░ 47%   AI descr…    video  1.2 GB       │ │
+│ │ ● Running  trip_015.mp4       ▓░░░ 12%   AI descr…    video  0.9 GB       │ │
+│ │ ⧗ Queued   trip_016.mp4       —          AI descr…    video  1.4 GB       │ │
+│ │ ⊘ Rejected slide_07.png       —          AI descr…    image  2.1 MB       │ │  ← slate, not red
+│ │ ✕ Failed   corrupt.mov        —          AI descr…    video  8.0 MB       │ │
+│ │ ⏸ Not att… trip_900.mp4       —          AI descr…    video  1.1 GB       │ │  ← amber
+│ │                                                        (body scrolls, fills)│ │
+│ └──────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+**The AI-descriptions row, worked through** (every figure follows from
+[processing_batches.mdx §4](./processing_batches.mdx), and they must always reconcile like this):
+
+* **Settled** = `ok 1,163 + rejected 41 + failed 3` = **1,207** of **1,440** → the bar and **84%**. The
+  refusals and the failure **advance** the bar: those files are finished, whatever the verdict.
+* **Done** = **1,163** — `ok` alone. The 41 refusals are **not** in it (§4.1's *"the plain success count"*).
+* **Rejected** = `41 / (1,163 + 41 answered)` = **3.4% → 3%**. The 3 failures and the 233 not-yet-asked are
+  **excluded from both sides** — over `total` this same row would read **2.8%** and would have read ~0% an
+  hour ago ([processing_batches.mdx §4.4](./processing_batches.mdx#44-the-rejection-rate--the-denominator-is-answered-never-total-locked)).
+* **Problems** = **3** (red). The 41 are **not** problems — nothing is broken; Gemini looked and declined.
+
+### 4.0.1 Why two tables and not the old three regions (LOCKED)
+
+The previous design stacked **Running now** · **Waiting** · **Batches** as three regions, with batches at
+the **bottom** as cards. That is now replaced, for three reasons worth recording so it is not re-litigated:
+
+* **The batch is the thing the user started; it belongs on top.** The user clicked a button that said
+  *"Describe 1,440 files"*. The first thing they want on this page is **that** run's row. Burying it under
+  the item churn put the summary furthest from the eye.
+* **Running / Waiting were never separate things — they are one column.** Splitting the same file list
+  across two regions by *state* meant a file **moved between regions** as it started, and the user could not
+  sort or filter across the whole set. §4.3's table already carried Status as a column and made the split
+  redundant; the **Waiting** count survives as the Status facet's `Queued` value and the batch bar's
+  remainder.
+* **Cards don't compare; rows do.** With three batches running, cards force a vertical scan of prose. The
+  user's actual question — *"which one is furthest along, and which one is in trouble?"* — is a
+  **column comparison**, which is what a table is for.
+
+### 4.1 The batches table (top, short) (LOCKED)
+
+**One row per batch** ([processing_batches.mdx §1](./processing_batches.mdx) — one popup Confirm = one
+batch). It is a [TanStack table](./tables.mdx) like every other table in the product.
+
+| Priority | Column | Shows |
+| --- | --- | --- |
+| **1 (kept)** | **Batch** | The **state dot** + the [label](./processing_batches.mdx#3-the-label--what-the-user-recognizes-it-by-locked) — *AI descriptions* over a muted second line *…/Movies/Trip_2026 · 1,440 files*. The full path is the [hover-info](./non_intrusive_tooltip.mdx) payload. |
+| **2 (kept)** | **Progress** | A determinate **bar + %** with `settled / total` beneath — `(ok + rejected + failed + halted) / total` ([processing_batches.mdx §4.1](./processing_batches.mdx)). |
+| **3 (kept)** | **Rejected** | **The product owner's number.** Count + rate — **`41 · 3%`** — or the **count only** below 20 answered, or **`—`** for an op no provider judges ([processing_batches.mdx §4.4](./processing_batches.mdx#44-the-rejection-rate--the-denominator-is-answered-never-total-locked), §4.5). **Slate, never red.** Amber above 20%. |
+| **4** | **Problems** | `failed` in **red** + `halted` in **amber**, e.g. **`3 · 41 not attempted`**; **`0`** when clean. Two counts, one cell, because they are one question — *"did anything go wrong?"* — with two [very different answers](./processing_batches.mdx#43-failed-vs-halted--attempted-vs-never-attempted). |
+| **5** | **Started** | **Relative** (*8 min ago*), live-ticking; absolute ISO in the hover-info. Relative wins because the only thing the user asks of this column is *"is this the one I just started?"* |
+| **6** | **Done** | `ok` — the plain success count. |
+| **7 (drops first)** | **Elapsed / ETA** | Runtime, and for a running batch a **rate-derived ETA** (§4.1.2). |
+
+* **⋮ menu** per row — pinned, never drops ([processing_batches.mdx §6](./processing_batches.mdx)).
+* **Responsive priority-drop** ([repos.mdx §3.2.1](./repos.mdx)): lowest priority drops first, the row
+  **never wraps**. **Rejected is priority 3 — it survives almost any width**, because it is the column the
+  page was redesigned to show.
+* **No facet rail, no search.** This table is **short by construction**; a filter rail over three rows would
+  be furniture that costs more than it saves ([tables.mdx §2.2](./tables.mdx) puts facets on a rail *because*
+  a long table hides things — a three-row table hides nothing). If it ever exceeds §4.1.1's scroll cap, the
+  **sort** icon alone is offered.
+* **Default sort: Started, descending** — newest batch on top, because the batch the user just started is
+  the one they came to look at. A **real `defaultSort`** the [chip run](./tables.mdx#35-sorting-without-opening-the-dropdown--the-active-sort-chips-locked)
+  displays and the user can change — never an invisible JS pre-sort (the mistake §4.3's `STATE_ORDER` made).
+* **Row click** = *Show only this batch's items* (§4.1.3). The ⋮ is the full menu.
+
+### 4.1.1 Height — bounded, and it shrinks to fit (LOCKED)
+
+The batches table has **content below it** (the items table), so it takes the **content-below exception** to
+the house full-page-height rule ([repos.mdx §3.3.1](./repos.mdx) — *"the table keeps a **bounded** height so
+what sits under it stays visible"*): **`fillHeight={false}`**.
+
+But bounded is not enough, because **"often only one"** is the common case:
+
+* The table is **sized to its content up to 6 rows**, then scrolls internally. **One batch = a one-row
+  table**, not a six-row box with five rows of dead space. Reserving height for batches that do not exist
+  would steal it from the items table — the thing the user is actually watching — in the exact case (one
+  batch) that happens most.
+* **Zero batches → the table is absent from the DOM entirely** — header and all. Ad-hoc work
+  ([processing_batches.mdx §1](./processing_batches.mdx)) still renders in the items table below. This is the
+  same **no-empty-chrome** rule the nav item and dock already follow (§6 AC 6): an empty table that says
+  *"no batches"* above a table full of running items is a contradiction the user has to resolve.
+* The **items table below keeps `fillHeight` and still fills to the viewport bottom** — content **above** a
+  table never triggers the exception ([repos.mdx §3.3.1](./repos.mdx)). The page itself **never scrolls**;
+  only the two bodies do.
+
+### 4.1.2 The ETA is honest or it is absent (LOCKED)
+
+**Elapsed** is a fact and always shows. **ETA** is a projection, and shows **only** when it can be one:
+
+* It appears once **≥ 10 items have settled** and **≥ 30 s** have elapsed, derived from the **trailing rate**
+  (settled per minute over the last 2 minutes), and reads **approximate** — *"~14 min left"*.
+* Below those thresholds it is **absent**, not a guess. A batch's first two files say nothing about the next
+  1,438 — a 4-second image and a 40-minute video share a queue, and an ETA extrapolated from the image is a
+  confident lie. The product would rather show nothing than a number that halves and doubles while the user
+  watches it.
+* It is **absent** for a finished batch (Elapsed becomes the total runtime) and for a **stopped/halted** one.
+
+### 4.1.3 Clicking a batch sets a VISIBLE facet (LOCKED)
+
+Clicking a batch row — or its ⋮ → *Show only this batch's items* — **sets the items table's Batch facet**
+(§4.3.1b) to that batch and nothing more.
+
+This is master/detail done the way this product already does it — exactly the pattern
+[one_repo.mdx §4.1](./one_repo.mdx)'s summary segments use ("*clicking a segment **sets the Pin (IPFS)
+facet** to that one value*"), and it is required by the LOCKED rule §4.3.1a already states for the
+**Failed only** preset:
+
+> *"filtering correctly and **showing** that you filtered are two separate requirements"* — a preset that
+> quietly applied its own hidden predicate would leave a **traceless narrowing**.
+
+So the narrowing lands **on the rail as the facet's own chips**, where the user can **see why 1,300 rows
+vanished** and undo it by re-checking a box or hitting the facet's **All** link. Clicking the **already-selected**
+batch row again returns the facet to all-checked. The facet stays the single source of truth; the click is a
+shortcut to a state the user could have set themselves.
+
+A hidden `selectedBatchId` filter would be faster to build and would produce the identical row set — and the
+first time a user clicked a batch, walked away, came back, and found the items table "missing" three
+quarters of their work with no visible reason, it would cost more than it saved.
+
+### 4.1.4 The toast points here (LOCKED)
+
+The Confirm's LOCKED toast ([page_actions.mdx §2](./page_actions.mdx)) — *"1,440 files will have their AI
+descriptions created"* — gains a **"View progress"** action that opens `/processing` **with that batch's
+facet already set** (§4.1.3). `EnqueuePlan` returns the `batchId`
+([processing_batches.mdx §7](./processing_batches.mdx)) precisely so the toast can name its own row rather
+than guess at the newest one. The toast's **wording is unchanged and stays LOCKED**; this adds an action, not
+prose.
+
+### 4.2 The items table (bottom, full-height) — every batch together (LOCKED)
+
+The user's words: *"That bottom list is all the processing batches together."*
+
+The bottom table is **not** scoped to a batch by default. It is **every item of every batch**, plus ad-hoc
+work, in one list — because the machine has **one** queue and the user's real question is *"what is my
+computer doing?"*, not *"what is batch #2 doing?"*. The **Batch** column tells each row apart; the **Batch
+facet** narrows when the user wants that (§4.1.3).
+
+Its states, columns, facets, and responsive behavior are §4.3 — unchanged in structure, extended with the
+**`Rejected`** state (§4.3.1) and the **Batch** facet + column (§4.3.1b).
+
+The two-table Processing page is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingPage.tsx` — `ProcessingPage` (subscribes to `useProgress()`; renders `<ProcessingBatchesTable batches={batches} />` — `fillHeight={false}`, content-sized to 6 rows — above `<ProcessingItemsTable />` — `fillHeight`, fed by `jobs` + `queuedItems` + `recentFailures`), with the batch table in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingBatchesTable.tsx` — `ProcessingBatchesTable` (the Rejected column's `rejectionRate()`, the §4.1.2 ETA gate, and the row click → `setBatchFacet()`). The route is registered in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/router.tsx` — `processingRoute` (`path: "/processing"`, code-split).
+
+### 4.2a The empty state (LOCKED)
+
+When the page has **nothing at all** (no jobs, no backlog, no batches) it renders one calm line —
+**"Nothing is processing right now."** — not two empty tables. A user can reach `/processing` directly, and
+an idle page **starts moving on its own** the moment work appears anywhere (§4.5).
+
+---
+
+### 4.3 The per-item processing table — every state, with responsive columns (LOCKED)
+
+This is the page's **bottom table** (§4.2) — **all the batches together**. The top table (§4.1) answers
+*"how are my runs going?"*; this one answers, **per file**, *"which ones are running in parallel, which are
+pending, which failed, which are underway."* It is a [tables.mdx](./tables.mdx) house table that makes
+**every item's state explicit** and, crucially, shows the **parallelism** directly.
+
+### 4.3.1 The six item states (LOCKED)
+
+Every item is in exactly one state — the same
+[five-way outcome taxonomy](./processing_batches.mdx#4-the-outcome-taxonomy--five-ways-a-file-ends-locked)
+the batch counters aggregate, plus `Running`. **The item rows and the batch counters are two views of one
+truth and can never disagree**: each row's state is exactly the bucket its batch counted it into.
+
+| State | Meaning | How it reads |
+| --- | --- | --- |
+| **Running** (underway, **in parallel**) | Actively being worked **right now**. **Multiple `Running` rows at once = running in parallel** ([transcribe_engine.mdx §5](./transcribe_engine.mdx) — calibrated to the machine). | A determinate **% bar** per row + a spinner; the **worker-utilization read** (§3a) above says how many of the budget's slots are busy (e.g. *"12 / 14 workers busy (~90% of cores)"* — one global read across all buckets, never a per-op one). |
+| **Pending** (queued, **not started**) | Admitted to the queue but **waiting for a free worker slot**. | A muted **"Queued"** chip; the backlog shown as **rows** so the user sees exactly what's in line. |
+| **Rejected** (**the provider said no**) | The provider **considered the file and refused** — a `RECITATION`/`SAFETY` verdict that **survived every retry**, or a blocked input ([ai_description.mdx §2.3](./ai_description.mdx)). A `.ai_description_rejected` record was written. **It is settled, and it is not a fault.** | A **slate/violet "Rejected"** chip + the provider's reason. **Never red** — nothing is broken; the provider answered. **No retry affordance**: it is settled after four attempts, and *overwrite on the file* is the only way to ask again ([processing_batches.mdx §6](./processing_batches.mdx)). |
+| **Halted** (**never attempted**) | The provider's circuit **opened** ([to_fix.mdx §2.4](./to_fix.mdx)), or the user **stopped the batch** ([processing_batches.mdx §6.2](./processing_batches.mdx)). It did **not** error — it was **never tried**. | An **amber "Not attempted"** chip + the reason. **Not red, and never worded as a failure** ([warnings.mdx §2](./warnings.mdx) — nothing is broken). One **banner per circuit** groups them with a one-click **re-queue**; the rows keep their own per-item truth. |
+| **Failed** | The item **errored / could not complete** — including a transcription that came back **short of the full duration** ([transcribe_engine.mdx §4](./transcribe_engine.mdx)). | A **red "Failed"** chip + the **reason** (and, for a truncated transcript, the covered-vs-total figure). Failures **persist** through the batch's [retention](./processing_batches.mdx#5-retention--the-row-outlives-the-run-locked) so they stay readable after the run. |
+| **Done** (recent) | Completed successfully in this run. | A **green "Done"** chip; recent completions linger briefly so the user sees progress, then age out. |
+
+* **Three non-green outcomes, three colors, three different meanings.** `Rejected` (slate) · `Halted`
+  (amber) · `Failed` (red) are the states users and code most often collapse into one — and the whole
+  design turns on keeping them apart. **Red means we are broken. Amber means we never tried. Slate means
+  the provider looked and declined.** Each implies a different action (fix it · re-queue it free · accept
+  it), so one color for all three would tell the user to do the wrong thing two times out of three.
+
+* **Nothing is hidden.** A file that has not started yet is a **Pending row**, not an invisible integer — the
+  user can see the whole queue that is pending but not started, the ones underway, and the ones that failed
+  out, all at once.
+* **`Halted` is never a flavour of `Failed`.** They are **different facts**: a failed item **was attempted**
+  and the work is genuinely lost; a halted item **was never sent** and costs nothing to run now. Rendering a
+  halted item as "failed" makes the user **re-run work believing it was attempted** — and hides that the
+  cheap fix is to re-queue the batch once the provider is healthy. It must therefore be **re-queueable in
+  one click** (§4.3.1's banner), not buried in a retry-each-row flow.
+
+  Draining the doomed tasks and marking them `halted` — never `failed` — is in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `haltDoomedTasks()` (splices `pending`, `recordFailure({ state: "halted" })`, `appendTerminal(id, "halted")`), carried on `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FailedItemView.state?: "failed" | "halted"`.
+
+  The amber **"Not attempted"** rendering and the one-banner-per-circuit grouping are in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingItemsTable.tsx` — `ItemState` / `STATE_ORDER` / the state labels; `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/haltedWarning.tsx` — `haltedGroups()` / `haltedWarningDef()` (the re-queue action).
+* **Sort.** Default **Running → Pending → Failed → Halted → Rejected → Done**, so in-flight work is on top,
+  the **actionable** problems (`Failed`, then the free-to-fix `Halted`) sit next where they are found without
+  hunting, and the **settled** outcomes (`Rejected`, `Done`) — the ones with nothing to do about them — sit
+  below. **This must be a real default sort, not an invisible
+  JS pre-sort.** Today the rows are ordered by a `STATE_ORDER` constant before they ever reach the table,
+  with **no `defaultSort`** — so the state ordering is a fact the user can neither **see** nor **change**:
+  the sort chip run ([tables.mdx §3.5](./tables.mdx#35-sorting-without-opening-the-dropdown--the-active-sort-chips-locked))
+  renders nothing, the Status header shows no caret, and clicking a header silently discards the grouping.
+  The order above is therefore declared as the table's **default sort key (Status, in the state order)**
+  ([tables.mdx §3.4](./tables.mdx#34-the-default-sort--bookmarks-first-locked-default-user-changeable)), so
+  it displays honestly as a chip, is user-changeable, and persists per user like every other sort (§4 there).
+* **Filter.** Per [tables.mdx §2](./tables.mdx#2-filtering--the-value-visibility-checkbox-model-locked) —
+  see §4.3.1a.
+
+### 4.3.1a The facets — Status, Kind, and Batch (LOCKED)
+
+Filtering follows [tables.mdx §2](./tables.mdx#2-filtering--the-value-visibility-checkbox-model-locked)
+and is not restated. Three facets on the **rail**, vocabularies declared as
+[§2.8](./tables.mdx#28-a-facets-values-must-be-declared--an-empty-facet-is-a-bug-locked) requires:
+
+| Facet | Values (each a checkbox, all checked by default) | Column |
+| --- | --- | --- |
+| **Status** | ☑ **Running** · ☑ **Queued** · ☑ **Rejected** · ☑ **Not attempted** · ☑ **Failed** | Status (§4.3.2) — the item states (§4.3.1). **Done** is described in §4.3.1 but is **not yet a slice** (§5), so it is not yet a value; when that slice lands it becomes **☑ Done** and — per [tables.mdx §4.1](./tables.mdx#41-facets-persist-as-the-hidden-values-never-the-shown-ones-locked) — is **visible to existing users by default** because facets persist as `hidden:`. |
+| **Kind** | ☑ **Audio** · ☑ **Video** · ☑ **Image** | Kind (§4.3.2) — the media kind. An item with no media kind (a `pin` / `scan` op) holds no value on this axis; that is not a facet value, mirroring the N/A rule in [tables.mdx §2.4.1](./tables.mdx#241-the-two-facets-fixed-vocabulary-locked). |
+| **Batch** (§4.3.1b) | ☑ one value **per live batch** (its label) · ☑ **Ad hoc** | Batch (§4.3.2) — which run this item belongs to. **Runtime vocabulary** — the only one in the product. |
+
+**File / Reason are free text** → the `⛛` popover as `contains`; **Size** / **Duration** are numeric
+thresholds ([tables.mdx §2.3](./tables.mdx#23-what-survives-in-the-filter--popover-locked)).
+
+#### "Failed only" is a preset that sets the Status facet — not a second filter (LOCKED)
+
+**"Failed only" is fully expressible in the Status facet**: it is exactly *Failed ✓, every other value ✗*.
+So it does **not** become a promoted checkbox. **Bookmarked only** earns that exception because it is a
+promotion of a **non-column** flag ([tables.mdx §2.7](./tables.mdx#27-the-promoted-bookmarked-only-filter-locked));
+a second control that duplicates a facet's own values would give the same predicate two sources of truth
+and let the rail contradict the checkbox.
+
+Instead it is a **one-click preset** — a small **`Failed only`** link beside the Status facet, offered
+**only when any item failed** — that **sets the Status facet** (leaves only `Failed` checked) and nothing
+more. **It does not touch the Batch facet**, so a batch the user already isolated (§4.1.3) stays isolated
+and the preset reads as *"the failures **of what I am looking at**"* — the two facets AND together
+([tables.mdx §2.1](./tables.mdx)) exactly as the rail shows. The resulting state is then **visible on the
+rail** as the facets' own chips, so the user can see
+*why* rows vanished and undo it by re-checking a box or hitting the facet's **All** link. This applies
+[page_actions.mdx §1.2](./page_actions.mdx#12-rule-2--skip-already-done-for-producing-actions-locked)'s
+LOCKED rule to filtering: *"a user … cannot see a filter that left no trace"* — **filtering correctly and
+*showing* that you filtered are two separate requirements**. A preset that quietly applied its own hidden
+predicate would leave exactly that traceless narrowing; one that sets the facet leaves the trace on the
+rail. The facet stays the single source of truth; the preset is just a shortcut to a state the user could
+have clicked themselves.
+
+### 4.3.1b The Batch facet — a runtime vocabulary, and why it breaks two house rules on purpose (LOCKED)
+
+The Batch facet is what makes §4.1.3's *"click a batch, see its items"* a **visible** narrowing rather than a
+hidden predicate. It is the product's **first facet whose values are not knowable at design time** — they
+are the live batches — and that forces **two deliberate, documented departures** from
+[tables.mdx §2](./tables.mdx). Both are recorded here so neither reads as an oversight:
+
+* **Departure 1 — `Ad hoc` IS a declared value, though the N/A rule would say otherwise.**
+  [tables.mdx §2.4.1](./tables.mdx) says an item holding no value on an axis contributes **no facet value**
+  (which is why a `pin` job adds no `Kind` value). By that reading, un-batched work would simply be
+  unfilterable on this axis — and would therefore be **stuck on screen forever**, because a row that holds
+  no value can never be excluded. That would defeat the facet's entire purpose: clicking a batch would show
+  *"that batch's 1,440 items **and** every stray right-click compress"*, which is not what the user asked
+  for and not what the row promises. So **"has no batch" is treated as a real, checkable value**, because —
+  unlike "this pin has no media kind" — it is a fact the user actively reasons about and needs to both
+  isolate and exclude. **The N/A rule holds where N/A is meaningless; here it is meaningful.**
+* **Departure 2 — this facet does NOT persist.** Every other facet persists per user as `hidden:`
+  ([tables.mdx §4.1](./tables.mdx)). This one is **ephemeral session state**. Persisting it would be
+  incoherent: a batch id is **gone** by the next session (§5's retention, and the queue is in-memory), so a
+  saved `hidden: [a1b2c3d4]` would be a permanent instruction about a batch that no longer exists, silently
+  accumulating dead ids in `config.yaml` forever. The precedent already exists —
+  [tables.mdx §6](./tables.mdx) LOCKs that *"tab selection is presentation, not preference"* and is never
+  written to config. **A facet over ephemeral values is presentation, not preference.**
+* **The vocabulary is never empty.** [tables.mdx §2.8](./tables.mdx) makes an empty facet a bug. With **zero
+  batches** the facet has no values to offer, so — like the batches table itself (§4.1.1) — it is **absent
+  from the rail entirely**, not rendered empty. With batches present it always has ≥ 1 value.
+* **Overflow.** Many concurrent batches are rare, but the rail's standard **`+N more` → popover**
+  ([tables.mdx §2.2](./tables.mdx)) handles it with no special case. Values sort **newest batch first**,
+  matching the batches table's default sort (§4.1) so the two orders agree.
+* **The last-value rule still holds** ([tables.mdx §2.1](./tables.mdx)): unchecking the final checked box is
+  disabled — *"At least one value must be shown."*
+
+The Batch facet's runtime vocabulary, its non-persistence, and the `Ad hoc` value are to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingItemsTable.tsx` — `ProcessingItemsTable` (the `id: "batch"` column, its vocabulary derived from `useProgress().batches` + the `Ad hoc` sentinel for `batchId == null`, held in component state and excluded from the `tables.views.<tableId>` persistence write).
+
+The Status facet ships its vocabulary today (`filterOptions: ["Running", "Queued", "Failed"]`) but as a `<select>`; the Kind facet's values, the rail rendering, the `Failed only` preset, and the real `defaultSort` (replacing the invisible `STATE_ORDER` pre-sort) are to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingItemsTable.tsx` — `ProcessingItemsTable` (the `id: "status"` / `id: "kind"` columns and the `STATE_ORDER` row sort), against the new facet-rail region of `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
+
+### 4.3.2 The columns (transcribe example) + responsive priority-drop (LOCKED)
+
+The table carries **all the columns the user would want**, and — exactly as the product owner asked —
+**when they don't all fit, the lowest-priority columns disappear so there is no wrapping; the wider the
+page, the more columns appear** (the same responsive-priority rule as the repo files table,
+[repos.mdx §3.2.1](./repos.mdx#321-responsive-column-priority--drop-the-least-important-column-as-the-table-narrows-locked)).
+
+Columns, highest priority (never dropped) → lowest (dropped first as the page narrows):
+
+| Priority | Column | Shows |
+| --- | --- | --- |
+| **1 (kept)** | **Status** | The state chip (§4.3.1) — Running / Queued / Rejected / Not attempted / Failed / Done. |
+| **2 (kept)** | **File** | Name (+ muted relative path); the item being processed. |
+| **3** | **Progress** | The determinate **% bar** (Running), or `—` (any settled or pending state). |
+| **4** | **Batch** | The [batch label](./processing_batches.mdx#3-the-label--what-the-user-recognizes-it-by-locked)'s **verb only** (*AI descriptions*), or **Ad hoc** (§4.3.1b). The **full** label is the hover-info. It sits at priority 4 — above Kind — because with the bottom table holding **every batch together** (§4.2), *"which run is this from?"* outranks *"what kind of file is it?"*. **It drops when the Batch facet is narrowed to a single batch**: the rail already says so, and a column repeating one value down every row is width spent to say nothing. |
+| **5** | **Kind** | audio / video / image (for transcribe / describe) — or the op's analog. |
+| **6** | **Size** | File size. |
+| **7** | **Duration** | Media length (for transcribe — the thing that makes a run long); `—` until probed. |
+| **8** | **Engine** | Which engine/provider is running it (`whisper-large` / `apple-speech` / `gemini`) — [transcribe_engine.mdx §2](./transcribe_engine.mdx). |
+| **9** | **Elapsed / Started** | How long this item has been running / when it started. |
+| **10 (drops first)** | **Reason** | The failure **or refusal** reason — **auto-shown** whenever any row is `Failed`, `Rejected`, or `Not attempted`, regardless of width (a reason is never hidden), and otherwise the first to drop. |
+
+* **No wrapping, ever.** As the window narrows, columns drop from priority 10 upward; the row stays a single
+  line. Widen the window and they come back, most-important-first.
+* **General, not transcribe-only.** The same table serves `describe` / `compress` / `ocr` / `pin`
+  runs — only the op-specific columns (Kind/Duration/Engine) swap for that op's analog; Status/File/
+  Progress/Batch are universal.
+* **Full-height.** With **nothing beneath it**, the table fills the page height and its **body** scrolls (the
+  house full-page-height table rule, [repos.mdx §3.3.1](./repos.mdx) / the charter Tables section). The
+  **batches table above it does not trigger the content-below exception** — content **above** a table never
+  does (§4.1.1). The page header, the worker-utilization read, the batches table, the control row, and the
+  facet rail all stay **pinned**; only this table's rows scroll.
+
+The per-item processing table (the six states, the Running→Pending→Failed→Halted→Rejected→Done default sort,
+the Batch column, and the responsive priority-drop column set) is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingItemsTable.tsx` —
+`ProcessingItemsTable` (a `DataTable` fed by `jobs` (Running) + `queuedItems` (Pending) + `recentFailures`
+(Failed / Not attempted / Rejected, split on `FailedItemView.state`) from `useProgress()`, using the shared
+responsive-priority column machinery of
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx`).
+
+**`Done` is spec'd but has no wire slice yet — a known, deliberate gap.** §4.3.1 describes the state and
+§4.3.1a reserves its facet value, but §5's payload carries **no** recent-completions field, so the table
+**renders no Done rows today**. That is honest and safe: the batch row's **Done** counter (§4.1) already
+answers *"how many succeeded?"* exactly, at any scale, so nothing the user needs is missing — a `Done` row
+list would be a **convenience**, not a source of truth. When the slice lands it must be **capped like the
+others** (§4.4) and **age out**, or a 2,000-file batch ends as 2,000 permanent green rows burying the very
+failures the page exists to surface. The facet value appears automatically at that point, visible to
+existing users, because facets persist as `hidden:` ([tables.mdx §4.1](./tables.mdx)).
+
+---
+
+### 4.4 Performance at scale — thousands of items without a slow page (LOCKED)
+
+A single batch can be **2,000+ files** (the "2,000 AI descriptions" scenario,
+[ai_description.mdx §12.7](./ai_description.mdx)). The Processing page must stay **fast to load and smooth to
+watch** at that size — it is a monitoring surface, and a monitoring surface that itself janks under load is
+useless. Four properties, each LOCKED, guarantee it:
+
+1. **The backend never blocks — so the poll always answers.** The single API server must keep serving
+   `GET /api/progress` on its normal cadence even while thousands of jobs drain. That holds only because
+   **every producer's heavy work is asynchronous** — the `describe` compress-to-fit transcode + base64 read
+   ([ai_description.mdx §3.3.1](./ai_description.mdx)) and the `compress` transcode
+   ([job_queue.mdx §3](./job_queue.mdx)) all run via `child_process.spawn` / `fs.promises`, never a
+   synchronous `spawnSync`/`readFileSync` that would freeze the event loop
+   ([performance.mdx P-27](./performance.mdx)). **This is the property whose absence produced the reported
+   "the Processing page would not load" bug** — with a synchronous describe transcode, the poll was stuck
+   behind a blocked loop.
+2. **The poll payload is bounded, the counts stay exact.** The pending rows (`queuedItems`) and the failure
+   rows (`recentFailures`) are **capped** (500 each, §5) so a 2,000- or 20,000-item queue is still a **small,
+   fixed-size** JSON body — the rows are the **head of the line**, not the whole backlog. The **exact**
+   totals still travel as integers (`queued` / `queuedByOp`), so the per-op backlog read says *"2,000 describing"*
+   even though only the first 500 ride as rows. The poll cost is **O(cap)**, not O(N).
+3. **The table renders a fixed number of rows.** The per-item table (§4.3) is the house `DataTable`, which
+   **windows** its rows — only the ~30 rows intersecting the viewport are in the DOM, regardless of whether
+   the page has 50 rows or the 500-row cap ([performance.mdx P-01](./performance.mdx)) — and paginates at
+   500. So the render is **fixed-cost**; a big backlog never becomes a 500/2,000-`<tr>` DOM dump.
+4. **The batches table costs O(batches), not O(files) — and that is why the counters live on the batch.**
+   A 2,000-file batch is **one row of integers**. Every figure the top table shows — progress, the
+   [rejection rate](./processing_batches.mdx#44-the-rejection-rate--the-denominator-is-answered-never-total-locked),
+   Problems — is read from **counters the queue already incremented** as each task returned
+   (`recordBatchResult()`), **never** by scanning item rows. This is load-bearing, not an optimization: the
+   item rows are **capped** (500, above), so a rate derived by counting them would be computed over the
+   **head of the line** and would be **flatly wrong** for any batch bigger than the cap — reporting the
+   rejection rate of the first 500 files as if it were the run's. **The counters are exact at any size
+   precisely because they are never derived from the truncated view.**
+
+Together these mean the page **loads instantly and scrolls smoothly** at any batch size, the numbers are
+always truthful, and the only thing that grows with the backlog is the integer counts — never the work the
+browser or the poll has to do. The poll also **self-accelerates** while busy (§4.5) so the picture stays
+live without a heavier idle poll.
+
+The bounded-payload caps are enforced server-side (`listQueuedItems()` / `listRecentFailures()` cap at 500)
+in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts`; the
+row windowing + 500-default pagination live in the shared
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` (the
+`useWindowedRows` windowing, [performance.mdx P-01](./performance.mdx)); the non-blocking backend is the
+async producers cited in §5 and [ai_description.mdx §3.3.1](./ai_description.mdx).
+
+### 4.5 An idle page starts moving when work appears elsewhere (LOCKED)
 
 The user's words: *"the page might show that there's nothing progressing because there may be nothing
 progressing. Another tab might actually add things … and then that page should be notified by the backend
@@ -218,7 +613,7 @@ regress:
 The shared-state + polling merge (so another tab's / launchd's work surfaces here) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/progress/ProgressContext.tsx` — `ProgressProvider` (the `useQuery(["progress"], api.progress, { refetchInterval: dockBusy ? 1200 : 3000 })` poll, merged de-duped by job id with the tab's own optimistic `run()` set) against the process-global `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.registry.ts` and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` that every producer writes into.
 
-### 4.2 Applying a TO DO batch is a Processing producer (LOCKED)
+### 4.6 Applying a TO DO batch is a Processing producer (LOCKED)
 
 Besides "Compress inside" and the page-action producers (§1), **Applying a [TO DO Batch](./to_do_batches.mdx)**
 from the [To Do page](./to_do.mdx) is a first-class producer of the work these three surfaces show. When the
@@ -227,186 +622,27 @@ LFBridge writes each row's decision(s) to the shared ledger and **enqueues the e
 jobs** ([job_queue.mdx](./job_queue.mdx)) — the popup closes immediately and the work drains here:
 
 * **`pull_down` recommendations** → **pull-down fetch** jobs (pin the file so its bytes arrive over IPFS).
-  Each surfaces as a **Running now** card / dock card as it starts, and counts into **Waiting** while queued.
+  Each surfaces as a **Running** row (§4.3) / dock card as it starts, and sits as a **Queued** row while it waits.
 * **`compress_video` / `compress_image` recommendations** → **compress** jobs — the same `compress:image` /
   `compress:video` admission buckets the "Compress inside" batch uses ([job_queue.mdx §3](./job_queue.mdx)),
   so they fill the Core Budget alongside any other compression and appear atop the **worker-utilization read**
   (§3a).
 * **A [transcribe slug](./to_do.mdx#7-show-what-could-be-transcribed-locked)'s Apply** ("Transcribe N files")
   → **transcribe** jobs. This is the **main producer of transcribe jobs** in the product — the ~80% popup's
-  default-checked list becomes the queue's `transcribe` backlog, shown in **Waiting** as *"N transcribing"*
+  default-checked list becomes the queue's `transcribe` backlog, shown as **Queued** rows (§4.3), counted per op by `queuedByOp` (§5)
   and, per file, as a live card with the transcription's determinate %.
 
 Because a mixed batch's Apply can fan out **all three** kinds at once (pull-downs + compress + transcribe),
-the Processing page is where the user watches a single batch's effects drain together — the same three
-regions (Running now · Waiting · Batches), the same one `GET /api/progress` poll (§5), no new surface. A
+the Processing page is where the user watches a single batch's effects drain together — **one** batch row of
+kind `mixed` on top ([processing_batches.mdx §1.2](./processing_batches.mdx) — one button, one batch, never
+three), its items below with their real ops in the **Batch**-filtered items table (§4.1.3), the same one
+`GET /api/progress` poll (§5), no new surface. A
 batch Apply started **in another tab** (or its yellow-banner twin on a repo page) lands in the same
-process-global queue, so an idle Processing page **starts moving on its own** (§4.1) just as it does for any
+process-global queue, so an idle Processing page **starts moving on its own** (§4.5) just as it does for any
 other producer.
 
 The To-Do batch Apply that writes decisions then enqueues the effects is served in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/batches/:id/apply` (fans the checked recommendations out to `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()` as `pull_down` / `compress` / `transcribe` tasks), triggered from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoBatchPopup` / `TranscribeBatchPopup`.
-
----
-
-## 4.3 The per-item processing table — every state, with responsive columns (LOCKED)
-
-The three regions (§4) answer *"is anything happening, and roughly what?"* For a **big batch — especially a
-transcription run of dozens of long files** — the user also asked to see, **per file**, *"which ones are
-running in parallel, which are pending, which failed, which are underway."* So the **Running now** region on
-the Processing page expands into a **per-item table** ([tables.mdx](./tables.mdx) house style) that makes
-**every item's state explicit** and, crucially, shows the **parallelism** directly.
-
-### 4.3.1 The five item states (LOCKED)
-
-Every item in the current run is in exactly one state, and the table groups/sorts by it so the picture is
-unambiguous:
-
-| State | Meaning | How it reads |
-| --- | --- | --- |
-| **Running** (underway, **in parallel**) | Actively being worked **right now**. **Multiple `Running` rows at once = running in parallel** ([transcribe_engine.mdx §5](./transcribe_engine.mdx) — calibrated to the machine). | A determinate **% bar** per row + a spinner; the **worker-utilization read** (§3a) above the table says how many of the budget's slots are busy (e.g. *"3 / 3 transcription workers busy"*). |
-| **Pending** (queued, **not started**) | Admitted to the queue but **waiting for a free worker slot**. | A muted **"Queued"** chip; these are the backlog the §4 **Waiting** count summarizes, now shown as **rows** so the user sees exactly what's in line. |
-| **Halted** (**never attempted**) | The provider's circuit **opened** and drained this item out of the queue before it ever ran ([to_fix.mdx §2.4](./to_fix.mdx)). It did **not** error — it was **never tried**. | An **amber "Not attempted"** chip + the reason. **Not red, and never worded as a failure** ([warnings.mdx §2](./warnings.mdx) — nothing is broken). One **banner per circuit** groups them with a one-click **re-queue**; the rows keep their own per-item truth in the table. |
-| **Failed** | The item **errored / could not complete** — including a transcription that came back **short of the full duration** ([transcribe_engine.mdx §4](./transcribe_engine.mdx)). | A **red "Failed"** chip + the **reason** (and, for a truncated transcript, the covered-vs-total figure). Failures **persist** through the batch's retention window (§4) so they stay readable after the run. |
-| **Done** (recent) | Completed successfully in this run. | A **green "Done"** chip; recent completions linger briefly so the user sees progress, then age out. |
-
-* **Nothing is hidden.** A file that has not started yet is a **Pending row**, not an invisible integer — the
-  user can see the whole queue that is pending but not started, the ones underway, and the ones that failed
-  out, all at once.
-* **`Halted` is never a flavour of `Failed`.** They are **different facts**: a failed item **was attempted**
-  and the work is genuinely lost; a halted item **was never sent** and costs nothing to run now. Rendering a
-  halted item as "failed" makes the user **re-run work believing it was attempted** — and hides that the
-  cheap fix is to re-queue the batch once the provider is healthy. It must therefore be **re-queueable in
-  one click** (§4.3.1's banner), not buried in a retry-each-row flow.
-
-  Draining the doomed tasks and marking them `halted` — never `failed` — is in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `haltDoomedTasks()` (splices `pending`, `recordFailure({ state: "halted" })`, `appendTerminal(id, "halted")`), carried on `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FailedItemView.state?: "failed" | "halted"`.
-
-  The amber **"Not attempted"** rendering and the one-banner-per-circuit grouping are in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingItemsTable.tsx` — `ItemState` / `STATE_ORDER` / the state labels; `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/haltedWarning.tsx` — `haltedGroups()` / `haltedWarningDef()` (the re-queue action).
-* **Sort.** Default **Running → Pending → Halted → Failed → Done**, so in-flight work is on top, the failures are
-  easy to find, and the queue tail is visible below. **This must be a real default sort, not an invisible
-  JS pre-sort.** Today the rows are ordered by a `STATE_ORDER` constant before they ever reach the table,
-  with **no `defaultSort`** — so the state ordering is a fact the user can neither **see** nor **change**:
-  the sort chip run ([tables.mdx §3.5](./tables.mdx#35-sorting-without-opening-the-dropdown--the-active-sort-chips-locked))
-  renders nothing, the Status header shows no caret, and clicking a header silently discards the grouping.
-  The order above is therefore declared as the table's **default sort key (Status, in the state order)**
-  ([tables.mdx §3.4](./tables.mdx#34-the-default-sort--bookmarks-first-locked-default-user-changeable)), so
-  it displays honestly as a chip, is user-changeable, and persists per user like every other sort (§4 there).
-* **Filter.** Per [tables.mdx §2](./tables.mdx#2-filtering--the-value-visibility-checkbox-model-locked) —
-  see §4.3.1a.
-
-### 4.3.1a The facets — Status and Kind (LOCKED)
-
-Filtering follows [tables.mdx §2](./tables.mdx#2-filtering--the-value-visibility-checkbox-model-locked)
-and is not restated. Two facets on the **rail**, vocabularies declared as
-[§2.8](./tables.mdx#28-a-facets-values-must-be-declared--an-empty-facet-is-a-bug-locked) requires:
-
-| Facet | Values (each a checkbox, all checked by default) | Column |
-| --- | --- | --- |
-| **Status** | ☑ **Running** · ☑ **Queued** · ☑ **Failed** | Status (§4.3.2) — the item states that ship as poll slices (§5). **Done** is described in §4.3.1 but is **not yet a slice**, so it is not yet a value; when the fourth slice lands it becomes **☑ Done** and — per [tables.mdx §4.1](./tables.mdx#41-facets-persist-as-the-hidden-values-never-the-shown-ones-locked) — is **visible to existing users by default** because facets persist as `hidden:`. |
-| **Kind** | ☑ **Audio** · ☑ **Video** · ☑ **Image** | Kind (§4.3.2) — the media kind. An item with no media kind (a `pin` / `scan` op) holds no value on this axis; that is not a facet value, mirroring the N/A rule in [tables.mdx §2.4.1](./tables.mdx#241-the-two-facets-fixed-vocabulary-locked). |
-
-**File / Reason are free text** → the `⛛` popover as `contains`; **Size** / **Duration** are numeric
-thresholds ([tables.mdx §2.3](./tables.mdx#23-what-survives-in-the-filter--popover-locked)).
-
-#### "Failed only" is a preset that sets the Status facet — not a second filter (LOCKED)
-
-**"Failed only" is fully expressible in the Status facet**: it is exactly *Running ✗, Queued ✗, Failed ✓*.
-So it does **not** become a promoted checkbox. **Bookmarked only** earns that exception because it is a
-promotion of a **non-column** flag ([tables.mdx §2.7](./tables.mdx#27-the-promoted-bookmarked-only-filter-locked));
-a second control that duplicates a facet's own values would give the same predicate two sources of truth
-and let the rail contradict the checkbox.
-
-Instead it is a **one-click preset** — a small **`Failed only`** link beside the Status facet, offered
-**only when any item failed** — that **sets the Status facet** (unchecks Running and Queued) and nothing
-more. The resulting state is then **visible on the rail** as the facet's own chips, so the user can see
-*why* rows vanished and undo it by re-checking a box or hitting the facet's **All** link. This applies
-[page_actions.mdx §1.2](./page_actions.mdx#12-rule-2--skip-already-done-for-producing-actions-locked)'s
-LOCKED rule to filtering: *"a user … cannot see a filter that left no trace"* — **filtering correctly and
-*showing* that you filtered are two separate requirements**. A preset that quietly applied its own hidden
-predicate would leave exactly that traceless narrowing; one that sets the facet leaves the trace on the
-rail. The facet stays the single source of truth; the preset is just a shortcut to a state the user could
-have clicked themselves.
-
-The Status facet ships its vocabulary today (`filterOptions: ["Running", "Queued", "Failed"]`) but as a `<select>`; the Kind facet's values, the rail rendering, the `Failed only` preset, and the real `defaultSort` (replacing the invisible `STATE_ORDER` pre-sort) are to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingItemsTable.tsx` — `ProcessingItemsTable` (the `id: "status"` / `id: "kind"` columns and the `STATE_ORDER` row sort), against the new facet-rail region of `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
-
-### 4.3.2 The columns (transcribe example) + responsive priority-drop (LOCKED)
-
-The table carries **all the columns the user would want**, and — exactly as the product owner asked —
-**when they don't all fit, the lowest-priority columns disappear so there is no wrapping; the wider the
-page, the more columns appear** (the same responsive-priority rule as the repo files table,
-[repos.mdx §3.2.1](./repos.mdx#321-responsive-column-priority--drop-the-least-important-column-as-the-table-narrows-locked)).
-
-Columns, highest priority (never dropped) → lowest (dropped first as the page narrows):
-
-| Priority | Column | Shows |
-| --- | --- | --- |
-| **1 (kept)** | **Status** | The state chip (§4.3.1) — Running / Queued / Failed / Done. |
-| **2 (kept)** | **File** | Name (+ muted relative path); the item being processed. |
-| **3** | **Progress** | The determinate **% bar** (Running), or `—` (Pending), or the fail marker. |
-| **4** | **Kind** | audio / video (for transcribe) — or the op's analog. |
-| **5** | **Size** | File size. |
-| **6** | **Duration** | Media length (for transcribe — the thing that makes a run long); `—` until probed. |
-| **7** | **Engine** | Which engine is running it (`whisper-large` / `apple-speech`) — [transcribe_engine.mdx §2](./transcribe_engine.mdx). |
-| **8** | **Elapsed / Started** | How long this item has been running / when it started. |
-| **9 (drops first)** | **Reason** | The failure reason — **auto-shown** whenever any row is `Failed`, regardless of width (a failure's reason is never hidden), and otherwise the first to drop. |
-
-* **No wrapping, ever.** As the window narrows, columns drop from priority 9 upward; the row stays a single
-  line. Widen the window and they come back, most-important-first.
-* **General, not transcribe-only.** The same table serves `compress` / `pull_down` runs — only the
-  op-specific columns (Kind/Duration/Engine) swap for that op's analog; Status/File/Progress are universal.
-* **Full-height.** With nothing beneath it, the table fills the page height and its **body** scrolls (the
-  house full-page-height table rule, [tables.mdx](./tables.mdx) / the charter Tables section); the header,
-  the worker-utilization read, and the Waiting/Batches summaries stay pinned.
-
-The per-item processing table (four states, the Running→Pending→Failed→Done grouping, the responsive
-priority-drop column set) is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingPage.tsx` —
-`ProcessingItemsTable` (a `DataTable` fed by `jobs` (Running) + `queuedItems` (Pending) + `recentFailures`
-(Failed) + recent `done` from `useProgress()`, using the shared responsive-priority column machinery of
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx`).
-
----
-
-## 4.4 Performance at scale — thousands of items without a slow page (LOCKED)
-
-A single batch can be **2,000+ files** (the "2,000 AI descriptions" scenario,
-[ai_description.mdx §12.7](./ai_description.mdx)). The Processing page must stay **fast to load and smooth to
-watch** at that size — it is a monitoring surface, and a monitoring surface that itself janks under load is
-useless. Three properties, each LOCKED, guarantee it:
-
-1. **The backend never blocks — so the poll always answers.** The single API server must keep serving
-   `GET /api/progress` on its normal cadence even while thousands of jobs drain. That holds only because
-   **every producer's heavy work is asynchronous** — the `describe` compress-to-fit transcode + base64 read
-   ([ai_description.mdx §3.3.1](./ai_description.mdx)) and the `compress` transcode
-   ([job_queue.mdx §3](./job_queue.mdx)) all run via `child_process.spawn` / `fs.promises`, never a
-   synchronous `spawnSync`/`readFileSync` that would freeze the event loop
-   ([performance.mdx P-27](./performance.mdx)). **This is the property whose absence produced the reported
-   "the Processing page would not load" bug** — with a synchronous describe transcode, the poll was stuck
-   behind a blocked loop.
-2. **The poll payload is bounded, the counts stay exact.** The pending rows (`queuedItems`) and the failure
-   rows (`recentFailures`) are **capped** (500 each, §5) so a 2,000- or 20,000-item queue is still a **small,
-   fixed-size** JSON body — the rows are the **head of the line**, not the whole backlog. The **exact**
-   totals still travel as integers (`queued` / `queuedByOp`), so the Waiting count reads *"2,000 describing"*
-   even though only the first 500 ride as rows. The poll cost is **O(cap)**, not O(N).
-3. **The table renders a fixed number of rows.** The per-item table (§4.3) is the house `DataTable`, which
-   **windows** its rows — only the ~30 rows intersecting the viewport are in the DOM, regardless of whether
-   the page has 50 rows or the 500-row cap ([performance.mdx P-01](./performance.mdx)) — and paginates at
-   500. So the render is **fixed-cost**; a big backlog never becomes a 500/2,000-`<tr>` DOM dump.
-
-Together these mean the page **loads instantly and scrolls smoothly** at any batch size, the numbers are
-always truthful, and the only thing that grows with the backlog is the integer counts — never the work the
-browser or the poll has to do. The poll also **self-accelerates** while busy (§4.1) so the picture stays
-live without a heavier idle poll.
-
-The bounded-payload caps are enforced server-side (`listQueuedItems()` / `listRecentFailures()` cap at 500)
-in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts`; the
-row windowing + 500-default pagination live in the shared
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` (the
-`useWindowedRows` windowing, [performance.mdx P-01](./performance.mdx)); the non-blocking backend is the
-async producers cited in §5 and [ai_description.mdx §3.3.1](./ai_description.mdx).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/batches/:id/apply` (fans the checked recommendations out to `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()` as `compress` / `transcribe` tasks and `pull_down` recommendations as **pin/fetch** work (the `pin` op — [job_queue.mdx §4b](./job_queue.mdx); `pull_down` is **not** a `JobOp`)), triggered from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoBatchPopup` / `TranscribeBatchPopup`.
 
 ---
 
@@ -417,27 +653,40 @@ with the two things the Processing page needs beyond the raw running jobs and th
 
 ```ts
 GET /api/progress → {
-  jobs: ProgressJob[],                                   // running now (registry + active scan)
+  jobs: ProgressJob[],                                   // running now (registry + active scan) — + batchId?
   queued?: number,                                       // total pending backlog (dock footer)
-  queuedByOp?: Partial<Record<ProgressKind, number>>,    // pending split per op (Processing "Waiting")
-  queuedItems?: QueuedItem[],                            // PENDING items as ROWS (§4.3.1) — { op, path, kind?, sizeBytes?, durationSec? }, capped (e.g. 500)
-  recentFailures?: FailedItem[],                         // FAILED items + reason (§4.3.1) — { op, path, reason, coveredSec?, durationSec?, at }, kept through the batch retention window
-  batches?: ProcessingBatch[],                           // active + recently-finished batches (§4)
+  queuedByOp?: Partial<Record<ProgressKind, number>>,    // pending split per op (the Status facet's Queued read)
+  queuedItems?: QueuedItem[],                            // PENDING items as ROWS (§4.3.1) — { op, path, batchId?, kind?, sizeBytes?, durationSec? }, capped (e.g. 500)
+  recentFailures?: FailedItem[],                         // SETTLED-NOT-OK items (§4.3.1) — { op, path, batchId?, reason, state: "failed" | "halted" | "rejected", coveredSec?, durationSec?, at }, capped
+  batches?: ProcessingBatch[],                           // the §4.1 batches table (processing_batches.mdx §2)
   workers?: { busy: number; budget: number },            // Core Budget utilization (§3a) — busy/total slots
 }
 ```
 
-* `queuedByOp` labels the **Waiting** region without the page needing to re-count.
-* `queuedItems` are the **pending-but-not-started** items as **rows** for the per-item table (§4.3): the
-  files in line, each with enough to render (op, path, kind, size, duration). **Capped** (e.g. 500) so a
-  huge queue stays a light poll — the count (`queued`/`queuedByOp`) is still exact; the rows are the head of
-  the line. Absent when nothing is queued.
-* `recentFailures` are the **failed** items with their **reason** (and, for a truncated transcript, the
-  covered-vs-total seconds — [transcribe_engine.mdx §4](./transcribe_engine.mdx)); kept through the batch
-  **retention window** (§4) so failures stay visible after the run. Absent when nothing failed.
-* `batches` carries each run's `{ label, total, done, failed, errors[], deleteOriginal, startedAt,
-  finishedAt }` — active ones (`finishedAt: null`) drive the progress bars; recently-finished ones (within
-  the 30-min retention) carry the error list. All optional/absent when empty, so an idle poll is tiny.
+* `queuedByOp` gives the per-op backlog read without the page re-counting.
+* `queuedItems` are the **pending-but-not-started** items as **rows** for the items table (§4.3): the files
+  in line, each with enough to render (op, path, **batchId**, kind, size, duration). **Capped** (e.g. 500) so
+  a huge queue stays a light poll — the count (`queued`/`queuedByOp`) is still exact; the rows are the head
+  of the line. Absent when nothing is queued.
+* `recentFailures` carries **every settled-but-not-`ok`** item + its **reason** — discriminated by
+  **`state`** into the three that must never be confused (§4.3.1): **`failed`** (attempted, errored — incl.
+  a transcript short of full duration, [transcribe_engine.mdx §4](./transcribe_engine.mdx)), **`halted`**
+  (never attempted), and **`rejected`** (the provider refused). **The field name is a legacy wire literal
+  and is now a misnomer** — a `rejected` item is not a failure ([processing_batches.mdx §4.2](./processing_batches.mdx))
+  — but `state` is the discriminator every surface reads, and renaming a shipped wire field to fix a comment
+  would be churn for nothing. **Never infer state from the field name or the reason prose** — that is
+  [ai_description.mdx §3.5](./ai_description.mdx)'s LOCKED rule (*"classify on the evidence object, never on
+  the message prose"*) applied one layer out: a reason string reading *"…(finishReason: PROHIBITED_CONTENT)"*
+  must not make a **timeout** render slate. **Structure decides; text is for reading.**
+* `batches` carries the [full batch record](./processing_batches.mdx#2-the-batch-record-locked-shape) —
+  `{ batchId, kind, label, scope, provider?, engine?, total, ok, rejected, failed, halted, running, errors[],
+  startedAt, finishedAt, stoppedBy?, manifestPath }`. Active ones (`finishedAt: null`) drive the §4.1 bars;
+  finished ones persist per [processing_batches.mdx §5](./processing_batches.mdx)'s retention. All
+  optional/absent when empty, so an idle poll is tiny.
+* **`batchId` rides every item** (`jobs`, `queuedItems`, `recentFailures`) — it is what joins the two tables.
+  Absent on ad-hoc work, which is exactly the **Ad hoc** facet value (§4.3.1b). **The join is done client-side
+  off the one payload; there is no per-batch item endpoint** — narrowing to a batch (§4.1.3) must never cost
+  a fetch, or a click on a row would stall behind the network and the two tables could momentarily disagree.
 * `workers` is the **worker-utilization read** (§3a): `busy` = admission slots occupied across all buckets
   right now, `budget` = the live mass-compute Core Budget the queue admits against
   ([job_queue.mdx §3](./job_queue.mdx), [parallelization.mdx](./parallelization.mdx)). Absent when the queue
@@ -461,48 +710,82 @@ The extended payload is assembled in code:
    into a single **"+ N more running"** summary line (under the cards, above the "+ N queued" footer), so a
    mass compress-inside run **never walls the screen**. The cap is display-only — the full running list is
    on the Processing page.
-3. **Processing page (§4):** `/processing` shows **Running now** (running jobs with their determinate
-   detail), **Waiting** (the pending backlog, labeled per op), and **Batches** (one card per "Compress
-   inside" run with a `done+failed / total` progress bar). A finished batch shows its **error list** (each
-   failed file + reason) or an all-clear summary, and lingers for a 30-min retention window. An empty page
-   shows a calm "Nothing is processing right now."
-3a. **Per-item table (§4.3):** the Running-now region expands into a **per-item table** that makes **every
-   item's state explicit** — **Running** (underway; **multiple Running rows = running in parallel**),
-   **Pending** (queued, **not started**, shown as rows not just a count), **Failed** (with the reason,
-   including a transcript **short of the full duration**), and recent **Done** — grouped/sorted
-   Running→Pending→Failed→Done. Its columns (Status, File, Progress, Kind, Size, Duration, Engine,
-   Elapsed/Started, Reason) follow the **responsive priority-drop** rule ([repos.mdx §3.2.1](./repos.mdx#321-responsive-column-priority--drop-the-least-important-column-as-the-table-narrows-locked)):
-   lowest-priority columns drop first so the row **never wraps**, and the wider the page the more columns
-   show; a failure's **Reason** is never hidden. Fed by `jobs` + `queuedItems` + `recentFailures` + recent
-   `done` from the one `GET /api/progress` poll (§5).
-3b. **Facets + an honest default sort (§4.3.1a):** the table's categorical filters are **value-checkbox
+3. **Processing page = two stacked tables (§4):** `/processing` shows a **short batches table on top**
+   (§4.1) over a **full-height items table** (§4.3). The old three regions (Running now · Waiting ·
+   Batches-as-cards) are **gone** (§4.0.1): Running/Waiting are the items table's Status column, and batches
+   are **rows on top, not cards at the bottom**. An empty page shows a calm "Nothing is processing right
+   now." — not two empty tables.
+3a. **The batches table (§4.1):** **one row per batch** = one popup Confirm
+   ([processing_batches.mdx §1](./processing_batches.mdx)), minted **at Confirm** (before the first worker,
+   §1.1 there) and reading **Batch · Progress · Rejected · Problems · Started · Done · Elapsed/ETA** with a
+   **⋮** menu. **Rejected is priority 3** and survives almost any width. Default sort **Started ↓** (a real,
+   visible, user-changeable `defaultSort`). Height is **bounded** (`fillHeight={false}` — the content-below
+   exception) and **content-sized up to 6 rows**, so **one batch renders a one-row table**, never a six-row
+   box of dead space; **zero batches → absent from the DOM** (§4.1.1). **ETA is absent until ≥ 10 settled and
+   ≥ 30 s** — never a guess (§4.1.2).
+3b. **The rejection read (§4.1, [processing_batches.mdx §4.2/§4.4](./processing_batches.mdx)):** the
+   **Rejected** column shows the product owner's number — refusals that **survived every retry** — as
+   **count + rate over `answered` (`rejected / (ok + rejected)`)**, **never over `total`** (which would read
+   ~2% during a 50%-refusal run) and never over `settled`. **Count only below 20 answered**; **`—`** (not
+   `0`) for any op no provider judges (§4.5 there). It is **slate, never red**, it **advances** the progress
+   bar (it is settled), and above **20%** it turns **amber with a warning but does not pause the batch** —
+   the deliberate opposite of [to_fix.mdx §2.7](./to_fix.mdx)'s transient ceiling.
+3c. **Master/detail is a visible facet (§4.1.3):** clicking a batch row (or ⋮ → *Show only this batch's
+   items*) **sets the items table's Batch facet** — landing on the **rail** as chips the user can see and
+   undo — **never** a hidden `selectedBatchId` predicate. Clicking the selected row again restores
+   all-checked. This is [one_repo.mdx §4.1](./one_repo.mdx)'s segment pattern and §4.3.1a's LOCKED rule:
+   *"filtering correctly and showing that you filtered are two separate requirements."*
+3d. **Per-item table (§4.3):** **every batch's items together** (§4.2), with **every item's state explicit**
+   — **Running** (**multiple Running rows = running in parallel**), **Pending** (rows, not just a count),
+   **Rejected** (slate — the provider refused), **Not attempted** (amber — halted/stopped), and **Failed**
+   (red, with the reason, incl. a transcript **short of the full duration**) — default-sorted
+   **Running → Pending → Failed → Halted → Rejected → Done** (actionable above settled). **`Done` is spec'd
+   but has no wire slice yet** (§4.3.2) — the batch row's Done counter carries that truth, and when the slice
+   lands it must be **capped and age out**. Columns (Status,
+   File, Progress, **Batch**, Kind, Size, Duration, Engine, Elapsed/Started, Reason) follow the **responsive
+   priority-drop** rule ([repos.mdx §3.2.1](./repos.mdx#321-responsive-column-priority--drop-the-least-important-column-as-the-table-narrows-locked)):
+   lowest drops first so the row **never wraps**; a **Reason is never hidden**, and **Batch drops when the
+   Batch facet is narrowed to one batch**. It **fills the page height** — the batches table above it does
+   **not** trigger the content-below exception. Fed by `jobs` + `queuedItems` + `recentFailures` (split on
+   `state`) from the one `GET /api/progress` poll (§5).
+3e. **Facets + an honest default sort (§4.3.1a/b):** the table's categorical filters are **value-checkbox
    facets on the rail, all checked by default** ([tables.mdx §2](./tables.mdx#2-filtering--the-value-visibility-checkbox-model-locked)),
-   never a `<select>` — **Status** (☑ Running ☑ Queued ☑ Failed) and **Kind** (☑ Audio ☑ Video ☑ Image);
-   File/Reason are `contains` and Size/Duration are thresholds in the `⛛` popover. **"Failed only" is a
-   one-click preset that sets the Status facet** (unchecks Running + Queued), **not** a second promoted
-   checkbox — so the narrowing is visible on the rail and reversible, and the facet stays the single source
-   of truth ([page_actions.mdx §1.2](./page_actions.mdx#12-rule-2--skip-already-done-for-producing-actions-locked)).
-   The **Running → Pending → Failed → Done** order is a **real default sort** the chip run displays and the
-   user can change — not the invisible `STATE_ORDER` JS pre-sort.
-4. **Worker utilization (§3a):** while jobs run, the Processing page shows a **busy / budget** read atop
-   Running now — e.g. **"12 / 14 workers busy (~90% of cores)"** — derived from `workers` on the same
+   never a `<select>` — **Status** (☑ Running ☑ Queued ☑ Rejected ☑ Not attempted ☑ Failed), **Kind**
+   (☑ Audio ☑ Video ☑ Image), and **Batch** (one value per live batch · ☑ **Ad hoc**). The **Batch** facet is
+   the product's only **runtime vocabulary** and takes **two documented departures** (§4.3.1b): **`Ad hoc` is
+   a real value** (the N/A rule would make un-batched rows permanently un-excludable, defeating §4.1.3), and
+   it **does not persist** (batch ids are ephemeral — persisting `hidden:` ids would accumulate dead ids
+   forever; *presentation, not preference*, per [tables.mdx §6](./tables.mdx)). It is **absent** at zero
+   batches rather than empty. File/Reason are `contains`; Size/Duration are thresholds in the `⛛` popover.
+   **"Failed only" is a one-click preset that sets the Status facet** (leaves only `Failed`), **not** a
+   second promoted checkbox, and **does not touch the Batch facet**. The state order is a **real default
+   sort** the chip run displays and the user can change — not the invisible `STATE_ORDER` JS pre-sort.
+4. **Worker utilization (§3a):** while jobs run, the Processing page shows a **busy / budget** read **at the
+   top of the page, above the batches table** — e.g. **"12 / 14 workers busy (~90% of cores)"** — derived from `workers` on the same
    `GET /api/progress` poll (`busy` = occupied admission slots, `budget` = the live Core Budget,
    [job_queue.mdx §3](./job_queue.mdx), [parallelization.mdx](./parallelization.mdx)); it is **absent when the
    queue is idle**. The same busy/budget figure may echo as a compact badge on the dock/nav item, reusing the
    §2 badge slot (no second poll).
 5. **One source (§5):** all three surfaces read `GET /api/progress`, extended with `queuedByOp`, `batches`,
-   and `workers` (all optional); they never disagree because there is no second source of truth.
+   and `workers` (all optional); they never disagree because there is no second source of truth. **`batchId`
+   rides every item** and is what joins the two tables — **client-side, off the one payload**; there is **no
+   per-batch item endpoint**, so narrowing to a batch never costs a fetch. **`recentFailures` is
+   discriminated by `state`** (`failed` | `halted` | `rejected`) and **state is never inferred from the field
+   name or the reason prose** ([ai_description.mdx §3.5](./ai_description.mdx) — *structure decides*).
 6. **No empty chrome:** when nothing is processing, the nav item and the dock are both absent from the DOM;
-   only the directly-navigated `/processing` page renders (its empty state).
-7. **Cross-tab wake (§4.1):** an **idle** Processing page (showing "Nothing is processing right now.") that
+   only the directly-navigated `/processing` page renders (its empty state). With **zero batches** the
+   batches table and the Batch facet are **absent**, not empty (§4.1.1, §4.3.1b).
+7. **Cross-tab wake (§4.5):** an **idle** Processing page (showing "Nothing is processing right now.") that
    is open when **another tab**, a server-side batch, or the **launchd** worker queues work **starts moving
    on its own** within one poll interval (**≤ ~1.2 s** while busy) — driven by the shared process-global
-   queue/registry state + the `GET /api/progress` poll, with no second source of truth.
-8. **TO DO batch Apply (§4.2):** **Applying a [TO DO Batch](./to_do_batches.mdx)** enqueues its effects as
+   queue/registry state + the `GET /api/progress` poll, with no second source of truth. **A batch started in
+   another tab appears as a row in the batches table**, same interval, same reason.
+8. **TO DO batch Apply (§4.6):** **Applying a [TO DO Batch](./to_do_batches.mdx)** enqueues its effects as
    **background jobs** that surface across all three surfaces — **pull-down fetch**, **compress**, and
-   **transcribe** kinds appear as Running-now / dock cards and count into **Waiting** per op; a
+   **transcribe** kinds appear as Running / dock cards and count into the Status facet's `Queued`; a
    **transcribe slug's** Apply is the **main producer of transcribe jobs**; a **mixed** batch fans out all
-   three kinds into the same queue and the same `GET /api/progress` poll, with no new surface.
+   three kinds into the same queue and the same `GET /api/progress` poll, with no new surface — and lands as
+   **ONE** batch row of kind `mixed` ([processing_batches.mdx §1.2](./processing_batches.mdx)), never three.
 9. **Scale — 2,000+ items (§4.4):** enqueuing **2,000 AI descriptions** (or any large batch) and opening
    `/processing` — including in a **second browser that did nothing** — **loads promptly and stays smooth**:
    the poll keeps answering because **no producer blocks the event loop** (async transcode + async base64
@@ -510,6 +793,11 @@ The extended payload is assembled in code:
    payload is **bounded** (pending/failure rows capped at 500) while the counts stay **exact**; and the
    per-item table **windows** its rows so the render is fixed-cost. The reported "the Processing page would
    not load during a mass describe run" defect stays closed.
+9a. **The batches table is O(batches) (§4.4 item 4):** a 2,000-file batch is **one row of integers**. Every top-
+   table figure — progress, the rejection rate, Problems — is read from the **counters
+   `recordBatchResult()` already incremented**, **never** by scanning the item rows. Deriving a rate from
+   rows would compute it over the **capped head of the line** (500) and be **wrong for any batch larger than
+   the cap**.
 
 <!--
   The THREE surfaces for background work, all driven by GET /api/progress:
@@ -522,23 +810,45 @@ The extended payload is assembled in code:
    §3.1 DOCK CARD CAP (LOCKED) — mass-compute runs ~cores jobs at once, so cap the dock at MAX_DOCK_CARDS=3
       live cards + one "+ N more running" summary line (under the cards, above "+ N queued"). Display-only;
       full list on the Processing page. ProgressDock.tsx: jobs.slice(0,3) + (jobs.length−visible.length).
-   §4.1 CROSS-TAB WAKE (LOCKED) — backend queue/registry/batch state is process-global; work started in
+   §4.5 CROSS-TAB WAKE (LOCKED) — backend queue/registry/batch state is process-global; work started in
       ANOTHER TAB / server-side batch / launchd worker lands in the same state, and every surface polls
       GET /api/progress, so an IDLE Processing page starts moving on its own within one interval (~1.2s busy).
       No server push; SSE is the seam if instant wake is ever needed. ProgressContext useQuery poll.
    §3a WORKER UTILIZATION READ (LOCKED) — now the queue runs MANY jobs at once against the Core Budget
       (parallelization.mdx, job_queue.mdx §3; mass-compute = round(cores × max_core_fraction), default 0.9),
       the Processing page shows how BUSY the machine is: a "{busy} / {budget} workers busy (~{pct}% of cores)"
-      line atop Running now (e.g. "12 / 14 workers busy (~90% of cores)"), optionally echoed as a compact
+      line AT THE TOP OF THE PAGE, ABOVE the batches table (e.g. "12 / 14 workers busy (~90% of cores)"), optionally echoed as a compact
       badge on the dock/nav item (reuses the §2 badge slot, no second poll). Derived from GET /api/progress
       workers{busy,budget}; ABSENT when idle. busy = occupied admission slots; budget = live coreBudget();
       ~pct = resolved performance.max_core_fraction. Rendered in ProcessingPage.tsx; assembled server-side in
       progress.router GET / from jobqueue in-flight slot count + concurrency.ts coreBudget().
-   §4 PROCESSING PAGE (/processing, ProcessingPage.tsx, processingRoute) — Running now (jobs) · Waiting
-      (queuedByOp, per-op backlog) · Batches (one card per Compress-inside run: label + Originals disposition +
-      a done+failed/total progress bar + on-finish the ERROR LIST from compression.mdx §12.4). Finished batches
-      linger 30 min (retention) so errors stay readable after the nav item vanished. Empty state: "Nothing is
-      processing right now."
+   §4 PROCESSING PAGE (/processing, ProcessingPage.tsx, processingRoute) = *** TWO STACKED TABLES ***
+      (REDESIGN — the old three regions Running now · Waiting · Batches-as-cards are GONE, §4.0.1: the batch
+      is what the user STARTED so it goes ON TOP; Running/Waiting were never separate things, just the Status
+      COLUMN (a file MOVED between regions as it started + couldn't be sorted/filtered across); cards don't
+      compare, ROWS do).
+      §4.1 TOP = BATCHES TABLE (short; ProcessingBatchesTable.tsx) — 1 row per batch = 1 popup Confirm
+        (processing_batches.mdx §1). Cols by priority: 1 Batch(dot+label / muted scope·N files) · 2 Progress
+        (bar+% + settled/total) · 3 *** REJECTED *** (count + rate; the product owner's ask — survives almost
+        any width) · 4 Problems (failed RED + halted AMBER; "0" when clean) · 5 Started (RELATIVE, ticking;
+        ISO in hover-info) · 6 Done(ok) · 7 Elapsed/ETA. ⋮ pinned. NO facet rail / NO search (short by
+        construction — a rail over 3 rows is furniture). defaultSort = Started DESC (REAL defaultSort, chip-
+        visible, user-changeable — NOT the STATE_ORDER mistake). Row click = §4.1.3.
+      §4.1.1 HEIGHT — fillHeight={false} (the CONTENT-BELOW exception, repos.mdx §3.3.1) AND content-sized up
+        to 6 rows then internal scroll: "often only one" => a ONE-ROW table, never a 6-row box of dead space
+        (that height belongs to the items table). ZERO batches => ABSENT from the DOM (no-empty-chrome).
+        The ITEMS table below still FILLS — content ABOVE never triggers the exception. Page never scrolls.
+      §4.1.2 ETA IS HONEST OR ABSENT — Elapsed always; ETA only at >=10 settled AND >=30s, from the TRAILING
+        rate (last 2 min), worded "~14 min left". Below that: NOTHING, not a guess (a 4s image and a 40min
+        video share a queue; an ETA off the image is a confident lie). Absent when finished/stopped.
+      §4.1.3 CLICK A BATCH => SETS THE VISIBLE **Batch FACET** (§4.3.1b), never a hidden selectedBatchId.
+        = one_repo.mdx §4.1's segment pattern + §4.3.1a's LOCKED rule ("filtering correctly and SHOWING that
+        you filtered are two separate requirements"). Re-click the selected row => all-checked.
+      §4.1.4 TOAST gains a "View progress" action opening /processing with that batch's facet set; EnqueuePlan
+        returns batchId so the toast names its OWN row, not "the newest". Toast WORDING unchanged/LOCKED.
+      §4.2 BOTTOM = ITEMS TABLE (§4.3) — ALL BATCHES TOGETHER by default (the machine has ONE queue; the user
+        asks "what is my computer doing?"). Batch COLUMN tells rows apart; Batch FACET narrows.
+      §4.2a EMPTY STATE: "Nothing is processing right now." — ONE line, not two empty tables.
    §4.4 PERFORMANCE AT SCALE (LOCKED) — a 2,000+ item batch (ai_description.mdx §12.7) must load fast + stay
       smooth: (1) the backend NEVER blocks the event loop (every producer's heavy child process is async —
       describe transcode+base64 ai_description.mdx §3.3.1, compress transcode job_queue.mdx §3; a synchronous
@@ -546,32 +856,75 @@ The extended payload is assembled in code:
       answers; (2) the poll payload is BOUNDED (queuedItems + recentFailures capped 500) while counts stay
       EXACT (queued/queuedByOp integers) → O(cap) poll; (3) the per-item table WINDOWS rows (P-01) → fixed-cost
       render. Caps in jobqueue.service listQueuedItems()/listRecentFailures(); windowing in DataTable.
+      (4) THE BATCHES TABLE IS O(batches) — a 2,000-file batch = ONE ROW OF INTEGERS. Progress/rejection
+      rate/Problems are read from the COUNTERS recordBatchResult() already incremented — NEVER by scanning
+      item rows. LOAD-BEARING, not an optimization: the rows are CAPPED at 500, so a rate derived from them
+      would be the rate OF THE HEAD OF THE LINE and flatly wrong for any batch > the cap.
    §5 GET /api/progress EXTENDED: + queuedByOp (Partial<Record<ProgressKind,number>>) + batches (ProcessingBatch[])
       + workers?{busy,budget} (§3a Core Budget utilization; absent when idle). Backend progress.router folds in
       queueDepthByOp()+listBatches()+(in-flight slot count & coreBudget()); jobqueue.service owns the batch registry
-      (createBatch/recordBatchResult/listBatches, 30-min prune) + the live in-flight slot count; concurrency.ts
+      (createBatch/recordBatchResult/listBatches + the prune) + the live in-flight slot count; concurrency.ts
       owns coreBudget(). Frontend ProgressContext exposes batches + workers.
-   §4.2 TO DO BATCH APPLY (LOCKED) — Applying a TO DO Batch (to_do.mdx batch popup) writes decisions + ENQUEUES
+      NOW ALSO: batchId RIDES EVERY ITEM (jobs/queuedItems/recentFailures) = the JOIN between the two tables,
+      done CLIENT-SIDE off the ONE payload — there is NO per-batch item endpoint (a row click must never cost
+      a fetch, or the two tables could momentarily disagree). `batches` carries the FULL record
+      (processing_batches.mdx §2), retention per §5 there (row = process lifetime, SUPERSEDING the old 30 min).
+      recentFailures is DISCRIMINATED BY `state`: "failed" | "halted" | "rejected". The FIELD NAME is a legacy
+      wire literal + now a MISNOMER (a rejected item is NOT a failure) — kept, because `state` is what every
+      surface reads and renaming a shipped field to fix a comment is churn. NEVER infer state from the field
+      name or the reason PROSE (ai_description §3.5's LOCKED rule one layer out: a reason reading
+      "…(finishReason: PROHIBITED_CONTENT)" must not make a TIMEOUT render slate). STRUCTURE DECIDES.
+   §4.6 TO DO BATCH APPLY (LOCKED) — Applying a TO DO Batch (to_do.mdx batch popup) writes decisions + ENQUEUES
       the effects as background jobs that show here: pull_down → pull-down fetch jobs, compress_video/image →
       compress jobs (same buckets as Compress-inside), a transcribe slug's "Transcribe N files" → transcribe
       jobs (the MAIN producer of transcribe jobs). A mixed batch fans out all three kinds into the one queue +
-      the one GET /api/progress poll; another tab's / repo-banner-twin's Apply lands in the same process-global
-      queue so an idle page wakes (§4.1). Served by todo.router POST /api/todo/batches/:id/apply → jobqueue enqueue().
-   §4.3.1a FACETS + HONEST DEFAULT SORT (LOCKED, per tables.mdx §2) — Status (☑ Running ☑ Queued ☑ Failed —
-      the real ItemState values / poll slices; "Done" is spec'd in §4.3.1 but is NOT yet a slice, so not yet
-      a value; when the 4th slice lands it's visible to existing users automatically because facets persist
-      as `hidden:`, tables §4.1) and Kind (☑ Audio ☑ Video ☑ Image) are VALUE-CHECKBOX facets on the RAIL,
-      all checked; File/Reason → `contains`, Size/Duration → thresholds in the ⛛ popover. "FAILED ONLY" is
-      NOT a promoted checkbox (it is fully expressible as Status with Running+Queued unchecked; duplicating a
-      facet's values = two sources of truth) — it is a ONE-CLICK PRESET that SETS the Status facet, shown only
-      when something failed, so the narrowing is VISIBLE on the rail + reversible (page_actions.mdx §1.2:
-      "filtering correctly and SHOWING that you filtered are two separate requirements"). Bookmarked-only
-      keeps its exception (tables §2.7) only because it promotes a NON-column flag. The Running→Pending→
-      Failed→Done order must become a REAL defaultSort (today it's an invisible STATE_ORDER JS pre-sort with
-      no defaultSort — the user can't see it in the §3.5 chip run or change it). Code seam:
-      ProcessingItemsTable.tsx (id:"status"/id:"kind" columns + the STATE_ORDER sort) + the DataTable rail.
-  Keep in sync with webapp.mdx §10–§14 (dock/registry/poll), job_queue.mdx (queue+batches +§3 Core Budget),
-  parallelization.mdx (the Core Budget the §3a utilization read reflects), left_bar.mdx + left_bar.yaml (the
-  conditional item), compression.mdx §12 (the batch producer + error list), to_do.mdx + to_do_batches.mdx +
-  transcribe_calc_engine.mdx (the TO DO batch Apply producer, §4.2).
+      the one GET /api/progress poll => and lands as ***ONE*** batch row of kind "mixed" (processing_batches
+      §1.2 — one button = one batch), NEVER three; another tab's / repo-banner-twin's Apply lands in the same
+      process-global queue so an idle page wakes (§4.5). Served by todo.router POST /api/todo/batches/:id/apply
+      → jobqueue enqueue().
+   §4.3.1 SIX ITEM STATES (LOCKED) = processing_batches.mdx §4's five outcomes + Running. Rows and batch
+      COUNTERS are two views of ONE truth (a row's state = the bucket its batch counted it into).
+      *** THREE NON-GREEN OUTCOMES, THREE COLORS, THREE MEANINGS *** — the crux of the whole design:
+      REJECTED (slate) = the provider LOOKED AND DECLINED (survived all 4 retries; ai_description §2.3) ·
+      HALTED/"Not attempted" (amber) = NEVER TRIED (circuit opened, or user Stop) · FAILED (red) = WE BROKE.
+      Actions differ (accept it · re-queue free · fix it), so one color for all three tells the user to do the
+      wrong thing 2 times out of 3. Rejected gets NO retry affordance (settled; overwrite on the FILE is the
+      only reconsider). defaultSort = Running→Pending→Failed→Halted→Rejected→Done (ACTIONABLE above SETTLED).
+   §4.3.1a FACETS + HONEST DEFAULT SORT (LOCKED, per tables.mdx §2) — Status (☑ Running ☑ Queued ☑ Rejected
+      ☑ Not attempted ☑ Failed; "Done" is spec'd in §4.3.1 but is NOT yet a slice, so not yet a value; when
+      that slice lands it's visible to existing users automatically because facets persist as `hidden:`,
+      tables §4.1), Kind (☑ Audio ☑ Video ☑ Image), and NEW **Batch** (§4.3.1b) are VALUE-CHECKBOX facets on
+      the RAIL, all checked; File/Reason → `contains`, Size/Duration → thresholds in the ⛛ popover.
+      "FAILED ONLY" is NOT a promoted checkbox (it is fully expressible as Status with only Failed checked;
+      duplicating a facet's values = two sources of truth) — it is a ONE-CLICK PRESET that SETS the Status
+      facet, shown only when something failed, so the narrowing is VISIBLE on the rail + reversible
+      (page_actions.mdx §1.2: "filtering correctly and SHOWING that you filtered are two separate
+      requirements"); it does NOT touch the Batch facet (they AND together, so it reads "the failures OF WHAT
+      I'M LOOKING AT"). Bookmarked-only keeps its exception (tables §2.7) only because it promotes a
+      NON-column flag. The state order must become a REAL defaultSort (today it's an invisible STATE_ORDER JS
+      pre-sort with no defaultSort — the user can't see it in the §3.5 chip run or change it). Code seam:
+      ProcessingItemsTable.tsx (id:"status"/id:"kind"/id:"batch" columns + the STATE_ORDER sort) + DataTable rail.
+   §4.3.1b THE **Batch** FACET (LOCKED) — the product's FIRST RUNTIME VOCABULARY (values = the live batches),
+      which forces TWO DELIBERATE, DOCUMENTED DEPARTURES from tables.mdx §2 (neither is an oversight):
+      (1) "Ad hoc" IS A DECLARED VALUE even though §2.4.1's N/A rule (a pin has no Kind) would say un-batched
+          work contributes no value — because a row holding NO value can never be EXCLUDED, so it'd be stuck
+          on screen forever and clicking a batch would show "its 1,440 items AND every stray right-click
+          compress". The N/A rule holds where N/A is MEANINGLESS; "has no batch" is meaningful.
+      (2) IT DOES NOT PERSIST (every other facet persists as `hidden:`, tables §4.1) — batch ids are EPHEMERAL,
+          so a saved hidden:[a1b2c3d4] is a permanent instruction about a batch that no longer exists,
+          accumulating dead ids in config.yaml forever. Precedent: tables §6 "tab selection is presentation,
+          not preference". A facet over ephemeral values is PRESENTATION.
+      ZERO batches => the facet is ABSENT from the rail (not empty — §2.8 makes an empty facet a bug).
+      Values sort NEWEST FIRST (agreeing with §4.1's Started DESC). Overflow = the standard +N more popover.
+      Last-value rule still holds (§2.1). Batch COLUMN = priority 4 (above Kind — with all batches together,
+      "which run?" outranks "what kind?"), drops when the facet is narrowed to ONE batch (the rail already
+      says so; a column repeating one value is width spent to say nothing).
+  Keep in sync with processing_batches.mdx (*** the batch RECORD + the rejection-rate math — this file owns
+  the PAGE, that file owns the COUNTING ***), webapp.mdx §10–§14 (dock/registry/poll), job_queue.mdx (queue +
+  §4a batches + §2.1 halted + §3 Core Budget), parallelization.mdx (the Core Budget the §3a read reflects),
+  left_bar.mdx + left_bar.yaml (the conditional item), dialogs.mdx §5–§6 (the popup Confirm that MINTS a
+  batch), page_actions.mdx §2/§5 (the toast + EnqueuePlan.batchId), ai_description.mdx §2.3/§3.5 (the refusal
+  + what makes it final), to_fix.mdx §2.4/§2.7 (circuit; the transient ceiling the rejection rate is NOT),
+  compression.mdx §12 (a batch producer + error list), to_do.mdx + to_do_batches.mdx +
+  transcribe_calc_engine.mdx (the TO DO batch Apply producer, §4.6).
 -->

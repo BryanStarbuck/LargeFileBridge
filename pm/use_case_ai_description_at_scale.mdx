@@ -110,7 +110,7 @@ run.
 **What LargeFileBridge does.** The Processing page reads the **one polled source**, `GET /api/progress`
 ([processing.mdx §5](./processing.mdx)). Because the queue/registry state is **process-global** and the
 server is **not blocked** (Step 3), the poll **answers**, and the page **loads and starts moving within one
-poll interval** — the cross-tab wake behavior ([processing.mdx §4.1](./processing.mdx)). This is the exact
+poll interval** — the cross-tab wake behavior ([processing.mdx §4.5](./processing.mdx)). This is the exact
 action the product owner took; before the async fix, the page hung here because the poll was stuck behind a
 blocked event loop.
 

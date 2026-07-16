@@ -1,0 +1,267 @@
+---
+title: LargeFileBridge — Libraries, Not `brew install` (the external-tool policy)
+description: The product-wide rule for how LargeFileBridge acquires the capabilities it needs — OCR, IPFS, video/image compression, transcription. The rule is that a capability arrives through `pnpm install` and the lockfile, NOT through a `brew install` the user must perform and we must then detect, version-check, preflight, and apologize for. This spec exists because of a real, diagnosed incident: the user pressed "Turn on IPFS + keep it on across reboots", the IPFS page reported "Start on reboot: on ✓", and IPFS was off after every single reboot anyway — because Homebrew's own `homebrew.mxcl.kubo` LaunchAgent (from a `brew services start kubo` the user ran long ago, outside this app) and our `com.largefilebridge.ipfs` LaunchAgent both fired at login and raced for `~/.ipfs/repo.lock`. The loser exited 1 and, with `KeepAlive` off, was never retried. That entire class of bug — two owners for one daemon, a brew-provisioned tool the user's machine can silently reconfigure underneath us, a version we don't control — is not reachable when the capability is a library we own inside our own process. The OCR feature already proved the pattern (ocr.mdx §3: "THE ENGINE IS A LIBRARY, NOT A `brew install`" — `mac-ocr` + `tesseract.js`, vendored tessdata, zero preflight), and `sharp` already sits in the backend alongside ImageMagick. This spec generalizes that from one feature to the whole product, grades every external dependency we currently have onto a three-tier ladder (in-process library > vendored binary > irreducible OS built-in), and sequences the migration — IPFS/Kubo → Helia first, because it is both the worst offender and the one whose bug the user is hitting today. It is honest about what does NOT have a library answer: ffmpeg has no real in-process equivalent at GB scale, so its win is a vendored, version-pinned binary that removes brew without pretending WASM can transcode a 4K movie. Cross-links ipfs_ui.mdx §13 (the auto-start bug this diagnosed), ipfs.mdx (the pinset), tools.mdx (the preflight page that shrinks as this lands), ocr.mdx §3 (the precedent), and compression.mdx (the biggest remaining binary).
+---
+
+# LargeFileBridge — Libraries, Not `brew install`
+
+## 0. The rule
+
+> **A capability LargeFileBridge needs arrives through `pnpm install` and is pinned in the lockfile.
+> It is NOT a tool the user must `brew install` and we must then detect, version-check, preflight,
+> route around, and apologize for.**
+
+This is a **product directive**, not an implementation preference. It already exists in the codebase,
+scoped to one feature — [ocr.mdx §3](./ocr.mdx) states it outright, and the code says so in its own
+charter comment:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/engines.ts` — header charter:
+*"THE ENGINE IS A LIBRARY, NOT A `brew install` … there is no tool for the user to provision, no
+consent dialog, no 'Re-check' button, and no broken-PATH support surface. That is the whole reason
+this feature can be run over an entire tree."*
+
+That last sentence is the entire argument. This spec **promotes that rule from OCR to the product**.
+
+---
+
+## 1. Why — the incident that produced this spec
+
+This is not a taste argument. It is a **diagnosed bug**, reproduced on the user's own machine.
+
+The user pressed **"Turn on IPFS + keep it on across reboots."** The IPFS page then reported
+**"Start on reboot: on ✓."** After every reboot, IPFS was **off**, and every other page correctly said
+so. Both statements were being rendered from the same machine at the same time.
+
+The cause was **two owners for one daemon**:
+
+| Agent | Origin | What it runs |
+| --- | --- | --- |
+| `homebrew.mxcl.kubo` | `brew services start kubo` — run by the user, **outside this app**, long ago | `ipfs daemon` |
+| `com.largefilebridge.ipfs` | Our auto-start feature ([ipfs_ui.mdx §13](./ipfs_ui.mdx)) | `ipfs daemon --enable-gc` |
+
+Both have `RunAtLoad`. Both fire at login. Both try to take `~/.ipfs/repo.lock`. **One wins; the loser
+exits 1.** Our plist set `KeepAlive = false` — a deliberate choice, so that the app's own Off toggle
+wouldn't be fought by launchd — which also meant **the loser was never retried**. Observed state:
+
+```
+$ launchctl print gui/501/com.largefilebridge.ipfs
+    state = not running
+    runs = 1
+    last exit code = 1
+
+$ tail -1 ~/T/_large_files_bridge/ipfs-autostart.err
+    Error: lock /Users/bryan/.ipfs/repo.lock: someone else has the lock
+```
+
+**The brew-installed tool is the reason this bug is possible at all.** We do not own the daemon, we do
+not own its lifecycle, and a `brew services` registration the user made years ago — in a different
+tool, for a different reason — silently competes with our feature forever. No amount of care inside our
+code removes a second owner we cannot see.
+
+An **in-process IPFS node has no daemon, no `repo.lock`, no LaunchAgent, and no second owner.** The
+bug is not fixed; it is **unreachable**.
+
+> **§13 of ipfs_ui.mdx carries the interim fixes** (honest status, conflict detection, retry-on-failure).
+> This spec carries the **end state** that retires them.
+
+---
+
+## 2. The ladder — three tiers, in preference order
+
+Not every dependency can be a library, and pretending otherwise produces worse software than admitting
+it. Grade every external dependency onto this ladder and move it **up** as far as it honestly goes.
+
+### Tier A — In-process library (preferred)
+
+An npm dependency that runs **inside our Node process**. No child process, no PATH, no version drift,
+no preflight, no user provisioning, no second owner.
+
+*Examples already shipping:* `tesseract.js` (WASM OCR), `mac-ocr` (prebuilt universal binary over
+Apple's Vision framework), `sharp` (libvips binding), `sharp-phash`, `blockhash-core`.
+
+### Tier B — Vendored binary via npm (acceptable)
+
+Still a child process — but the binary **arrives through `pnpm install`**, is **version-pinned in the
+lockfile**, and the user never provisions it. This kills the brew dependency, the PATH probe, the
+preflight row, and the "which version does this machine have?" question, even though it does not kill
+the subprocess.
+
+*This is the honest answer for ffmpeg.* See §4.
+
+### Tier C — Irreducible OS built-in (accept, document)
+
+Things that are the OS, where a "library" is meaningless: `launchctl`, `git` (via `simple-git`, which
+is a wrapper over the system binary — see §5), `sw_vers`, `vm_stat`, `ps`, `swiftc`.
+
+**These are fine.** They are not brew tools, they do not drift, and the user does not provision them.
+The policy targets **brew-provisioned** dependencies, not every `spawn` in the codebase.
+
+---
+
+## 3. The current inventory, graded
+
+Surveyed from the live tree. **"Auto-install"** means we run a package manager on the user's behalf.
+
+| Tool | Used for | Today | Target tier | Candidate |
+| --- | --- | --- | --- | --- |
+| **`ipfs` (Kubo)** | The whole IPFS node: pin, add, pinset, daemon | brew, **auto-install**, + a LaunchAgent we own | **A** | **Helia** (§4.1) |
+| **`brew`** | Installing `ipfs` and `pipx` for us | invoked directly | **gone** | — |
+| **`ffmpeg`** | Video compression, audio extraction, OCR frames, transcode | brew, required | **B** | `ffmpeg-static` (§4.2) |
+| **`ffprobe`** | Duration / resolution / codec probing | brew, required | **B** | `ffprobe-static` |
+| **`magick`/`convert`** | Image compression, PNG→compressible, HEIC | brew, required | **A** *(partial)* | `sharp` — **already a dep** (§4.3) |
+| **`oxipng`** | Lossless PNG optimization | brew, required | **B** | evaluate |
+| **`cwebp`** | WebP encoding | brew, required | **A** | `sharp` covers WebP |
+| **`cjpeg`/`jpegoptim`** | JPEG optimization | brew, required | **A** | `sharp` covers JPEG quality |
+| **`libheif`** | HEIC decode delegate | brew, required | **A** *(verify)* | `sharp` HEIF — **needs verification**, see §4.3 |
+| **`whisper`** | Local transcription | `pipx`, required | **B** | evaluate (`nodejs-whisper` / `whisper.cpp`) |
+| **`mlx-qwen3-asr`** | Apple-Silicon ASR | `pipx`, **auto-install** | **B/C** | MLX is Python-native; likely stays |
+| **`pipx` / `pip3`** | Bootstrap for the two above | **auto-install via brew** | **gone** with them | — |
+| **`swiftc`** | Compiles our bundled SpeechAnalyzer helper | Xcode CLT | **C** | irreducible (Apple framework) |
+| **`launchctl`** | Our own scheduled agents | OS | **C** | irreducible |
+| **`git`** | Repo init, `git mv`, merges | `simple-git` → system git | **C** | see §5 |
+
+**The shape of the win:** ~6 brew *execution* sites and ~40 brew *hint strings* across the tree. The
+hint strings are the tell — every one is a place we ask the user to go fix their machine for us.
+
+---
+
+## 4. The migrations
+
+### 4.1 IPFS: Kubo daemon → Helia (in-process) — **first, and highest value**
+
+This is both the **worst offender** (a daemon we don't own, auto-installed via brew, plus a LaunchAgent
+that races a brew LaunchAgent) and the one whose bug the **user is hitting today**.
+
+**Why it is unusually tractable here:** we already do **not** shell out to the `ipfs` CLI for real work.
+`ipfs.service.ts` is **pure HTTP** against the Kubo RPC:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `apiBase()` / `rpc()`
+(`fetch` → `http://127.0.0.1:5001/api/v0`; header: *"Uses fetch, never `curl`"*)
+
+Every caller goes through `pinAdd` / `pinRm` / `isPinned` / `addFile` / `health` / `repoStat`. **That
+is a seam.** Helia replaces the **transport behind those functions**; the pinset, the scan, the To-Do
+engine, and every UI surface above them do not change. The CLI is only touched by the three sibling
+files that exist *because* there is a daemon — `ipfs-node.service.ts` (install/start/stop),
+`ipfs-config-health.service.ts` (`ipfs version`), `ipfs-autostart.service.ts` (the plist). **All three
+are deleted by this migration**, along with §13 of ipfs_ui.mdx, the IPFS-off page, the install job, the
+upgrade job, and the config-health repair flow.
+
+**What it costs — stated honestly, not waved through:**
+
+* **The node's life becomes the backend's life.** Kubo's daemon runs 24/7 independent of this app. An
+  in-process node is up only while our backend is up — and **`com.largefilebridge.webapp` does not
+  exist today**; the backend is a manual `just run`. So this migration **requires** making the backend
+  itself a launchd service. That is a **feature, not a tax**: it collapses two agents we half-own into
+  **one agent we fully own**, and "keep IPFS on across reboots" becomes "keep Large File Bridge on
+  across reboots" — a promise we can actually keep.
+* **DHT provide/reprovide is the real risk, and it is the thing this app lives on.** Our whole product
+  is *my other computer can find and fetch my file*. That is a DHT provide. Distributed Press's real
+  Kubo→Helia migration hit **"DHT advertisement failures and connectivity issues"**, and provide/
+  reprovide is a known bottleneck in **both** implementations (~15s per provide; Kubo's answer is the
+  Accelerated DHT Client). **This must be proven on a real two-computer pull before we commit** —
+  see the gate in §6.
+* **Pinset migration.** Kubo's `~/.ipfs` blockstore is not Helia's datastore. Existing pins must be
+  re-added or the blockstore adapted. Sizing this is part of the spike.
+* **Large-file throughput.** Kubo is Go; Helia is JS. This app pins **multi-GB video**. Must be
+  measured, not assumed.
+
+**Gate:** §6. We do not delete the Kubo path until Helia demonstrably serves a real file to a real
+second computer.
+
+### 4.2 ffmpeg — Tier B, and no pretending
+
+**There is no honest in-process ffmpeg.** `@ffmpeg/ffmpeg` (WASM) exists and is far too slow to
+transcode the GB-scale video this product is built for. `fluent-ffmpeg` is a *command builder*, not an
+implementation — it still spawns the same binary.
+
+The real, achievable win is **Tier B**: `ffmpeg-static` / `ffprobe-static` vendor a pinned binary
+through `pnpm install`. We still spawn a subprocess — but **brew is gone**, the version is **pinned and
+identical on every machine**, the PATH probe is gone, the preflight rows are gone, and ~12 `brew install
+ffmpeg` hint strings are gone.
+
+**Do not oversell this as "a library."** It is a vendored binary, and the spec should say so.
+
+*Verify before committing:* license posture (ffmpeg-static ships an LGPL/GPL build — confirm which, and
+that the codecs we use are present), Apple-Silicon binary availability, and that our `-vf`/codec flags
+work unchanged against the pinned build.
+
+### 4.3 Images — `sharp` is already in the tree
+
+`sharp` (^0.35.3) is **already a backend dependency**, used today only for `sharp-phash`. It is
+libvips in-process and natively covers **JPEG quality, PNG optimization, and WebP encoding** — which is
+`cjpeg`, `jpegoptim`, `oxipng`, and `cwebp`, four brew tools, gone.
+
+**Two things must be verified, not assumed:**
+
+1. **HEIC decode.** `sharp`'s prebuilt binaries have historically **excluded HEIF** for licensing
+   reasons. Our HEIC→JPEG conversion is a shipped feature ([heic-jpeg memory], `compression.service.ts`).
+   If prebuilt `sharp` cannot decode HEIC, ImageMagick + `libheif` **stays** for that one path, and we
+   say so plainly rather than shipping a regression.
+2. **Animated GIF.** We already route GIF/BMP away from `cwebp` to ImageMagick. Confirm `sharp` handles
+   the cases that motivated that.
+
+**`magick` likely survives as a narrow fallback**, not as a required tool. That is still a large win:
+it moves from *required* to *optional*.
+
+### 4.4 Transcription — the weakest case, sequence it last
+
+`whisper` and `mlx-qwen3-asr` arrive via `pipx`, and `model-provision.service.ts` **auto-installs
+`pipx` via brew** — the most aggressive brew use in the tree. But MLX is genuinely Python-native, and
+our SpeechAnalyzer path is genuinely a Swift/Apple framework. This one may honestly end at Tier B/C.
+
+**It is already permissioned and consent-gated** ([transcription-engine memory]), so it is the least
+painful of the four. **Do it last.**
+
+---
+
+## 5. What this policy does NOT target
+
+* **`git` via `simple-git`.** It wraps the system git binary, and that is **correct**: `isomorphic-git`
+  would reimplement merge semantics we depend on being real (`git.service.ts` runs actual `ort`-strategy
+  merges). Git is Tier C. Leave it.
+* **`launchctl`, `sw_vers`, `vm_stat`, `ps`, `lsof`, `swiftc`.** OS built-ins. Tier C. Leave them.
+* **The user's own Homebrew.** We never uninstall, stop, or reconfigure a brew service the user set up
+  outside this app **without an explicit, confirmed click** ([dialogs.mdx](./dialogs.mdx)). Detecting
+  Homebrew's kubo agent and **declining to compete with it** is correct; silently running
+  `brew services stop kubo` is not.
+
+---
+
+## 6. Sequencing & the gates
+
+Each step is independently shippable and independently valuable. **No step is a big-bang rewrite.**
+
+| # | Step | Gate before it lands |
+| --- | --- | --- |
+| 0 | **Interim IPFS fixes** — honest auto-start status, conflict detection, retry-on-failure ([ipfs_ui.mdx §13.1–13.3](./ipfs_ui.mdx)) | **DONE** — status verified against real launchd state |
+| 1 | **Helia spike** — behind a flag, alongside Kubo | **A real second computer pulls a real multi-GB file via Helia's provide.** If the DHT risk in §4.1 is real, we learn it here, not after deleting Kubo. |
+| 2 | **Backend becomes a launchd service** (`com.largefilebridge.webapp`) | Survives reboot; one agent, fully ours |
+| 3 | **Helia default; delete the Kubo daemon path** | Step 1 green + pinset migration proven |
+| 4 | **`sharp` replaces cwebp/cjpeg/jpegoptim/oxipng** | HEIC + animated-GIF verification (§4.3) |
+| 5 | **Vendored ffmpeg/ffprobe** | License + Apple-Silicon + flag-compat check (§4.2) |
+| 6 | **Transcription** | Last, and may honestly stop at Tier B/C |
+
+**What each step deletes** is the measure of success — not what it adds:
+
+* Step 3 deletes: `ipfs-node.service.ts`, `ipfs-autostart.service.ts`, `ipfs-config-health.service.ts`,
+  ipfs_ui.mdx §13/§14/§15, the IPFS-off page, the install/upgrade/repair jobs, the auto-start LaunchAgent,
+  **and this entire class of bug.**
+* Steps 4–5 delete: the Tools preflight's compression rows, `detectTools()`, and ~40 `brew install`
+  strings.
+* **[tools.mdx](./tools.mdx) shrinks toward nothing.** A preflight page is a **symptom** of this
+  policy being unmet. When the policy is fully met, the page has nothing left to check — and that is
+  the point.
+
+---
+
+## 7. The standing rule for new features
+
+> **When adding a capability, the first question is "what npm library gives us this?" — never
+> "what should the user `brew install`?"**
+>
+> If the honest answer is a binary, vendor it through npm (Tier B) and **say in the spec that it is a
+> vendored binary**. Requiring the user to provision a tool is a **last resort** that must be argued
+> for in the feature's own spec — not a default.
+
+OCR is the model to copy: two engines, both npm, vendored data, zero preflight, zero consent dialog,
+and — precisely because of that — **safe to run across an entire tree**.

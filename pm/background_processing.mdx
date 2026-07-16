@@ -118,7 +118,7 @@ planned → enqueued → admitted → started → running → terminal → recor
 | **running** | Any partial output goes to a **temp path**, never the final path. | The **heartbeat** (§7) while anything is in flight. | The card's determinate % (compress/transcribe) or spinner (describe). | Temp artifacts orphaned; the item re-runs whole on restart. **A half-written final artifact would break R5 — hence temp-then-rename.** |
 | **terminal** | The artifact (`.ai_description` / `.transcription` / the compressed file) is `rename`d into place — **atomic**. | **`END`** with `outcome=` + `ms=`. | The card clears (`end()`). | If the rename completed, the work is **done and will be skipped** on replay (R5). If not, it re-runs. Either way: correct. |
 | **recorded** | Failures **must** outlive the item (`recordFailure()` — in memory + 30-min retention today). | `END outcome=failed reason=…`. | A **Failed row** on the Processing table ([processing.mdx §4.3](./processing.mdx)). | Failure list lost on restart. Acceptable **only** because `transactions.log` is durable and holds the same fact (R6). |
-| **surfaced** | — | — | The poll renders it within ≤ ~1.2 s ([processing.mdx §4.1](./processing.mdx)). | The **honesty contract** (§8) applies: on restart the user is told what was restored and what was lost. |
+| **surfaced** | — | — | The poll renders it within ≤ ~1.2 s ([processing.mdx §4.5](./processing.mdx)). | The **honesty contract** (§8) applies: on restart the user is told what was restored and what was lost. |
 
 Two lifecycle rules that fall out of the table and are **LOCKED**:
 

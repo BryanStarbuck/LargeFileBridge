@@ -374,7 +374,7 @@ batch** ([to_do_batches.mdx §4](./to_do_batches.mdx#4-transcribe-batches--a-sib
 * **What it produces.** One **transcribe batch** per storage with candidates → a **transcribe slug** on the
   [To Do page](./to_do.mdx#7-show-what-could-be-transcribed-locked); its chevron opens the **~80%-screen**,
   default-checked popup whose **"Transcribe N files"** Apply is the point where transcription is finally
-  **enqueued as background jobs** ([job_queue.mdx §4b](./job_queue.mdx), [processing.mdx §4.2](./processing.mdx#42-applying-a-to-do-batch-is-a-processing-producer-locked)).
+  **enqueued as background jobs** ([job_queue.mdx §4b](./job_queue.mdx), [processing.mdx §4.6](./processing.mdx#46-applying-a-to-do-batch-is-a-processing-producer-locked)).
   So this link *finds* the work; the transcribe slug's Apply *does* it.
 * **No skip-already-done toast.** Because it queues nothing, it shows no `willProcess` toast; its result is
   the transcribe slug(s) it produces (or a calm "nothing untranscribed here").
@@ -510,7 +510,7 @@ The routes are mounted on the existing feature routers:
   detail + File System/directory pages. Runs the What-Can-Be-Transcribed Calc Engine (transcribe_calc_engine.mdx)
   over the page scope: opt-in/heavier (never a scan), read-only, HARD_SKIP-walked, cancelable, "Looking…" state,
   NO willProcess toast. Writes a transcribe batch → a transcribe SLUG (to_do.mdx §7); transcription is enqueued
-  ONLY later by that slug's "Transcribe N files" Apply (job_queue.mdx §4b, processing.mdx §4.2). Wired via
+  ONLY later by that slug's "Transcribe N files" Apply (job_queue.mdx §4b, processing.mdx §4.6). Wired via
   pageActions.ts showWhatCanBeTranscribed() → POST /api/todo/transcribe-scan.
 
   Notification (LOCKED wording): "{N} files will have their Transcriptions created" / "… AI descriptions

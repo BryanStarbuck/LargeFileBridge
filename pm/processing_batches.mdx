@@ -1,0 +1,467 @@
+---
+title: LargeFileBridge — Processing Batches (the batch record, its outcome taxonomy, and the rejection rate)
+description: The BATCH is the unit of work the user actually started. Every popup Confirm ("Describe 1,440 files") mints exactly one batch, and this spec owns that record — its identity (the batchId already minted for the batch manifest), its label, its lifecycle, its RETENTION, and above all its FIVE-WAY OUTCOME TAXONOMY. The load-bearing rule: a provider REFUSAL (Gemini's RECITATION / SAFETY verdict, ai_description.mdx §2.3) is neither a success nor a failure — it is a third outcome, `rejected`, counted separately so the user can read "what percentage did Gemini reject?" without a refusal ever turning a batch red or a failure ever hiding inside a green bar. Defines the rejection RATE and its denominator (answered, never total), the small-sample rule, and the amber high-rejection read. Sibling of processing.mdx (the page that renders these rows), job_queue.mdx §4a (the registry that holds them), ai_description.mdx §2.3/§3.5 (the refusal producer), to_fix.mdx §2.4/§2.7 (the circuit + the transient ceiling this is deliberately NOT).
+---
+
+# LargeFileBridge — Processing Batches
+
+The user's words: *"Whenever somebody clicks, in a popup window there is often a number. Consider that a
+processing batch, and they might well have submitted multiple processing batches."*
+
+That number — the **"Describe 1,440 files"** on a popup's blue Confirm button
+([dialogs.mdx §5.1](./dialogs.mdx)) — is the moment a **batch** is born. A batch is **the unit of work the
+user actually started**: one Confirm, one batch, one row on the Processing page's top table
+([processing.mdx §4.1](./processing.mdx)). The user may start several — kick off descriptions on one repo,
+walk to another and start transcriptions — and each is its own batch, draining together against the one
+queue.
+
+This spec owns the **batch record**: what it is, how it is labeled, how it ends, how long it lingers, and —
+the substance of this file — **how its outcomes are counted**. [processing.mdx](./processing.mdx) owns the
+**page** that renders it.
+
+Siblings this builds on and does not repeat:
+
+* [job_queue.mdx §4a](./job_queue.mdx) — the batch **registry** (`createBatch` / `recordBatchResult` /
+  `listBatches`) and the `QueueTask.batchId` that groups a run's tasks.
+* [dialogs.mdx §5–§6](./dialogs.mdx) — the **unified batch-confirm popup**, the four entry points, and the
+  live checked count that becomes the batch's `total`.
+* [ai_description.mdx §2.3](./ai_description.mdx) — the **refusal** (`.ai_description_rejected`) this spec
+  counts, and §3.5 — the retry policy that decides when a refusal is final.
+* [to_fix.mdx §2.4](./to_fix.mdx) — the **circuit breaker** that halts a batch; §2.7 — the transient-failure
+  ceiling that pauses one (and which a rejection rate is deliberately **not**, §4.4).
+
+---
+
+## 1. A batch is one Confirm (LOCKED)
+
+**Every popup Confirm mints exactly one batch.** There is no other way to make one, and a Confirm never
+makes zero or two.
+
+| Producer | Confirm reads | Batch it mints |
+| --- | --- | --- |
+| **Create Transcriptions** ([dialogs.mdx §6](./dialogs.mdx)) | *Transcribe N files* | one `transcribe` batch |
+| **Create AI descriptions** | *Describe N files* | one `describe` batch |
+| **Create OCR text** ([ocr.mdx §8.5](./ocr.mdx)) | *OCR N files* | one `ocr` batch |
+| **Compress inside** ([compression.mdx §12](./compression.mdx)) | *Compress N files* | one `compress` batch |
+| **Apply a TO DO Batch** ([to_do.mdx](./to_do.mdx)) | *Apply* | **one** batch, even when mixed (§1.2) |
+
+* **Ad-hoc work is not a batch.** A single-file Compress from the viewer/entity menu, a `pin`, a `scan` —
+  work the user started **one item at a time** — has **no** `batchId`. It still runs, still shows in the
+  items table, and holds the **Ad hoc** value on the Batch facet
+  ([processing.mdx §4.3.1b](./processing.mdx)). Fabricating a one-row batch for every menu click would
+  bury the real batches — the top table exists to answer *"what did I set running?"*, and a lone right-click
+  compress is not an answer to that question.
+* **The identity already exists.** `batchId` is **already minted today** — the batch manifest
+  ([to_fix.mdx §4.1](./to_fix.mdx)) generates it before the enqueue, every producer stamps it onto each
+  `QueueTask`, and the logger scopes to it. The only gap is that it never reaches the client. **This spec
+  surfaces the existing id; it does not invent a second one.** One id spans the manifest on disk, the log
+  lines, the queue tasks, and the table row — so a batch the user is watching and a batch a grep finds are
+  provably the same run.
+
+The batchId minted for the manifest and stamped onto every task is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/batch/batch-manifest.service.ts` — `writeManifest()` (mints `batch_id`), consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` / `describe.service.ts` / `ocr.service.ts` (each stamps `batchId: manifest.batchId` onto its `enqueue()` tasks).
+
+### 1.1 The batch is minted at Confirm, not at first run (LOCKED)
+
+The batch row appears the **instant** the popup's Confirm is pressed — **before** any worker picks up a
+task. A 1,440-file describe batch shows as **`0 / 1,440`, Running, 0%** immediately.
+
+This is not a detail. A batch that only materialized once its first file started would leave the user
+staring at a page that says **"Nothing is processing right now."** for the seconds between their click and
+the first worker slot — exactly when they are looking hardest for confirmation that their click worked. The
+row **is** the receipt.
+
+### 1.2 A mixed TO DO Apply is ONE batch, not three (LOCKED)
+
+An [Apply](./processing.mdx#46-applying-a-to-do-batch-is-a-processing-producer-locked) can fan out
+`compress` + `transcribe` + `pin` effects at once. That is **one** batch — the user pressed **one** button,
+and the batch models **the thing the user started**, not the ops the queue happens to route it through.
+
+* Its `kind` is **`mixed`**, and its label names the source batch (*Apply: Trip_2026 to-do*).
+* Its `total` is **every** enqueued effect across all ops.
+* The **items** table still shows each item's real op, so the routing stays visible one level down.
+
+Splitting one Apply into three rows would make the top table lie about how many times the user acted, and
+would leave no row that answers *"is my Apply done?"* — the only question the user actually has.
+
+---
+
+## 2. The batch record (LOCKED shape)
+
+```ts
+export interface ProcessingBatch {
+  batchId: string;              // the manifest's batch_id (§1) — one id, disk + logs + queue + UI
+  kind: JobOp | "mixed";        // transcribe | describe | ocr | compress | mixed (§1.2)
+  label: string;                // human title (§3)
+  scope: string;                // the resolved root, or "N checked paths" (scopeLabel())
+  provider?: string;            // describe only — gemini | openai | grok (drives the Rejected column)
+  engine?: string;              // transcribe/ocr only — the engine that ran it
+  total: number;                // files enqueued at Confirm — the denominator that never moves (§4.1)
+  ok: number;                   // completed, output written
+  rejected: number;             // the provider REFUSED — a verdict, not a fault (§4.2)
+  failed: number;               // attempted and errored (§4.3)
+  halted: number;               // never attempted — circuit opened, or the user stopped it (§4.3)
+  running: number;              // in flight right now
+  errors: { path: string; reason: string; state: "failed" | "halted" }[];  // capped (§5)
+  startedAt: string;            // ISO — when Confirm was pressed (§1.1)
+  finishedAt: string | null;    // ISO when settled; null while running
+  stoppedBy?: "user" | "circuit";  // why a batch ended early (§6)
+  manifestPath: string;         // the durable record on disk (§5)
+}
+```
+
+**`total` is fixed at Confirm and never moves.** It is the number the user read on the button. A batch that
+recomputed its denominator mid-run (because a file vanished, or dedup dropped one) would show a progress bar
+that goes *backwards*, and would silently disagree with the toast the user just read
+([page_actions.mdx §2](./page_actions.mdx) — *"the toast and the dock never disagree"*). If a task is dropped
+before it runs, it lands in **`halted`**, keeping the identity of §4.1 true.
+
+---
+
+## 3. The label — what the user recognizes it by (LOCKED)
+
+A batch's label must let a user with **three** batches running tell them apart **at a glance**. It is built
+from what is already known at Confirm:
+
+```
+{Verb} · {scope tail} · {N} files
+```
+
+* **Verb** — the op in the user's words, the same wording the popup used: **AI descriptions** /
+  **Transcriptions** / **OCR text** / **Compress** / **Apply**. Never the wire literal (`describe`), never
+  the abbreviation ([the charter's spell-it-out rule](../CLAUDE.md)).
+* **Scope tail** — the **last two path segments** of the resolved root (*…/Movies/Trip_2026*), because the
+  head of an absolute path is identical across every batch a user runs and steals the width that
+  distinguishes them. The **full** path is the row's [hover-info](./non_intrusive_tooltip.mdx) payload and
+  its `title`. When the scope was checked paths rather than a root, it reads **N checked paths** (the
+  existing `scopeLabel()`).
+* **N files** — the `total`.
+
+Worked: **`AI descriptions · …/Movies/Trip_2026 · 1,440 files`**.
+
+The label is **computed once at mint and stored** on the record — never re-derived at render. A label that
+re-derived would drift if the scope directory were renamed mid-run, and the user would lose the name of the
+thing they started.
+
+---
+
+## 4. The outcome taxonomy — five ways a file ends (LOCKED)
+
+This is the heart of this spec. A batch's files end in exactly **five** states, and the reason there are
+five rather than the obvious two is that **the middle three are routinely mistaken for each other, and each
+mistake costs the user real money or real work.**
+
+| Outcome | What happened | **Settled?** (advances the bar) | Reads as |
+| --- | --- | --- | --- |
+| **`ok`** | The work ran and the output was written. | ✅ yes | green |
+| **`rejected`** | The provider **considered the file and said no** — a `RECITATION` / `SAFETY` verdict that **survived every retry**, or a blocked input ([ai_description.mdx §2.3](./ai_description.mdx)). A `.ai_description_rejected` record is written. | ✅ yes | **slate/violet, never red** |
+| **`failed`** | The work **was attempted and errored** — a dead key, a missing tool, a transcript short of full duration. | ✅ yes | **red** |
+| **`halted`** | **Never attempted.** The circuit opened ([to_fix.mdx §2.4](./to_fix.mdx)) or the user stopped the batch (§6). Costs nothing to re-run. | ✅ yes | **amber, "Not attempted"** |
+| **`running` / pending** | Not settled yet. | ❌ no | spinner / muted |
+
+**The column above says "settled", not "done", on purpose.** **`done` is a forbidden word for four of these
+five buckets** — it is the name of **`ok` alone** (the Done column — [processing.mdx §4.1](./processing.mdx)'s *"the plain success count"*), and
+folding `rejected` into it is [precisely the defect this spec closes](#42-rejected-is-the-one-the-product-owner-asked-for-locked).
+**Settled** and **done** are different questions: *"will this file be touched again?"* (settled — drives the
+**bar**) versus *"did the work succeed?"* (done — drives the **counters**). A refusal is **settled but not
+done**. Keeping the two words apart in the spec is what keeps them apart in the code.
+
+### 4.1 The identity that must always hold (LOCKED)
+
+```
+ok + rejected + failed + halted + running + pending === total
+```
+
+**Every file is in exactly one bucket, always.** This identity is what makes the top table trustworthy: if
+it ever breaks, a batch either shows a progress bar that never reaches 100% (a file fell out of every
+bucket) or one that overshoots (a file was counted twice). It is the single assertion worth testing on this
+record.
+
+**Progress** is therefore `(ok + rejected + failed + halted) / total` — *settled over started*. A refusal and
+a failure both **advance** the bar, because both are **finished**: the file will not be touched again. The
+bar answers *"how much is left?"* — it is **not** a quality score. Quality is the job of the three separate
+counters beside it, which is exactly why they are separate.
+
+### 4.2 `rejected` is the one the product owner asked for (LOCKED)
+
+The user's words: *"I think that Google Gemini APIs for AI description can reject some of those, and we want
+to find out what percentage were rejected."*
+
+They are right, and the corpus already proves the scale: on the product owner's own files, **~3% of describe
+calls** come back refused, and a single refusing slide measured a **~40% coin toss** across ten identical
+calls ([ai_description.mdx §3.5](./ai_description.mdx)). Generation is **sampled**, so the output filter is
+a die roll, not a property of the file — which is why the retry policy re-rolls it, and why only a refusal
+that **survives all four attempts** is counted `rejected` here. Anything that would have succeeded on
+attempt two must never reach this counter.
+
+**`rejected` is not a failure and must never render as one.** [ai_description.mdx §2.3](./ai_description.mdx)
+LOCKs this: *"That is an answer, not a breakdown"* — a refusal *"drains green"* and *"is SETTLED — never
+re-offered, never re-billed."* Counting it as failed would:
+
+* paint a tree of copyrighted slides **red** when nothing is broken;
+* feed the transient-failure ceiling ([to_fix.mdx §2.7](./to_fix.mdx)) and **halt the remaining files** —
+  *"the exact defect this record exists to end"*;
+* and invite the user to "retry" work the provider has already, deliberately, and repeatably declined —
+  spending their quota to be told no again.
+
+**But it is not a success either**, and folding it into `ok` is the other half of the error. A user reading
+**"1,440 done"** on a batch where 41 files silently have no description has been told something false. The
+whole reason the product owner asked for this number is that **it is currently invisible** — `rejected` is
+today folded into `done` and nothing anywhere aggregates refusals into a rate (there is no rejection-rate
+metric in the product).
+
+So: **third bucket, third column, its own color.** Green means described. Red means broken. **Slate means
+the provider looked and declined** — a fact the user needs, in a color that does not shout.
+
+### 4.3 `failed` vs `halted` — attempted vs never attempted
+
+Already LOCKED in [job_queue.mdx §2.1](./job_queue.mdx) and not restated: a **failed** task ran and errored;
+a **halted** task was **never sent**. They are separate columns here for the same reason they are separate
+states there — they imply **opposite** user actions. Re-running a halted batch is free and correct;
+re-running a failed one may repeat real work. The batch row's actions honor that split (§6).
+
+### 4.4 The rejection RATE — the denominator is `answered`, never `total` (LOCKED)
+
+The rate the top table shows is:
+
+```
+rejectionRate = rejected / (ok + rejected)        // "answered" = the provider gave a verdict
+```
+
+**The denominator is the files the provider actually answered — not `total`, and not `settled`.**
+
+This is the single most important decision in this file, because the obvious denominator is wrong in a way
+that is hard to see and easy to ship:
+
+* **Over `total`**, the rate **starts at 0% and climbs all run**, because the denominator counts 1,400 files
+  that have not been asked yet. Ten minutes into a batch that is refusing **half** of everything it touches,
+  the column would calmly read **2%**. The number would be arithmetically correct and completely
+  misleading — and it is *most* misleading exactly when it matters most, early, while there is still time to
+  stop and fix the prompt or the model.
+* **Over `settled`**, a provider outage that fails 500 files would **dilute the rate downward** — the user's
+  refusal rate would appear to *improve* because a different thing broke. Two unrelated faults must not move
+  one number.
+* **Over `answered`**, the rate is **stable from the first few files and means one thing**: *of the files
+  Gemini looked at, this share came back refused.* It is the same number at 5% drained as at 100%, so the
+  user can act on it early — which is the entire point of showing it.
+
+`failed` and `halted` files are **excluded from both sides**: they never got a verdict, so they can neither
+be a rejection nor evidence of non-rejection. A file that timed out tells you **nothing** about whether
+Gemini would have refused it, and letting it vote either way corrupts the only number on the page that
+describes the **provider's judgment** rather than our plumbing.
+
+**The small-sample rule (LOCKED).** A percentage over a handful of files is noise wearing a lab coat: the
+first file coming back refused would render **"100% rejected"** and send the user to debug a healthy batch.
+So the column shows:
+
+* **`answered < 20`** → the **count only** (e.g. **`2`**), no percentage.
+* **`answered ≥ 20`** → **count + percentage** (e.g. **`41 · 3%`**).
+
+The threshold is a display rule, not a measurement rule — `rejected` is counted from the first file and the
+count is always shown. The hover-info payload states the full fraction (*41 of 1,246 answered*) so the
+denominator is never a mystery, at any sample size.
+
+**The amber read (LOCKED).** When `answered ≥ 20` **and** `rejectionRate > 20%`, the cell goes **amber** and
+the batch offers a warning ([warnings.mdx](./warnings.mdx)) — *"Gemini is refusing 1 in 4 of these files.
+They are settled and not re-billed; overwrite is the one way to ask it to reconsider
+([ai_description.mdx §2.3](./ai_description.mdx))."*
+
+**It does not pause the batch, and this is deliberate** — it is the explicit counterpoint to
+[to_fix.mdx §2.7](./to_fix.mdx)'s transient-failure ceiling, which **does** pause at the same 20%. The two
+look alike and must behave in opposite ways: a **transient** failure rate that high means *something is
+broken* and grinding on wastes the user's quota, so stop. A **rejection** rate that high may mean nothing is
+wrong at all — a folder of copyrighted slides refusing at 40% is the provider working **exactly as
+designed**, and every refusal is a settled, cheap, correct outcome. Pausing that batch would strand a run
+that is doing its job. **Inform, never interrupt.**
+
+The rejection rate, its `answered` denominator, and the small-sample threshold are computed in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `recordBatchResult()` (routes a `rejected` result to its own counter instead of folding it into `done`), rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingBatchesTable.tsx` — `rejectionRate()` / the `rejected` column.
+
+### 4.5 Only a provider-judged op has a Rejected column (LOCKED)
+
+`rejected` is meaningful **only where a provider renders a verdict** — today **`describe`** alone. Local ops
+have no one to refuse them: ffmpeg does not decline a video on taste, and Whisper does not object to a
+podcast. So:
+
+* a **`describe`** (or `mixed` containing describe) batch renders the **Rejected** cell;
+* every other kind renders **`—`** — *not* `0`. **`0` is a measurement; `—` is "this question does not
+  apply."** A column of zeros down every compress batch would imply we checked and found none, and would
+  train the user to ignore the column exactly where it carries the number they asked for.
+
+`transcribe`'s truncated-transcript check and `ocr`'s empty-text result are **not** rejections and must never
+be counted here: a short transcript is a **`failed`** ([transcribe_engine.mdx §4](./transcribe_engine.mdx)),
+and OCR finding no text is **`ok`** ([ocr.mdx](./ocr.mdx) — *empty text = SUCCESS*, or every text-free image
+is re-offered forever).
+
+---
+
+## 5. Retention — the row outlives the run (LOCKED)
+
+The user must be able to read a batch's outcome **after** it finishes. Two different lifetimes, because the
+counters are tiny and the error lists are not:
+
+| What | Lives | Why |
+| --- | --- | --- |
+| **The batch row** (label, counts, rate, timestamps — ~200 bytes) | **the process lifetime**, pruned at **200 batches** or **24 h**, whichever first (FIFO) | A batch that finished an hour ago is the one the user comes back to ask *"how many did Gemini reject?"*. Dropping the row at 30 min throws away the answer while the question is still live, to save nothing. |
+| **The `errors[]` list** (path + reason per bad file) | **capped at 200 per batch**, oldest dropped | This is the only part that grows with the failure count. The cap keeps the poll bounded ([processing.mdx §4.4](./processing.mdx)); the **counts stay exact** past the cap, and the **manifest** holds every one. |
+| **The manifest on disk** (`…_describe_1440_a1b2c3d4.yaml`) | **forever** ([to_fix.mdx §4.1](./to_fix.mdx)) | The durable record. It already carries the batch's identity, scope, counts and full file list — a restart clears the table, never the truth. |
+
+This **supersedes** the 30-minute retention in [job_queue.mdx §4a](./job_queue.mdx), which was written when a
+batch was only ever a "Compress inside" run whose sole post-run value was its error list. A batch row is now
+the user's receipt for work they started, and 30 minutes is shorter than a coffee break.
+
+**In-memory only, like the queue itself** ([job_queue.mdx §5](./job_queue.mdx)). A restart empties the table.
+That is correct and not a loss: the batch's durable record is the manifest, and a batch that did not survive
+the process was not running anymore either. When the row is gone and the question is still live, **the
+manifest is the answer** — the row's ⋮ menu links to it by path (§6) precisely so the user learns where the
+permanent copy lives.
+
+---
+
+## 6. Batch actions — what the ⋮ menu offers (LOCKED)
+
+Each batch row carries a **⋮ menu** ([menus.mdx](./menus.mdx) house style). Every item is **derived from the
+counters**, and an item that would act on **zero** files is **absent, not disabled** — the same
+skip-already-done honesty [page_actions.mdx §1.2](./page_actions.mdx) LOCKs for producing actions:
+
+| Item | Shown when | Does |
+| --- | --- | --- |
+| **Show only this batch's items** | always | Sets the **Batch facet** on the items table to this batch ([processing.mdx §4.3.1b](./processing.mdx)) — a **visible** rail change, never a hidden predicate. |
+| **Re-queue not attempted (N)** | `halted > 0` | Re-enqueues the halted files **into a new batch** (§6.1). The one-click re-queue [job_queue.mdx §2.1](./job_queue.mdx) requires. |
+| **Retry failed (N)** | `failed > 0` | Re-enqueues the failed files into a new batch. Distinct from the above because these **were** attempted — the user is choosing to spend the work again. |
+| **Stop batch** | `finishedAt === null` | §6.2. |
+| **Open manifest** | always | Reveals the durable YAML (§5) in the OS file manager ([os_open.mdx](./os_open.mdx)). |
+
+**There is no "Retry rejected".** A refusal is **settled** — the provider has already answered, four times
+([ai_description.mdx §3.5](./ai_description.mdx)), and re-asking spends quota to hear the same no.
+*"**Overwrite is the one way to ask the provider to reconsider**"* (§2.3 there), and that lives on the file,
+not on the batch. Offering a batch-level retry-rejected would be a button whose honest label is *"waste your
+quota"*.
+
+### 6.1 A re-queue is a NEW batch, never a resurrection (LOCKED)
+
+Re-queueing 41 halted files mints a **new** batch (*AI descriptions · …/Trip_2026 · 41 files*) that names its
+origin (*re-queued from …a1b2c3d4*). The original row keeps its **historical** counts forever.
+
+Mutating the original — resetting its `halted` to 0 and re-running in place — would destroy the record of
+what happened, make `startedAt` a lie (started when? the first attempt or this one?), and leave the manifest
+on disk disagreeing with the row on screen. **A batch is a historical fact about one Confirm.** Facts do not
+get re-run; new work is new work.
+
+### 6.2 Stop reuses `halted`, it does not invent a state (LOCKED)
+
+**Stop batch** drains that batch's **pending** tasks out of the queue and marks them **`halted`** with reason
+**"stopped by you"** (`stoppedBy: "user"`), then sets `finishedAt`.
+
+* **Running tasks are left to finish.** Killing a half-written transcode mid-write risks the truncated
+  output the compress integrity gate exists to prevent
+  ([compression.mdx §5](./compression.mdx#5-the-data-safety-guarantee--a-compress-must-never-leave-a-broken-file-locked)) — and the file is
+  seconds from done anyway. Stop means *"start no more"*, and the button's hover-info says so.
+* **It reuses `halted` because the fact is identical**: these files were **never attempted**. The user gets
+  the same amber *"Not attempted"* read, the same free one-click re-queue, and the same truth in the
+  manifest. Minting a `cancelled` state would be a fourth word for a thing we already have two correct
+  words for (`halted`, and `stoppedBy` for the *why*).
+
+Stopping a batch (drain pending → `halted`, reason "stopped by you") is served in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `stopBatch(batchId)` (reuses `haltDoomedTasks()`'s splice + `recordFailure({ state: "halted" })` path), exposed as `POST /api/progress/batches/:id/stop` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.router.ts`.
+
+---
+
+## 7. The wire shape
+
+`batches[]` on the one polled `GET /api/progress` ([processing.mdx §5](./processing.mdx)) carries the §2
+record. **No second endpoint, no second poll** — the batch table, the items table, the dock, and the nav item
+all read the one payload, which is why they can never disagree.
+
+* The **counters** ride every poll (they are integers).
+* The **`errors[]`** list rides capped at 200 (§5).
+* **`EnqueuePlan` gains `batchId`** ([page_actions.mdx §5](./page_actions.mdx)) so the Confirm that started
+  the run knows which row is its own — enabling the toast's *"View progress"* pointer
+  ([processing.mdx §4.1.4](./processing.mdx)) without a lookup-by-guessing.
+
+---
+
+## 8. Acceptance criteria
+
+1. **One Confirm = one batch (§1):** each popup Confirm mints exactly one `ProcessingBatch` carrying the
+   **existing manifest `batchId`** — not a second id. Ad-hoc single-file work mints **none** and reads as
+   **Ad hoc**. A **mixed** TO DO Apply is **one** batch of kind `mixed` (§1.2), never three.
+2. **Minted at Confirm (§1.1):** the row appears **before** the first worker starts, reading `0 / N`,
+   Running — the user's click has a receipt immediately.
+3. **`total` is frozen (§2):** the denominator is the number the user read on the button and never moves; a
+   dropped task lands in `halted`, so the bar never runs backwards or disagrees with the toast.
+4. **The identity holds (§4.1):** `ok + rejected + failed + halted + running + pending === total` at every
+   poll; progress = `settled / total`.
+5. **`rejected` is its own bucket (§4.2):** a refusal that **survived every retry** counts `rejected` —
+   **never** `failed` (it must not paint red or feed [to_fix.mdx §2.7](./to_fix.mdx)'s ceiling) and **never**
+   folded into `ok` (a batch with 41 undescribed files must not report them as described). It renders
+   **slate/violet**, and it **advances** the progress bar because it is settled.
+6. **The rate's denominator is `answered` (§4.4):** `rejected / (ok + rejected)` — **not** `total` (which
+   would read 2% during a 50%-refusal run) and **not** `settled` (which would let an outage dilute it).
+   `failed`/`halted` are excluded from both sides. **`answered < 20` shows the count only**; `≥ 20` shows
+   count + %; the hover-info always states the full fraction.
+7. **High rejection informs, never interrupts (§4.4):** `> 20%` at `answered ≥ 20` turns the cell **amber**
+   with a warning — and **does not pause the batch**, the deliberate opposite of §2.7's transient ceiling,
+   because a refusal is a correct outcome and pausing would strand a healthy run.
+8. **Rejected applies only to provider-judged ops (§4.5):** `describe`/`mixed` render the cell; every other
+   kind renders **`—`**, never `0`. A truncated transcript is `failed`; OCR's empty text is `ok`.
+9. **Retention (§5):** the **row** survives the **process lifetime** (pruned at 200 batches / 24 h) —
+   superseding [job_queue.mdx §4a](./job_queue.mdx)'s 30 min; `errors[]` caps at **200** per batch while
+   counts stay **exact**; the **manifest** on disk is the durable record and is reachable from the row's ⋮.
+10. **Actions (§6):** the ⋮ offers *Show only this batch's items* (sets the **visible** Batch facet),
+    *Re-queue not attempted* / *Retry failed* (each **absent at zero**, each minting a **new** batch, §6.1),
+    *Stop batch*, and *Open manifest*. **No "Retry rejected"** exists — overwrite on the file is the only way
+    to reconsider a settled verdict.
+11. **Stop (§6.2):** drains **pending** to `halted` (`stoppedBy: "user"`), **lets running tasks finish**, and
+    invents no new state.
+12. **One source (§7):** batches ride `GET /api/progress`; `EnqueuePlan` gains `batchId`. No second endpoint.
+
+<!--
+  THE BATCH = one popup Confirm ("Describe 1,440 files") = one row on the Processing top table.
+  processing.mdx owns the PAGE; this file owns the RECORD + the COUNTING.
+  LOCKED:
+   §1 One Confirm = one batch. batchId is the EXISTING manifest batch_id (already minted + stamped on every
+      QueueTask + in the log context) — surface it, do NOT mint a second. Ad-hoc single-file/menu work has NO
+      batch (=> "Ad hoc" facet value). §1.1 minted AT CONFIRM, before the first worker (the row is the receipt).
+      §1.2 a MIXED TO DO Apply = ONE batch, kind "mixed" (one button = one batch); items keep their real op.
+   §2 Record: {batchId, kind, label, scope, provider?, engine?, total, ok, rejected, failed, halted, running,
+      errors[], startedAt, finishedAt, stoppedBy?, manifestPath}. total FROZEN at Confirm (= the number on the
+      button = the toast's willProcess); a dropped task => halted, so the bar never reverses.
+   §3 Label = "{Verb} · {last 2 path segments} · {N} files"; verb in USER words (AI descriptions, never
+      "describe"); full path in hover-info; computed once at mint + STORED (never re-derived).
+   §4 FIVE outcomes: ok | rejected | failed | halted | running/pending.
+      IDENTITY: ok+rejected+failed+halted+running+pending === total. Progress = settled/total (rejected AND
+      failed both ADVANCE the bar — the bar = "how much left", not a quality score).
+   §4.2 *** rejected = the product owner's ask *** — Gemini RECITATION/SAFETY that SURVIVED ALL 4 RETRIES
+      (ai_description §3.5; ~3% of the owner's corpus, one slide = ~40% coin toss). NOT failed (ai_description
+      §2.3 LOCKED "an answer, not a breakdown" — would paint red + feed to_fix §2.7's ceiling + halt the rest)
+      and NOT ok (41 files silently undescribed reported as described). => THIRD bucket, THIRD column, SLATE.
+      Today it's folded into done and nothing aggregates a rate — that's the gap this closes.
+   §4.4 *** RATE = rejected / (ok + rejected) — denominator is ANSWERED, never total, never settled ***
+      over total => starts 0% + climbs; a 50%-refusal run reads 2% early = wrong exactly when it matters.
+      over settled => an outage's failures DILUTE it (two faults moving one number).
+      failed/halted excluded BOTH sides (no verdict => no evidence either way).
+      SMALL SAMPLE: answered<20 => COUNT ONLY (else file #1 refused = "100% rejected"); >=20 => count + %.
+      hover-info always states "41 of 1,246 answered".
+      AMBER at >20% (answered>=20) but DOES NOT PAUSE — the deliberate OPPOSITE of to_fix §2.7's transient
+      ceiling which DOES pause at 20%. A refusal is a CORRECT outcome (copyrighted slides refuse ~40%);
+      pausing strands a healthy run. INFORM, NEVER INTERRUPT.
+   §4.5 Rejected column ONLY for describe/mixed (a provider judges); every other kind => "—" NOT 0
+      ("0" = we measured; "—" = question doesn't apply). Truncated transcript = failed; OCR empty text = ok.
+   §5 RETENTION: row = PROCESS LIFETIME (prune 200 batches / 24h) — SUPERSEDES job_queue §4a's 30 min (written
+      when a batch was only Compress-inside + its error list). errors[] cap 200/batch, counts stay EXACT.
+      Manifest on disk = the DURABLE record (forever). In-memory only; restart clears (like the queue).
+   §6 ⋮ actions, each ABSENT at zero (not disabled): Show only this batch's items (sets the VISIBLE Batch
+      facet) · Re-queue not attempted (halted>0) · Retry failed (failed>0) · Stop batch · Open manifest.
+      NO "Retry rejected" — settled after 4 attempts; overwrite on the FILE is the only reconsider.
+      §6.1 a re-queue = a NEW batch naming its origin; NEVER mutate the original (a batch is a historical
+      fact about one Confirm; mutating destroys the record + makes startedAt a lie).
+      §6.2 STOP drains PENDING => halted (stoppedBy:"user"), LETS RUNNING FINISH (killing a transcode
+      mid-write risks the truncated output compression.mdx §5's data-safety gate exists to stop). Reuses halted; invents
+      no "cancelled" state.
+   §7 Rides the ONE GET /api/progress poll; EnqueuePlan gains batchId (so the Confirm knows its own row).
+  Keep in sync with processing.mdx (the page + the two tables), job_queue.mdx §4a (registry; §5 retention now
+  superseded here) + §2.1 (halted), ai_description.mdx §2.3 (the refusal record) + §3.5 (retry => what counts
+  as final), to_fix.mdx §2.4 (circuit) + §2.7 (the transient ceiling this is NOT) + §4.1 (the manifest),
+  dialogs.mdx §5–§6 (the Confirm that mints it), page_actions.mdx §5 (EnqueuePlan + batchId).
+-->

@@ -428,23 +428,62 @@ export function AutostartRow({
       </div>
     );
   }
-  const on = autostart.enabled;
+  // This row answers ONE question: "will IPFS come back after I reboot?" (ipfs_ui.mdx §13.1)
+  //
+  // Two ways it used to answer wrongly:
+  //   1. "Registered with launchd" is NOT "working". An agent that lost the repo-lock race sits
+  //      registered-but-DEAD at exit code 1, and this rendered it "on ✓" — the exact contradiction the
+  //      user hit ("it says on, but IPFS is off after every reboot"). So: enabled && !lastRunFailed.
+  //   2. Someone ELSE may be the one starting IPFS (Homebrew's kubo agent). We deliberately don't
+  //      compete with it (§13.2) — but the honest answer to the question is then still YES. Reporting
+  //      "off" because *our* agent isn't the owner would be a new lie in the other direction.
+  const failed = autostart.lastRunFailed;
+  const conflict = autostart.conflict;
+  const oursOn = autostart.enabled && !failed;
+  const on = oursOn || conflict !== null;
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-[var(--lfb-border)] bg-white px-4 py-3 text-sm">
-      <RotateCw className={`h-4 w-4 ${on ? "text-green-600" : "text-black/40"}`} />
+      <RotateCw className={`h-4 w-4 ${failed && !conflict ? "text-amber-600" : on ? "text-green-600" : "text-black/40"}`} />
       <span className="font-medium">Start on reboot</span>
-      <span className={on ? "text-green-700" : "text-black/50"}>
-        {on ? "on ✓ — IPFS will restart automatically when you reboot" : "off — IPFS won't come back on its own after a reboot"}
+      <span className={failed && !conflict ? "text-amber-700" : on ? "text-green-700" : "text-black/50"}>
+        {conflict
+          ? `on ✓ — ${conflict.source} starts IPFS when you log in`
+          : failed
+            ? `set up, but it failed at the last reboot${autostart.lastExitCode !== null ? ` (exit ${autostart.lastExitCode})` : ""} — IPFS did not come back`
+            : oursOn
+              ? "on ✓ — IPFS will restart automatically when you reboot"
+              : "off — IPFS won't come back on its own after a reboot"}
       </span>
+      {/* Name the real cause instead of leaving the user to guess — the whole point of §13.1. */}
+      {failed && !conflict && autostart.failureReason && (
+        <span className="w-full text-xs text-black/50">{autostart.failureReason}</span>
+      )}
+      {conflict && (
+        <span className="w-full text-xs text-black/50">
+          Large File Bridge is letting {conflict.source} ({conflict.label}) do that, rather than adding a
+          second daemon that would fight it for the IPFS repository lock at every login.
+          {autostart.installed
+            ? " An older Large File Bridge auto-start agent is still installed and losing that race — turn it off to clear the conflict."
+            : ""}
+        </span>
+      )}
+      {/* The control acts ONLY on OUR agent — it must never imply we can toggle someone else's. With a
+          foreign owner and no agent of ours, there is nothing for this button to do (§13.2): offering
+          "Turn off" there would be a no-op that reads like it stops Homebrew's, and offering "Turn on"
+          would promise a competing agent we deliberately refuse to create. So: no button. */}
       <span className="ml-auto">
-        {on ? (
+        {conflict && !autostart.installed ? null : autostart.installed ? (
           <button
             onClick={onRemove}
             disabled={busy}
             className="inline-flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-2.5 py-1 text-sm hover:bg-slate-100 disabled:opacity-50"
-            title="Stop IPFS from starting automatically on reboot"
+            title={
+              conflict
+                ? `Remove Large File Bridge's auto-start agent, leaving ${conflict.source} as the only one that starts IPFS`
+                : "Stop IPFS from starting automatically on reboot"
+            }
           >
-            <X className="h-3.5 w-3.5" /> Turn off auto-start
+            <X className="h-3.5 w-3.5" /> {conflict ? "Clear the conflict" : "Turn off auto-start"}
           </button>
         ) : (
           <button

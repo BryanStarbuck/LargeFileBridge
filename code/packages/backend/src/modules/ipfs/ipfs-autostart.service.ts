@@ -17,7 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { IpfsAutostartStatus } from "@lfb/shared";
+import type { IpfsAutostartConflict, IpfsAutostartStatus } from "@lfb/shared";
 import { updateAppConfig } from "../store-model/config.service.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { log, rotateIfOversized } from "../../shared/logging.js";
@@ -78,7 +78,15 @@ function renderPlist(ipfsBin: string): string {
     <key>IPFS_PATH</key><string>${ipfsPath}</string>
   </dict>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><false/>
+  <!-- Retry ONLY a failed start, never a clean one. A deliberate Off (\`ipfs shutdown\`) exits 0, so
+       launchd leaves it stopped — the On/Off toggle still wins, which is why KeepAlive was false.
+       But a start that FAILS (exit 1: repo.lock held, home dir not yet mounted, slow disk at boot)
+       used to stay dead until the next reboot. SuccessfulExit:false retries just that case. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key><false/>
+  </dict>
+  <key>ThrottleInterval</key><integer>30</integer>
   <key>StandardOutPath</key><string>${outPath}</string>
   <key>StandardErrorPath</key><string>${errPath}</string>
 </dict>
@@ -95,27 +103,160 @@ async function launchctl(...args: string[]): Promise<void> {
   }
 }
 
-/** Is the LaunchAgent loaded in launchd (so it WILL run at the next reboot/login)? */
-async function isLoaded(): Promise<boolean> {
+/**
+ * Read launchd's view of our agent. `launchctl print` SUCCEEDING only proves the job is REGISTERED —
+ * it says nothing about whether it ran or died. Reading it as "enabled" was the bug behind the exact
+ * contradiction the user reported: the IPFS page said "Start on reboot: on ✓" while the job sat at
+ * `state = not running, last exit code = 1` after losing the repo-lock race (ipfs_ui.mdx §13.1).
+ * So we parse the fields that carry the truth.
+ */
+interface LaunchdView {
+  loaded: boolean;
+  running: boolean;
+  lastExitCode: number | null;
+}
+
+async function readLaunchd(): Promise<LaunchdView> {
+  let stdout: string;
   try {
-    await run("launchctl", ["print", domainTarget()]);
-    return true;
+    ({ stdout } = await run("launchctl", ["print", domainTarget()]));
+  } catch {
+    return { loaded: false, running: false, lastExitCode: null };
+  }
+  // `state = running` / `state = not running`; `last exit code = 1` / `= (never exited)`.
+  const state = /^\s*state\s*=\s*(.+)$/m.exec(stdout)?.[1]?.trim() ?? "";
+  const exitRaw = /^\s*last exit code\s*=\s*(.+)$/m.exec(stdout)?.[1]?.trim() ?? "";
+  const exitNum = Number.parseInt(exitRaw, 10);
+  return {
+    loaded: true,
+    running: state === "running",
+    lastExitCode: Number.isNaN(exitNum) ? null : exitNum,
+  };
+}
+
+/** Has the user disabled the job? A disabled job is registered but will NOT run at boot. */
+async function isDisabled(): Promise<boolean> {
+  try {
+    const { stdout } = await run("launchctl", ["print-disabled", `gui/${uid()}`]);
+    return new RegExp(`"${IPFS_AUTOSTART_LABEL}"\\s*=>\\s*disabled`).test(stdout);
   } catch {
     return false;
   }
 }
 
-/** Current auto-start posture: OS support, plist on disk, and whether it's loaded/enabled. */
+/** The daemon's own last words, so a failure names its real cause instead of a shrug. */
+function readFailureReason(): string | null {
+  try {
+    const errPath = path.join(resolveStateDir(), "ipfs-autostart.err");
+    const size = fs.statSync(errPath).size;
+    const start = Math.max(0, size - 8192); // last 8 KiB is plenty; never slurp the whole (rotating) file
+    const fd = fs.openSync(errPath, "r");
+    try {
+      const buf = Buffer.allocUnsafe(size - start);
+      const read = fs.readSync(fd, buf, 0, size - start, start);
+      const lines = buf
+        .subarray(0, read)
+        .toString("utf8")
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
+      return lines.at(-1) ?? null;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Find a FOREIGN launchd job that also runs `ipfs daemon` — overwhelmingly `brew services start kubo`
+ * (homebrew.mxcl.kubo). Both agents fire at login, race for ~/.ipfs/repo.lock, and the loser exits 1
+ * forever (KeepAlive is off). Installing a second agent alongside one of these is the bug, not the fix
+ * (ipfs_ui.mdx §13.2), so we detect it rather than compete with it.
+ */
+async function findConflict(): Promise<IpfsAutostartConflict | null> {
+  const dirs = [
+    path.join(os.homedir(), "Library", "LaunchAgents"),
+    "/Library/LaunchAgents",
+    "/Library/LaunchDaemons",
+  ];
+  for (const dir of dirs) {
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(dir);
+    } catch {
+      continue; // dir may not exist / not be readable — never fatal to a status read
+    }
+    for (const name of entries) {
+      if (!name.endsWith(".plist")) continue;
+      const label = name.slice(0, -".plist".length);
+      if (label === IPFS_AUTOSTART_LABEL) continue; // ours
+      const file = path.join(dir, name);
+      let body: string;
+      try {
+        body = fs.readFileSync(file, "utf8");
+      } catch {
+        continue;
+      }
+      // Only a job that actually launches an ipfs daemon competes for the repo lock.
+      if (!/<string>[^<]*\bipfs\b<\/string>/.test(body) || !/<string>daemon<\/string>/.test(body)) continue;
+      let running = false;
+      try {
+        const { stdout } = await run("launchctl", ["print", `gui/${uid()}/${label}`]);
+        running = /^\s*state\s*=\s*running\s*$/m.test(stdout);
+      } catch {
+        running = false;
+      }
+      return {
+        label,
+        source: label.startsWith("homebrew.mxcl.") ? "Homebrew (brew services)" : label,
+        path: file,
+        running,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Current auto-start posture: OS support, plist on disk, whether launchd will really run it, and
+ * whether it actually WORKED last boot. `enabled` is now "registered AND not disabled"; it is no
+ * longer allowed to imply success — `lastRunFailed` carries that, so the UI can stop claiming "on ✓"
+ * for a dead agent.
+ */
 export async function autostartStatus(): Promise<IpfsAutostartStatus> {
-  if (!supported()) return { supported: false, installed: false, enabled: false };
+  if (!supported()) {
+    return {
+      supported: false,
+      installed: false,
+      enabled: false,
+      lastExitCode: null,
+      lastRunFailed: false,
+      failureReason: null,
+      conflict: null,
+    };
+  }
   let installed = false;
   try {
     installed = fs.existsSync(agentPath());
   } catch {
     installed = false;
   }
-  const enabled = installed ? await isLoaded() : false;
-  return { supported: true, installed, enabled };
+  const view = installed ? await readLaunchd() : { loaded: false, running: false, lastExitCode: null };
+  const enabled = view.loaded && !(await isDisabled());
+  // Failed = it ran and exited non-zero, and isn't up right now. (A daemon we deliberately stopped
+  // exits 0, so a clean Off is never reported as a failure.)
+  const lastRunFailed = enabled && !view.running && view.lastExitCode !== null && view.lastExitCode !== 0;
+  return {
+    supported: true,
+    installed,
+    enabled,
+    lastExitCode: view.lastExitCode,
+    lastRunFailed,
+    failureReason: lastRunFailed ? readFailureReason() : null,
+    conflict: await findConflict(),
+  };
 }
 
 /**
@@ -131,6 +272,18 @@ export async function installAutostart(): Promise<IpfsAutostartStatus> {
   const ipfsBin = await resolveIpfsBin();
   if (!ipfsBin) {
     throw new Error("Couldn't find the `ipfs` binary to auto-start. Install IPFS first.");
+  }
+  // Refuse to become the second agent racing for the repo lock (ipfs_ui.mdx §13.2). Something else
+  // already starts IPFS at login; adding our own is what produced "auto-start says on, IPFS is off" —
+  // the loser of the race exits 1 and, with KeepAlive off, never retries. Adopt instead of compete.
+  const conflict = await findConflict();
+  if (conflict) {
+    log.warn(
+      "ipfs",
+      `not installing IPFS auto-start: ${conflict.label} (${conflict.source}) already auto-starts a daemon at ${conflict.path}`,
+    );
+    await persistIntent(true); // the user's intent — "keep IPFS on" — IS satisfied, just not by our agent
+    return autostartStatus();
   }
   const file = agentPath();
   try {
