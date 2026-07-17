@@ -14,6 +14,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -32,6 +33,7 @@ import type {
 import { api } from "../api/client.js";
 import { mapLimit } from "../lib/concurrency.js";
 import { clientLog } from "../lib/clientLog.js";
+import { lastBatchFinishedAt, isRecentlyFinished } from "./linger.js";
 
 // One unit of browser-initiated work handed to run(). `task` gets a `report` callback for determinate
 // jobs; `invalidate` (query keys) refresh grids/counts when the batch succeeds.
@@ -55,6 +57,10 @@ interface ProgressCtx {
   // say WHICH empty it is — Finished, Empty, or Interrupted — instead of always claiming the calm one.
   session: SessionView | null;
   processing: boolean; // any running job, pending backlog, OR active batch (processing.mdx §1)
+  // A batch settled within the LINGER window and nothing is running now (processing.mdx §2.1). The nav
+  // item keys off `processing || recentlyFinished` so a fast run stays reachable after it ends; the dock
+  // keys off `processing` alone, because a card must still mean live work.
+  recentlyFinished: boolean;
   run: (specs: JobSpec[], opts?: { invalidate?: unknown[][]; batchLabel?: string }) => Promise<void>;
 }
 
@@ -158,12 +164,26 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
   const session = useMemo<SessionView | null>(() => server?.session ?? null, [server]);
   const workers = server?.workers ?? null; // core-budget utilization (processing.mdx §3a)
   // "Processing" (processing.mdx §1): a running job, a pending backlog, OR a still-active batch. Drives
-  // the conditional left-bar item + the dock's presence.
+  // the dock's presence, and the SPINNING state of the left-bar item.
   const processing = jobs.length > 0 || queued > 0 || batches.some((b) => !b.finishedAt);
 
+  // The LINGER (processing.mdx §2.1) — when the most recent batch settled, or null if none has.
+  const lastFinishedAt = useMemo(() => lastBatchFinishedAt(batches), [batches]);
+
+  // Expiry needs its OWN clock, not the poll. React Query's structural sharing hands back the SAME data
+  // reference when an idle poll returns identical JSON — so a linger that expired purely as a function of
+  // the poll would never re-render, and the item would hang around until the next unrelated change.
+  const [now, setNow] = useState(() => Date.now());
+  const recentlyFinished = isRecentlyFinished({ processing, lastFinishedAt, now });
+  useEffect(() => {
+    if (!recentlyFinished) return; // running, never ran, or already expired — no clock needed
+    const id = setInterval(() => setNow(Date.now()), 15_000);
+    return () => clearInterval(id);
+  }, [recentlyFinished]);
+
   const value = useMemo<ProgressCtx>(
-    () => ({ jobs, queued, queuedByOp, batches, queuedItems, recentFailures, workers, session, processing, run }),
-    [jobs, queued, queuedByOp, batches, queuedItems, recentFailures, workers, session, processing, run],
+    () => ({ jobs, queued, queuedByOp, batches, queuedItems, recentFailures, workers, session, processing, recentlyFinished, run }),
+    [jobs, queued, queuedByOp, batches, queuedItems, recentFailures, workers, session, processing, recentlyFinished, run],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

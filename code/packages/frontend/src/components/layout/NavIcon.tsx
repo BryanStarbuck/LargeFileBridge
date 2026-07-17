@@ -9,6 +9,7 @@ import type { LucideProps } from "lucide-react";
 import type { ComponentType } from "react";
 import {
   Boxes,
+  Check,
   ChevronDown,
   Columns3,
   ExternalLink,
@@ -26,6 +27,8 @@ import {
 
 const ICONS: Record<string, ComponentType<LucideProps>> = {
   Boxes,
+  // Not a left_bar.yaml row — the settled state of the runtime-injected "Processing" item (Sidebar.tsx).
+  Check,
   ChevronDown,
   Columns3,
   ExternalLink,

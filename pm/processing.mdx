@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Background Processing (the conditional left-bar item, the bottom-left progress window, and the Processing page)
-description: The three surfaces that show background work while it runs. (1) A CONDITIONAL "Processing" left-bar item that appears as the LAST item of the top nav list (below Settings, above the empty space before the account slot) ONLY while background work is running, and disappears when it is done — clicking it opens the Processing page. (2) The bottom-left PROGRESS WINDOW in the main area (the existing progress dock) — a small stack of live cards for the items running right now, plus a "+ N queued" backlog footer; now clickable to open the Processing page. (3) The PROCESSING PAGE (route /processing) — TWO STACKED TABLES: a SHORT BATCHES table on top (one row per popup Confirm — Started · Progress · Done · Rejected · Problems, often one row, sometimes several) over the FULL-HEIGHT ITEMS table beneath it (every item of every batch together — running, pending, rejected, failed, halted), linked by a visible Batch facet so clicking a batch narrows the items below it. All three surfaces read one polled source, GET /api/progress. Sibling of processing_batches.mdx (the batch RECORD + the rejection-rate math the top table renders), webapp.mdx §10–§14 (the dock + registry the window reuses), job_queue.mdx (the queue + batches this surfaces), left_bar.mdx / left_bar.yaml (the nav the conditional item joins), and dialogs.mdx §5–§6 (the popup Confirm that mints a batch).
+description: The three surfaces that show background work while it runs. (1) A CONDITIONAL "Processing" left-bar item that appears as the LAST item of the top nav list (below Settings, above the empty space before the account slot) while background work is running, and for a short LINGER after the last batch settles (§2.1) so a run that finishes faster than the poll is still reachable, then disappears — clicking it opens the Processing page. (2) The bottom-left PROGRESS WINDOW in the main area (the existing progress dock) — a small stack of live cards for the items running right now, plus a "+ N queued" backlog footer; now clickable to open the Processing page. (3) The PROCESSING PAGE (route /processing) — TWO STACKED TABLES: a SHORT BATCHES table on top (one row per popup Confirm — Started · Progress · Done · Rejected · Problems, often one row, sometimes several) over the FULL-HEIGHT ITEMS table beneath it (every item of every batch together — running, pending, rejected, failed, halted), linked by a visible Batch facet so clicking a batch narrows the items below it. All three surfaces read one polled source, GET /api/progress. Sibling of processing_batches.mdx (the batch RECORD + the rejection-rate math the top table renders), webapp.mdx §10–§14 (the dock + registry the window reuses), job_queue.mdx (the queue + batches this surfaces), left_bar.mdx / left_bar.yaml (the nav the conditional item joins), and dialogs.mdx §5–§6 (the popup Confirm that mints a batch).
 ---
 
 # LargeFileBridge — Background Processing
@@ -67,12 +67,13 @@ when the processing is done."*
 * **Position.** It is the **last item of the top nav list** — rendered **after** the static yaml items
   (…Scans, Settings) and **before** the large empty space that runs down to the pinned account slot at the
   bottom. It is **not** in the account slot; it sits at the tail of the scrolling nav list.
-* **Conditional.** It renders **only while `processing` is true** (§1) and **vanishes** the moment work
-  finishes. It is never shown disabled or greyed — it is simply present or absent.
+* **Conditional.** It renders while `processing` is true (§1) **or while a batch settled within the linger
+  window** (§2.1) — never disabled or greyed, simply present or absent.
 * **Look.** Same nav-row treatment as every other item ([left_bar.mdx §3](./left_bar.mdx)): black label,
-  a lucide icon (a spinning `Loader2` / `RefreshCw` to read as "active"), the active accent tint when the
-  user is on `/processing`. It may show a small **count badge** (running + queued) on the right, like the
-  IPFS children's pinned counts.
+  a lucide icon, the active accent tint when the user is on `/processing`. It may show a small **count
+  badge** (running + queued) on the right, like the IPFS children's pinned counts. The icon states WHICH
+  of the two conditions is holding the row open: a spinning `Loader2` while work is live, a static `Check`
+  while it is merely **lingering** (§2.1). A spinner over finished work would be fake progress (§1).
 * **Click.** Routes to **`/processing`** (§4).
 * **Source-of-truth note.** The static nav items still come from `pm/left_bar.yaml`
   ([left_bar.mdx](./left_bar.mdx)); **Processing** is a **runtime-injected** item (like the dynamic company
@@ -80,9 +81,42 @@ when the processing is done."*
   sidebar when `processing` is true. It is **documented** in `left_bar.yaml` as a commented, runtime-only
   entry so the nav's full shape is discoverable in the source of truth.
 
-The conditional Processing row (appended after the yaml nav items, only while work runs, routing to
+The conditional Processing row (appended after the yaml nav items, while work runs or lingers, routing to
 `/processing`) is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (reads `useProgress()`; renders the Processing `<Link>` after the `leftBar.navItems` map when `processing` is true, with the active-route tint and the running+queued count).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (reads `useProgress()`; renders the Processing `<Link>` after the `leftBar.navItems` map when `processing || recentlyFinished`, with the active-route tint and the running+queued count).
+
+---
+
+## 2.1 The linger — why the item outlives the work
+
+**A batch can finish faster than the poll can show it.** The item above is the only route to `/processing`,
+and gating it strictly on live work assumed every run is long enough to see. Fast runs are not. A
+**16-image OCR batch settles in ~4 seconds** — barely more than the dock's 3s idle poll — so the item had
+at most **one poll** to render in and then vanished for good. The user saw no tab, no card, and no result,
+and reasonably concluded **nothing had run**. The work had in fact completed perfectly.
+
+What made this a true defect rather than a missed glance: the batch record **is kept for 24 hours**
+([processing_batches.mdx §5](./processing_batches.mdx)) *specifically* so its outcome stays readable, and
+the Processing page renders finished batches happily (§4). The record **outlived every way of reaching
+it** — retained on the server, rendered by the page, and unreachable from the nav.
+
+* **Rule.** After the most recently finished batch settles, the item **stays for a linger window** (5
+  minutes) and then leaves. During the linger it shows a `Check`, not a spinner (§2).
+* **Precedence.** `processing` (§1) and `recentlyFinished` are **mutually exclusive** — the live predicate
+  always wins, so exactly one of the two icon states can hold at a time.
+* **Clock skew.** A `finishedAt` stamped **ahead** of the browser clock counts as *just finished*, never as
+  expired — hiding the run the user is waiting on is the worse failure.
+* **Why not longer.** The row says "Processing". Holding it for the full 24h retention would park that word
+  over an idle machine all day; 5 minutes is enough to notice and click.
+* **Why the dock does NOT linger.** The dock (§3) is a stack of **live cards** and still keys off
+  `processing` alone — a card is a claim that work is happening now (§1's never-fake rule). The nav item
+  only claims there is **something to look at**, which stays true after the work ends.
+
+Deciding whether a settled batch is still recent enough to keep the row open is computed in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/progress/linger.ts` — `lastBatchFinishedAt()` (the most recent settled stamp, skipping active and unparseable ones) and `isRecentlyFinished()` (the window test, false while `processing`).
+
+Driving the expiry off its own clock rather than the poll is done in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/progress/ProgressContext.tsx` — `ProgressProvider` (a 15s `setInterval` runs only while lingering; React Query's structural sharing returns an identical data reference on an idle poll, so a poll-derived expiry would never re-render and the row would hang until an unrelated change).
 
 ---
 
@@ -802,8 +836,9 @@ The extended payload is assembled in code:
 <!--
   The THREE surfaces for background work, all driven by GET /api/progress:
    §2 CONDITIONAL "Processing" LEFT-BAR ITEM — the LAST item of the top nav list (after Settings, above the
-      account slot), shown ONLY while processing (jobs.length>0 || queued>0 || activeBatches>0), vanishes when
-      done, routes to /processing. Runtime-injected in Sidebar.tsx (NOT a static yaml row; documented as a
+      account slot), shown while processing (jobs.length>0 || queued>0 || activeBatches>0) — spinner — AND for
+      a 5-min LINGER after the last batch settles (§2.1) — Check — so a ~4s run stays reachable; then
+      vanishes, routes to /processing. Runtime-injected in Sidebar.tsx (NOT a static yaml row; documented as a
       commented runtime entry in left_bar.yaml). May show a running+queued count badge.
    §3 BOTTOM-LEFT PROGRESS WINDOW = the existing dock (webapp.mdx §10), unchanged EXCEPT now click-through →
       /processing (ProgressDock.tsx onClick navigate).
