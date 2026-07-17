@@ -112,10 +112,10 @@ function transferFor(decision: Decision, cid: string | null, peers: string[]): T
 //     PAGES render badges.
 // The MENU (menus.mdx §5) reads only kind, repo, decision, flags, compress state — never `rollup` or
 // `badges` — so it fetches with BOTH off to stay instant regardless of how big the parent directory is.
-export function buildEntityView(
+export async function buildEntityView(
   input: string | undefined,
   opts: { rollup?: boolean; badges?: boolean } = {},
-): EntityView {
+): Promise<EntityView> {
   const wantRollup = opts.rollup ?? true;
   const wantBadges = opts.badges ?? true;
   const e = resolveEntity(input);
@@ -193,7 +193,7 @@ export function buildEntityView(
     peers,
     compressible: comp.compressible,
     compressState: comp.compressState,
-    rollup: e.kind === "dir" && wantRollup ? buildDirRollup(e.abs, match) : null,
+    rollup: e.kind === "dir" && wantRollup ? await buildDirRollup(e.abs, match) : null,
   };
 }
 
@@ -201,8 +201,14 @@ export function buildEntityView(
 // (and guards against the TypeScript-`.ts` vs MPEG-TS-`.ts` extension collision). 1 MiB.
 const COMPRESS_FLOOR_BYTES = 1024 * 1024;
 
-/** The charter category rollup for a directory (directories.mdx §2/§3). Bounded recursive walk. */
-function buildDirRollup(dirAbs: string, match: RepoMatch | null): DirRollup {
+const ROLLUP_YIELD_EVERY = 1000; // hand the event loop back every N processed entries during the walk
+const rollupYield = (): Promise<void> => new Promise((r) => setImmediate(r));
+
+/** The charter category rollup for a directory (directories.mdx §2/§3). Bounded recursive walk. ASYNC +
+ *  cooperatively yielding: the walk is up to 20k `statSync`s and, on a cloud-mounted tree, each can block
+ *  for seconds hydrating a placeholder — so it yields periodically to keep concurrent requests flowing
+ *  instead of freezing the whole event loop for the walk's duration (mirrors fs.service.ts listDirectory). */
+async function buildDirRollup(dirAbs: string, match: RepoMatch | null): Promise<DirRollup> {
   const threshold = getAppConfig().big_file.threshold_bytes;
   const flags = effectiveFlags(dirAbs); // dir-scoped: suppress offers already opted out
 
@@ -249,6 +255,7 @@ function buildDirRollup(dirAbs: string, match: RepoMatch | null): DirRollup {
 
   // Bounded recursive walk for the category counts (shared budget so huge trees stay cheap).
   const budget = { left: 20000 };
+  let sinceYield = 0;
   const stack: Array<{ dir: string; depth: number }> = [{ dir: dirAbs, depth: 0 }];
   while (stack.length && budget.left-- > 0) {
     const { dir, depth } = stack.pop()!;
@@ -262,6 +269,12 @@ function buildDirRollup(dirAbs: string, match: RepoMatch | null): DirRollup {
       continue;
     }
     for (const ent of dirents) {
+      // Yield to the event loop every N entries so a big/cloud-mounted subtree can't run the whole 20k-stat
+      // walk without letting other requests breathe (async policy — same as fs.service.ts listDirectory).
+      if ((sinceYield += 1) >= ROLLUP_YIELD_EVERY) {
+        sinceYield = 0;
+        await rollupYield();
+      }
       if (ent.name.startsWith(".")) continue;
       if (ent.isDirectory()) {
         // Bundles (.app/.framework/…) are opaque — don't roll up their internal assets. (bundles-opaque)

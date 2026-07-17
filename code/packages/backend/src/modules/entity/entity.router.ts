@@ -11,7 +11,7 @@ export const entityRouter = Router();
 entityRouter.use(requireAllowListed);
 
 // GET /api/entity?path=<abs> — the single-entity payload (files.mdx §2, directories.mdx §3).
-entityRouter.get("/", (req, res) => {
+entityRouter.get("/", async (req, res) => {
   const p = typeof req.query.path === "string" ? req.query.path : undefined;
   // `?rollup=0` skips the expensive directory category rollup (buildDirRollup's up-to-20k-`statSync`
   // walk). `?badges=0` skips the code-badge context, which readdirs the PARENT dir and runs
@@ -21,7 +21,7 @@ entityRouter.get("/", (req, res) => {
   const rollup = req.query.rollup !== "0";
   const badges = req.query.badges !== "0";
   try {
-    res.json({ ok: true, data: buildEntityView(p, { rollup, badges }) });
+    res.json({ ok: true, data: await buildEntityView(p, { rollup, badges }) });
   } catch (e) {
     log.warn("entity", `buildEntityView failed for ${p ?? "<none>"}: ${(e as Error).message}`);
     res.status(400).json({ ok: false, error: (e as Error).message });
