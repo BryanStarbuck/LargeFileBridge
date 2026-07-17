@@ -324,17 +324,20 @@ A file is a **candidate** (a large-file-bridge payload the scan records) when **
    and is ≥ **50 MB** (default). This is the charter's *"big files that aren't a good idea to check in"*
    category: we surface it and offer the one-click ⊘ **git-ignore**. Repo units only — the computer unit
    has no working tree, so "checked in" is meaningless there.
-5. **Analysis media — video / audio / image, regardless of size.** The file is a **video / audio / image**
-   (`isMediaFile`) at **any** size, even a small, checked-in, not-git-ignored one — a 2 MB screenshot, a
-   200 KB icon, a 30-second clip. It is admitted **only** so the analysis tabs can act on it: **OCR** a
-   screenshot, **describe** an image, **transcribe** a short clip ([task_tabs.mdx §4.6/§4.7](./task_tabs.mdx),
-   [ocr.mdx §11.1.1](./ocr.mdx)). This is the rule that lets *"open the OCR tab and OCR a file smaller than
-   the large-file size"* work — without it, a small JPG is never a row and no UI filter could reveal it.
+5. **Analysis candidate — video / audio / image / PDF, regardless of size.** The file is a **video / audio /
+   image OR a PDF** (`isAnalysisCandidate` = `isMediaFile` **or** `isPdfFile`) at **any** size, even a small,
+   checked-in, not-git-ignored one — a 2 MB screenshot, a 200 KB icon, a 30-second clip, a **1 MB contract
+   PDF**. It is admitted **only** so the analysis tabs can act on it: **OCR** a screenshot **or a PDF**,
+   **describe** an image, **transcribe** a short clip ([task_tabs.mdx §4.6/§4.7](./task_tabs.mdx),
+   [ocr.mdx §11.1.1](./ocr.mdx)). This is the rule that lets *"open the OCR tab, turn off Large files, and OCR
+   a PDF smaller than the large-file size"* work — without it, a small JPG or PDF is never a row and no UI
+   filter could reveal it. **PDFs join here, NOT in the payload rules** (rule 1/2): a PDF is an OCR target but
+   **never IPFS payload or a compress candidate**, so it is admitted for analysis only ([ocr.mdx §1.7.1](./ocr.mdx)).
    **Repo units only** (like rule 4): the **computer unit** walks all of home, where admitting every tiny
-   icon/thumbnail would flood the census — a repo is the bounded, intentional scope for OCR-a-small-image.
+   icon/thumbnail/PDF would flood the census — a repo is the bounded, intentional scope for OCR-a-small-file.
 
 > **Rule 5 rows are `analysisOnly` — surfaced-but-small, and NEVER payload.** A rule-5 row exists so a small
-> image/video/audio can be OCR'd / described / transcribed, nothing more. It is:
+> image/video/audio/**PDF** can be OCR'd / described / transcribed, nothing more. It is:
 > * **flagged `analysisOnly`** on the candidate (and carried onto the `FileRow`) — the flag the promoted
 >   **"Large files only"** rail toggle reads to hide these rows by default ([tables.mdx §2.9](./tables.mdx)).
 >   A rule-5 row is *the* thing that toggle hides; every other candidate stays visible when it is on.
@@ -366,8 +369,8 @@ A file is a **candidate** (a large-file-bridge payload the scan records) when **
 > (in-memory, for the auto-decide gate); rule-5 rows carry both.
 
 The candidate predicate — git-ignored media at any size (rule 1), else the size gate (rule 2), plus forced
-includes (rule 3), the checked-in nudge (rule 4), and analysis media at any size (rule 5) — is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` (`isCandidate` / `analysisOnly`, using `isMediaFile()` from `shared/scan-filters.ts`)
+includes (rule 3), the checked-in nudge (rule 4), and analysis candidates at any size (rule 5) — is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` (`isCandidate` / `analysisOnly`, using `isAnalysisCandidate()` = `isMediaFile()` **or** `isPdfFile()` from `shared/scan-filters.ts`)
 
 > #### Why rule 4 exists — the bug it fixes (root-cause note, do not remove)
 >

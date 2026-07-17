@@ -205,6 +205,7 @@ Implemented in code: `ocrPdf()` and the `needs_pdf_tools` gate in
 | --- | --- | --- |
 | **Image** | **SLOW / ACCURATE** — `.accurate` recognition level, language correction **on** | One file, one pass. The user is asking about *this* image; accuracy is worth every millisecond. A 4K screenshot costs a few hundred ms even at the slow setting — there is nothing to save. |
 | **Video** | **FAST** — `.fast` recognition level, language correction **off**, one frame every **15 s** | A 40-minute video at a 15s stride is **160 frames**. At the slow level that is minutes per file; at the fast level it is seconds. Multiply by a 2,000-file tree and the choice is the difference between a feature and an unusable one. |
+| **PDF page** | **SLOW / ACCURATE** — `.accurate`, language correction **on** — like an image (§1.7.1) | A page is a document, and the reader wants every clause right — accuracy is the whole point. A PDF also has **far fewer pages** than a video has frames (tens, not 160), so the accurate pass stays affordable, bounded by `max_pages`. |
 
 This mapping is **exactly** what Apple's Vision framework exposes as `VNRequestTextRecognitionLevel.accurate`
 vs `.fast` (§3.2), which is a large part of why that engine was chosen: our product rule and the engine's
@@ -327,7 +328,7 @@ cannot be half-installed, and it works on a fresh clone with zero user action. F
 | **`tesseract.js`** (npm) — pure **WASM** port of Tesseract, 100+ languages, worker/scheduler pool. | **npm dependency** — no native build. | **Yes**, *but* it **downloads `traineddata` on first run** unless the language data is vendored and `langPath` is pointed at it (§3.3). | Engine params, not a first-class fast/accurate switch | ✅ **FALLBACK** (non-Mac / Vision unavailable) |
 | **`node-tesseract-ocr`** | Thin wrapper that **shells out to a brew-installed `tesseract`** | Yes | — | ❌ **Violates the directive** — it *is* the brew tool, wearing an npm hat. |
 | **RapidOCR / PP-OCRv5 via `onnxruntime-node`** (`onnx-ocr-js`, `ppu-paddle-ocr`) | npm + **ONNX model files** (tens of MB) to fetch/vendor | Yes | Model-size choice | ❌ **Rejected for v1** — genuinely good accuracy, but reintroduces exactly the **model-provisioning** problem (§3.3) we are choosing a library to avoid, plus an `onnxruntime-node` native binary per platform. Revisit only if Tesseract's fallback accuracy proves insufficient. |
-| **Scribe.js** | npm, builds on tesseract.js; adds PDF + accuracy | Yes | — | ❌ **Rejected for v1** — its headline win is **PDF**, which is not our input kind (§14 candidates are image + video). Heavier and slower than tesseract.js for the same job. Revisit **if and when** LFBridge OCRs PDFs. |
+| **Scribe.js** | npm, builds on tesseract.js; adds PDF + accuracy | Yes | — | ❌ **Rejected** — its headline win is **PDF**, but we OCR PDFs by **rasterizing each page** with poppler's `pdftoppm` and reading the page image with the engine we already ship (§1.7.1), so Scribe.js's PDF layer buys us nothing while being heavier and slower than tesseract.js for the same image job. |
 | **Cloud OCR** (Google Vision API, AWS Textract, Klippa…) | Network | **No** | — | ❌ **Rejected on charter grounds.** OCR has **no reason** to upload; making it a second network path would forfeit §4, the property that makes §1.4 acceptable. |
 
 **Sources:** [mac-ocr](https://github.com/privatenumber/mac-ocr) · [VNRecognizeTextRequest](https://developer.apple.com/documentation/vision/vnrecognizetextrequest) · [tesseract.js API](https://github.com/naptha/tesseract.js/blob/master/docs/api.md) · [tesseract.js workers vs schedulers](https://github.com/naptha/tesseract.js/blob/master/docs/workers_vs_schedulers.md) · [tesseract.js-offline](https://github.com/jeromewu/tesseract.js-offline) · [Scribe.js vs Tesseract](https://github.com/scribeocr/scribe.js/blob/master/docs/scribe_vs_tesseract.md) · [RapidOCR](https://github.com/RapidAI/RapidOCR)
@@ -517,6 +518,11 @@ only to make the rare failure honest:
   honest-outcome posture describe takes for its compress-to-fit ([ai_description.mdx §3.3](./ai_description.mdx)).
   **Images need no external tool at all.** Note the asymmetry this creates and do not paper over it: an
   ffmpeg-less machine OCRs every image fine and every video not at all.
+* **PDF adds one tool dependency: poppler's `pdftoppm`** (page rasterization, §1.7.1) — the **exact same
+  shape** as the video/ffmpeg dependency. When a **PDF** is OCR'd on a machine without poppler, the run
+  reports **`needs_pdf_tools`** with the install hint (`brew install poppler`). Same stated asymmetry: a
+  poppler-less machine OCRs every image fine and every PDF not at all. `pdfToolsPresent()` is surfaced on
+  `GET /api/ocr/engines` (`OcrEnginesStatus.pdfToolsPresent`) beside `videoToolsPresent`.
 * **Every entry point gates identically — no bypass** (the rule [Transcribe.mdx §5.2.2](./Transcribe.mdx)
   locks): the viewer button, the ⋮ item, the page action, the popup Apply, and the queue worker all route
   through the same gate. There is no path that reaches the engine without it.
@@ -566,6 +572,13 @@ The band (band 6) held **two** columns — AI description (left) and Transcripti
   | **audio** | — | ✓ | **—** (no pixels, §1.7) |
   | **image** | ✓ | — | **✓** |
   | **video** | ✓ | ✓ | **✓** (all three) |
+
+  **PDF is OCR'd from the tab, the popup, and the row icon — not from a media band.** A `.pdf` has no media
+  viewer (it routes to the `/file` properties page, not `/image`·`/video`·`/audio`), so it does not appear in
+  this per-band matrix. Its OCR runs from the OCR tab's row icon, the metric-tile / page-action popup, and the
+  ⋮ / right-click **Create OCR text** item — every non-viewer entry point — and its `.ocr` artifact is stored
+  and searchable exactly like an image's. (A dedicated PDF viewer band that renders the extracted text is a
+  reasonable **future** follow-up; it is out of scope here.)
 
   A **video** therefore shows **three** columns and an **audio** file shows **one**. Column widths divide the
   band evenly among the columns actually shown, so an image's two columns each get half — the band never
@@ -664,7 +677,7 @@ silent one-click run; the menu is the same actions as the fast path, not a bypas
 
 The **Directory (non-repo)** catalog ([menus.mdx §5.2](./menus.mdx)) gains **Create OCR text** in the
 **`Create`** group, beside `Create Transcriptions` / `Create AI descriptions`. It opens the unified popup
-**scoped to this directory's subtree** (`{ root: <dir> }`), listing every OCR-able image/video under it,
+**scoped to this directory's subtree** (`{ root: <dir> }`), listing every OCR-able image/video/PDF under it,
 with a solid-blue **"OCR N files"** confirm.
 
 This is the **directory triple-dot / right-click** flow the directive names, and the twin of the
@@ -700,7 +713,7 @@ note above). It sits beside **Create Transcriptions · Create AI descriptions ·
 three LOCKED [page_actions.mdx §1](./page_actions.mdx) rules:
 
 * **Rule 1 — Scope** ([§1.1](./page_actions.mdx)) — with rows **checked**, exactly the checked set; with
-  **nothing** checked, **every image/video on the page, recursively**.
+  **nothing** checked, **every image/video/PDF on the page, recursively**.
 * **Rule 2 — Skip-already-done** ([§1.2](./page_actions.mdx)) — files with a `done` `.ocr` artifact
   (**including empty-text ones** — §2.3) and non-image/-video files are dropped **before** the popup lists
   anything.
@@ -941,31 +954,39 @@ Policy: [parallelization.mdx §3](./parallelization.mdx).
 ### 11.1 The tab
 
 [task_tabs.mdx §1](./task_tabs.mdx)'s per-repo tab strip becomes **All · IPFS · Compress · Transcribe · AI
-descriptions · OCR**. The OCR tab lists the repo's **image/video** files with the OCR status icon leading,
-plus the standard metrics strip (§12) and hover-info region, and it re-tunes the table from the same
+descriptions · OCR**. The OCR tab lists the repo's **image / video / PDF** files with the OCR status icon
+leading, plus the standard metrics strip (§12) and hover-info region, and it re-tunes the table from the same
 data-driven tab config the other five use ([task_tabs.mdx §7](./task_tabs.mdx)) — **no bespoke table**.
 Default sort is the shared **"could-first"** (the actionable rows), then **Size desc**.
+
+The per-row `ocr` status is `na` unless the file is an image, a video, or a **PDF** (`ocrStatusFor()` in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts`); PDFs join
+the same "could → done" model as the media kinds, so a folder of contracts opens as a full column of
+**could**-OCR rows.
 
 #### 11.1.1 The OCR tab opens on SMALL files — `Large files only` seeds OFF (LOCKED)
 
 OCR is the small-file case. Its canonical subjects — a **screenshot** of an error, a **receipt** or bank
-**statement**, a **slide** with a pricing tier, a downloaded **JPG** — are almost always **below** the
-large-file threshold (§1.1–§1.4). So the OCR tab is the **one documented exception** to the product-wide
-"Large files only" default ([tables.mdx §2.9](./tables.mdx), [task_tabs.mdx §4.6](./task_tabs.mdx)):
+**statement**, a **slide** with a pricing tier, a **contract PDF**, a downloaded **JPG** — are almost always
+**below** the large-file threshold (§1.1–§1.4). So the OCR tab is the **one documented exception** to the
+product-wide "Large files only" default ([tables.mdx §2.9](./tables.mdx), [task_tabs.mdx §4.6](./task_tabs.mdx)):
 
-* **The promoted `Large files only` rail toggle seeds OFF on the OCR tab.** Every image/video shows,
-  **at every size**, the moment the tab opens — so a user who came to read a small screenshot sees it
-  immediately instead of an empty table. The toggle stays on the rail; turning it **on** narrows to large
-  video files.
-* **Small files are reachable because the scan now admits them.** A small, not-git-ignored image or video
-  is admitted as an `analysisOnly` candidate ([scan.mdx §4.1](./scan.mdx)) — a row that exists **only** so
-  it can be OCR'd / described / transcribed, and that is **never** bridged to IPFS on its own (the same
-  non-payload exclusion the checked-in-nudge rows get). Without that admission the OCR tab could not list a
-  2 MB JPG at all, and no rail toggle could reveal it. This closes the reported gap: *"go into a repo, open
-  the OCR tab, and OCR files that are definitely smaller than the large-file size."*
-* **The `File type` facet** ([tables.mdx §2.10](./tables.mdx)) on the OCR tab shows **Images** and
-  **Videos** (the present classes), both checked — one click isolates *just the images* to OCR a folder of
-  screenshots.
+* **The promoted `Large files only` rail toggle seeds OFF on the OCR tab.** Every image / video / PDF shows,
+  **at every size**, the moment the tab opens — so a user who came to read a small screenshot or a one-page
+  PDF sees it immediately instead of an empty table. The toggle stays on the rail; turning it **on** narrows
+  to large files.
+* **Small files are reachable because the scan now admits them.** A small, not-git-ignored image, video, or
+  **PDF** is admitted as an `analysisOnly` candidate ([scan.mdx §4.1](./scan.mdx)) — a row that exists
+  **only** so it can be OCR'd / described / transcribed, and that is **never** bridged to IPFS on its own (the
+  same non-payload exclusion the checked-in-nudge rows get). The admission predicate is `isAnalysisCandidate()`
+  (media **or** PDF) in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts`.
+  Without that admission the OCR tab could not list a 2 MB JPG or a 1 MB PDF at all, and no rail toggle could
+  reveal it. This closes the reported gap: *"go into a repo, open the OCR tab, turn off Large files, and OCR
+  the PDFs that are definitely smaller than the large-file size."*
+* **The `File type` facet** ([tables.mdx §2.10](./tables.mdx)) lives in the **Filter ⛛ dropdown** and lists
+  the four common kinds up front — **Images · Videos · Audio · PDFs** — with an **All kinds** reset and a
+  **More types…** disclosure for the rest. On the OCR tab this is what isolates *just the PDFs* (or just the
+  screenshots) in one click. PDF is included precisely because **OCR is often done on PDFs**.
 
 The OCR tab's default sort, columns, and this default-OFF toggle are declared in the shared tab config in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — the `ocr` `TaskTabDef` (its `largeOnlyDefault: false`).
@@ -1017,7 +1038,7 @@ The OCR status icon is implemented in code:
 `describable`/`described`, and rendered as panels named **`OCRable`** (could) and **`OCRed`** (done) —
 the [task_tabs.mdx §4.4/§4.5](./task_tabs.mdx) could/done naming convention:
 
-* **`OCRable`** — image/video files with **no** `.ocr` artifact. **Clicking it opens the educate-and-fix
+* **`OCRable`** — image/video/PDF files with **no** `.ocr` artifact. **Clicking it opens the educate-and-fix
   popup** (§12.2); the panel is **amber-tinted** when > 0 (the "offer" health tint for task work,
   [task_tabs.mdx §2.3](./task_tabs.mdx)) and a **big green 0** when the repo is fully OCR'd (§2.2).
 * **`OCRed`** — files with a `done` artifact. **It is INERT** — clicking does nothing. This is the
@@ -1105,7 +1126,7 @@ entry naming a **file set** must supply `targets` and render the two-pane subjec
 The task-work tile popups live in **§11**, *not* §10 ([warnings.mdx §11.1](./warnings.mdx) — "The task-work
 metric popups"). §11.1.1–§11.1.3 are transcribe / describe / compress; **§11.1.4 is OCR**:
 
-> **§11.1.4 OCRable — image/video with no OCR text — `warn` (id: `repo-ocrable-work`)**
+> **§11.1.4 OCRable — image/video/PDF with no OCR text — `warn` (id: `repo-ocrable-work`)**
 
 This is the def `buildOcrWarning()` produces (§12.2) — the sibling of `repo-transcribable-work` /
 `repo-describable-work`. **Do not put it in §10.11**; the two homes are the convention, and this spec is
@@ -1277,12 +1298,14 @@ credentials to manage** (§4):
 * **`ocr.video_stride_seconds`** — default **15** (§2.2.1). Labeled *"Read a frame from each video every N
   seconds"* with the live implication shown (*"≈ 160 frames for a 40-minute video"*).
 * **`ocr.max_frames`** — default **1,000** (§15.2 rule 7).
+* **`ocr.max_pages`** — default **500** — the PDF analogue of `max_frames`, bounding a pathological document
+  (§1.7.1); when it bites, `truncated: true` is recorded and the UI says so.
 * **`ocr.language`** — default from the app locale (BCP-47). Choosing a non-vendored language triggers the
   consent flow (§3.3), never a silent download.
 * **`ocr.engine`** — `auto` (default) | `vision` | `tesseract`.
 
 The config schema block is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — the `ocr` block of `AppConfigSchema` (`engine` default `"auto"`, `video_stride_seconds` default `15`, `max_frames` default `1000`, `language`); edited from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — the `ocr` block of `AppConfigSchema` (`engine` default `"auto"`, `video_stride_seconds` default `15`, `max_frames` default `1000`, `max_pages` default `500`, `language`); edited from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx`.
 
 ---
 
@@ -1292,17 +1315,18 @@ Allow-list-gated like every data route, and the exact shape of `/api/transcribe`
 
 | Method + path | Body / query | What |
 | --- | --- | --- |
-| `GET /api/ocr/engines` | — | The engine matrix (available / unavailable, the resolved default, ffmpeg presence) + `anyAvailable`. |
+| `GET /api/ocr/engines` | — | The engine matrix (available / unavailable, the resolved default, ffmpeg presence via `videoToolsPresent`, poppler presence via `pdfToolsPresent`) + `anyAvailable`. |
 | `GET /api/ocr/file?path=<abs>` | — | The existing `OcrView` for a media file, or `null` (§5.1). |
 | `POST /api/ocr/file` | `{ path, overwrite?, engine? }` | **Run OCR** on one file → `OcrResult`. |
 | `POST /api/ocr/batch` | `{ paths[], overwrite?, engine? }` | A selected set → `OcrBatchResult`. |
-| `POST /api/ocr/tree` | `{ path, overwrite?, engine? }` | All image/video under a directory/repo, recursive. |
+| `POST /api/ocr/tree` | `{ path, overwrite?, engine? }` | All image/video/PDF under a directory/repo, recursive. |
 | `POST /api/ocr/plan` | `{ paths?, root? }` | **Preview only — nothing queued** ([dialogs.mdx §5.2](./dialogs.mdx)). Applies scope + skip-already-done server-side → `{ files: {path, sizeBytes, kind, frames?}[], considered, alreadyDone, unsupported }` for the popup (§9). |
 | `POST /api/ocr/enqueue` | `{ paths?, root?, overwrite?, engine? }` | **Plan + background-queue** (op `ocr`) → returns the `EnqueuePlan` **immediately** (§8.5). |
 
 `OcrResult.status` reports each run truthfully: **`ocred`** (success — **including empty text**, §2.3),
 **`skipped`** (an artifact exists and `overwrite` not set), **`no_engine`** (§6), **`needs_ffmpeg`** (a video
-on a machine without ffmpeg, §6), **`unsupported`** (not an image/video), or **`failed`** (with the reason).
+on a machine without ffmpeg, §6), **`needs_pdf_tools`** (a PDF on a machine without poppler's `pdftoppm`, §6),
+**`unsupported`** (not an image/video/PDF), or **`failed`** (with the reason).
 
 The OCR REST surface is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/ocr.router.ts` — `ocrRouter`, mounted at `/api/ocr` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts`.
@@ -1511,7 +1535,7 @@ recognitions wanting to run at once — peaked at **exactly 22 = the budget**, n
 <!--
   CANONICAL spec for the THIRD transaction type: OCR (read text out of pixels). Siblings: Transcribe.mdx
   ("what was SAID", audio+video) and ai_description.mdx ("what is SEEN", image+video). OCR = "what does it
-  SAY on screen" (literal glyphs, verbatim), image+video. NOT audio (no pixels). NOT a description.
+  SAY on screen" (literal glyphs, verbatim), image+video+PDF. NOT audio (no pixels). NOT a description.
 
   §0 SYMMETRY is now a TRIPLE (extends ai_description.mdx §0's pair). Adding a surface to one obliges all 3.
      Two deliberate asymmetries: (1) OCR is LOCAL (no key/provider/credentials — describe's whole

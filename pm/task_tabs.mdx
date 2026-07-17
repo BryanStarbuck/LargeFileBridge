@@ -422,9 +422,10 @@ own per-tab tuning:
   **below** the large-file threshold — a small checked-in JPG, a short screen clip. The tab's `rowFilter`
   (scope, §1.3.1) and this toggle **compose by AND**: turning Large-files-only off never widens the tab's
   media scope, it only stops hiding small files within it.
-* **File type facet** — `☑ Images ☑ Videos ☑ Audio ☑ PDFs ☐ Other` (Other off by default). On a task tab
-  the tab scope already narrows the classes, so the facet shows just the present ones (OCR → Images, Videos)
-  and lets the user isolate one class in a click.
+* **File type facet** — `☑ Images ☑ Videos ☑ Audio ☑ PDFs ☐ Other` (Other off by default), inside the
+  **Filter ⛛ dropdown** with an **All kinds** reset and a **More types…** disclosure ([tables.mdx §2.10](./tables.mdx)).
+  The four common kinds always list without expanding; on a task tab the tab scope narrows what actually has
+  rows (OCR → Images, Videos, **PDFs**), and the user isolates one class in a click.
 
 ### 4.1 All — the overview
 
@@ -506,29 +507,32 @@ own per-tab tuning:
 > and `describe` — each a `TaskStatus` (`could` / `done` / `na`), composed by the backend by joining each row
 > against the classifier and the storage index (§2.5). See §5.2 and §7.
 
-### 4.6 OCR — read the text out of images & videos (LOCKED — the default-OFF exception)
+### 4.6 OCR — read the text out of images, videos & PDFs (LOCKED — the default-OFF exception)
 
-* **Filter:** OCR-relevant files only — **images and videos** (`ocr` is `could` or `done`; audio has no
-  pixels — [ocr.mdx §11.1](./ocr.mdx)). Same media axis as AI descriptions (§4.5), a different question.
+* **Filter:** OCR-relevant files only — **images, videos, and PDFs** (`ocr` is `could` or `done`; audio has
+  no pixels — [ocr.mdx §11.1](./ocr.mdx)). A **superset** of the AI-descriptions media axis (§4.5): the same
+  images + video, **plus PDFs**, which are read by rasterizing each page ([ocr.mdx §1.7.1](./ocr.mdx)).
 * **`Large files only` seeds OFF here — the one exception** ([tables.mdx §2.9](./tables.mdx),
-  [ocr.mdx §11.4](./ocr.mdx)). OCR's real targets are a **screenshot, a receipt, a slide, a downloaded
-  JPG** — almost always **under** the large-file threshold. Opening the OCR tab with Large-files-only ON
-  would hide exactly the files the user came to read, so the OCR tab opens with the toggle **off** and all
-  image/video sizes visible. The toggle stays on the rail; the user can turn it **on** to focus on big
-  video files. **This is what makes "go to the OCR tab and OCR a small JPG" work out of the box** — the
-  small file is now a scan candidate ([scan.mdx §4.1](./scan.mdx)) and nothing hides it.
+  [ocr.mdx §11.4](./ocr.mdx)). OCR's real targets are a **screenshot, a receipt, a slide, a contract PDF, a
+  downloaded JPG** — almost always **under** the large-file threshold. Opening the OCR tab with
+  Large-files-only ON would hide exactly the files the user came to read, so the OCR tab opens with the toggle
+  **off** and all image/video/PDF sizes visible. The toggle stays on the rail; the user can turn it **on** to
+  focus on big files. **This is what makes "go to the OCR tab, turn off Large files, and OCR a small PDF" work
+  out of the box** — the small file is now a scan candidate ([scan.mdx §4.1](./scan.mdx)) and nothing hides it.
 * **Columns:** **`OCR`** (the three-state icon, [ocr.mdx §11.2](./ocr.mdx)) **as the LEADING, header-less
   control column — to the LEFT of `File`** (like Transcribe/Describe/Compress) — then `File`, `Size`,
-  `Kind` (image/video), `Changed`.
+  `Kind` (image/video/**pdf**), `Changed`.
 * **Default sort:** **could-OCR first** (files whose text hasn't been read yet), then **Size desc**.
 * **Metrics:** `OCRable` (could) · `OCRed` (done).
+* **Filter the list to just PDFs** via the File-type facet in the Filter ⛛ dropdown ([tables.mdx §2.10](./tables.mdx))
+  — check **PDFs** alone to OCR a folder of contracts.
 
 ### 4.7 Every file tab reaches small files — the reachability guarantee (LOCKED)
 
-The scan now admits **image/video/audio at any size** as `analysisOnly` candidates
+The scan now admits **image/video/audio AND PDF at any size** as `analysisOnly` candidates
 ([scan.mdx §4.1](./scan.mdx)) precisely so that turning **Large files only OFF** on **any** tab reveals
-the small media the tab is about — a small clip on Transcribe/Compress, a small image on
-Describe/OCR/Compress. `analysisOnly` rows are **never bridge payload**: they are excluded from auto-pin
+the small files the tab is about — a small clip on Transcribe/Compress, a small image on
+Describe/OCR/Compress, a **small PDF on OCR**. `analysisOnly` rows are **never bridge payload**: they are excluded from auto-pin
 exactly as the checked-in-nudge rows are ([scan.mdx §4.1](./scan.mdx), the `nudgeOnly` exclusion), so
 surfacing a thumbnail for OCR never silently pins it to IPFS.
 

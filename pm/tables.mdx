@@ -305,35 +305,53 @@ The toggle itself is rendered by the shared table in code:
 
 ### 2.10 The File-type facet — Images · Videos · Audio · PDFs · Other (LOCKED)
 
-Every file table also carries a **File type** facet on the rail — the value-visibility checkbox model
-(§2.1) applied to the file's **media class**, so a user can carve a mixed listing down to *"just the
-images"* (or add *"and the PDFs"*) in one click each. This is what makes OCR-on-images reachable: on a
-tab or page showing many kinds, check **Images** and the JPGs/PNGs/screenshots stand alone.
+Every file table carries a **File type** facet — the value-visibility checkbox model (§2.1) applied to the
+file's **media class**, so a user can carve a mixed listing down to *"just the images"* (or *"just the
+PDFs"*) in one click. This is what makes OCR-on-a-PDF reachable: on a tab or page showing many kinds, check
+**PDFs** and the contracts stand alone.
 
-* **Values (each a checkbox):** **Images · Videos · Audio · PDFs · Other.** A row's value is derived
-  from its name by the shared classifier `fileTypeForName()` — video / image / audio by extension
-  family, `pdf` for `.pdf`, and **Other** for everything else. Only the values **present** in the
-  current rows render as chips (an empty class shows no chip — §2.8's rule that a facet states its real
-  vocabulary).
-* **Default checked:** **Images, Videos, Audio, and PDFs are ON; Other is OFF.** All four media/document
-  classes show by default; the non-media **Other** bucket (source, docs, archives, data files) is the
-  opt-in the user *"adds"* when they want it. This is the product owner's rule — *"default on to images,
-  videos, and PDFs… they can add other types"* — with **Audio** included because it is media and a
-  Transcribe candidate (hiding it by default would blank the Transcribe tab). It is the **third**
-  documented departure from §2.1's all-checked default (§2.7, §2.9 are the others); Other-off is the only
-  box that starts unchecked.
-* **The last-value rule still holds** (§2.1): the final checked class cannot be unchecked.
+**Where it lives: inside the Filter ⛛ dropdown, not on the rail (LOCKED).** The facet is a **File type**
+section at the **top** of the filter popover (above the per-column filters, below any "Bookmarked only"). The
+product owner's rule: *"when you click on that filter icon, the pop-up lists the kinds — the most common ones —
+without having to expand."* The rail keeps only the promoted **Large files only** toggle (§2.9); file-type
+filtering moved into the dropdown so the filter icon is the one place a user goes to narrow a table.
+
+The section, top to bottom:
+
+* **`☑ All kinds`** — a reset row. Checked ⇔ **nothing** is hidden. Clicking it (when some kind is hidden)
+  **shows everything**. It cannot be *unchecked* directly — that would blank the table — so the user
+  unchecks individual kinds below instead. This is the *"a checkbox that means all kinds"* the product owner
+  asked for.
+* **The four COMMON kinds, always listed without expanding: `Images · Videos · Audio · PDFs`.** These four
+  render **whether or not** they are present in the data, so the user never has to expand to reach the kind
+  they want (PDF included precisely because **OCR is often done on PDFs**). Unchecking a kind that is absent
+  from the current rows is a harmless no-op.
+* **`More types…` disclosure** → reveals the remaining classes — today just **Other** (source, docs,
+  archives, data files). Collapsed by default; the label toggles to **Fewer types**. This is the *"thing to
+  click to get access to more types than that"*.
+
+Values, defaults, and rules:
+
+* **Values (each a checkbox):** **Images · Videos · Audio · PDFs · Other.** A row's value is derived from its
+  name by the shared classifier `fileTypeForName()` — video / image / audio by extension family, `pdf` for
+  `.pdf`, and **Other** for everything else.
+* **Default checked:** **Images, Videos, Audio, and PDFs are ON; Other is OFF.** The non-media **Other**
+  bucket is the opt-in the user *"adds"*. It is the **third** documented departure from §2.1's all-checked
+  default (§2.7, §2.9 are the others); Other-off is the only box that starts unchecked.
+* **The last-value rule still holds** (§2.1): the final **present** checked class cannot be unchecked (a
+  common kind that is absent from the data is not guarded — unchecking it changes nothing).
+* **The Filter ⛛ icon lights only when a PRESENT class is hidden** (or Large-only is on) — unchecking an
+  absent kind is a no-op and must not falsely mark the table "filtered".
 * **It composes by AND with the tab scope and every other facet** ([task_tabs.mdx §1.3.1](./task_tabs.mdx)).
-  On a task tab the tab's `rowFilter` already narrows the media axis (OCR → images + video), so the
-  facet there shows just those present classes — the facet never *widens* a tab's scope, it only cuts
-  within it.
-* **Persistence** follows §4 — saved per-user, per-page, storing the **unchecked** classes (`hidden:`)
-  so a future new class stays visible to existing users.
+  On a task tab the tab's `rowFilter` already narrows the media axis (OCR → images + video + PDF), so the
+  facet only cuts within it — it never *widens* a tab's scope.
+* **Persistence** follows §4 — saved per-user, per-page, storing the **unchecked** classes (`hidden:`) so a
+  future new class stays visible to existing users.
 
 The shared classifier both the facet and the media viewer route on lives in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/media.ts` — `fileTypeForName()` (image | video | audio | pdf | other), beside `mediaKindForName()`.
-The facet is rendered by the shared table's filter surface:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the `fileType` facet, driven by the same `columnFilters` state).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/media.ts` — `fileTypeForName()` (image | video | audio | pdf | other), beside `mediaKindForName()`; `isPdfName()` is the PDF discriminator.
+The facet is rendered inside the shared table's Filter dropdown:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the `fileTypeFacet` prop; `FILE_TYPE_COMMON` / `FILE_TYPE_EXTRA`, the `showMoreTypes` disclosure, the `FileTypeRow` component, and the `All kinds` reset).
 
 ---
 
