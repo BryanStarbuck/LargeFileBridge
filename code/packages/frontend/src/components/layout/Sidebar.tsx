@@ -18,7 +18,7 @@ export function Sidebar({ user }: { user: CurrentUser }) {
   const navigate = useNavigate();
   const path = useRouterState({ select: (s) => s.location.pathname });
   // Background-work state for the conditional "Processing" item (processing.mdx §2).
-  const { processing, jobs, queued } = useProgress();
+  const { processing, recentlyFinished, jobs, queued } = useProgress();
   const processingCount = jobs.length + queued;
   const activeRepo = useRouterState({
     select: (s) => (s.location.search as { repo?: string } | undefined)?.repo,
@@ -203,13 +203,16 @@ export function Sidebar({ user }: { user: CurrentUser }) {
         })}
 
         {/* Conditional "Processing" item (processing.mdx §2): the LAST item of the top nav list, shown
-            ONLY while background work runs (a running job, a pending backlog, or an active batch), and
-            gone the moment it finishes. Runtime-injected — NOT a static yaml row (documented as a comment
-            in left_bar.yaml). Routes to the Processing page. */}
-        {processing && (
+            while background work runs (a running job, a pending backlog, or an active batch) AND for a
+            short LINGER after the last batch settles (§2.1). The linger is what makes a FAST run
+            reachable: a 16-image OCR batch finishes in ~4s, so a strictly-live gate meant the only route
+            to /processing blinked past between two polls and the result — kept on the server for 24h —
+            could not be opened by any means. Runtime-injected, NOT a static yaml row (documented as a
+            comment in left_bar.yaml). Routes to the Processing page. */}
+        {(processing || recentlyFinished) && (
           <Link
             to="/processing"
-            title="Background work in progress"
+            title={recentlyFinished ? "Background work just finished" : "Background work in progress"}
             className="mx-2 my-0.5 flex items-center gap-2.5 rounded-md px-3 py-2 text-sm hover:bg-slate-100"
             style={
               path.startsWith("/processing")
@@ -217,7 +220,13 @@ export function Sidebar({ user }: { user: CurrentUser }) {
                 : { color: "#000" }
             }
           >
-            <NavIcon name="Loader2" className="h-4 w-4 animate-spin" />
+            {/* The icon carries the live/settled distinction — a spinner over finished work would be
+                fake progress (processing.mdx §1's never-fake rule). */}
+            {processing ? (
+              <NavIcon name="Loader2" className="h-4 w-4 animate-spin" />
+            ) : (
+              <NavIcon name="Check" className="h-4 w-4" />
+            )}
             <span className="flex-1">Processing</span>
             {processingCount > 0 && <span className="text-xs text-black/40">{processingCount}</span>}
           </Link>

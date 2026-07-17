@@ -44,6 +44,17 @@ export interface FrameSample {
   cleanup: () => Promise<void>;
 }
 
+/** Fold ffmpeg's multi-line stderr into ONE log line. Two reasons this is not cosmetic: a raw paste breaks
+ *  the one-fault-per-line format every log reader and the repeat-collapser (logging.ts `collapseKey`) assume,
+ *  and a blind tail slice can cut mid-line — the real 36-video failure logged as `failed: F`, with the actual
+ *  diagnostic stranded on orphan lines below. Keep the LAST few real lines: ffmpeg puts the cause last. */
+function oneLineStderr(stderr: string, max = 300): string {
+  const lines = stderr.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return "(no stderr)";
+  const tail = lines.slice(-3).join(" | ").replace(/\s+/g, " ");
+  return tail.length > max ? `…${tail.slice(-max)}` : tail;
+}
+
 /** Run a child process to completion, capturing stdout. Async — the whole point (§10.4). `label` attributes
  *  the child's RSS in a heap warning, so a runaway ffmpeg is identifiable as OCR's rather than anonymous. */
 async function runAsync(cmd: string, args: string[], label: string, timeoutMs = 30 * 60_000): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -133,24 +144,42 @@ export async function extractFrames(
 
   try {
     const durationSeconds = await probeVideo(abs);
-    const half = opts.stride / 2;
+
+    // A clip SHORTER THAN ONE STRIDE has exactly one window — itself — and the half-stride phase breaks on it:
+    // `-ss 7.5` on a 4.5s clip seeks past EOF, and even at 14.9s the post-seek remainder is too short for
+    // `fps=1/15` to emit anything. Either way ZERO frames reach the encoder, and ffmpeg then fails opening
+    // mjpeg at EOF with `-22 (Invalid argument)` / "Non full-range YUV is non-standard" — noise that names
+    // neither the clip's length nor the real problem. That is the whole story of the 36/1779 batch failure:
+    // every failure was <15s, every video >=15s passed, 36 short videos in the tree and 36 failures.
+    //
+    // §2.2.2's intent is "sample the MIDDLE of the window, never t=0". For a sub-stride clip the window IS the
+    // clip, so its middle is `duration/2` — one frame, no `fps` grid to stride. Same rule, honestly applied to
+    // a clip that only has one window; the LOCKED phase is unchanged for everything >= one stride.
+    const shortClip = durationSeconds !== null && durationSeconds < opts.stride;
+    const phase = shortClip ? durationSeconds! / 2 : opts.stride / 2;
+    const scale = `scale='min(${MAX_FRAME_WIDTH},iw)':-2`;
+
     const release = await acquireTranscodeSlot();
     try {
-      // ONE sequential pass. `-ss <half>` phases the grid (§2.2.2); `fps=1/stride` strides it; `scale` bounds
+      // ONE sequential pass. `-ss <phase>` phases the grid (§2.2.2); `fps=1/stride` strides it; `scale` bounds
       // the width (rule 2); `-an` drops audio (rule 3); `-q:v 3` is a good JPEG at a fraction of PNG's cost
       // (rule 4); `-frames:v` bounds a pathological input (rule 7).
       const { code, stderr } = await runAsync("ffmpeg", [
         "-nostdin",
         "-v", "error",
-        "-ss", String(half),
+        "-ss", String(phase),
         "-i", abs,
         "-an",
-        "-vf", `fps=1/${opts.stride},scale='min(${MAX_FRAME_WIDTH},iw)':-2`,
-        "-frames:v", String(opts.maxFrames),
+        "-vf", shortClip ? scale : `fps=1/${opts.stride},${scale}`,
+        "-frames:v", shortClip ? "1" : String(opts.maxFrames),
         "-q:v", "3",
         path.join(dir, "f_%05d.jpg"),
       ], `ocr-frames:${path.basename(abs)}`);
-      if (code !== 0) throw new Error(`ffmpeg frame extraction failed: ${stderr.trim().slice(-300)}`);
+      if (code !== 0) {
+        throw new Error(
+          `ffmpeg frame extraction failed (exit ${code}, ${durationSeconds ? `${durationSeconds.toFixed(1)}s` : "duration unknown"} clip, sampled from ${phase.toFixed(1)}s): ${oneLineStderr(stderr)}`,
+        );
+      }
     } finally {
       // Release BEFORE the caller recognizes (§10.3) — the slot covers the ffmpeg pass only.
       release();
@@ -159,12 +188,25 @@ export async function extractFrames(
     const files = (await fsp.readdir(dir)).filter((f) => f.endsWith(".jpg")).sort();
     const frames: SampledFrame[] = files.map((f, i) => ({
       file: path.join(dir, f),
-      // Frame i is the center of window i: half + i × stride (§2.2.2).
-      at: half + i * opts.stride,
+      // Frame i is the center of window i: phase + i × stride (§2.2.2). For a sub-stride clip there is one
+      // window and `phase` is the clip's own midpoint.
+      at: phase + i * opts.stride,
     }));
+
+    // ffmpeg CAN exit 0 having written nothing (it is the encoder-open at EOF that errors, and not always).
+    // A zero-frame extraction must never read as "a video with no text" — §2.3 makes empty a SUCCESS for
+    // images, and letting an empty frame set through here would launder a real extraction fault into a
+    // `status: done, text: ""` artifact that is never retried. Say what happened instead. Reachable when
+    // ffprobe gave no duration (so `shortClip` could not be detected) and the clip is in fact sub-stride.
+    if (frames.length === 0) {
+      throw new Error(
+        `ffmpeg extracted 0 frames from a ${durationSeconds ? `${durationSeconds.toFixed(1)}s` : "duration-unknown"} clip (stride ${opts.stride}s, sampled from ${phase.toFixed(1)}s) — nothing to OCR.`,
+      );
+    }
+
     // The cap BIT if we emitted exactly max_frames and the clip is longer than they cover. Recorded so the
     // artifact and the UI can SAY it (rule 7) — a silent truncation reads as "we covered it all".
-    const covered = half + frames.length * opts.stride;
+    const covered = phase + frames.length * opts.stride;
     const truncated = frames.length >= opts.maxFrames && (durationSeconds === null || durationSeconds > covered);
     if (truncated) {
       log.warn("ocr", `${abs}: hit max_frames (${opts.maxFrames}) — sampled only the first ~${Math.round(covered)}s of ${durationSeconds ? Math.round(durationSeconds) + "s" : "the clip"} (ocr.mdx §15.2 rule 7).`);
