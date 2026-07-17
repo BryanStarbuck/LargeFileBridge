@@ -85,7 +85,7 @@ compressRouter.post("/batch", async (req, res) => {
 // POST /api/compress/inside — the "Compress videos & images inside" dialog (compress_inside.mdx §5).
 // Plans + background-queues a directory's compressible media; returns the PLAN immediately (never waits
 // for the work). The queue drains it one file at a time with per-file transactional safety.
-compressRouter.post("/inside", (req, res) => {
+compressRouter.post("/inside", async (req, res) => {
   const body = z
     .object({
       root: z.string().min(1),
@@ -100,7 +100,7 @@ compressRouter.post("/inside", (req, res) => {
     return res.status(400).json({ ok: false, error: "select at least one of images / videos" });
   }
   try {
-    res.json({ ok: true, data: enqueueCompressInside(body.data) });
+    res.json({ ok: true, data: await enqueueCompressInside(body.data) });
   } catch (e) {
     log.error("compress", `compress-inside failed: ${(e as Error).message}`);
     res.status(400).json({ ok: false, error: (e as Error).message });

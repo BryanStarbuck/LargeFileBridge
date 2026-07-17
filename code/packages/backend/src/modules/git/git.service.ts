@@ -15,7 +15,7 @@
 import type { RepoOwner, PersonalAccount } from "@lfb/shared";
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, execFile } from "node:child_process";
 import { simpleGit, type SimpleGit } from "simple-git";
 import { storageUnitDir } from "../../shared/store/scopes.js";
 import { expandHome } from "../fs/badges.js";
@@ -680,6 +680,47 @@ function runCheckIgnore(repoRoot: string, absPaths: string[], verbose: boolean):
     log.warn("git", `check-ignore failed in ${repoRoot}: ${(e as Error).message}`);
     return null;
   }
+}
+
+/** Async twin of `runCheckIgnore` (non-blocking spawn) for request paths that must not stall the event loop
+ *  on the git process — the badge-context listing walk on a large/cloud-mounted dir (fs.service /
+ *  buildEntityView). Same exit-code contract: exit-1 (none ignored) resolves to its stdout, ≥128 → null. */
+function runCheckIgnoreAsync(repoRoot: string, absPaths: string[], verbose: boolean): Promise<string | null> {
+  const args = verbose ? ["check-ignore", "-v", "--stdin"] : ["check-ignore", "--stdin"];
+  return new Promise((resolve) => {
+    const child = execFile(
+      "git",
+      args,
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+        maxBuffer: 64 * 1024 * 1024,
+      },
+      (err, stdout) => {
+        // On a non-zero exit execFile sets `err` but still hands us the captured `stdout`. Exit-1 means
+        // "none ignored" (stdout carries whichever WERE ignored, empty on a clean 1) — not a failure.
+        if (!err) return resolve(stdout);
+        if ((err as { code?: number }).code === 1) return resolve(stdout ?? "");
+        log.warn("git", `check-ignore (async) failed in ${repoRoot}: ${err.message}`);
+        resolve(null);
+      },
+    );
+    child.stdin?.end(absPaths.join("\n") + "\n");
+  });
+}
+
+/** Async twin of `checkIgnore` — one non-blocking `git check-ignore --stdin` over `absPaths`. */
+export async function checkIgnoreAsync(repoRoot: string, absPaths: string[]): Promise<Set<string>> {
+  const ignored = new Set<string>();
+  if (absPaths.length === 0) return ignored;
+  const out = await runCheckIgnoreAsync(repoRoot, absPaths, false);
+  if (out === null) return ignored;
+  for (const line of out.split("\n")) {
+    const p = line.trim();
+    if (p) ignored.add(p);
+  }
+  return ignored;
 }
 
 /** Turn a fetch/push error into a user-facing problem, flagging auth failures for re-authentication (git_backbone.mdx §5). */

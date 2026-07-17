@@ -31,6 +31,7 @@ import { appendHistory } from "../storage/history-log.service.js";
 import { restampOnTransform } from "../storage/decisions.service.js";
 import { repoIdFromPath, folderForRepoId } from "../store-model/units.service.js";
 import { HARD_SKIP, isMacPackageDir } from "../../shared/scan-filters.js";
+import { collectFilesRecursive } from "../../shared/fs-walk.js";
 import { enqueue, createBatch } from "../jobqueue/jobqueue.service.js";
 import { writeManifest, trackBatch } from "../jobqueue/batch-manifest.service.js";
 import { log } from "../../shared/logging.js";
@@ -902,9 +903,9 @@ export async function compressBatch(inputs: string[]): Promise<CompressResult[]>
 // background queue as a `compress` task carrying the per-run originals-disposition. Returns the PLAN
 // immediately (never waits for the work). The queue drains it one file at a time with per-file
 // transactional safety (a failed file's original is never deleted — compress_inside.mdx §4).
-export function enqueueCompressInside(req: CompressInsideRequest): CompressInsidePlan {
+export async function enqueueCompressInside(req: CompressInsideRequest): Promise<CompressInsidePlan> {
   const root = path.resolve(expandHome(req.root.trim()));
-  const files = walkCompressible(root, {
+  const files = await walkCompressible(root, {
     images: req.images,
     videos: req.videos,
     recursive: req.recursive,
@@ -968,14 +969,18 @@ export function enqueueCompressInside(req: CompressInsideRequest): CompressInsid
 
 /**
  * Collect compressible files under `root` of the selected kinds. Skips HARD_SKIP / hidden / tracking
- * dirs (same skip set as the scan), and includes only files whose extension heuristic says they SHOULD
- * compress (compressInfo — already-compressed media is skipped cheaply, no wasted transcode).
+ * dirs (same skip set as the scan) AND macOS package bundles (.app/.framework/… — a bundle's internal
+ * assets are referenced by name and must never be compressed/renamed/deleted, the bundles-opaque rule),
+ * and includes only files whose extension heuristic says they SHOULD compress (compressInfo — already-
+ * compressed media is skipped cheaply, no wasted transcode).
+ *
+ * Async + cooperatively yielding via the shared fs-walk so "Compress inside" over a large/cloud-mounted
+ * folder never freezes the event loop (it fires on an interactive click, page_actions/compress_inside.mdx).
  */
 function walkCompressible(
   root: string,
   sel: { images: boolean; videos: boolean; recursive: boolean },
-): string[] {
-  const out: string[] = [];
+): Promise<string[]> {
   const wanted = (name: string): boolean => {
     const info = compressInfo(name);
     if (info.compressState !== "should") return false; // skip already-compressed / non-media
@@ -983,30 +988,7 @@ function walkCompressible(
     if (info.compressible === "video") return sel.videos;
     return false;
   };
-  const visit = (dir: string, depth: number): void => {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const ent of entries) {
-      if (ent.isDirectory()) {
-        // Never descend into VCS/build junk, hidden dirs, or macOS package bundles (.app/.framework/…).
-        // A bundle's internal assets are referenced by name and must never be compressed/renamed/deleted.
-        if (HARD_SKIP.has(ent.name) || ent.name.startsWith(".") || isMacPackageDir(ent.name)) continue;
-        if (sel.recursive) visit(path.join(dir, ent.name), depth + 1);
-      } else if (ent.isFile() && wanted(ent.name)) {
-        out.push(path.join(dir, ent.name));
-      }
-    }
-  };
-  try {
-    if (fs.statSync(root).isDirectory()) visit(root, 0);
-  } catch {
-    /* unreadable root */
-  }
-  return out;
+  return collectFilesRecursive(root, wanted, HARD_SKIP, { recursive: sel.recursive, skipDir: isMacPackageDir });
 }
 
 function collapseHome(abs: string): string {

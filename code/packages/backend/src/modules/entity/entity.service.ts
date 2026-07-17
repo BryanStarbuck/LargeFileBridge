@@ -150,7 +150,7 @@ export async function buildEntityView(
   let badges: EntityView["badges"] = [];
   if (wantBadges) {
     const parent = path.dirname(e.abs);
-    const ctx = buildBadgeContext(parent);
+    const ctx = await buildBadgeContext(parent);
     badges = computeBadges(e.abs, name, e.kind, e.sizeBytes, ctx).badges;
   }
 

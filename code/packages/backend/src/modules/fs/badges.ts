@@ -9,7 +9,7 @@ import { getAppConfig } from "../store-model/config.service.js";
 import { listRepoFolders, getRepoConfig, isGitWorkingTree } from "../store-model/units.service.js";
 // The canonical repo-resolution + git-ignore probes live in git.service (directories.mdx §3.4a); we
 // reuse them here (and re-export nearestGitAtOrAbove below so existing importers keep resolving).
-import { nearestGitAtOrAbove, checkIgnore } from "../git/git.service.js";
+import { nearestGitAtOrAbove, checkIgnoreAsync } from "../git/git.service.js";
 // One source of truth for the never-descend set — shared with the scanner (scan.mdx §4).
 import { HARD_SKIP, isMacPackageDir } from "../../shared/scan-filters.js";
 import { log } from "../../shared/logging.js";
@@ -60,7 +60,12 @@ export interface FsBadgeContext {
 }
 
 /** Build the per-listing context once, so each row is cheap. */
-export function buildBadgeContext(dirAbs: string): FsBadgeContext {
+// ASYNC (directories.mdx §3.4a): the one `git check-ignore --stdin` over this listing's children is a
+// subprocess spawn, and on a large/cloud-mounted parent it must not block the event loop. Both callers are
+// already async (fs.service `listDirectory`, entity.service `buildEntityView`), so this awaits the
+// non-blocking git spawn. Everything else here is in-memory; per-ROW badge work (computeBadges) stays
+// synchronous — it only reads the `gitIgnored` Set this precomputes.
+export async function buildBadgeContext(dirAbs: string): Promise<FsBadgeContext> {
   const cfg = getAppConfig();
   const registeredRepos: { path: string; decisions: Record<string, string> }[] = [];
   for (const folder of listRepoFolders()) {
@@ -78,7 +83,7 @@ export function buildBadgeContext(dirAbs: string): FsBadgeContext {
   // repo — in ONE `git check-ignore --stdin` — which of its immediate children are ignored, and stash the
   // set so each row is just a Set.has(). No enclosing repo ⇒ nothing can be git-ignored here (empty set).
   const enclosingRepo = nearestGitAtOrAbove(dirAbs);
-  const gitIgnored = computeGitIgnoredSet(dirAbs, enclosingRepo);
+  const gitIgnored = await computeGitIgnoredSet(dirAbs, enclosingRepo);
   return {
     thresholdBytes: cfg.big_file.threshold_bytes,
     registeredRepos,
@@ -90,7 +95,7 @@ export function buildBadgeContext(dirAbs: string): FsBadgeContext {
 }
 
 /** One `git check-ignore --stdin` over this directory's immediate children (directories.mdx §3.4a). */
-function computeGitIgnoredSet(dirAbs: string, enclosingRepo: string | null): Set<string> {
+async function computeGitIgnoredSet(dirAbs: string, enclosingRepo: string | null): Promise<Set<string>> {
   if (!enclosingRepo) return new Set();
   let childAbs: string[];
   try {
@@ -99,7 +104,7 @@ function computeGitIgnoredSet(dirAbs: string, enclosingRepo: string | null): Set
     return new Set(); // unreadable listing → nothing to test
   }
   if (childAbs.length === 0) return new Set();
-  return checkIgnore(enclosingRepo, childAbs);
+  return checkIgnoreAsync(enclosingRepo, childAbs);
 }
 
 /** Effective sticky flag for a path: its own entry OR any ancestor directory's entry (path-scoped). */

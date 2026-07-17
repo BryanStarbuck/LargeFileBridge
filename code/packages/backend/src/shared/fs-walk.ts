@@ -16,16 +16,28 @@ import path from "node:path";
 const WALK_YIELD_EVERY = 1000; // hand the event loop back every N processed directory entries
 const walkYield = (): Promise<void> => new Promise((r) => setImmediate(r));
 
+export interface CollectOpts {
+  /** Descend into subdirectories (default true). When false, only `root`'s immediate children are collected. */
+  recursive?: boolean;
+  /** Extra per-directory skip predicate, applied on top of `skipDirs` + the dot-dir rule. E.g. pass
+   *  `isMacPackageDir` so a walk never descends into `.app`/`.framework` bundles (compress must never touch
+   *  bundle-internal assets — the bundles-opaque rule). Omitted → no extra pruning. */
+  skipDir?: (name: string) => boolean;
+}
+
 /**
  * Recursively collect the absolute paths of every FILE under `root` for which `accept(name)` is true,
- * pruning any directory in `skipDirs` or whose name starts with ".". If `root` is itself a file, it is
- * returned when `accept(basename)` holds. Never throws — an unreadable root or subdir yields no entries.
+ * pruning any directory in `skipDirs`, whose name starts with ".", or (when given) matched by
+ * `opts.skipDir`. If `root` is itself a file, it is returned when `accept(basename)` holds. Never throws —
+ * an unreadable root or subdir yields no entries.
  */
 export async function collectFilesRecursive(
   root: string,
   accept: (name: string) => boolean,
   skipDirs: Set<string>,
+  opts: CollectOpts = {},
 ): Promise<string[]> {
+  const recursive = opts.recursive ?? true;
   const out: string[] = [];
   let sinceYield = 0;
 
@@ -44,7 +56,8 @@ export async function collectFilesRecursive(
         await walkYield();
       }
       if (ent.isDirectory()) {
-        if (skipDirs.has(ent.name) || ent.name.startsWith(".")) continue;
+        if (!recursive) continue;
+        if (skipDirs.has(ent.name) || ent.name.startsWith(".") || opts.skipDir?.(ent.name)) continue;
         await visit(path.join(dir, ent.name));
       } else if (ent.isFile() && accept(ent.name)) {
         out.push(path.join(dir, ent.name));

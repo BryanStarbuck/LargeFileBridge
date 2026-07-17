@@ -52,7 +52,7 @@ export async function listDirectory(
   if (cached) return cached;
 
   const parent = path.dirname(dirAbs);
-  const ctx = buildBadgeContext(dirAbs);
+  const ctx = await buildBadgeContext(dirAbs);
 
   let dirents: fs.Dirent[];
   try {
