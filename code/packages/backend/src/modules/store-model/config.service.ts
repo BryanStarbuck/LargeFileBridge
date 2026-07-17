@@ -1,4 +1,5 @@
 // Typed accessor for the app-level, computer-wide config.yaml (storage.mdx §3, settings.mdx).
+import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { AppConfigSchema, type AppConfig, type FileFlags, defaultDeviceName } from "@lfb/shared";
@@ -7,8 +8,35 @@ import { appConfigPath } from "../../shared/store/scopes.js";
 import { collectHardware } from "../storage/hardware.service.js";
 import { RETIRED_GEMINI_MODELS, DEFAULT_GEMINI_MODEL } from "../describe/models.js";
 
+// ── config.yaml read cache (mtime-keyed) ─────────────────────────────────────────────────────────────
+// getAppConfig() was UNMEMOIZED, and effectiveFlags() calls it PER FILE — so GET /api/repos (repos ×
+// files) and every composeFileRows build paid an fs.readFileSync + YAML.parse + full Zod safeParse per
+// candidate file (thousands of parses per request). Cache the parsed+healed config keyed on the file's
+// MTIME: one cheap statSync per call (config.yaml is always on fast local storage under ~/T), re-parsing
+// only when the file actually changed. This is SELF-INVALIDATING — every write goes through updateYaml/
+// writeYaml, which bumps the mtime, so an in-process OR external write is picked up on the next call with
+// no explicit cache-busting. The whole app treats getAppConfig() as read-only (writes go through
+// updateAppConfig/setFileFlags), so returning the shared cached object is safe.
+let configCache: { mtimeMs: number; cfg: AppConfig } | null = null;
+
+/** Drop the memoized config (tests / a defensive manual bust). Normal writes self-invalidate via mtime. */
+export function clearAppConfigCache(): void {
+  configCache = null;
+}
+
 export function getAppConfig(): AppConfig {
-  const cfg = readYaml(appConfigPath(), AppConfigSchema);
+  const p = appConfigPath();
+  // Serve the cache when the file is unchanged since we parsed it. A missing file (mtimeMs stays -1) falls
+  // through to readYaml, which returns schema defaults — an uncacheable transient we simply don't cache.
+  let mtimeMs = -1;
+  try {
+    mtimeMs = fs.statSync(p).mtimeMs;
+  } catch {
+    /* not present yet → read (seed) below; don't serve/keep a cache for a file that doesn't exist */
+  }
+  if (mtimeMs >= 0 && configCache && configCache.mtimeMs === mtimeMs) return configCache.cfg;
+
+  const cfg = readYaml(p, AppConfigSchema);
   let dirty = false;
   // First-run seeding of sensible scanner roots so the app has something to show.
   if (cfg.scanner.roots.length === 0) {
@@ -64,11 +92,21 @@ export function getAppConfig(): AppConfig {
   }
   if (dirty) {
     try {
-      writeYaml(appConfigPath(), cfg as unknown as Record<string, unknown>);
+      writeYaml(p, cfg as unknown as Record<string, unknown>);
+      // The write bumped the mtime — re-stat so the cache key matches the file on disk (otherwise the very
+      // next call would see a newer mtime and needlessly re-parse).
+      try {
+        mtimeMs = fs.statSync(p).mtimeMs;
+      } catch {
+        mtimeMs = -1;
+      }
     } catch {
       /* best-effort persist — a failure just re-seeds on the next call until a write succeeds */
     }
   }
+  // Cache only when we have a real mtime to key on (the file exists). A missing/uncacheable file is re-read
+  // each call — a transient that resolves as soon as the first successful write lands.
+  if (mtimeMs >= 0) configCache = { mtimeMs, cfg };
   return cfg;
 }
 

@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import type { EntityView } from "@lfb/shared";
 import { api } from "@/api/client";
 import { copyText } from "@/lib/clipboard";
+import { patchEntityBadges } from "@/lib/patchEntityBadges";
 import { clientLog } from "../../lib/clientLog.js";
 
 /** The two labeled sticky-flag switches — Never IPFS & Do not compress (menus.mdx §6.6). */
@@ -16,7 +17,10 @@ export function FlagSwitches({ view }: { view: EntityView }) {
       api.setEntityFlags(view.path, patch),
     onSuccess: (v) => {
       qc.setQueryData(["entity", view.path], v);
-      qc.invalidateQueries({ queryKey: ["fs"] });
+      // Patch this entity's badges into the cached File-System listings in place (performance.mdx P-17)
+      // instead of invalidating ["fs"] — which would re-walk EVERY open FS column just to flip two flag
+      // chips. The mutation already returned the authoritative badges. Mirrors MediaViewer's flags handler.
+      patchEntityBadges(qc, v.path, v.badges);
       qc.invalidateQueries({ queryKey: ["repo"] });
     },
     onError: (e: Error) => {

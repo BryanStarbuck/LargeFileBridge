@@ -14,11 +14,14 @@ entityRouter.use(requireAllowListed);
 entityRouter.get("/", (req, res) => {
   const p = typeof req.query.path === "string" ? req.query.path : undefined;
   // `?rollup=0` skips the expensive directory category rollup (buildDirRollup's up-to-20k-`statSync`
-  // walk). The right-click / ⋯ menu passes it so opening the menu on a big/cloud-mounted directory is
-  // instant instead of blocking for seconds (it never reads `rollup`). Default keeps the rollup.
+  // walk). `?badges=0` skips the code-badge context, which readdirs the PARENT dir and runs
+  // `git check-ignore` over every sibling. The right-click / ⋯ menu passes BOTH (it reads neither) so
+  // opening the menu on a big/cloud-mounted directory is instant instead of blocking past its 10 s
+  // timeout. Defaults keep both — the single-entity pages need the rollup and the badges.
   const rollup = req.query.rollup !== "0";
+  const badges = req.query.badges !== "0";
   try {
-    res.json({ ok: true, data: buildEntityView(p, { rollup }) });
+    res.json({ ok: true, data: buildEntityView(p, { rollup, badges }) });
   } catch (e) {
     log.warn("entity", `buildEntityView failed for ${p ?? "<none>"}: ${(e as Error).message}`);
     res.status(400).json({ ok: false, error: (e as Error).message });

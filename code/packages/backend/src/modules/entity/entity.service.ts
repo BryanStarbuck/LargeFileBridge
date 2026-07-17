@@ -100,16 +100,24 @@ function transferFor(decision: Decision, cid: string | null, peers: string[]): T
 }
 
 /** Build the full EntityView for a file or directory. */
-// `rollup` (default true) controls the ONE expensive part of this call: the directory category rollup
-// (buildDirRollup — a bounded but up-to-20k-`statSync` walk that can block for seconds on large or
-// cloud-mounted trees). The ⋯ / right-click entity MENU never reads `rollup` (it only uses kind, repo,
-// decision, flags, compress state), so it fetches with rollup:false to stay instant. Only the single
-// directory PAGE (ViewOneDirectoryPage) needs the rollup and fetches with the default.
+// Two independent knobs gate the TWO expensive parts of this call, because the ⋯ / right-click entity
+// MENU needs neither:
+//   • `rollup` (default true) — the directory category rollup (buildDirRollup: a bounded but up-to-20k
+//     `statSync` walk that can block for seconds on large/cloud-mounted trees). Only the single directory
+//     PAGE (ViewOneDirectoryPage) needs it.
+//   • `badges` (default true) — the code badges, whose context (buildBadgeContext) `readdirSync`s the
+//     PARENT directory and runs one `git check-ignore --stdin` over EVERY child of the parent. On a large
+//     or cloud-mounted parent this is what blew past the menu's 10 s timeout ("Couldn't load actions:
+//     timeout of 10000ms exceeded"), even for a FILE where the rollup is never built. Only the single-entity
+//     PAGES render badges.
+// The MENU (menus.mdx §5) reads only kind, repo, decision, flags, compress state — never `rollup` or
+// `badges` — so it fetches with BOTH off to stay instant regardless of how big the parent directory is.
 export function buildEntityView(
   input: string | undefined,
-  opts: { rollup?: boolean } = {},
+  opts: { rollup?: boolean; badges?: boolean } = {},
 ): EntityView {
   const wantRollup = opts.rollup ?? true;
+  const wantBadges = opts.badges ?? true;
   const e = resolveEntity(input);
   const name = path.basename(e.abs) || e.abs;
   const flags: FileFlags = effectiveFlags(e.abs);
@@ -136,10 +144,15 @@ export function buildEntityView(
     };
   }
 
-  // Badges: build the listing context for the PARENT dir, then compute this entry's badges.
-  const parent = path.dirname(e.abs);
-  const ctx = buildBadgeContext(parent);
-  const { badges } = computeBadges(e.abs, name, e.kind, e.sizeBytes, ctx);
+  // Badges: build the listing context for the PARENT dir, then compute this entry's badges. Skipped for
+  // the menu (wantBadges=false) — buildBadgeContext readdirs the parent + runs `git check-ignore` over
+  // every sibling, the slow step that timed the menu out on large/cloud-mounted parents.
+  let badges: EntityView["badges"] = [];
+  if (wantBadges) {
+    const parent = path.dirname(e.abs);
+    const ctx = buildBadgeContext(parent);
+    badges = computeBadges(e.abs, name, e.kind, e.sizeBytes, ctx).badges;
+  }
 
   // Repo / pin context — only when inside a registered repo.
   const match = enclosingRepo(e.abs);

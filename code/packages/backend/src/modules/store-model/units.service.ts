@@ -23,7 +23,7 @@ import {
   mediaKindForName,
   isPdfName,
 } from "@lfb/shared";
-import type { ComputerUnitConfig, PlacementChoice } from "@lfb/shared";
+import type { ComputerUnitConfig, PlacementChoice, StorageType } from "@lfb/shared";
 import type { RepoOwner } from "@lfb/shared";
 import { compressInfo } from "../fs/badges.js";
 import { resolveRepoOwner, checkIgnoreVerbose, type IgnoreRule } from "../git/git.service.js";
@@ -32,6 +32,7 @@ import { resolveRepoOwner, checkIgnoreVerbose, type IgnoreRule } from "../git/gi
 // storage.service <-> storage-settings.service pair documents.
 import { getStorageRow } from "../storage/storage.service.js";
 import { analysisOutputs } from "../storage/tracking.service.js";
+import { resolveStorageType } from "../storage/storage-type.service.js";
 import { readYaml, updateYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import {
   reposRoot,
@@ -297,6 +298,10 @@ function composeFileRows(
         status.candidates.map((c) => path.join(repoRootAbs, c.path)),
       )
     : new Map<string, IgnoreRule>();
+  // Resolve the storage KIND ONCE per repo (it's memoized, but this also lets us hand the known type to
+  // analysisOutputs so it never re-resolves per file). The analysis-artifact probe below is the same
+  // value for all three task axes, so it is computed once per row and shared (see the task-status helpers).
+  const storageType = repoRootAbs ? resolveStorageType(repoRootAbs) : undefined;
   return status.candidates.map((cand) => {
     const decision: Decision = cfg.decisions[cand.path] ?? "undecided";
     const m = manifestByPath.get(cand.path);
@@ -326,12 +331,22 @@ function composeFileRows(
       // Add-to-git-ignore (⊘) toggle independently of the IPFS-axis `decision`. Reality, not intent:
       // `prov.gitignore` is the recorded DECISION and is kept for provenance only.
       ...gitIgnoreAxis(repoRootAbs, cand.path, ignoreRules),
-      // The Compress / Transcribe task-tab status for this file (task_tabs.mdx §4.4/§5/§6). Cheap,
-      // name-only for compress; transcribe needs one sidecar existence check per media file.
+      // The Compress / Transcribe / Describe / OCR task-tab status (task_tabs.mdx §4.4/§5/§6). Compress is
+      // cheap name-only. The other three all key off the SAME analysis-artifact probe, so it is done at
+      // most ONCE per row (only when the file could carry an artifact) and shared across the three, instead
+      // of each helper re-running ~a dozen statSyncs (the View-One-Repo hot-path cost this collapses).
       compress: compressStatusFor(cand.path),
-      transcribe: transcribeStatusFor(cand.path, repoRootAbs),
-      describe: describeStatusFor(cand.path, repoRootAbs),
-      ocr: ocrStatusFor(cand.path, repoRootAbs),
+      ...(() => {
+        const outputs =
+          repoRootAbs && couldHaveAnalysisArtifact(path.basename(cand.path))
+            ? safeAnalysisOutputs(repoRootAbs, cand.path, storageType)
+            : null;
+        return {
+          transcribe: transcribeStatusFor(cand.path, outputs),
+          describe: describeStatusFor(cand.path, outputs),
+          ocr: ocrStatusFor(cand.path, outputs),
+        };
+      })(),
       // Small analysis-only media (scan.mdx §4.1 rule 5) — the "Large files only" toggle hides these by
       // default and the decision/space counts exclude them (tables.mdx §2.9, one_repo.mdx §4.1).
       analysisOnly: cand.analysisOnly === true,
@@ -375,53 +390,64 @@ function compressStatusFor(relPath: string): TaskStatus {
   return ci.compressState === "done" ? "done" : "could";
 }
 
+// The three per-file analysis-task statuses (Transcribe / Describe / OCR) all read from ONE shared
+// `analysisOutputs(...)` probe computed once per row (see composeFileRows). Recomputing it inside each
+// helper was the View-One-Repo hot-path cost: analysisOutputs does ~a dozen `statSync`s across every
+// artifact layout, and a single VIDEO hit all three helpers → ~3× the stats per file (image → 2×). On a
+// cloud-mounted repo each statSync can block, so a large repo multiplied that into a multi-second load.
+// `outputs` is null when the probe was skipped/failed (non-media file, no repo root, unreadable) → the
+// task degrades to "could" so a candidate file is never wrongly hidden.
+
 // Transcribe task status (task_tabs.mdx §5). "na" unless the file is audio/video; then "done" iff a
-// `.transcription` sidecar already exists (analysisOutputs — cheap fs stat), else "could". Any failure
-// (no repo root, unreadable sidecar) degrades to "could" so a transcribable file is never hidden.
-function transcribeStatusFor(relPath: string, repoRootAbs: string | null): TaskStatus {
+// `.transcription` artifact already exists, else "could".
+function transcribeStatusFor(relPath: string, outputs: string[] | null): TaskStatus {
   const kind = mediaKindForName(path.basename(relPath));
   if (kind !== "video" && kind !== "audio") return "na";
-  try {
-    if (repoRootAbs && analysisOutputs(repoRootAbs, relPath).includes("transcript")) return "done";
-  } catch {
-    /* sidecar check unavailable → treat as not-yet-transcribed */
-  }
-  return "could";
+  return outputs?.includes("transcript") ? "done" : "could";
 }
 
-// AI-description task status (ai_description.mdx §11) — mirrors transcribeStatusFor but for the OTHER media
-// axis: "na" unless the file is IMAGE or VIDEO (audio is covered by transcription); then "done" iff a
-// `.ai_description` sidecar already exists (analysisOutputs — cheap fs stat), else "could". Any failure
-// degrades to "could" so a describable file is never hidden.
-function describeStatusFor(relPath: string, repoRootAbs: string | null): TaskStatus {
+// AI-description task status (ai_description.mdx §11) — the OTHER media axis: "na" unless the file is IMAGE
+// or VIDEO (audio is covered by transcription); then "done" iff a `.ai_description` artifact exists, else
+// "could".
+function describeStatusFor(relPath: string, outputs: string[] | null): TaskStatus {
   const kind = mediaKindForName(path.basename(relPath));
   if (kind !== "image" && kind !== "video") return "na";
-  try {
-    if (repoRootAbs && analysisOutputs(repoRootAbs, relPath).includes("description")) return "done";
-  } catch {
-    /* sidecar check unavailable → treat as not-yet-described */
-  }
-  return "could";
+  return outputs?.includes("description") ? "done" : "could";
 }
 
 // OCR task status (ocr.mdx §11.2) — the third sibling. "na" unless the file has text-bearing pixels: an IMAGE,
 // a VIDEO, or a PDF (audio has no pixels — ocr.mdx §1.7/§1.7.1); then "done" iff a `.ocr` artifact exists,
-// else "could". Any failure degrades to "could" so an OCR-able file is never hidden.
+// else "could".
 //
 // "done" keys on the ARTIFACT, never on the text being non-empty (ocr.mdx §2.3). A photo of a beach OCRs to
 // "" and is DONE — a tree of text-free holiday photos settles at a big green 0 rather than presenting an
 // eternal wall of candidates.
-function ocrStatusFor(relPath: string, repoRootAbs: string | null): TaskStatus {
+function ocrStatusFor(relPath: string, outputs: string[] | null): TaskStatus {
   const name = path.basename(relPath);
   const kind = mediaKindForName(name);
   const ocrable = kind === "image" || kind === "video" || isPdfName(name);
   if (!ocrable) return "na";
+  return outputs?.includes("ocr") ? "done" : "could";
+}
+
+// True when a file could carry ANY analysis artifact (transcript / description / OCR) — the gate that
+// decides whether the one shared `analysisOutputs` probe is worth doing for a row. A plain big file
+// (e.g. a .zip) matches none of these, so we skip its probe entirely — exactly as the old kind-gated
+// helpers did (they returned "na" before ever touching the filesystem).
+function couldHaveAnalysisArtifact(name: string): boolean {
+  const kind = mediaKindForName(name);
+  return kind === "image" || kind === "video" || kind === "audio" || isPdfName(name);
+}
+
+// The one shared analysis-artifact probe, never allowed to break row composition. analysisOutputs itself
+// swallows per-stat errors, but a path-join / storage-type failure could still throw — degrade to null
+// (→ every task "could") so a probe failure never hides a candidate file.
+function safeAnalysisOutputs(root: string, rel: string, type: StorageType | undefined): string[] | null {
   try {
-    if (repoRootAbs && analysisOutputs(repoRootAbs, relPath).includes("ocr")) return "done";
+    return analysisOutputs(root, rel, type);
   } catch {
-    /* artifact check unavailable → treat as not-yet-OCR'd */
+    return null;
   }
-  return "could";
 }
 
 // Roll up the per-tab "what could be done" metric counts (task_tabs.mdx §2.5) from the composed rows.

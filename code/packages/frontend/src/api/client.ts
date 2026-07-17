@@ -259,12 +259,14 @@ export const api = {
 
   // Single-entity views + the ⋯ / right-click menus (files.mdx, directories.mdx, menus.mdx §5).
   entity: (path: string) => unwrap<EntityView>(http.get("/entity", { params: { path } })),
-  // The ⋯ / right-click MENU payload: rollup:0 skips the expensive directory walk the menu never reads
-  // (menus.mdx §5 uses only kind/repo/decision/flags/compress state), so the menu opens instantly on
-  // big/cloud-mounted directories. A 10 s per-request timeout guarantees the menu can never sit on
-  // "Loading…" forever if the backend stalls — it surfaces an error the menu can show + retry.
+  // The ⋯ / right-click MENU payload: rollup:0 AND badges:0 skip the two expensive steps the menu never
+  // reads (menus.mdx §5 uses only kind/repo/decision/flags/compress state) — the directory rollup walk
+  // AND the code-badge context, which readdirs the PARENT dir + runs `git check-ignore` over every
+  // sibling (the real cause of "Couldn't load actions: timeout of 10000ms exceeded" on big/cloud-mounted
+  // parents, even for a file where the rollup never runs). A 10 s per-request timeout guarantees the menu
+  // can never sit on "Loading…" forever if the backend stalls — it surfaces an error the menu can retry.
   entityMenu: (path: string) =>
-    unwrap<EntityView>(http.get("/entity", { params: { path, rollup: 0 }, timeout: 10_000 })),
+    unwrap<EntityView>(http.get("/entity", { params: { path, rollup: 0, badges: 0 }, timeout: 10_000 })),
   setEntityFlags: (path: string, flags: { neverIpfs?: boolean; noCompress?: boolean }) =>
     unwrap<EntityView>(http.patch("/entity/flags", { path, ...flags })),
   setEntityDecision: (path: string, decision: Decision) =>
