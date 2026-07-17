@@ -9,7 +9,7 @@ import { useParams, useNavigate, Link } from "@tanstack/react-router";
 import { RefreshCw, Settings, ChevronLeft, Users, Clock, Ban, CircleSlash, ChevronRight, Search } from "lucide-react";
 import { toast } from "sonner";
 import type { FileRow, Decision, RepoDetail, PinCounts, PinNowResult } from "@lfb/shared";
-import { formatBytes, viewerRouteForName, mediaKindForName } from "@lfb/shared";
+import { formatBytes, viewerRouteForName, mediaKindForName, fileTypeForName } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
@@ -716,6 +716,11 @@ export function OneRepoPage() {
         data={tabRows}
         columns={visibleColumns}
         defaultSort={tab.defaultSort}
+        // The two promoted rail controls every file table carries (tables.mdx §2.9/§2.10). "Large files
+        // only" defaults ON (OFF on OCR — ocr.mdx §11.1.1) and hides the small analysis-only media; the
+        // File-type facet classifies each row by name. Together they let the user reach a small JPG to OCR.
+        largeOnly={{ rowIsLarge: (f) => !f.analysisOnly, defaultOn: tab.largeOnlyDefault }}
+        fileTypeFacet={{ valueOf: (f) => fileTypeForName(f.path.slice(f.path.lastIndexOf("/") + 1)) }}
         searchKeys={(f) => f.path}
         getRowId={(f) => f.fileId}
         // Row click → the file's "View one file" experience: media routes to its viewer

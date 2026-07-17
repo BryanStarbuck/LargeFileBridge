@@ -399,7 +399,10 @@ async function walkUnit(
       // even a small, checked-in, not-git-ignored one (a 2 MB screenshot, a 30-second clip) — so the
       // analysis tabs can OCR / describe / transcribe it. This is what lets "open the OCR tab and OCR a
       // file smaller than the large-file size" work; without it the small file is never a row.
-      const analysisMedia = isMediaFile(ent.name);
+      // REPO UNITS ONLY (gated on the same `checkedInThreshold` signal as rule 4): the computer unit walks
+      // ALL of home, where admitting every tiny icon/thumbnail would flood the census — a repo is the
+      // bounded, intentional scope where OCR-a-small-image is the real workflow.
+      const analysisMedia = opts.checkedInThreshold != null && isMediaFile(ent.name);
       // Payload = what this file would have been WITHOUT the nudge/analysis rules. A row that is only a
       // candidate because of `checkedInBig` or `analysisMedia` is NOT payload — the auto-decide policy must
       // never touch it (it would auto-pin a file the user never chose to bridge).

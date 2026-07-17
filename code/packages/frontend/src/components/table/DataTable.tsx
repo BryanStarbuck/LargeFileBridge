@@ -52,7 +52,27 @@ interface DataTableProps<T> {
   // first load and restored by "Clear sort". Bookmark-bearing tables pass Bookmarked-desc first, then
   // their natural secondary (e.g. Repos → [{bookmark,desc},{name,asc}]). Omitted → no default sort.
   defaultSort?: SortingState;
+  // Promoted "Large files only" toggle (tables.mdx §2.9) — rendered on the rail above the table ONLY when
+  // provided (file tables pass it; non-file tables omit it). `rowIsLarge` returns FALSE for the small
+  // analysis-only rows the toggle hides; `defaultOn` seeds it (per-tab — OCR seeds off, ocr.mdx §11.1.1).
+  largeOnly?: { rowIsLarge: (row: T) => boolean; defaultOn: boolean };
+  // File-type facet (tables.mdx §2.10) — value-visibility checkboxes over the file's media class
+  // (Images/Videos/Audio/PDFs/Other). `valueOf` maps a row to its class key; only classes PRESENT in the
+  // data render as chips (§2.8). Images/Videos/Audio/PDFs start checked; Other starts unchecked.
+  fileTypeFacet?: { valueOf: (row: T) => string };
 }
+
+// The File-type facet vocabulary (tables.mdx §2.10) — display order + labels, and the one class that
+// starts UNCHECKED (Other). Keys match the shared `fileTypeForName()` classifier.
+const FILE_TYPE_LABELS: Record<string, string> = {
+  image: "Images",
+  video: "Videos",
+  audio: "Audio",
+  pdf: "PDFs",
+  other: "Other",
+};
+const FILE_TYPE_ORDER = ["image", "video", "audio", "pdf", "other"];
+const FILE_TYPE_DEFAULT_OFF = ["other"]; // the opt-in "add other types" bucket (product owner's rule)
 
 const PAGE_SIZES = [100, 250, 500]; // P-01: no "All" (Number.MAX_SAFE_INTEGER) footgun.
 const ROW_H = 41; // fixed body-row height the windowing math relies on (px).
@@ -71,6 +91,8 @@ export function DataTable<T>({
   empty,
   fillHeight = true,
   defaultSort,
+  largeOnly,
+  fileTypeFacet,
 }: DataTableProps<T>) {
   // Multi-level sort (tables.mdx §3): the TanStack `sorting` array IS the ordered primary/secondary/
   // tertiary list — index 0 = primary. The dropdown priority slots and header clicks both drive it.
@@ -81,6 +103,48 @@ export function DataTable<T>({
   const [pageSize, setPageSize] = useState(500);
   const [showSort, setShowSort] = useState(false);
   const [showFilter, setShowFilter] = useState(false);
+  // Promoted "Large files only" toggle (tables.mdx §2.9). The table remounts per tab (OneRepoPage keys it
+  // by tab), so this seed is re-read on every tab switch — OCR opens with it OFF.
+  const [largeOnlyOn, setLargeOnlyOn] = useState(() => largeOnly?.defaultOn ?? false);
+  // File-type facet (tables.mdx §2.10) — the set of UNCHECKED (hidden) classes. Other starts hidden.
+  const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(() => new Set(FILE_TYPE_DEFAULT_OFF));
+
+  // The file-type classes actually present in the data — only these render as chips (tables.mdx §2.8/§2.10).
+  const presentTypes = useMemo(() => {
+    if (!fileTypeFacet) return [] as string[];
+    const seen = new Set<string>();
+    for (const r of data) seen.add(fileTypeFacet.valueOf(r));
+    return FILE_TYPE_ORDER.filter((t) => seen.has(t));
+  }, [data, fileTypeFacet]);
+
+  // Apply the two promoted rail controls BEFORE TanStack sees the rows (tables.mdx §2.9/§2.10): Large-only
+  // hides the analysis-only rows; the file-type facet hides the unchecked classes. Everything downstream
+  // (search, column filters, sort, windowing, count) then operates on this narrowed set.
+  const shownData = useMemo(() => {
+    let d = data;
+    if (largeOnly && largeOnlyOn) d = d.filter(largeOnly.rowIsLarge);
+    if (fileTypeFacet && hiddenTypes.size > 0)
+      d = d.filter((r) => !hiddenTypes.has(fileTypeFacet.valueOf(r)));
+    return d;
+  }, [data, largeOnly, largeOnlyOn, fileTypeFacet, hiddenTypes]);
+
+  // Toggle a file-type class, honoring the last-value rule (tables.mdx §2.1): the final CHECKED present
+  // class can't be unchecked (that would only ever blank the table).
+  const toggleType = useCallback(
+    (t: string) =>
+      setHiddenTypes((prev) => {
+        const next = new Set(prev);
+        if (next.has(t)) {
+          next.delete(t);
+          return next;
+        }
+        const stillVisible = presentTypes.filter((x) => x !== t && !next.has(x));
+        if (stillVisible.length === 0) return prev; // last visible class — refuse
+        next.add(t);
+        return next;
+      }),
+    [presentTypes],
+  );
 
   const searchText = useCallback(
     (row: T): string =>
@@ -125,7 +189,7 @@ export function DataTable<T>({
   );
 
   const table = useReactTable({
-    data,
+    data: shownData,
     columns: tanColumns,
     state: { sorting, columnFilters, globalFilter, pagination: { pageIndex: 0, pageSize } },
     onSortingChange: setSorting,
@@ -139,7 +203,12 @@ export function DataTable<T>({
     autoResetPageIndex: true,
   });
 
-  const filtersActive = columnFilters.length > 0;
+  // The filter icon lights when ANY filter is active — column filters OR the promoted rail controls
+  // (Large-only on, or any present file-type class unchecked), so the icon stays the single honest
+  // "something is filtered" indicator (tables.mdx §2.3/§2.9).
+  const facetActive =
+    (!!largeOnly && largeOnlyOn) || (!!fileTypeFacet && presentTypes.some((t) => hiddenTypes.has(t)));
+  const filtersActive = columnFilters.length > 0 || facetActive;
   const sortActive = sorting.length > 0;
 
   // Promoted "Bookmarked only" filter (tables.mdx §2): if the caller declares a leading `bookmark`
@@ -233,6 +302,54 @@ export function DataTable<T>({
         </IconButton>
         {rightHeader}
       </div>
+
+      {/* The facet rail (tables.mdx §2.2/§2.9/§2.10) — always-visible promoted controls above the table:
+          the "Large files only" toggle and the File-type checkbox facet. Rendered only for file tables
+          (which pass largeOnly / fileTypeFacet). All-checked / off is quiet (muted); active is emphasized. */}
+      {(largeOnly || (fileTypeFacet && presentTypes.length > 0)) && (
+        <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-1 pb-2 text-sm">
+          {largeOnly && (
+            <label
+              className="flex cursor-pointer items-center gap-1.5"
+              title="Show only large files. Turn this off to reach smaller files — e.g. a screenshot or JPG to OCR."
+            >
+              <input
+                type="checkbox"
+                checked={largeOnlyOn}
+                onChange={(e) => setLargeOnlyOn(e.target.checked)}
+              />
+              <span className={largeOnlyOn ? "text-black/70" : "text-black/40"}>Large files only</span>
+            </label>
+          )}
+          {fileTypeFacet && presentTypes.length > 0 && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="text-[11px] uppercase tracking-wide text-black/40">File type</span>
+              {presentTypes.map((t) => {
+                const checked = !hiddenTypes.has(t);
+                const isLastVisible =
+                  checked && presentTypes.filter((x) => !hiddenTypes.has(x)).length === 1;
+                return (
+                  <label
+                    key={t}
+                    className={`flex items-center gap-1 ${isLastVisible ? "cursor-not-allowed" : "cursor-pointer"}`}
+                    title={isLastVisible ? "At least one file type must be shown." : undefined}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={isLastVisible}
+                      onChange={() => toggleType(t)}
+                    />
+                    <span className={checked ? "text-black/70" : "text-black/40"}>
+                      {FILE_TYPE_LABELS[t] ?? t}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Multi-level sort dropdown (tables.mdx §3.1): each sortable column shows its asc/desc caret on
           the left and 1st/2nd/3rd priority markers on the right. Clicking a marker inserts the column
