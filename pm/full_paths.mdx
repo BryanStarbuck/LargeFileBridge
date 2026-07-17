@@ -123,11 +123,21 @@ unchecked). Only what is **page-specific** is below.
 ```
  ┌──────────────────────────────────────────────────────────────────────────────────┐
  │ [ 🔍 search name + path…    ]        Sort: [1 Bookmarked ↓] [2 Size ↓]    ⇅   ⛛  │ ← control row
- │ ☐ Bookmarked only  ·  Compressed ☑ Compressed ☑ Uncompressed  ·                  │
- │ Pin (IPFS) ☑ Pinned ☑ Not pinned ☑ Recommended ☑ Undecided  ·                     │ ← facet rail
+ │ ☐ Bookmarked only  ·  ☑ Large files only  ·  File type ☑ Images ☑ Videos ☑ Audio ☑ PDFs ☐ Other │
+ │ Compressed ☑ Compressed ☑ Uncompressed  ·                                          │ ← facet rail
+ │ Pin (IPFS) ☑ Pinned ☑ Not pinned ☑ Recommended ☑ Undecided  ·                     │
  │ Git-ignore ☑ Git-ignored ☑ Not git-ignored ☑ Recommended                          │
  └──────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+This page also carries the two **promoted rail controls** every file table shows — the
+**`☑ Large files only`** toggle and the **File type** facet ([tables.mdx §2.9/§2.10](./tables.mdx)). On
+Full paths *Large files only* seeds **ON** (this is the big-file table), and its **file walk is still
+threshold-gated today** (§1) — so turning it off widens to sub-threshold **media** only once the flat walk
+adopts the same rule-5 admission the repo scan uses ([scan.mdx §4.1](./scan.mdx),
+`fsindex.service.ts` `walkFilesFlatStreaming()`). Until then the toggle and the file-type facet cut within
+the large set the walk returns; the reachability guarantee ([task_tabs.mdx §4.7](./task_tabs.mdx)) is
+delivered first on the one-repo task tabs, where the tested OCR-a-small-JPG flow lives.
 
 ### 3.1 The **Compressed** facet — ☑ Compressed ☑ Uncompressed (both checked by default)
 

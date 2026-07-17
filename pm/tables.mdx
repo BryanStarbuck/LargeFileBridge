@@ -264,6 +264,77 @@ broken, but it is a bug either way and **must fail review**:
 * Known live offenders to fix when the rail lands: the one-repo **Status** facet and the
   storage-detail **Kind** facet (the latter also has an accessor/cell mismatch).
 
+### 2.9 The promoted "Large files only" filter (LOCKED)
+
+Every table whose rows are **files** — the one-repo task tabs ([one_repo.mdx](./one_repo.mdx),
+[task_tabs.mdx](./task_tabs.mdx)), **Full paths** ([full_paths.mdx](./full_paths.mdx)), **Processing**
+([processing.mdx](./processing.mdx)), and the **File System** file listings
+([file_system.mdx](./file_system.mdx)) — carries a **second promoted control**, a sibling of
+"Bookmarked only" (§2.7), pinned at the head of the facet rail:
+
+* **`☑ Large files only`** — when **on**, the table hides rows the scan admitted **only** as small,
+  not-git-ignored **analysis media** (the `analysisOnly` rows — [scan.mdx §4.1](./scan.mdx)); when
+  **off**, every file the scan surfaced shows, at **every size**. It ANDs with every other facet,
+  resets to page 1, and colors the filter icon.
+* **It defaults ON.** The product's whole subject is *large* files, so a fresh file table opens on the
+  large set. This is the deliberate opposite of §2.1's all-checked-is-inactive default: the promoted
+  toggle is **active by default** and the user turns it **off** to widen the view — exactly like the
+  File System page's existing `only_large: true` preference, which this generalizes.
+* **The one documented default-OFF exception is the OCR tab** ([task_tabs.mdx §4.7](./task_tabs.mdx),
+  [ocr.mdx §11.4](./ocr.mdx)). OCR's canonical targets — a screenshot, a receipt, a slide, a JPG — are
+  almost always **below** the large-file threshold, so opening the OCR tab with "Large files only" ON
+  would show an empty or near-empty table and hide the very files the user came to read. The OCR tab
+  therefore seeds this toggle **off**; the control is still present and the user can turn it back **on**.
+* **What "large" means here is NOT a raw byte compare.** A row counts as large (shown when the toggle is
+  on) when it is anything **other** than an `analysisOnly` row — i.e. it is bridge payload (including a
+  **git-ignored media file of any size**, which stays visible so the 5–100 MB clip case
+  [repos.mdx §4.1](./repos.mdx) is never re-hidden) **or** a checked-in-nudge file (≥ the 50 MB
+  checked-in threshold). Only the newly-surfaced small, not-git-ignored media hide behind the toggle.
+* Like Bookmarked-only it is a **single promoted checkbox, not a two-value facet** — "show me only the
+  big files" is one high-frequency intent with an obvious off state. It is the **second** documented
+  exception to §2.1 (§2.7 is the first), and the last.
+* **Persistence** — the toggle's state is saved per-user, per-page (and, on the task-tab page, seeded by
+  the active tab's default) alongside the rest of the filter state (§4).
+
+The backend flag that this toggle reads — `analysisOnly` on each `FileRow`, set for a small,
+not-git-ignored media file admitted purely so it can be OCR'd / described / transcribed — is produced in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` (the candidate predicate) and
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()`.
+The toggle itself is rendered by the shared table in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the promoted `largeOnly` control, sibling of the `bookmark` special case).
+
+### 2.10 The File-type facet — Images · Videos · Audio · PDFs · Other (LOCKED)
+
+Every file table also carries a **File type** facet on the rail — the value-visibility checkbox model
+(§2.1) applied to the file's **media class**, so a user can carve a mixed listing down to *"just the
+images"* (or add *"and the PDFs"*) in one click each. This is what makes OCR-on-images reachable: on a
+tab or page showing many kinds, check **Images** and the JPGs/PNGs/screenshots stand alone.
+
+* **Values (each a checkbox):** **Images · Videos · Audio · PDFs · Other.** A row's value is derived
+  from its name by the shared classifier `fileTypeForName()` — video / image / audio by extension
+  family, `pdf` for `.pdf`, and **Other** for everything else. Only the values **present** in the
+  current rows render as chips (an empty class shows no chip — §2.8's rule that a facet states its real
+  vocabulary).
+* **Default checked:** **Images, Videos, Audio, and PDFs are ON; Other is OFF.** All four media/document
+  classes show by default; the non-media **Other** bucket (source, docs, archives, data files) is the
+  opt-in the user *"adds"* when they want it. This is the product owner's rule — *"default on to images,
+  videos, and PDFs… they can add other types"* — with **Audio** included because it is media and a
+  Transcribe candidate (hiding it by default would blank the Transcribe tab). It is the **third**
+  documented departure from §2.1's all-checked default (§2.7, §2.9 are the others); Other-off is the only
+  box that starts unchecked.
+* **The last-value rule still holds** (§2.1): the final checked class cannot be unchecked.
+* **It composes by AND with the tab scope and every other facet** ([task_tabs.mdx §1.3.1](./task_tabs.mdx)).
+  On a task tab the tab's `rowFilter` already narrows the media axis (OCR → images + video), so the
+  facet there shows just those present classes — the facet never *widens* a tab's scope, it only cuts
+  within it.
+* **Persistence** follows §4 — saved per-user, per-page, storing the **unchecked** classes (`hidden:`)
+  so a future new class stays visible to existing users.
+
+The shared classifier both the facet and the media viewer route on lives in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/media.ts` — `fileTypeForName()` (image | video | audio | pdf | other), beside `mediaKindForName()`.
+The facet is rendered by the shared table's filter surface:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the `fileType` facet, driven by the same `columnFilters` state).
+
 ---
 
 ## 3. Multi-level sort — primary / secondary / tertiary (LOCKED)

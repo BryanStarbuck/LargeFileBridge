@@ -908,6 +908,30 @@ plus the standard metrics strip (§12) and hover-info region, and it re-tunes th
 data-driven tab config the other five use ([task_tabs.mdx §7](./task_tabs.mdx)) — **no bespoke table**.
 Default sort is the shared **"could-first"** (the actionable rows), then **Size desc**.
 
+#### 11.1.1 The OCR tab opens on SMALL files — `Large files only` seeds OFF (LOCKED)
+
+OCR is the small-file case. Its canonical subjects — a **screenshot** of an error, a **receipt** or bank
+**statement**, a **slide** with a pricing tier, a downloaded **JPG** — are almost always **below** the
+large-file threshold (§1.1–§1.4). So the OCR tab is the **one documented exception** to the product-wide
+"Large files only" default ([tables.mdx §2.9](./tables.mdx), [task_tabs.mdx §4.6](./task_tabs.mdx)):
+
+* **The promoted `Large files only` rail toggle seeds OFF on the OCR tab.** Every image/video shows,
+  **at every size**, the moment the tab opens — so a user who came to read a small screenshot sees it
+  immediately instead of an empty table. The toggle stays on the rail; turning it **on** narrows to large
+  video files.
+* **Small files are reachable because the scan now admits them.** A small, not-git-ignored image or video
+  is admitted as an `analysisOnly` candidate ([scan.mdx §4.1](./scan.mdx)) — a row that exists **only** so
+  it can be OCR'd / described / transcribed, and that is **never** bridged to IPFS on its own (the same
+  non-payload exclusion the checked-in-nudge rows get). Without that admission the OCR tab could not list a
+  2 MB JPG at all, and no rail toggle could reveal it. This closes the reported gap: *"go into a repo, open
+  the OCR tab, and OCR files that are definitely smaller than the large-file size."*
+* **The `File type` facet** ([tables.mdx §2.10](./tables.mdx)) on the OCR tab shows **Images** and
+  **Videos** (the present classes), both checked — one click isolates *just the images* to OCR a folder of
+  screenshots.
+
+The OCR tab's default sort, columns, and this default-OFF toggle are declared in the shared tab config in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — the `ocr` `TaskTabDef` (its `largeOnlyDefault: false`).
+
 ### 11.2 The three-state OCR status icon (`TextSelect`, done-color **violet**)
 
 The **fourth** skin of the one shared `StatusActionIcon` — *"one shared component in three skins — same box,

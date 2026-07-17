@@ -324,6 +324,24 @@ A file is a **candidate** (a large-file-bridge payload the scan records) when **
    and is ≥ **50 MB** (default). This is the charter's *"big files that aren't a good idea to check in"*
    category: we surface it and offer the one-click ⊘ **git-ignore**. Repo units only — the computer unit
    has no working tree, so "checked in" is meaningless there.
+5. **Analysis media — video / audio / image, regardless of size.** The file is a **video / audio / image**
+   (`isMediaFile`) at **any** size, even a small, checked-in, not-git-ignored one — a 2 MB screenshot, a
+   200 KB icon, a 30-second clip. It is admitted **only** so the analysis tabs can act on it: **OCR** a
+   screenshot, **describe** an image, **transcribe** a short clip ([task_tabs.mdx §4.6/§4.7](./task_tabs.mdx),
+   [ocr.mdx §11.1.1](./ocr.mdx)). This is the rule that lets *"open the OCR tab and OCR a file smaller than
+   the large-file size"* work — without it, a small JPG is never a row and no UI filter could reveal it.
+
+> **Rule 5 rows are `analysisOnly` — surfaced-but-small, and NEVER payload.** A rule-5 row exists so a small
+> image/video/audio can be OCR'd / described / transcribed, nothing more. It is:
+> * **flagged `analysisOnly`** on the candidate (and carried onto the `FileRow`) — the flag the promoted
+>   **"Large files only"** rail toggle reads to hide these rows by default ([tables.mdx §2.9](./tables.mdx)).
+>   A rule-5 row is *the* thing that toggle hides; every other candidate stays visible when it is on.
+> * **`nudgeOnly` too** (it is not payload), so it inherits rule 4's auto-decide exclusion below verbatim —
+>   surfacing a thumbnail for OCR must never auto-pin it to IPFS.
+> * A file that is **already** payload (git-ignored media, rule 1) or a **checked-in nudge** (rule 4) is
+>   **NOT** `analysisOnly` even though it is also media — those stay visible under "Large files only" (the
+>   5–100 MB git-ignored clip case above must never be re-hidden). `analysisOnly` = *"admitted purely by
+>   rule 5, by nothing higher."*
 
 > **Rule 4 rows are a NUDGE, not payload.** Admitting a checked-in file as a *candidate* does not make it
 > ours to bridge — it stays `undecided` with no CID and is never pinned. It is listed so the user can *see*
@@ -339,11 +357,15 @@ A file is a **candidate** (a large-file-bridge payload the scan records) when **
 > automatically for anyone"*). Both axes stay **Undecided** until the user clicks. Every row admitted by
 > rule 4 alone is flagged `nudgeOnly` in-memory by the walk (never persisted to `status.yaml`) purely to
 > enforce this. **A future change that admits more non-git-ignored candidates MUST extend this filter** —
-> widening the candidate set silently widens what auto-decide can publish.
+> widening the candidate set silently widens what auto-decide can publish. **Rule 5 (analysis media) is
+> exactly such a widening and it obeys this rule:** rule-5 rows are `nudgeOnly` too, so they are already
+> filtered out of `added` before the auto-decide policy runs — a small checked-in JPG surfaced for OCR is
+> never auto-pinned. `analysisOnly` (persisted, for the UI toggle) is a **separate** flag from `nudgeOnly`
+> (in-memory, for the auto-decide gate); rule-5 rows carry both.
 
-The candidate predicate — git-ignored media at any size, else the size gate, plus forced includes and the
-checked-in nudge — is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` (`isCandidate`, using `isMediaFile()` from `shared/scan-filters.ts`)
+The candidate predicate — git-ignored media at any size (rule 1), else the size gate (rule 2), plus forced
+includes (rule 3), the checked-in nudge (rule 4), and analysis media at any size (rule 5) — is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` (`isCandidate` / `analysisOnly`, using `isMediaFile()` from `shared/scan-filters.ts`)
 
 > #### Why rule 4 exists — the bug it fixes (root-cause note, do not remove)
 >

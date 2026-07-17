@@ -367,6 +367,13 @@ owed in or out; **Peers = 0** means nothing is backing this repo up.
 > count, not just the two or three files over 100 MB. A previous scanner bug gated everything on the
 > size threshold and made these repos look nearly empty; that is fixed.
 
+> **But these counts EXCLUDE `analysisOnly` rows.** The scan also surfaces small, not-git-ignored media
+> (rule 5, [scan.mdx §4.1](./scan.mdx)) so the analysis tabs can OCR / describe / transcribe them — but a
+> 200 KB icon is **not** a large-file decision the user owes. Those rows never enter Undecided / Pending /
+> Ignore ([one_repo.mdx §4.1](./one_repo.mdx)); they surface only when a file table's **Large files only**
+> toggle is turned off ([tables.mdx §2.9](./tables.mdx)). This keeps the repos-list counts honest — a repo
+> full of small images does not read as hundreds of pending decisions.
+
 ### 4.2 Status pill colors (LOCKED)
 
 | `status` | Meaning | Pill |

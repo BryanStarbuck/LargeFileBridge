@@ -268,6 +268,14 @@ A one-line summary the user reads first: **`128 Pin · 5 Undecided · 40 Ignore`
 label for the **Add to IPFS (pin)** decision (stored value `sync`). `Undecided` is accent-highlighted
 whenever it is > 0.
 
+> **These counts exclude `analysisOnly` rows.** The small, not-git-ignored media the scan surfaces purely
+> so they can be OCR'd / described / transcribed (rule 5, [scan.mdx §4.1](./scan.mdx)) are **not** large-file
+> decisions the user owes — they carry no Pin/Undecided/Ignore obligation. Counting a folder of thumbnails
+> as *"Undecided"* would make every repo look like it has hundreds of pending decisions. So the summary
+> counts, the repos-list counts ([repos.mdx §4.1](./repos.mdx)), and the large-file scan totals all count
+> only the non-`analysisOnly` candidates. The `analysisOnly` rows appear only when **Large files only** is
+> turned off (§4.2), and only the analysis metrics (`OCRable`, `Describable`, `Transcribable`) count them.
+
 **Every segment is a quick filter on the Pin (IPFS) facet — and only that facet.** All three counts read
 the **IPFS axis** ([tables.mdx §2.4.1](./tables.mdx#241-the-two-facets-fixed-vocabulary-locked)); none of
 them says anything about git-ignore. Clicking a segment **sets the Pin (IPFS) facet to that one value** —
@@ -313,9 +321,13 @@ not restate it:
   ([tables.mdx §2.2](./tables.mdx#22-the-facet-rail--filtering-without-opening-a-dropdown-locked)). This
   table's facets are **Pin (IPFS)** and **Git-ignore** — **two facets, never one, and neither is named
   "Decision"** ([tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked))
-  — plus **Status** (§4.6). The `128 Pin · 5 Undecided · 40 Ignore` segments (§4.1) drive the Pin (IPFS)
-  facet's chips.
+  — plus **Status** (§4.6), and the two **promoted rail controls** every file table carries: the
+  **`☑ Large files only`** toggle (default ON — hides the small `analysisOnly` media the scan surfaces;
+  turn it off to reach a small checked-in JPG or short clip — [tables.mdx §2.9](./tables.mdx)) and the
+  **File type** facet (`☑ Images ☑ Videos ☑ Audio ☑ PDFs ☐ Other` — [tables.mdx §2.10](./tables.mdx)). The
+  `128 Pin · 5 Undecided · 40 Ignore` segments (§4.1) drive the Pin (IPFS) facet's chips.
   ```
+  ☑ Large files only   ·   File type ☑ Images ☑ Videos ☑ Audio ☑ PDFs ☐ Other
   Pin (IPFS)  ☑ Pinned ☑ Not pinned ☑ Recommended ☑ Undecided   ·   Git-ignore  ☑ Git-ignored ☑ Not git-ignored ☑ Recommended
   ```
 * **Filter icon** (`⛛`, icon-only, no box) — **the long tail only**, not the place filters live
