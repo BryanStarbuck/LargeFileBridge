@@ -7,7 +7,7 @@
 // preview for the scope and build the same transcribe/describe/ocr WarningDef the tiles use, then open it.
 import { toast } from "sonner";
 import type { PreviewPlan } from "@lfb/shared";
-import { formatBytes, mediaKindForName } from "@lfb/shared";
+import { formatBytes, mediaKindForName, fileTypeForName } from "@lfb/shared";
 import { api } from "../api/client.js";
 import { clientLog } from "./clientLog.js";
 import { DESCRIBE_KIND_FILTERS } from "./describe.js";
@@ -339,7 +339,7 @@ export async function openDescribeBatch(scope: BatchScope): Promise<void> {
 export async function openOcrBatch(scope: BatchScope): Promise<void> {
   // dialogs.mdx §5.4 — spinner FIRST, synchronously, then the walk. A recursive OCR scope can be thousands of
   // files, and the plan additionally ffprobes video rows for their frame counts.
-  const gen = beginBatchOpen("Opening window…", openingSub(scope, "images & videos"));
+  const gen = beginBatchOpen("Opening window…", openingSub(scope, "images, videos & PDFs"));
   let plan: PreviewPlan;
   try {
     plan = await api.ocrPlan(scope);
@@ -350,8 +350,9 @@ export async function openOcrBatch(scope: BatchScope): Promise<void> {
     return;
   }
   const n = plan.files.length;
-  const videos = plan.files.filter((f) => mediaKindForName(f.path) === "video").length;
-  const images = n - videos;
+  const videos = plan.files.filter((f) => ocrKindOf(f.path) === "video").length;
+  const pdfs = plan.files.filter((f) => ocrKindOf(f.path) === "pdf").length;
+  const images = n - videos - pdfs;
   const def: WarningDef = {
     id: "batch-ocr",
     state: "warn",
@@ -359,21 +360,21 @@ export async function openOcrBatch(scope: BatchScope): Promise<void> {
     headline: n === 0 ? "Nothing to read text from here" : `${n} file${n === 1 ? " is" : "s are"} ready to have their text read`,
     sub:
       n === 0
-        ? `All ${plan.considered} image/video file${plural(plan.considered)} here already have OCR text.`
-        : `Large File Bridge can read the text out of each image/video locally — nothing runs until you apply.${excludedClause(plan.alreadyDone, "OCR text")}`,
+        ? `All ${plan.considered} image, video, and PDF file${plural(plan.considered)} here already have OCR text.`
+        : `Large File Bridge can read the text out of each image, video, and PDF locally — nothing runs until you apply.${excludedClause(plan.alreadyDone, "OCR text")}`,
     popup: {
       whatThisIs:
         n === 0
-          ? "Every image/video file in this scope already has OCR text, so there is nothing to do here."
+          ? "Every image, video, and PDF file in this scope already has OCR text, so there is nothing to do here."
           : // The per-kind COST asymmetry, stated honestly up front (ocr.mdx §9.1). This is the sentence that
-            // lets a user decide to take the images now and leave the videos for later.
-            `Large File Bridge found ${countsClause(images, videos)} with no OCR text yet. It reads the words that are visible on screen — a screenshot's error message, a slide's figures, a sign — so you can search for them later.`,
+            // lets a user decide to take the images and PDFs now and leave the videos for later.
+            `Large File Bridge found ${countsClause(images, videos, pdfs)} with no OCR text yet. It reads the words that are visible on screen — a screenshot's error message, a slide's figures, a contract's clauses — so you can search for them later.`,
       whyItMatters:
-        "OCR text makes the words inside your images and videos searchable without opening them. It runs entirely on this computer — nothing is uploaded. Images finish in seconds; each video is sampled every 15 seconds, so it takes about a minute per hour of footage. Use the Videos / Images filter to narrow the list, and uncheck any you want to skip.",
+        "OCR text makes the words inside your images, videos, and PDFs searchable without opening them. It runs entirely on this computer — nothing is uploaded. Images and PDF pages finish in seconds; each video is sampled every 15 seconds, so it takes about a minute per hour of footage. Use the Videos / Images / PDFs filter to narrow the list, and uncheck any you want to skip.",
       // ocr.mdx §9.1 — the Videos/Images filter row, load-bearing here because of the cost gap above.
       kindFilters: OCR_KIND_FILTERS,
       targets: plan.files.map((f) => {
-        const kind = mediaKindForName(f.path) ?? undefined;
+        const kind = ocrKindOf(f.path);
         // The frame count the plan resolved for a video row (ocr.mdx §9.2) — the one field OCR's plan has
         // that its siblings' don't. It is WHY one row is expensive, shown before the user commits to it.
         const frames = f.frames;
@@ -434,11 +435,23 @@ export async function openOcrBatch(scope: BatchScope): Promise<void> {
   requestBatchPopup(def, gen);
 }
 
-/** "1,204 images and 86 videos" / "86 videos" / "1 image" — the honest per-kind count for the OCR popup's
- *  cost sentence (ocr.mdx §9.1). Omits a kind entirely at zero rather than saying "0 videos". */
-function countsClause(images: number, videos: number): string {
-  const i = `${images.toLocaleString()} image${images === 1 ? "" : "s"}`;
-  const v = `${videos.toLocaleString()} video${videos === 1 ? "" : "s"}`;
-  if (images > 0 && videos > 0) return `${i} and ${v}`;
-  return images > 0 ? i : v;
+/** The OCR kind an OCR target is tagged with (ocr.mdx §9.1) — image | video | pdf, or undefined for anything
+ *  the OCR plan would not have queued. Unlike `mediaKindForName` (which returns null for a PDF), this uses the
+ *  File-type classifier so a `.pdf` is tagged `pdf` and its filter chip works. */
+function ocrKindOf(p: string): "image" | "video" | "pdf" | undefined {
+  const t = fileTypeForName(p);
+  return t === "image" || t === "video" || t === "pdf" ? t : undefined;
+}
+
+/** "1,204 images, 86 videos, and 12 PDFs" / "86 videos" / "1 image" — the honest per-kind count for the OCR
+ *  popup's cost sentence (ocr.mdx §9.1). Omits a kind entirely at zero rather than saying "0 videos". */
+function countsClause(images: number, videos: number, pdfs: number): string {
+  const parts: string[] = [];
+  if (images > 0) parts.push(`${images.toLocaleString()} image${images === 1 ? "" : "s"}`);
+  if (videos > 0) parts.push(`${videos.toLocaleString()} video${videos === 1 ? "" : "s"}`);
+  if (pdfs > 0) parts.push(`${pdfs.toLocaleString()} PDF${pdfs === 1 ? "" : "s"}`);
+  if (parts.length === 0) return "0 files";
+  if (parts.length === 1) return parts[0];
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
 }

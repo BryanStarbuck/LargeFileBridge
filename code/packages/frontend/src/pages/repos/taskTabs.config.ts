@@ -122,9 +122,11 @@ export const TASK_TABS: Record<TaskTabId, TaskTabDef> = {
     // Large files only default (tables.mdx §2.9) — OCR seeds OFF so small screenshots/JPGs show.
     largeOnlyDefault: true,
   },
-  // OCR — the third analysis tab (ocr.mdx §11.1). Same media axis as AI descriptions (images + video) but a
-  // different question: describe says what is SEEN, OCR quotes what it SAYS on screen. Audio never appears
-  // here — it has no pixels.
+  // OCR — the third analysis tab (ocr.mdx §11.1). A superset of the AI-descriptions media axis: images and
+  // video PLUS PDFs (ocr.mdx §1.7.1), all read for the text VISIBLE on screen — describe says what is SEEN,
+  // OCR quotes what it SAYS. Audio never appears here — it has no pixels; a PDF does, once its pages are
+  // rasterized. This is the one tab where PDFs are first-class, which is why it seeds "Large files only" OFF
+  // (a contract PDF or a screenshot is usually well below the large-file threshold).
   ocr: {
     id: "ocr",
     label: "OCR",
@@ -136,7 +138,7 @@ export const TASK_TABS: Record<TaskTabId, TaskTabDef> = {
     ],
     rowFilter: (f) => f.ocr === "could" || f.ocr === "done",
     metrics: ["ocrable", "ocred"],
-    defaultHint: "OCR: the text visible inside images and videos. Files whose text hasn't been read yet are on top.",
+    defaultHint: "OCR: the text visible inside images, videos, and PDFs. Files whose text hasn't been read yet are on top.",
     // Large files only default (tables.mdx §2.9) — OCR seeds OFF so small screenshots/JPGs show.
     largeOnlyDefault: false,
   },

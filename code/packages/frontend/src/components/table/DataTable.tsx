@@ -57,13 +57,15 @@ interface DataTableProps<T> {
   // analysis-only rows the toggle hides; `defaultOn` seeds it (per-tab — OCR seeds off, ocr.mdx §11.1.1).
   largeOnly?: { rowIsLarge: (row: T) => boolean; defaultOn: boolean };
   // File-type facet (tables.mdx §2.10) — value-visibility checkboxes over the file's media class
-  // (Images/Videos/Audio/PDFs/Other). `valueOf` maps a row to its class key; only classes PRESENT in the
-  // data render as chips (§2.8). Images/Videos/Audio/PDFs start checked; Other starts unchecked.
+  // (Images/Videos/Audio/PDFs/Other), rendered as a "File type" section INSIDE the Filter ⛛ dropdown.
+  // `valueOf` maps a row to its class key. The FOUR common kinds (Images/Videos/Audio/PDFs) are always
+  // listed so the user can filter to them without expanding; a "More types…" disclosure reveals the rest
+  // (Other). An "All kinds" checkbox clears the filter. Images/Videos/Audio/PDFs start checked; Other unchecked.
   fileTypeFacet?: { valueOf: (row: T) => string };
 }
 
-// The File-type facet vocabulary (tables.mdx §2.10) — display order + labels, and the one class that
-// starts UNCHECKED (Other). Keys match the shared `fileTypeForName()` classifier.
+// The File-type facet vocabulary (tables.mdx §2.10) — labels + the one class that starts UNCHECKED (Other).
+// Keys match the shared `fileTypeForName()` classifier.
 const FILE_TYPE_LABELS: Record<string, string> = {
   image: "Images",
   video: "Videos",
@@ -72,6 +74,11 @@ const FILE_TYPE_LABELS: Record<string, string> = {
   other: "Other",
 };
 const FILE_TYPE_ORDER = ["image", "video", "audio", "pdf", "other"];
+// The COMMON kinds always shown in the facet without expanding (product owner's rule): image, video, audio,
+// PDF. OCR in particular is "often done with PDFs also", so PDF sits alongside the media kinds up front.
+const FILE_TYPE_COMMON = ["image", "video", "audio", "pdf"];
+// Everything else lives behind the "More types…" disclosure — today just Other.
+const FILE_TYPE_EXTRA = FILE_TYPE_ORDER.filter((t) => !FILE_TYPE_COMMON.includes(t));
 const FILE_TYPE_DEFAULT_OFF = ["other"]; // the opt-in "add other types" bucket (product owner's rule)
 
 const PAGE_SIZES = [100, 250, 500]; // P-01: no "All" (Number.MAX_SAFE_INTEGER) footgun.
@@ -108,6 +115,9 @@ export function DataTable<T>({
   const [largeOnlyOn, setLargeOnlyOn] = useState(() => largeOnly?.defaultOn ?? false);
   // File-type facet (tables.mdx §2.10) — the set of UNCHECKED (hidden) classes. Other starts hidden.
   const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(() => new Set(FILE_TYPE_DEFAULT_OFF));
+  // The "More types…" disclosure inside the Filter dropdown — collapsed by default so only the four common
+  // kinds show without expanding (tables.mdx §2.10).
+  const [showMoreTypes, setShowMoreTypes] = useState(false);
 
   // The file-type classes actually present in the data — only these render as chips (tables.mdx §2.8/§2.10).
   const presentTypes = useMemo(() => {
@@ -144,6 +154,18 @@ export function DataTable<T>({
         return next;
       }),
     [presentTypes],
+  );
+
+  // The last PRESENT visible class can't be unchecked (tables.mdx §2.1) — that would only ever blank the
+  // table. A common kind that's ABSENT from the data is NOT guarded: unchecking it is a harmless no-op, and
+  // forbidding it would confuse (the box would refuse for no visible reason).
+  const isLastVisibleType = useCallback(
+    (t: string): boolean => {
+      if (hiddenTypes.has(t)) return false;
+      if (!presentTypes.includes(t)) return false;
+      return presentTypes.filter((x) => !hiddenTypes.has(x)).length === 1;
+    },
+    [presentTypes, hiddenTypes],
   );
 
   const searchText = useCallback(
@@ -303,51 +325,22 @@ export function DataTable<T>({
         {rightHeader}
       </div>
 
-      {/* The facet rail (tables.mdx §2.2/§2.9/§2.10) — always-visible promoted controls above the table:
-          the "Large files only" toggle and the File-type checkbox facet. Rendered only for file tables
-          (which pass largeOnly / fileTypeFacet). All-checked / off is quiet (muted); active is emphasized. */}
-      {(largeOnly || (fileTypeFacet && presentTypes.length > 0)) && (
+      {/* The facet rail (tables.mdx §2.2/§2.9) — the always-visible promoted "Large files only" toggle above
+          the table (the File-type facet now lives inside the Filter ⛛ dropdown, §2.10). Rendered only for
+          file tables (which pass largeOnly). Off is quiet (muted); on is emphasized. */}
+      {largeOnly && (
         <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-1 pb-2 text-sm">
-          {largeOnly && (
-            <label
-              className="flex cursor-pointer items-center gap-1.5"
-              title="Show only large files. Turn this off to reach smaller files — e.g. a screenshot or JPG to OCR."
-            >
-              <input
-                type="checkbox"
-                checked={largeOnlyOn}
-                onChange={(e) => setLargeOnlyOn(e.target.checked)}
-              />
-              <span className={largeOnlyOn ? "text-black/70" : "text-black/40"}>Large files only</span>
-            </label>
-          )}
-          {fileTypeFacet && presentTypes.length > 0 && (
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span className="text-[11px] uppercase tracking-wide text-black/40">File type</span>
-              {presentTypes.map((t) => {
-                const checked = !hiddenTypes.has(t);
-                const isLastVisible =
-                  checked && presentTypes.filter((x) => !hiddenTypes.has(x)).length === 1;
-                return (
-                  <label
-                    key={t}
-                    className={`flex items-center gap-1 ${isLastVisible ? "cursor-not-allowed" : "cursor-pointer"}`}
-                    title={isLastVisible ? "At least one file type must be shown." : undefined}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      disabled={isLastVisible}
-                      onChange={() => toggleType(t)}
-                    />
-                    <span className={checked ? "text-black/70" : "text-black/40"}>
-                      {FILE_TYPE_LABELS[t] ?? t}
-                    </span>
-                  </label>
-                );
-              })}
-            </div>
-          )}
+          <label
+            className="flex cursor-pointer items-center gap-1.5"
+            title="Show only large files. Turn this off to reach smaller files — e.g. a screenshot, PDF, or JPG to OCR."
+          >
+            <input
+              type="checkbox"
+              checked={largeOnlyOn}
+              onChange={(e) => setLargeOnlyOn(e.target.checked)}
+            />
+            <span className={largeOnlyOn ? "text-black/70" : "text-black/40"}>Large files only</span>
+          </label>
         </div>
       )}
 
@@ -416,6 +409,55 @@ export function DataTable<T>({
                 />
                 Bookmarked only
               </label>
+              <div className="my-1 border-t border-[var(--lfb-border)]" />
+            </>
+          )}
+          {/* The File-type facet (tables.mdx §2.10) — the common kinds up front, an "All kinds" reset, and a
+              "More types…" disclosure for the rest. OCR "is often done with PDFs also", so PDFs sit alongside
+              Images/Videos/Audio without expanding. Present classes drive the last-visible guard; a common
+              kind absent from the data is still listed (unchecking it is a harmless no-op). */}
+          {fileTypeFacet && (
+            <>
+              <div className="px-3 pb-1 pt-0.5 text-[11px] uppercase tracking-wide text-black/40">File type</div>
+              <label className="flex cursor-pointer items-center gap-2 px-3 py-1 text-sm">
+                <input
+                  type="checkbox"
+                  checked={hiddenTypes.size === 0}
+                  // A reset affordance: checking it shows everything. It can't be UNCHECKED directly (that
+                  // would blank the table) — the user unchecks individual kinds below instead.
+                  onChange={(e) => {
+                    if (e.target.checked) setHiddenTypes(new Set());
+                  }}
+                />
+                <span className={hiddenTypes.size === 0 ? "text-black/70" : "text-black/50"}>All kinds</span>
+              </label>
+              {FILE_TYPE_COMMON.map((t) => (
+                <FileTypeRow
+                  key={t}
+                  t={t}
+                  checked={!hiddenTypes.has(t)}
+                  disabled={isLastVisibleType(t)}
+                  onToggle={() => toggleType(t)}
+                />
+              ))}
+              {showMoreTypes &&
+                FILE_TYPE_EXTRA.map((t) => (
+                  <FileTypeRow
+                    key={t}
+                    t={t}
+                    checked={!hiddenTypes.has(t)}
+                    disabled={isLastVisibleType(t)}
+                    onToggle={() => toggleType(t)}
+                  />
+                ))}
+              {FILE_TYPE_EXTRA.length > 0 && (
+                <button
+                  className="w-full px-3 py-1 text-left text-sm text-[var(--lfb-primary)]"
+                  onClick={() => setShowMoreTypes((v) => !v)}
+                >
+                  {showMoreTypes ? "Fewer types" : "More types…"}
+                </button>
+              )}
               <div className="my-1 border-t border-[var(--lfb-border)]" />
             </>
           )}
@@ -704,6 +746,30 @@ function setColumnFilter(
     const rest = prev.filter((f) => f.id !== id);
     return value === "" ? rest : [...rest, { id, value }];
   });
+}
+
+// One File-type checkbox row inside the Filter dropdown (tables.mdx §2.10). Disabled only when it is the last
+// visible PRESENT class (the last-value rule) — with a title that says why.
+function FileTypeRow({
+  t,
+  checked,
+  disabled,
+  onToggle,
+}: {
+  t: string;
+  checked: boolean;
+  disabled: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <label
+      className={`flex items-center gap-2 px-3 py-1 text-sm ${disabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+      title={disabled ? "At least one file type must be shown." : undefined}
+    >
+      <input type="checkbox" checked={checked} disabled={disabled} onChange={onToggle} />
+      <span className={checked ? "text-black/70" : "text-black/40"}>{FILE_TYPE_LABELS[t] ?? t}</span>
+    </label>
+  );
 }
 
 function IconButton({

@@ -78,3 +78,20 @@ export function isMediaFile(name: string): boolean {
   const ext = path.extname(name).toLowerCase();
   return VIDEO_EXT.has(ext) || AUDIO_EXT.has(ext) || IMAGE_EXT.has(ext);
 }
+
+// Documents that are not media (no player, no IPFS payload) but ARE analysis targets — today just PDF, which
+// the OCR tab reads by rasterizing each page (ocr.mdx §1.7.1). Kept SEPARATE from isMediaFile on purpose: a
+// PDF must never be treated as pin payload or a compress candidate, only admitted for analysis (rule 5).
+const PDF_EXT = new Set([".pdf"]);
+
+/** True when `name` is a PDF — a non-media analysis candidate (OCR only). */
+export function isPdfFile(name: string): boolean {
+  return PDF_EXT.has(path.extname(name).toLowerCase());
+}
+
+/** True when `name` is something the analysis tabs can act on — media (transcribe / describe / OCR) OR a PDF
+ *  (OCR only). This is the scanner's rule-5 admission predicate (scan.mdx §4.1 rule 5): a file at ANY size is
+ *  a candidate so the analysis tabs can reach it, even below the large-file threshold. */
+export function isAnalysisCandidate(name: string): boolean {
+  return isMediaFile(name) || isPdfFile(name);
+}

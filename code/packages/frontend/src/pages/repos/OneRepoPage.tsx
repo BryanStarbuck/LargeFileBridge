@@ -497,16 +497,20 @@ export function OneRepoPage() {
     { id: "changed", header: "Changed", kind: "timestamp", accessor: (f) => f.changedAt,
       cell: (f) => <span title={absoluteTime(f.changedAt)}>{relativeTime(f.changedAt)}</span> },
     // ── Task-tab columns (task_tabs.mdx §4). Present in the union; shown only on the tabs that list them.
-    // `kind` — video/image/audio, for the Compress & Transcribe tabs.
+    // `kind` — the File-type class (video/image/audio/pdf), for the Compress, Transcribe & OCR tabs. Uses
+    // `fileTypeForName` (not `mediaKindForName`) so a PDF reads as "pdf" on the OCR tab rather than blank.
     {
       id: "kind",
       header: "Kind",
       kind: "enum",
-      accessor: (f) => mediaKindForName(f.path.slice(f.path.lastIndexOf("/") + 1)) ?? "",
-      filterOptions: ["video", "image", "audio"],
+      accessor: (f) => {
+        const t = fileTypeForName(f.path.slice(f.path.lastIndexOf("/") + 1));
+        return t === "other" ? "" : t;
+      },
+      filterOptions: ["video", "image", "audio", "pdf"],
       cell: (f) => {
-        const k = mediaKindForName(f.path.slice(f.path.lastIndexOf("/") + 1));
-        return <span className="text-xs text-black/60">{k ?? "—"}</span>;
+        const t = fileTypeForName(f.path.slice(f.path.lastIndexOf("/") + 1));
+        return <span className="text-xs text-black/60">{t === "other" ? "—" : t}</span>;
       },
     },
     // `compress` — the three-state Compress status icon (task_tabs.mdx §6). Sort by status ("could" <

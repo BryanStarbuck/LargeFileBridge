@@ -100,13 +100,16 @@ export const AppConfigSchema = z.object({
   // the LOCKED sampling stride (§2.2.1): a slide lives 30s–5min and a chyron 10–30s, so 15s catches them
   // while sampling 0.07% of a 30fps stream. `max_frames` (default 1000) bounds a pathological input (a
   // 10-hour stream would emit 2,400 frames at 15s); when it bites, the artifact records truncated:true and
-  // the UI SAYS so — no silent caps (§15.2 rule 7). `language` is BCP-47; a language whose data is not
-  // vendored is a PERMISSIONED download, never silent (§3.3).
+  // the UI SAYS so — no silent caps (§15.2 rule 7). `max_pages` (default 500) is the SAME bound for the PDF
+  // path (§1.7.1): a page is one accurate read, and a pathological 5,000-page PDF is capped, truncated:true,
+  // and SAID. `language` is BCP-47; a language whose data is not vendored is a PERMISSIONED download, never
+  // silent (§3.3).
   ocr: z
     .object({
       engine: z.enum(["auto", "vision", "tesseract"]).default("auto"),
       video_stride_seconds: z.number().min(1).max(600).default(15),
       max_frames: z.number().int().min(1).max(10000).default(1000),
+      max_pages: z.number().int().min(1).max(10000).default(500),
       language: z.string().default("en-US"),
     })
     .prefault({}),

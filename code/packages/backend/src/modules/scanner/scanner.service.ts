@@ -30,7 +30,7 @@ import { listPins } from "../ipfs/ipfs.service.js";
 import { compressInfo } from "../fs/badges.js";
 import { readYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import { computerUnitDir, unitConfigPath, unitStatusPath } from "../../shared/store/scopes.js";
-import { HARD_SKIP, isMacPackageDir, isMediaFile } from "../../shared/scan-filters.js";
+import { HARD_SKIP, isMacPackageDir, isMediaFile, isAnalysisCandidate } from "../../shared/scan-filters.js";
 import { mapLimit, responsiveBudget } from "../../shared/concurrency.js";
 import { log } from "../../shared/logging.js";
 
@@ -395,14 +395,16 @@ async function walkUnit(
       // These rows are a NUDGE, never bridge payload — the user's ⊘ click is what makes them ours.
       const checkedInBig =
         opts.checkedInThreshold != null && !gitIgnored && st.size >= opts.checkedInThreshold;
-      // THE ANALYSIS-MEDIA RULE (scan.mdx §4.1 rule 5): a video/audio/image at ANY size is a candidate —
-      // even a small, checked-in, not-git-ignored one (a 2 MB screenshot, a 30-second clip) — so the
-      // analysis tabs can OCR / describe / transcribe it. This is what lets "open the OCR tab and OCR a
-      // file smaller than the large-file size" work; without it the small file is never a row.
+      // THE ANALYSIS-CANDIDATE RULE (scan.mdx §4.1 rule 5): a video/audio/image OR a PDF at ANY size is a
+      // candidate — even a small, checked-in, not-git-ignored one (a 2 MB screenshot, a 30-second clip, a
+      // one-page contract PDF) — so the analysis tabs can OCR / describe / transcribe it. This is what lets
+      // "open the OCR tab and OCR a file smaller than the large-file size" work; without it the small file is
+      // never a row. PDFs join here (not isMediaFile) because they are an OCR target but NOT pin payload
+      // (ocr.mdx §1.7.1) — isAnalysisCandidate = media OR pdf.
       // REPO UNITS ONLY (gated on the same `checkedInThreshold` signal as rule 4): the computer unit walks
       // ALL of home, where admitting every tiny icon/thumbnail would flood the census — a repo is the
-      // bounded, intentional scope where OCR-a-small-image is the real workflow.
-      const analysisMedia = opts.checkedInThreshold != null && isMediaFile(ent.name);
+      // bounded, intentional scope where OCR-a-small-file is the real workflow.
+      const analysisMedia = opts.checkedInThreshold != null && isAnalysisCandidate(ent.name);
       // Payload = what this file would have been WITHOUT the nudge/analysis rules. A row that is only a
       // candidate because of `checkedInBig` or `analysisMedia` is NOT payload — the auto-decide policy must
       // never touch it (it would auto-pin a file the user never chose to bridge).

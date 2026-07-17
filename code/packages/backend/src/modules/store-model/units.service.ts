@@ -21,6 +21,7 @@ import {
   type TaskStatus,
   type TaskMetrics,
   mediaKindForName,
+  isPdfName,
 } from "@lfb/shared";
 import type { ComputerUnitConfig, PlacementChoice } from "@lfb/shared";
 import type { RepoOwner } from "@lfb/shared";
@@ -403,16 +404,18 @@ function describeStatusFor(relPath: string, repoRootAbs: string | null): TaskSta
   return "could";
 }
 
-// OCR task status (ocr.mdx §11.2) — the third sibling. "na" unless the file is IMAGE or VIDEO (audio has no
-// pixels); then "done" iff a `.ocr` artifact exists, else "could". Any failure degrades to "could" so an
-// OCR-able file is never hidden.
+// OCR task status (ocr.mdx §11.2) — the third sibling. "na" unless the file has text-bearing pixels: an IMAGE,
+// a VIDEO, or a PDF (audio has no pixels — ocr.mdx §1.7/§1.7.1); then "done" iff a `.ocr` artifact exists,
+// else "could". Any failure degrades to "could" so an OCR-able file is never hidden.
 //
 // "done" keys on the ARTIFACT, never on the text being non-empty (ocr.mdx §2.3). A photo of a beach OCRs to
 // "" and is DONE — a tree of text-free holiday photos settles at a big green 0 rather than presenting an
 // eternal wall of candidates.
 function ocrStatusFor(relPath: string, repoRootAbs: string | null): TaskStatus {
-  const kind = mediaKindForName(path.basename(relPath));
-  if (kind !== "image" && kind !== "video") return "na";
+  const name = path.basename(relPath);
+  const kind = mediaKindForName(name);
+  const ocrable = kind === "image" || kind === "video" || isPdfName(name);
+  if (!ocrable) return "na";
   try {
     if (repoRootAbs && analysisOutputs(repoRootAbs, relPath).includes("ocr")) return "done";
   } catch {

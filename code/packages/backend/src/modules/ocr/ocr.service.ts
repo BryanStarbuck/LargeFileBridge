@@ -11,8 +11,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import type { OcrBlock, OcrKind, OcrResult, OcrBatchResult, OcrView, OcrEngineId, OcrEnginesStatus, EnqueuePlan, PreviewPlan } from "@lfb/shared";
-import { mediaKindForName } from "@lfb/shared";
+import type { OcrBlock, OcrKind, OcrLevel, OcrResult, OcrBatchResult, OcrView, OcrEngineId, OcrEnginesStatus, EnqueuePlan, PreviewPlan } from "@lfb/shared";
+import { mediaKindForName, isPdfName } from "@lfb/shared";
 import { HARD_SKIP } from "../../shared/scan-filters.js";
 import { expandHome } from "../fs/badges.js";
 import { getAppConfig } from "../store-model/config.service.js";
@@ -25,6 +25,7 @@ import { enqueue, createBatch } from "../jobqueue/jobqueue.service.js";
 import { writeManifest, trackBatch } from "../jobqueue/batch-manifest.service.js";
 import { selectEngine, engineStatus, ocrLanguage } from "./engines.js";
 import { extractFrames, videoToolsPresent, probeVideo, frameCountFor, collapseDuplicates } from "./frames.js";
+import { renderPdfPages, pdfToolsPresent } from "./pdf.js";
 import { coreBudget } from "../../shared/concurrency.js";
 import { log } from "../../shared/logging.js";
 import { txn, txnBegin, txnEnd, type TxnOutcome, type TxnFields } from "../../shared/transactions.js";
@@ -42,10 +43,13 @@ function exists(p: string): boolean {
   }
 }
 
-/** Only image + video have pixels to read (§1.7). Audio is transcription's job. */
+/** What has text-bearing pixels to read (§1.7): an IMAGE, a VIDEO's frames, or a PDF's rasterized PAGES
+ *  (§1.7.1). Audio is transcription's job; everything else has no glyphs to read. */
 function ocrKindFor(name: string): OcrKind | null {
   const k = mediaKindForName(name);
-  return k === "image" || k === "video" ? k : null;
+  if (k === "image" || k === "video") return k;
+  if (isPdfName(name)) return "pdf";
+  return null;
 }
 
 /** `<trackingBase(root)>/<rel-dir>/<name.ext>.ocr` — resolved by the SHARED ordered placement rule and the
@@ -88,6 +92,8 @@ export function readOcr(input: string): OcrView | null {
       generatedAt: (doc.generated as string) ?? null,
       strideSeconds: typeof doc.stride_seconds === "number" ? doc.stride_seconds : null,
       framesSampled: typeof doc.frames_sampled === "number" ? doc.frames_sampled : null,
+      pageCount: typeof doc.page_count === "number" ? doc.page_count : null,
+      pagesRead: typeof doc.pages_read === "number" ? doc.pages_read : null,
       truncated: doc.truncated === true,
     };
   } catch {
@@ -125,6 +131,8 @@ export function ocrEngines(): OcrEnginesStatus {
     // Stated separately BECAUSE the asymmetry is real (§6): an ffmpeg-less machine OCRs every image fine and
     // every video not at all. Papering over it would make "OCR is broken" the user's conclusion.
     videoToolsPresent: videoToolsPresent(),
+    // The same asymmetry for PDFs: without poppler's `pdftoppm`, every image OCRs and every PDF does not.
+    pdfToolsPresent: pdfToolsPresent(),
     language: ocrLanguage(),
     strideSeconds: cfg?.video_stride_seconds ?? 15,
   };
@@ -146,7 +154,7 @@ export async function ocrOne(input: string, opts: { overwrite?: boolean; engine?
   const kind = ocrKindFor(name);
   if (!kind) {
     ledgerNoWork(abs, { bytes }, "blocked", "unsupported_kind");
-    return result(abs, "unsupported", null, null, null, "only images and videos have text to read");
+    return result(abs, "unsupported", null, null, null, "only images, videos, and PDFs have text to read");
   }
 
   const { root, ocrPath, needsSetup } = resolveOcrPath(abs);
@@ -173,20 +181,30 @@ export async function ocrOne(input: string, opts: { overwrite?: boolean; engine?
     ledgerNoWork(abs, { bytes, kind }, "blocked", "needs_ffmpeg");
     return result(abs, "needs_ffmpeg", null, null, null, reason);
   }
+  // The PDF path needs poppler's `pdftoppm` to rasterize pages — the same asymmetry as the video path (§6).
+  if (kind === "pdf" && !pdfToolsPresent()) {
+    const reason = "reading text from a PDF needs poppler — install it with `brew install poppler` (images are unaffected)";
+    ledgerNoWork(abs, { bytes, kind }, "blocked", "needs_pdf_tools");
+    return result(abs, "needs_pdf_tools", null, null, null, reason);
+  }
 
   const cfg = getAppConfig().ocr;
   const stride = cfg?.video_stride_seconds ?? 15;
   const maxFrames = cfg?.max_frames ?? 1000;
+  const maxPages = cfg?.max_pages ?? 500;
   const language = ocrLanguage();
-  // The two-speed rule (§2, LOCKED): image → accurate, video frame → fast.
-  const level = kind === "image" ? "accurate" : "fast";
+  // The two-speed rule (§2, LOCKED): image → accurate, video frame → fast, PDF page → accurate (a page is a
+  // document — accuracy is the whole point, and a PDF has far fewer pages than a video has frames).
+  const level: OcrLevel = kind === "video" ? "fast" : "accurate";
 
   try {
     return await txn("ocr", { file: abs, bytes, engine: engine.id, kind, level, overwrite: !!opts.overwrite }, async (_t, end) => {
       const doc = await track("ocr", name, async () =>
         kind === "image"
           ? await ocrImage(abs, engine, language)
-          : await ocrVideo(abs, engine, language, stride, maxFrames),
+          : kind === "pdf"
+            ? await ocrPdf(abs, engine, language, maxPages)
+            : await ocrVideo(abs, engine, language, stride, maxFrames),
       );
 
       fs.mkdirSync(path.dirname(ocrPath), { recursive: true });
@@ -201,6 +219,7 @@ export async function ocrOne(input: string, opts: { overwrite?: boolean; engine?
           kind,
           language,
           ...(kind === "video" ? { stride_seconds: stride, frames_sampled: doc.framesSampled, truncated: doc.truncated } : {}),
+          ...(kind === "pdf" ? { page_count: doc.pageCount, pages_read: doc.pagesRead, truncated: doc.truncated } : {}),
           text: doc.text,
           blocks: doc.blocks,
         }),
@@ -213,8 +232,8 @@ export async function ocrOne(input: string, opts: { overwrite?: boolean; engine?
       // schedules its own sync, so OCR text never again depends on the device worker's `git add -A`.
       noteArtifactWritten(ocrPath, "OCR texts");
       // `chars`, never the text itself — recognized text never enters a ledger line (transactions_log §9).
-      end({ chars: doc.text.length, blocks: doc.blocks.length, ...(kind === "video" ? { frames: doc.framesSampled } : {}) });
-      log.info("ocr", `${abs} → ${ocrPath} (${engine.id}/${level}, ${doc.text.length} chars${kind === "video" ? `, ${doc.framesSampled} frames` : ""})`);
+      end({ chars: doc.text.length, blocks: doc.blocks.length, ...(kind === "video" ? { frames: doc.framesSampled } : {}), ...(kind === "pdf" ? { pages: doc.pagesRead } : {}) });
+      log.info("ocr", `${abs} → ${ocrPath} (${engine.id}/${level}, ${doc.text.length} chars${kind === "video" ? `, ${doc.framesSampled} frames` : ""}${kind === "pdf" ? `, ${doc.pagesRead} pages` : ""})`);
       return result(abs, "ocred", ocrPath, engine.id, doc.text.length, null);
     });
   } catch (e) {
@@ -227,7 +246,9 @@ export async function ocrOne(input: string, opts: { overwrite?: boolean; engine?
 interface OcrDoc {
   text: string;
   blocks: OcrBlock[];
-  framesSampled: number | null;
+  framesSampled: number | null; // video only
+  pageCount: number | null; // pdf only — total pages in the document
+  pagesRead: number | null; // pdf only — pages actually rasterized + read
   truncated: boolean;
 }
 
@@ -236,7 +257,45 @@ interface OcrDoc {
  *  resolution is exactly what makes small text legible, and this is a one-shot cost. */
 async function ocrImage(abs: string, engine: ReturnType<typeof selectEngine> & object, language: string): Promise<OcrDoc> {
   const r = await engine.recognize(abs, { level: "accurate", language });
-  return { text: r.text, blocks: r.blocks, framesSampled: null, truncated: false };
+  return { text: r.text, blocks: r.blocks, framesSampled: null, pageCount: null, pagesRead: null, truncated: false };
+}
+
+/**
+ * The PDF path (§1.7.1, §2.4): rasterize each page to a PNG, read it ACCURATELY (a page is a document, not a
+ * throwaway video frame), tag every block with its 1-based page, flatten with page separators, delete the
+ * temp images.
+ *
+ * Like the video path, the recognitions run concurrently but draw the ONE SHARED recognition limiter (§10.2)
+ * — a 200-page PDF is itself a batch, and letting each page fan out across the full core budget would
+ * oversubscribe the box exactly as an unbounded per-video frame fan-out would.
+ */
+async function ocrPdf(
+  abs: string,
+  engine: ReturnType<typeof selectEngine> & object,
+  language: string,
+  maxPages: number,
+): Promise<OcrDoc> {
+  const render = await renderPdfPages(abs, { maxPages });
+  try {
+    const perPage: Array<{ page: number; text: string; blocks: OcrBlock[] }> = [];
+    await Promise.all(
+      render.pages.map(async (pg) => {
+        const r = await withRecognitionSlot(() => engine.recognize(pg.file, { level: "accurate", language }));
+        // Tag every block with its page so a search hit can name the page it came from (§5.1). A page with no
+        // text contributes no blocks but is still a READ page (§2.3 — empty is a success).
+        const blocks: OcrBlock[] = r.blocks.map((b) => ({ ...b, page: pg.page }));
+        perPage.push({ page: pg.page, text: r.text, blocks });
+      }),
+    );
+    perPage.sort((a, b) => a.page - b.page);
+    const blocks = perPage.flatMap((p) => p.blocks);
+    // The flattened text is what search greps (§5.1). Pages are joined by a blank line; a wholly text-free
+    // PDF flattens to "" — a SUCCESS with `pages_read: N`, not a failure (§2.3).
+    const text = perPage.map((p) => p.text).filter((t) => t.trim() !== "").join("\n\n").trim();
+    return { text, blocks, framesSampled: null, pageCount: render.pageCount, pagesRead: render.pages.length, truncated: render.truncated };
+  } finally {
+    await render.cleanup();
+  }
 }
 
 /**
@@ -271,7 +330,7 @@ async function ocrVideo(
     // The flattened text is what search greps (§5.1). An entirely text-free video flattens to "" — which is a
     // SUCCESS with `frames_sampled: N`, not a failure (§2.3).
     const text = timed.map((t) => t.text).join("\n\n").trim();
-    return { text, blocks, framesSampled: sample.frames.length, truncated: sample.truncated };
+    return { text, blocks, framesSampled: sample.frames.length, pageCount: null, pagesRead: null, truncated: sample.truncated };
   } finally {
     // 160 JPEGs × 2,000 videos is real disk (§15.2 rule 8).
     await sample.cleanup();
@@ -535,6 +594,6 @@ function summarizeOcr(results: OcrResult[]): OcrBatchResult {
     // `ocred` counts the empty-text successes too — they ARE successes (§2.3).
     ocred: results.filter((r) => r.status === "ocred").length,
     skipped: results.filter((r) => r.status === "skipped" || r.status === "needs_setup").length,
-    failed: results.filter((r) => r.status === "failed" || r.status === "no_engine" || r.status === "needs_ffmpeg" || r.status === "unsupported").length,
+    failed: results.filter((r) => r.status === "failed" || r.status === "no_engine" || r.status === "needs_ffmpeg" || r.status === "needs_pdf_tools" || r.status === "unsupported").length,
   };
 }

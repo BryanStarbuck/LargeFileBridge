@@ -54,6 +54,7 @@ export async function withOcrReady(opts: { label: string; run: () => void }): Pr
 export const OCR_KIND_FILTERS: WarningKindFilter[] = [
   { id: "video", label: "Videos" },
   { id: "image", label: "Images" },
+  { id: "pdf", label: "PDFs" },
 ];
 
 /** One-file outcome → a human line (ocr.mdx §18's status set). */

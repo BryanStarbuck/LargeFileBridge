@@ -18,7 +18,14 @@ of an existing one is that it answers a **different question** from either sibli
 | --- | --- | --- | --- |
 | **Transcription** ([Transcribe.mdx](./Transcribe.mdx)) | *"What was **said**?"* | audio + video | Speech → text, verbatim |
 | **AI description** ([ai_description.mdx](./ai_description.mdx)) | *"What is **seen**?"* | image + video | A vision model's **prose** about the frame |
-| **OCR** (this spec) | *"What does it **say on screen**?"* | image + video | The **literal glyphs**, verbatim, with positions |
+| **OCR** (this spec) | *"What does it **say on screen**?"* | image + video + **PDF** | The **literal glyphs**, verbatim, with positions |
+
+OCR has the **widest** input axis of the three, and PDF is the reason (§1.7.1). A document is a stack of pages,
+each of which is just pixels once rendered — so a scanned contract, a signed agreement, or a slide export all
+become searchable text the same way a screenshot does. This is where OCR stops being the mirror of AI
+description (image + video) and becomes a superset: **image + video + PDF.**
+
+Implemented in code: `ocrKindFor()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/ocr.service.ts` returns `image` / `video` / `pdf` (else null); the PDF page-render path is `renderPdfPages()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/pdf.ts`.
 
 The distinction is not academic. AI description **paraphrases** and may *mention* that a sign exists; OCR
 **quotes** the sign, exactly, and can be searched for. A slide deck video described by Gemini yields "a
@@ -26,9 +33,13 @@ slide listing quarterly figures"; the same video OCR'd yields the actual figures
 substitute.
 
 Two things make this feature worth pinning down: **the two-speed rule** (§2 — image = slow/accurate, video =
-fast at a 15-second stride, which is the whole performance story), and **the engine being a library rather
-than a `brew` tool** (§3 — the explicit product directive, and the thing that keeps OCR installable,
-offline, and charter-clean).
+fast at a 15-second stride, which is the whole performance story; a **PDF page reads accurate**, like an
+image, because a page is a document and there are far fewer pages than a video has frames), and **the engine
+being a library rather than a `brew` tool** (§3 — the explicit product directive, and the thing that keeps
+OCR installable, offline, and charter-clean). One deliberate exception rides alongside the engine directive:
+**PDF and video both lean on an external command** (poppler's `pdftoppm` to rasterize pages; ffmpeg to sample
+frames) — the recognizer is still a library, but a page/frame has to be produced first, and that is a
+subprocess we detect on PATH and state the absence of honestly (§6).
 
 Siblings this builds on and does not repeat:
 
@@ -147,10 +158,37 @@ them**. OCR is the cheapest of the three transactions (no network, no model down
 so it is often the **first** one run over a new tree — it costs nothing but CPU and answers "what is this?"
 for anything screen-recorded.
 
+### 1.7.1 The third kind — PDF (a stack of pages we rasterize)
+
+A PDF is not media (no player, no IPFS payload) but it is a **first-class OCR target**, and for the common
+case it is the **most valuable** one: legal contracts, signed agreements, invoices, and scanned documents are
+overwhelmingly PDFs, and "read the text out of these PDFs" is exactly what a user in a folder of them wants.
+
+* **How it works.** A PDF is a stack of **pages**. Each page is rendered to a PNG (poppler's `pdftoppm`, at
+  150 DPI — crisp enough for body text without paying 4× the pixels of a 300-DPI render), and each page image
+  is read at the **accurate** level — the same pass a standalone image gets (§2.1), because a page IS a
+  document and accuracy is the whole point. The per-page texts are concatenated (blank-line separated) into
+  the searchable `text`, and every block is tagged with its **1-based page** so a hit can name its page (§5.1).
+* **Bounded + honest.** `max_pages` (default **500**) caps a pathological document exactly as `max_frames`
+  caps a pathological video; when it bites, the artifact records `truncated: true` and the UI **says** so
+  (§15.2 rule 7). The artifact also records `page_count` (from `pdfinfo`) and `pages_read`.
+* **Concurrency.** A 200-page PDF is itself a batch; its page recognitions draw the **one shared recognition
+  limiter** (§10.2), never a fresh per-document budget — the same rule the video frame path obeys.
+* **The tool.** Rasterization needs poppler's `pdftoppm` on PATH — the **same posture** as the video path's
+  ffmpeg (§6). Without it, every image still OCRs fine and every PDF reports `needs_pdf_tools` with a
+  `brew install poppler` hint. Empty-text is still a SUCCESS (a blank page contributes nothing, §2.3).
+
+Implemented in code: `ocrPdf()` and the `needs_pdf_tools` gate in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/ocr.service.ts`; page rendering +
+`pdfToolsPresent()` / `pdfPageCount()` in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/pdf.ts`.
+
 ### 1.7 The negative case — what OCR is NOT for
 
 * **Not audio.** An `.mp3` has no pixels. The OCR tab does not appear for audio (§7) and audio files are
   never candidates (§14).
+* **Not other documents.** Only **PDF** is the document OCR kind today (§1.7.1). `.docx` / `.pptx` / `.txt`
+  are not rasterized — a `.txt` already IS text, and Office formats are out of scope until asked for.
 * **Not a description.** OCR on a photo of a beach returns nothing (there is no text) — and that is a
   **correct, successful** result, not a failure (§2.3). A file with `text: ""` is **OCR'd**; it simply has no
   text. It must never be re-offered as "not yet OCR'd" (§12.5).

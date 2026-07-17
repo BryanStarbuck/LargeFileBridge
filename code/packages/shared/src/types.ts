@@ -1572,20 +1572,28 @@ export interface DescribeBatchResult {
 // ── OCR — read the text out of the pixels (ocr.mdx) ─────────────────────────
 // The THIRD transaction type. Transcription answers "what was SAID" (audio), AI description answers "what is
 // SEEN" (a vision model's prose), and OCR answers "what does it SAY on screen" — the literal glyphs, verbatim.
-// Image + video only (audio has no pixels). 100% LOCAL: no provider, no key, no upload (§4).
-export type OcrKind = "image" | "video";
+// Image + video + PDF (audio has no pixels). 100% LOCAL: no provider, no key, no upload (§4).
+//
+// PDF is the third OCR kind (ocr.mdx §1.7.1): a document is a stack of PAGES, each of which we RASTERIZE and
+// read exactly like an image — so a legal PDF, a scanned contract, or a slide export yields searchable text
+// the same way a screenshot does. The rasterization step needs an external tool (poppler's `pdftoppm`), the
+// same way the video path needs ffmpeg (§6).
+export type OcrKind = "image" | "video" | "pdf";
 export type OcrEngineId = "vision" | "tesseract";
-/** The recognition level, keyed on media kind (ocr.mdx §2, LOCKED): image → accurate, video frame → fast. */
+/** The recognition level, keyed on media kind (ocr.mdx §2, LOCKED): image → accurate, video frame → fast,
+ *  PDF page → accurate (a page is a document — accuracy is the whole point, like a standalone image). */
 export type OcrLevel = "accurate" | "fast";
 
 /** One positioned/timed observation. An IMAGE block carries a NORMALIZED bbox (0–1 x/y/w/h) so the viewer can
- *  overlay a hit at any render size; a VIDEO block carries a time RANGE so a hit can SEEK (§5.1, §7). */
+ *  overlay a hit at any render size; a VIDEO block carries a time RANGE so a hit can SEEK; a PDF block carries
+ *  the 1-based PAGE it was read from (§5.1, §7). */
 export interface OcrBlock {
   text: string;
   confidence: number | null;
   bbox?: [number, number, number, number] | null; // image only — normalized [x, y, w, h]
   start?: number; // video only — seconds
   end?: number; // video only — seconds (a RANGE after consecutive-duplicate collapse, §2.2.3)
+  page?: number; // pdf only — 1-based page number the text was read from
 }
 
 /** The existing OCR text for a media file (GET /api/ocr/file), or null when no artifact exists yet.
@@ -1602,14 +1610,16 @@ export interface OcrView {
   generatedAt: string | null; // ISO
   strideSeconds: number | null; // video only
   framesSampled: number | null; // video only
-  truncated: boolean; // video only — max_frames bit, so the clip was sampled only up to that point (§15.2)
+  pageCount: number | null; // pdf only — total pages in the document
+  pagesRead: number | null; // pdf only — pages actually rasterized + read (≤ pageCount when max_pages bit)
+  truncated: boolean; // video: max_frames bit; pdf: max_pages bit — sampled only up to that point (§15.2)
 }
 
 /** The result of one OCR run (POST /api/ocr/file). Reports truthfully per file.
  *  `ocred` covers the EMPTY-TEXT case: a text-free image is a success, not a failure (§2.3). */
 export interface OcrResult {
   path: string;
-  status: "ocred" | "skipped" | "no_engine" | "needs_ffmpeg" | "unsupported" | "failed" | "needs_setup";
+  status: "ocred" | "skipped" | "no_engine" | "needs_ffmpeg" | "needs_pdf_tools" | "unsupported" | "failed" | "needs_setup";
   ocrPath: string | null;
   engine: OcrEngineId | null;
   chars: number | null; // 0 is a real, successful answer — "no text in this image"
@@ -1638,6 +1648,9 @@ export interface OcrEnginesStatus {
   defaultEngine: OcrEngineId | "auto";
   anyAvailable: boolean;
   videoToolsPresent: boolean;
+  // PDF OCR rasterizes each page with poppler's `pdftoppm` — the same stated asymmetry as video/ffmpeg (§6):
+  // false means every image OCRs fine and every PDF does not until the tool is installed.
+  pdfToolsPresent: boolean;
   language: string;
   strideSeconds: number;
 }

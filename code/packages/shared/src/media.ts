@@ -45,9 +45,15 @@ export function viewerRouteForName(name: string): "/image" | "/video" | "/audio"
   return kind === "image" ? "/image" : kind === "video" ? "/video" : kind === "audio" ? "/audio" : "/file";
 }
 
-// PDFs are a distinct, filterable document class in the File-type facet (tables.mdx §2.10) — not media
-// (no viewer, no analysis task today) but common enough that "show me just the PDFs" is a real intent.
+// PDFs are a distinct, filterable document class in the File-type facet (tables.mdx §2.10) — not MEDIA (no
+// player, no IPFS payload), but a first-class OCR target: a PDF is a stack of pages we rasterize and read
+// like images (ocr.mdx §1.7.1). "show me just the PDFs" and "OCR these PDFs" are both real intents.
 const PDF_EXT = new Set([".pdf"]);
+
+/** True when `name` is a PDF — the document OCR kind (ocr.mdx §1.7.1) and the `pdf` File-type facet value. */
+export function isPdfName(name: string): boolean {
+  return PDF_EXT.has(fileExt(name));
+}
 
 /**
  * The File-type facet value for a name (tables.mdx §2.10): image | video | audio | pdf | other.
