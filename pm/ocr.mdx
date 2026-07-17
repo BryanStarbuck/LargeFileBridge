@@ -218,6 +218,18 @@ sampling grid by **half a stride** (`-ss 7.5` equivalent, via the filter's phase
 **7.5 s, 22.5 s, 37.5 s…** — the **middle** of each 15-second window, where the content of that window
 actually is. The count of frames is unchanged; only the phase moves.
 
+**A clip shorter than one stride has exactly ONE window — itself.** The half-stride phase must therefore be
+**clamped to the clip's own midpoint** (`duration/2`) and the `fps` grid dropped for a single frame. Applying
+the fixed `-ss 7.5` to a sub-stride clip seeks at or past its end, **zero frames** reach the encoder, and
+ffmpeg fails opening mjpeg at EOF with `-22 (Invalid argument)` — a message that names neither the length nor
+the cause. This is not hypothetical: it failed **36 of 1,779** files in the 2026-07-16 batch — every video
+under 15 s in the tree, and *only* those. The rule above is unchanged for anything ≥ one stride; this is the
+same intent ("sample the middle of the window, never t=0") applied honestly to a clip that has one window.
+
+Phases the grid, clamps sub-stride clips, and rejects a zero-frame extraction rather than laundering it into
+an empty-but-`done` artifact, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/frames.ts` → `extractFrames()`.
+
 #### 2.2.3 Consecutive-duplicate frames collapse (LOCKED)
 
 A slide on screen for 3 minutes produces **12 identical frames** → 12 identical text blocks. Recording all 12
