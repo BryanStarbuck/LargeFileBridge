@@ -111,10 +111,24 @@ export async function probeVideo(abs: string): Promise<number | null> {
   }
 }
 
-/** How many frames a clip will yield at a stride — what the popup shows per video row (§9.2). */
+/**
+ * How many frames a clip will yield at a stride — what the popup shows per video row (§9.2).
+ *
+ * This MUST agree with what `extractFrames` actually emits, or the popup promises work that never happens
+ * (the §9.2 hint) and §2.2.2's "the count of frames is unchanged; only the phase moves" becomes a lie. The
+ * arithmetic is therefore the ffmpeg `fps` filter's REAL behaviour, measured rather than assumed: with the
+ * grid phased by `half`, the filter emits one frame per output slot and ROUNDS TO THE NEAREST slot, so a
+ * clip yields `round((D - half) / stride)` frames — NOT `ceil(D / stride)`, which over-counted every clip
+ * (a 40s clip promised 3 and delivered 2) and, worse, promised 1 for a clip that delivered 0 (see below).
+ *
+ * The SHORT-CLIP branch (D < stride) mirrors extractFrames': one frame at the clip's midpoint, always.
+ */
 export function frameCountFor(durationSeconds: number | null, stride: number, maxFrames: number): number | null {
   if (durationSeconds === null) return null;
-  return Math.min(maxFrames, Math.max(1, Math.ceil(durationSeconds / stride)));
+  // A clip shorter than one stride is a single window — extractFrames grabs exactly one frame at D/2.
+  if (durationSeconds < stride) return 1;
+  const emitted = Math.floor((durationSeconds - stride / 2) / stride + 0.5); // round-half-up = the fps filter
+  return Math.min(maxFrames, Math.max(1, emitted));
 }
 
 /**

@@ -36,6 +36,15 @@ export type BatchPopupState =
   | null;
 type Listener = (state: BatchPopupState) => void;
 let listener: Listener | null = null;
+// The state a launcher asked for while NO host was listening. The bus is a single module-level listener, so
+// any window where the host is not registered — the app tree remounting across an auth blip / a "Reconnecting"
+// swap, a dev-server module-graph replacement that leaves the click handler holding a different instance of
+// this module than the host registered on — turned every producing click into a SILENT no-op: the /plan
+// request still went out and the backend still logged it, but no spinner and no popup ever appeared, and
+// nothing was written to the fault trail to say why. That is the exact shape of the "Create OCR text does
+// nothing" report. Holding the state instead means the click is never lost: the popup opens as soon as a host
+// registers, and `emit` records the gap so the trail says it happened.
+let pending: BatchPopupState | undefined;
 // A monotonically-increasing generation token. Every scope-walking open takes the NEXT gen; if the user
 // cancels the spinner (or a newer open starts) the gen advances, so a stale in-flight plan result that
 // arrives afterwards is a NO-OP and never pops a window the user already dismissed (dialogs.mdx §5.4).
@@ -44,22 +53,48 @@ let openGen = 0;
 /** BatchPopupHost registers here; returns an unsubscribe for its effect cleanup. */
 export function onBatchPopupRequested(cb: Listener): () => void {
   listener = cb;
+  // Deliver whatever was requested while nothing was listening (see `pending`), so a click that landed in
+  // that window still opens its window rather than vanishing.
+  if (pending !== undefined) {
+    const state = pending;
+    pending = undefined;
+    cb(state);
+  }
   return () => {
+    // Guard on identity: when the app tree remounts, React registers the NEW host before tearing the old one
+    // down, so an unguarded cleanup would null out the live listener and re-open this whole bug.
     if (listener === cb) listener = null;
   };
+}
+
+/** The ONE way this module talks to the host — never `listener?.(…)`, which silently drops when null. */
+function emit(state: BatchPopupState): void {
+  if (listener) {
+    listener(state);
+    return;
+  }
+  // `state === null` (a close/cancel) intentionally BUFFERS as null too: it clears any popup held above
+  // rather than resurrecting one the user already dismissed.
+  pending = state;
+  if (state) {
+    clientLog.error(
+      "batchPopup.noHost",
+      new Error(`batch popup requested with no host mounted (${state.kind}) — buffered until one registers`),
+    );
+  }
 }
 
 /** Show the "Opening window…" spinner and claim a fresh generation token for this open (dialogs.mdx §5.4). */
 function beginBatchOpen(headline: string, sub: string): number {
   const gen = ++openGen;
-  listener?.({
+  emit({
     kind: "loading",
     headline,
     sub,
     // Cancel/Esc/backdrop: advance the gen so the pending plan result becomes a no-op, and clear the host.
     onCancel: () => {
       openGen++;
-      listener?.(null);
+      emit(null);
     },
   });
   return gen;
@@ -74,14 +109,14 @@ function isStale(gen: number): boolean {
  *  (stale gen). Passing no gen (e.g. a caller that didn't walk a tree) always opens. */
 export function requestBatchPopup(def: WarningDef, gen?: number): void {
   if (gen != null && isStale(gen)) return;
-  listener?.({ kind: "popup", def });
+  emit({ kind: "popup", def });
 }
 
 /** Close whatever the batch host is showing (spinner or popup). Ignored if superseded (stale gen). */
 export function closeBatchPopup(gen?: number): void {
   if (gen != null && isStale(gen)) return;
   openGen++;
-  listener?.(null);
+  emit(null);
 }
 
 function plural(n: number): string {
@@ -347,9 +382,16 @@ export async function openOcrBatch(scope: BatchScope): Promise<void> {
           label: labelForPath(f.path),
           name: basename(f.path),
           kind,
-          sizeText: formatBytes(f.sizeBytes),
+          // The frame count rides ROW 1's right-hand slot, beside the size. It CANNOT go in `sublabel`:
+          // that is a LEGACY fallback the row only reads when `pathText` is absent (registry.ts's
+          // `rowPath()` = `pathText ?? sublabel`), and this row always sets `pathText` — so the hint
+          // rendered nowhere at all. §9.2's whole point is that the user sees WHY a row is expensive
+          // BEFORE committing to it, and a hint that never paints does not say anything.
+          sizeText:
+            kind === "video" && frames
+              ? `${formatBytes(f.sizeBytes)} · ${frames} frame${frames === 1 ? "" : "s"}`
+              : formatBytes(f.sizeBytes),
           pathText: labelForPath(f.path),
-          sublabel: kind === "video" && frames ? `${frames} frame${frames === 1 ? "" : "s"} to read` : undefined,
         };
       }),
       targetNoun: "file",

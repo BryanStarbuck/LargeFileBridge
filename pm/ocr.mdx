@@ -636,14 +636,21 @@ a recursive walk can resolve to thousands of files, it gets the **"Opening windo
 
 ### 8.4 Repo & storage scale — where OCR does and does NOT appear (LOCKED)
 
-**The repo `⋮` has no producing actions today, and OCR does not add one.** [menus.mdx §5.1](./menus.mdx)'s
-Repo catalog is Open / Work / Config / Copy / Danger — it carries **no** `Create Transcriptions` and **no**
-`Create AI descriptions`. ([Transcribe.mdx §2.4](./Transcribe.mdx)'s claim that the repo kebab gains
-"Transcribe all files…" describes a surface that does not exist.) A whole repo is OCR'd from the one-repo
-page's **action-link** (§8.5), its **metric tile** (§12.2), or its **header primary** (§12.3) — three ways
-already. **Adding a fourth to the repo kebab would break the symmetry contract in the wrong direction**: it
-would give OCR a surface neither sibling has. If the repo catalog ever gains producing actions, it gains
-**all three** at once (§0).
+**The repo `⋮` carries all three producing actions, OCR included.** This paragraph previously said the
+opposite — that the Repo catalog was Open / Work / Config / Copy / Danger with **no** producing actions, so
+OCR must not add one. **That was already untrue when it was written**: the repo-row kebab had gained
+`Create Transcriptions` and `Create AI descriptions`
+(`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `RepoKebab`),
+and the second of those carries a comment recording that it, too, had been missing and unreachable there.
+Read literally, the stale text argued for the one outcome §0 forbids: a surface carrying two of the three.
+
+So the contract's own rule decides it — **all three or none** — and the catalog has two, so it gets the
+third. The trio sits in the `Create` group in the LOCKED order transcription → AI description → OCR, each
+opening the unified popup scoped to the repo's working tree (`{ root: <repo path> }`).
+
+A whole repo is therefore OCR'd four ways: the repo `⋮`, the one-repo page's **action-link** (§8.5), its
+**metric tile** (§12.2), and its **header primary** (§12.3). [menus.mdx §5.1](./menus.mdx)'s Repo catalog is
+stale in the same way and should be reconciled to match.
 
 **Storage scale** is the action-links row on the storage detail page ([storages.mdx](./storages.mdx)) —
 covered by §8.5, since that page carries the same catalog.

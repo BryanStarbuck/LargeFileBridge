@@ -895,7 +895,7 @@ async function runTaskInner(t: QueueTask): Promise<TerminalReason> {
         outcome = "failed";
         recordFailure({ op: "transcribe", path: t.path, reason: tr.reason ?? tr.status, batchId: t.batchId });
         queueFailureLog("transcribe", t.path, tr.reason ?? tr.status);
-      } else if (tr.status === "skipped") outcome = "skipped";
+      } else if (tr.status === "skipped" || tr.status === "needs_setup") outcome = "skipped";
     } else if (t.op === "describe") {
       const dr = await describeOne(t.path, {
         overwrite: t.overwrite,
@@ -922,7 +922,7 @@ async function runTaskInner(t: QueueTask): Promise<TerminalReason> {
         // refusal as "described". Still NOT a failure: it never calls recordFailure, never logs a queue
         // failure, and never feeds the §2.7 ceiling.
         outcome = "rejected";
-      } else if (dr.status === "skipped") outcome = "skipped";
+      } else if (dr.status === "skipped" || dr.status === "needs_setup") outcome = "skipped";
     } else if (t.op === "ocr") {
       // OCR (ocr.mdx §10.5). ocrOne registers its own track("ocr", …), so the dock card comes for free.
       // NOTE the statuses that are NOT failures: `ocred` with 0 chars is a SUCCESS — most images have no text
@@ -932,7 +932,11 @@ async function runTaskInner(t: QueueTask): Promise<TerminalReason> {
         outcome = "failed";
         recordFailure({ op: "ocr", path: t.path, reason: or.reason ?? or.status, batchId: t.batchId });
         queueFailureLog("ocr", t.path, or.reason ?? or.status);
-      } else if (or.status === "skipped") outcome = "skipped";
+        // `needs_setup` wrote NO artifact — the file was redirected to the storage wizard. Draining it as
+        // `done` (the old fall-through, shared by all three ops above) counted work that never happened, so
+        // the batch read complete while the file still has no OCR text. It is a skip, exactly as
+        // summarizeOcr() has always counted it.
+      } else if (or.status === "skipped" || or.status === "needs_setup") outcome = "skipped";
     } else {
       // compress — wrap in a track("compress", …) so the file shows a live dock card while it runs.
       // The heavy transcode is async inside compressFile (spawn), so this does NOT block the event loop.

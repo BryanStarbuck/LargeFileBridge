@@ -21,12 +21,13 @@ import {
   Ban,
   Captions,
   Sparkles,
+  TextSelect,
 } from "lucide-react";
 import { HardDrive } from "lucide-react";
 import type { RepoRow, PeerRow, IpfsPinRow, StorageRow } from "@lfb/shared";
 import { api } from "@/api/client";
 import { ActionsKebab, type Action } from "./EntityMenu";
-import { openTranscribeBatch, openDescribeBatch } from "@/lib/batchPopup";
+import { openTranscribeBatch, openDescribeBatch, openOcrBatch } from "@/lib/batchPopup";
 import { confirmModal } from "@/lib/modals";
 import { copyText } from "@/lib/clipboard";
 import { clientLog } from "../../lib/clientLog.js";
@@ -158,6 +159,18 @@ export function RepoKebab({ repo }: { repo: RepoRow }) {
       // popup). This item was previously missing from the repo-row ⋮, so "Create AI descriptions" was
       // unreachable here; both producing actions must be symmetric on every ⋮/right-click surface.
       onSelect: () => openDescribeBatch({ root: repo.path }),
+    },
+    {
+      id: "create-ocr-text",
+      label: "Create OCR text",
+      group: "Create",
+      icon: <TextSelect className="h-4 w-4" />,
+      // The third sibling (ocr.mdx §0's symmetry contract): the trio is adjacent and always in the order
+      // transcription → AI description → OCR, at every scale. This surface had gained the first two, so
+      // omitting the third repeated — one release later — the exact "unreachable here" bug the comment
+      // above records. (ocr.mdx §8.4 says the repo ⋮ carries no producing actions at all; this catalog
+      // disagrees with that spec in practice, and the contract's rule for that case is all three or none.)
+      onSelect: () => openOcrBatch({ root: repo.path }),
     },
     {
       id: "toggle-pin",

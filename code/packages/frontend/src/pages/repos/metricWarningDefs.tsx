@@ -12,7 +12,7 @@ import { formatBytes, mediaKindForName } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { clientLog } from "../../lib/clientLog.js";
 import { DESCRIBE_KIND_FILTERS } from "../../lib/describe.js";
-import { OCR_KIND_FILTERS } from "../../lib/ocr.js";
+import { OCR_KIND_FILTERS, withOcrReady } from "../../lib/ocr.js";
 import { withModelReady } from "../../lib/transcribe.js";
 import type { WarningDef } from "../../components/ui/warnings/registry.js";
 import type { MetricId } from "./metricWarnings.js";
@@ -380,16 +380,28 @@ export function buildOcrWarning(detail: RepoDetail, repoId: string): WarningDef 
       // BACKGROUND-ENQUEUED (ocr.mdx §9, the locked-closed ai_description.mdx §12.4 defect). Never
       // api.ocrBatch here: that would OCR every file inline inside ONE HTTP request, which stays open for
       // minutes, dies on a blip, and never surfaces per-file rows on the Processing page.
+      // Engine-gated like EVERY other OCR producer (ocr.mdx §6: "the viewer button, the ⋮ item, the page
+      // action, the popup Apply, and the queue worker all route through the same gate. There is no path
+      // that reaches the engine without it."). This tile's Apply was the one path that skipped it, so on a
+      // machine with no engine it queued a batch that could only fail, file by file. withOcrReady is a
+      // pass-through whenever an engine resolves, so the common case keeps its immediate feel.
       apply: async (_sel, checkedPaths) => {
-        try {
-          const plan = await api.ocrEnqueue({ paths: checkedPaths });
-          if (plan.needsSetup) {
-            toast.error("Set up Personal storage first — Settings → Storages");
-          }
-        } catch (e) {
-          clientLog.error("ocr.enqueue", e);
-          toast.error(e instanceof Error ? e.message : "Could not queue OCR");
-        }
+        await withOcrReady({
+          label: `OCR ${checkedPaths.length} file${checkedPaths.length === 1 ? "" : "s"}`,
+          run: () => {
+            void api
+              .ocrEnqueue({ paths: checkedPaths })
+              .then((plan) => {
+                if (plan.needsSetup) {
+                  toast.error("Set up Personal storage first — Settings → Storages");
+                }
+              })
+              .catch((e) => {
+                clientLog.error("ocr.enqueue", e);
+                toast.error(e instanceof Error ? e.message : "Could not queue OCR");
+              });
+          },
+        });
       },
     },
   };

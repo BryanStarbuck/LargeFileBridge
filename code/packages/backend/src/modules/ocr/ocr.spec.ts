@@ -95,5 +95,18 @@ describe("frameCountFor (ocr.mdx §2.2.1 / §15)", () => {
 
   it("always yields at least one frame for a clip shorter than the stride", () => {
     expect(frameCountFor(3, 15, 1000)).toBe(1);
+    expect(frameCountFor(12, 15, 1000)).toBe(1); // extractFrames' short-clip branch: one frame at D/2
+    expect(frameCountFor(14.9, 15, 1000)).toBe(1);
+  });
+
+  // The hint MUST equal what extractFrames actually emits (§9.2) — the popup promising 3 frames for a clip
+  // that yields 2 is a promise the run cannot keep. `ceil(D / stride)` over-counted every clip whose tail
+  // fell inside a partial window; the real ffmpeg `fps` filter rounds to the NEAREST slot on the phased
+  // grid, i.e. round((D - stride/2) / stride). These numbers were MEASURED against ffmpeg, not derived.
+  it("matches ffmpeg's measured emission on a phased grid (§2.2.2)", () => {
+    expect(frameCountFor(16, 15, 1000)).toBe(1); // measured: 1 (ceil said 2)
+    expect(frameCountFor(40, 15, 1000)).toBe(2); // measured: 2 (ceil said 3)
+    expect(frameCountFor(100, 15, 1000)).toBe(6); // measured: 6 (ceil said 7)
+    expect(frameCountFor(300, 15, 1000)).toBe(20); // measured: 20 — agrees
   });
 });
