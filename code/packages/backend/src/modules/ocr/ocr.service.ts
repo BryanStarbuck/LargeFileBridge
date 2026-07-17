@@ -14,6 +14,7 @@ import YAML from "yaml";
 import type { OcrBlock, OcrKind, OcrLevel, OcrResult, OcrBatchResult, OcrView, OcrEngineId, OcrEnginesStatus, EnqueuePlan, PreviewPlan } from "@lfb/shared";
 import { mediaKindForName, isPdfName } from "@lfb/shared";
 import { HARD_SKIP } from "../../shared/scan-filters.js";
+import { collectFilesRecursive } from "../../shared/fs-walk.js";
 import { expandHome } from "../fs/badges.js";
 import { getAppConfig } from "../store-model/config.service.js";
 import { resolveArtifactPlacement, artifactPathForPlacement, OCR_EXT } from "../storage/artifact-placement.service.js";
@@ -401,7 +402,7 @@ export async function ocrMany(inputs: string[], opts: { overwrite?: boolean; eng
 export async function ocrTree(input: string, opts: { overwrite?: boolean; engine?: OcrEngineId | "auto" } = {}): Promise<OcrBatchResult> {
   const abs = path.resolve(expandHome(input.trim()));
   if (!exists(abs)) return summarizeOcr([result(abs, "failed", null, null, null, "path not found")]);
-  const media = walkOcrable(abs);
+  const media = await walkOcrable(abs);
   log.info("ocr", `tree ocr: ${media.length} image/video file(s) under ${abs}`);
   return ocrMany(media, opts);
 }
@@ -416,7 +417,7 @@ export async function ocrTree(input: string, opts: { overwrite?: boolean; engine
  */
 export async function enqueueOcr(opts: { paths?: string[]; root?: string; overwrite?: boolean; engine?: OcrEngineId | "auto" }): Promise<EnqueuePlan> {
   const overwrite = opts.overwrite ?? false;
-  const candidates = ocrCandidates(opts);
+  const candidates = await ocrCandidates(opts);
   let alreadyDone = 0;
   let unsupported = 0;
   let needSetup = 0;
@@ -484,7 +485,7 @@ export async function enqueueOcr(opts: { paths?: string[]; root?: string; overwr
  */
 export async function previewOcr(opts: { paths?: string[]; root?: string; overwrite?: boolean }): Promise<PreviewPlan> {
   const overwrite = opts.overwrite ?? false;
-  const candidates = ocrCandidates(opts);
+  const candidates = await ocrCandidates(opts);
   const cfg = getAppConfig().ocr;
   const stride = cfg?.video_stride_seconds ?? 15;
   const maxFrames = cfg?.max_frames ?? 1000;
@@ -542,7 +543,7 @@ export async function previewOcr(opts: { paths?: string[]; root?: string; overwr
 const PREVIEW_PROBE_LIMIT = 200;
 
 /** Checked `paths` used as-is, else the recursive `root` walked for image/video (page_actions.mdx §1.1). */
-function ocrCandidates(opts: { paths?: string[]; root?: string }): string[] {
+async function ocrCandidates(opts: { paths?: string[]; root?: string }): Promise<string[]> {
   if (opts.paths && opts.paths.length > 0) return opts.paths.map((p) => path.resolve(expandHome(p.trim())));
   if (opts.root && opts.root.trim()) return walkOcrable(path.resolve(expandHome(opts.root.trim())));
   throw new Error("enqueue requires either paths[] (the checked set) or root (to walk recursively)");
@@ -561,31 +562,11 @@ function safeSize(p: string): number | undefined {
   }
 }
 
-/** Recursively collect image/video paths under `root`, skipping hidden/tracking/heavy dirs. */
-function walkOcrable(root: string): string[] {
-  const out: string[] = [];
-  const visit = (dir: string): void => {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const ent of entries) {
-      if (ent.isDirectory()) {
-        if (SKIP_DIRS.has(ent.name) || ent.name.startsWith(".")) continue;
-        visit(path.join(dir, ent.name));
-      } else if (ent.isFile() && ocrKindFor(ent.name)) {
-        out.push(path.join(dir, ent.name));
-      }
-    }
-  };
-  try {
-    fs.statSync(root).isDirectory() ? visit(root) : ocrKindFor(path.basename(root)) && out.push(root);
-  } catch {
-    /* unreadable root */
-  }
-  return out;
+/** Recursively collect image/video paths under `root`, skipping hidden/tracking/heavy dirs. Async +
+ *  cooperatively yielding (shared fs-walk) so the batch-plan popup never freezes the event loop on a large
+ *  or cloud-mounted tree — the file predicate (`ocrKindFor`) also admits PDFs (ocr.mdx §11.2). */
+function walkOcrable(root: string): Promise<string[]> {
+  return collectFilesRecursive(root, (name) => !!ocrKindFor(name), SKIP_DIRS);
 }
 
 function summarizeOcr(results: OcrResult[]): OcrBatchResult {

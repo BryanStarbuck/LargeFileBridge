@@ -12,6 +12,7 @@ import YAML from "yaml";
 import type { DescribeKind, DescribeResult, DescribeBatchResult, DescribeView, DescribeProvidersStatus, DescribeAiConfig, DescribeAiConfigPatch, AiCredentialsInfo, EnqueuePlan, PreviewPlan, ProviderHealthView, ProviderResumeResult } from "@lfb/shared";
 import { mediaKindForName } from "@lfb/shared";
 import { HARD_SKIP } from "../../shared/scan-filters.js";
+import { collectFilesRecursive } from "../../shared/fs-walk.js";
 import { expandHome } from "../fs/badges.js";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
 import { appConfigPath } from "../../shared/store/scopes.js";
@@ -491,7 +492,7 @@ export async function describeTree(
 ): Promise<DescribeBatchResult> {
   const abs = path.resolve(expandHome(input.trim()));
   if (!exists(abs)) return summarizeDescribe([result(abs, "failed", null, null, "path not found")]);
-  const media = walkDescribable(abs);
+  const media = await walkDescribable(abs);
   log.info("describe", `tree describe: ${media.length} image/video file(s) under ${abs}`);
   return describeMany(media, opts);
 }
@@ -509,7 +510,7 @@ export async function enqueueDescribe(opts: {
   provider?: ProviderId | "auto";
 }): Promise<EnqueuePlan> {
   const overwrite = opts.overwrite ?? false;
-  const candidates = describeCandidates(opts);
+  const candidates = await describeCandidates(opts);
   let alreadyDone = 0;
   let unsupported = 0;
   let needSetup = 0;
@@ -636,7 +637,7 @@ export async function enqueueDescribe(opts: {
  */
 export async function previewDescribe(opts: { paths?: string[]; root?: string; overwrite?: boolean }): Promise<PreviewPlan> {
   const overwrite = opts.overwrite ?? false;
-  const candidates = describeCandidates(opts);
+  const candidates = await describeCandidates(opts);
   let alreadyDone = 0;
   let unsupported = 0;
   const files: PreviewPlan["files"] = [];
@@ -696,7 +697,7 @@ export async function previewDescribe(opts: { paths?: string[]; root?: string; o
 }
 
 /** Checked `paths` used as-is, else the recursive `root` walked for image/video (page_actions.mdx §1.1). */
-function describeCandidates(opts: { paths?: string[]; root?: string }): string[] {
+async function describeCandidates(opts: { paths?: string[]; root?: string }): Promise<string[]> {
   if (opts.paths && opts.paths.length > 0) {
     return opts.paths.map((p) => path.resolve(expandHome(p.trim())));
   }
@@ -724,30 +725,11 @@ function safeSize(p: string): number | undefined {
 }
 
 /** Recursively collect image/video file paths under `root`, skipping hidden/tracking/heavy dirs. */
-function walkDescribable(root: string): string[] {
-  const out: string[] = [];
-  const visit = (dir: string): void => {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const ent of entries) {
-      if (ent.isDirectory()) {
-        if (SKIP_DIRS.has(ent.name) || ent.name.startsWith(".")) continue;
-        visit(path.join(dir, ent.name));
-      } else if (ent.isFile() && describeKindFor(ent.name)) {
-        out.push(path.join(dir, ent.name));
-      }
-    }
-  };
-  try {
-    fs.statSync(root).isDirectory() ? visit(root) : describeKindFor(path.basename(root)) && out.push(root);
-  } catch {
-    /* unreadable root */
-  }
-  return out;
+// Async + cooperatively yielding (shared fs-walk) so the batch-plan popup never freezes the event loop on
+// a large or cloud-mounted tree. Collects image/video files (describeKindFor); behavior otherwise identical
+// to the sync walk it replaces.
+function walkDescribable(root: string): Promise<string[]> {
+  return collectFilesRecursive(root, (name) => !!describeKindFor(name), SKIP_DIRS);
 }
 
 /** Exported for describe-counts.spec.ts — the sum invariant is the whole claim of the shape. */

@@ -12,6 +12,7 @@ import { Transcriber } from "../../tools/transcribe/Transcribe.js";
 import { transcribeWithEngine, canTranscribe as engineCanTranscribe } from "../../tools/transcribe/engine.js";
 import { getAppConfig } from "../store-model/config.service.js";
 import { HARD_SKIP } from "../../shared/scan-filters.js";
+import { collectFilesRecursive } from "../../shared/fs-walk.js";
 import { expandHome } from "../fs/badges.js";
 import { resolveArtifactPlacement, artifactPathForPlacement, TRANSCRIPTION_EXT } from "../storage/artifact-placement.service.js";
 import { markDurableArtifact } from "../storage/tracking-root.service.js";
@@ -189,7 +190,7 @@ export async function transcribeMany(inputs: string[], overwrite = false): Promi
 export async function transcribeTree(input: string, overwrite = false): Promise<TranscribeBatchResult> {
   const abs = path.resolve(expandHome(input.trim()));
   if (!exists(abs)) return summarize([result(abs, "failed", null, null, "path not found")]);
-  const media = walkMedia(abs);
+  const media = await walkMedia(abs);
   log.info("transcribe", `tree transcribe: ${media.length} media file(s) under ${abs}`);
   return transcribeMany(media, overwrite);
 }
@@ -210,9 +211,9 @@ export async function transcribeStorageById(id: string, overwrite = false): Prom
  * background queue ([job_queue.mdx](../jobqueue)), and returns the PLAN immediately — never the results.
  * The caller returns without awaiting the queue; each file surfaces its own `transcribe` dock card as it runs.
  */
-export function enqueueTranscribe(opts: { paths?: string[]; root?: string; overwrite?: boolean }): EnqueuePlan {
+export async function enqueueTranscribe(opts: { paths?: string[]; root?: string; overwrite?: boolean }): Promise<EnqueuePlan> {
   const overwrite = opts.overwrite ?? false;
-  const candidates = resolveCandidates(opts);
+  const candidates = await resolveCandidates(opts);
   let alreadyDone = 0;
   let unsupported = 0;
   let needSetup = 0;
@@ -286,9 +287,9 @@ export function enqueueTranscribe(opts: { paths?: string[]; root?: string; overw
  * checked-by-default. First-time-setup files stay in the list (their wizard fires later, at the popup's
  * Apply → enqueue). Nothing is ever written or queued here.
  */
-export function previewTranscribe(opts: { paths?: string[]; root?: string; overwrite?: boolean }): PreviewPlan {
+export async function previewTranscribe(opts: { paths?: string[]; root?: string; overwrite?: boolean }): Promise<PreviewPlan> {
   const overwrite = opts.overwrite ?? false;
-  const candidates = resolveCandidates(opts);
+  const candidates = await resolveCandidates(opts);
   let alreadyDone = 0;
   let unsupported = 0;
   const files: PreviewPlan["files"] = [];
@@ -327,7 +328,7 @@ export function previewTranscribe(opts: { paths?: string[]; root?: string; overw
  * The candidate set for a page action (page_actions.mdx §1.1): a non-empty `paths` is the CHECKED set
  * (used as-is); otherwise `root` is walked recursively for media. Exactly one must be supplied.
  */
-function resolveCandidates(opts: { paths?: string[]; root?: string }): string[] {
+async function resolveCandidates(opts: { paths?: string[]; root?: string }): Promise<string[]> {
   if (opts.paths && opts.paths.length > 0) {
     return opts.paths.map((p) => path.resolve(expandHome(p.trim())));
   }
@@ -346,30 +347,11 @@ function scopeLabel(opts: { paths?: string[]; root?: string }): string {
 }
 
 /** Recursively collect audio/video file paths under `root`, skipping hidden/tracking/heavy dirs. */
-function walkMedia(root: string): string[] {
-  const out: string[] = [];
-  const visit = (dir: string): void => {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const ent of entries) {
-      if (ent.isDirectory()) {
-        if (SKIP_DIRS.has(ent.name) || ent.name.startsWith(".")) continue;
-        visit(path.join(dir, ent.name));
-      } else if (ent.isFile() && engine.canTranscribe(ent.name)) {
-        out.push(path.join(dir, ent.name));
-      }
-    }
-  };
-  try {
-    fs.statSync(root).isDirectory() ? visit(root) : engine.canTranscribe(root) && out.push(root);
-  } catch {
-    /* unreadable root */
-  }
-  return out;
+// Async + cooperatively yielding (shared fs-walk) so the batch-plan popup never freezes the event loop on
+// a large or cloud-mounted tree. Collects audio/video files (engine.canTranscribe); behavior otherwise
+// identical to the sync walk it replaces.
+function walkMedia(root: string): Promise<string[]> {
+  return collectFilesRecursive(root, (name) => engine.canTranscribe(name), SKIP_DIRS);
 }
 
 function result(

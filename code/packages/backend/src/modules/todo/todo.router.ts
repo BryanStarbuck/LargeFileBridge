@@ -124,7 +124,7 @@ todoRouter.post("/batches/:id/apply", async (req, res) => {
     if (doc.kind === "transcribe") {
       const abs = chosen.map((i) => path.join(root, i.path));
       if (abs.length) {
-        enqueueTranscribe({ paths: abs });
+        await enqueueTranscribe({ paths: abs });
         result.transcribed = abs.length;
         result.applied += abs.length;
       }
