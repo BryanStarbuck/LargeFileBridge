@@ -138,6 +138,13 @@ export interface FileRow {
   // The rule that ignores this file, for the "Ignored by .gitignore:3 — `**/videos/**`" explanation.
   // `source` is a basename (e.g. ".gitignore"). Absent when the file is not ignored.
   gitignoreRule?: { source: string; line: number; pattern: string };
+  // True when the scan admitted this row ONLY as small, not-git-ignored ANALYSIS MEDIA (scan.mdx §4.1
+  // rule 5) — a sub-threshold image/video/audio surfaced purely so the analysis tabs can OCR / describe /
+  // transcribe it. It is NEVER bridge payload (never auto-pinned), and it does NOT count toward the
+  // large-file decision/space metrics or the repos-list counts (one_repo.mdx §4.1). The promoted
+  // "Large files only" rail toggle (tables.mdx §2.9) hides exactly these rows by default; turning the
+  // toggle off is what reveals them. Absent/false = a normal large-file candidate (payload or nudge).
+  analysisOnly?: boolean;
 }
 
 // One file a peer computer pinned that THIS computer is missing — the subject of the "pull them down"
@@ -1198,6 +1205,12 @@ export interface EntityFlagsPatch {
 // Which viewer a file opens in. Non-media files fall back to the /file properties page.
 // Audio joins image/video as a viewer-first kind (the /audio player) — media_viewer.mdx.
 export type MediaKind = "image" | "video" | "audio";
+
+// The value vocabulary of the shared File-type facet (tables.mdx §2.10). A superset of MediaKind that
+// adds `pdf` (a distinct, filterable document class) and `other` (everything non-media/non-pdf), so a
+// file table can offer ☑ Images ☑ Videos ☑ Audio ☑ PDFs ☐ Other checkboxes. Derived name-only by
+// fileTypeForName() in media.ts.
+export type FileType = "image" | "video" | "audio" | "pdf" | "other";
 
 // Best-effort, LOCAL-ONLY, NO-SHELL probe of a media file (media_viewer.mdx §2). Every field is
 // nullable: the sniff reads a bounded header/tail and reports only what it can determine. The viewer

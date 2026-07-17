@@ -38,11 +38,15 @@ interface Candidate {
   path: string; // relative to unit root
   size: number;
   modified_at: string;
-  // TRUE when this row exists ONLY as the checked-in nudge (scan.mdx §4.1 rule 4) — it is not git-ignored
-  // and would not have been a candidate on payload grounds. In-memory only: writeStatus() persists just
-  // path/size/modified_at, so this never reaches status.yaml. It exists to keep the auto-decide policy off
-  // these rows (§4.1 "a nudge, not payload").
+  // TRUE when this row is NOT bridge payload — the checked-in nudge (scan.mdx §4.1 rule 4) OR small
+  // analysis media (rule 5). In-memory only: writeStatus() does not persist it, because its only job is to
+  // keep the auto-decide policy off these rows in the SAME scan pass (§4.1 "a nudge, not payload").
   nudgeOnly?: boolean;
+  // TRUE when this row was admitted ONLY as small, not-git-ignored analysis media (scan.mdx §4.1 rule 5) —
+  // a sub-threshold image/video/audio surfaced purely so the analysis tabs can OCR / describe / transcribe
+  // it. Unlike `nudgeOnly`, this IS persisted to status.yaml, because the frontend "Large files only" rail
+  // toggle (tables.mdx §2.9) reads it off each FileRow long after the scan. A rule-5 row carries BOTH flags.
+  analysisOnly?: boolean;
 }
 
 // Progress reporter threaded through the walk so the background job runner (scan-job.ts) can surface
@@ -391,12 +395,23 @@ async function walkUnit(
       // These rows are a NUDGE, never bridge payload — the user's ⊘ click is what makes them ours.
       const checkedInBig =
         opts.checkedInThreshold != null && !gitIgnored && st.size >= opts.checkedInThreshold;
-      // Payload = what this file would have been WITHOUT the nudge rule. A row that is only a candidate
-      // because of `checkedInBig` is nudge-only, and the auto-decide policy must never touch it.
+      // THE ANALYSIS-MEDIA RULE (scan.mdx §4.1 rule 5): a video/audio/image at ANY size is a candidate —
+      // even a small, checked-in, not-git-ignored one (a 2 MB screenshot, a 30-second clip) — so the
+      // analysis tabs can OCR / describe / transcribe it. This is what lets "open the OCR tab and OCR a
+      // file smaller than the large-file size" work; without it the small file is never a row.
+      const analysisMedia = isMediaFile(ent.name);
+      // Payload = what this file would have been WITHOUT the nudge/analysis rules. A row that is only a
+      // candidate because of `checkedInBig` or `analysisMedia` is NOT payload — the auto-decide policy must
+      // never touch it (it would auto-pin a file the user never chose to bridge).
       const isPayload =
         forced || gitIgnoredMedia || (bigEnough && (followsGitignore ? gitIgnored : true));
-      const isCandidate = isPayload || checkedInBig;
+      const isCandidate = isPayload || checkedInBig || analysisMedia;
       if (!isCandidate) continue;
+      // `analysisOnly` = admitted PURELY by rule 5 (not payload, not the checked-in nudge) — a small media
+      // file. It is what the "Large files only" toggle hides (tables.mdx §2.9). A git-ignored media file of
+      // any size (rule 1, payload) or a 50–100 MB checked-in nudge (rule 4) is NOT analysisOnly, so it stays
+      // visible under the toggle — the 5–100 MB git-ignored clip case (scan.mdx §4.1) is never re-hidden.
+      const analysisOnly = !isPayload && !checkedInBig && analysisMedia;
       // At the cap: stop accumulating, but keep counting so the warning below is exact (§I item I4).
       if (out.length >= cap) {
         dropped++;
@@ -406,7 +421,10 @@ async function walkUnit(
         path: opts.rootLabelAbsolute ? abs : rel,
         size: st.size,
         modified_at: st.mtime.toISOString(),
+        // nudgeOnly keeps the auto-decide policy off every non-payload row (checked-in nudge OR analysis
+        // media); analysisOnly additionally marks the rule-5-only rows for the "Large files only" toggle.
         ...(isPayload ? {} : { nudgeOnly: true }),
+        ...(analysisOnly ? { analysisOnly: true } : {}),
       });
       void relForIgnore;
     }
@@ -539,10 +557,18 @@ function diffStatus(
     last_scan_at: new Date().toISOString(),
     scan_source: source,
     effective_threshold_bytes: threshold,
-    big_file_count: candidates.length,
-    big_file_bytes: candidates.reduce((s, c) => s + c.size, 0),
+    // The "big file" totals count only real large-file candidates — small analysis media (rule 5) is NOT a
+    // large file and must not inflate the repos-list count/bytes (one_repo.mdx §4.1 / repos.mdx §4.1).
+    big_file_count: candidates.filter((c) => !c.analysisOnly).length,
+    big_file_bytes: candidates.reduce((s, c) => (c.analysisOnly ? s : s + c.size), 0),
     repo_state: repoState === "computer" ? "present" : "present",
-    candidates: candidates.map((c) => ({ path: c.path, size: c.size, modified_at: c.modified_at })),
+    // Persist analysisOnly (the frontend "Large files only" toggle reads it); path/size/modified_at as before.
+    candidates: candidates.map((c) => ({
+      path: c.path,
+      size: c.size,
+      modified_at: c.modified_at,
+      ...(c.analysisOnly ? { analysisOnly: true } : {}),
+    })),
     changes_since_last_scan: { added, grew, shrank, moved, deleted },
   };
 }

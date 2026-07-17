@@ -719,6 +719,10 @@ export const UnitStatusSchema = z.object({
         path: z.string(),
         size: z.number().default(0),
         modified_at: iso.optional(),
+        // TRUE when the row was admitted ONLY as small analysis media (scan.mdx §4.1 rule 5). Persisted
+        // (unlike the in-memory `nudgeOnly`) because the frontend "Large files only" toggle reads it off
+        // each FileRow. Absent/false = a normal large-file candidate (payload or checked-in nudge).
+        analysisOnly: z.boolean().optional(),
       }),
     )
     .default([]),

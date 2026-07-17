@@ -2,7 +2,7 @@
 // must route a file to the right viewer BEFORE it has an EntityView (e.g. a File System cell click,
 // which only knows the name). The backend keeps its own richer detection in badges.ts/media.ts; this
 // is the lightweight, name-only discriminator both sides agree on.
-import type { MediaKind } from "./types.js";
+import type { MediaKind, FileType } from "./types.js";
 
 // Kept in step with backend badges.ts VIDEO_EXT / IMAGE_* sets. Videos are primary, images secondary
 // (charter §Compression). ".ts" is intentionally NOT treated as video here — it collides with
@@ -43,4 +43,21 @@ export function mediaKindForName(name: string): MediaKind | null {
 export function viewerRouteForName(name: string): "/image" | "/video" | "/audio" | "/file" {
   const kind = mediaKindForName(name);
   return kind === "image" ? "/image" : kind === "video" ? "/video" : kind === "audio" ? "/audio" : "/file";
+}
+
+// PDFs are a distinct, filterable document class in the File-type facet (tables.mdx §2.10) — not media
+// (no viewer, no analysis task today) but common enough that "show me just the PDFs" is a real intent.
+const PDF_EXT = new Set([".pdf"]);
+
+/**
+ * The File-type facet value for a name (tables.mdx §2.10): image | video | audio | pdf | other.
+ * A superset of `mediaKindForName()` — same video/image/audio families, plus `pdf` for `.pdf` and
+ * `other` for everything else (source, docs, archives, data files). Name-only, isomorphic; the shared
+ * discriminator the facet's accessor and the media viewer both agree on.
+ */
+export function fileTypeForName(name: string): FileType {
+  const kind = mediaKindForName(name);
+  if (kind) return kind; // image | video | audio
+  if (PDF_EXT.has(fileExt(name))) return "pdf";
+  return "other";
 }

@@ -331,6 +331,9 @@ function composeFileRows(
       transcribe: transcribeStatusFor(cand.path, repoRootAbs),
       describe: describeStatusFor(cand.path, repoRootAbs),
       ocr: ocrStatusFor(cand.path, repoRootAbs),
+      // Small analysis-only media (scan.mdx §4.1 rule 5) — the "Large files only" toggle hides these by
+      // default and the decision/space counts exclude them (tables.mdx §2.9, one_repo.mdx §4.1).
+      analysisOnly: cand.analysisOnly === true,
     };
   });
 }
@@ -448,6 +451,18 @@ function computeTaskMetrics(files: FileRow[]): TaskMetrics {
     bigNotIgnored: 0,
   };
   for (const f of files) {
+    // The pure-ANALYSIS metrics (OCR / describe / transcribe) count EVERY row — that is the whole point of
+    // surfacing small media (scan.mdx §4.1 rule 5): a small screenshot IS an OCR candidate.
+    if (f.transcribe === "could") m.transcribable++;
+    if (f.transcribe === "done") m.transcribed++;
+    if (f.describe === "could") m.describable++;
+    if (f.describe === "done") m.described++;
+    if (f.ocr === "could") m.ocrable++;
+    if (f.ocr === "done") m.ocred++;
+    // The large-file DECISION and SPACE metrics count only real large-file candidates. Small analysis-only
+    // media (rule 5) is not a pin decision, not a space-reclaim target, and not a git-ignore nudge — so it
+    // must not inflate these tiles (tables.mdx §2.9 / one_repo.mdx §4.1).
+    if (f.analysisOnly) continue;
     if (f.decision === "undecided") m.undecided++;
     if (f.decision === "sync" && f.transfer === "pending") m.pending++;
     if (f.decision === "sync" && f.cid != null && f.peers.length === 0) m.notBackedUp++;
@@ -456,12 +471,6 @@ function computeTaskMetrics(files: FileRow[]): TaskMetrics {
       else m.compressibleVideos++;
     }
     if (f.compress === "done") m.alreadyCompressed++;
-    if (f.transcribe === "could") m.transcribable++;
-    if (f.transcribe === "done") m.transcribed++;
-    if (f.describe === "could") m.describable++;
-    if (f.describe === "done") m.described++;
-    if (f.ocr === "could") m.ocrable++;
-    if (f.ocr === "done") m.ocred++;
     if (!f.gitignore && f.sizeBytes >= bigFileMetricThreshold) m.bigNotIgnored++;
   }
   return m;
@@ -491,6 +500,9 @@ function transferFor(decision: Decision, cid: string | null, peers: string[]): T
 function countDecisions(files: FileRow[]): RepoCounts {
   const counts: RepoCounts = { pinned: 0, pending: 0, undecided: 0, ignored: 0 };
   for (const f of files) {
+    // Small analysis-only media (scan.mdx §4.1 rule 5) is not a large-file decision the user owes — a
+    // folder of thumbnails must not read as hundreds of Undecided (one_repo.mdx §4.1 / repos.mdx §4.1).
+    if (f.analysisOnly) continue;
     if (f.decision === "ignore") counts.ignored++;
     else if (f.decision === "undecided") counts.undecided++;
     else if (f.decision === "sync") {
