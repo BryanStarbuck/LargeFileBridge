@@ -89,6 +89,7 @@ export function StoragesPage() {
       </div>
 
       <DataTable
+        tableId="storages"
         fillHeight={false}
         data={rows}
         columns={columns}

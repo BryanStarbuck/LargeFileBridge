@@ -178,6 +178,7 @@ export function ReposPage() {
       </div>
 
       <DataTable
+        tableId="repos"
         data={repos ?? []}
         columns={columns}
         searchKeys={(r) => `${r.name} ${r.path}`}

@@ -177,6 +177,7 @@ export function DevicesPage() {
       )}
 
       <DataTable
+        tableId="devices"
         data={rows}
         columns={columns}
         searchKeys={(d) =>

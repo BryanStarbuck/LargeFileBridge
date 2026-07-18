@@ -876,6 +876,33 @@ export const FileSystemViewSchema = z.object({
 });
 export type FileSystemView = z.infer<typeof FileSystemViewSchema>;
 
+// ── Per-table persisted view state (tables.mdx — "save the sorts, filters, and which columns are
+// shown" per logged-in user) ─────────────────────────────────────────────────
+// The sort order, active column filters, search text, hidden columns, and promoted facet state the
+// user last had on ONE table, keyed by a stable table id (e.g. "repos", "repo-files:all"). Personal,
+// cosmetic view state — never gates access, never derives identity. Restored on mount, written
+// debounced. Held in the per-user config.yaml `tables:` record below.
+export const TableViewSchema = z.object({
+  // Multi-level sort, primary first — each { col, dir } mirrors one TanStack SortingState entry.
+  sort: z
+    .array(z.object({ col: z.string(), dir: z.enum(["asc", "desc"]) }))
+    .default([]),
+  // Active column filters: columnId → filter value (the string the Filter dropdown wrote).
+  filters: z.record(z.string(), z.string()).default({}),
+  // The search-box text.
+  search: z.string().default(""),
+  // Column ids the user explicitly turned OFF in the Columns dropdown (presentation-only; a hidden
+  // column can still be sorted/filtered). Kept forward-compatibly — ids no longer present are ignored.
+  hidden_columns: z.array(z.string()).default([]),
+  // Promoted "Large files only" toggle state, when the table carries it (file tables). Optional so a
+  // table without the toggle stores nothing for it.
+  large_only: z.boolean().optional(),
+  // The File-type facet's UNCHECKED (hidden) class keys, when the table carries the facet.
+  hidden_types: z.array(z.string()).optional(),
+  updated_at: iso.optional(),
+});
+export type TableView = z.infer<typeof TableViewSchema>;
+
 // ── per-user config.yaml (storage.mdx §4) ───────────────────────────────────
 export const UserConfigSchema = z.object({
   schema_version: z.number().default(1),
@@ -887,7 +914,12 @@ export const UserConfigSchema = z.object({
       last_route: z.string().default("/"),
     })
     .prefault({}),
-  tables: z.record(z.string(), z.unknown()).default({}),
+  // Remembered per-table view state (tables.mdx §4, LOCKED). `views` is keyed by a stable table id
+  // (`repos`, `repo-files:all`, …); each value is a TableView (sort/filters/search/hidden columns/
+  // facets). A fresh user reads back { views: {} } — never an error.
+  tables: z
+    .object({ views: z.record(z.string(), TableViewSchema).default({}) })
+    .prefault({}),
   // The File System page's persisted view state (directories.mdx §1.3). A fresh user with no block
   // reads back the schema defaults (empty columns/selection, all filters ON) — never an error.
   file_system: FileSystemViewSchema.prefault({}),

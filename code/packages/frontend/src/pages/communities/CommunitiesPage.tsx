@@ -125,6 +125,7 @@ export function CommunitiesPage() {
       {data && <StorageHeader data={data} onApplyBudget={(b) => setBudget.mutate(b)} busy={setBudget.isPending} />}
 
       <DataTable
+        tableId="communities"
         data={rows}
         columns={columns}
         searchKeys={(c) => `${c.name} ${c.publisher ?? ""} ${c.description ?? ""}`}

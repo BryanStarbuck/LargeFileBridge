@@ -186,6 +186,7 @@ export function ProcessingBatchesTable({ batches, onStop }: { batches: Processin
 
   return (
     <DataTable
+      tableId="processing-batches"
       data={batches}
       columns={columns}
       getRowId={(b) => b.batchId}

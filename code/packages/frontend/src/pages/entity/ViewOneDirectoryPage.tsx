@@ -189,6 +189,7 @@ export function ViewOneDirectoryPage() {
       {/* Category rollup table */}
       <h2 className="mb-1 text-sm font-medium text-black/70">What's inside</h2>
       <DataTable
+        tableId="directory-files"
         // Content below the table (the footer summary) → bounded height, not full-page
         // (directories.mdx §8 / repos.mdx §3.3.1).
         fillHeight={false}

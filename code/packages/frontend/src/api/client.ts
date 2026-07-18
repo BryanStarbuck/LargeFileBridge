@@ -19,6 +19,7 @@ import type {
   SizeUnit,
   FsListing,
   FileSystemView,
+  TableView,
   FlatFileListing,
   EntityView,
   AuthConfig,
@@ -106,6 +107,10 @@ export interface DecisionPolicyResult {
   policy: DecisionPolicyDoc;
   shareStatus: DecisionShareStatus;
 }
+
+// The loose body the table sends when persisting its view — every field optional so a partial change
+// (just a sort, just a column toggle) is a valid patch; the backend re-parses it through the schema.
+export type TableViewPatch = Partial<Omit<TableView, "updated_at">>;
 
 export const api = {
   me: () => unwrap<CurrentUser>(http.get("/auth/me")),
@@ -245,6 +250,13 @@ export const api = {
     selection: string[];
     filters?: Partial<{ only_large: boolean; videos: boolean; images: boolean; audio: boolean }>;
   }) => unwrap<FileSystemView | null>(http.put("/fs/view-state", view)),
+
+  // Per-user, per-table remembered view state (tables.mdx — sort/filters/search/hidden columns per
+  // logged-in user). GET returns the whole map keyed by table id (the frontend loads it once and hands
+  // each table its slot); PUT persists one table's view, debounced by the table on every change.
+  tableViews: () => unwrap<Record<string, TableView>>(http.get("/table-views")),
+  saveTableView: (tableId: string, view: TableViewPatch) =>
+    unwrap<TableView | null>(http.put(`/table-views/${encodeURIComponent(tableId)}`, view)),
   // OS hand-off (os_open.mdx) — the host platform label + whether "Open on {label}" is possible here,
   // and the localhost-only action that opens a local file/folder in the desktop OS default handler.
   platform: () => unwrap<PlatformInfo>(http.get("/fs/platform")),

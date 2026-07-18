@@ -32,6 +32,7 @@ import { progressRouter } from "./modules/progress/progress.router.js";
 import { securityRouter } from "./modules/security/security.router.js";
 import { internalRouter } from "./modules/internal/internal.router.js";
 import { clientLogRouter } from "./modules/clientlog/clientlog.router.js";
+import { tableViewsRouter } from "./modules/store-model/table-views.router.js";
 import * as ipfs from "./modules/ipfs/ipfs.service.js";
 import { reconcileWorkerSchedules, ensureDeviceWorkerDefaultOn } from "./modules/schedule/schedule.service.js";
 import { startWatchdog } from "./modules/schedule/watchdog.service.js";
@@ -226,6 +227,7 @@ async function main(): Promise<void> {
   app.use("/api/todo", todoRouter); // To Do page: per-storage batches, dismiss, apply, transcribe-scan (to_do.mdx)
   app.use("/api/internal", internalRouter);
   app.use("/api/client-log", clientLogRouter); // browser fault trail -> shared logger -> error.err
+  app.use("/api/table-views", tableViewsRouter); // per-user remembered table sort/filters/columns (tables.mdx)
 
   // Global error handler -> error.err.
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {

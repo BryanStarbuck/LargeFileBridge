@@ -478,9 +478,23 @@ The §2.4 rule is not filter-only. **Pin and git-ignore are two sortable columns
   `users/<email>/config.yaml`, under the existing **`tables.views`** map
   ([storage_local.mdx](./storage_local.mdx) §4, the tier for per-user "prefs / last view"). **Not** computer-wide,
   **not** in any pin unit — it is *this user's* view of *this page*.
-* **Keyed by table id.** `tables.views.<tableId>` (`repos`, `files`, `communities`, …). Each entry
-  stores the **ordered sort keys** and the **active filters** (including **Bookmarked only**, and the
-  search text if we choose to persist it).
+* **Keyed by table id.** `tables.views.<tableId>` (`repos`, `files`, `communities`, `repo-files:<tab>`,
+  …). Each entry stores the **ordered sort keys**, the **active filters** (including the promoted
+  **Large files only** toggle and the **File-type facet**), the **search text**, and the **hidden
+  columns** the user turned off in the Columns dropdown (§4b).
+* **Status: IMPLEMENTED.** The `tables.views` map — unused scaffolding until now — is live. Backend:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/table-views.service.ts`
+  (`loadTableViews` / `saveTableView`, read-modify-write merge-by-key so one table's write never
+  clobbers another) behind `GET/PUT /api/table-views[/:tableId]`
+  (`.../store-model/table-views.router.ts`). Frontend: the `useTableView(tableId)` hook
+  (`.../frontend/src/api/useTableView.ts`) loads the whole map once per session (deduped), hands each
+  `DataTable` its slot, and persists on change debounced 600 ms; the `DataTable` gates saving behind a
+  `hydrated` flag so first render never writes defaults over a stored view. The persisted TableView
+  shape is the current flat filter model (`filters: { <columnId>: <value> }`), not the idealized
+  per-facet `filters.facets.<f>.hidden` form the §4.1 excerpt below sketches — but it obeys the same
+  §4.1 principle: every persisted field records the **deviation from default** (hidden columns, hidden
+  file-types, Large-only on), never the shown set, so newly-added columns/kinds stay visible to
+  existing users.
 
 #### 4.1 Facets persist as the HIDDEN values, never the shown ones (LOCKED)
 
@@ -567,6 +581,35 @@ Repo / File) and its Status verdict are pinned. Implemented in
 
 ---
 
+## 4b. The Columns (`⚏`) dropdown — user-driven show/hide (LOCKED, site-wide)
+
+Beside the Sort (`⇅`) and Filter (`⛛`) icons in every table's control row sits a **third icon-only
+dropdown, Columns (`⚏`)** — the same pop-out pattern, iterating the table's full column list with **one
+checkbox per column**. Modeled on the sister app's movie-sheet "Columns" pop-out. Turning a column off
+**actually removes it from the rendered table** (header, body, and `<colgroup>`), not merely dims it.
+
+* **What it does.** A checked column shows; unchecked hides. The dropdown header reads `shown/total`
+  (e.g. `6/8`). A **"Show all columns"** action clears every manual hide (disabled when nothing is
+  hidden). The icon lights (primary color) whenever at least one column is hidden.
+* **Last-column guard.** The final visible column's checkbox is **disabled** — hiding it would only ever
+  blank the table (the same last-value rule as the File-type facet, §2.1).
+* **Layered on top of responsive priority (§4a), user wins.** Manual hides apply **first**; the
+  responsive min-width budget then runs over what remains. So a column the user hid never reappears on a
+  wide window, and the responsive layer only ever hides **more**, never re-shows a manually-hidden
+  column. A manually-shown low-priority column can still be responsively dropped when the window is too
+  narrow to fit it — presentation, not intent.
+* **Hidden ≠ gone from Sort/Filter.** Like responsive hiding, a manually-hidden column **still appears in
+  the Sort and Filter dropdowns** — hiding is presentation-only; you can still sort or filter by it.
+* **Persisted.** The hidden set is saved per-user, per-table as `hidden_columns: [...]` under
+  `tables.views.<tableId>` (§4), and restored on load — obeying §4.1 (store the hidden set, never the
+  shown one, so a newly-added column defaults to visible for existing users).
+* **Where.** The dropdown, the `hiddenCols` state, the manual-then-responsive column pipeline, and the
+  hydrate/save wiring all live in the shared
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx`
+  (`tableId` prop, `toggleCol`, `manualColumns` → `visibleColumns`), so **every** table inherits it.
+
+---
+
 ## 5. Acceptance criteria
 
 1. **Repos, the Full-paths files table, and Communities** each have a **leading ribbon bookmark
@@ -599,12 +642,17 @@ Repo / File) and its Status verdict are pinned. Implemented in
    chips, headers, and dropdown are one state (§3.5).
 10. The **default sort is Bookmarked-descending first, then the table's natural secondary** — applied
     only when the user has no saved sort; fully user-changeable (§3.4).
-11. **Sort and filter persist per user, per page** in `users/<email>/config.yaml` `tables.views`, saved
-    on every change and restored on load; the default is not written until the user changes something
-    (§4).
+11. **Sort, filter, search, AND column visibility persist per user, per page** in
+    `users/<email>/config.yaml` `tables.views.<tableId>`, saved on every change (debounced) and restored
+    on load; the default is not written until the user changes something (§4). The map is live, not
+    scaffolding — a fresh visit to any table restores the exact view the user last left.
 12. **Facets persist as `hidden:` (the unchecked values), never `shown:`** — an omitted or empty facet
     key means all-checked, so a newly-added enum value is visible to existing users by default; legacy
-    scalar values migrate on read (§4.1).
+    scalar values migrate on read (§4.1). The Columns dropdown's `hidden_columns` obeys the same rule.
+13. **Every table's control row carries a third Columns (`⚏`) dropdown** beside Sort and Filter (§4b):
+    one checkbox per column, `shown/total` badge, "Show all columns", last-column guard, and the icon
+    lit whenever a column is hidden. Unchecking a column **removes it from the rendered table**; manual
+    hides apply before the responsive budget (user wins) and a hidden column still appears in Sort/Filter.
 
 ## 6. Tab-scoped column sets (LOCKED)
 

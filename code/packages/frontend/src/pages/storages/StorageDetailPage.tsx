@@ -149,6 +149,7 @@ export function StorageDetailPage() {
       )}
 
       <DataTable
+        tableId="storage-detail"
         fillHeight={false}
         data={data?.files ?? []}
         columns={columns}

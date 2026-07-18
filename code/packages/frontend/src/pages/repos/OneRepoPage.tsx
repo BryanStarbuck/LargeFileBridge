@@ -713,6 +713,8 @@ export function OneRepoPage() {
       <DataTable
         // Keyed by tab so switching re-applies the tab's default sort (task_tabs.mdx §7).
         key={activeTab}
+        // Remembered view state is per task tab (each tab projects its own columns/sort).
+        tableId={`repo-files:${activeTab}`}
         // Content below the table (the Repo details disclosure) → bounded height, not full-page
         // (one_repo.mdx §4 / repos.mdx §3.3.1).
         fillHeight={false}

@@ -19,9 +19,10 @@ import {
   type SortingState,
   type ColumnFiltersState,
 } from "@tanstack/react-table";
-import { Search, Filter, ArrowUpDown } from "lucide-react";
+import { Search, Filter, ArrowUpDown, Columns3 } from "lucide-react";
 import { useDebounced } from "../../lib/useDebounced.js";
 import { useWindowedRows } from "./useWindowedRows.js";
+import { useTableView } from "../../api/useTableView.js";
 import type { LfbColumn } from "./types.js";
 
 interface DataTableProps<T> {
@@ -62,6 +63,12 @@ interface DataTableProps<T> {
   // listed so the user can filter to them without expanding; a "More types…" disclosure reveals the rest
   // (Other). An "All kinds" checkbox clears the filter. Images/Videos/Audio/PDFs start checked; Other unchecked.
   fileTypeFacet?: { valueOf: (row: T) => string };
+  // Stable id for this table (tables.mdx — remembered view state). When set, the table's sort, column
+  // filters, search, hidden columns, and promoted facet state are persisted per logged-in user (in the
+  // per-user config.yaml `tables:` record) and restored on the next visit. Keep it unique per surface —
+  // e.g. "repos", "storages", "repo-files:<tab>". Omit it and the table works exactly as before but
+  // remembers nothing across visits.
+  tableId?: string;
 }
 
 // The File-type facet vocabulary (tables.mdx §2.10) — labels + the one class that starts UNCHECKED (Other).
@@ -100,6 +107,7 @@ export function DataTable<T>({
   defaultSort,
   largeOnly,
   fileTypeFacet,
+  tableId,
 }: DataTableProps<T>) {
   // Multi-level sort (tables.mdx §3): the TanStack `sorting` array IS the ordered primary/secondary/
   // tertiary list — index 0 = primary. The dropdown priority slots and header clicks both drive it.
@@ -110,6 +118,12 @@ export function DataTable<T>({
   const [pageSize, setPageSize] = useState(500);
   const [showSort, setShowSort] = useState(false);
   const [showFilter, setShowFilter] = useState(false);
+  const [showColumns, setShowColumns] = useState(false);
+  // Manual show/hide (charter Tables — the Columns ⚏ dropdown): the set of column ids the user turned
+  // OFF. Presentation-only and layered ON TOP of the responsive auto-hide: a manually-hidden column is
+  // removed before the responsive budget runs; a hidden column can still be sorted/filtered (its row
+  // stays in the Sort/Filter dropdowns, which iterate the full `columns`).
+  const [hiddenCols, setHiddenCols] = useState<Set<string>>(() => new Set());
   // Promoted "Large files only" toggle (tables.mdx §2.9). The table remounts per tab (OneRepoPage keys it
   // by tab), so this seed is re-read on every tab switch — OCR opens with it OFF.
   const [largeOnlyOn, setLargeOnlyOn] = useState(() => largeOnly?.defaultOn ?? false);
@@ -176,6 +190,78 @@ export function DataTable<T>({
     [searchKeys],
   );
 
+  // Toggle a column's manual visibility (charter Tables — Columns ⚏ dropdown). Honors a last-value rule
+  // like the file-type facet: the final visible column can't be hidden (that would only ever blank the
+  // table). Turning a column back ON just removes it from the hidden set.
+  const toggleCol = useCallback(
+    (id: string) =>
+      setHiddenCols((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) {
+          next.delete(id);
+          return next;
+        }
+        if (columns.length - next.size <= 1) return prev; // last visible column — refuse
+        next.add(id);
+        return next;
+      }),
+    [columns.length],
+  );
+
+  // ── Remembered view state (tables.mdx) ────────────────────────────────────────
+  // When a tableId is set, restore the user's saved sort/filters/search/hidden-columns/facets on mount
+  // and persist them (debounced) on every change. `hydrated` gates saving so the first render never
+  // writes defaults over a stored view; it flips true only AFTER the stored view is applied, so the
+  // follow-up save writes the same values back (idempotent) instead of clobbering them.
+  const { view: storedView, loaded: viewLoaded, save: saveView } = useTableView(tableId);
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    if (!tableId || !viewLoaded || hydrated) return;
+    const v = storedView;
+    if (v) {
+      const colIds = new Set(columns.map((c) => c.id));
+      const sort = (v.sort ?? [])
+        .filter((s) => colIds.has(s.col))
+        .map((s) => ({ id: s.col, desc: s.dir === "desc" }));
+      if (sort.length) setSorting(sort);
+      const cf = Object.entries(v.filters ?? {})
+        .filter(([id]) => colIds.has(id))
+        .map(([id, value]) => ({ id, value }));
+      if (cf.length) setColumnFilters(cf);
+      if (v.search) setSearch(v.search);
+      const hc = (v.hidden_columns ?? []).filter((id) => colIds.has(id));
+      if (hc.length) setHiddenCols(new Set(hc));
+      if (typeof v.large_only === "boolean") setLargeOnlyOn(v.large_only);
+      if (Array.isArray(v.hidden_types)) setHiddenTypes(new Set(v.hidden_types));
+    }
+    setHydrated(true);
+  }, [tableId, viewLoaded, hydrated, storedView, columns]);
+
+  useEffect(() => {
+    if (!tableId || !hydrated) return;
+    saveView({
+      sort: sorting.map((s) => ({ col: s.id, dir: s.desc ? "desc" : "asc" })),
+      filters: Object.fromEntries(columnFilters.map((f) => [f.id, String(f.value)])),
+      search,
+      hidden_columns: [...hiddenCols],
+      ...(largeOnly ? { large_only: largeOnlyOn } : {}),
+      ...(fileTypeFacet ? { hidden_types: [...hiddenTypes] } : {}),
+    });
+  }, [
+    tableId,
+    hydrated,
+    sorting,
+    columnFilters,
+    search,
+    hiddenCols,
+    largeOnlyOn,
+    hiddenTypes,
+    largeOnly,
+    fileTypeFacet,
+    saveView,
+  ]);
+
   // Responsive column priority (repos.mdx §3.2.1 / tables.mdx §4a): measure the container and hide the
   // lowest-priority columns until the min-width budget fits — so a cell never wraps to a second line.
   // The BODY/HEAD render from `visibleColumns`; the Sort/Filter dropdowns keep using the full `columns`
@@ -183,9 +269,16 @@ export function DataTable<T>({
   const wrapRef = useRef<HTMLDivElement>(null);
   const containerW = useContainerWidth(wrapRef);
   const hiddenCount = columns.filter((c) => c.priority !== undefined).length > 0; // any priorities set?
+  // Manual show/hide (Columns ⚏ dropdown) is applied FIRST — the user's explicit "off" wins — then the
+  // responsive budget runs over what's left. So a column the user hid never comes back on a wide window,
+  // and the responsive layer only ever hides more, never re-shows a manually-hidden column.
+  const manualColumns = useMemo(
+    () => (hiddenCols.size ? columns.filter((c) => !hiddenCols.has(c.id)) : columns),
+    [columns, hiddenCols],
+  );
   const visibleColumns = useMemo(
-    () => (hiddenCount ? computeVisibleColumns(columns, containerW, !!selection) : columns),
-    [columns, containerW, selection, hiddenCount],
+    () => (hiddenCount ? computeVisibleColumns(manualColumns, containerW, !!selection) : manualColumns),
+    [manualColumns, containerW, selection, hiddenCount],
   );
 
   // Column model — selection is NOT part of it (P-03), so this only rebuilds when the caller's
@@ -232,6 +325,7 @@ export function DataTable<T>({
     (!!largeOnly && largeOnlyOn) || (!!fileTypeFacet && presentTypes.some((t) => hiddenTypes.has(t)));
   const filtersActive = columnFilters.length > 0 || facetActive;
   const sortActive = sorting.length > 0;
+  const columnsActive = hiddenCols.size > 0; // the Columns icon lights when any column is hidden
 
   // Promoted "Bookmarked only" filter (tables.mdx §2): if the caller declares a leading `bookmark`
   // column (enum yes/no, as Repos does), the filter dropdown pins a "Bookmarked only" checkbox at the
@@ -308,6 +402,7 @@ export function DataTable<T>({
           onClick={() => {
             setShowSort((s) => !s);
             setShowFilter(false);
+            setShowColumns(false);
           }}
         >
           <ArrowUpDown className="h-4 w-4" />
@@ -318,9 +413,22 @@ export function DataTable<T>({
           onClick={() => {
             setShowFilter((s) => !s);
             setShowSort(false);
+            setShowColumns(false);
           }}
         >
           <Filter className="h-4 w-4" />
+        </IconButton>
+        {/* Columns ⚏ (charter Tables) — show/hide which columns render; the badge reads shown/total. */}
+        <IconButton
+          active={columnsActive}
+          title="Columns"
+          onClick={() => {
+            setShowColumns((s) => !s);
+            setShowSort(false);
+            setShowFilter(false);
+          }}
+        >
+          <Columns3 className="h-4 w-4" />
         </IconButton>
         {rightHeader}
       </div>
@@ -494,6 +602,43 @@ export function DataTable<T>({
             })}
           <button className="w-full px-3 py-1.5 text-sm text-[var(--lfb-primary)]" onClick={() => setColumnFilters([])}>
             Clear filters
+          </button>
+        </Popover>
+      )}
+
+      {/* Columns dropdown (charter Tables): one checkbox per column to show/hide it in the table below.
+          Hiding is presentation-only and layered on top of the responsive auto-hide — a hidden column
+          still appears in the Sort/Filter dropdowns. The last visible column can't be hidden (that would
+          only ever blank the table). "Show all columns" clears every manual hide. */}
+      {showColumns && (
+        <Popover>
+          <div className="flex items-center justify-between px-3 pb-1 pt-0.5 text-[11px] uppercase tracking-wide text-black/40">
+            <span>Show columns</span>
+            <span>
+              {columns.length - hiddenCols.size}/{columns.length}
+            </span>
+          </div>
+          {columns.map((c) => {
+            const visible = !hiddenCols.has(c.id);
+            const isLast = visible && columns.length - hiddenCols.size === 1;
+            return (
+              <label
+                key={c.id}
+                className={`flex items-center gap-2 px-3 py-1 text-sm ${isLast ? "cursor-not-allowed" : "cursor-pointer"}`}
+                title={isLast ? "At least one column must stay visible." : undefined}
+              >
+                <input type="checkbox" checked={visible} disabled={isLast} onChange={() => toggleCol(c.id)} />
+                <span className={visible ? "text-black/70" : "text-black/40"}>{c.header}</span>
+              </label>
+            );
+          })}
+          <div className="my-1 border-t border-[var(--lfb-border)]" />
+          <button
+            className="w-full px-3 py-1.5 text-left text-sm text-[var(--lfb-primary)] disabled:opacity-40"
+            disabled={hiddenCols.size === 0}
+            onClick={() => setHiddenCols(new Set())}
+          >
+            Show all columns
           </button>
         </Popover>
       )}

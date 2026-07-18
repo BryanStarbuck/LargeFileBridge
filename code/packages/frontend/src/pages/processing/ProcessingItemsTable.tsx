@@ -363,6 +363,7 @@ export function ProcessingItemsTable({
 
   return (
     <DataTable
+      tableId="processing-items"
       data={rows}
       columns={columns}
       getRowId={(it) => it.id}

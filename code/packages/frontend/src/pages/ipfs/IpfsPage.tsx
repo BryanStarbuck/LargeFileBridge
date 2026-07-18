@@ -340,6 +340,7 @@ export function IpfsPage() {
         <>
           <h2 className="mb-1 text-sm font-semibold text-black/70">Pinned files</h2>
           <DataTable
+            tableId="ipfs"
             // Content below the table (NodeDetails) → bounded height, not full-page
             // (ipfs.mdx §5 / repos.mdx §3.3.1).
             fillHeight={false}
