@@ -48,7 +48,7 @@ import {
 import { ensureDir } from "../../config/state-dir.js";
 import { getPeers } from "./peers.service.js";
 import { readLedger, foldLedger, type FoldedDecision } from "../storage/decisions.service.js";
-import { effectiveFlags, getAppConfig } from "./config.service.js";
+import { effectiveFlags, getAppConfig, computerLabel } from "./config.service.js";
 import { log } from "../../shared/logging.js";
 
 export function repoIdFromPath(absPath: string): string {
@@ -309,6 +309,8 @@ function composeFileRows(
   // analysisOutputs so it never re-resolves per file). The analysis-artifact probe below is the same
   // value for all three task axes, so it is computed once per row and shared (see the task-status helpers).
   const storageType = repoRootAbs ? resolveStorageType(repoRootAbs) : undefined;
+  // THIS device's pinned_by identity, resolved once per repo — pin truth is self-claim-only (ipfs.mdx §1.1).
+  const selfLabel = computerLabel();
   return status.candidates.map((cand) => {
     const decision: Decision = cfg.decisions[cand.path] ?? "undecided";
     const m = manifestByPath.get(cand.path);
@@ -328,7 +330,7 @@ function composeFileRows(
       sizeBytes: cand.size,
       cid: decision === "sync" ? (m?.cid ?? null) : null,
       decision,
-      transfer: transferFor(decision, m?.cid ?? null, peers),
+      transfer: transferFor(decision, m?.cid ?? null, peers, selfLabel),
       peers,
       // Live pin reality for the three-state icon (one_repo.mdx §4.9). Only meaningful for a decided file
       // that has a recorded CID; the pinset is CANONICAL so a `Qm…`-encoded pin of a `bafy…` manifest CID
@@ -484,6 +486,7 @@ function checkedInThresholdBytes(): number {
 }
 function computeTaskMetrics(files: FileRow[]): TaskMetrics {
   const bigFileMetricThreshold = checkedInThresholdBytes();
+  const selfLabel = computerLabel();
   const m: TaskMetrics = {
     undecided: 0,
     pending: 0,
@@ -512,9 +515,13 @@ function computeTaskMetrics(files: FileRow[]): TaskMetrics {
     // media (rule 5) is not a pin decision, not a space-reclaim target, and not a git-ignore nudge — so it
     // must not inflate these tiles (tables.mdx §2.9 / one_repo.mdx §4.1).
     if (f.analysisOnly) continue;
-    if (f.decision === "undecided") m.undecided++;
+    // Foreign-pinned rows (pinnedForeign, the green state of one_repo.mdx §4.9) are excluded: the
+    // Undecided tile asks "pin these?", and their bytes are already pinned on this node.
+    if (f.decision === "undecided" && !f.pinnedForeign) m.undecided++;
     if (f.decision === "sync" && f.transfer === "pending") m.pending++;
-    if (f.decision === "sync" && f.cid != null && f.peers.length === 0) m.notBackedUp++;
+    // "Backed up" means a pin on an OTHER computer (ipfs.mdx §1.1) — this device's own pinned_by claim is
+    // local pin truth, not a backup, so it must not silence the "live only on this machine" warning.
+    if (f.decision === "sync" && f.cid != null && !f.peers.some((p) => p !== selfLabel)) m.notBackedUp++;
     if (f.compress === "could") {
       if (compressInfo(path.basename(f.path)).compressible === "image") m.compressibleImages++;
       else m.compressibleVideos++;
@@ -540,20 +547,33 @@ function foldLedgerForRepo(cfg: RepoUnitConfig): Map<string, FoldedDecision> {
   }
 }
 
-function transferFor(decision: Decision, cid: string | null, peers: string[]): TransferStatus {
+/** "Pinned" means pinned on THIS computer (ipfs.mdx §1.1): only OUR OWN `pinned_by` claim — the one the
+ *  pin pass verifies against the real local pinset every cycle — counts. A file claimed only by peer
+ *  devices is NOT pinned here; it reads `pending` so the pin pass pulls it down and pins it locally. */
+export function transferFor(
+  decision: Decision,
+  cid: string | null,
+  peers: string[],
+  selfLabel: string,
+): TransferStatus {
   if (decision !== "sync") return "na";
   if (!cid) return "pending";
-  return peers.length > 0 ? "pinned" : "pending";
+  return peers.includes(selfLabel) ? "pinned" : "pending";
 }
 
 function countDecisions(files: FileRow[]): RepoCounts {
-  const counts: RepoCounts = { pinned: 0, pending: 0, undecided: 0, ignored: 0 };
+  const counts: RepoCounts = { pinned: 0, pending: 0, undecided: 0, ignored: 0, pinnedForeign: 0 };
   for (const f of files) {
     // Small analysis-only media (scan.mdx §4.1 rule 5) is not a large-file decision the user owes — a
     // folder of thumbnails must not read as hundreds of Undecided (one_repo.mdx §4.1 / repos.mdx §4.1).
     if (f.analysisOnly) continue;
     if (f.decision === "ignore") counts.ignored++;
-    else if (f.decision === "undecided") counts.undecided++;
+    else if (f.decision === "undecided") {
+      // Already pinned on this node under a foreign CID (green state, one_repo.mdx §4.9) → not a pin
+      // nag. Counted apart so the Undecided ask stays honest and the file still shows in the totals.
+      if (f.pinnedForeign) counts.pinnedForeign++;
+      else counts.undecided++;
+    }
     else if (f.decision === "sync") {
       if (f.transfer === "pinned") counts.pinned++;
       else counts.pending++;

@@ -28,8 +28,15 @@ export type RepoStatus =
 export interface RepoCounts {
   pinned: number;
   pending: number;
+  // Files with NO decision AND no pin anywhere — the real "please decide/pin" ask. A file whose bytes are
+  // already pinned on this node under a foreign CID (FileRow.pinnedForeign, the green state of
+  // one_repo.mdx §4.9) is NOT counted here — nagging "pin it" about a pinned file was the 4th bug in the
+  // "CLI says pinned, app says not" saga. Those land in `pinnedForeign` below instead.
   undecided: number;
   ignored: number;
+  // Undecided files whose bytes ARE pinned on this node outside Large File Bridge (foreign-pin discovery).
+  // Kept separate so the pin-nag counts stay honest while the files don't silently vanish from the totals.
+  pinnedForeign: number;
 }
 
 // A repo's company/personal ownership (repo_company_mapping.mdx §1.1). `kind` is the split; `companyId` is
@@ -178,9 +185,12 @@ export interface MissingPinnedFile {
 // MetricsStrip renders one panel per count for the active tab (a light-green big-0 when a count is 0).
 // `pullDown` is NOT here — it comes from RepoDetail.missingPinned.length (computed in the router).
 export interface TaskMetrics {
-  undecided: number; // files with no decision yet
+  // Files with no decision yet AND not already pinned on this node. Excludes FileRow.pinnedForeign rows —
+  // the "Undecided" tile is a "decide / pin these" nag, and a foreign-pinned file's bytes are already
+  // pinned here (green state, one_repo.mdx §4.9), so counting it re-asks a satisfied question.
+  undecided: number;
   pending: number; // sync files queued to transfer
-  notBackedUp: number; // sync files with a CID but 0 peers (live only on this machine)
+  notBackedUp: number; // sync files with a CID that no OTHER computer pins (live only on this machine)
   compressibleVideos: number; // videos that look uncompressed
   compressibleImages: number; // images that look uncompressed / convertible
   alreadyCompressed: number; // media already compressed
@@ -1205,6 +1215,8 @@ export interface EntityView {
   decision: Decision | null; // null when not in a repo (files.mdx §2)
   transfer: TransferStatus | null;
   cid: string | null;
+  // OTHER computers claiming this file's pin — this device's own pinned_by claim is excluded (it is local
+  // pin truth, carried by `transfer`, not a backup — ipfs.mdx §1.1). Drives "backed up on N other computers".
   peers: string[];
   // Foreign-pin REALITY, same axis as FileRow.pinnedForeign: an undecided file whose bytes a background
   // pass discovered are already pinned on this node under a foreign CID (foreign_pin_discovery.mdx §6).

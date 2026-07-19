@@ -276,6 +276,23 @@ whenever it is > 0.
 > only the non-`analysisOnly` candidates. The `analysisOnly` rows appear only when **Large files only** is
 > turned off (§4.2), and only the analysis metrics (`OCRable`, `Describable`, `Transcribable`) count them.
 
+> **These counts also exclude foreign-pinned rows from `Undecided` — the 4th fix in the pin-truth saga
+> (2026-07-19).** An undecided file whose bytes are **already pinned on this node** under a foreign CID
+> (`FileRow.pinnedForeign`, the green state — §4.9) must **not** be counted as `Undecided`: that tile and
+> its triage popup are a *"pin these?"* ask, and re-asking it about a pinned file is exactly the "app says
+> not pinned, CLI says pinned" defect again (a `charlie-kirk` repo showed **76 Undecided** of which **69**
+> were already pinned). Those rows are counted apart as `RepoCounts.pinnedForeign` and the summary line
+> appends **`· 69 Pinned locally`** (green) when > 0, so they never silently vanish from the readout —
+> "pinned" means pinned on THIS computer by ANY local software ([ipfs.mdx §1.1](./ipfs.mdx)). The same exclusion applies to the `Undecided` metric tile ([task_tabs.mdx §2.5](./task_tabs.mdx)),
+> the triage popup's target list, the repos-list `Undecided` column, the `needs_review` rollup, and the
+> to-do batch engine's `pin` recommendation (it recommends only the still-owed git-ignore axis for them).
+> Counted in code:
+> `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
+> `countDecisions` and `computeTaskMetrics` (popup filter mirrored in
+> `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+> `buildUndecidedWarning`; batch seam in
+> `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts`).
+
 **Every segment is a quick filter on the Pin (IPFS) facet — and only that facet.** All three counts read
 the **IPFS axis** ([tables.mdx §2.4.1](./tables.mdx#241-the-two-facets-fixed-vocabulary-locked)); none of
 them says anything about git-ignore. Clicking a segment **sets the Pin (IPFS) facet to that one value** —
@@ -593,7 +610,7 @@ file they *chose* to sync has actually **arrived and pinned here yet**. So the i
 | **Not set to sync** | grey **outline** pin ("white background") | `decision !== "sync"` | This file is **not** being synced over IPFS. **Click to add it.** |
 | **Synced here** | **blue filled** pin ("dark-blue fill") | `decision === "sync"` **and** `pinnedHere === true` | Chosen to sync **and** this computer's IPFS node actually holds the pin — in sync here. |
 | **Set to sync, not here yet** | **RED filled** pin ("red fill") | `decision === "sync"` **and** `pinnedHere === false` | You chose to sync it, but **this** computer does not have it pinned yet. The pin pass will **pull it down**; the red flags the transient out-of-sync gap ([pin_process.mdx §2](./pin_process.mdx)). |
-| **Pinned outside LFB** | **GREEN filled** pin | `decision !== "sync"` **and** `pinnedForeign === true` | The bytes are **already pinned on this node** under a foreign CID (a bare `ipfs add`, IPFS Desktop, another tool) — discovered by the background pass ([foreign_pin_discovery.mdx §6](./foreign_pin_discovery.mdx#6-surfacing--the-file-shows-as-pinned-in-the-web-app-locked)). Reality without intent. **Click to have Large File Bridge sync it too.** |
+| **Pinned locally** (outside LFB) | **GREEN filled** pin | `decision !== "sync"` **and** `pinnedForeign === true` | The bytes are **already pinned on this node** under a foreign CID (a bare `ipfs add`, IPFS Desktop, another tool — **we don't care which local software pinned it**, [ipfs.mdx §1.1](./ipfs.mdx)). Discovered by the background pass ([foreign_pin_discovery.mdx §6](./foreign_pin_discovery.mdx#6-surfacing--the-file-shows-as-pinned-in-the-web-app-locked)). Reality without intent. **Click to have Large File Bridge sync it too.** |
 
 * **`pinnedHere` is a LIVE, CANONICAL read of this node's pinset — never a per-file hash on the read path.**
   The blue↔red split is driven by `FileRow.pinnedHere`, computed by testing the file's recorded manifest CID
@@ -615,7 +632,10 @@ file they *chose* to sync has actually **arrived and pinned here yet**. So the i
   correctly **recorded** the pin in `foreign-pins.json` and shipped `pinnedForeign` on the row — but the pin
   cell here still rendered only `decision × pinnedHere`, so the recorded reality was **never drawn** and an
   undecided pinned file stayed grey. Fix 3 is this fourth state: **recorded must mean rendered**. Any new
-  surface that shows pin state must consume `pinnedForeign`, not just `pinnedHere`.
+  surface that shows pin state must consume `pinnedForeign`, not just `pinnedHere`. Fix 4 (2026-07-19)
+  extended the same rule to the **counting** surfaces: the `Undecided` summary segment / metric tile /
+  triage popup and the to-do batch `pin` recommendation all exclude `pinnedForeign` rows (§4.1 blockquote) —
+  a pin-nag about a pinned file is the same defect wearing a number instead of an icon.
 * **Toggling writes the decision to the shared ledger, which travels to the owning Personal / Company
   storage.** Clicking the Pin icon — one file, or a bulk popup for hundreds — writes the IPFS axis to the
   repo's `decisions.yaml` ledger (§4.5.1). That ledger lives under the repo's tracking area and is committed

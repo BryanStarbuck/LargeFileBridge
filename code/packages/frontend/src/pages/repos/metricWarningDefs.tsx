@@ -138,7 +138,9 @@ export function buildPullDownWarning(detail: RepoDetail, repoId: string): Warnin
  *  (warnings.mdx §10.2.7). Null when nothing is undecided. This is the popup the "Undecided N" tile opens. */
 export function buildUndecidedWarning(detail: RepoDetail, repoId: string): WarningDef | null {
   const undecided = detail.counts.undecided;
-  const undecidedFiles = detail.files.filter((f) => f.decision === "undecided");
+  // Must mirror the backend count exactly (units.service.ts countDecisions): foreign-pinned rows are NOT
+  // undecided-nag targets — their bytes are already pinned here (green state, one_repo.mdx §4.9).
+  const undecidedFiles = detail.files.filter((f) => f.decision === "undecided" && !f.pinnedForeign);
   if (undecided === 0 || undecidedFiles.length === 0) return null;
   const headline = `${undecided} file${undecided === 1 ? "" : "s"} need${undecided === 1 ? "s" : ""} a decision`;
   const sub = "Choose Add to IPFS (pin) or Ignore for them in the table below so Large File Bridge knows what to move.";

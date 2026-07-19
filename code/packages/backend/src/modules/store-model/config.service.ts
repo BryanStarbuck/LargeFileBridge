@@ -110,6 +110,13 @@ export function getAppConfig(): AppConfig {
   return cfg;
 }
 
+/** THIS computer's device label — the identity written into every manifest's `pinned_by` (devices.mdx §1).
+ *  The single definition: pin-truth checks ("is MY label in pinned_by?" — ipfs.mdx §1.1) and the pin pass's
+ *  claim writes must agree on this exact string, so neither may derive it separately. */
+export function computerLabel(): string {
+  return getAppConfig().computer.label || "this-computer";
+}
+
 export async function updateAppConfig(mutate: (c: AppConfig) => AppConfig): Promise<AppConfig> {
   return updateYaml(appConfigPath(), AppConfigSchema, (c) => {
     if (c.scanner.roots.length === 0) c.scanner.roots = defaultRoots();

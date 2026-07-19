@@ -63,6 +63,34 @@ Siblings this spec builds on and does not repeat:
 | **Untracked (pinned)** | A CID this node pins that is **not** in any LFB manifest — pinned before LFB existed, pinned by hand, or pinned by another tool. It is real, kept content LFB is not yet managing. **These are the import candidates.** |
 | **Import** | Bring an untracked pin under LFB tracking: attach it to a file/unit, record it in the manifest ([storage §9](./storage_local.mdx#9-the-manifest--ipfs-pin-model)), and thereafter treat it as **Pinned**. Import **adds tracking**; it never re-pins, re-downloads, or moves bytes (the pin already exists). |
 
+### 1.1 "Pinned" means pinned on THIS local computer — no matter which software pinned it (LOCKED)
+
+Every surface in the product that says a file **is pinned** or **is not pinned** answers exactly ONE
+question: **"is this file pinned on THIS local computer's IPFS node, right now?"** Nothing else. The word
+"foreign" appears in two different situations, and they get OPPOSITE verdicts:
+
+| Situation | Verdict | Why |
+| --- | --- | --- |
+| Pinned on this computer by **other local software** (a bare `ipfs add`, IPFS Desktop, a script — "foreign" = not the Large File Bridge web app) | **PINNED = true** — shown to the user as **"Pinned locally"** | The bytes ARE kept on this node. **We do not care which local software created the pin** — we support other IPFS tools pinning alongside us. The only wrinkle is the pin may wear a CID we never computed, which is what Foreign Pin Discovery (§9) resolves. |
+| Pinned only on **another of the user's computers** ("foreign" = off this machine; the manifest's `pinned_by` lists a peer device but not this one) | **PINNED = false** on this computer | A peer's pin is a **backup / pull-down signal**, never local pin truth. Showing it as pinned here would hide exactly the gap we exist to close — instead we help the user get it pinned **locally** (the pin pass pulls `sync` files; the pull-down warning offers peer-pinned files). |
+
+* **Local pin truth comes only from this node's pinset** — `pinnedHere` (live canonical pinset test for a
+  decided file's manifest CID) and `pinnedForeign` (the recorded, per-scan-verified Foreign Pin Discovery
+  index; entries are dropped the moment the local kept-set no longer holds them). Both are reads of THIS
+  node; neither can ever be set by data that traveled from another computer (the sidecar re-seed path
+  re-records a traveled CID only after testing it against the LOCAL kept-set).
+* **A peer's `pinned_by` claim is never "pinned".** The per-file transfer verdict says `pinned` only when
+  THIS computer's own label is in `pinned_by` (the self-claim the pin pass verifies against the real local
+  pinset every cycle); a file claimed only by peers reads `pending` here — the pin pass will pin it locally.
+* **User-facing wording is "Pinned locally"** for a file pinned on this node outside Large File Bridge —
+  never phrased as if being pinned by other software made it less pinned.
+* Local pin truth is computed in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
+  `composeFileRows` (`pinnedHere` / `pinnedForeign`) and `transferFor` (self-claim-only `pinned`);
+  discovery + per-scan verification in
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/foreign-pin.service.ts` —
+  `discoverForeignPin()` / `verifyForeignPins()`.
+
 ---
 
 ## 2. Layout
@@ -494,6 +522,11 @@ page's read — so opening the IPFS page stays cheap; it reads what a prior pass
 > ([one_repo.mdx §4.9](./one_repo.mdx#49-the-pin-icon-is-three-state--decision--live-pin-reality-locked)).
 > Rule for every future surface: if a view claims pin truth, it must consume **both** `pinnedHere` **and**
 > `pinnedForeign` — a recorded discovery that no view draws is still a bug.
+> Fix 4 extended the rule to the **counting** surfaces (the Undecided metric/popup and to-do batches must
+> not nag "pin it" about a locally-pinned file — [one_repo.mdx §4.1](./one_repo.mdx)), and the follow-up
+> realignment pinned down the definition both fixes serve: **"pinned" = pinned on THIS computer, by any
+> local software; a peer computer's pin is never local pin truth** (§1.1 — which also fixed `transferFor`
+> reading ANY `pinned_by` claim, including a peer's, as "pinned" here).
 
 <!--
   This is the IPFS PAGE spec (the left-bar view of the LOCAL pinset), distinct from knowledge/ipfs.mdx

@@ -143,8 +143,22 @@ export async function recalcRepo(folder: string): Promise<TodoBatchDoc | null> {
     for (const f of detail.files) {
       if (seen.has(f.path)) continue;
       if (f.decision === "undecided" && f.sizeBytes >= threshold && !f.neverIpfs) {
-        if (f.gitignore) {
+        // Foreign-pinned rows (green state, one_repo.mdx §4.9): the bytes are already pinned on this
+        // node, so never recommend `ipfs` for them — a pin nag about a pinned file. The git-ignore axis
+        // is independent and still owed; already-ignored foreign pins need nothing at all.
+        if (f.pinnedForeign) {
+          if (!f.gitignore) {
+            items.push({
+              path: f.path,
+              sizeBytes: f.sizeBytes,
+              category: "git_ignore",
+              recommend: { gitignore: true },
+            });
+          }
+          seen.add(f.path);
+        } else if (f.gitignore) {
           items.push({ path: f.path, sizeBytes: f.sizeBytes, category: "pin", recommend: { ipfs: true } });
+          seen.add(f.path);
         } else {
           items.push({
             path: f.path,
@@ -152,8 +166,8 @@ export async function recalcRepo(folder: string): Promise<TodoBatchDoc | null> {
             category: "git_ignore",
             recommend: { ipfs: true, gitignore: true },
           });
+          seen.add(f.path);
         }
-        seen.add(f.path);
       }
     }
   } catch (e) {

@@ -324,7 +324,7 @@ export function OneRepoPage() {
               blockedByNeverIpfs
                 ? "Add to IPFS is blocked by Never-IPFS"
                 : foreignPinned
-                  ? "Pinned on this computer — this file is already pinned in IPFS (pinned outside Large File Bridge). Click to have Large File Bridge sync it too."
+                  ? "Pinned locally — this file is already pinned on this computer's IPFS node (by other IPFS software, which is fine). Click to have Large File Bridge sync it across your computers too."
                   : !decided
                     ? "Not set to sync — click to add this file to IPFS"
                     : missingHere
@@ -592,6 +592,20 @@ export function OneRepoPage() {
           {c.pinned + c.pending} Pin ·{" "}
           <span className={c.undecided > 0 ? "text-[var(--lfb-primary)] font-medium" : ""}>{c.undecided} Undecided</span> ·{" "}
           {c.ignored} Ignore
+          {/* Undecided-but-already-pinned (green state, one_repo.mdx §4.9; "pinned" = pinned on THIS
+              computer by ANY local software — ipfs.mdx §1.1) — split out of Undecided so the app never
+              asks to pin a file whose bytes are already pinned on this node. */}
+          {c.pinnedForeign > 0 && (
+            <>
+              {" "}·{" "}
+              <span
+                className="text-green-700"
+                title="Already pinned on this computer's IPFS node by other IPFS software — which is fine. Large File Bridge just isn't managing their sync yet."
+              >
+                {c.pinnedForeign} Pinned locally
+              </span>
+            </>
+          )}
         </div>
       )}
 

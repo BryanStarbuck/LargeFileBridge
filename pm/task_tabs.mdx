@@ -191,6 +191,14 @@ an arrow button (§2.6), so the tile itself is what the user presses. Examples:
 
 * **Undecided** → the triage popup listing the undecided files with the two decision toggles
   ([decision_toggles.mdx §7](./decision_toggles.mdx#7-in-the-warning--to-do-batch-popups--three-axes-per-row-locked)).
+  The count and the popup's list both **exclude foreign-pinned rows** (`FileRow.pinnedForeign` — already
+  pinned on this node outside Large File Bridge): this metric is a *"pin these?"* ask, and it must never
+  nag about a file whose bytes are already pinned ([one_repo.mdx §4.1 blockquote / §4.9 fix 4](./one_repo.mdx)).
+  Counted in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
+  `computeTaskMetrics` (popup list in
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+  `buildUndecidedWarning`).
 * **Pull Down** → the "pull them down" popup ([warnings.mdx §10.8.12](./warnings.mdx)) of peer-pinned
   files missing locally.
 * **Not Backed Up** → the pin/peer popup for `sync` files with 0 peers.

@@ -25,7 +25,13 @@ import {
 } from "../fs/badges.js";
 import type { FolderInterest } from "@lfb/shared";
 import { assertAllowedPath } from "../fs/allow-root.js";
-import { effectiveFlags, ownFlags, setFileFlags, getAppConfig } from "../store-model/config.service.js";
+import {
+  effectiveFlags,
+  ownFlags,
+  setFileFlags,
+  getAppConfig,
+  computerLabel,
+} from "../store-model/config.service.js";
 import {
   listRepoFolders,
   getRepoConfig,
@@ -33,6 +39,7 @@ import {
   getRepoStatus,
   updateRepoConfig,
   repoIdFromPath,
+  transferFor,
 } from "../store-model/units.service.js";
 import { log } from "../../shared/logging.js";
 import { resolveStateDir, ensureDir } from "../../config/state-dir.js";
@@ -92,12 +99,6 @@ function enclosingRepo(abs: string): RepoMatch | null {
     }
   }
   return best;
-}
-
-function transferFor(decision: Decision, cid: string | null, peers: string[]): TransferStatus {
-  if (decision !== "sync") return "na";
-  if (!cid) return "pending";
-  return peers.length > 0 ? "pinned" : "pending";
 }
 
 /** Build the full EntityView for a file or directory. */
@@ -170,9 +171,13 @@ export async function buildEntityView(
       const cfg = getRepoConfig(match.folder);
       decision = (cfg.decisions[rel] as Decision) ?? "undecided";
       const m = getRepoManifest(match.folder).files.find((f) => f.path === rel);
-      peers = m?.pinned_by ?? [];
+      const selfLabel = computerLabel();
+      const claims = m?.pinned_by ?? [];
       cid = decision === "sync" ? (m?.cid ?? null) : null;
-      transfer = transferFor(decision, cid, peers);
+      transfer = transferFor(decision, cid, claims, selfLabel);
+      // Ship only OTHER computers as peers (ipfs.mdx §1.1): this device's own pinned_by claim is local pin
+      // truth (already in `transfer`), not a backup — "backed up on N other computers" must not count us.
+      peers = claims.filter((p) => p !== selfLabel);
       // Foreign-pin reality (foreign_pin_discovery.mdx §6) — cheap read of the recorded index, no hashing.
       if (decision !== "sync") pinnedForeign = !!foreignPinByAbsPath(e.abs);
     }

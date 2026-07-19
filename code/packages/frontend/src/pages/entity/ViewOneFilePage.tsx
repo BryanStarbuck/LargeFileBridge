@@ -160,8 +160,8 @@ function fileVerdict(v: EntityView): { state: Health; headline: string; sub?: st
     if (v.pinnedForeign) {
       return {
         state: "neutral",
-        headline: "Pinned on this computer — pinned outside Large File Bridge",
-        sub: "Add it to IPFS in Large File Bridge to keep it synced across your computers.",
+        headline: "Pinned locally — pinned on this computer's IPFS node",
+        sub: "Pinned by other IPFS software, which is fine. Add it to IPFS in Large File Bridge to keep it synced across your computers.",
       };
     }
     return {

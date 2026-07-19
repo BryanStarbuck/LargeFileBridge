@@ -12,7 +12,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ManifestSchema, UnitStatusSchema, mediaKindForName, type Manifest, type ManifestFile, type UnitStatus, type Decision, type PinCounts, type MissingPinnedFile } from "@lfb/shared";
-import { getAppConfig } from "../store-model/config.service.js";
+import { computerLabel } from "../store-model/config.service.js";
 import {
   listRepoFolders,
   getRepoConfig,
@@ -45,10 +45,6 @@ import { enqueue } from "../jobqueue/jobqueue.service.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { responsiveBudget } from "../../shared/concurrency.js";
 import { log } from "../../shared/logging.js";
-
-function computerLabel(): string {
-  return getAppConfig().computer.label || "this-computer";
-}
 
 // One global concurrency budget for ALL heavy IPFS work in a pass — the canonical RESPONSIVE budget
 // (`cores − 2`, parallelization.mdx §1) so a 20–30-core machine stays busy while 2 cores keep the web app
