@@ -610,6 +610,144 @@ checkbox per column**. Modeled on the sister app's movie-sheet "Columns" pop-out
 
 ---
 
+## 4c. The icon control columns — Pin · Ignore · Transcribe · AI Description · OCR (LOCKED, site-wide)
+
+Every **file-list** table in the product leads with a block of **narrow icon control columns**, immediately
+to the right of the row-selection checkbox. The **full vocabulary is five columns**, in this exact order —
+and each surface renders **only the subset that applies to its row model** (see the applicable-subset rule
+below):
+
+```
+ ▮ │ 📌 │ ⊘ │ ⌯ │ 👁 │ 🔤 │ File            │ Size │ …
+sel  Pin Ign Trn Desc OCR
+```
+
+1. **Pin** — the Add-to-IPFS axis (📌).
+2. **Ignore** — the Add-to-git-ignore axis (⊘).
+3. **Transcribe** — audio/video transcript status.
+4. **AI Description** — image/video AI-description status.
+5. **OCR** — image/video/PDF text-extraction status.
+
+**This block replaces the old spread-out decision + status columns.** The columns **Decision**, **Decided
+by**, **Decided (when)**, and the transfer **Status** column are **removed from file tables**: the **Pin**
+and **Ignore** icon cells now carry the two decision axes in full (the four-state toggle grammar,
+[decision_toggles.mdx §1](./decision_toggles.mdx)), so the old labelled `[Decision ▾]` select and its
+`Decided by` / `Decided` provenance columns are gone, and the transfer/status column is dropped. (The two
+decision **axes** still exist as data and are still **set** by clicking the Pin / Ignore icons; provenance
+still exists in the ledger and on hover — only the *columns* are retired.) The one exception below.
+
+* **Applies to every file table EXCEPT the File System page.** The one-repo files table (all task tabs,
+  [one_repo.mdx](./one_repo.mdx), [task_tabs.mdx](./task_tabs.mdx)), the **Storage detail** file table
+  ([storages.mdx](./storages.mdx), [storage_repo.mdx](./storage_repo.mdx)), and the **IPFS pins** table
+  ([ipfs_ui.mdx](./ipfs_ui.mdx)) all carry the icon block. **The File System page
+  ([file_system.mdx](./file_system.mdx) / `FullPathsPage`) is the ONE explicit exclusion** — it keeps its
+  raw path listing without the icon block.
+
+* **The five are the FULL vocabulary; each file table renders only the SUBSET that applies to its row model
+  (LOCKED).** Pin and Ignore are **repo/decision** concepts, and Transcribe/AI Description/OCR are
+  **content-analysis** concepts — a row shows an icon only where that axis is meaningful for its kind of
+  row. The applicable subsets:
+  * **One-repo files table** (`FileRow`) — **all five** (Pin · Ignore · Transcribe · AI Description · OCR):
+    each row is a large file under a repo, so both decision axes and all three analysis axes apply.
+  * **Storage detail file table** (`StorageFileRow`) — **the three analysis icons only** (Transcribe · AI
+    Description · OCR). A storage file row has **no per-file pin or git-ignore decision** (that is a repo
+    concept), so **Pin and Ignore do not appear**; status derives from the file's `analysis[]` + filename
+    kind ([storages.mdx](./storages.mdx)).
+  * **IPFS pins table** (`IpfsPinRow`) — **Pin + the three analysis icons** (Pin · Transcribe · AI
+    Description · OCR). **No Ignore column** — git-ignore has no meaning for a CID pin; the analysis icons
+    derive from the pin's `analysis[]` + resolved file kind, and a path-less/untracked pin reads `na`
+    ([ipfs_ui.mdx](./ipfs_ui.mdx)).
+  * **File System page** (`FullPathsPage`) — **none** (the one exclusion above).
+  The order is always the canonical Pin → Ignore → Transcribe → AI Description → OCR, with the
+  non-applicable columns simply **omitted** (not rendered as empty), so whichever columns a surface shows
+  stay in the same left-to-right order.
+
+### 4c.1 Narrow, minimal padding (LOCKED)
+
+The five columns are **as narrow as an icon** — a single 16×16 glyph with **minimal horizontal padding**
+(the DataTable `tight` column flag, which renders `px-1` instead of the normal cell padding). They never
+carry text in a cell; they never wrap. Typed on `LfbColumn.tight` in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts`.
+
+### 4c.2 The header is the same icon as the cells — an icon-only header (LOCKED)
+
+Each of the five columns has a **header that is the SAME icon as its cells**, not a text word. The column
+header renders the column's glyph (Pin, Ignore, Transcribe, AI Description, OCR) in a muted weight — an
+**icon-only header** — so the header block reads as five small icons directly above five columns of the
+same icons. A plain-text **label** (`"Pin"`, `"Ignore"`, `"Transcribe"`, `"AI Description"`, `"OCR"`) is
+kept **only** for the Sort / Filter / Columns dropdowns ([§3.1](#3-multi-level-sort--primary--secondary--tertiary-locked),
+[§2](#2-filtering--the-value-visibility-checkbox-model-locked), [§4b](#4b-the-columns--dropdown--user-driven-showhide-locked-site-wide)),
+where a bare icon would be ambiguous. The icon header is set via `LfbColumn.headerCell` in
+`.../table/types.ts` and rendered by the shared `TaskIconHeader`.
+
+### 4c.3 Hover fills the docked hover-info region and shows a title tooltip (LOCKED)
+
+**People often don't understand these icons.** So hovering **either the column header icon OR any cell
+icon** does two things:
+
+* **(a) a native `title` tooltip** appears on the glyph (the quick "what is this"); and
+* **(b) the page's docked hover-info region** ([task_tabs.mdx §3](./task_tabs.mdx),
+  [non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)) fills with a **plain-English explanation** of
+  what that icon means — what an **IPFS pin** is, what **git-ignore** does, and what **transcription**,
+  **AI description**, and **OCR** are. This is the primary teaching surface for the icon vocabulary: a
+  non-expert hovers the Pin header and reads *"Pin = back this file up across your computers over IPFS,"*
+  hovers OCR and reads *"OCR reads the text out of an image, video frame, or PDF page."*
+
+The per-kind explanation strings live beside the icon meta in the reusable task-icon kit
+(`TASK_ICON`), and hovering calls `setHoverInfo` on the docked region.
+
+### 4c.4 One shared visual grammar — StatusActionIcon (LOCKED)
+
+All five icons render through **one shared component**, `StatusActionIcon`, so the whole block speaks one
+visual language across three states:
+
+| State | Meaning | Render |
+| --- | --- | --- |
+| **done / on** | The thing is done (transcript exists, pinned, git-ignored, described, OCR'd). | **solid fill in the column's UNIQUE color** + a **white glyph** + a subtle **inner white ring** ("white outline"). |
+| **actionable-not-done** ("could" / off) | The action applies and could be taken; **clickable**. | **white background**, **light-gray outline**, a **dark-gray "pen" glyph**. Clicking it starts/sets that axis or task. |
+| **not-applicable** ("na") | The axis/task does not apply to this row. | **white background**, a **very-thin hairline outline**, a **faint-gray glyph**; **inert** (no click). |
+
+This is the same three-state box the decision toggles and the Transcribe/Describe/Compress status icons
+already use ([decision_toggles.mdx](./decision_toggles.mdx), [task_tabs.mdx §5–§6](./task_tabs.mdx)) — the
+icon control block is that grammar generalized into a fixed leading column set. Implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` —
+`StatusActionIcon`; the per-kind header, cell, and explanation are the reusable kit
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TASK_ICON`,
+`TaskIconHeader`, `TaskStatusCell`.
+
+### 4c.5 Each "done" color is unique (LOCKED)
+
+So the five columns are distinguishable at a glance when their "done" fills sit side by side, **each uses a
+different color** for its solid done/on state:
+
+| Column | "Done" color | Token |
+| --- | --- | --- |
+| **Pin** | blue (`#1d4ed8`) | `--lfb-pin` |
+| **Ignore** | orange (`#c2410c`) | `--lfb-decision-on` |
+| **Transcribe** | indigo (`#4338ca`) | `--lfb-transcribe-done` |
+| **AI Description** | teal (`#0d9488`) | `--lfb-describe-done` |
+| **OCR** | violet (`#7c3aed`) | `--lfb-ocr-done` |
+
+> **Transcribe changed from blue to indigo.** The Transcribe done color was the pin blue (`--lfb-pin`) back
+> when the Transcribe icon only ever appeared **on its own tab**, never beside the Pin icon. Now that all
+> five icons **lead every file table together**, a blue Transcribe would clash with the blue Pin one column
+> over, so Transcribe's done color is **indigo** (`--lfb-transcribe-done` `#4338ca`) — close enough to read
+> as "the transcript one," distinct enough not to be mistaken for a pin. The "could" edge and the N/A
+> hairline stay identical across all five (`--lfb-decision-on` / `--lfb-toggle-off-edge`); only the filled
+> done swatch tells the columns apart.
+
+### 4c.6 The icon columns lead every task tab; content columns still vary (LOCKED)
+
+On the per-repo screen the **task tabs are kept** (All / IPFS / Compress / Transcribe / AI descriptions /
+OCR — [task_tabs.mdx §1](./task_tabs.mdx)); the five icon columns now **lead every tab** (their `columnIds`
+begin with `pin`, `ignore`, `transcribe`, `describe`, `ocr`), and each tab then appends its own task
+**content** columns after `File`. The **Compress** tab additionally shows its **Compress status icon**
+(green done, [task_tabs.mdx §6](./task_tabs.mdx)) as a content column — Compress is not one of the five
+leading icons because it is not a per-file yes/no artifact axis in the same sense, so it rides as the
+Compress tab's own status column.
+
+---
+
 ## 5. Acceptance criteria
 
 1. **Repos, the Full-paths files table, and Communities** each have a **leading ribbon bookmark
@@ -653,6 +791,25 @@ checkbox per column**. Modeled on the sister app's movie-sheet "Columns" pop-out
     one checkbox per column, `shown/total` badge, "Show all columns", last-column guard, and the icon
     lit whenever a column is hidden. Unchecking a column **removes it from the rendered table**; manual
     hides apply before the responsive budget (user wins) and a hidden column still appears in Sort/Filter.
+14. **Every file table except the File System page leads with the icon control columns** — the **full
+    vocabulary is five**, **Pin · Ignore · Transcribe · AI Description · OCR**, in that order right of the
+    select checkbox, and **each surface renders only the subset that applies to its row model** (§4c):
+    the **one-repo files table** shows all five; the **Storage detail** table shows the **three analysis
+    icons** (Transcribe · AI Description · OCR — no Pin/Ignore, a storage row has no per-file decision); the
+    **IPFS pins** table shows **Pin + the three analysis icons** (no Ignore — git-ignore is meaningless for
+    a CID pin); the **File System page** shows none. Non-applicable columns are **omitted**, never rendered
+    empty, and the shown columns keep the canonical order.
+    They are **narrow with minimal padding** (`tight`/`px-1`, §4c.1); each **header is that column's
+    icon**, not text, with the text label kept only for the Sort/Filter/Columns dropdowns (§4c.2). Hovering
+    the header icon **or** any cell icon shows a `title` tooltip **and** fills the docked hover-info region
+    with a plain-English explanation of that icon (§4c.3). All five render through the one **StatusActionIcon**
+    grammar — done/on = solid unique-color fill + white glyph + inner white ring; actionable = white bg +
+    gray outline + dark-gray pen glyph (clickable); n/a = white bg + hairline outline + faint glyph (inert)
+    (§4c.4). The five **done colors are unique** — Pin blue, Ignore orange, Transcribe **indigo** (changed
+    from blue so it no longer clashes with Pin), AI Description teal, OCR violet (§4c.5). The old
+    **Decision**, **Decided by**, **Decided**, and **Status** columns are **removed** from file tables; the
+    two decision axes still exist as data and are set via the Pin/Ignore icons. **The File System page is
+    the one exclusion.**
 
 ## 6. Tab-scoped column sets (LOCKED)
 
@@ -692,6 +849,22 @@ Applied in code:
   NEVER `shown:`, so newly-added enum values stay visible to existing users (§4.1, LOCKED — this is
   not a stylistic choice). Repos (§3,§8) is the reference implementation; this file generalizes it.
   All tables are TanStack (charter).
+  ICON CONTROL COLUMNS (§4c, LOCKED, site-wide): every FILE table EXCEPT the File System page leads with 5
+  narrow icon columns after the select checkbox — Pin, Ignore, Transcribe, AI Description, OCR (exact
+  order). tight/px-1 (§4c.1). Header = the column's ICON not text (§4c.2, LfbColumn.headerCell); text label
+  kept only for Sort/Filter/Columns dropdowns. Hover header OR cell icon → native title tooltip + fills the
+  docked hover-info region (setHoverInfo) with plain-English "what this icon means" (§4c.3). ONE shared
+  StatusActionIcon grammar (§4c.4): done/on = solid UNIQUE-color fill + white glyph + inner white ring;
+  actionable("could"/off) = white bg + light-gray outline + dark-gray pen glyph (clickable); na = white bg +
+  hairline outline + faint glyph (inert). UNIQUE done colors (§4c.5): Pin blue --lfb-pin #1d4ed8 · Ignore
+  orange --lfb-decision-on #c2410c · Transcribe INDIGO --lfb-transcribe-done #4338ca (CHANGED from blue so it
+  no longer clashes with Pin now both show together) · AI Description teal --lfb-describe-done #0d9488 · OCR
+  violet --lfb-ocr-done #7c3aed. REMOVED from file tables: Decision, Decided by, Decided, Status (transfer) —
+  Pin/Ignore icons carry the two axes; axes still exist as DATA, still set via the icons. Task tabs KEPT; the
+  5 icons lead EVERY tab; Compress tab keeps its green Compress status icon as a CONTENT column (§4c.6). Code:
+  StatusActionIcon.tsx; table/taskIcons.tsx (TASK_ICON/TaskIconHeader/TaskStatusCell); types.ts
+  (headerCell/tight); DataTable.tsx; OneRepoPage.tsx + taskTabs.config.ts; HoverInfoRegion.tsx (setHoverInfo);
+  StorageDetailPage.tsx; IpfsPage.tsx.
 
   CHARTER NOTE: CLAUDE.md's Tables rule still says the filter/sort icons "open a dropdown to filter /
   sort the table." §2.2 and §3.5 move the common path OUT of those dropdowns onto always-visible

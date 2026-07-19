@@ -42,7 +42,7 @@ export const TASK_TABS: Record<TaskTabId, TaskTabDef> = {
     id: "all",
     label: "All",
     icon: LayoutGrid,
-    columnIds: ["pinned", "gitignore", "path", "size", "decision", "decidedBy", "decidedAt", "status", "peers", "cid", "changed"],
+    columnIds: ["pinned", "gitignore", "transcribe", "describe", "ocr", "path", "size", "peers", "cid", "changed"],
     defaultSort: [{ id: "changed", desc: true }],
     rowFilter: () => true,
     metrics: ["undecided", "pullDown", "notBackedUp", "compressibleVideos", "compressibleImages", "transcribable", "describable", "bigNotIgnored"],
@@ -56,7 +56,7 @@ export const TASK_TABS: Record<TaskTabId, TaskTabDef> = {
     id: "ipfs",
     label: "IPFS",
     icon: Pin,
-    columnIds: ["pinned", "gitignore", "path", "size", "status", "peers", "cid", "changed"],
+    columnIds: ["pinned", "gitignore", "transcribe", "describe", "ocr", "path", "size", "peers", "cid", "changed"],
     defaultSort: [
       { id: "peers", desc: false },
       { id: "size", desc: true },
@@ -75,7 +75,7 @@ export const TASK_TABS: Record<TaskTabId, TaskTabDef> = {
     // The Compress status icon is the LEADING, header-less control column — to the LEFT of File, the same
     // slot Pin/IPFS occupy (task_tabs.mdx §4.3/§6). A compact Pin is kept after it so the user can still pin.
     icon: Archive,
-    columnIds: ["compress", "pinned", "path", "size", "kind", "changed"],
+    columnIds: ["pinned", "gitignore", "transcribe", "describe", "ocr", "compress", "path", "size", "kind", "changed"],
     defaultSort: [
       { id: "compress", desc: false },
       { id: "size", desc: true },
@@ -93,7 +93,7 @@ export const TASK_TABS: Record<TaskTabId, TaskTabDef> = {
     // The Transcribe status icon is the LEADING, header-less control column — to the LEFT of File, like the
     // Pin/IPFS icons (task_tabs.mdx §4.4/§5; the product owner: "move it left of the file icon, drop the title").
     icon: Captions,
-    columnIds: ["transcribe", "path", "size", "kind", "changed"],
+    columnIds: ["pinned", "gitignore", "transcribe", "describe", "ocr", "path", "size", "kind", "changed"],
     defaultSort: [
       { id: "transcribe", desc: false },
       { id: "size", desc: true },
@@ -111,7 +111,7 @@ export const TASK_TABS: Record<TaskTabId, TaskTabDef> = {
     id: "ai-descriptions",
     label: "AI descriptions",
     icon: ScanText,
-    columnIds: ["describe", "path", "size", "kind", "changed"],
+    columnIds: ["pinned", "gitignore", "transcribe", "describe", "ocr", "path", "size", "kind", "changed"],
     defaultSort: [
       { id: "describe", desc: false },
       { id: "size", desc: true },
@@ -131,7 +131,7 @@ export const TASK_TABS: Record<TaskTabId, TaskTabDef> = {
     id: "ocr",
     label: "OCR",
     icon: TextSelect,
-    columnIds: ["ocr", "path", "size", "kind", "changed"],
+    columnIds: ["pinned", "gitignore", "transcribe", "describe", "ocr", "path", "size", "kind", "changed"],
     defaultSort: [
       { id: "ocr", desc: false },
       { id: "size", desc: true },

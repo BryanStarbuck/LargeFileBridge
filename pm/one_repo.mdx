@@ -103,10 +103,10 @@ Three regions stacked in the content column: the **header** (repo identity + the
 │            │  Pin (IPFS) ☑Pinned ☑Not pinned ☑Recommended ☑Undecided                    │ ← facet rail — TWO facets, never one
 │            │  Git-ignore ☑Git-ignored ☑Not git-ignored ☑Recommended                     │   (tables.mdx §2.2/§2.4)
 │            ├───────────────────────────────────────────────────────────────────────────┤
-│            │  ☐  File                     Size   Pin decision  Status   Peers  Changed   │
-│            │  ☐  render/final_4k.mov      8.2GB  [Pin ▾]       Pinned   3      2h ago  ⋮ │
-│            │  ☐  render/take_07.mov       6.1GB  [Undecid▾]    —        0      5m ago ⚠⋮ │
-│  [account] │  ☐  scratch/proxy.mp4        220MB  [Ignore ▾]    —        0      1d ago  ⋮ │ ← trailing ⋮ = row kebab (file catalog)
+│            │  ☐ 📌 ⊘ ⌯ 👁 🔤  File               Size   Peers  Changed                   │ ← 5 leading icon cols
+│            │  ☐ ● ● ● ○ ○   render/final_4k.mov  8.2GB  3      2h ago                 ⋮ │   Pin Ign Trn Desc OCR
+│            │  ☐ ○ ○ ● ○ ○   render/take_07.mov   6.1GB  0      5m ago               ⚠ ⋮ │
+│  [account] │  ☐ ○ ● · · ·   scratch/proxy.mp4    220MB  0      1d ago                 ⋮ │ ← trailing ⋮ = row kebab (file catalog)
 │            ├───────────────────────────────────────────────────────────────────────────┤
 │            │  173 files                                     page 1 / 1        [500 ▾]     │
 └────────────┴───────────────────────────────────────────────────────────────────────────┘
@@ -321,7 +321,7 @@ not restate it:
   ([tables.mdx §2.2](./tables.mdx#22-the-facet-rail--filtering-without-opening-a-dropdown-locked)). This
   table's facets are **Pin (IPFS)** and **Git-ignore** — **two facets, never one, and neither is named
   "Decision"** ([tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked))
-  — plus **Status** (§4.6), and the two **promoted rail controls** every file table carries: the
+  — and the two **promoted rail controls** every file table carries: the
   **`☑ Large files only`** toggle (default ON — hides the small `analysisOnly` media the scan surfaces;
   turn it off to reach a small checked-in JPG or short clip — [tables.mdx §2.9](./tables.mdx)) and the
   **File type** facet (`☑ Images ☑ Videos ☑ Audio ☑ PDFs ☐ Other` — [tables.mdx §2.10](./tables.mdx)). The
@@ -349,36 +349,50 @@ not restate it:
 
 ### 4.3 Columns
 
+The table leads with the **five icon control columns** ([tables.mdx §4c](./tables.mdx)) — **Pin · Ignore ·
+Transcribe · AI Description · OCR** — immediately right of the select checkbox, then the **File** identity
+column and the remaining data columns. The old **Pin decision** select, the **Decided by** / **Decided**
+provenance columns, and the transfer **Status** column are **removed** (§4.3.1).
+
 | # | Column | Kind | Sort | Filter | Notes |
 | --- | --- | --- | --- | --- | --- |
 | 0 | **☐ select** | — | — | — | Row checkbox; header checkbox selects the current page (for bulk decisions). |
-| 1 | **File** | text | ✓ | ✓ (contains) | Path relative to the repo root; directory prefix muted, filename bold. |
-| 2 | **Size** | int (bytes) | ✓ | ✓ | Human-readable (`8.2 GB`), right-aligned; sorts/filters on raw bytes. |
-| 3 | **Pin** | toggle | ✓ | ✓ **Pin (IPFS)** facet | The **Add-to-IPFS decision toggle** ([decision_toggles.mdx](./decision_toggles.mdx)) — solid orange = pinned; dashed orange = the [To-Do calc engine](./to_do_batch_calc_engine.mdx) recommends pinning it; white/grey = off. Writes the `sync` axis on click (§4.5.1). **This column carries the IPFS axis's one facet and its one sort key** ([tables.mdx §2.4.1](./tables.mdx#241-the-two-facets-fixed-vocabulary-locked)). |
-| 3b | **Ignore** | toggle | ✓ | ✓ **Git-ignore** facet | The **Add-to-git-ignore decision toggle** (⊘, [decision_toggles.mdx](./decision_toggles.mdx)) — solid orange = git-ignored; dashed = recommended; white/grey = off. Repo-scoped (always present here, since every row is under this repo). Writes the git-ignore axis on click (§4.5.1). **This column carries the git-ignore axis's one facet and its one sort key**, sourced from `git check-ignore` — never from the ledger ([decisions.mdx §1.1](./decisions.mdx#11-this-ledger-records-intent--git-records-the-git-ignore-state-locked)). |
-| 3c | **Pin decision** | enum | ✗ | ✗ (→ the **Pin (IPFS)** facet on col 3) | A **`[Pin ▾]` inline select** — Add to IPFS (pin) / Ignore / Undecided (§4.5) — the labelled **editor** for the **IPFS axis only**, kept for users who prefer the list. **`Ignore` here means "deliberately NOT pinned"** (`ignore` on the IPFS axis) — it does **not** mean git-ignored; that is col 3b, a different axis with a different source of truth ([tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked)). **Not sortable, not filterable** — see below. |
-| 4 | **Status** | enum | ✓ | ✓ | `transfer` status pill (§4.6); `—` for files not marked Add to IPFS (pin). |
-| 5 | **Peers** | int | ✓ | ✓ | How many of your computers hold this file. `0` on an **Add-to-IPFS (pin)** file renders red (not backed up yet). |
-| 6 | **CID** | text | ✓ | ✓ | IPFS content id (monospace, middle-truncated, click to copy); blank until the file is an Add-to-IPFS (pin) file with a CID. |
-| 7 | **Changed** | timestamp | ✓ | ✓ | `changedAt`, relative with absolute tooltip. |
+| 1 | **Pin** *(icon)* | StatusActionIcon | ✓ | ✓ **Pin (IPFS)** facet | The **Add-to-IPFS decision toggle** ([decision_toggles.mdx](./decision_toggles.mdx)) rendered as the first leading icon column — **solid BLUE (`--lfb-pin`)** = pinned; dashed "could" edge = the [To-Do calc engine](./to_do_batch_calc_engine.mdx) recommends pinning; white/pen = off. Icon-only header; hover explains *"what an IPFS pin is."* Writes the `sync` axis on click (§4.5.1). **Carries the IPFS axis's one facet + one sort key** ([tables.mdx §2.4.1](./tables.mdx#241-the-two-facets-fixed-vocabulary-locked)). |
+| 2 | **Ignore** *(icon)* | StatusActionIcon | ✓ | ✓ **Git-ignore** facet | The **Add-to-git-ignore decision toggle** (⊘, [decision_toggles.mdx](./decision_toggles.mdx)) — **solid ORANGE (`--lfb-decision-on`)** = git-ignored; dashed = recommended; white/pen = off. Icon-only header; hover explains *"what git-ignore does."* Repo-scoped (always present here). Writes the git-ignore axis on click (§4.5.1). **Carries the git-ignore axis's one facet + one sort key**, sourced from `git check-ignore`, never the ledger ([decisions.mdx §1.1](./decisions.mdx#11-this-ledger-records-intent--git-records-the-git-ignore-state-locked)). |
+| 3 | **Transcribe** *(icon)* | StatusActionIcon | ✓ | ✓ | Three-state transcript status ([task_tabs.mdx §5](./task_tabs.mdx)) — **solid INDIGO (`--lfb-transcribe-done`)** = has transcript; "could" = audio/video with none (click to transcribe); n/a = not audio/video. Icon-only header; hover explains transcription. Present on **every** tab now, not only Transcribe. |
+| 4 | **AI Description** *(icon)* | StatusActionIcon | ✓ | ✓ | Three-state describe status ([task_tabs.mdx §5.2](./task_tabs.mdx)) — **solid TEAL (`--lfb-describe-done`)** = described; "could" = image/video with none; n/a otherwise. Icon-only header; hover explains AI description. Present on every tab. |
+| 5 | **OCR** *(icon)* | StatusActionIcon | ✓ | ✓ | Three-state OCR status ([ocr.mdx §11.2](./ocr.mdx)) — **solid VIOLET (`--lfb-ocr-done`)** = text read; "could" = image/video/PDF not yet read; n/a otherwise. Icon-only header; hover explains OCR. Present on every tab. |
+| 6 | **File** | text | ✓ | ✓ (contains) | Path relative to the repo root; directory prefix muted, filename bold. |
+| 7 | **Size** | int (bytes) | ✓ | ✓ | Human-readable (`8.2 GB`), right-aligned; sorts/filters on raw bytes. |
+| 8 | **Peers** | int | ✓ | ✓ | How many of your computers hold this file. `0` on an **Add-to-IPFS (pin)** file renders red (not backed up yet). |
+| 9 | **CID** | text | ✓ | ✓ | IPFS content id (monospace, middle-truncated, click to copy); blank until the file is an Add-to-IPFS (pin) file with a CID. |
+| 10 | **Changed** | timestamp | ✓ | ✓ | `changedAt`, relative with absolute tooltip. |
 | — | **`⋮`** | — | — | — | The row **kebab** — the **file** action catalog ([menus.mdx §5.3](./menus.mdx#53-file)). A control cell: opens the menu, never navigates. Right-click on the row opens the same menu ([menus.mdx §3.1](./menus.mdx#31-right-click-opens-the-same-menu-locked)). |
 
-> **Why col 3c is renamed, and why it neither sorts nor filters.** It was called **Decision** and offered
-> a three-value `sync`/`ignore`/`undecided` filter — the exact conflation
-> [tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked)
-> retires: a control named *Decision* reads as if it covers **both** axes when it only ever covered the
-> **IPFS** one, and its `Ignore` value collides head-on with the git-ignore column beside it. So:
-> * **The select survives as an editor, renamed.** Setting **one row's** pin decision is a genuine
->   **one-of-N** choice (a file is pinned *or* not-pinned *or* undecided — never two at once), and
->   [tables.mdx §2.5](./tables.mdx#25-checkbox-vs-radio-vs-segmented--pick-by-the-question-locked) permits a
->   radio/select for a true one-of-N **editor**. The name now says which axis it edits.
-> * **Its filter is gone, not moved.** Filtering the IPFS axis happens **once**, on the **Pin (IPFS)**
->   facet the **Pin** toggle column (col 3) carries (§4.2). Giving 3c its own facet would render the
->   *same* facet twice on one rail — two chip groups over one axis, able to disagree — which is the
->   opposite of the one-facet-per-axis rule. **One axis → one facet → one column carries it**; the
->   labelled select stays a pure editor. The same argument removes its sort key
->   ([tables.mdx §3.6](./tables.mdx#36-sort-obeys-the-axis-split-too-locked): Pin and Ignore are the two
->   keys, and a second Pin key would be a duplicate of col 3's).
+The five icon columns are **narrow with minimal padding** (the DataTable `tight` flag → `px-1`), each with
+an **icon-only header** (a plain-text label is kept only for the Sort/Filter/Columns dropdowns), and
+hovering **the header icon or any cell icon** both shows a `title` tooltip and fills the docked hover-info
+region with a plain-English explanation ([tables.mdx §4c.2–§4c.3](./tables.mdx)). All five share the one
+**`StatusActionIcon`** grammar with **unique done colors** (Pin blue, Ignore orange, Transcribe indigo, AI
+Description teal, OCR violet — [tables.mdx §4c.4–§4c.5](./tables.mdx)).
+
+#### 4.3.1 Removed columns — the icons replace the old decision + status UI (LOCKED)
+
+The Pin and Ignore icon cells **fully replace** the old spread-out decision UI, so these columns are **gone
+from the file table**:
+
+* **Pin decision** (the inline `[Pin ▾]` / old *Decision* select) — retired. The **Pin** icon (col 1) is
+  now the per-row IPFS-axis control; setting the axis is a click on the icon, not a select. (A labelled
+  one-of-N editor still lives off-table in the file kebab's *Set pin ▸* submenu, [menus.mdx §5.3](./menus.mdx).)
+* **Decided by** and **Decided (when)** — the provenance **columns** are removed; *who decided and when*
+  now surfaces **on hover** (the docked hover-info region and the file page, §4.8).
+* **Status** (the transfer pill) — dropped from the file table; the **Pin** icon's state already tells the
+  user whether a file is pinned, and the richer transfer detail lives on the file's View-one-file page and
+  the IPFS pins table ([ipfs_ui.mdx](./ipfs_ui.mdx)).
+
+**The two decision axes still exist as data** ([decisions.mdx](./decisions.mdx)) and are still **set via the
+Pin / Ignore icons** — only the extra *columns* are retired, nothing else. The File System page keeps its
+own layout and is the one file table **without** this icon block ([tables.mdx §4c](./tables.mdx)).
 
 Pagination: **default 500** ([Repos §3.3](./repos.mdx)); the **file count** shows left of the pager.
 
@@ -392,10 +406,10 @@ The trailing per-row file kebab is rendered in code:
 
 **Clicking a file row opens that file's "View one file" experience.** The whole row is a deep link —
 and the **File** column especially — so a single click on `render/final_4k.mov` takes the user straight
-to the page for that one file. Only the interactive control cells opt out (the **Pin** / **Ignore**
-toggles flip in place; the inline **Pin decision** select edits in place; the **CID** cell copies; the
-**`⋮`** kebab opens the menu). Each of those stops click propagation so it never also fires the row
-navigation.
+to the page for that one file. Only the interactive control cells opt out (the five leading icon columns —
+**Pin** / **Ignore** flip the two decision axes in place, and **Transcribe** / **AI Description** / **OCR**
+queue-or-view their task in place; the **CID** cell copies; the **`⋮`** kebab opens the menu). Each of those
+stops click propagation so it never also fires the row navigation.
 
 **Where a row click lands depends on the file's kind** — the same media-routing rule the File System
 browser and the entity menus use ([media_viewer.mdx §1](./media_viewer.mdx), [menus.mdx §2](./menus.mdx#2-cell-navigation--clicking-a-cell-is-a-deep-link)):
@@ -415,8 +429,9 @@ Per-cell targets (all resolve to the row target above unless noted):
 | Cell | Click target |
 | --- | --- |
 | **File** | The file's **View one file** experience (viewer for media, properties otherwise). |
-| **Size / Status / Changed** | Same as the row — the file's View one file page. |
-| **Pin / Ignore / Pin decision** | Inline controls — the two axis toggles flip, the select edits, all in place; none navigates (§4.5 / §4.5.1); each stops propagation. |
+| **Size / Changed** | Same as the row — the file's View one file page. |
+| **Pin / Ignore** | Inline controls — the two axis toggles flip in place; neither navigates (§4.5.1); each stops propagation. |
+| **Transcribe / AI Description / OCR** | Inline status icons — "could" queues the task (background job), "done" views the output, n/a is inert; none navigates; each stops propagation ([task_tabs.mdx §5](./task_tabs.mdx)). |
 | **Peers** | Same as the row (peers detail lives on the file page / [Peers](./left_bar.mdx)). |
 | **CID** | **Copies** the CID (click-to-copy); does not navigate away; stops propagation. |
 | **`⋮`** | Opens the **file action menu** — never navigates (§4.3); stops propagation. |
@@ -470,15 +485,19 @@ to set each axis; the full visual grammar (four render states — OFF white/grey
 The Pin/Ignore toggle columns are rendered in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (the `pin` and `ignore` `LfbColumn`s mounting `DecisionToggle`; write via `setDecision`).
 
-### 4.5 The Decision select (per row) — the core interaction
+### 4.5 The Decision select (per row) — SUPERSEDED by the Pin icon
 
-Each row's **Pin decision** cell (col 3c — the column this section names *Decision* for historical/anchor
-reasons) is an inline select with the three states of the **IPFS axis only**. It is an **editor**, not a
-filter: a true one-of-N choice per row, which is why the select shape survives
-([tables.mdx §2.5](./tables.mdx#25-checkbox-vs-radio-vs-segmented--pick-by-the-question-locked)) while its
-filter does not (§4.3). Its **Ignore** option means *"deliberately not pinned"* — **not** git-ignored,
-which is the separate **Ignore** toggle column (§4.5.1). Changing it writes immediately (optimistic, with
-rollback on error):
+> **The inline Decision/`Pin decision` select column is removed from the table (§4.3.1).** The per-row core
+> interaction for the IPFS axis is now a click on the **Pin** icon (col 1, §4.5.1) — the icon cell writes
+> the same three-state IPFS-axis decision the select used to. A labelled one-of-N editor still exists
+> off-table in the file kebab's *Set pin ▸* submenu ([menus.mdx §5.3](./menus.mdx)). The state-transition
+> semantics below are unchanged — they now fire from the Pin icon (and its "could"/recommended click)
+> rather than a select.
+
+Setting a row's IPFS-axis decision (via the Pin icon, or the off-table *Set pin ▸* editor) moves through
+the same three states of the **IPFS axis only**. Its **Not pinned** state means *"deliberately not
+pinned"* — **not** git-ignored, which is the separate **Ignore** icon (§4.5.1). Writing is immediate
+(optimistic, with rollback on error):
 
 * → **Add to IPFS (pin)** (decision value `sync`): LFBridge adds the file to the manifest,
   computes/records its **CID**, pins it, and queues transfers to peers. The row's Status moves to
@@ -493,6 +512,12 @@ Writing a per-file decision (single or bulk) to the repo's `config.yaml` is hand
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `PATCH /api/repos/:repoId/files`
 
 ### 4.6 Transfer status pill (LOCKED)
+
+> **No longer a column in this table (§4.3.1).** The transfer **Status** column is **removed from the
+> One-repo file table** — the **Pin** icon (col 1) already tells the user whether a file is pinned, so a
+> separate pill column was redundant. The `transfer` value and this pill mapping still exist and still
+> render on the file's **View-one-file** page and on the **IPFS pins table** ([ipfs_ui.mdx](./ipfs_ui.mdx));
+> only the file-table *column* is gone. The mapping below governs those surviving surfaces.
 
 | `transfer` | Meaning | Pill |
 | --- | --- | --- |
@@ -512,10 +537,13 @@ Because decisions are now a **team-shared, attributed** record ([decisions.mdx �
 this screen surfaces *who* decided each file and *when* — a decision the team can't inspect is barely
 better than none:
 
-* **Hover the Decision cell** → a non-intrusive tooltip ([non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)):
-  *"Add to IPFS + git-ignored · decided by bob@acme.com · Jul 12, 2:32 PM"*. A small person/clock glyph
-  marks a file decided by **someone else on the team** (vs. you), so others' choices are visible at a
-  glance.
+* **Hover the Pin or Ignore icon** (the two leading decision icons, §4.3 — the old standalone *Decision*
+  cell is gone, §4.3.1) → a non-intrusive tooltip ([non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)),
+  also filled into the docked hover-info region: *"Add to IPFS + git-ignored · decided by bob@acme.com ·
+  Jul 12, 2:32 PM"*. A small person/clock glyph marks a file decided by **someone else on the team** (vs.
+  you), so others' choices are visible at a glance. **Provenance moved from its own columns to the icon
+  hover** — the *Decided by* and *Decided* columns are removed (§4.3.1), but the *who/when* data is intact
+  and surfaces here and on the file page.
 * **Filter/sort by decider — its own `Decided by` facet, a THIRD independent thing.** Provenance is
   neither the pin axis nor the git-ignore axis: *who* chose is orthogonal to *what* they chose (a
   teammate can have decided either axis, both, or — via the default decision policy
@@ -580,35 +608,40 @@ The **Decided by** facet itself is a **new** surface (the rail has no provenance
    accent-highlighted when > 0.
 4. The **files table** is one TanStack table, one row per large git-ignored file, flat/chromeless,
    with the standard control row (search left; icon-only filter `⛛` and sort dropdowns right), the
-   always-visible **facet rail** beneath it, and columns: select, File, Size, Pin, Ignore, Pin decision,
-   Status, Peers, CID, Changed, and a trailing **`⋮`** kebab.
+   always-visible **facet rail** beneath it, and columns in order: select, then the **five leading icon
+   control columns Pin · Ignore · Transcribe · AI Description · OCR** ([tables.mdx §4c](./tables.mdx)),
+   then File, Size, Peers, CID, Changed, and a trailing **`⋮`** kebab. The old **Pin decision** select,
+   **Decided by**, **Decided**, and transfer **Status** columns are **removed** (§4.3.1).
 5. **Pagination defaults to 500**; the **file count** shows left of the pager.
-6. Each row shows the **two decision-toggle columns** — **Pin** (Add to IPFS) and **Ignore** (⊘, Add to
-   git ignore) — per [decision_toggles.mdx](./decision_toggles.mdx) (four render states incl. **RECOMMENDED**
-   dashed-orange for calc-engine suggestions), alongside the labelled **Pin decision** select; both write
-   immediately per §4.5 / §4.5.1, write only their own axis to the team-shared ledger, and never delete the
-   user's local file.
+6. Each row shows the **two decision-icon columns** — **Pin** (Add to IPFS, solid **blue** done) and
+   **Ignore** (⊘, Add to git ignore, solid **orange** done) — as the first two of the five leading icon
+   columns, rendered through the shared **`StatusActionIcon`** ([tables.mdx §4c](./tables.mdx),
+   [decision_toggles.mdx](./decision_toggles.mdx); the "could"/recommended edge and n/a hairline are shared).
+   Both write immediately per §4.5.1, write only their own axis to the team-shared ledger, and never delete
+   the user's local file. The labelled **Pin decision** select column is **removed** (§4.3.1) — the Pin icon
+   is the per-row IPFS-axis control now.
 6b. **The two axes are never one control.** The rail carries **Pin (IPFS)** and **Git-ignore** as **two
    facets** with the [tables.mdx §2.4.1](./tables.mdx#241-the-two-facets-fixed-vocabulary-locked)
    vocabulary, and **no facet on this page is named "Decision"**
    ([tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked));
    **Pin** and **Ignore** are two separate sort keys with no combined "Decision" key (§4.2,
-   [tables.mdx §3.6](./tables.mdx#36-sort-obeys-the-axis-split-too-locked)). The col-3c select is an
-   **IPFS-axis editor only** — renamed **Pin decision**, `Sort ✗ Filter ✗` (§4.3) — so the IPFS axis has
-   exactly **one** facet and **one** sort key, both on col 3. Provenance is a **third, separate**
-   `Decided by` facet (☑ Me ☑ Teammate ☑ Policy ☑ Undecided, §4.8), never folded into either axis. The
-   stored `sync` / `ignore` / `undecided` values are unchanged — this is a **label + facet** change, not a
+   [tables.mdx §3.6](./tables.mdx#36-sort-obeys-the-axis-split-too-locked)). The old **Pin decision** select
+   column is **removed** (§4.3.1) — the **Pin** icon carries the IPFS axis's one facet and one sort key.
+   Provenance is a **third, separate** `Decided by` **rail facet** (☑ Me ☑ Teammate ☑ Policy ☑ Undecided,
+   §4.8) — a filter, not a column, so it survives the column removal — never folded into either axis. The
+   stored `sync` / `ignore` / `undecided` values are unchanged — this is a **column + facet** change, not a
    data change.
 7. **Bulk actions** (`⋮`, enabled on selection) set Add to IPFS (pin) / Ignore / Undecided across
    selected rows and can Pin-now the selected `sync`-decision files; the header checkbox selects the
    page, with a "select all matching" affordance under an active filter.
-8. The **Status** column follows the LOCKED transfer-status pill mapping (§4.6); an Add-to-IPFS (pin)
-   file with Peers = 0 renders the peer count red.
+8. The transfer **Status** column is **removed** from this table (§4.3.1) — the **Pin** icon shows pinned
+   state; the LOCKED transfer-status pill mapping (§4.6) now applies only on the file page and the IPFS pins
+   table. An Add-to-IPFS (pin) file with Peers = 0 still renders the **Peers** count red.
 9. Empty / all-decided / loading / node-unreachable states render per §5.
 10. The header carries a top-right **`⋮` "more" menu** = the **repo** entity catalog
     ([menus.mdx §5.1](./menus.mdx#51-repo)), with *Open repo* omitted and *Pin now* also present as the
-    primary button (§3.1). Each files-table **data cell is a deep link** per §4.7 (File/Size/Status/
-    Changed → View one file; Peers → Peers filtered to the file; CID copies); the row **`⋮` kebab** (and
+    primary button (§3.1). Each files-table **data cell is a deep link** per §4.7 (File/Size/Changed →
+    View one file; Peers → Peers filtered to the file; CID copies); the row **`⋮` kebab** (and
     right-click) opens the **file** catalog ([menus.mdx §5.3](./menus.mdx#53-file)) and never navigates,
     with compress/convert/ignore gated behind an explicit-click confirm.
 11. The header carries the **task tab strip** (right of center) — **All** (default) / **IPFS** / **Compress**
@@ -624,20 +657,32 @@ The **Decided by** facet itself is a **new** surface (the rail has no provenance
     **"Compress ›"** (blue) — and each opens the same educate-and-fix popup its metric tile opens. **Every
     actionable metric tile opens a popup** and lets the user start the work (not only Undecided / Pull-down);
     the transcribe/describe applies are model/consent-gated, interposing then resuming.
+13. **The five leading icon control columns** ([tables.mdx §4c](./tables.mdx)) — **Pin · Ignore · Transcribe
+    · AI Description · OCR**, in that order right of the select checkbox — lead the table on **every** tab
+    (§4.3): narrow (`tight`/`px-1`), **icon-only headers** (text label kept only for Sort/Filter/Columns
+    dropdowns), each rendered through the shared **`StatusActionIcon`** with **unique done colors** (Pin blue,
+    Ignore orange, Transcribe indigo, AI Description teal, OCR violet). Hovering the header icon **or** any
+    cell icon shows a `title` tooltip **and** fills the docked hover-info region with a plain-English
+    explanation of the icon (§4.3, §4.8). The **Pin decision**, **Decided by**, **Decided**, and **Status**
+    columns are removed (§4.3.1); the two decision axes remain as data, set via the Pin/Ignore icons.
 
 <!--
   Keep this page aligned with repos.mdx (the list it drills into) and left_bar.yaml (the nav).
   LOCKED across specs: the three-state DECISION model — Add to IPFS (pin) / Ignore / Undecided (user
   intent; the pin decision's stored wire value stays `sync`) vs the TransferStatus (reality); the
-  transfer-status pill colors (§4.6); the standard control row (search left; icon-only sort/filter
-  right); pagination default 500 with the count shown. The Pin-decision inline-select is the core
-  interaction — changing it never deletes local bytes.
+  transfer-status pill colors (§4.6, now shown on the file page + IPFS pins table, NOT this file table);
+  the standard control row (search left; icon-only sort/filter right); pagination default 500 with the
+  count shown. Clicking the Pin icon (the per-row IPFS control) never deletes local bytes.
+  ICON COLUMNS (tables.mdx §4c, §4.3/§4.3.1, LOCKED): the table LEADS every tab with FIVE narrow icon control
+  columns after the select checkbox — Pin·Ignore·Transcribe·AI Description·OCR — icon-only headers, docked
+  hover-info explanation, shared StatusActionIcon, UNIQUE done colors (Pin blue, Ignore orange, Transcribe
+  indigo, AI Description teal, OCR violet). REMOVED from this file table: the "Pin decision" select column,
+  the Decided by + Decided provenance columns, and the transfer Status column. The two decision axes still
+  exist as DATA and are set by clicking the Pin/Ignore icons; provenance surfaces on icon hover (§4.8).
   AXIS SPLIT (tables.mdx §2.4, LOCKED): Pin (IPFS) and Git-ignore are TWO facets on the rail and TWO sort
-  keys — never one, and NO facet/column filter is named "Decision". Col 3c was "Decision" with a
-  three-value sync/ignore/undecided filter; it is renamed "Pin decision", is IPFS-AXIS ONLY (its `Ignore`
-  = "deliberately not pinned", NOT git-ignored), and keeps its select ONLY as a per-row one-of-N EDITOR
-  (tables.mdx §2.5) — Sort ✗ Filter ✗, because col 3 (the Pin toggle) already carries the IPFS axis's one
-  facet + one sort key, and one axis gets exactly one of each. §4.1's segments drive the Pin (IPFS) facet
+  keys — never one, and NO facet/column filter is named "Decision". The removed col-3c select used to carry
+  the IPFS-axis one-of-N choice; that choice is now a click on the Pin icon (col 1), which carries the IPFS
+  axis's one facet + one sort key. §4.1's segments drive the Pin (IPFS) facet
   only and never touch Git-ignore (recommend relabeling `Ignore` → `Not pinned` there — same word, two
   axes, one screen). Provenance is a THIRD facet, `Decided by` (Me/Teammate/Policy/Undecided, §4.8), not a
   values-list on any axis. Labels + facets only — sync/ignore/undecided stay FROZEN wire values

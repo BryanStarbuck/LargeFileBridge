@@ -9,7 +9,7 @@ import { useNavigate, useSearch, Link } from "@tanstack/react-router";
 import { RefreshCw, Copy, Check, DownloadCloud, ShieldCheck, ChevronLeft } from "lucide-react";
 import { toast } from "sonner";
 import type { IpfsPageData, IpfsPinRow, IpfsNodeCard } from "@lfb/shared";
-import { formatBytes } from "@lfb/shared";
+import { formatBytes, viewerRouteForName } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
@@ -17,8 +17,13 @@ import { EntityKebab, type Action } from "../../components/menu/EntityMenu.js";
 import { PageActions } from "../../components/menu/PageActions.js";
 import { publishIpfsList } from "../../components/menu/domainActions.js";
 import { PinKebab } from "../../components/menu/RowKebabs.js";
-import { PinToggle } from "../../components/PinToggle.js";
 import { usePinCid } from "../../components/usePinCid.js";
+// The shared icon control-column kit (tables.mdx icon-columns): the unified Pin box + the Transcribe /
+// AI-description / OCR icons, derived from each pin's analysis[] + resolved file kind.
+import { TaskIconCell, TaskIconHeader, analysisTaskStatuses, boolStatus, TASK_ICON, type TaskIconKind } from "../../components/table/taskIcons.js";
+import { runTranscribeFile } from "../../lib/transcribe.js";
+import { runDescribeFile } from "../../lib/describe.js";
+import { runOcrFile } from "../../lib/ocr.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { StatusBanner, FixButton } from "../../components/ui/StatusBanner.js";
 import type { WarningDef } from "../../components/ui/warnings/registry.js";
@@ -102,12 +107,48 @@ export function IpfsPage() {
     },
   ];
 
+  // The click on an analysis icon (tables.mdx icon-columns): "could" runs the analysis for this pin's
+  // resolved file; "done" opens its viewer; "na"/path-less is inert. Only resolved pins (with a path) can
+  // be actionable — a path-less pin's icons all read "na".
+  const onAnalysisActivate = (kind: TaskIconKind, p: IpfsPinRow, state: string) => {
+    if (!p.path || state === "na") return;
+    const name = p.file ?? p.path.slice(p.path.lastIndexOf("/") + 1);
+    const refresh = () => qc.invalidateQueries({ queryKey: ["ipfs"] });
+    if (state === "done") {
+      navigate({ to: viewerRouteForName(name), search: { path: p.path } });
+      return;
+    }
+    if (kind === "transcribe") runTranscribeFile(p.path, name);
+    else if (kind === "describe") runDescribeFile(p.path, name, { onDone: refresh });
+    else if (kind === "ocr") runOcrFile(p.path, name, { onDone: refresh });
+  };
+
+  // One narrow analysis icon column — status derived from the pin's analysis[] + its resolved file name.
+  const analysisIconCol = (kind: "transcribe" | "describe" | "ocr"): LfbColumn<IpfsPinRow> => ({
+    id: kind,
+    header: TASK_ICON[kind].label,
+    headerCell: <TaskIconHeader kind={kind} />,
+    tight: true,
+    minWidth: 30,
+    kind: "enum",
+    filterOptions: ["could", "done", "na"],
+    accessor: (p) => analysisTaskStatuses(p.file ?? "", p.analysis)[kind],
+    cell: (p) => {
+      const state = analysisTaskStatuses(p.file ?? "", p.analysis)[kind];
+      return <TaskIconCell kind={kind} state={state} onActivate={() => onAnalysisActivate(kind, p, state)} />;
+    },
+  });
+
   const columns: LfbColumn<IpfsPinRow>[] = [
     {
-      // The toggle pin: solid dark-blue = pinned, outline = not. Every pins-page row is a real CID
-      // in the local pinset, so it starts pinned; clicking runs pin add/rm on the node (ipfs.mdx §3).
+      // The unified pin icon (tables.mdx icon-columns / ipfs.mdx §3): solid dark-blue = pinned, outline =
+      // not. Every pins-page row is a real CID in the local pinset, so it starts pinned; clicking runs pin
+      // add/rm on the node. Disabled while the node is down or a toggle for this CID is in flight.
       id: "pinned",
-      header: "Pin",
+      header: TASK_ICON.pin.label,
+      headerCell: <TaskIconHeader kind="pin" />,
+      tight: true,
+      minWidth: 30,
       kind: "text",
       sortable: false,
       filterable: false,
@@ -115,15 +156,19 @@ export function IpfsPage() {
       cell: (p) => {
         const pinned = pin.isPinned(p.cid, true);
         return (
-          <PinToggle
-            pinned={pinned}
-            busy={pin.isBusy(p.cid)}
-            disabled={nodeDown}
-            onToggle={() => pin.toggle(p.cid, pinned)}
+          <TaskIconCell
+            kind="pin"
+            state={boolStatus(pinned)}
+            disabled={nodeDown || pin.isBusy(p.cid)}
+            title={pinned ? "Pinned over IPFS — click to unpin" : "Not pinned — click to pin over IPFS"}
+            onActivate={() => pin.toggle(p.cid, pinned)}
           />
         );
       },
     },
+    analysisIconCol("transcribe"),
+    analysisIconCol("describe"),
+    analysisIconCol("ocr"),
     {
       id: "file",
       header: "File name",

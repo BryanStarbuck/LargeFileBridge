@@ -63,7 +63,18 @@ fills it solid (ON) — confirming the suggestion. Clicking a solid (ON) toggle 
 > **Two axes → four combinations.** Because each toggle is independently OFF/ON, a single file shows one
 > of **four** combinations at a glance: pin-off/ignore-off · pin-on/ignore-off · pin-off/ignore-on ·
 > pin-on/ignore-on. The single most common LFBridge decision — *"pin it AND git-ignore it"* — is both
-> toggles solid orange.
+> toggles filled ON.
+
+> **Color reconciliation with the icon-column block (LOCKED).** When these two toggles render as the first
+> two of the **five leading icon control columns** ([tables.mdx §4c](./tables.mdx)) — which is now the
+> default on every file table — they render through the **shared `StatusActionIcon`**, whose **ON/"done"
+> fill is the column's UNIQUE color** so the five columns are distinguishable side by side
+> ([tables.mdx §4c.5](./tables.mdx)): the **Pin** toggle's ON fill is **blue** (`--lfb-pin` `#1d4ed8`) and
+> the **Ignore** toggle's ON fill is **orange** (`--lfb-decision-on` `#c2410c`). Historically *both*
+> toggles used the one orange (`--lfb-decision-on`); Pin moved to blue only so it no longer reads the same
+> as Ignore now that the two sit adjacent in the fixed icon block (and Transcribe moved blue→indigo for the
+> same reason). The **RECOMMENDED** (dashed "could") edge and the **N/A** hairline are unchanged and
+> **identical across all five** columns; only the filled ON swatch differs per axis.
 
 The token set and the `<DecisionToggle>` render states are defined in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/decision/DecisionToggles.tsx` —
@@ -228,9 +239,25 @@ Deciding whether a given path is under a repo (and which repo's `.gitignore` an 
 
 ## 5. In the One-repo file table (LOCKED)
 
-The [One-repo](./one_repo.mdx) file table gains an explicit **two-toggle decision area** on each row.
-Rather than only the single inline **Decision** select ([one_repo.mdx §4.5](./one_repo.mdx#45-the-decision-select-per-row--the-core-interaction)), the row now
-shows the **two axes directly** as toggles:
+The [One-repo](./one_repo.mdx) file table renders the two toggles as the **first two of the five leading
+icon control columns** ([tables.mdx §4c](./tables.mdx)) — **Pin** then **Ignore**, immediately right of the
+row-select checkbox, ahead of Transcribe · AI Description · OCR — each a narrow (`tight`/`px-1`) icon column
+with an **icon-only header** and a **hover explanation** in the docked hover-info region
+([tables.mdx §4c.2–§4c.3](./tables.mdx)). They render through the **shared `StatusActionIcon`** (Pin's ON
+fill blue, Ignore's orange, §1) instead of any per-page toggle rendering, so Pin/Ignore speak the same
+visual language as the three analysis icons beside them.
+
+> **The labelled Decision select and the provenance columns are removed from file tables (LOCKED).** The
+> icon block **fully replaces** the old spread-out decision UI: the inline `[Decision ▾]` / `[Pin ▾]` select
+> **column**, the **Decided by** column, and the **Decided (when)** column are **gone from the file table**,
+> as is the transfer **Status** column ([tables.mdx §4c](./tables.mdx)). The **Pin** and **Ignore** icon
+> cells now carry both decision axes in full — a click sets that axis exactly as before (§2). **The two
+> axes still exist as data** (the team-shared ledger, [decisions.mdx](./decisions.mdx)) and provenance still
+> exists — *who/when* now surfaces **on hover** ([one_repo.mdx §4.8](./one_repo.mdx), the docked hover-info
+> region and the file page) rather than as its own column. Only the *columns* are retired; no data or axis
+> is lost.
+
+The row still expresses the **two axes directly** as toggles:
 
 ```
 ☐  File                     Size    Pin   Ignore   Status    Peers  Changed
@@ -263,23 +290,21 @@ shows the **two axes directly** as toggles:
   sources of truth** (§1.0): a merged facet would have to pick one source and lie about the other. Sort
   obeys the same split — a **Pin** key and an **Ignore** key, no combined "Decision" key, ordered
   **On → Recommended → Off → N/A** ([tables.mdx §3.6](./tables.mdx#36-sort-obeys-the-axis-split-too-locked)).
-* The **Status** transfer pill is unchanged. The labelled select beside the toggles is **renamed
-  `Decision` → `Pin decision`** and is now **filter-less and sort-less**
-  ([one_repo.mdx §4.3](./one_repo.mdx#43-columns)): a facet named *Decision* offering
-  `sync/ignore/undecided` claimed both axes while covering only the **IPFS** one, so it is retired per
-  [tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked).
-  The select **survives as a per-row editor** — setting one row's pin decision is a genuine one-of-N
-  choice ([tables.mdx §2.5](./tables.mdx#25-checkbox-vs-radio-vs-segmented--pick-by-the-question-locked)) —
-  for users who prefer the labelled list; the toggles remain the fast, always-visible way to set each
-  axis. Its `Ignore` option means *"deliberately not pinned"*, **not** git-ignored. The stored
-  `sync` / `ignore` / `undecided` values are untouched — **frozen wire values**
-  ([decisions.mdx §7](./decisions.mdx#7-reconciliation--folding-the-shared-ledger-onto-this-computer-locked)).
+* **The labelled select column is removed** (see the boxed rule above): the Pin/Ignore icon cells are the
+  only per-row decision surface in the file table now. The IPFS axis's **one facet and one sort key** still
+  live on the **Pin** column, and the git-ignore axis's on the **Ignore** column — the retired select never
+  carried a facet or sort key anyway ([tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked)).
+  The stored `sync` / `ignore` / `undecided` values are untouched — **frozen wire values**
+  ([decisions.mdx §7](./decisions.mdx#7-reconciliation--folding-the-shared-ledger-onto-this-computer-locked)) —
+  the icons write them exactly as the select did. (Where a labelled one-of-N editor is still wanted — e.g.
+  the file kebab's *Set pin ▸* submenu, [menus.mdx §5.3](./menus.mdx) — it stays available off-table; it is
+  only the *column* that is gone.)
 
-The Pin/Ignore toggle columns, wired to the same `setDecision` mutation the inline select uses, are rendered in code:
+The Pin/Ignore icon columns (the first two of the five leading icon control columns, [tables.mdx §4c](./tables.mdx)), wired to the same `setDecision` mutation, are rendered in code through the shared `StatusActionIcon`:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
-(the `pin` and `ignore` `LfbColumn`s mounting `DecisionToggle`).
+(the `pin` and `ignore` `LfbColumn`s, `tight` + icon-only `headerCell`, mounting `StatusActionIcon` via the `TaskStatusCell` kit).
 
-Splitting these into **two** rail facets with the §2.4.1 vocabulary (today the page filters the IPFS axis through the col-3c `<select>`) is a **new** surface; it is to be implemented in code:
+Splitting these into **two** rail facets with the §2.4.1 vocabulary (the removed col-3c `<select>` used to carry the IPFS-axis filter) is a **new** surface; it is to be implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (`filterOptions` on the `pin` and `ignore` `LfbColumn`s, removed from the `decision` column), rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the facet rail).
 
 ---
@@ -370,6 +395,13 @@ with the third **Compress** action axis.
    named "Decision"**. The four-state grammar maps onto the facet values; **N/A is not a facet value**.
    Sort splits the same way (a **Pin** key and an **Ignore** key, never a combined one), ordered
    **On → Recommended → Off → N/A**.
+10. **Pin + Ignore render as the first two of the five leading icon control columns** ([tables.mdx §4c](./tables.mdx),
+    §5): narrow (`tight`/`px-1`), **icon-only headers**, hover explanation in the docked hover-info region,
+    all through the shared **`StatusActionIcon`** with **unique ON colors — Pin blue (`--lfb-pin`), Ignore
+    orange (`--lfb-decision-on`)** (§1 color reconciliation). The old **Decision** select column, the
+    **Decided by** and **Decided** provenance columns, and the transfer **Status** column are **removed from
+    the file table** — the icons carry both axes; the two axes still exist as data and provenance surfaces on
+    hover.
 
 ## 9. Status icons reuse this grammar — Transcribe & Compress (LOCKED)
 
@@ -410,9 +442,16 @@ and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/Comp
   ALL CHECKED by default (NOT the old shared on/off/recommended filterOptions list). Vocabulary is frozen
   by tables.mdx §2.4.1; the four-state grammar (§1) maps onto those values and N/A is NOT a facet value.
   They can't merge because they read two sources (manifest vs live `git check-ignore`, §1.0). Same split
-  for sort keys (On → Recommended → Off → N/A). The labelled select is renamed Decision → "Pin decision",
-  IPFS-axis-only, Sort ✗ Filter ✗ — an EDITOR only (one_repo.mdx §4.3). Labels/facets only —
-  sync/ignore/undecided stay FROZEN wire values. Keep aligned with
+  for sort keys (On → Recommended → Off → N/A).
+  ICON COLUMN BLOCK (tables.mdx §4c): Pin + Ignore now render as the first two of the FIVE leading icon
+  control columns (Pin·Ignore·Transcribe·AI Description·OCR) via the shared StatusActionIcon — Pin ON fill is
+  BLUE (--lfb-pin), Ignore ON is ORANGE (--lfb-decision-on); historically BOTH were orange, Pin moved to blue
+  only so it doesn't read the same as Ignore now they sit adjacent (§1 color reconciliation). "could"/dashed
+  edge + N/A hairline identical across all five. The labelled Decision/"Pin decision" SELECT COLUMN is
+  REMOVED from the file table (one_repo §4.3.1) — the Pin icon is the per-row IPFS control; a labelled
+  one-of-N editor survives only off-table in the kebab's Set pin ▸. Decided by / Decided / transfer Status
+  columns also removed (provenance surfaces on icon hover). Two axes still exist as DATA, set via the icons.
+  Labels/columns/facets only — sync/ignore/undecided stay FROZEN wire values. Keep aligned with
   decisions.mdx (ledger), git_ignore.mdx (engine), one_repo.mdx §4/§5 (table), directories.mdx §3 (badges),
-  warnings.mdx §4.5 + to_do.mdx §6 (popups), to_do_batch_calc_engine.mdx (the RECOMMENDED source).
+  warnings.mdx §4.5 + to_do.mdx §6 (popups), to_do_batch_calc_engine.mdx (the RECOMMENDED source), tables.mdx §4c (icon columns).
 -->

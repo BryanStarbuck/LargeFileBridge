@@ -280,6 +280,19 @@ height (it does not expand to fill the viewport) so the node details below it st
 
 ### 5.1 Columns
 
+**Leading icon control columns (shared subset — see [tables.mdx §4c](./tables.mdx#4c-the-icon-control-columns--pin--ignore--transcribe--ai-description--ocr-locked-site-wide)).**
+Before the content columns below, this file-list table presents the **applicable subset** of the
+product-wide icon control columns — **Pin · Transcribe · AI Description · OCR** — right of the row-select
+checkbox. The full vocabulary is five, but **Ignore is omitted here** because git-ignore has no meaning for
+a CID pin (there is no working-tree path to ignore); the **File System** page shows **none**. Their
+`StatusActionIcon` grammar, unique done colors, icon-only headers, and hover-info teaching are owned by
+tables.mdx §4c and spelled out for this surface in
+[ipfs_ui.mdx §5.5](./ipfs_ui.mdx#55-the-pinset-table-gains-the-icon-control-columns--pin--the-three-analysis-icons-locked);
+not restated here. Two surface notes: the leading **Pin** icon (the *Add-to-IPFS axis*) is **always
+"done/on"** here — every row is pinned — and is **not** the content **Pin** *type* column (col 3,
+`recursive` / `direct` / `mfs`); and **Transcribe / AI Description / OCR** derive their state from the pin's
+`analysis[]` field plus its resolved filename kind (path-less / untracked pins read `na`).
+
 | # | Column | Kind | Notes |
 | --- | --- | --- | --- |
 | 1 | **File / CID** | text | The resolved file basename when known, else the CID (monospace, middle-truncated). |
@@ -422,6 +435,14 @@ of the same Tracked rows, so it stays in lock-step with the table with no second
     that repo's pins (with an `IPFS · <RepoName>` title); clicking the **IPFS** parent clears the filter
     and shows the whole pinset. The child list is a rollup of the Tracked rows (the `repos` payload), so
     a repo with no pins never appears and untracked pins show only in the unfiltered parent view.
+11. The table **leads with the applicable subset — Pin + the three analysis icons** (Pin · Transcribe · AI
+    Description · OCR, [tables.mdx §4c](./tables.mdx#4c-the-icon-control-columns--pin--ignore--transcribe--ai-description--ocr-locked-site-wide),
+    detailed in [ipfs_ui.mdx §5.5](./ipfs_ui.mdx#55-the-pinset-table-gains-the-icon-control-columns--pin--the-three-analysis-icons-locked))
+    right of the row-select checkbox, before the content columns. **Ignore is omitted** (git-ignore is
+    meaningless for a CID pin). The leading **Pin** icon is always *done* here (every row is pinned) and is
+    distinct from the **Pin type** column; **Transcribe / AI Description / OCR** derive done / could / na from
+    the pin's `analysis[]` field plus resolved filename kind, path-less/untracked pins reading `na` (§5.1).
+    The **File System** page shows **none**.
 
 <!--
   This is the IPFS PAGE spec (the left-bar view of the LOCAL pinset), distinct from knowledge/ipfs.mdx

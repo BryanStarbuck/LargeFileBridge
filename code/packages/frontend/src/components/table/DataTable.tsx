@@ -287,7 +287,9 @@ export function DataTable<T>({
     () =>
       visibleColumns.map((c) => ({
         id: c.id,
-        header: c.header,
+        // Icon columns render `headerCell` (a glyph) in the <thead>; text columns render their label.
+        // TanStack's `header` accepts a string OR a render function (not a bare node), so wrap the node.
+        header: c.headerCell != null ? () => c.headerCell : c.header,
         accessorFn: (row) => c.accessor(row),
         enableSorting: c.sortable ?? true,
         filterFn: (row, _id, value) => {
@@ -298,7 +300,7 @@ export function DataTable<T>({
           return String(v ?? "").toLowerCase().includes(String(value).toLowerCase());
         },
         cell: ({ row }) => (c.cell ? c.cell(row.original) : String(c.accessor(row.original) ?? "")),
-        meta: { align: c.align },
+        meta: { align: c.align, tight: c.tight },
       })),
     [visibleColumns],
   );
@@ -676,7 +678,9 @@ export function DataTable<T>({
                     </th>
                   )}
                   {hg.headers.map((h) => {
-                    const align = (h.column.columnDef.meta as { align?: string } | undefined)?.align;
+                    const meta = h.column.columnDef.meta as { align?: string; tight?: boolean } | undefined;
+                    const align = meta?.align;
+                    const padX = meta?.tight ? "px-1" : "px-2"; // narrow icon columns (tables.mdx icon-columns)
                     // Header-click sort (repos.mdx §3.1 / tables.mdx §3.3): clicking a header promotes
                     // that column to PRIMARY (1st), cascade-demoting the others; clicking the same header
                     // (already primary) toggles its asc ↔ desc. Same `sorting` state as the Sort dropdown
@@ -689,7 +693,7 @@ export function DataTable<T>({
                         key={h.id}
                         onClick={canSort ? toggleSort : undefined}
                         aria-sort={dir ? (dir.desc ? "descending" : "ascending") : undefined}
-                        className={`py-2 px-2 font-medium ${align === "right" ? "text-right" : ""} ${
+                        className={`py-2 ${padX} font-medium ${align === "right" ? "text-right" : ""} ${
                           canSort ? "cursor-pointer select-none hover:text-black" : ""
                         }`}
                       >
@@ -735,11 +739,13 @@ export function DataTable<T>({
                       </td>
                     )}
                     {row.getVisibleCells().map((cell) => {
-                      const align = (cell.column.columnDef.meta as { align?: string } | undefined)?.align;
+                      const cmeta = cell.column.columnDef.meta as { align?: string; tight?: boolean } | undefined;
+                      const align = cmeta?.align;
+                      const cellPadX = cmeta?.tight ? "px-1" : "px-2";
                       return (
                         <td
                           key={cell.id}
-                          className={`py-2 px-2 ${align === "right" ? "text-right tabular-nums" : ""}`}
+                          className={`py-2 ${cellPadX} ${align === "right" ? "text-right tabular-nums" : ""}`}
                         >
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
                         </td>

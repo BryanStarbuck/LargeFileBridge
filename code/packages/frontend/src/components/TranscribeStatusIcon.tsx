@@ -7,7 +7,9 @@ import { Captions } from "lucide-react";
 import type { TaskStatus } from "@lfb/shared";
 import { StatusActionIcon } from "./StatusActionIcon.js";
 
-const TRANSCRIBE_DONE_BLUE = "var(--lfb-pin, #1d4ed8)";
+// Unique INDIGO — distinct from the Pin's blue, which now sits in the same left icon-column block
+// (tables.mdx icon-columns). Each of the five columns owns a different "done" color.
+const TRANSCRIBE_DONE_INDIGO = "var(--lfb-transcribe-done, #4338ca)";
 
 const TITLE: Record<TaskStatus, string> = {
   done: "Transcript ready — click to view",
@@ -29,7 +31,7 @@ export function TranscribeStatusIcon({
   return (
     <StatusActionIcon
       state={state}
-      doneColor={TRANSCRIBE_DONE_BLUE}
+      doneColor={TRANSCRIBE_DONE_INDIGO}
       title={TITLE[state]}
       onActivate={onActivate}
       onMouseEnter={onMouseEnter}

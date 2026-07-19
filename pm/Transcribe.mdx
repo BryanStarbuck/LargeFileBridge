@@ -709,6 +709,16 @@ The transcription REST surface (tools / read-transcript / file / batch / tree / 
     audio/video file has a complete transcript. **Where** the transcript lands is not decided here — it is
     the placement radio owned by [placement_radios.mdx](./placement_radios.mdx) / [repo_settings.mdx](./repo_settings.mdx)
     (§9.2, cross-link only).
+12. **The Transcribe status icon leads every file table; its done color is indigo (§9).** The three-state
+    Transcribe status icon is one of the **five persistent leading icon control columns**
+    (Pin · Ignore · Transcribe · AI Description · OCR) on **every file-list table except the File System page**
+    ([tables.mdx §4c](./tables.mdx#4c-the-icon-control-columns--pin--ignore--transcribe--ai-description--ocr-locked-site-wide)),
+    not only the Transcribe tab; its header is the `Captions` icon itself (no title text), and hovering the
+    header or any cell fills the docked hover-info region with a plain-English "what transcription is"
+    explanation. Its **done** fill is **indigo** (`--lfb-transcribe-done` `#4338ca`), **changed from the old
+    blue (`--lfb-pin`)** so it no longer clashes with the blue **Pin** icon now that both lead every table side
+    by side ([tables.mdx §4c.5](./tables.mdx#4c5-each-done-color-is-unique-locked)); the "could" edge and the
+    N/A hairline are unchanged.
 
 ## 8. Bulk discovery — "Show what could be transcribed" (the To-Do transcribe slugs) (LOCKED)
 
@@ -777,9 +787,23 @@ On the per-repo screen ([one_repo.mdx](./one_repo.mdx)) the **Transcribe tab**
 ([task_tabs.mdx §4.4](./task_tabs.mdx#44-transcribe--get-transcripts)) narrows the files table to
 **transcribable** files (audio, or video with audio — [special_files.mdx §3](./special_files.mdx#3-the-transcribable-sub-flag--video-has-audio-and-audio))
 and adds a per-row **Transcribe status icon** (lucide `Captions`) with **three** states — the authoritative
-definition is [task_tabs.mdx §5](./task_tabs.mdx#5-the-transcribe-status-icon--three-states-locked):
+definition is [task_tabs.mdx §5](./task_tabs.mdx#5-the-transcribe-status-icon--three-states-locked). As of the
+shared icon-control-column model this icon is **no longer confined to the Transcribe tab**: it is one of the
+**five persistent leading icon columns** — Pin · Ignore · Transcribe · AI Description · OCR — that lead
+**every file-list table in the product** (except the File System page)
+([tables.mdx §4c](./tables.mdx#4c-the-icon-control-columns--pin--ignore--transcribe--ai-description--ocr-locked-site-wide)),
+each rendered through the shared `StatusActionIcon` grammar, with hovering the header icon **or** any cell
+filling the **docked hover-info region** with a plain-English *"what transcription is"* explanation
+([tables.mdx §4c.3](./tables.mdx#4c3-hover-fills-the-docked-hover-info-region-and-shows-a-title-tooltip-locked)):
 
-* **Done** — the file has a `.transcription` transcript (§3) → **solid blue fill, white edge/glyph**.
+* **Done** — the file has a `.transcription` transcript (§3) → **solid indigo fill
+  (`--lfb-transcribe-done` `#4338ca`), white glyph + inner white ring**. *(This "done" swatch was **blue**
+  (`--lfb-pin`) back when the Transcribe icon only ever appeared on its own tab, never beside the Pin icon;
+  now that all five icon columns **lead every file table together**, a blue Transcribe would clash with the
+  blue **Pin** one column over, so its done color is **indigo** — close enough to still read as "the
+  transcript one," distinct enough not to be mistaken for a pin. The "could" edge (`--lfb-decision-on`) and
+  the N/A hairline (`--lfb-toggle-off-edge`) are **unchanged**; only the filled swatch moved —
+  [tables.mdx §4c.5](./tables.mdx#4c5-each-done-color-is-unique-locked).)*
 * **Could be transcribed** — audio/video with **no** transcript yet (exactly this engine's candidate) →
   **red/orange normal-thickness edge, 99%-white / 1%-tint fill** (the token is the shared "actionable"
   warm color the product owner refers to as **red** — the same `could` wash the Compress icon uses;
@@ -788,10 +812,13 @@ definition is [task_tabs.mdx §5](./task_tabs.mdx#5-the-transcribe-status-icon--
   same enqueue the transcribe popup uses.
 * **Not applicable** — not audio/video → **white fill, very-thin very-light-grey edge** (inert).
 
-* **Position (LOCKED — [task_tabs.mdx §4.4/§5](./task_tabs.mdx#5-the-transcribe-status-icon--three-states-locked)).**
-  On the Transcribe tab the icon is a **leading control column to the LEFT of the File column** — the same
-  slot the **Pin** and **IPFS** icons occupy on their tabs — and its column header carries **no title text**
-  (an icon-only control column). The product owner's instruction: *"move that transcribe icon over to the
+* **Position (LOCKED — [task_tabs.mdx §4.4/§5](./task_tabs.mdx#5-the-transcribe-status-icon--three-states-locked),
+  [tables.mdx §4c](./tables.mdx#4c-the-icon-control-columns--pin--ignore--transcribe--ai-description--ocr-locked-site-wide)).**
+  The icon is a **leading control column to the LEFT of the File column** — the **third** of the five icon
+  columns (after **Pin** and **Ignore**), in the same left-of-File slot the Pin and IPFS icons occupy — and its
+  column header is the **`Captions` icon itself, with no title text** (an icon-only header; the plain-text label
+  `"Transcribe"` is kept only for the Sort/Filter/Columns dropdowns). It now leads **every** file table, not
+  only the Transcribe tab. The product owner's instruction: *"move that transcribe icon over to the
   left of the file icon and get rid of the title of it — like the pin icons and the IPFS icon."*
 
 The tab's default sort puts the red/orange "could" rows first (most work-to-do at the top), then Size desc.

@@ -6,26 +6,24 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
-import { RefreshCw, Settings, ChevronLeft, Users, Clock, Ban, CircleSlash, ChevronRight, Search } from "lucide-react";
+import { RefreshCw, Settings, ChevronLeft, Archive, ChevronRight, Search } from "lucide-react";
 import { toast } from "sonner";
 import type { FileRow, Decision, RepoDetail, PinCounts, PinNowResult } from "@lfb/shared";
 import { formatBytes, viewerRouteForName, mediaKindForName, fileTypeForName } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
-import { RepoStatusPill, TransferPill } from "../../components/Pill.js";
+import { RepoStatusPill } from "../../components/Pill.js";
 import { EntityKebab, type Action } from "../../components/menu/EntityMenu.js";
 import { PageActions, producingActions } from "../../components/menu/PageActions.js";
 import { compressAllVideos, compressAllImages, gitIgnoreBig } from "../../components/menu/domainActions.js";
 import type { ActionScope } from "../../lib/pageActions.js";
 import { withModelReady } from "../../lib/transcribe.js";
 import { confirmModal } from "../../lib/modals.js";
-import { PinToggle } from "../../components/PinToggle.js";
-import { DecisionToggle } from "../../components/decision/DecisionToggles.js";
-import { TranscribeStatusIcon } from "../../components/TranscribeStatusIcon.js";
+// The five leading icon control columns share ONE kit (tables.mdx icon-columns): Pin, Ignore, Transcribe,
+// AI description, OCR — unique-color box icons with icon-only headers + hover-region explanations.
+import { TaskIconCell, TaskIconHeader, boolStatus, TASK_ICON, type TaskIconKind } from "../../components/table/taskIcons.js";
 import { CompressStatusIcon } from "../../components/CompressStatusIcon.js";
-import { DescribeStatusIcon } from "../../components/DescribeStatusIcon.js";
-import { OcrStatusIcon } from "../../components/OcrStatusIcon.js";
 import { runDescribeFile } from "../../lib/describe.js";
 import { runOcrFile } from "../../lib/ocr.js";
 import { TaskTabs } from "./TaskTabs.js";
@@ -37,7 +35,6 @@ import { setHoverInfo } from "./HoverInfoRegion.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { WarningPopup } from "../../components/ui/WarningPopup.js";
 import type { WarningDef } from "../../components/ui/warnings/registry.js";
-import { Tooltip } from "../../components/ui/Tooltip.js";
 import { Disclosure } from "../../components/ui/Disclosure.js";
 import { refetchUntilResolved } from "../../components/ui/warnings/resolveRefetch.js";
 import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
@@ -48,30 +45,6 @@ import { copyText } from "@/lib/clipboard";
 const DECISIONS: Decision[] = ["sync", "ignore", "undecided"];
 const decisionLabel = (d: Decision): string =>
   d === "sync" ? "Add to IPFS (pin)" : d[0].toUpperCase() + d.slice(1);
-
-// Decision provenance buckets (one_repo.mdx §4.8 / decisions.mdx §10). These labels double as the exact
-// Decision-column filter VALUES — the DataTable enum filter matches `accessor(row) === value`, so the
-// bucket accessor must return one of these strings verbatim.
-const PROVENANCE_BUCKETS = ["decided by me", "by a teammate", "policy-decided", "undecided"] as const;
-
-// Which provenance bucket a file falls in, given the current user's email (null when unknown). A
-// "policy:<email>" sentinel decidedBy is a policy auto-decision; a bare email that equals the viewer is
-// "me"; any other set decider (or an anonymous decidedAt with no decidedBy) is a teammate.
-function decisionBucket(f: FileRow, selfEmail: string | null): (typeof PROVENANCE_BUCKETS)[number] {
-  if (!f.decidedBy && !f.decidedAt) return "undecided";
-  if (f.decidedBy?.startsWith("policy:")) return "policy-decided";
-  if (f.decidedBy && selfEmail && f.decidedBy === selfEmail) return "decided by me";
-  return "by a teammate";
-}
-
-// Human name for the decider used in the tooltip: "you" for self, "policy (email)" for a policy
-// auto-decision, "a teammate" for an anonymous (attribution-off) decision, else the raw email.
-function decidedByLabel(f: FileRow, selfEmail: string | null): string {
-  if (!f.decidedBy) return "a teammate";
-  if (f.decidedBy.startsWith("policy:")) return `policy (${f.decidedBy.slice("policy:".length)})`;
-  if (selfEmail && f.decidedBy === selfEmail) return "you";
-  return f.decidedBy;
-}
 
 /** One-line summary of a file for the hover-info region (task_tabs.mdx §3) — name · size · kind · task state. */
 function fileSummary(f: FileRow): string {
@@ -99,6 +72,23 @@ function pinSummary(c: PinCounts): string {
   return parts.length ? `Pin done — ${parts.join(", ")}` : "Nothing to pin — no files marked Pin";
 }
 
+// The shared presentation for a leading icon control column (tables.mdx icon-columns): narrow, tight
+// padding, an icon-only header (with tooltip + hover-region wiring), and the readable label kept for the
+// Sort/Filter/Columns dropdowns. Each column then adds its own id / kind / accessor / cell.
+function iconCol(
+  kind: TaskIconKind,
+): Pick<LfbColumn<FileRow>, "header" | "headerCell" | "tight" | "width" | "minWidth"> {
+  // No `width` on purpose: a fixed width would switch the whole table to table-fixed layout and squeeze
+  // the File column. Auto-layout sizes an icon column to its ~16px glyph already; `tight` trims the padding
+  // and `minWidth` only feeds the responsive drop budget (tables.mdx icon-columns).
+  return {
+    header: TASK_ICON[kind].label,
+    headerCell: <TaskIconHeader kind={kind} />,
+    tight: true,
+    minWidth: 30,
+  };
+}
+
 export function OneRepoPage() {
   const { repoId } = useParams({ strict: false }) as { repoId: string };
   const qc = useQueryClient();
@@ -115,11 +105,6 @@ export function OneRepoPage() {
     queryKey: ["repo", repoId],
     queryFn: () => api.repo(repoId),
   });
-
-  // Current user — shares the AppShell's ["me"] cache (one_repo.mdx §4.8). Drives the "decided by me"
-  // vs. "by a teammate" provenance split; null-safe so the glyph/tooltip degrade gracefully if absent.
-  const { data: me } = useQuery({ queryKey: ["me"], queryFn: api.me });
-  const selfEmail = me?.email ?? null;
 
   const setDecision = useMutation({
     mutationFn: ({ paths, decision }: { paths: string[]; decision: Decision }) =>
@@ -299,69 +284,99 @@ export function OneRepoPage() {
   ];
 
   const columns: LfbColumn<FileRow>[] = [
+    // ── The five leading icon control columns (tables.mdx icon-columns). Immediately right of the row
+    // checkbox on EVERY tab, narrow with tight padding and icon-only headers. Pin & Ignore are toggles;
+    // the three analysis icons (Transcribe / AI description / OCR) show status AND perform the one-click
+    // action. Each owns a unique "done" color and explains itself in the hover-info region on hover.
     {
-      // Same toggle pin as everywhere (ipfs.mdx §3): solid dark-blue = pinned (this file is pinned
-      // over IPFS), outline = not. Toggling flips the pin⇄ignore decision that governs the pin.
+      ...iconCol("pin"),
       id: "pinned",
-      header: "Pin",
       kind: "text",
       sortable: false,
       filterable: false,
       accessor: () => "",
       cell: (f) => {
         const pinned = f.decision === "sync";
-        // Never-IPFS (decisions.mdx §17): a flagged file may never be pinned, so the pin toggle is
-        // disabled — you can't flip it into the Add-to-IPFS "sync" decision.
+        // Never-IPFS (decisions.mdx §17): a flagged file may never be pinned, so the pin toggle is disabled.
         const blockedByNeverIpfs = !!f.neverIpfs;
-        // Control cell — stop the click bubbling to the row's navigate (one_repo.mdx §4.7).
         return (
-          <span
-            onClick={(e) => e.stopPropagation()}
-            title={blockedByNeverIpfs ? "blocked by Never-IPFS" : undefined}
-          >
-            <PinToggle
-              pinned={pinned}
-              disabled={ipfsDown || blockedByNeverIpfs}
-              // Two-axis write preserving the git-ignore axis (decision_toggles.mdx §2).
-              onToggle={() =>
-                setAxes.mutate({ paths: [f.path], ipfs: !pinned, gitignore: !!f.gitignore })
-              }
-            />
-          </span>
+          <TaskIconCell
+            kind="pin"
+            state={boolStatus(pinned)}
+            disabled={ipfsDown || blockedByNeverIpfs}
+            title={
+              blockedByNeverIpfs
+                ? "Add to IPFS is blocked by Never-IPFS"
+                : pinned
+                  ? "Pinned over IPFS — click to unpin"
+                  : "Not pinned — click to pin over IPFS"
+            }
+            extraHover={fileSummary(f)}
+            // Two-axis write preserving the git-ignore axis (decision_toggles.mdx §2).
+            onActivate={() => setAxes.mutate({ paths: [f.path], ipfs: !pinned, gitignore: !!f.gitignore })}
+          />
         );
       },
     },
     {
-      // The Add-to-git-ignore (⊘) decision toggle (decision_toggles.mdx / one_repo.mdx §4.5.1). Every row
-      // here is under this repo, so the ignore axis always applies (never N/A). Solid orange = git-ignored.
+      ...iconCol("ignore"),
       id: "gitignore",
-      header: "Ignore",
       kind: "text",
       sortable: false,
       filterable: false,
       accessor: () => "",
-      cell: (f) => (
-        <span onClick={(e) => e.stopPropagation()}>
-          <DecisionToggle
-            state={f.gitignore ? "on" : "off"}
-            // A rule we must not rewrite (a pattern, or a non-root-.gitignore source) owns this file, so
-            // OFF is not ours to perform — say so and name the rule rather than offering a dead click
-            // (git_ignore.mdx §5.5).
-            locked={!!f.gitignoreLocked}
-            title={
-              f.gitignoreLocked && f.gitignoreRule
-                ? `Git-ignored by ${f.gitignoreRule.source}:${f.gitignoreRule.line} — ${f.gitignoreRule.pattern}\n` +
-                  `That rule covers more than this file, so Large File Bridge will not rewrite it. Edit ${f.gitignoreRule.source} to change this.`
-                : f.gitignore
-                  ? "Git-ignored — click to stop ignoring this file"
-                  : "Add to git ignore"
-            }
-            onToggle={() =>
-              setAxes.mutate({ paths: [f.path], ipfs: f.decision === "sync", gitignore: !f.gitignore })
-            }
-            glyph={<CircleSlash className="h-2.5 w-2.5" strokeWidth={2.5} />}
+      cell: (f) => {
+        const on = !!f.gitignore;
+        // A rule we must not rewrite (a pattern, or a non-root-.gitignore source) owns this file, so OFF is
+        // not ours to perform — show it ON but locked and name the rule (git_ignore.mdx §5.5).
+        const locked = !!f.gitignoreLocked;
+        const title =
+          locked && f.gitignoreRule
+            ? `Git-ignored by ${f.gitignoreRule.source}:${f.gitignoreRule.line} — ${f.gitignoreRule.pattern}. ` +
+              `That rule covers more than this file, so Large File Bridge will not rewrite it.`
+            : on
+              ? "Git-ignored — click to stop ignoring this file"
+              : "Add to git ignore";
+        return (
+          <TaskIconCell
+            kind="ignore"
+            state={on ? "done" : "could"}
+            disabled={locked}
+            title={title}
+            extraHover={fileSummary(f)}
+            onActivate={() => setAxes.mutate({ paths: [f.path], ipfs: f.decision === "sync", gitignore: !on })}
           />
-        </span>
+        );
+      },
+    },
+    {
+      ...iconCol("transcribe"),
+      id: "transcribe",
+      kind: "enum",
+      accessor: (f) => f.transcribe ?? "na",
+      filterOptions: ["could", "done", "na"],
+      cell: (f) => (
+        <TaskIconCell kind="transcribe" state={f.transcribe ?? "na"} extraHover={fileSummary(f)} onActivate={() => onTranscribeActivate(f)} />
+      ),
+    },
+    {
+      ...iconCol("describe"),
+      id: "describe",
+      kind: "enum",
+      accessor: (f) => f.describe ?? "na",
+      filterOptions: ["could", "done", "na"],
+      cell: (f) => (
+        <TaskIconCell kind="describe" state={f.describe ?? "na"} extraHover={fileSummary(f)} onActivate={() => onDescribeActivate(f)} />
+      ),
+    },
+    {
+      ...iconCol("ocr"),
+      id: "ocr",
+      kind: "enum",
+      accessor: (f) => f.ocr ?? "na",
+      filterOptions: ["could", "done", "na"],
+      cell: (f) => (
+        <TaskIconCell kind="ocr" state={f.ocr ?? "na"} extraHover={fileSummary(f)} onActivate={() => onOcrActivate(f)} />
       ),
     },
     {
@@ -386,110 +401,6 @@ export function OneRepoPage() {
     },
     { id: "size", header: "Size", kind: "bytes", align: "right", accessor: (f) => f.sizeBytes,
       cell: (f) => formatBytes(f.sizeBytes) },
-    {
-      id: "decision",
-      header: "Decision",
-      kind: "enum",
-      accessor: (f) => f.decision,
-      filterOptions: DECISIONS,
-      cell: (f) => {
-        const bucket = decisionBucket(f, selfEmail);
-        // A small glyph flags a file decided by SOMEONE ELSE (one_repo.mdx §4.8): a person for a
-        // teammate, a clock for a policy auto-decision. Nothing for "me" or an undecided file.
-        const glyph =
-          bucket === "policy-decided" ? (
-            <Clock className="h-3.5 w-3.5 shrink-0 text-black/40" aria-label="decided by policy" />
-          ) : bucket === "by a teammate" ? (
-            <Users className="h-3.5 w-3.5 shrink-0 text-black/40" aria-label="decided by a teammate" />
-          ) : null;
-        // Never-IPFS (decisions.mdx §17): the Add-to-IPFS ("sync") option is disabled so a flagged file
-        // can't be pushed into a pin decision; Ignore / Undecided stay selectable. A Ban glyph + title
-        // spell out why. Mirrors ViewOneFilePage's per-option `disabled` guard.
-        const blockedByNeverIpfs = !!f.neverIpfs;
-        const select = (
-          <select
-            value={f.decision}
-            onClick={(e) => e.stopPropagation()}
-            onChange={(e) => setDecision.mutate({ paths: [f.path], decision: e.target.value as Decision })}
-            title={blockedByNeverIpfs ? "Add to IPFS is blocked by Never-IPFS" : undefined}
-            className="rounded border border-[var(--lfb-border)] px-1 py-0.5 text-xs"
-          >
-            {DECISIONS.map((d) => (
-              <option key={d} value={d} disabled={d === "sync" && blockedByNeverIpfs}>
-                {decisionLabel(d)}
-              </option>
-            ))}
-          </select>
-        );
-        const neverHint = blockedByNeverIpfs ? (
-          <span title="blocked by Never-IPFS" className="inline-flex text-black/40">
-            <Ban className="h-3.5 w-3.5 shrink-0" aria-label="blocked by Never-IPFS" />
-          </span>
-        ) : null;
-        const body = (
-          <span className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-            {select}
-            {glyph}
-            {neverHint}
-          </span>
-        );
-        // Non-intrusive tooltip (§4.8) — only when the file actually has an attributed decision.
-        if (!f.decidedBy && !f.decidedAt) return body;
-        return (
-          <Tooltip
-            content={`${decisionLabel(f.decision)} · decided by ${decidedByLabel(f, selfEmail)} · ${absoluteTime(f.decidedAt ?? null)}`}
-          >
-            {body}
-          </Tooltip>
-        );
-      },
-    },
-    {
-      // Provenance WHO — the bucket filter (decided by me / by a teammate / policy-decided / undecided,
-      // one_repo.mdx §4.8). enum accessor → the DataTable's exact-match filter dropdown. Not sortable
-      // (bucket order is not meaningful); the WHEN column below carries the sort-by-decided-at.
-      id: "decidedBy",
-      header: "Decided by",
-      kind: "enum",
-      accessor: (f) => decisionBucket(f, selfEmail),
-      filterOptions: [...PROVENANCE_BUCKETS],
-      sortable: false,
-      priority: 5,
-      cell: (f) => {
-        const bucket = decisionBucket(f, selfEmail);
-        if (bucket === "undecided") return <span className="text-black/20">—</span>;
-        const glyph =
-          bucket === "policy-decided" ? (
-            <Clock className="h-3.5 w-3.5 shrink-0" />
-          ) : bucket === "by a teammate" ? (
-            <Users className="h-3.5 w-3.5 shrink-0" />
-          ) : null;
-        return (
-          <span className="inline-flex items-center gap-1 text-xs text-black/60">
-            {glyph}
-            {bucket === "decided by me" ? "me" : decidedByLabel(f, selfEmail)}
-          </span>
-        );
-      },
-    },
-    {
-      // Provenance WHEN — sort-by-decided-at (one_repo.mdx §4.8): most recently triaged first. ISO-8601
-      // UTC sorts chronologically as a plain string, so the timestamp accessor needs no transform.
-      id: "decidedAt",
-      header: "Decided",
-      kind: "timestamp",
-      accessor: (f) => f.decidedAt ?? null,
-      filterable: false,
-      priority: 6,
-      cell: (f) =>
-        f.decidedAt ? (
-          <span title={absoluteTime(f.decidedAt)}>{relativeTime(f.decidedAt)}</span>
-        ) : (
-          <span className="text-black/20">—</span>
-        ),
-    },
-    { id: "status", header: "Status", kind: "enum", accessor: (f) => f.transfer,
-      cell: (f) => <TransferPill status={f.transfer} /> },
     { id: "peers", header: "Peers", kind: "int", align: "right", accessor: (f) => f.peers.length,
       cell: (f) => <span className={f.decision === "sync" && f.cid && f.peers.length === 0 ? "text-red-600" : ""}>{f.peers.length}</span> },
     { id: "cid", header: "CID", kind: "text", accessor: (f) => f.cid,
@@ -513,13 +424,19 @@ export function OneRepoPage() {
         return <span className="text-xs text-black/60">{t === "other" ? "—" : t}</span>;
       },
     },
-    // `compress` — the three-state Compress status icon (task_tabs.mdx §6). Sort by status ("could" <
-    // "done" < "na" alphabetically) puts the actionable rows first; filter on the same three values.
+    // `compress` — the three-state Compress status icon (task_tabs.mdx §6). Not one of the five standard
+    // left icons; it is the Compress tab's own content icon, kept narrow with an icon header for parity.
+    // Sort by status ("could" < "done" < "na") puts actionable rows first; filter on the same values.
     {
       id: "compress",
-      // Header-less: an icon-only leading control column, like Pin/IPFS (task_tabs.mdx §4.3/§6). It only
-      // appears on the Compress tab, so blanking the title here never affects other tabs.
-      header: "",
+      header: "Compress",
+      headerCell: (
+        <span className="inline-flex text-black/55" title="Compress — reclaim space on videos and images">
+          <Archive className="h-2.5 w-2.5" strokeWidth={2.5} />
+        </span>
+      ),
+      tight: true,
+      minWidth: 30,
       kind: "enum",
       accessor: (f) => f.compress ?? "na",
       filterOptions: ["could", "done", "na"],
@@ -527,58 +444,6 @@ export function OneRepoPage() {
         <CompressStatusIcon
           state={f.compress ?? "na"}
           onActivate={() => onCompressActivate(f)}
-          onMouseEnter={() => setHoverInfo(fileSummary(f))}
-          onMouseLeave={() => setHoverInfo(null)}
-        />
-      ),
-    },
-    // `transcribe` — the three-state Transcribe status icon (task_tabs.mdx §5).
-    {
-      id: "transcribe",
-      // Header-less: an icon-only leading control column, like Pin/IPFS (task_tabs.mdx §4.4/§5; the product
-      // owner asked to move it left of File and drop the title). It only appears on the Transcribe tab.
-      header: "",
-      kind: "enum",
-      accessor: (f) => f.transcribe ?? "na",
-      filterOptions: ["could", "done", "na"],
-      cell: (f) => (
-        <TranscribeStatusIcon
-          state={f.transcribe ?? "na"}
-          onActivate={() => onTranscribeActivate(f)}
-          onMouseEnter={() => setHoverInfo(fileSummary(f))}
-          onMouseLeave={() => setHoverInfo(null)}
-        />
-      ),
-    },
-    // `describe` — the three-state AI-description status icon (ai_description.mdx §11), the mirror of the
-    // transcribe column. Header-less leading control column; only appears on the AI descriptions tab.
-    {
-      id: "describe",
-      header: "",
-      kind: "enum",
-      accessor: (f) => f.describe ?? "na",
-      filterOptions: ["could", "done", "na"],
-      cell: (f) => (
-        <DescribeStatusIcon
-          state={f.describe ?? "na"}
-          onActivate={() => onDescribeActivate(f)}
-          onMouseEnter={() => setHoverInfo(fileSummary(f))}
-          onMouseLeave={() => setHoverInfo(null)}
-        />
-      ),
-    },
-    // `ocr` — the three-state OCR status icon (ocr.mdx §11.2), the third sibling. Header-less leading
-    // control column; only appears on the OCR tab.
-    {
-      id: "ocr",
-      header: "",
-      kind: "enum",
-      accessor: (f) => f.ocr ?? "na",
-      filterOptions: ["could", "done", "na"],
-      cell: (f) => (
-        <OcrStatusIcon
-          state={f.ocr ?? "na"}
-          onActivate={() => onOcrActivate(f)}
           onMouseEnter={() => setHoverInfo(fileSummary(f))}
           onMouseLeave={() => setHoverInfo(null)}
         />

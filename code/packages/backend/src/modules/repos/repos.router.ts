@@ -15,7 +15,7 @@ import {
   ownerForRepoConfig,
   setRepoOwnerOverride,
 } from "../store-model/units.service.js";
-import { startScan, getScanJob } from "../scanner/scan-job.js";
+import { startScan, getScanJob, maybeTriggerStaleScan } from "../scanner/scan-job.js";
 import { pinRepoFolder, pinAll, missingPinnedFromPeers, pullMissing } from "../pin/pin.service.js";
 import {
   recordDecision,
@@ -72,6 +72,10 @@ reposRouter.use(requireAllowListed);
 // GET /api/repos — the Repos table.
 reposRouter.get("/", (_req, res) => {
   try {
+    // Freshness self-heal: if we haven't scanned the filesystem in >4h, kick a background scan now so the
+    // next poll reflects current disk state. Non-blocking + single-flight (scan-job.ts) — never delays this
+    // response and no-ops when a scan is already running or recent.
+    maybeTriggerStaleScan("Repos list loaded");
     const rows: RepoRow[] = listRepoFolders().map(computeRepoRow);
     res.json({ ok: true, data: rows });
   } catch (e) {
@@ -202,6 +206,9 @@ reposRouter.get("/:repoId", async (req, res) => {
   const folder = folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   try {
+    // Freshness self-heal on page load (>4h stale → background scan). Non-blocking + single-flight, so it
+    // never delays the detail response and coalesces harmlessly if a scan is already running.
+    maybeTriggerStaleScan(`One-repo detail loaded (${folder})`);
     const detail: RepoDetail = computeRepoDetail(folder, await ipfs.health());
     // Augment with the peer-pinned-but-missing set so the §10.8.12 "pull them down" warning has data.
     // Best-effort at the router (computeRepoDetail is sync + shared): a down/slow IPFS never blocks the page.

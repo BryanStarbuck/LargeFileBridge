@@ -176,6 +176,24 @@ a **metric panel**, a **table row**, a **tooltip target** (pill/badge/status ico
 * **Default state.** When nothing is hovered it shows a short **hint for the active tab** (e.g.
   *"Transcribe: audio and video files with no transcript yet. Hover a file for details."*).
 
+### 6.1 It also explains the five icon control columns (LOCKED)
+
+Every file table now leads with **five icon control columns** — **Pin · Ignore · Transcribe · AI
+Description · OCR** ([tables.mdx §4c](./tables.mdx)) — whose headers and cells are bare icons rather than
+words. **People often don't understand these icons**, so hovering (or keyboard-focusing) **either the
+column's icon header OR any cell icon** publishes a **plain-English explanation** into this docked region
+(in addition to a native `title` tooltip on the glyph): what an **IPFS pin** is, what **git-ignore** does,
+and what **transcription**, **AI description**, and **OCR** are. This is the primary teaching surface for
+the icon vocabulary — the docked region is exactly the *"display what that means over there"* home for the
+new icon columns, the same role it already plays for the code badges. The per-kind explanation strings live
+beside the icon meta (`TASK_ICON`, [tables.mdx §4c.3](./tables.mdx)); hovering an icon calls the same
+`setHoverInfo` these panels/rows already use.
+
+Publishing the icon-column explanation on hover is wired in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TaskIconHeader` /
+`TaskStatusCell` (each calls `setHoverInfo` with the kind's explanation), rendered into
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `HoverInfoRegion`.
+
 Rendered in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `HoverInfoRegion` (subscribes to a small `useHoverInfo()` context that panels, rows, tooltips, and action links publish to on hover/focus).
 

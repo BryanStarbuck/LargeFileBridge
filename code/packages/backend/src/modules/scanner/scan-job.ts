@@ -12,6 +12,7 @@
 import type { ScanJob, ScanPhase } from "@lfb/shared";
 import { scanAll, type ProgressSink } from "./scanner.service.js";
 import { stampRun } from "../schedule/schedule.service.js";
+import { getAppConfig } from "../store-model/config.service.js";
 import { log } from "../../shared/logging.js";
 
 const IDLE: ScanJob = {
@@ -65,6 +66,35 @@ export function startScan(source: "manual" | "scheduled"): { started: boolean; j
   // an unhandled promise (runJob is fire-and-forget) — catch it so it lands in the fault trail.
   runJob().catch((e) => log.error("scan", `scan job crashed: ${(e as Error).message}`));
   return { started: true, job: getScanJob() };
+}
+
+// A page-load "freshness" trigger (scan.mdx §10). When a UI page loads and the last COMPLETED discovery
+// scan is older than this, kick a background scan so the page's next poll reflects current disk state.
+// This is a SEPARATE notion from the scheduled worker's "overdue" (2× interval, schedule.service.ts): that
+// one is a timer backstop, this one fires on HUMAN activity, so an actively-used app self-heals stale
+// status without the user having to click "Scan now". Threshold is 4h per product direction — if we
+// haven't scanned in the last four hours and someone opens a page, refresh in the background.
+const PAGE_LOAD_SCAN_STALE_MS = 4 * 60 * 60 * 1000; // 4 hours
+
+/**
+ * Kick a background discovery scan IFF the last completed scan is stale (>4h) — called on UI page loads
+ * so the view reflects current disk state without a manual "Scan now". Non-blocking and safe to call on
+ * every request: it no-ops when a scan is already running (so it never queues a redundant rerun) and when
+ * a recent scan makes the data fresh. Never throws — a bad/absent last-run stamp just counts as stale.
+ */
+export function maybeTriggerStaleScan(reason: string): void {
+  try {
+    if (scanIsRunning()) return; // already walking — a second start would only queue a wasteful rerun
+    const lastRun = getAppConfig().scan_process.last_run_at;
+    const last = lastRun ? Date.parse(lastRun) : NaN;
+    const stale = !Number.isFinite(last) || Date.now() - last > PAGE_LOAD_SCAN_STALE_MS;
+    if (!stale) return;
+    log.info("scan", `${reason}: last scan ${lastRun ?? "never"} is >4h old — kicking a background scan.`);
+    startScan("scheduled");
+  } catch (e) {
+    // A freshness trigger must NEVER break the page it fires from — swallow and move on.
+    log.debug("scan", `maybeTriggerStaleScan skipped: ${(e as Error).message}`);
+  }
 }
 
 async function runJob(): Promise<void> {

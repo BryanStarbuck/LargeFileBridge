@@ -21,6 +21,7 @@ import {
   repoIdFromPath,
 } from "../store-model/units.service.js";
 import { getAppConfig } from "../store-model/config.service.js";
+import { analysisOutputs } from "../storage/tracking.service.js";
 import * as ipfs from "./ipfs.service.js";
 import { log } from "../../shared/logging.js";
 
@@ -32,6 +33,9 @@ interface TrackedInfo {
   size: number;
   peers: number; // pinned_by length (your computers claiming this CID)
   seenAt: string | null;
+  // Which analysis artifacts already exist for this file (tables.mdx icon-columns). Computed from the
+  // owning repo root + relative path via analysisOutputs(); empty for path-less pins.
+  analysis: string[];
 }
 
 const COMPUTER_MANIFEST = () => unitManifestPath(computerUnitDir());
@@ -50,6 +54,10 @@ function buildTrackedIndex(): Map<string, TrackedInfo> {
       const base = cfg.repo.path || "";
       for (const f of manifest.files) {
         if (!f.cid) continue;
+        // Which analysis artifacts (transcript/description/ocr/…) already exist — probed only for tracked
+        // pins with a resolvable repo-relative path (a small, pinned subset), so the icon columns on the
+        // pins table show the same done/not-done state as the repo file table (tables.mdx icon-columns).
+        const analysis = base && f.path ? analysisOutputs(base, f.path) : [];
         index.set(f.cid, {
           repoId,
           unit: name,
@@ -57,6 +65,7 @@ function buildTrackedIndex(): Map<string, TrackedInfo> {
           size: f.size,
           peers: f.pinned_by.length,
           seenAt: status.last_scan_at ?? manifest.generated_at ?? null,
+          analysis,
         });
       }
     } catch (e) {
@@ -79,6 +88,9 @@ function buildTrackedIndex(): Map<string, TrackedInfo> {
         size: f.size,
         peers: f.pinned_by.length,
         seenAt: computer.generated_at ?? null,
+        // Computer-unit pins are path-less placeholders (or a bare absolute path with no owning repo root
+        // to key analysis off), so no analysis artifacts are resolved here.
+        analysis: [],
       });
     }
   } catch (e) {
@@ -138,6 +150,7 @@ export async function computeIpfsPage(): Promise<IpfsPageData> {
         repoId: info.repoId,
         peers: info.peers,
         seenAt: info.seenAt,
+        analysis: info.analysis,
       };
     }
     return {
@@ -151,6 +164,7 @@ export async function computeIpfsPage(): Promise<IpfsPageData> {
       repoId: null,
       peers: 0,
       seenAt: null,
+      analysis: [],
     };
   });
 

@@ -1120,6 +1120,38 @@ The Describe status icon (three states, click-to-describe / click-to-view) is re
 The new per-file field is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FileRow.describe` (a `TaskStatus`, alongside the existing `FileRow.transcribe` / `FileRow.compress`).
 
+### 11.3 The Describe icon is now a PERSISTENT LEADING column on every file table (LOCKED — see [tables.mdx §4c](./tables.mdx))
+
+The Describe status icon is **no longer only on the AI descriptions tab.** As of the product-wide **icon
+control columns** model, it is one of **five fixed leading icon columns** — **Pin · Ignore · Transcribe · AI
+Description · OCR**, in that order, immediately right of the row-select checkbox — that lead **every**
+file-list table in the product: **every task tab** (All / IPFS / Compress / Transcribe / AI descriptions /
+OCR), the **Storage detail** file table, and the **IPFS pins** table. **The one exclusion is the File System
+page** (`FullPathsPage`), which keeps its raw path listing. **[tables.mdx §4c](./tables.mdx) is the
+product-wide OWNER** of the icon-column block (the ordering, the narrow `tight`/`px-1` padding, the
+icon-only header, the hover behavior, and the shared three-state grammar); this section only names the
+describe entry in it and does not re-litigate the block. The per-repo **task tabs are kept** (§11.1) — the
+tab still filters to describable files and appends its describe-specific content columns; what changed is
+that the Describe icon now also rides on **every other** file table alongside its four siblings.
+
+* **Done color stays TEAL.** In the shared column block the Describe "done" fill is **teal**
+  (`--lfb-describe-done` `#0d9488`, [tables.mdx §4c.5](./tables.mdx)), the unique color that tells it apart
+  from Pin (blue), Ignore (orange), Transcribe (indigo), and OCR (violet) when all five "done" swatches sit
+  side by side. This **reconciles §11.2's earlier "blue done (`--lfb-pin`)" note**, which dated from when the
+  Describe icon only ever appeared **on its own tab**, never beside the blue Pin icon — exactly the same
+  blue→distinct change tables.mdx §4c.5 records for Transcribe (blue→indigo). The "could"/actionable edge and
+  the not-applicable hairline are unchanged and identical across all five columns.
+* **Icon-only header + hover teaching.** The column **header is the same `ScanText` glyph as the cells**
+  (no text word); a plain-text `"AI Description"` label is kept only for the Sort / Filter / Columns
+  dropdowns ([tables.mdx §4c.2](./tables.mdx)). Hovering **the header icon OR any cell icon** shows a native
+  `title` tooltip **and** fills the page's **docked hover-info region** with a plain-English explanation of
+  **what an AI description is** — that a vision model wrote a searchable, hyper-detailed prose account of what
+  the image or video shows, so the file can be found and understood without opening it
+  ([tables.mdx §4c.3](./tables.mdx)).
+
+The shared icon-column block, its one visual grammar, the icon-only header, and the docked-hover explanation are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon` (the three-state box, teal `--lfb-describe-done` for describe's done fill); the reusable task-icon kit `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TASK_ICON` / `TaskIconHeader` / `TaskStatusCell` (the describe row carries the header glyph and the plain-English hover string); the column typing `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts` — `LfbColumn.headerCell` / `LfbColumn.tight`; the docked hover region `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo`; and the per-tab column order `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` + `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` (`columnIds` begin `pin`, `ignore`, `transcribe`, `describe`, `ocr`).
+
 ---
 
 ## 12. The describable / described metric pair, the popup, and the "Describe ›" header primary (LOCKED)
@@ -1570,6 +1602,14 @@ external-provider opt-in).
     file can never 400** `/describe/plan` (or `/enqueue`) and suppress the popup; the same guard is mirrored
     in `previewTranscribe` / the transcribe enqueue. An **empty** scope still opens the popup in its
     all-clear "Nothing to describe here" state.
+16. **The Describe icon is a persistent leading column on every file table (§11.3, [tables.mdx §4c](./tables.mdx)):**
+    the three-state **AI Description** icon is one of the five fixed leading icon columns
+    (**Pin · Ignore · Transcribe · AI Description · OCR**) that lead **every** file table — every task tab,
+    the Storage detail table, and the IPFS pins table — **except the File System page**. Its **done fill is
+    teal** (`--lfb-describe-done` `#0d9488`), unique among the five; its **header is the `ScanText` glyph**,
+    not text (the `"AI Description"` label kept only for the Sort/Filter/Columns dropdowns); and hovering the
+    header **or** a cell icon shows a `title` tooltip **and** fills the docked hover-info region with a
+    plain-English "what an AI description is" explanation. The per-repo **AI descriptions task tab is kept**.
 
 <!--
   AI description = hyper-detailed searchable description of an IMAGE or VIDEO via a vision provider.

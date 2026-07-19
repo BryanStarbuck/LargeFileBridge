@@ -413,6 +413,22 @@ links).
 Each tab declares four things. **Deep-thought defaults below** — every choice is "what is most useful for
 this task, first."
 
+> **The five icon control columns lead EVERY tab (LOCKED — supersedes the per-tab "single leading icon"
+> language below).** [tables.mdx §4c](./tables.mdx) makes **Pin · Ignore · Transcribe · AI Description ·
+> OCR** a **fixed leading block** on every file table, right of the select checkbox. So on **every** task
+> tab, each tab's `columnIds` now **begin with all five** (`pin`, `ignore`, `transcribe`, `describe`,
+> `ocr`) before the tab's own content columns — the Transcribe / Describe / OCR status icons are no longer
+> *only* on their own tab, and no tab shows a single lone status icon as its one leading column anymore.
+> Where a per-tab section below still says *"the `Transcribe` icon is the LEADING, header-less control
+> column to the LEFT of `File`,"* read it as: that tab's icon is **one of the five** leading icon columns
+> (in the fixed Pin·Ignore·Transcribe·AI Description·OCR order), each an **icon-only header** (not
+> header-less — the header is the icon, [tables.mdx §4c.2](./tables.mdx)) with the docked hover-info
+> explanation. The **Decision** (`Pin decision` select), **Decided by**, **Decided**, and transfer
+> **Status** columns are **removed from every tab** ([one_repo.mdx §4.3.1](./one_repo.mdx)); the two decision
+> axes still exist as data and are set via the Pin/Ignore icons. The one thing that stays a **content**
+> column is the **Compress status icon** (green) on the Compress tab (§4.3, §6) — Compress is not one of the
+> five leading icons.
+
 **Every tab carries the two promoted rail controls** ([tables.mdx §2.9/§2.10](./tables.mdx)) on top of its
 own per-tab tuning:
 
@@ -432,9 +448,11 @@ own per-tab tuning:
 * **Filter:** none of its own — but the **Large files only** toggle (default ON) means a fresh **All** tab
   shows every **large** file in the repo; turning it off reveals the small analysis media too
   ([one_repo.mdx §4](./one_repo.mdx)).
-* **Columns:** the full standard set — `Pin`, `Ignore`, `File`, `Size`, `Decision`, `Status`, `Peers`,
-  `CID`, `Changed` (the responsive-priority rules still drop the least-important as it narrows,
-  [repos.mdx §3.2.1](./repos.mdx#321-responsive-column-priority--drop-the-least-important-column-as-the-table-narrows-locked)).
+* **Columns:** the five leading icon columns `pin`, `ignore`, `transcribe`, `describe`, `ocr`
+  ([tables.mdx §4c](./tables.mdx)), then `File`, `Size`, `Peers`, `CID`, `Changed`. The old `Decision`,
+  `Decided by`, `Decided`, and `Status` columns are gone ([one_repo.mdx §4.3.1](./one_repo.mdx)). (The
+  responsive-priority rules still drop the least-important content column as it narrows,
+  [repos.mdx §3.2.1](./repos.mdx#321-responsive-column-priority--drop-the-least-important-column-as-the-table-narrows-locked).)
 * **Default sort:** **most-actionable first** — Undecided rows on top, then most-recently-changed
   (`Changed` desc). The user lands on the decisions they still owe.
 * **Metrics (all of them):** `Undecided` · `Pull down` · `Not backed up` · `Compressible videos` ·
@@ -446,8 +464,9 @@ own per-tab tuning:
 * **Filter:** IPFS-relevant files — **large OR media** (video/image/audio), matching the classifier's
   `large`/`video`/`image`/`audio` categories ([special_files.mdx](./special_files.mdx)). (Small non-media
   files that were never candidates don't appear.)
-* **Columns:** `Pin`, `Ignore`, `File`, `Size`, `Status` (transfer pill), `Peers`, `CID`, `Changed`. The
-  Compress/Transcribe status columns are **hidden** here.
+* **Columns:** the five leading icon columns ([tables.mdx §4c](./tables.mdx)), then `File`, `Size`, `Peers`,
+  `CID`, `Changed`. The transfer **Status** column is removed ([one_repo.mdx §4.3.1](./one_repo.mdx)) — the
+  **Pin** icon shows pinned state; the Compress content column is not shown here.
 * **Default sort:** **by transfer urgency**, worst first — `missing`/`error` → `pending` → `undecided`
   (needs a decision) → `pinned`; secondary **Size desc** so the biggest at-risk bytes lead. A `sync` file
   with **0 peers** sorts above a comfortably-pinned one.
@@ -458,11 +477,13 @@ own per-tab tuning:
 * **Filter:** compressible-relevant files — **videos and images** (`compressible` true, i.e. the
   extension-based `compressState === "should"`, plus already-`done` ones shown muted so the user sees the
   whole picture). Audio and non-media never appear (audio is never compressible — charter).
-* **Columns:** **`Compress`** (the compress status icon, §6) **as the LEADING control column — to the LEFT
-  of `File`, header-less (icon only)** — then `File`, `Size`, `Kind` (video/image), `Changed`. IPFS decision
-  columns are hidden except a compact `Pin` is kept so the user can still pin what they compress. The status
-  icon sits in the same **leading, title-less** slot the `Pin`/IPFS icons occupy elsewhere (§4.4, mirrored
-  grammar). (An **est. savings** column is a later add, driven by the learned size baseline —
+* **Columns:** the **five leading icon columns** (`pin`, `ignore`, `transcribe`, `describe`, `ocr` —
+  [tables.mdx §4c](./tables.mdx)), then `File`, then **`Compress`** (the green compress status icon, §6) **as
+  a content column** to the right of `File`, then `Size`, `Kind` (video/image), `Changed`. Compress is **not**
+  one of the five leading icons (it is not a per-file yes/no artifact axis in the same sense), so it rides as
+  the Compress tab's own status **content** column — using the same `StatusActionIcon` box grammar as the
+  five, green done ([tables.mdx §4c.6](./tables.mdx)). The user can still pin what they compress via the
+  leading `Pin` icon. (An **est. savings** column is a later add, driven by the learned size baseline —
   [compression.mdx](./compression.mdx) — and is out of scope until the baseline exists.)
 * **Default sort:** **could-compress first**, then **Size desc** — the biggest reclaimable file at the top,
   because that is the biggest win.
@@ -749,10 +770,12 @@ export interface TaskTabDef {
 }
 ```
 
-* **Columns** — `OneRepoPage` defines the union of all columns once (adding the **three** new status
-  columns `transcribe`, `compress`, and `describe`); the active tab's `columnIds` selects and orders the
-  subset. The `describe` tab's `columnIds` lead with `describe` exactly as `transcribe`'s lead with
-  `transcribe` and `compress`'s lead with `compress`. The
+* **Columns** — `OneRepoPage` defines the union of all columns once (including the five icon control columns
+  `pin`, `ignore`, `transcribe`, `describe`, `ocr` and the Compress-tab `compress` content column); **every**
+  tab's `columnIds` **begin with all five icon columns in the fixed order** `pin`, `ignore`, `transcribe`,
+  `describe`, `ocr` ([tables.mdx §4c](./tables.mdx)), then the tab's own content columns after `File`. No
+  tab includes a `decision`, `decidedBy`, `decided`, or transfer `status` column anymore
+  ([one_repo.mdx §4.3.1](./one_repo.mdx)). The
   responsive-priority drop rule ([repos.mdx §3.2.1](./repos.mdx#321-responsive-column-priority--drop-the-least-important-column-as-the-table-narrows-locked))
   still runs on whatever subset is visible.
 * **Sort** — the tab's `defaultSort` becomes the table's `defaultSort`; the user can still re-sort (header
@@ -830,6 +853,15 @@ filtered `data`, and the tab's `metrics` to `MetricsStrip`).
     and drives the same metric-popup + **"Describe ›"** header-primary + confirm-flow behavior as Transcribe
     (§5.2.1). The Transcribe / Describe / Compress icons are **one shared `StatusActionIcon` in three skins**
     (§5.3) — same states/toggle/click contract, differing only in glyph and done-color.
+14. **The five icon control columns lead EVERY tab** ([tables.mdx §4c](./tables.mdx), §4 preamble): every
+    tab's `columnIds` begin with **Pin · Ignore · Transcribe · AI Description · OCR** in that fixed order,
+    ahead of the tab's content columns; each is narrow (`tight`/`px-1`) with an **icon-only header** and a
+    docked hover-info explanation, all through the shared **`StatusActionIcon`** with unique done colors (Pin
+    blue, Ignore orange, Transcribe **indigo**, AI Description teal, OCR violet). The **Decision**,
+    **Decided by**, **Decided**, and transfer **Status** columns are **removed from every tab**
+    ([one_repo.mdx §4.3.1](./one_repo.mdx)); the two decision axes still exist as data, set via the Pin/Ignore
+    icons. The **Compress** tab additionally shows its **green Compress status icon** as a **content** column
+    (§4.3, §6) — Compress is not one of the five leading icons.
 
 <!--
   Task Tabs = the All / IPFS / Compress / Transcribe tab strip in the One-repo header (right of center;

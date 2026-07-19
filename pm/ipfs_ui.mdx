@@ -231,6 +231,58 @@ built they are two new node ops on `~/BGit/Bryan_git/LargeFileBridge/code/packag
 `ipfs.router.ts` and surfaced as dashboard header buttons — each an explicit-click action (charter
 consent posture) that changes *what is cached/announced*, never *what is served* beyond only-our-content.
 
+### 5.5 The pinset table gains the icon control columns — Pin + the three analysis icons (LOCKED)
+
+The **pinset table** at **`/ipfs/pins`** ([pm/ipfs.mdx §5](./ipfs.mdx#5-the-table-tanstack-house-style)) that
+the **Shared files** tile opens is a **file-list table**, so it leads with the applicable subset of the
+product-wide icon control columns — **Pin · Transcribe · AI Description · OCR** — owned by
+[tables.mdx §4c](./tables.mdx#4c-the-icon-control-columns--pin--ignore--transcribe--ai-description--ocr-locked-site-wide)
+and **not restated here**.
+
+* **This surface's subset omits Ignore.** The full vocabulary is five, but a `IpfsPinRow` keys on a **CID**,
+  and **git-ignore has no meaning for a pin** — there is no working-tree path to ignore — so **the Ignore
+  column does not appear here** (it exists only on the one-repo files table, which is under a git repo). The
+  pins table shows **Pin + the three analysis icons**. tables.mdx §4c already names the IPFS pins table as
+  **included** with this subset; the **File System page** ([file_system.mdx](./file_system.mdx)) is the file
+  table that shows **none**. What else is specific to the pinset surface:
+
+* **Order and placement** follow the shared block: right of the row-select checkbox,
+  `Pin → Transcribe → AI Description → OCR` (Ignore omitted), each an as-narrow-as-an-icon `tight` column
+  (minimal `px-1` padding), and only then the pinset's own content columns (File / CID, Size, the **Pin
+  type** column, Tracked, Unit, Peers, Seen — [ipfs.mdx §5.1](./ipfs.mdx#51-columns)).
+* **The Pin icon cell is naturally "done / on" here.** Every row on this page is, by definition,
+  **pinned** — so its **Pin** icon renders the shared *done* box (**solid `--lfb-pin` blue fill + white
+  glyph + inner white ring**, [tables.mdx §4c.4–§4c.5](./tables.mdx#4c4-one-shared-visual-grammar--statusactionicon-locked)),
+  replacing any old ad-hoc pin rendering. This icon-block **Pin** — the *Add-to-IPFS axis* — is distinct
+  from the pinset table's existing **Pin** *type* column (`recursive` / `direct` / `mfs`): the icon says
+  *"backed up across your computers over IPFS,"* the type column says *"how."*
+* **Transcribe / AI Description / OCR derive from the pin's `analysis[]` + resolved kind.** For each pinned
+  file the cell reads **done** when the matching output is present in the pin's new **`analysis: string[]`**
+  field (computed for resolved tracked pins in `buildTrackedIndex` via `analysisOutputs`) — a transcript,
+  an AI description, or an OCR-text output — **actionable ("could")** when the **resolved file kind** makes
+  the task apply but no output exists yet, and **not-applicable** when the kind doesn't support it (no
+  transcript for a still image, no OCR for an audio file). **Path-less / untracked pins read `na`** across
+  all three analysis icons (there is no resolved local file to analyze).
+* **Header icon and hover teaching are the shared ones**
+  ([tables.mdx §4c.2–§4c.3](./tables.mdx#4c2-the-header-is-the-same-icon-as-the-cells--an-icon-only-header-locked)):
+  each column's **header is the same glyph as its cells** (icon-only; the text label `"Pin"` /
+  `"Transcribe"` / `"AI Description"` / `"OCR"` is kept only for the Sort / Filter / Columns dropdowns),
+  and hovering the **header icon OR any cell icon** shows a native `title` tooltip **and** fills this
+  page's docked **hover-info region** with a plain-English explanation of that icon (what an **IPFS pin**
+  is, and so on).
+
+The pinset table and its columns render in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsPage.tsx` — `IpfsPage` component
+
+The four icons on this surface (Pin + the three analysis icons — no Ignore) render through the one shared visual grammar and the reusable task-icon kit:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon`;
+and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` —
+`TASK_ICON`, `TaskIconHeader`, `TaskStatusCell` (typed on `LfbColumn.headerCell` / `LfbColumn.tight` in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts`); the analysis states come from the pin's `analysis: string[]` field built in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-page.service.ts` — `buildTrackedIndex` (via `analysisOutputs`).
+
+The docked hover-info region each icon fills on hover is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo`.
+
 ---
 
 ## 6. Node states (what renders)
@@ -1013,6 +1065,16 @@ The IPFS fault sites that must record to the trail (start-failure diagnosis, con
 23. **New data surface:** `GET /api/ipfs/config-health`, `POST /api/ipfs/config-repair {issueIds}`,
     `POST /api/ipfs/upgrade`, and a **`configHealth`** + **`upgrade`** block on `GET /api/ipfs/node`;
     job phases add **`migrating`/`repairing`** and **`upgrading`** (§14–§16).
+24. **The pinset table leads with Pin + the three analysis icon columns** (§5.5): the `/ipfs/pins` table
+    (the Shared-files drill-in) shows the **applicable subset** of the five-icon vocabulary — **Pin ·
+    Transcribe · AI Description · OCR**, right of the row-select checkbox per
+    [tables.mdx §4c](./tables.mdx#4c-the-icon-control-columns--pin--ignore--transcribe--ai-description--ocr-locked-site-wide).
+    **The Ignore column is omitted** — git-ignore has no meaning for a CID pin. The **Pin** cell renders the
+    shared *done* box (solid `--lfb-pin`, white glyph, inner ring) because every row is pinned (distinct from
+    the **Pin type** column); **Transcribe / AI Description / OCR** derive done / could / na from the pin's
+    `analysis[]` field (built in `ipfs-page.service.ts` `buildTrackedIndex`) plus the resolved filename kind,
+    with **path-less / untracked pins reading `na`**; each header is icon-only and its hover fills the docked
+    hover-info region. The **File System** page shows **none**.
 
 ---
 

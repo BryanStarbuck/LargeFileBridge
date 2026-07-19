@@ -1,20 +1,24 @@
-// The shared three-state status/action icon (task_tabs.mdx §5/§6). It echoes the decision-toggle box
-// grammar (decision_toggles.mdx §1) but is a STATUS indicator, not a two-axis decision, so a finished
-// action reads in its own "done" color (blue for a transcript, green for a compression) and there are
-// only THREE states:
-//   • done — the action is complete → solid `doneColor` fill, white glyph.
-//   • could — an actionable candidate → medium-orange normal-thickness edge, a 99%-white / 1%-orange
-//             fill (a barely-there orange wash), orange glyph. Clicking it queues the action.
-//   • na   — the task does not apply to this file kind → white fill, a very-thin very-light-grey edge,
-//             a faint grey glyph; inert.
+// The shared status/action icon (tables.mdx icon-columns / task_tabs.mdx §5/§6). It is the ONE visual
+// grammar every icon control column uses (Pin, Ignore, Transcribe, AI description, OCR), so the five read
+// as one system. A finished action reads in its own UNIQUE "done" color (blue pin, orange ignore, indigo
+// transcript, teal description, violet OCR). THREE states:
+//   • done — the action is complete / the toggle is ON → solid `doneColor` fill, WHITE glyph, and a subtle
+//            inner white ring (the "white outline" the product owner asked for on a filled icon).
+//   • could — an actionable candidate / the toggle is OFF-but-settable → WHITE background, a LIGHT-GREY
+//             outline and a darker-grey "pen" glyph. Clicking it performs the action (queue / toggle on).
+//   • na   — the task does not apply to this file → white fill, a very-thin very-light-grey edge, a faint
+//            grey glyph; inert.
+// The product owner's rule: the UNIQUE color appears ONLY when done — a not-done icon is uniformly grey
+// (light-grey outline + pen glyph on white), and the GLYPH SHAPE + the icon-header tell the columns apart.
 // It is a CONTROL CELL: it stops click propagation and never navigates the row.
 import type { ReactNode } from "react";
 import type { TaskStatus } from "@lfb/shared";
 
-const ORANGE = "#c2410c"; // --lfb-decision-on (the "actionable" orange used by the decision toggles)
-const COULD_FILL = "rgba(194,65,12,0.04)"; // ~99% white / 1% orange
-const NA_EDGE = "#e5e7eb"; // very-light-grey hairline
+const COULD_EDGE = "#d1d5db"; // light-grey outline for an actionable not-done icon
+const COULD_GLYPH = "#4b5563"; // the darker-grey "pen" glyph for an actionable not-done icon
+const NA_EDGE = "#e5e7eb"; // very-thin very-light-grey hairline (inert)
 const NA_GLYPH = "#d1d5db";
+const DONE_RING = "inset 0 0 0 1.5px rgba(255,255,255,0.9)"; // the white outline on a filled icon
 
 export interface StatusActionIconProps {
   state: TaskStatus;
@@ -43,9 +47,9 @@ export function StatusActionIcon({
 }: StatusActionIconProps) {
   const box: React.CSSProperties =
     state === "done"
-      ? { background: doneColor, border: "none", color: "#fff" }
+      ? { background: doneColor, border: "none", color: "#fff", boxShadow: DONE_RING }
       : state === "could"
-        ? { background: COULD_FILL, border: `1px solid ${ORANGE}`, color: ORANGE }
+        ? { background: "#fff", border: `1px solid ${COULD_EDGE}`, color: COULD_GLYPH }
         : { background: "#fff", border: `1px solid ${NA_EDGE}`, color: NA_GLYPH };
 
   const inert = state === "na" || disabled;

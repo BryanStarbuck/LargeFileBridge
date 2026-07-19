@@ -6,15 +6,20 @@ import { useParams, useNavigate, Link } from "@tanstack/react-router";
 import { ChevronLeft, RefreshCw, Sparkles, Captions, Settings } from "lucide-react";
 import { toast } from "sonner";
 import type { StorageFileRow } from "@lfb/shared";
-import { formatBytes, mediaKindForName } from "@lfb/shared";
+import { formatBytes, mediaKindForName, viewerRouteForName } from "@lfb/shared";
 import { api } from "@/api/client";
 import { runTranscribeFile } from "@/lib/transcribe";
+import { runDescribeFile } from "@/lib/describe";
+import { runOcrFile } from "@/lib/ocr";
 import { PageActions, producingActions } from "@/components/menu/PageActions";
 import { compressAllVideos } from "@/components/menu/domainActions";
 import type { Action } from "@/components/menu/EntityMenu";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { DataTable } from "@/components/table/DataTable";
 import type { LfbColumn } from "@/components/table/types";
+// The shared icon control-column kit (tables.mdx icon-columns) — the Transcribe / AI description / OCR
+// status icons, here derived from the storage index's analysis[] + the file's kind.
+import { TaskIconCell, TaskIconHeader, analysisTaskStatuses, TASK_ICON, type TaskIconKind } from "@/components/table/taskIcons";
 import { relativeTime, absoluteTime } from "@/lib/format";
 import { clientLog } from "@/lib/clientLog";
 
@@ -75,7 +80,45 @@ export function StorageDetailPage() {
     },
   ];
 
+  // The click on an analysis icon (tables.mdx icon-columns): "could" runs the analysis for this one file;
+  // "done" opens the file's viewer to read the result; "na" is inert. The storage root joins the row's
+  // relative path into the absolute path each runner keys off.
+  const onAnalysisActivate = (kind: TaskIconKind, f: StorageFileRow, state: string) => {
+    if (!s || state === "na") return;
+    const name = f.path.slice(f.path.lastIndexOf("/") + 1);
+    const abs = `${s.root}/${f.path}`;
+    const refresh = () => qc.invalidateQueries({ queryKey: ["storage", storageId] });
+    if (state === "done") {
+      navigate({ to: viewerRouteForName(name), search: { path: abs } });
+      return;
+    }
+    if (kind === "transcribe") runTranscribeFile(abs, name);
+    else if (kind === "describe") runDescribeFile(abs, name, { onDone: refresh });
+    else if (kind === "ocr") runOcrFile(abs, name, { onDone: refresh });
+  };
+
+  // One narrow analysis icon column (Transcribe / AI description / OCR) — status derived from analysis[].
+  const analysisIconCol = (kind: "transcribe" | "describe" | "ocr"): LfbColumn<StorageFileRow> => ({
+    id: kind,
+    header: TASK_ICON[kind].label,
+    headerCell: <TaskIconHeader kind={kind} />,
+    tight: true,
+    minWidth: 30,
+    kind: "enum",
+    filterOptions: ["could", "done", "na"],
+    accessor: (f) => analysisTaskStatuses(f.path.slice(f.path.lastIndexOf("/") + 1), f.analysis)[kind],
+    cell: (f) => {
+      const state = analysisTaskStatuses(f.path.slice(f.path.lastIndexOf("/") + 1), f.analysis)[kind];
+      return <TaskIconCell kind={kind} state={state} onActivate={() => onAnalysisActivate(kind, f, state)} />;
+    },
+  });
+
   const columns: LfbColumn<StorageFileRow>[] = [
+    // Leading analysis icon columns (tables.mdx icon-columns). Storage files aren't the pin/git-ignore
+    // surface (that's repos), so only the three analysis icons appear here.
+    analysisIconCol("transcribe"),
+    analysisIconCol("describe"),
+    analysisIconCol("ocr"),
     { id: "path", header: "File", kind: "text", accessor: (f) => f.path, cell: (f) => <span className="font-medium">{f.path}</span> },
     { id: "size", header: "Size", kind: "bytes", align: "right", accessor: (f) => f.sizeBytes, cell: (f) => formatBytes(f.sizeBytes) },
     { id: "kind", header: "Kind", kind: "enum", accessor: (f) => f.compressible ?? "", cell: (f) => <span className="text-black/60">{mediaKindForName(f.path.slice(f.path.lastIndexOf("/") + 1)) ?? "—"}</span> },
@@ -86,14 +129,8 @@ export function StorageDetailPage() {
       cell: (f) => {
         const media = mediaKindForName(f.path.slice(f.path.lastIndexOf("/") + 1));
         if (!media) return null;
-        const name = f.path.slice(f.path.lastIndexOf("/") + 1);
         return (
           <span className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
-            {(media === "audio" || media === "video") && s && (
-              <button className="flex items-center gap-1 text-sm text-[var(--lfb-primary)] hover:underline" title="Transcribe this file" onClick={() => runTranscribeFile(`${s.root}/${f.path}`, name)}>
-                <Captions className="h-3.5 w-3.5" /> Transcribe
-              </button>
-            )}
             <button className="flex items-center gap-1 text-sm text-[var(--lfb-primary)] hover:underline" title="Queue transcript / description / visuals-by-time" onClick={() => analyze.mutate(f.path)}>
               <Sparkles className="h-3.5 w-3.5" /> Analyze
             </button>

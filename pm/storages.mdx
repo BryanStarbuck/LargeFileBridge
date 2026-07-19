@@ -397,8 +397,8 @@ fingerprint index (§4.1), and the analysis outputs (§6) become visible and act
 │            │  Type company   Files 1,204   Tracked 1,180   Clones Drive✓ Dropbox—        │ ← descriptor summary grid
 │            ├───────────────────────────────────────────────────────────────────────────┤
 │            │  search…                                                       ⇅   ⛛        │
-│            │  Name              Path                    Size   Analysis   Changed      ⋮ │ ← files table (TanStack)
-│            │  final_4k.mp4      render/final_4k.mp4     734MB  T D V   [Analyze]  2h   ⋮ │
+│            │  ▮ 📌 ⊘ ⌯ 👁 🔤  Name          Path              Size  Analysis  Changed  ⋮ │ ← files table (TanStack)
+│            │  ▮ 📌 ⊘ ⌯ 👁 🔤  final_4k.mp4  render/final_4k…  734MB T D V  2h       ⋮ │
 │            └───────────────────────────────────────────────────────────────────────────┘
 └────────────┴───────────────────────────────────────────────────────────────────────────┘
 ```
@@ -407,8 +407,10 @@ fingerprint index (§4.1), and the analysis outputs (§6) become visible and act
   **type**, the type-specific block (e.g. `company_name`, or which `community` + role), the **clones**
   posture (§5), and the rolled-up **file / tracked** counts from the Local-Storage `repos/<repoKey>/files.yaml` (§4.1).
 * **Files table** — a [TanStack `DataTable`](../CLAUDE.md) (house style, [repos.mdx §3](./repos.mdx)),
-  one row per file in the storage, each carrying which §6 analysis outputs exist (transcript / description
-  / visuals-by-time) and a per-row **Analyze** action.
+  one row per file in the storage, **leading with the three analysis icon columns** (Transcribe · AI
+  Description · OCR — §7.2; a storage row has **no** per-file pin/git-ignore decision, so **Pin and Ignore
+  are omitted**), then the content columns, each row carrying which §6 analysis outputs exist (transcript /
+  description / visuals-by-time) and a per-row **Analyze** action.
 * **Primary button — Index files** — (re)builds the per-file fingerprint index (§4.1) for this storage;
   it stays a visible primary button in the header ([page_actions.mdx §3](./page_actions.mdx)).
 
@@ -469,6 +471,35 @@ skip-already-done, background queue, and the toast wording are all inherited fro
 
 implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage` (mounts `PageActions` from `code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions`, scoped to this storage's root).
+
+### 7.2 The leading analysis icon columns — Transcribe · AI Description · OCR (LOCKED — subset of tables.mdx §4c)
+
+The storage-detail files table **leads with the three analysis icon columns** — **Transcribe · AI
+Description · OCR**, in that order, immediately right of the row-select checkbox. These are the
+**applicable subset** of the product-wide five-icon vocabulary
+([tables.mdx §4c](./tables.mdx#4c-the-icon-control-columns--pin--ignore--transcribe--ai-description--ocr-locked-site-wide)):
+a `StorageFileRow` has **no per-file pin or git-ignore decision** — that is a *repo* concept — so the
+**Pin and Ignore columns are omitted here** (they appear only on the one-repo files table, which is under a
+git repo). The **File System page shows none; this storage detail table shows the three analysis icons.**
+The full column model — the `tight` / `px-1` narrowness, the icon-only header, the hover `title` tooltip
+**and** docked hover-info fill, the shared three-state `StatusActionIcon` grammar, and each column's unique
+"done" color (Transcribe indigo `--lfb-transcribe-done`, AI Description teal `--lfb-describe-done`, OCR
+violet `--lfb-ocr-done`) — is **owned by [tables.mdx §4c](./tables.mdx#4c-the-icon-control-columns--pin--ignore--transcribe--ai-description--ocr-locked-site-wide)** and is not restated here.
+
+* **No Pin / Ignore / Decision columns on this table.** Because a storage file row carries no decision,
+  the old spread-out **Decision / Decided by / Decided (when)** and transfer **Status** columns never apply
+  here, and neither do the Pin/Ignore decision icons — only the three content-analysis icons appear.
+* **Transcribe · AI Description · OCR status is DERIVED FROM EACH FILE'S `analysis[]` OUTPUTS** (§4.1) —
+  the recorded per-file analysis outputs (`transcript` / `description` / an OCR output) decide the **done**
+  state, and the **filename kind** decides **applicability**: Transcribe applies to **audio / video**, AI
+  Description to **image / video**, OCR to **image / video / PDF**. A file whose `analysis[]` already holds
+  the output renders **done** in that column's unique color; one where the task applies but no output exists
+  yet renders the actionable "could" state (clickable to enqueue that pass); one where the task does not
+  apply to the kind renders the inert **N/A** hairline. This is the same `analysis[]` list the §6 **Analysis**
+  content column reads (`T D V`) — the icon columns are its per-axis, actionable projection.
+
+Deriving each row's Transcribe / AI Description / OCR icon state from the file's `analysis[]` outputs plus the filename kind (via `analysisTaskStatuses`), and prepending the three analysis icon columns before the content columns, is to be implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage` (the leading `transcribe` / `describe` / `ocr` columns only — no `pin` / `ignore` here), built from the reusable task-icon kit `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TASK_ICON` / `TaskIconHeader` / `TaskStatusCell`, each cell rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon`, marked `LfbColumn.tight` + `LfbColumn.headerCell` (`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts`) and filling the docked hover region via `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo`.
 
 ---
 
@@ -667,6 +698,16 @@ Populating the per-storage `stateSyncRepo` descriptor when it splits the page in
     Kind facet **declares its vocabulary** and its **accessor reads the media kind its cell renders** —
     closing both §2.8 offences (a dead `any`-only dropdown, and an accessor/cell mismatch against
     `compressible`); a file with no media kind holds no value on the axis and is not a facet value.
+9b. **The storage-detail files table LEADS with the three analysis icon columns** — **Transcribe · AI
+    Description · OCR**, in that order, right of the row-select checkbox (§7.2). These are the **applicable
+    subset** of the product-wide five-icon vocabulary
+    ([tables.mdx §4c](./tables.mdx#4c-the-icon-control-columns--pin--ignore--transcribe--ai-description--ocr-locked-site-wide)):
+    a `StorageFileRow` has **no per-file pin/git-ignore decision**, so **Pin and Ignore are omitted** here
+    (the old Decision / Decided-by / Decided / Status columns never applied either). **Transcribe / AI
+    Description / OCR status is DERIVED FROM each file's `analysis[]` outputs plus the filename kind** for
+    applicability (Transcribe → audio/video, AI Description → image/video, OCR → image/video/PDF). The three
+    render through the shared three-state `StatusActionIcon`, with an icon-only header and hover filling the
+    docked hover-info region, each in its unique done color (§7.2).
 10. The Storages-page payload gains a per-storage **`stateSyncRepo`** descriptor (§10) — `configured`,
     `root`, `ownedRepoCount`, `remote` — non-null only for **company** and **Personal** storages, `null`
     for `local` and `community`; it extends `StorageRow` / `StoragesPageData` and is populated by
@@ -721,7 +762,17 @@ Populating the per-storage `stateSyncRepo` descriptor when it splits the page in
   read the field the cell renders; compressible is a DIFFERENT axis and never folds into Kind (§2.4 rule).
   A file with no media kind holds no value on the axis — not a facet value (N/A rule, §2.4.1). §9's "the
   repos it owns (a filtered view of the Repos list)" = scoping by NAVIGATION, not a rail facet.
-  Acceptance §8–§10 updated (+ §9a for the two facets). Sibling detail specs: storage_local, storage_repo, storage_personal,
+  ICON COLUMNS (§7.2, SUBSET of tables.mdx §4c, don't restate): the storage-detail files table LEADS with only
+  the THREE analysis icon columns Transcribe·AI Description·OCR — a StorageFileRow has NO per-file pin/git-ignore
+  decision (a repo concept), so PIN AND IGNORE ARE OMITTED here (and the old Decision/Decided-by/Decided/Status
+  cols never applied). Full five-icon vocabulary is repo-only; File System = none.
+  Transcribe/AI-Description/OCR status DERIVED FROM each file's analysis[] outputs + filename kind for
+  applicability (transcribe→audio/video, describe→image/video, OCR→image/video/PDF) via analysisTaskStatuses — the
+  per-axis actionable projection of the same analysis[] the §6 "Analysis" content col reads. Shared
+  StatusActionIcon three-state grammar, icon-only header, hover fills docked hover-info; unique done colors per §4c.
+  Code: StorageDetailPage leading transcribe/describe/ocr cols ONLY (no pin/ignore) via taskIcons.tsx
+  (TASK_ICON/TaskIconHeader/TaskStatusCell) + StatusActionIcon.tsx, LfbColumn.tight/headerCell, setHoverInfo (HoverInfoRegion.tsx).
+  Acceptance §8–§10 updated (+ §9a for the two facets, + §9b for the icon columns). Sibling detail specs: storage_local, storage_repo, storage_personal,
   storage_company, storage_community; cross-links artifact_placement_policy, repo_tracking_scheme,
   repo_company_mapping, placement_radios, repo_settings.
 -->

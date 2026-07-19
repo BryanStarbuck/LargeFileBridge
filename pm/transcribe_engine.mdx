@@ -33,7 +33,11 @@ Siblings this builds on and does not repeat:
 * [Transcribe.mdx](./Transcribe.mdx) — the feature. Output placement (§3 there:
   `<trackingBase>/<rel>/<name.ext>.transcription`, the base keyed on storage kind per
   [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)),
-  entry points, the REST surface, the status icon. This engine is what its `transcribeOne()` drives.
+  entry points, the REST surface, and the three-state **Transcribe status icon** — now one of the **five
+  persistent leading icon columns** on every file table
+  ([tables.mdx §4c](./tables.mdx#4c-the-icon-control-columns--pin--ignore--transcribe--ai-description--ocr-locked-site-wide)),
+  its **done** fill **indigo** (`--lfb-transcribe-done` `#4338ca`, changed from blue so it no longer clashes
+  with the blue Pin icon beside it). This engine is what its `transcribeOne()` drives.
 * [parallelization.mdx](./parallelization.mdx) — the shared **Core Budget** (mass-compute = `round(cores ×
   max_core_fraction)`, default 0.9; the anti-oversubscription invariant). §5 here is the transcribe-specific
   calibration that draws that budget.

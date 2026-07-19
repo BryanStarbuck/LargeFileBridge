@@ -328,6 +328,10 @@ export interface IpfsPinRow {
   repoId: string | null; // owning repo (drives the left-bar child filter — ipfs.mdx §2.1); null otherwise
   peers: number; // how many of your computers also pin this CID (0 on a tracked file = not backed up)
   seenAt: string | null; // last time a scan confirmed this pin
+  // Which analysis artifacts already exist for this pin's resolved file (tables.mdx icon-columns) —
+  // "transcript" | "description" | "ocr" | "visuals_by_time". Empty for path-less / untracked pins. Drives
+  // the Transcribe / AI-description / OCR icon columns on the IPFS pins table (analysisTaskStatuses).
+  analysis: string[];
 }
 
 // The node-status / security card (ipfs.mdx §3) — reflects AND guards only-our-content.

@@ -1028,6 +1028,36 @@ there, rather than presenting an eternal wall of candidates.
 The OCR status icon is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/OcrStatusIcon.tsx` — via the shared `StatusActionIcon` (the sibling of `TranscribeStatusIcon.tsx` / `DescribeStatusIcon.tsx` / `CompressStatusIcon.tsx`); the click wired in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `onOcrActivate()`.
 
+### 11.3 The OCR icon is now a PERSISTENT LEADING column on every file table (LOCKED — see [tables.mdx §4c](./tables.mdx))
+
+The OCR status icon is **no longer only on the OCR tab.** As of the product-wide **icon control columns**
+model, it is one of **five fixed leading icon columns** — **Pin · Ignore · Transcribe · AI Description ·
+OCR**, in that exact order, immediately right of the row-select checkbox — that lead **every** file-list
+table in the product: **every task tab** (All / IPFS / Compress / Transcribe / AI descriptions / OCR), the
+**Storage detail** file table, and the **IPFS pins** table. **The one exclusion is the File System page**
+(`FullPathsPage`), which keeps its raw path listing. **[tables.mdx §4c](./tables.mdx) is the product-wide
+OWNER** of the icon-column block (the ordering, the narrow `tight`/`px-1` padding, the icon-only header, the
+hover behavior, and the shared three-state grammar); this section only names the OCR entry in it and does
+not re-litigate the block. The per-repo **OCR task tab is kept** (§11.1) — including its `Large files only`-OFF
+default (§11.1.1) — the tab still lists the image/video/PDF rows and appends its OCR-specific content; what
+changed is that the OCR icon now also rides on **every other** file table alongside its four siblings.
+
+* **Done color is VIOLET.** In the shared column block the OCR "done" fill stays **violet**
+  (`--lfb-ocr-done` `#7c3aed`, [tables.mdx §4c.5](./tables.mdx)) — the unique color that tells it apart from
+  Pin (blue), Ignore (orange), Transcribe (indigo), and AI Description (teal) when all five "done" swatches
+  sit side by side. The "could"/actionable edge and the not-applicable hairline are unchanged and identical
+  across all five columns (§11.2).
+* **Icon-only header + hover teaching (amends §11.2's "header-less").** In the shared block the column
+  **header is the same `TextSelect` glyph as the cells** — an **icon-only header**, not the truly header-less
+  slot §11.2 described from when the OCR icon only appeared on its own tab; a plain-text `"OCR"` label is kept
+  only for the Sort / Filter / Columns dropdowns ([tables.mdx §4c.2](./tables.mdx)). Hovering **the header
+  icon OR any cell icon** shows a native `title` tooltip **and** fills the page's **docked hover-info region**
+  with a plain-English explanation of what OCR is — *"OCR reads the text out of an image, video frame, or PDF
+  page,"* so those words become searchable without opening the file ([tables.mdx §4c.3](./tables.mdx)).
+
+The shared icon-column block, its one visual grammar, the icon-only header, and the docked-hover explanation are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon` (the three-state box, violet `--lfb-ocr-done` for OCR's done fill); the reusable task-icon kit `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TASK_ICON` / `TaskIconHeader` / `TaskStatusCell` (the OCR row carries the `TextSelect` header glyph and the plain-English hover string); the column typing `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts` — `LfbColumn.headerCell` / `LfbColumn.tight`; the docked hover region `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo`; and the per-tab column order `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` + `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` (`columnIds` begin `pin`, `ignore`, `transcribe`, `describe`, `ocr`).
+
 ---
 
 ## 12. The `ocrable` / `ocred` metric pair, the popup, and the "OCR ›" header primary (LOCKED)
@@ -1450,6 +1480,15 @@ the kind of asymmetry §0 exists to prevent. Do **not** quietly add `ocr` alongs
     (`ipfs-down → pull-down → undecided → transcribe → describe → compress → ocr`) — a search convenience
     never outranks a backup risk, a decision, missing content, or wasted disk. Scan-stale still wins;
     all-clear still shows no button.
+17. **The OCR icon is a persistent leading column on every file table (§11.3, [tables.mdx §4c](./tables.mdx)):**
+    the three-state **OCR** icon (`TextSelect`) is one of the five fixed leading icon columns
+    (**Pin · Ignore · Transcribe · AI Description · OCR**) that lead **every** file table — every task tab, the
+    Storage detail table, and the IPFS pins table — **except the File System page**. Its **done fill is
+    violet** (`--lfb-ocr-done` `#7c3aed`), unique among the five; its **header is the `TextSelect` glyph**
+    (an icon-only header, amending §11.2's "header-less" slot — the `"OCR"` label kept only for the
+    Sort/Filter/Columns dropdowns); and hovering the header **or** a cell icon shows a `title` tooltip **and**
+    fills the docked hover-info region with *"OCR reads the text out of an image, video frame, or PDF page."*
+    The per-repo **OCR task tab (with its `Large files only`-OFF default) is kept**.
 
 ---
 

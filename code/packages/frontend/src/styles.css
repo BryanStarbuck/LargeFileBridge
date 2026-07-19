@@ -10,6 +10,13 @@
   --lfb-pin: #1e40af; /* blue-800 — our dark blue, the "pinned" fill */
   --lfb-pin-muted: #94a3b8; /* slate-400 — the empty (not-pinned) outline */
 
+  /* Icon control columns (tables.mdx icon-columns). Each of the five leading icon columns owns a UNIQUE
+     "done" fill so the row's Pin / Ignore / Transcribe / AI-description / OCR state reads at a glance. */
+  --lfb-decision-on: #c2410c; /* orange-700 — Ignore ON (git-ignored) */
+  --lfb-transcribe-done: #4338ca; /* indigo-700 — transcript exists (distinct from the Pin blue) */
+  --lfb-describe-done: #0d9488; /* teal-600   — AI description exists */
+  --lfb-ocr-done: #7c3aed; /* violet-600 — OCR text has been read */
+
   /* Health model (use_cases.mdx §1, LOCKED). Fixed / Improvable / Broken.
      One vocabulary, one color language — every page's health color comes from here. */
   --lfb-ok: #16a34a; /* green-600  — Fixed */

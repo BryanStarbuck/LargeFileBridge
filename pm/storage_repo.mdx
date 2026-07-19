@@ -179,6 +179,17 @@ The repos list and per-repo UI over this storage are rendered in code:
   does not re-list every repo).
 * The **[Repos](./repos.mdx)** tab is the long list; each row opens its **[One repo](./one_repo.mdx)**
   screen — the working UI over one repo storage.
+* **The repo's file table leads with all five icon control columns** — **Pin · Ignore · Transcribe · AI
+  Description · OCR**. A repo storage is the **one surface that shows the full five-icon set**, because each
+  row is a large file **under a git repo**, so both decision axes (Pin, Ignore) **and** the three analysis
+  axes apply. It is **owned by [tables.mdx §4c](./tables.mdx#4c-the-icon-control-columns--pin--ignore--transcribe--ai-description--ocr-locked-site-wide)**
+  and detailed in [one_repo.mdx §4.3](./one_repo.mdx) — not restated here. **Transcribe / AI Description /
+  OCR status is derived from each file's `analysis[]` outputs** (§4, the Category-A transcript /
+  AI-description / visuals-by-time this repo produces) **plus the filename kind** for applicability
+  (transcribe → audio/video, describe → image/video, OCR → image/video/PDF), while **Pin / Ignore** carry
+  the repo's two-axis decision (Add to IPFS / Add to git-ignore, §3). (Contrast the non-repo **storage
+  detail** table, which — having no per-file decision — shows only the **three analysis icons**,
+  [storages.mdx §7.2](./storages.mdx#72-the-leading-analysis-icon-columns--transcribe--ai-description--ocr-locked--subset-of-tablesmdx-4c).)
 
 ---
 
@@ -348,6 +359,12 @@ out-of-compliance and move it to Local Storage.
   (nothing churny is written there). Reuses the shared model from storages.mdx (don't restate it).
   UI = repos.mdx + one_repo.mdx.
   The Storages tab represents all repos with ONE "Repos" child that links to the Repos tab.
+  §5 also notes (light, cross-ref only) the repo file table LEADS with ALL FIVE icon control columns
+  Pin·Ignore·Transcribe·AI Description·OCR — a repo is the ONLY surface showing the full five (rows are under a
+  git repo, so both decision axes + all three analysis axes apply); owned by tables.mdx §4c, detailed in
+  one_repo.mdx §4.3; the Transcribe/Describe/OCR icons DERIVE from each file's analysis[] outputs + filename
+  kind, Pin/Ignore = the §3 two-axis decision. Contrast the non-repo storage-detail table (three analysis
+  icons only, no Pin/Ignore — storages.mdx §7.2) and File System page (none).
   §6 TO DO Batch: each repo owns ONE local/disposable/uncommitted batch repo_<slug>_2_do.yaml under
   ~/T/_large_files_bridge/_do_batches/, recalc-and-replace each scan from classified special files +
   folded team decisions ledger (to_do_batch_calc_engine.mdx, recommends-only, skips folded decisions).

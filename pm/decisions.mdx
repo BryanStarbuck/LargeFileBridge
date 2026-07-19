@@ -383,12 +383,15 @@ ones in [one_repo.mdx](./one_repo.mdx) and [menus.mdx](./menus.mdx), only what t
 
 * **The "N files need a decision" popup** ([warnings.mdx §10.2.7](./warnings.mdx)) — the two checkboxes
   (§1), applied to the checked subjects. This is the primary surface and the canonical example.
-* **The per-row Pin-decision control + bulk menu** ([one_repo.mdx §4.4/§4.5](./one_repo.mdx)) — the inline
-  three-state control remains for the **IPFS axis** (it maps to the ledger's `ipfs`), and the file/repo
-  **Git ignore** action ([menus.mdx §5](./menus.mdx)) writes the **git-ignore axis**. Each writes a
-  decision record so the two in-table paths and the popup all converge on the same ledger.
-  The control is named **Pin decision**, never *Decision* — the bare word reads as if it spans both
-  axes when it only ever writes the IPFS one ([tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked)).
+* **The per-row Pin + Ignore icon cells + bulk menu** ([one_repo.mdx §4.3.1/§4.5.1](./one_repo.mdx)) — the
+  two leading **icon control columns** ([tables.mdx §4c](./tables.mdx)) are now the in-table per-row control:
+  clicking the **Pin** icon writes the **IPFS axis** (it maps to the ledger's `ipfs`), clicking the
+  **Ignore** (⊘) icon writes the **git-ignore axis**. The old labelled `[Pin decision ▾]` select **column
+  is removed** — the Pin icon replaces it; a labelled one-of-N editor still lives off-table in the file
+  kebab's *Set pin ▸* submenu ([menus.mdx §5.3](./menus.mdx)). Each path writes a decision record so the
+  in-table icons, the kebab, and the popup all converge on the same ledger. No control is named *Decision* —
+  the bare word reads as if it spans both axes when each one writes a single axis
+  ([tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked)).
 * **The file kebab** ([menus.mdx §5.3](./menus.mdx)) — *Add to IPFS / Remove from IPFS*, *Set pin ▸*,
   and *Git ignore* each append a record. The sticky **Never IPFS** flag
   ([menus.mdx §6.6](./menus.mdx)) is a *stronger* statement than a decision (it forbids `ipfs: true`) and
@@ -445,10 +448,12 @@ The per-repo default-decision policy (read on scan, applied to newly-discovered 
 We record `decided_by` and `decided_at` precisely so a team can **see** them — a decision the team can't
 inspect is barely better than none. Every place a decision is shown, its provenance is one hover away:
 
-* **The files table Decision cell** ([one_repo.mdx §4.3/§4.5](./one_repo.mdx)) gains a
-  **non-intrusive tooltip** ([non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)): *"Add to IPFS +
-  git-ignored · decided by bob@acme.com · Jul 12, 2:32 PM"*. A tiny person/clock glyph marks a file whose
-  decision was made by **someone else on the team** (vs. you), so a reviewer can spot others' choices.
+* **The files table Pin / Ignore icon cells** ([one_repo.mdx §4.3.1/§4.8](./one_repo.mdx)) gain a
+  **non-intrusive tooltip** ([non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)), also filled into
+  the docked hover-info region: *"Add to IPFS + git-ignored · decided by bob@acme.com · Jul 12, 2:32 PM"*.
+  A tiny person/clock glyph marks a file whose decision was made by **someone else on the team** (vs. you),
+  so a reviewer can spot others' choices. (The provenance moved here from its own **Decided by** / **Decided**
+  columns, which are removed from the file table, [one_repo.mdx §4.3.1](./one_repo.mdx); the data is intact.)
 * **A "Decided by" facet** — its own facet on the table's filter rail, **not** a filter hung off a
   column named "Decision" ([tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked)
   forbids a facet named *Decision*, because the name reads as if it spans both axes when it never
