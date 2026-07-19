@@ -27,6 +27,13 @@ import {
 } from "../storage/file-sidecar.service.js";
 import { readCommittedManifest } from "../pin/manifest.service.js";
 import { listPins, canonicalCid } from "../ipfs/ipfs.service.js";
+import {
+  buildDiscoveryCtx,
+  discoverForeignPin,
+  recordForeignPin,
+  verifyForeignPins,
+  type DiscoveryCtx,
+} from "../ipfs/foreign-pin.service.js";
 import { compressInfo } from "../fs/badges.js";
 import { readYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import { computerUnitDir, unitConfigPath, unitStatusPath } from "../../shared/store/scopes.js";
@@ -121,6 +128,21 @@ export async function scanAll(
     log.debug("scan", `pinset fetch skipped (node unreachable?): ${(e as Error).message}`);
   }
 
+  // Foreign Pin Discovery context (foreign_pin_discovery.mdx §3) — the kept-set (pins ∪ MFS roots) + the
+  // size-prune index, built ONCE for the whole scan and threaded into every repo's external-state pass so
+  // an UNDECIDED file already pinned OUTSIDE us (a bare `ipfs add`, another tool) is discovered, size-pruned
+  // and cached. Built only when the node is reachable (pinset non-empty); when down we skip discovery AND
+  // skip verify, so a node-down scan never wipes previously-recorded discoveries.
+  let discovery: DiscoveryCtx | undefined;
+  if (pinset.size > 0) {
+    discovery = await buildDiscoveryCtx();
+    try {
+      verifyForeignPins(discovery.keptSet); // drop discoveries another tool has since unpinned (§5.1)
+    } catch (e) {
+      log.debug("scan", `verifyForeignPins skipped: ${(e as Error).message}`);
+    }
+  }
+
   await mapLimit(repoFolders, responsiveBudget(), async (folder) => {
     const rc = getRepoConfig(folder);
     progress.unitStart(rc.repo.name || folder);
@@ -177,7 +199,12 @@ export async function scanAll(
     // already-compressed OUTSIDE us — as a once-per-file `observed`/not-lfbridge sidecar event
     // (repo_tracking_scheme.mdx §3.3). Reuses the single pinset + the manifest CID map; idempotent per file.
     try {
-      const extCtx: ExternalStateCtx = { pinset, cidForPath: (rel) => cidByPath.get(rel) ?? null };
+      const extCtx: ExternalStateCtx = {
+        pinset,
+        cidForPath: (rel) => cidByPath.get(rel) ?? null,
+        repoRoot: repoPath,
+        discovery,
+      };
       for (const c of candidates) {
         await reconcileExternalState(
           repoPath,
@@ -467,6 +494,8 @@ function writeStatus(
 export interface ExternalStateCtx {
   pinset: Set<string>; // CANONICAL (CIDv1 base32) CIDs pinned on THIS computer's node (fetched once per scan)
   cidForPath: (relPath: string) => string | null; // repo-relative path → its committed-manifest CID (or null)
+  repoRoot?: string; // absolute repo root — for foreign-pin discovery's abs path (foreign_pin_discovery.mdx §3)
+  discovery?: DiscoveryCtx; // the kept-set + size-prune index; present only when the node is reachable (§3)
 }
 
 /**
@@ -486,20 +515,62 @@ export async function reconcileExternalState(
   const name = file.name ?? path.basename(file.path);
   const cid = ctx.cidForPath(file.path);
   // Canonical membership (knowledge/ipfs.mdx §5.1) — record the ORIGINAL manifest CID, test by canonical form.
-  const pinnedCid = cid != null && ctx.pinset.has(canonicalCid(cid)) ? cid : null;
+  let pinnedCid = cid != null && ctx.pinset.has(canonicalCid(cid)) ? cid : null;
+  let pinProfile: string | undefined; // which ADD_PROFILES entry reproduced a foreign pin (null = manifest CID)
+
+  // FOREIGN PIN DISCOVERY (foreign_pin_discovery.mdx §3): a file with no pinned manifest CID may STILL be
+  // pinned — under a CID some OTHER tool created (a bare `ipfs add` → `Qm…`, a different DAG profile, MFS).
+  // Probe it, but BOUNDED: only when the node is reachable and the size-prune admits it, and cached so an
+  // unchanged file is never re-hashed. This is the background pass paying the hash once (never on a read).
+  if (!pinnedCid && ctx.discovery && ctx.discovery.keptSizes.length > 0 && ctx.repoRoot) {
+    const abs = path.join(ctx.repoRoot, file.path);
+    const mtimeMs = file.modified ? Date.parse(file.modified) : 0;
+    try {
+      const hit = await discoverForeignPin(abs, file.size, mtimeMs, ctx.discovery);
+      if (hit) {
+        pinnedCid = hit.cid;
+        pinProfile = hit.profile;
+        // Global index (tier-1 fast UI lookup — §5/§6): record so the repo row (pinnedForeign) and the IPFS
+        // page (reverse resolution) surface it cheaply without re-hashing. Idempotent upsert keyed by path.
+        recordForeignPin({ cid: hit.cid, profile: hit.profile, absPath: abs, size: file.size, repoRoot });
+      }
+    } catch (e) {
+      log.debug("scan", `foreign-pin discovery skipped for ${abs}: ${(e as Error).message}`);
+    }
+  }
+
   const looksCompressed = compressInfo(name).compressState === "done";
   if (!pinnedCid && !looksCompressed) return; // no external state to record for this file
 
   // Idempotency guard (§3.3 "recorded once, not every pass"): an existing observed/ipfs_pin event means the
-  // external/pin state was already captured — never re-append it on a subsequent scan.
+  // external/pin state was already captured — never re-append it on a subsequent scan. Before returning,
+  // re-seed the global index from the durable sidecar CID (the index is a rebuildable cache — if it was
+  // cleared, a prior discovery still lives in the travelling sidecar, so heal it here — §5/§6).
   const existing = readSidecar(repoRoot, file.path);
-  if (existing?.file.events.some((e) => e.kind === "observed" || e.kind === "ipfs_pin")) return;
+  const prior = existing?.file.events.find((e) => e.kind === "observed" || e.kind === "ipfs_pin");
+  if (prior) {
+    const priorCid = (prior as { ipfs?: { cid?: string } }).ipfs?.cid;
+    if (priorCid && ctx.repoRoot && ctx.discovery?.keptSet.has(canonicalCid(priorCid))) {
+      recordForeignPin({
+        cid: priorCid,
+        profile: (prior as { ipfs?: { profile?: string } }).ipfs?.profile ?? "recorded",
+        absPath: path.join(ctx.repoRoot, file.path),
+        size: file.size,
+        repoRoot,
+      });
+    }
+    return;
+  }
 
   const event: FileEventInput = { kind: "observed", by: NOT_LFBRIDGE };
   const notes: string[] = [];
   if (pinnedCid) {
-    event.ipfs = { pinned: true, cid: pinnedCid };
-    notes.push("already pinned on this computer's IPFS node");
+    event.ipfs = { pinned: true, cid: pinnedCid, ...(pinProfile ? { profile: pinProfile } : {}) };
+    notes.push(
+      pinProfile
+        ? `already pinned on this computer's IPFS node (discovered under profile ${pinProfile}, outside Large File Bridge)`
+        : "already pinned on this computer's IPFS node",
+    );
   }
   if (looksCompressed) {
     event.compressed = { looks_compressed: true, size: file.size };

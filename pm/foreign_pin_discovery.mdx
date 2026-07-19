@@ -1,0 +1,322 @@
+---
+title: LargeFileBridge — Foreign Pin Discovery (finding files pinned by OTHER IPFS software)
+description: The authoritative spec for a chronic, real problem — a file's bytes are ALREADY IPFS-pinned on this computer, but pinned OUTSIDE Large File Bridge (a bare `ipfs add`, IPFS Desktop, Pinata's local node, a script, another app), so the pin wears a CID we never computed and our web app never notices it. This spec makes Large File Bridge resilient to that: it scans for ALL the kinds of CID a file's bytes can be pinned under (CIDv0 vs CIDv1 encodings AND the several DAG build profiles that yield genuinely different multihashes), maps a discovered pin BACK to the file on disk (reverse resolution), records the discovery so we never re-hash it, and persists the discovery at three tiers — local state (always), the personal repo, and the company repo — so every one of the user's Large File Bridge computers learns which files are already pinned and under which CID. It also stays compatible with other IPFS software that may pin OR unpin our files. Reconciles with knowledge/ipfs.mdx §5.1/§5.2 (the CID-identity model + the honest read-path boundary), pin_process.mdx §5 (the pinset reconcile step), scan.mdx (the every-15-minute pass that runs discovery), ipfs.mdx §4/§9 (the IPFS page that shows discovered pins as named, importable rows), storage_local.mdx §9 (the manifest/sidecar the discovery is written into), and decisions.mdx (why an UNDECIDED file can still be shown as pinned).
+---
+
+# LargeFileBridge — Foreign Pin Discovery
+
+> **The chronic problem, stated plainly.** A large file on this computer is **already pinned in IPFS**,
+> but it was pinned by **some other software** — a bare `ipfs add` on the CLI, IPFS Desktop, a Pinata or
+> web3.storage helper, a migration script, another app entirely. That other tool added the file under a
+> **different kind of CID** than the one **Large File Bridge** computes, so when Large File Bridge asks
+> "is this file pinned?" it looks for **its** CID, does not find it, and reports the file as **not
+> pinned** — even though the bytes are sitting pinned on the very same node. The user then sees a file
+> they *know* is pinned shown as un-pinned, and reasonably concludes the app is broken.
+>
+> This has been a **long-standing** disconnect. This spec is how we fix it for good: **scan for every
+> kind of CID a file could be pinned under, discover the pin no matter who created it, map that CID back
+> to the file, and remember it — locally and in the shared repos — so it is never lost again.**
+
+This spec is the **user-facing / product** companion to the CID-identity engine documented in
+[knowledge/ipfs.mdx §5.1–§5.2](../knowledge/ipfs.mdx#51-the-same-file-can-have-several-different-cids--never-compare-cid-strings-raw-locked-learned-from-a-defect).
+Knowledge owns *why one file has several CIDs and how we compare them*; this file owns *the product
+behavior — discover, resolve, record, persist, surface, and stay compatible with other pinning tools.*
+
+Siblings this builds on and does not repeat:
+
+* [knowledge/ipfs.mdx §5.1](../knowledge/ipfs.mdx#51-the-same-file-can-have-several-different-cids--never-compare-cid-strings-raw-locked-learned-from-a-defect) — the two CID axes (encoding vs DAG profile), `canonicalCid()`, `contentPinnedCid()`, and the honest "no hashing on the read path" boundary.
+* [pin_process.mdx §5](./pin_process.mdx#5-what-a-pass-does-per-unit--and-what-the-opt-in-gates) — the per-unit pinset reconcile; discovery runs **inside** that reconcile, in the background.
+* [scan.mdx](./scan.mdx) — the every-15-minute pass that fetches the pinset once and drives discovery.
+* [ipfs.mdx §4/§9](./ipfs.mdx#4-import--the-load-bearing-feature) — the IPFS page, where a discovered pin becomes a **named, importable** row instead of a bare CID.
+* [storage_local.mdx §9](./storage_local.mdx#9-the-manifest--ipfs-pin-model) — the manifest + per-file sidecar the discovery is recorded into.
+* [decisions.mdx](./decisions.mdx) — why a file the user has **not** decided to sync can still be shown as pinned (reality ≠ intent).
+
+---
+
+## 1. The two things that make a pin "invisible" to us
+
+A file's bytes can be pinned under a CID we do not look for for **two independent reasons**. Both must be
+scanned for; either one alone makes the app go blind.
+
+### 1.1 The ENCODING axis — same block, different spelling (cheap to fix)
+
+The **same block** can be written as **CIDv0** (`Qm…`, base58btc — what a bare legacy `ipfs add`
+produces) or **CIDv1** (`bafy…`, base32 — what newer tools and our app produce). These are **two
+spellings of one identical block.** And critically, **`ipfs pin ls` is base-sensitive**: query a block
+that was pinned as `Qm…` by its `bafy…` form and the node answers *"not pinned"* — even though it holds
+it. A raw string compare therefore misses every pin whose base differs from ours (the "invisible v0
+pins" class — a user reported ~1,255 of them on one machine).
+
+**Fix (free, no hashing):** canonicalize **every** CID — ours and every pinset entry — to **one form
+(CIDv1 base32)** before any comparison. Bridges this whole axis. This is already in place everywhere the
+pinset is read (`canonicalCid()` / `canonicalPinnedSet()`).
+
+### 1.2 The DAG-PROFILE axis — genuinely different bytes, different multihash (needs re-hashing)
+
+`--cid-version`, `--raw-leaves`, the **chunker** (`--chunker`, e.g. `size-262144` vs `size-1048576`),
+the **hash** (`--hash`), and **trickle vs balanced** layout (`--trickle`) all change *how the Merkle DAG
+is built*, so they change the **multihash itself**. Two tools can add the identical file and produce
+**completely different root CIDs** that canonicalization can **never** reconcile — they are different
+blocks. For a multi-block file, even "v0 vs v1 with the same leaf setting" differ, because each parent
+node embeds its children's CIDs *in that version*.
+
+**Fix (bounded, requires re-hashing):** re-hash the local bytes under each **profile IPFS realistically
+produces** and test each canonicalized result against the pinset. `contentPinnedCid()` does this. It is
+**expensive** (a full byte read + hash per profile), so §3 wraps it in aggressive pruning + caching and
+runs it **only in the background**, never on a page read.
+
+> **The motivating file made both axes concrete.** `2077951056697331723.mp4` (a charlie-kirk video) was
+> pinned as **`QmTo4Htjkqv…`** (a bare `ipfs add`, CIDv0). Our app, adding with `--cid-version=1`,
+> computes **`bafybeigoytoir7…`** — a *different DAG*, not in the pinset. Canonicalization alone could
+> not see it (different multihash, not just a different base); only re-hashing under the **v0** profile
+> reproduces `QmTo4Htjkqv…`, whose canonical form **is** in the pinset. Discovery must do exactly that.
+
+---
+
+## 2. Scan for ALL the kinds — the coverage matrix (LOCKED)
+
+"Different kinds of IPFS" is not one dimension. Discovery must cover **all** of these, and the app must
+never assume the file is unpinned merely because *our* kind of CID is absent.
+
+| Kind of variation | Example other-tool behavior | How we scan for it | Cost |
+| --- | --- | --- | --- |
+| **CID base** (v0 `Qm…` ↔ v1 `bafy…`) | legacy `ipfs add`; IPFS Desktop | `canonicalCid()` on both sides | free |
+| **CID version DAG** (v0 dag-pb vs v1) | bare add vs `--cid-version=1` | re-hash under both, `contentPinnedCid()` | 1 hash/profile |
+| **raw-leaves on/off** | Kubo v1 default `raw-leaves=true` vs `false` | re-hash under both leaf settings | 1 hash/profile |
+| **chunker size** | web3.storage/Pinata often 1 MiB UnixFS vs Kubo 256 KiB | re-hash under known chunker profiles (best-effort; see §2.1) | 1 hash/profile |
+| **pin TYPE** (recursive / direct / **MFS** / indirect) | a file dropped into MFS is GC-protected but NOT in `pin ls` | read `pin ls` (recursive+direct) **and** enumerate MFS roots | metadata only |
+| **pinned vs unpinned by others** | another tool later `pin rm`s our file | reconcile every pass; a discovery that no longer verifies is dropped (§5) | metadata only |
+
+### 2.1 The honest limit — chunkers we cannot reproduce
+
+We can re-hash under any profile **Kubo itself** can produce. If another tool used a **non-Kubo chunker
+or codec** we cannot reproduce locally (some pinning services do), re-hashing will **not** reproduce
+that CID and the pin stays undiscovered by content. That residual is **surfaced, not hidden**: the pin
+still appears on the **IPFS page** as an **Untracked (pinned)** row (by CID), and §4's reverse-by-size
+resolution can still *name the file* even when we cannot reproduce its exact CID. We **log** how many
+untracked pins we could not resolve, so the gap is visible rather than silently reported as "all clear"
+([performance.mdx](./performance.mdx) no-silent-caps rule).
+
+The profile list we re-hash under is a single named constant so it is **easy to extend** as we learn new
+tools' defaults — implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/foreign-pin.service.ts` — `ADD_PROFILES`
+
+### 2.2 Pin TYPE coverage — recursive, direct, and MFS
+
+`ipfs pin ls` lists **recursive** + **direct** roots (indirect blocks are rolled under their root). But
+a file another tool placed in the **Mutable File System** (`ipfs files cp …`) is **GC-protected**
+(implicit pin, [knowledge/ipfs.mdx §3/§7](../knowledge/ipfs.mdx#3-pinning--telling-ipfs-to-keep-a-file))
+yet appears in **neither** listing. So "kept content" is a **superset** of the explicit pinset. Discovery
+enumerates the **MFS roots** (`ipfs files ls` / `ipfs files stat`) and folds their CIDs into the
+kept-set it compares against, so a file another tool protected via MFS is discovered too.
+
+Enumerating MFS roots and folding them into the kept-set is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `listMfsRoots()`, folded into `keptCidSet()`
+
+---
+
+## 3. Discovery runs in the BACKGROUND, bounded and cached (LOCKED)
+
+The one rule that keeps this affordable: **discovery never runs on a page read.** Re-hashing a file is
+expensive; the read path stays cheap ([knowledge/ipfs.mdx §5.1 "the honest boundary"](../knowledge/ipfs.mdx#51-the-same-file-can-have-several-different-cids--never-compare-cid-strings-raw-locked-learned-from-a-defect)).
+Discovery is a step of the **every-15-minute scan / pin pass** ([scan.mdx](./scan.mdx),
+[pin_process.mdx §5](./pin_process.mdx#5-what-a-pass-does-per-unit--and-what-the-opt-in-gates)), and the
+UI simply **reads what a prior pass recorded**.
+
+The bounded algorithm, per repo, reusing the **one** pinset fetched per scan:
+
+1. **Build the kept-set once** — canonical CIDs from `pin ls` (recursive+direct) **plus** MFS roots (§2.2),
+   plus each kept CID's on-disk **cumulative size** (`objectSize`). One node round-trip set per scan.
+2. **Size-prune HARD.** A file is a discovery candidate **only if some kept CID's cumulative size matches
+   the file's size** within a tight tolerance. This is decisive: the DAG's cumulative size is the file
+   size + a few hundred bytes of framing (measured: a 2,358,647-byte video → 2,359,214-byte DAG, **0.024%**
+   overhead). So we hash **only** files whose size already matches a mystery pin — in practice a handful,
+   not the whole repo.
+3. **Re-hash the survivors** under `ADD_PROFILES` (§2) via `add --only-hash` (no store, no pin, no
+   network) and test each canonicalized result against the kept-set. First hit wins → `{cid, profile}`.
+4. **Cache the verdict** keyed by the file's **fingerprint** (`size` + `mtimeMs`), so an unchanged file is
+   **never re-hashed** on later passes — including a **negative** cache (hashed, not pinned) so we don't
+   re-hash the same non-match every 15 minutes. A file whose size/mtime changes invalidates its entry.
+5. **Record + persist** the discovery (§4, §5) and **surface** it (§6).
+
+The size-prune + profile re-hash + fingerprint cache is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/foreign-pin.service.ts` — `discoverForeignPin()` (uses `keptSizeIndex()` for the prune and `ipfs.contentPinnedCid()` for the re-hash), cache in `foreignPinCache` under the state root
+
+> **Why size-prune is safe and sufficient.** Content addressing guarantees identical bytes → identical
+> CID under a given profile, so a real pin of *this* file has a cumulative size within framing tolerance
+> of the file. Files whose size doesn't match **cannot** be the same content, so skipping them loses no
+> real discovery — it only avoids hashing files that could not possibly match.
+
+---
+
+## 4. Reverse resolution — from a pinned CID BACK to the file on disk (LOCKED)
+
+The user's insight: *"ask IPFS for the list of everything pinned on this computer, then go from those
+CIDs back to where the file is."* Discovery is that mapping, and it runs **two ways**:
+
+* **Forward (content):** for a known local file, compute its CID under each profile and look it up in the
+  kept-set (§3). This gives an **exact** file → CID match.
+* **Reverse (by size, for leftover untracked pins):** for a pinned CID we could **not** match forward
+  (e.g. a non-Kubo chunker, §2.1), find local candidate files whose size matches the pin's cumulative
+  size, and — bounded — re-hash those few candidates to confirm. If confirmed, the CID resolves to that
+  path; if the chunker is unreproducible, we still show the pin **named by its size-matched candidate**
+  with a "likely this file" note rather than a bare, anonymous CID.
+
+The result is that the **IPFS page never shows an anonymous `bafy…`/`Qm…` row for a file we actually
+have on disk** — it shows the **filename**, its repo, and offers **Import** ([ipfs.mdx §4](./ipfs.mdx#4-import--the-load-bearing-feature)).
+
+Resolving a leftover untracked pin to a local path by size-matched candidates is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/foreign-pin.service.ts` — `resolvePinToPath()`, consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-page.service.ts` — `buildTrackedIndex()` / `computeIpfsPage()`
+
+---
+
+## 5. Persist the discovery at THREE tiers (LOCKED)
+
+A discovery must **not** be thrown away — re-hashing to find it again is exactly the cost we are avoiding,
+and **other computers** benefit from knowing the answer. So every discovery is written at up to three
+tiers, and the tier is chosen by **where the file lives**, exactly like all LFB tracking placement
+([storage-kind rule](./artifact_placement_policy.mdx), [churn policy](./repo_storage.mdx)):
+
+| Tier | When it applies | What is written | Who benefits |
+| --- | --- | --- | --- |
+| **1. Local state** (always) | every discovery, unconditionally | a per-file `observed` / `ipfs_pin` sidecar event carrying `{ pinned: true, cid, profile, by: not-lfbridge }`, plus the fingerprint cache under the state root | THIS computer — never re-hashes; the repo row + IPFS page read it |
+| **2. Personal repo** | the file lives in a repo the user **owns as personal** | the same sidecar, written into that repo's **`.lfbridge/`** (committed, travels via git) | the user's **other** Large File Bridge computers pulling that personal repo |
+| **3. Company repo** | the file lives in a repo owned by a **company** | the same sidecar, written into the company repo's **`.lfbridge/`** (committed, travels) | **teammates'** Large File Bridge instances on the company repo |
+
+Tiers 2 and 3 are **not** a second write we bolt on — they fall out of the existing **tracking base
+dir** choke point: a git-backed repo's sidecar lives in **`.lfbridge/`** inside that repo (which is
+committed and therefore *is* the personal/company travelling copy), while a file with **no owning
+repo** records into the **computer-unit manifest** under the state root (tier 1 only). One code path, the
+tier follows the file's storage kind + owner — never joined by hand
+([storage-kind rule](./artifact_placement_policy.mdx) §0).
+
+* **If there is no personal or company repo** (a loose file, or a repo LFB knows but that isn't owned),
+  we **still** record tier 1 (local state) so the knowledge is never lost — the user's requirement:
+  *"If there aren't personal repos or company repos, we can always store this information in our local
+  storage."*
+* **When we DO find a foreign pin with an unexpected CID, we update our tracking to say so** — recording
+  the **actual** CID the bytes are pinned under (not the CID we *would* have used), so the record reflects
+  reality. On import ([ipfs.mdx §4](./ipfs.mdx#4-import--the-load-bearing-feature)) that discovered CID is
+  what enters the manifest — never a duplicate re-add under our profile.
+
+Writing the discovery into the sidecar at the right tier (via the tracking-base choke point) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `reconcileExternalState()` (extended to probe undecided files and record the discovered CID), writing through `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/file-sidecar.service.ts` — `appendFileEvent()` into `trackingBaseDir()`
+
+### 5.1 Staying compatible with other software that pins OR unpins
+
+Other tools own their pins; we never fight them. Compatibility is **reconcile every pass**, never
+**assume**:
+
+* **They pinned it** → we discover it (§3), record it (§5), and show it (§6). We do **not** re-add or
+  re-pin it — the bytes are already kept; a duplicate add under our profile would waste space and create a
+  second CID.
+* **They later unpinned it** → on the next pass the discovered CID is **no longer in the kept-set**, so
+  the recorded `pinned` reality flips back to false and the row stops claiming a pin
+  ([pin_process.mdx §5](./pin_process.mdx#5-what-a-pass-does-per-unit--and-what-the-opt-in-gates),
+  [sync_list.mdx §5.1](./sync_list.mdx#51-local-claims-are-verified-not-believed) — a pin claim is only
+  ever trusted while `pin ls` truly holds it). A discovery is a **cache of an observation**, re-verified,
+  never a permanent assertion.
+* **The file changed on disk** → its fingerprint (size/mtime) changes, the cache entry is invalidated, and
+  the next pass re-discovers against the new bytes.
+
+---
+
+## 6. Surfacing — the file shows as pinned in the web app (LOCKED)
+
+Once a prior background pass has **recorded** a discovery, the read paths reflect it **cheaply** (a
+recorded-flag read, no hashing — the honest boundary holds):
+
+* **Repo file row.** The pin icon on the file's repo page reflects **node reality**. For a file the user
+  **decided** to sync, this was already true via the manifest CID. Now, for an **undecided** file whose
+  bytes we **discovered** are pinned, the row carries `pinnedForeign: true` (sourced from the recorded
+  sidecar event, not a live hash) so the UI can show it as **pinned on this computer** — distinct from the
+  intent-blue "we chose to sync this" state. Reality (it is pinned) and intent (the user opted in) are
+  **different axes**; discovery drives reality, the decision drives intent
+  ([decisions.mdx](./decisions.mdx)).
+* **IPFS page.** The discovered CID resolves to the **filename + repo** (§4) instead of a bare CID, and is
+  offered for **Import** ([ipfs.mdx §4](./ipfs.mdx#4-import--the-load-bearing-feature)). Import records the
+  **discovered** CID (the real one) into tracking — metadata only, no re-pin.
+
+The repo row's foreign-pin reality flag is populated in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` (reads the recorded discovery; sets `FileRow.pinnedForeign`), field defined in `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FileRow`
+
+---
+
+## 7. The test that must pass (LOCKED — the motivating file)
+
+This spec is validated against one specific, real file that exposed the whole problem. The end-to-end
+behavior below **must** hold:
+
+> **File:** `/Users/bryan/BGit/Bryan_git/charlie-kirk/videos/2077951056697331723.mp4`
+> **Pinned as:** `QmTo4HtjkqvEMCvAUMDo6eP6FwroAp8r2btv1mqGSwyFFa` (recursive, a bare `ipfs add` — CIDv0)
+> **Our default CID:** `bafybeigoytoir7…` (`--cid-version=1`) — **not** in the pinset
+
+Acceptance:
+
+1. `contentPinnedCid()` on the file returns **`QmTo4Htjkqv…`** (found via the v0 profile probe). ✅ verified.
+2. `isPinned("QmTo4Htjkqv…")` returns **true** (canonical membership against the pinset). ✅ verified.
+3. A background pass **discovers** the pin (size-prune admits it — 0.024% size overhead — then the v0
+   re-hash matches), **records** it in the file's sidecar under `.lfbridge/` in the charlie-kirk repo
+   (tier 2, a personal repo), and **caches** the verdict so later passes don't re-hash.
+4. The file's **repo row** shows **pinned on this computer** (`pinnedForeign: true`), even though it is
+   **undecided**.
+5. The **IPFS page** shows the pin as a **named** row (the video's filename + the charlie-kirk repo), not
+   a bare `Qm…`, and offers **Import**; importing records `QmTo4Htjkqv…` (never a duplicate add).
+6. If another tool later `pin rm`s it, the next pass drops the pinned reality and the row stops claiming a
+   pin (§5.1).
+
+The specific-file verification is exercised in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/foreign-pin.spec.ts`
+
+---
+
+## 8. Acceptance criteria
+
+1. A file whose bytes are pinned on this node under **any** CID — any base (v0/v1), any reproducible DAG
+   profile (§2), or protected via **MFS** (§2.2) — is **discovered**, not reported as un-pinned (§1, §2).
+2. Discovery runs **only in the background** (the 15-minute scan / pin pass), **size-pruned** and
+   **fingerprint-cached**; it **never** hashes on a page read, and an unchanged file is **never re-hashed**
+   (§3).
+3. A discovered pin is **mapped back to its file** (forward by content, or reverse by size for
+   unreproducible chunkers), so the IPFS page shows a **named, importable** row, never an anonymous CID for
+   a file we hold on disk (§4).
+4. Every discovery is **persisted**: **tier 1 local state always**, plus the **personal** or **company**
+   repo's `.lfbridge/` when the file lives in an owned repo — so the user's other computers and teammates
+   learn it (§5). With no owning repo, tier 1 alone still records it.
+5. The recorded discovery carries the **actual** CID the bytes are pinned under (and the profile), and
+   **Import** records that CID — never a duplicate re-add under our own profile (§5, §6).
+6. We stay **compatible** with other pinning software: a pin they created is discovered and shown but
+   **never re-pinned**; a pin they later remove is **dropped** on the next pass; a changed file is
+   re-discovered (§5.1).
+7. The **repo file row** reflects node reality for a discovered pin (`pinnedForeign`), distinct from the
+   sync **intent** decision; the **IPFS page** resolves and offers **Import** (§6).
+8. Chunkers/codecs we **cannot** reproduce are **surfaced and logged**, never silently reported as "all
+   clear" (§2.1).
+9. The motivating file `2077951056697331723.mp4` passes the end-to-end test in §7.
+
+<!--
+  AUTHORITATIVE spec for FOREIGN PIN DISCOVERY — finding files already pinned OUTSIDE Large File Bridge
+  under a CID we never computed (the chronic "CLI says pinned, app says off" problem, generalized).
+  LOCKED:
+  (§1) Two axes make a pin invisible: ENCODING (v0/v1 same block — canonicalCid, free) and DAG PROFILE
+       (different multihash — needs re-hashing via contentPinnedCid). BOTH must be scanned.
+  (§2) Coverage matrix: base, cid-version, raw-leaves, chunker, pin TYPE incl MFS, and pinned/unpinned by
+       others. ADD_PROFILES is the extensible re-hash list; non-Kubo chunkers are the honest limit (§2.1),
+       SURFACED + LOGGED, never hidden. MFS roots folded into the kept-set (§2.2).
+  (§3) Discovery is BACKGROUND ONLY (scan/pin pass), size-pruned HARD (cumulative size ≈ file size, 0.024%
+       overhead measured), and fingerprint-cached (size+mtime, incl a NEGATIVE cache). NEVER hash on a read.
+  (§4) Reverse resolution: forward by content, reverse by size for leftover untracked pins → the IPFS page
+       never shows an anonymous CID for a file we hold on disk.
+  (§5) THREE-tier persistence: tier1 local state ALWAYS; tier2 personal repo .lfbridge/; tier3 company repo
+       .lfbridge/. Tier follows the file's storage KIND + owner via the trackingBaseDir choke point — never
+       joined by hand. No owning repo → tier1 only. Record the ACTUAL discovered CID.
+  (§5.1) Compatibility: discover-not-re-pin; drop when they unpin; re-discover when the file changes. A
+       discovery is a re-verified observation cache, never a permanent claim (sync_list §5.1).
+  (§6) Surfacing is a CHEAP recorded-flag read: repo row gets pinnedForeign (reality) distinct from the sync
+       decision (intent, decisions.mdx); IPFS page resolves + offers Import (ipfs.mdx §4).
+  (§7) The motivating file 2077951056697331723.mp4 (pinned QmTo4Htjkqv…, our default bafybeigoytoir7…) is the
+       LOCKED end-to-end test. Items 1–2 already VERIFIED against the live daemon.
+  Engine lives in knowledge/ipfs.mdx §5.1/§5.2 (canonicalCid/contentPinnedCid + the honest boundary); this
+  file is the product behavior. Code: modules/ipfs/foreign-pin.service.ts (engine), scanner.service.ts
+  reconcileExternalState (record), units.service.ts composeFileRows (surface), ipfs-page.service.ts (resolve).
+-->

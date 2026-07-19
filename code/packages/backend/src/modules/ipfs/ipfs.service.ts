@@ -252,30 +252,101 @@ async function addOnlyHash(absPath: string, query: Record<string, string>): Prom
 }
 
 /**
- * Return the CID under which THIS FILE's exact bytes are ALREADY pinned on this node, or null — bridging the
- * DAG-PROFILE axis that canonicalCid cannot (knowledge/ipfs.mdx §5.1). The same bytes hash to DIFFERENT
- * multihashes under different add profiles, so a CID-string/pinset compare can never recognize a foreign-
- * profile pin; only re-hashing can. We probe the two profiles IPFS realistically produces:
- *   • our app standard — `--cid-version=1` (Kubo defaults raw-leaves=true) → `bafy…` (raw leaves);
- *   • a legacy / manual `ipfs add` with no flags → CIDv0 dag-pb, no raw leaves → `Qm…`.
- * For a MULTI-BLOCK file these are genuinely different blocks (parent nodes embed child CIDs of that version),
- * which is exactly why the same movie can read "pinned" on the CLI yet "not pinned" to a naive check.
- *
- * EXPENSIVE: a full byte read+hash per profile (streamed over loopback). Callers MUST bound how often they
- * invoke it — NEVER on a bulk scan/read hot path (that is why the scanner keeps its cheap manifest-CID
- * shortcut and this is a targeted, on-demand probe).
+ * The add PROFILES we re-hash a file under to recognize a foreign pin across the DAG-profile axis
+ * (knowledge/ipfs.mdx §5.1 / pm/foreign_pin_discovery.mdx §2). Each profile is a set of `ipfs add` flags
+ * that changes how the Merkle DAG is built, hence the multihash. This list is the SINGLE place to extend as
+ * we learn other tools' defaults — it is deliberately a named constant, not inline, so foreign-pin discovery
+ * grows by adding an entry here. We can only reproduce profiles KUBO can produce; a non-Kubo chunker/codec is
+ * the honest limit (surfaced + logged on the IPFS page, never silently called "clear" — §2.1).
+ *   • v1-raw-leaves    — our app standard (`--cid-version=1`, Kubo defaults raw-leaves=true) → `bafy…`
+ *   • v0-dag-pb        — a legacy / manual `ipfs add` with no flags → CIDv0 dag-pb, no raw leaves → `Qm…`
+ *   • v1-no-raw-leaves — `--cid-version=1 --raw-leaves=false` (dag-pb leaves under a v1 root)
  */
-export async function contentPinnedCid(absPath: string): Promise<string | null> {
-  const pinned = await canonicalPinnedSet();
-  for (const query of [{ "cid-version": "1" }, { "cid-version": "0" }]) {
+export const ADD_PROFILES: ReadonlyArray<{ label: string; query: Record<string, string> }> = [
+  { label: "v1-raw-leaves", query: { "cid-version": "1" } },
+  { label: "v0-dag-pb", query: { "cid-version": "0" } },
+  { label: "v1-no-raw-leaves", query: { "cid-version": "1", "raw-leaves": "false" } },
+];
+
+/**
+ * Like contentPinnedCid but also names WHICH profile matched (for the discovery record — foreign_pin_discovery
+ * §5). Re-hashes the local bytes under each ADD_PROFILES entry (no store, no pin, no network) and tests each
+ * canonicalized result against `pinned` (the kept-set — pins ∪ MFS roots, §2.2). First hit wins.
+ * EXPENSIVE (a full byte read+hash per profile); callers MUST bound how often they invoke it — never on a
+ * read hot path (foreign_pin_discovery §3 runs it in the background, size-pruned + cached).
+ */
+export async function contentPinnedCidDetailed(
+  absPath: string,
+  pinned?: Set<string>,
+): Promise<{ cid: string; profile: string } | null> {
+  const kept = pinned ?? (await keptCidSet());
+  for (const { label, query } of ADD_PROFILES) {
     try {
       const cid = await addOnlyHash(absPath, query);
-      if (pinned.has(canonicalCid(cid))) return cid;
+      if (kept.has(canonicalCid(cid))) return { cid, profile: label };
     } catch (e) {
-      log.debug("ipfs", `contentPinnedCid probe (${JSON.stringify(query)}) failed for ${absPath}: ${(e as Error).message}`);
+      log.debug("ipfs", `contentPinnedCid probe (${label}) failed for ${absPath}: ${(e as Error).message}`);
     }
   }
   return null;
+}
+
+/**
+ * Return the CID under which THIS FILE's exact bytes are ALREADY pinned on this node, or null — bridging the
+ * DAG-PROFILE axis that canonicalCid cannot (knowledge/ipfs.mdx §5.1). See contentPinnedCidDetailed for the
+ * profile set and the cost warning. This thin wrapper keeps the existing string|null callers (pin.service
+ * foreign-profile adoption) unchanged.
+ */
+export async function contentPinnedCid(absPath: string): Promise<string | null> {
+  return (await contentPinnedCidDetailed(absPath))?.cid ?? null;
+}
+
+/**
+ * MFS root CIDs — the "kept but not in `pin ls`" content (knowledge/ipfs.mdx §3/§7): a file another tool
+ * dropped into the Mutable File System is GC-protected (implicit pin) yet appears in NEITHER pin listing.
+ * Folding these into the kept-set makes foreign-pin discovery see MFS-protected files too
+ * (foreign_pin_discovery §2.2). Best-effort — MFS empty/unreadable just yields [].
+ */
+export async function listMfsRoots(): Promise<string[]> {
+  try {
+    const res = await rpc("files/ls", { args: ["/"], query: { long: "true" } });
+    const json = (await res.json()) as { Entries?: Array<{ Hash?: string }> | null };
+    return (json.Entries ?? []).map((e) => e.Hash).filter((h): h is string => !!h);
+  } catch (e) {
+    log.debug("ipfs", `listMfsRoots unavailable: ${(e as Error).message}`);
+    return [];
+  }
+}
+
+/** The kept-set: CANONICAL (CIDv1 base32) CIDs the node is keeping — explicit pins (recursive+direct) UNION
+ *  MFS roots (§2.2). This is the superset a foreign-pin comparison must test against, not just `pin ls`. */
+export async function keptCidSet(): Promise<Set<string>> {
+  const [pins, mfs] = await Promise.all([listPins(), listMfsRoots()]);
+  const set = new Set(pins.map((p) => canonicalCid(p.cid)));
+  for (const cid of mfs) set.add(canonicalCid(cid));
+  return set;
+}
+
+/**
+ * Index kept CIDs by their on-disk cumulative size → the SIZE-PRUNE key for foreign-pin discovery
+ * (foreign_pin_discovery §3). A DAG's cumulative size is the file size + a few hundred bytes of framing
+ * (measured ~0.024% on a 2.3 MB video), so a file is a discovery candidate ONLY if some kept CID's size sits
+ * just above the file size — letting us hash a handful of size-matched files instead of the whole repo.
+ * Metadata-only (`files/stat` per CID, bounded concurrency); best-effort — unresolvable CIDs are skipped.
+ */
+export async function keptSizeIndex(): Promise<Map<number, string[]>> {
+  const cids = [...(await keptCidSet())];
+  const idx = new Map<number, string[]>();
+  let next = 0;
+  const workers = Array.from({ length: Math.min(8, cids.length) }, async () => {
+    while (next < cids.length) {
+      const cid = cids[next++]!;
+      const size = await objectSize(cid);
+      if (size != null) idx.set(size, [...(idx.get(size) ?? []), cid]);
+    }
+  });
+  await Promise.all(workers);
+  return idx;
 }
 
 // ── Reading the pinset (ipfs.mdx §6 — the scheduleTask's metadata-only read) ─

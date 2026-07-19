@@ -227,16 +227,45 @@ this machine does **not** hold it yet (the pin pass will pull it). `pinnedHere` 
 when the pinset can't be read it is `undefined` → the icon shows intent-blue and **never a false red**. This
 is what fixes the "CLI says pinned, app says off" complaint **for any file the user opted into syncing**.
 
-**The honest boundary (what we still do NOT do, on purpose).** We do **not** auto-hash every *undecided*
-file on scan/page-load to discover foreign-profile pins — that would put full-file hashing on the read path
-this app is careful to keep cheap, and an **undecided** file has **no recorded CID** to test cheaply.
-Consequence: a file whose bytes are pinned only under a foreign profile **and which the user has not decided
-to sync** (e.g. a legacy manual `ipfs add` producing a `Qm…` CID we never computed) still reads as "not set
-to sync" (grey) on the repo page — the three-state icon only turns blue/red once there **is** a decision and
-a recorded CID. The node's actual pins are surfaced authoritatively on the **IPFS page** (ipfs.mdx §4),
-where such a pin appears as **Untracked (pinned)** and can be **imported** (or adopted, without a duplicate
-add, the moment the file is decided — the foreign-profile-adoption step above). This keeps the boundary
-honest: we assert a pin reality on the repo row **only** where verifying it costs a set lookup, never a hash.
+**The honest boundary — hashing happens in the BACKGROUND, never on a read.** We do **not** auto-hash
+every *undecided* file **on a page read** — that would put full-file hashing on the read path this app is
+careful to keep cheap. But we **do** discover foreign-profile pins for undecided files: it happens in the
+**every-15-minute background scan/pin pass**, aggressively **size-pruned** (only files whose size matches a
+mystery pin are hashed — a DAG's cumulative size is the file size + ~0.024% framing, so the prune is
+decisive) and **fingerprint-cached** (an unchanged file is never re-hashed). The read path then just reads
+the **recorded** discovery — a flag, not a hash. This is the **Foreign Pin Discovery** subsystem, specified
+in full in [pm/foreign_pin_discovery.mdx](../pm/foreign_pin_discovery.mdx) and summarized in §5.2 below.
+Consequence with discovery in place: a file whose bytes are pinned only under a foreign profile, **even when
+undecided**, is discovered by a background pass, recorded (repo row shows it pinned via `pinnedForeign`), and
+resolved to a named row on the **IPFS page** (ipfs.mdx §4). The rule that stands: we never assert a pin
+reality on a **read** by paying a hash — the hash is paid once, in the background, and cached.
+
+### 5.2 Scanning for ALL pin kinds + reverse resolution (Foreign Pin Discovery)
+
+The chronic real-world problem: **other IPFS software pins our files under CIDs we never compute** (a bare
+`ipfs add`, IPFS Desktop, Pinata/web3.storage helpers, scripts), and a naive check reports them un-pinned.
+Robustness requires scanning for **every kind** a pin can wear and mapping it back to the file:
+
+* **Encoding axis** (v0 `Qm…` ↔ v1 `bafy…`, same block) → `canonicalCid()` (free, §5.1 Layer 1).
+* **DAG-profile axis** (`--cid-version` / `--raw-leaves` / chunker / hash / trickle — different multihash) →
+  re-hash under each profile IPFS can reproduce, via `contentPinnedCid()` (§5.1 Layer 2). The profile list is
+  a single extensible constant (`ADD_PROFILES`); a **non-Kubo chunker we cannot reproduce** is the honest
+  limit — it is **surfaced and logged**, never silently called "clear."
+* **Pin TYPE** — `pin ls` gives **recursive + direct** roots only; a file another tool put in **MFS** is
+  GC-protected but in **neither** listing, so discovery also enumerates **MFS roots** (`ipfs files`) and
+  folds them into the kept-set it compares against.
+* **Reverse resolution** — *"list everything pinned, then map each CID back to the file."* For a pin we
+  cannot match forward, find local files whose **size** matches the pin (cumulative size ≈ file size) and
+  re-hash those few to confirm — so the IPFS page shows a **named** file, not an anonymous CID.
+
+Discovery is **background-only, size-pruned, and fingerprint-cached** (never on a read), and each discovery
+is **persisted at three tiers** — local state always, plus the **personal** or **company** repo's
+`.lfbridge/` when the file lives in an owned repo — so the user's other computers and teammates learn which
+files are already pinned and under which CID. We **discover but never re-pin** another tool's pin, and we
+**drop** a discovered pin the moment `pin ls` no longer holds it (they unpinned it). Full behavior, the
+coverage matrix, the three tiers, and the locked end-to-end test (the `2077951056697331723.mp4` /
+`QmTo4Htjkqv…` case) are in [pm/foreign_pin_discovery.mdx](../pm/foreign_pin_discovery.mdx). Engine in code:
+`code/packages/backend/src/modules/ipfs/foreign-pin.service.ts` — `discoverForeignPin()` / `resolvePinToPath()`.
 
 ---
 

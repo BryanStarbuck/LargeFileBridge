@@ -32,6 +32,7 @@ import { resolveRepoOwner, checkIgnoreVerbose, type IgnoreRule } from "../git/gi
 // storage.service <-> storage-settings.service pair documents.
 import { getStorageRow } from "../storage/storage.service.js";
 import { canonicalCid } from "../ipfs/ipfs.service.js";
+import { foreignPinByAbsPath } from "../ipfs/foreign-pin.service.js";
 import { analysisOutputs } from "../storage/tracking.service.js";
 import { resolveStorageType } from "../storage/storage-type.service.js";
 import { readYaml, updateYaml, writeYaml } from "../../shared/store/yaml-store.js";
@@ -335,6 +336,13 @@ function composeFileRows(
       // not fetched) or no CID → icon shows intent only, never a false red. NO per-file hashing here.
       pinnedHere:
         pinset && decision === "sync" && m?.cid ? pinset.has(canonicalCid(m.cid)) : undefined,
+      // Node REALITY for an UNDECIDED file: a background pass discovered its bytes pinned OUTSIDE us under a
+      // foreign CID (foreign_pin_discovery.mdx §6). Cheap read of the recorded global index — NO hashing on
+      // this hot path. Only meaningful when the file isn't already surfacing as a decided/sync pin.
+      pinnedForeign:
+        repoRootAbs && decision !== "sync"
+          ? !!foreignPinByAbsPath(path.join(repoRootAbs, cand.path))
+          : undefined,
       changedAt: cand.modified_at ?? status.last_scan_at ?? new Date(0).toISOString(),
       decidedBy: prov?.decidedBy ?? null,
       decidedAt: prov?.decidedAt ?? null,

@@ -112,6 +112,13 @@ export interface FileRow {
   // intent only and never cries red. Cheap: a set-membership test per row against the once-fetched pinset —
   // NEVER a per-file hash on the read path (the honest boundary, knowledge/ipfs.mdx §5.1).
   pinnedHere?: boolean;
+  // Node REALITY for a file the user has NOT decided to sync: its bytes are pinned on this computer under a
+  // CID discovered OUTSIDE Large File Bridge (a bare `ipfs add`, another tool, a foreign DAG profile / MFS) —
+  // Foreign Pin Discovery (pm/foreign_pin_discovery.mdx §6). This is a cheap read of a RECORDED background
+  // discovery (never a live hash). It is a distinct axis from `pinnedHere`/`decision`: `pinnedForeign` says
+  // "it IS pinned here" (reality); the decision says "the user chose to sync it" (intent). Undefined/false
+  // when nothing was discovered. Lets the pin icon show "pinned on this computer" for an undecided file.
+  pinnedForeign?: boolean;
   changedAt: string;
   // Compress task status (task_tabs.mdx §6) — from the extension verdict compressInfo(name): "could" =
   // a video/image that looks uncompressed, "done" = already compressed, "na" = not a compressible kind.

@@ -23,6 +23,7 @@ import {
 import { getAppConfig } from "../store-model/config.service.js";
 import { analysisOutputs } from "../storage/tracking.service.js";
 import * as ipfs from "./ipfs.service.js";
+import { foreignPinByCanonicalCid } from "./foreign-pin.service.js";
 import { log } from "../../shared/logging.js";
 
 // What we know about a CID that appears in some manifest (i.e. a Tracked pin).
@@ -155,6 +156,25 @@ export async function computeIpfsPage(): Promise<IpfsPageData> {
         peers: info.peers,
         seenAt: info.seenAt,
         analysis: info.analysis,
+      };
+    }
+    // REVERSE RESOLUTION (foreign_pin_discovery.mdx §4): an untracked pin may be a file we DO hold on disk,
+    // pinned OUTSIDE us under a foreign CID that a background pass already discovered + recorded. Resolve it
+    // to the filename + repo so this row is NAMED and importable, not an anonymous CID. Cheap recorded read.
+    const foreign = foreignPinByCanonicalCid(p.cid);
+    if (foreign) {
+      return {
+        cid: p.cid,
+        file: path.basename(foreign.absPath),
+        path: foreign.absPath,
+        sizeBytes: foreign.size || sizes.get(p.cid) || 0,
+        pinType: p.type,
+        tracked: "import" as const, // still an import candidate — now named
+        unit: foreign.repoRoot ? path.basename(foreign.repoRoot) : null,
+        repoId: foreign.repoRoot ? repoIdFromPath(foreign.repoRoot) : null,
+        peers: 0,
+        seenAt: foreign.at,
+        analysis: [],
       };
     }
     return {

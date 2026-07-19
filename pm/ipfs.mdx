@@ -453,6 +453,37 @@ of the same Tracked rows, so it stays in lock-step with the table with no second
     the pin's `analysis[]` field plus resolved filename kind, path-less/untracked pins reading `na` (§5.1).
     The **File System** page shows **none**.
 
+---
+
+## 9. Untracked pins are scanned for ALL CID kinds and resolved to files (Foreign Pin Discovery)
+
+An **Untracked (pinned)** row (§1, §4) is not always a mystery CID. The pinset can hold files that were
+pinned **outside Large File Bridge** — a bare `ipfs add`, IPFS Desktop, a Pinata/web3.storage helper, a
+script — under a **CID we never compute** (a legacy CIDv0 `Qm…`, or a different DAG profile / chunker).
+A file that is genuinely pinned on this node must **not** be reported as un-pinned just because its pin
+wears a CID our app didn't create. This page is where that resilience is made visible.
+
+* **Scan for every kind.** Reconciliation matches a pin against our manifests **canonically** (§4, the
+  v0↔v1 encoding axis) **and**, in the background, discovers pins under **different DAG profiles** by
+  re-hashing the local bytes (the DAG-profile axis), plus pins protected via **MFS**. The full coverage
+  matrix — base, cid-version, raw-leaves, chunker, pin type — is
+  [pm/foreign_pin_discovery.mdx §2](./foreign_pin_discovery.mdx#2-scan-for-all-the-kinds--the-coverage-matrix-locked).
+* **Resolve back to the file.** A discovered or size-matched pin is **mapped back to its local path**, so
+  the row shows the **filename + repo** (an `import` row that names the file), not a bare anonymous CID
+  ([foreign_pin_discovery.mdx §4](./foreign_pin_discovery.mdx#4-reverse-resolution--from-a-pinned-cid-back-to-the-file-on-disk-locked)).
+  A pin we **cannot** reproduce (a non-Kubo chunker) still lists by CID and is **logged**, never hidden.
+* **Import records the ACTUAL CID.** Importing a discovered pin records the CID the bytes are **really**
+  pinned under (e.g. `QmTo4Htjkqv…`), never a duplicate re-add under our own profile (§4).
+* **Persisted so other computers learn it.** The discovery is written at three tiers — local state
+  always, plus the **personal** or **company** repo's `.lfbridge/` when the file lives in an owned repo —
+  so every one of the user's Large File Bridge computers (and teammates on a company repo) knows the file
+  is already pinned and under which CID
+  ([foreign_pin_discovery.mdx §5](./foreign_pin_discovery.mdx#5-persist-the-discovery-at-three-tiers-locked)).
+
+Discovery runs in the **background** (the 15-minute scan/pin pass), size-pruned and cached — never on this
+page's read — so opening the IPFS page stays cheap; it reads what a prior pass recorded. Engine in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/foreign-pin.service.ts` — `discoverForeignPin()` / `resolvePinToPath()`; surfaced by `ipfs-page.service.ts` — `computeIpfsPage()`.
+
 <!--
   This is the IPFS PAGE spec (the left-bar view of the LOCAL pinset), distinct from knowledge/ipfs.mdx
   (the IPFS knowledge base) and ipfs_share_files.mdx (the opt-in PUBLIC share feature). LOCKED: the
