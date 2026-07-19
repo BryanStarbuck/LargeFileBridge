@@ -155,6 +155,15 @@ function fileVerdict(v: EntityView): { state: Health; headline: string; sub?: st
     if (v.decision === "ignore") {
       return { state: "neutral", headline: "Set to Ignore — not pinned", sub: "This file is deliberately not bridged." };
     }
+    // Foreign-pin reality (foreign_pin_discovery.mdx §6): the bytes ARE pinned on this node, just not by us —
+    // never tell the user an actually-pinned file is un-pinned.
+    if (v.pinnedForeign) {
+      return {
+        state: "neutral",
+        headline: "Pinned on this computer — pinned outside Large File Bridge",
+        sub: "Add it to IPFS in Large File Bridge to keep it synced across your computers.",
+      };
+    }
     return {
       state: "warn",
       headline: "Not set to pin yet",

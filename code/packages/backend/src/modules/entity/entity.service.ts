@@ -36,6 +36,7 @@ import {
 } from "../store-model/units.service.js";
 import { log } from "../../shared/logging.js";
 import { resolveStateDir, ensureDir } from "../../config/state-dir.js";
+import { foreignPinByAbsPath } from "../ipfs/foreign-pin.service.js";
 
 export interface ResolvedEntity {
   abs: string;
@@ -161,6 +162,7 @@ export async function buildEntityView(
   let transfer: TransferStatus | null = null;
   let cid: string | null = null;
   let peers: string[] = [];
+  let pinnedForeign: boolean | undefined;
   if (match) {
     const rel = path.relative(match.repoPath, e.abs);
     repo = { repoId: match.repoId, name: match.repoName, relPath: rel };
@@ -171,6 +173,8 @@ export async function buildEntityView(
       peers = m?.pinned_by ?? [];
       cid = decision === "sync" ? (m?.cid ?? null) : null;
       transfer = transferFor(decision, cid, peers);
+      // Foreign-pin reality (foreign_pin_discovery.mdx §6) — cheap read of the recorded index, no hashing.
+      if (decision !== "sync") pinnedForeign = !!foreignPinByAbsPath(e.abs);
     }
   }
 
@@ -191,6 +195,7 @@ export async function buildEntityView(
     transfer,
     cid,
     peers,
+    pinnedForeign,
     compressible: comp.compressible,
     compressState: comp.compressState,
     rollup: e.kind === "dir" && wantRollup ? await buildDirRollup(e.abs, match) : null,

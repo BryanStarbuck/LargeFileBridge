@@ -593,6 +593,7 @@ file they *chose* to sync has actually **arrived and pinned here yet**. So the i
 | **Not set to sync** | grey **outline** pin ("white background") | `decision !== "sync"` | This file is **not** being synced over IPFS. **Click to add it.** |
 | **Synced here** | **blue filled** pin ("dark-blue fill") | `decision === "sync"` **and** `pinnedHere === true` | Chosen to sync **and** this computer's IPFS node actually holds the pin — in sync here. |
 | **Set to sync, not here yet** | **RED filled** pin ("red fill") | `decision === "sync"` **and** `pinnedHere === false` | You chose to sync it, but **this** computer does not have it pinned yet. The pin pass will **pull it down**; the red flags the transient out-of-sync gap ([pin_process.mdx §2](./pin_process.mdx)). |
+| **Pinned outside LFB** | **GREEN filled** pin | `decision !== "sync"` **and** `pinnedForeign === true` | The bytes are **already pinned on this node** under a foreign CID (a bare `ipfs add`, IPFS Desktop, another tool) — discovered by the background pass ([foreign_pin_discovery.mdx §6](./foreign_pin_discovery.mdx#6-surfacing--the-file-shows-as-pinned-in-the-web-app-locked)). Reality without intent. **Click to have Large File Bridge sync it too.** |
 
 * **`pinnedHere` is a LIVE, CANONICAL read of this node's pinset — never a per-file hash on the read path.**
   The blue↔red split is driven by `FileRow.pinnedHere`, computed by testing the file's recorded manifest CID
@@ -605,10 +606,16 @@ file they *chose* to sync has actually **arrived and pinned here yet**. So the i
   icon **never cries red** on missing information. Red is only ever a **verified** "decided but absent here."
 * **This directly fixes "the CLI says it's pinned but the web app shows it isn't"** — for any file the user
   has **opted into syncing**, the icon now reflects the node's real pinset, not just the stored decision.
-  (The remaining case — a file **pinned but never decided**, e.g. a legacy manual `ipfs add` under a foreign
-  CID profile — stays on the honest boundary: it is surfaced on the **IPFS page** as an importable untracked
-  pin, because recognizing it on the repo page would require hashing every undecided file. See
-  [knowledge/ipfs.mdx §5.1](../knowledge/ipfs.mdx) and [ipfs_ui.mdx](./ipfs_ui.mdx).)
+* **The undecided-but-pinned case is the GREEN state — LEARNED FROM A DEFECT (the 3rd fix in this saga).**
+  A file **pinned but never decided** (a legacy manual `ipfs add` under a foreign CID profile) is discovered
+  by the **background** foreign-pin pass — never a read-path hash, so the honest boundary holds — and the row
+  carries `pinnedForeign: true` ([foreign_pin_discovery.mdx §6](./foreign_pin_discovery.mdx#6-surfacing--the-file-shows-as-pinned-in-the-web-app-locked)).
+  History of the bug ("CLI says pinned, this page says not pinned", e.g. `charlie-kirk/videos/1965884012565766172.mp4`
+  pinned as `QmT5j43eo…`): fix 1 canonicalized CID encodings (v0↔v1); fix 2 built foreign-pin discovery, which
+  correctly **recorded** the pin in `foreign-pins.json` and shipped `pinnedForeign` on the row — but the pin
+  cell here still rendered only `decision × pinnedHere`, so the recorded reality was **never drawn** and an
+  undecided pinned file stayed grey. Fix 3 is this fourth state: **recorded must mean rendered**. Any new
+  surface that shows pin state must consume `pinnedForeign`, not just `pinnedHere`.
 * **Toggling writes the decision to the shared ledger, which travels to the owning Personal / Company
   storage.** Clicking the Pin icon — one file, or a bulk popup for hundreds — writes the IPFS axis to the
   repo's `decisions.yaml` ledger (§4.5.1). That ledger lives under the repo's tracking area and is committed
@@ -621,11 +628,12 @@ file they *chose* to sync has actually **arrived and pinned here yet**. So the i
 
 Computed in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
-`composeFileRows` (sets `pinnedHere` from the threaded canonical pinset), fed by
+`composeFileRows` (sets `pinnedHere` from the threaded canonical pinset, and `pinnedForeign` from the
+recorded foreign-pin index via `foreignPinByAbsPath`), fed by
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `repoDetailWithPins`
 (fetches `ipfs.canonicalPinnedSet()` once per detail response). Rendered by
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
-(the `pin` `LfbColumn`, three-state via `TaskIconCell` with a red `doneColor` override), through the shared
+(the `pin` `LfbColumn`, four-state via `TaskIconCell` with red/green `doneColor` overrides), through the shared
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon`.
 
 ---

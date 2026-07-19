@@ -307,8 +307,13 @@ export function OneRepoPage() {
         //     it yet (the pin pass will pull it). `pinnedHere===false` is a VERIFIED miss; `undefined` means
         //     unverified (IPFS down / not fetched) → we do NOT cry red, we show intent-blue.
         const missingHere = decided && f.pinnedHere === false;
-        const state: TaskStatus = decided ? "done" : "could";
-        const doneColor = missingHere ? "#dc2626" : undefined; // red only for a verified decided-but-absent file
+        // FOURTH state (foreign_pin_discovery.mdx §6): an UNDECIDED file whose bytes a background pass
+        // discovered are ALREADY pinned on this node under a foreign CID (a bare `ipfs add`, another tool).
+        // Reality without intent — rendered as a GREEN filled pin, distinct from intent-blue, so the app
+        // never shows "not pinned" for a file the node genuinely holds.
+        const foreignPinned = !decided && f.pinnedForeign === true;
+        const state: TaskStatus = decided || foreignPinned ? "done" : "could";
+        const doneColor = missingHere ? "#dc2626" : foreignPinned ? "#15803d" : undefined;
         return (
           <TaskIconCell
             kind="pin"
@@ -318,11 +323,13 @@ export function OneRepoPage() {
             title={
               blockedByNeverIpfs
                 ? "Add to IPFS is blocked by Never-IPFS"
-                : !decided
-                  ? "Not set to sync — click to add this file to IPFS"
-                  : missingHere
-                    ? "Set to sync, but this computer doesn't have it pinned yet — it will pull it on the next pin pass. Click to stop syncing."
-                    : "Synced (pinned) on this computer — click to stop syncing this file"
+                : foreignPinned
+                  ? "Pinned on this computer — this file is already pinned in IPFS (pinned outside Large File Bridge). Click to have Large File Bridge sync it too."
+                  : !decided
+                    ? "Not set to sync — click to add this file to IPFS"
+                    : missingHere
+                      ? "Set to sync, but this computer doesn't have it pinned yet — it will pull it on the next pin pass. Click to stop syncing."
+                      : "Synced (pinned) on this computer — click to stop syncing this file"
             }
             extraHover={fileSummary(f)}
             // Two-axis write preserving the git-ignore axis (decision_toggles.mdx §2).

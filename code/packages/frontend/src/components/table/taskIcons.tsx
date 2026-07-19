@@ -38,7 +38,7 @@ export const TASK_ICON: Record<TaskIconKind, TaskIconDef> = {
     fillDone: true,
     glyph: <Pin className={GLYPH} strokeWidth={2.25} />,
     explain:
-      "IPFS pin — sync this file across your own computers over IPFS. Blue filled = synced (pinned) on THIS computer; red filled = set to sync but this computer doesn't have it yet (it will pull it); grey outline = not set to sync (click to add).",
+      "IPFS pin — sync this file across your own computers over IPFS. Blue filled = synced (pinned) on THIS computer; red filled = set to sync but this computer doesn't have it yet (it will pull it); green filled = already pinned on this computer outside Large File Bridge (click to have Large File Bridge sync it too); grey outline = not set to sync (click to add).",
   },
   ignore: {
     label: "Ignore",

@@ -484,6 +484,17 @@ Discovery runs in the **background** (the 15-minute scan/pin pass), size-pruned 
 page's read — so opening the IPFS page stays cheap; it reads what a prior pass recorded. Engine in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/foreign-pin.service.ts` — `discoverForeignPin()` / `resolvePinToPath()`; surfaced by `ipfs-page.service.ts` — `computeIpfsPage()`.
 
+> **The "CLI says pinned, app says not pinned" bug took THREE fixes — recorded must mean RENDERED.**
+> Fix 1: canonical CID matching (the §4 note — v0↔v1 encodings of the same block). Fix 2: foreign-pin
+> discovery (§9 — different DAG profiles, recorded into `foreign-pins.json` + the row's `pinnedForeign`).
+> Fix 3 (learned from `charlie-kirk/videos/1965884012565766172.mp4`, pinned `QmT5j43eo…`): discovery was
+> **working and recorded**, but the **View one repo** pin cell rendered only `decision × pinnedHere` and
+> never read `pinnedForeign` — so the recorded reality was invisible and the file still showed un-pinned.
+> The repo row now renders a **green filled pin** for undecided-but-foreign-pinned files
+> ([one_repo.mdx §4.9](./one_repo.mdx#49-the-pin-icon-is-three-state--decision--live-pin-reality-locked)).
+> Rule for every future surface: if a view claims pin truth, it must consume **both** `pinnedHere` **and**
+> `pinnedForeign` — a recorded discovery that no view draws is still a bug.
+
 <!--
   This is the IPFS PAGE spec (the left-bar view of the LOCAL pinset), distinct from knowledge/ipfs.mdx
   (the IPFS knowledge base) and ipfs_share_files.mdx (the opt-in PUBLIC share feature). LOCKED: the

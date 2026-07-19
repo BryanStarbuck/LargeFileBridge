@@ -1206,6 +1206,9 @@ export interface EntityView {
   transfer: TransferStatus | null;
   cid: string | null;
   peers: string[];
+  // Foreign-pin REALITY, same axis as FileRow.pinnedForeign: an undecided file whose bytes a background
+  // pass discovered are already pinned on this node under a foreign CID (foreign_pin_discovery.mdx §6).
+  pinnedForeign?: boolean;
 
   // Compression heuristic (directory.mdx §3.3) — drives the Compression card / rollup.
   compressible: "video" | "image" | null;
