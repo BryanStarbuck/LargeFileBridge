@@ -103,6 +103,15 @@ export interface FileRow {
   decision: Decision;
   transfer: TransferStatus;
   peers: string[];
+  // Whether THIS computer's IPFS node actually holds this file's pin RIGHT NOW — a live, canonical read of
+  // the local pinset (knowledge/ipfs.mdx §5.1), not the manifest `pinned_by` cache. Drives the three-state
+  // pin icon (one_repo.mdx §4.9): decided + pinnedHere===true → BLUE (in sync here); decided +
+  // pinnedHere===false → RED (we chose to sync it, but this machine doesn't have it yet — the pin pass will
+  // pull it). ONLY meaningful for a decided (decision==="sync") file with a recorded CID; `undefined` means
+  // "not verified" (IPFS was down, the pinset wasn't fetched, or the file isn't decided) → the icon shows
+  // intent only and never cries red. Cheap: a set-membership test per row against the once-fetched pinset —
+  // NEVER a per-file hash on the read path (the honest boundary, knowledge/ipfs.mdx §5.1).
+  pinnedHere?: boolean;
   changedAt: string;
   // Compress task status (task_tabs.mdx §6) — from the extension verdict compressInfo(name): "could" =
   // a video/image that looks uncompressed, "done" = already compressed, "na" = not a compressible kind.

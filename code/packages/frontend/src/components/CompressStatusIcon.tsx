@@ -34,7 +34,7 @@ export function CompressStatusIcon({
       onActivate={onActivate}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
-      glyph={<Archive className="h-2.5 w-2.5" strokeWidth={2.5} />}
+      glyph={<Archive className="h-[15px] w-[15px]" strokeWidth={2.5} />}
     />
   );
 }

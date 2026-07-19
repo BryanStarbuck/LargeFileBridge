@@ -8,7 +8,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
 import { RefreshCw, Settings, ChevronLeft, Archive, ChevronRight, Search } from "lucide-react";
 import { toast } from "sonner";
-import type { FileRow, Decision, RepoDetail, PinCounts, PinNowResult } from "@lfb/shared";
+import type { FileRow, Decision, RepoDetail, PinCounts, PinNowResult, TaskStatus } from "@lfb/shared";
 import { formatBytes, viewerRouteForName, mediaKindForName, fileTypeForName } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
@@ -22,7 +22,7 @@ import { withModelReady } from "../../lib/transcribe.js";
 import { confirmModal } from "../../lib/modals.js";
 // The five leading icon control columns share ONE kit (tables.mdx icon-columns): Pin, Ignore, Transcribe,
 // AI description, OCR — unique-color box icons with icon-only headers + hover-region explanations.
-import { TaskIconCell, TaskIconHeader, boolStatus, TASK_ICON, type TaskIconKind } from "../../components/table/taskIcons.js";
+import { TaskIconCell, TaskIconHeader, TASK_ICON, type TaskIconKind } from "../../components/table/taskIcons.js";
 import { CompressStatusIcon } from "../../components/CompressStatusIcon.js";
 import { runDescribeFile } from "../../lib/describe.js";
 import { runOcrFile } from "../../lib/ocr.js";
@@ -296,28 +296,37 @@ export function OneRepoPage() {
       filterable: false,
       accessor: () => "",
       cell: (f) => {
-        const pinned = f.decision === "sync";
+        const decided = f.decision === "sync";
         // Never-IPFS (decisions.mdx §17): a flagged file may never be pinned, so the pin toggle is disabled.
         const blockedByNeverIpfs = !!f.neverIpfs;
+        // THREE STATES (one_repo.mdx §4.9). The state comes from the DECISION (intent) crossed with a LIVE,
+        // canonical read of this node's pinset (`f.pinnedHere`, knowledge/ipfs.mdx §5.1):
+        //   • not decided        → "could": grey OUTLINE pin (white/not-set) — click adds it to IPFS.
+        //   • decided & here      → "done" BLUE filled pin — synced (pinned) on THIS computer.
+        //   • decided & NOT here  → "done" RED filled pin — we chose to sync it, but this machine doesn't hold
+        //     it yet (the pin pass will pull it). `pinnedHere===false` is a VERIFIED miss; `undefined` means
+        //     unverified (IPFS down / not fetched) → we do NOT cry red, we show intent-blue.
+        const missingHere = decided && f.pinnedHere === false;
+        const state: TaskStatus = decided ? "done" : "could";
+        const doneColor = missingHere ? "#dc2626" : undefined; // red only for a verified decided-but-absent file
         return (
           <TaskIconCell
             kind="pin"
-            state={boolStatus(pinned)}
+            state={state}
+            doneColor={doneColor}
             disabled={ipfsDown || blockedByNeverIpfs}
             title={
-              // This icon is the Add-to-IPFS DECISION (intent), not a live read of the node's pinset. A
-              // file's bytes can already be pinned on this node under a different CID encoding/profile
-              // (knowledge/ipfs.mdx §5.1) while this reads "off"; the live pinset truth is the IPFS page.
-              // So the copy states the DECISION, and never asserts a pin reality we didn't verify here.
               blockedByNeverIpfs
                 ? "Add to IPFS is blocked by Never-IPFS"
-                : pinned
-                  ? "Set to sync over IPFS — click to stop syncing this file"
-                  : "Not set to sync — click to add this file to IPFS (see the IPFS page for the node's actual pins)"
+                : !decided
+                  ? "Not set to sync — click to add this file to IPFS"
+                  : missingHere
+                    ? "Set to sync, but this computer doesn't have it pinned yet — it will pull it on the next pin pass. Click to stop syncing."
+                    : "Synced (pinned) on this computer — click to stop syncing this file"
             }
             extraHover={fileSummary(f)}
             // Two-axis write preserving the git-ignore axis (decision_toggles.mdx §2).
-            onActivate={() => setAxes.mutate({ paths: [f.path], ipfs: !pinned, gitignore: !!f.gitignore })}
+            onActivate={() => setAxes.mutate({ paths: [f.path], ipfs: !decided, gitignore: !!f.gitignore })}
           />
         );
       },

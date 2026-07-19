@@ -664,10 +664,13 @@ still exists in the ledger and on hover — only the *columns* are retired.) The
 
 ### 4c.1 Narrow, minimal padding (LOCKED)
 
-The five columns are **as narrow as an icon** — a single 16×16 glyph with **minimal horizontal padding**
-(the DataTable `tight` column flag, which renders `px-1` instead of the normal cell padding). They never
-carry text in a cell; they never wrap. Typed on `LfbColumn.tight` in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts`.
+The five columns are **as narrow as an icon** — a single ~15px glyph with **minimal horizontal padding**
+(the DataTable `tight` column flag, which renders **`px-0.5`** — 2px each side — instead of the normal cell
+padding). The columns of bare icons sit **tight together**, not spread apart by whitespace (product owner,
+2026-07-19: "the spacing between those columns of just icons should be far more narrow"). They never carry
+text in a cell; they never wrap. Typed on `LfbColumn.tight` in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts`; the `px-0.5` is
+applied in `.../table/DataTable.tsx` (both the header and cell `tight` branch).
 
 ### 4c.2 The header is the same icon as the cells — an icon-only header (LOCKED)
 
@@ -696,29 +699,53 @@ icon** does two things:
 The per-kind explanation strings live beside the icon meta in the reusable task-icon kit
 (`TASK_ICON`), and hovering calls `setHoverInfo` on the docked region.
 
-### 4c.4 One shared visual grammar — StatusActionIcon (LOCKED)
+### 4c.4 One shared visual grammar — StatusActionIcon: JUST THE GLYPH, no rounded rectangle (LOCKED)
 
 All five icons render through **one shared component**, `StatusActionIcon`, so the whole block speaks one
-visual language across three states:
+visual language across three states.
+
+> **The state lives in the GLYPH, NOT in a box around it (product owner, 2026-07-19).** Earlier the "done"
+> state was a **filled rounded-rectangle box** with a white glyph and an inner white ring. The product owner
+> asked to **remove the rounded rectangle entirely** — "just the icon, like we had it correct for the Pin in
+> the V1 repo." So there is **no box, border, background, or ring** in any state. The color (and, for the
+> Pin, the fill) is applied to the **icon itself**:
 
 | State | Meaning | Render |
 | --- | --- | --- |
-| **done / on** | The thing is done (transcript exists, pinned, git-ignored, described, OCR'd). | **solid fill in the column's UNIQUE color** + a **white glyph** + a subtle **inner white ring** ("white outline"). |
-| **actionable-not-done** ("could" / off) | The action applies and could be taken; **clickable**. | **white background**, **light-gray outline**, a **dark-gray "pen" glyph**. Clicking it starts/sets that axis or task. |
-| **not-applicable** ("na") | The axis/task does not apply to this row. | **white background**, a **very-thin hairline outline**, a **faint-gray glyph**; **inert** (no click). |
+| **done / on** | The thing is done (transcript exists, pinned, git-ignored, described, OCR'd). | The **glyph drawn in the column's UNIQUE color**. The **Pin** is a **SOLID FILLED** glyph (the dark-blue / red filled pushpin the owner described); the other four are a **colored stroke** (filling their inner detail — the ignore slash, the caption bars — would blot it out). No box. |
+| **actionable-not-done** ("could" / off) | The action applies and could be taken; **clickable**. | The glyph as a **grey outline** (fill none) on the plain cell background — the "white / not-set" look. Clicking it starts/sets that axis or task. |
+| **not-applicable** ("na") | The axis/task does not apply to this row. | The glyph in a **faint grey**; **inert** (no click). |
 
-This is the same three-state box the decision toggles and the Transcribe/Describe/Compress status icons
-already use ([decision_toggles.mdx](./decision_toggles.mdx), [task_tabs.mdx §5–§6](./task_tabs.mdx)) — the
-icon control block is that grammar generalized into a fixed leading column set. Implemented in code:
+Implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` —
-`StatusActionIcon`; the per-kind header, cell, and explanation are the reusable kit
+`StatusActionIcon` (glyph-only; `cloneElement` injects the per-state `color`/`fill`, `fillWhenDone` is the
+Pin's solid-fill flag); the per-kind header, cell, and explanation are the reusable kit
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TASK_ICON`,
-`TaskIconHeader`, `TaskStatusCell`.
+`TaskIconHeader`, `TaskIconCell`.
+
+#### 4c.4a The Pin is THREE-STATE — grey / blue / RED (LOCKED)
+
+The **Pin** icon carries an extra state the other four do not, because a pin has two facts to convey at once:
+the user's **decision** (do I want this synced?) and the **reality on THIS computer** (is it actually pinned
+here right now?). See [one_repo.mdx §4.9](./one_repo.mdx) for the authoritative definition. In summary:
+
+| Pin state | Background / fill the owner described | Meaning |
+| --- | --- | --- |
+| **grey outline** | "white background" | **Not set to sync** — no IPFS decision. Click to add. |
+| **blue filled** | "dark-blue fill" | **Set to sync AND pinned on this computer** — in sync here. |
+| **red filled** | "red fill" | **Set to sync, but this computer does NOT have it pinned yet.** The pin pass will pull it; the red flags the transient out-of-sync gap. |
+
+The blue↔red split comes from `FileRow.pinnedHere` — a **live, canonical read of this node's pinset**
+(`ipfs.canonicalPinnedSet()`, [knowledge/ipfs.mdx §5.1](../knowledge/ipfs.mdx)), computed once per page load
+and tested per row with **no per-file hashing** (the honest boundary). When `pinnedHere` is `undefined`
+(IPFS down / pinset not fetched) the Pin falls back to intent-blue and **never shows a false red**. The other
+four icons keep the two-state done/could/na grammar above.
 
 ### 4c.5 Each "done" color is unique (LOCKED)
 
-So the five columns are distinguishable at a glance when their "done" fills sit side by side, **each uses a
-different color** for its solid done/on state:
+So the five columns are distinguishable at a glance when their "done" glyphs sit side by side, **each uses a
+different color** for its done/on state (the Pin's done color is blue by default, or **red** in its
+decided-but-not-here state — §4c.4a):
 
 | Column | "Done" color | Token |
 | --- | --- | --- |
@@ -799,14 +826,16 @@ Compress tab's own status column.
     **IPFS pins** table shows **Pin + the three analysis icons** (no Ignore — git-ignore is meaningless for
     a CID pin); the **File System page** shows none. Non-applicable columns are **omitted**, never rendered
     empty, and the shown columns keep the canonical order.
-    They are **narrow with minimal padding** (`tight`/`px-1`, §4c.1); each **header is that column's
+    They are **narrow with minimal padding** (`tight`/**`px-0.5`**, §4c.1); each **header is that column's
     icon**, not text, with the text label kept only for the Sort/Filter/Columns dropdowns (§4c.2). Hovering
     the header icon **or** any cell icon shows a `title` tooltip **and** fills the docked hover-info region
     with a plain-English explanation of that icon (§4c.3). All five render through the one **StatusActionIcon**
-    grammar — done/on = solid unique-color fill + white glyph + inner white ring; actionable = white bg +
-    gray outline + dark-gray pen glyph (clickable); n/a = white bg + hairline outline + faint glyph (inert)
-    (§4c.4). The five **done colors are unique** — Pin blue, Ignore orange, Transcribe **indigo** (changed
-    from blue so it no longer clashes with Pin), AI Description teal, OCR violet (§4c.5). The old
+    grammar — **JUST THE GLYPH, no rounded rectangle** (§4c.4): done/on = the glyph in its unique color (Pin =
+    solid FILLED, the other four = colored stroke); actionable = grey outline glyph (clickable); n/a = faint
+    grey glyph (inert). The **Pin is three-state** — grey outline (not set) / blue filled (synced here) / red
+    filled (set to sync but not on this computer yet) — §4c.4a. The five **done colors are unique** — Pin blue,
+    Ignore orange, Transcribe **indigo** (changed from blue so it no longer clashes with Pin), AI Description
+    teal, OCR violet (§4c.5). The old
     **Decision**, **Decided by**, **Decided**, and **Status** columns are **removed** from file tables; the
     two decision axes still exist as data and are set via the Pin/Ignore icons. **The File System page is
     the one exclusion.**
@@ -851,12 +880,15 @@ Applied in code:
   All tables are TanStack (charter).
   ICON CONTROL COLUMNS (§4c, LOCKED, site-wide): every FILE table EXCEPT the File System page leads with 5
   narrow icon columns after the select checkbox — Pin, Ignore, Transcribe, AI Description, OCR (exact
-  order). tight/px-1 (§4c.1). Header = the column's ICON not text (§4c.2, LfbColumn.headerCell); text label
-  kept only for Sort/Filter/Columns dropdowns. Hover header OR cell icon → native title tooltip + fills the
-  docked hover-info region (setHoverInfo) with plain-English "what this icon means" (§4c.3). ONE shared
-  StatusActionIcon grammar (§4c.4): done/on = solid UNIQUE-color fill + white glyph + inner white ring;
-  actionable("could"/off) = white bg + light-gray outline + dark-gray pen glyph (clickable); na = white bg +
-  hairline outline + faint glyph (inert). UNIQUE done colors (§4c.5): Pin blue --lfb-pin #1d4ed8 · Ignore
+  order). tight/px-0.5 — icons sit TIGHT together, no wide whitespace (§4c.1). Header = the column's ICON not
+  text (§4c.2, LfbColumn.headerCell); text label kept only for Sort/Filter/Columns dropdowns. Hover header OR
+  cell icon → native title tooltip + fills the docked hover-info region (setHoverInfo) with plain-English
+  "what this icon means" (§4c.3). ONE shared StatusActionIcon grammar (§4c.4) = JUST THE GLYPH, NO ROUNDED
+  RECTANGLE / box / ring (product owner 2026-07-19): done/on = glyph in its UNIQUE color (Pin = solid FILLED,
+  others = colored stroke); actionable("could"/off) = grey outline glyph (clickable); na = faint grey glyph
+  (inert). PIN IS THREE-STATE (§4c.4a, one_repo §4.9): grey outline = not set to sync · blue filled = synced
+  (pinned) on THIS computer · RED filled = set to sync but this computer lacks it (FileRow.pinnedHere, a live
+  canonical pinset read, undefined→intent-blue never false red). UNIQUE done colors (§4c.5): Pin blue --lfb-pin #1d4ed8 · Ignore
   orange --lfb-decision-on #c2410c · Transcribe INDIGO --lfb-transcribe-done #4338ca (CHANGED from blue so it
   no longer clashes with Pin now both show together) · AI Description teal --lfb-describe-done #0d9488 · OCR
   violet --lfb-ocr-done #7c3aed. REMOVED from file tables: Decision, Decided by, Decided, Status (transfer) —

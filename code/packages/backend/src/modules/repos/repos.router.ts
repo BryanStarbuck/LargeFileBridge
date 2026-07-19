@@ -59,6 +59,25 @@ async function missingPinnedSafe(repoRoot: string): Promise<MissingPinnedFile[]>
   }
 }
 
+/**
+ * Compute the One-repo detail with the LIVE pin reality folded in. Fetches this node's pinset ONCE (canonical,
+ * knowledge/ipfs.mdx §5.1) and threads it into composeFileRows so every decided row carries `pinnedHere` — the
+ * signal behind the three-state pin icon (one_repo.mdx §4.9: blue = decided & pinned here, red = decided but
+ * this machine doesn't hold it yet). Best-effort: a down/slow node yields an undefined pinset (never blocks the
+ * page), and the icon simply falls back to intent-only. This is the ONE choke point every RepoDetail-returning
+ * handler uses, so a pin toggle's response reflects reality the same way the initial GET does.
+ */
+async function repoDetailWithPins(folder: string): Promise<RepoDetail> {
+  const health = await ipfs.health();
+  let pinset: Set<string> | undefined;
+  try {
+    pinset = await ipfs.canonicalPinnedSet();
+  } catch (e) {
+    log.debug("repos", `pinset fetch skipped for ${folder} (node unreachable?): ${(e as Error).message}`);
+  }
+  return computeRepoDetail(folder, health, pinset);
+}
+
 /** Repo-relative paths that carry the sticky Never-IPFS flag (decisions.mdx §17) — the IPFS axis is rejected
  *  for these at the write path. The flag is path-scoped (own entry OR any ancestor dir), read via the SAME
  *  accessor the policy engine uses (config.service `effectiveFlags`). */
@@ -209,7 +228,7 @@ reposRouter.get("/:repoId", async (req, res) => {
     // Freshness self-heal on page load (>4h stale → background scan). Non-blocking + single-flight, so it
     // never delays the detail response and coalesces harmlessly if a scan is already running.
     maybeTriggerStaleScan(`One-repo detail loaded (${folder})`);
-    const detail: RepoDetail = computeRepoDetail(folder, await ipfs.health());
+    const detail: RepoDetail = await repoDetailWithPins(folder);
     // Augment with the peer-pinned-but-missing set so the §10.8.12 "pull them down" warning has data.
     // Best-effort at the router (computeRepoDetail is sync + shared): a down/slow IPFS never blocks the page.
     detail.missingPinned = await missingPinnedSafe(repoRootFor(folder));
@@ -225,7 +244,7 @@ reposRouter.get("/:repoId/files", async (req, res) => {
   const folder = folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   try {
-    const detail = computeRepoDetail(folder, await ipfs.health());
+    const detail = await repoDetailWithPins(folder);
     res.json({ ok: true, data: detail.files });
   } catch (e) {
     log.error("repos", `${folder}: files failed: ${(e as Error).message}`);
@@ -303,7 +322,7 @@ reposRouter.patch("/:repoId/files", async (req, res) => {
         `${folder}: decided ${paths.length} file(s) ipfs=${!!body.data.ipfs} gitignore=${!!body.data.gitignore} by ${decidedBy ?? "?"}`,
       );
     }
-    const detail: RepoDetail = computeRepoDetail(folder, await ipfs.health());
+    const detail: RepoDetail = await repoDetailWithPins(folder);
     detail.missingPinned = await missingPinnedSafe(repoRootFor(folder));
     res.json({ ok: true, data: detail });
   } catch (e) {
@@ -333,7 +352,7 @@ reposRouter.post("/:repoId/pull", async (req, res) => {
       "repos",
       `${folder}: pulled ${counts.pulled} file(s), ${counts.failed} failed (compress=${!!body.data.compress}) by ${by ?? "?"}`,
     );
-    const detail: RepoDetail = computeRepoDetail(folder, await ipfs.health());
+    const detail: RepoDetail = await repoDetailWithPins(folder);
     detail.missingPinned = await missingPinnedSafe(repoRoot);
     res.json({ ok: true, data: detail });
   } catch (e) {
@@ -358,7 +377,7 @@ reposRouter.post("/:repoId/pin", async (req, res) => {
     const repoName = getRepoConfig(folder).repo.name || folder;
     // Report what the run ACTUALLY did (counts), never a fixed "complete" string (pin_process.mdx §6).
     const counts = await track("pin", repoName, () => pinRepoFolder(folder, only, { manual: true }));
-    const detail = computeRepoDetail(folder, await ipfs.health());
+    const detail = await repoDetailWithPins(folder);
     res.json({ ok: true, data: { detail, counts } });
     void pinAll({ priorityDone: folder }).catch((e) =>
       log.error("repos", `full pass after manual pin of ${folder} failed: ${(e as Error).message}`),

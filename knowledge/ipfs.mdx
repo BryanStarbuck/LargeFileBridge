@@ -218,14 +218,25 @@ differed from ours — the "invisible v0 pins" class.
   — `addFile()` (and the `addOnlyHash` helper). Existing manifests that recorded a wrapper CID heal on the
   next content change (or when the wrapper pin is lost) rather than all at once.
 
+**What we DO surface cheaply — the three-state pin icon for DECIDED files (no hashing).** For a file the
+user has **decided to sync**, we already know its CID (it is in the manifest), so checking whether **this
+computer** actually holds the pin is an **O(1) set lookup** against the once-fetched canonical pinset — no
+hashing at all. The repo-page **Pin icon is therefore three-state** (one_repo.mdx §4.9): grey outline = not
+set to sync; **blue** = decided **and** pinned here (verified against the live pinset); **red** = decided but
+this machine does **not** hold it yet (the pin pass will pull it). `pinnedHere` carries this per row, and
+when the pinset can't be read it is `undefined` → the icon shows intent-blue and **never a false red**. This
+is what fixes the "CLI says pinned, app says off" complaint **for any file the user opted into syncing**.
+
 **The honest boundary (what we still do NOT do, on purpose).** We do **not** auto-hash every *undecided*
 file on scan/page-load to discover foreign-profile pins — that would put full-file hashing on the read path
-this app is careful to keep cheap. Consequence: a file whose bytes are pinned only under a foreign profile
-and which the user has **not** decided to sync will still read as "not set to sync" on the repo page (its
-pin icon is the **decision/intent** toggle, not a live pinset read — see one_repo.mdx). The node's actual
-pins are surfaced authoritatively on the **IPFS page** (ipfs.mdx §4), where such a pin appears as
-**Untracked (pinned)** and can be imported. This is why the repo-row pin tooltip states the *decision*
-("set to sync" / "not set to sync") and never asserts a pin reality it did not verify.
+this app is careful to keep cheap, and an **undecided** file has **no recorded CID** to test cheaply.
+Consequence: a file whose bytes are pinned only under a foreign profile **and which the user has not decided
+to sync** (e.g. a legacy manual `ipfs add` producing a `Qm…` CID we never computed) still reads as "not set
+to sync" (grey) on the repo page — the three-state icon only turns blue/red once there **is** a decision and
+a recorded CID. The node's actual pins are surfaced authoritatively on the **IPFS page** (ipfs.mdx §4),
+where such a pin appears as **Untracked (pinned)** and can be **imported** (or adopted, without a duplicate
+add, the moment the file is decided — the foreign-profile-adoption step above). This keeps the boundary
+honest: we assert a pin reality on the repo row **only** where verifying it costs a set lookup, never a hash.
 
 ---
 

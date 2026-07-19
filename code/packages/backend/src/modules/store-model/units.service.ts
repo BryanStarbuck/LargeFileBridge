@@ -31,6 +31,7 @@ import { resolveRepoOwner, checkIgnoreVerbose, type IgnoreRule } from "../git/gi
 // called from ownerForRepoConfig, never at module-eval), which is safe under NodeNext ESM — same pattern the
 // storage.service <-> storage-settings.service pair documents.
 import { getStorageRow } from "../storage/storage.service.js";
+import { canonicalCid } from "../ipfs/ipfs.service.js";
 import { analysisOutputs } from "../storage/tracking.service.js";
 import { resolveStorageType } from "../storage/storage-type.service.js";
 import { readYaml, updateYaml, writeYaml } from "../../shared/store/yaml-store.js";
@@ -246,11 +247,15 @@ export function computeRepoRow(folder: string): RepoRow {
   };
 }
 
-export function computeRepoDetail(folder: string, ipfs: IpfsHealth): RepoDetail {
+// `pinset` (optional) is THIS node's live pinset as CANONICAL CIDv1-base32 strings (ipfs.canonicalPinnedSet()),
+// fetched ONCE by the router and threaded through so each decided row can be marked pinnedHere without any
+// per-file hashing (one_repo.mdx §4.9 / knowledge/ipfs.mdx §5.1). Omitted (undefined) when IPFS is down or the
+// caller didn't fetch it → rows carry no pinnedHere and the pin icon falls back to intent-only (no red).
+export function computeRepoDetail(folder: string, ipfs: IpfsHealth, pinset?: Set<string>): RepoDetail {
   const cfg = getRepoConfig(folder);
   const status = getRepoStatus(folder);
   const manifest = getRepoManifest(folder);
-  const files = composeFileRows(folder, cfg, status, manifest);
+  const files = composeFileRows(folder, cfg, status, manifest, pinset);
   const counts = countDecisions(files);
   return {
     repoId: repoIdFromPath(cfg.repo.path || folder),
@@ -276,6 +281,7 @@ function composeFileRows(
   cfg: RepoUnitConfig,
   status: UnitStatus,
   manifest: Manifest,
+  pinset?: Set<string>,
 ): FileRow[] {
   const manifestByPath = new Map(manifest.files.map((f) => [f.path, f]));
   // Fold the shared decision ledger ONCE per repo for provenance (decisions.mdx §10; one_repo.mdx §4.8):
@@ -323,6 +329,12 @@ function composeFileRows(
       decision,
       transfer: transferFor(decision, m?.cid ?? null, peers),
       peers,
+      // Live pin reality for the three-state icon (one_repo.mdx §4.9). Only meaningful for a decided file
+      // that has a recorded CID; the pinset is CANONICAL so a `Qm…`-encoded pin of a `bafy…` manifest CID
+      // (same block) still counts (knowledge/ipfs.mdx §5.1). Undefined when we have no pinset (IPFS down /
+      // not fetched) or no CID → icon shows intent only, never a false red. NO per-file hashing here.
+      pinnedHere:
+        pinset && decision === "sync" && m?.cid ? pinset.has(canonicalCid(m.cid)) : undefined,
       changedAt: cand.modified_at ?? status.last_scan_at ?? new Date(0).toISOString(),
       decidedBy: prov?.decidedBy ?? null,
       decidedAt: prov?.decidedAt ?? null,

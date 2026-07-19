@@ -36,7 +36,7 @@ export function TranscribeStatusIcon({
       onActivate={onActivate}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
-      glyph={<Captions className="h-2.5 w-2.5" strokeWidth={2.5} />}
+      glyph={<Captions className="h-[15px] w-[15px]" strokeWidth={2.5} />}
     />
   );
 }

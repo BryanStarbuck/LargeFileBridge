@@ -580,6 +580,54 @@ The per-row `decidedBy` / `decidedAt` (joined from the folded shared ledger) tha
 The **Decided by** facet itself is a **new** surface (the rail has no provenance facet today); it is to be implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (a `decidedBy` `LfbColumn` facet over `FileRow.decidedBy`, rendered on the shared facet rail in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`).
 
+### 4.9 The Pin icon is THREE-STATE — decision × live pin reality (LOCKED)
+
+The **Pin** icon (col 1) conveys **two facts at once**: the user's **decision** (do I want this file synced
+over IPFS?) and the **reality on THIS computer right now** (is it actually pinned here?). A single on/off
+toggle can only show intent; but a user syncing across three machines needs to see, per machine, whether a
+file they *chose* to sync has actually **arrived and pinned here yet**. So the icon has **three states**
+(the visual grammar — bare glyph, no rounded rectangle — is [tables.mdx §4c.4/§4c.4a](./tables.mdx)):
+
+| State | Glyph | Condition | What it tells the user |
+| --- | --- | --- | --- |
+| **Not set to sync** | grey **outline** pin ("white background") | `decision !== "sync"` | This file is **not** being synced over IPFS. **Click to add it.** |
+| **Synced here** | **blue filled** pin ("dark-blue fill") | `decision === "sync"` **and** `pinnedHere === true` | Chosen to sync **and** this computer's IPFS node actually holds the pin — in sync here. |
+| **Set to sync, not here yet** | **RED filled** pin ("red fill") | `decision === "sync"` **and** `pinnedHere === false` | You chose to sync it, but **this** computer does not have it pinned yet. The pin pass will **pull it down**; the red flags the transient out-of-sync gap ([pin_process.mdx §2](./pin_process.mdx)). |
+
+* **`pinnedHere` is a LIVE, CANONICAL read of this node's pinset — never a per-file hash on the read path.**
+  The blue↔red split is driven by `FileRow.pinnedHere`, computed by testing the file's recorded manifest CID
+  against `ipfs.canonicalPinnedSet()` (this node's `ipfs pin ls`, canonicalized to CIDv1 base32 so a `Qm…`
+  pin of a `bafy…` CID for the **same block** still counts — [knowledge/ipfs.mdx §5.1](../knowledge/ipfs.mdx)).
+  The pinset is fetched **once per page load** and each row is an O(1) set lookup — **no full-file hashing**,
+  honoring the read-path cost boundary this app keeps ([knowledge/ipfs.mdx §5.1 honest boundary](../knowledge/ipfs.mdx)).
+* **`undefined` → intent-blue, NEVER a false red.** When the pinset can't be read (IPFS daemon down, or the
+  caller didn't fetch it) `pinnedHere` is `undefined`; a decided file then shows **blue** (intent) and the
+  icon **never cries red** on missing information. Red is only ever a **verified** "decided but absent here."
+* **This directly fixes "the CLI says it's pinned but the web app shows it isn't"** — for any file the user
+  has **opted into syncing**, the icon now reflects the node's real pinset, not just the stored decision.
+  (The remaining case — a file **pinned but never decided**, e.g. a legacy manual `ipfs add` under a foreign
+  CID profile — stays on the honest boundary: it is surfaced on the **IPFS page** as an importable untracked
+  pin, because recognizing it on the repo page would require hashing every undecided file. See
+  [knowledge/ipfs.mdx §5.1](../knowledge/ipfs.mdx) and [ipfs_ui.mdx](./ipfs_ui.mdx).)
+* **Toggling writes the decision to the shared ledger, which travels to the owning Personal / Company
+  storage.** Clicking the Pin icon — one file, or a bulk popup for hundreds — writes the IPFS axis to the
+  repo's `decisions.yaml` ledger (§4.5.1). That ledger lives under the repo's tracking area and is committed
+  and union-merged by the git backbone, so a decision made on one computer travels to the user's other
+  computers; when the repo is owned by a **company** storage with a sync repo, it travels to the whole team
+  ([decisions.mdx §3](./decisions.mdx), [repo_company_mapping.mdx](./repo_company_mapping.mdx),
+  [repo_owner_propagation.mdx](./repo_owner_propagation.mdx)). Turning the axis **off** (grey) is the same
+  path in reverse. On each other computer the pass then reconciles reality → the icon there shows **red**
+  until that machine pulls the bytes, then **blue**.
+
+Computed in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
+`composeFileRows` (sets `pinnedHere` from the threaded canonical pinset), fed by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `repoDetailWithPins`
+(fetches `ipfs.canonicalPinnedSet()` once per detail response). Rendered by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
+(the `pin` `LfbColumn`, three-state via `TaskIconCell` with a red `doneColor` override), through the shared
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon`.
+
 ---
 
 ## 5. Empty & loading states

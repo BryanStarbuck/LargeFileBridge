@@ -680,7 +680,7 @@ export function DataTable<T>({
                   {hg.headers.map((h) => {
                     const meta = h.column.columnDef.meta as { align?: string; tight?: boolean } | undefined;
                     const align = meta?.align;
-                    const padX = meta?.tight ? "px-1" : "px-2"; // narrow icon columns (tables.mdx icon-columns)
+                    const padX = meta?.tight ? "px-0.5" : "px-2"; // very-narrow icon columns (tables.mdx icon-columns)
                     // Header-click sort (repos.mdx §3.1 / tables.mdx §3.3): clicking a header promotes
                     // that column to PRIMARY (1st), cascade-demoting the others; clicking the same header
                     // (already primary) toggles its asc ↔ desc. Same `sorting` state as the Sort dropdown
@@ -741,7 +741,7 @@ export function DataTable<T>({
                     {row.getVisibleCells().map((cell) => {
                       const cmeta = cell.column.columnDef.meta as { align?: string; tight?: boolean } | undefined;
                       const align = cmeta?.align;
-                      const cellPadX = cmeta?.tight ? "px-1" : "px-2";
+                      const cellPadX = cmeta?.tight ? "px-0.5" : "px-2"; // very-narrow icon columns (tables.mdx)
                       return (
                         <td
                           key={cell.id}

@@ -17,23 +17,28 @@ export type TaskIconKind = "pin" | "ignore" | "transcribe" | "describe" | "ocr";
 interface TaskIconDef {
   /** Readable column name — used by the Sort/Filter/Columns dropdowns and as the icon's aria-label. */
   label: string;
-  /** The solid fill for the "done"/"on" state — unique per kind. */
+  /** The unique color for the "done"/"on" state (colored glyph — NO box; product owner 2026-07-19). */
   doneColor: string;
-  /** The glyph, drawn small to sit inside the icon box. */
+  /** Pin only: draw the "done" glyph as a SOLID FILL (the dark-blue / red filled pin the owner described).
+   *  The other kinds keep a colored stroke so their inner detail stays legible. */
+  fillDone?: boolean;
+  /** The glyph, drawn as a bare ~15px icon (no surrounding rounded rectangle). */
   glyph: ReactNode;
   /** The plain-English explanation shown in the hover-info region on hover (header or cell). */
   explain: string;
 }
 
-const GLYPH = "h-2.5 w-2.5";
+// Bare glyph size — larger than the old 10px because there is no longer a 16px box around it to fill.
+const GLYPH = "h-[15px] w-[15px]";
 
 export const TASK_ICON: Record<TaskIconKind, TaskIconDef> = {
   pin: {
     label: "Pin",
     doneColor: "var(--lfb-pin, #1e40af)",
-    glyph: <Pin className={GLYPH} strokeWidth={2.5} />,
+    fillDone: true,
+    glyph: <Pin className={GLYPH} strokeWidth={2.25} />,
     explain:
-      "IPFS pin — keep this file pinned across your own computers over IPFS. Filled = pinned; outline = not pinned (click to pin).",
+      "IPFS pin — sync this file across your own computers over IPFS. Blue filled = synced (pinned) on THIS computer; red filled = set to sync but this computer doesn't have it yet (it will pull it); grey outline = not set to sync (click to add).",
   },
   ignore: {
     label: "Ignore",
@@ -117,6 +122,7 @@ export function TaskIconCell({
   disabled,
   title,
   extraHover,
+  doneColor,
 }: {
   kind: TaskIconKind;
   state: TaskStatus;
@@ -126,13 +132,17 @@ export function TaskIconCell({
   title?: string;
   /** Extra per-row line appended under the explanation in the hover-info region. */
   extraHover?: string;
+  /** Override the "done" color for this one cell — the three-state Pin passes red when a file is set to
+   *  sync but not yet on this computer (one_repo.mdx §4.9). Defaults to the kind's own unique color. */
+  doneColor?: string;
 }) {
   const def = TASK_ICON[kind];
   const hover = extraHover ? `${def.explain}\n${extraHover}` : def.explain;
   return (
     <StatusActionIcon
       state={state}
-      doneColor={def.doneColor}
+      doneColor={doneColor ?? def.doneColor}
+      fillWhenDone={def.fillDone}
       title={title ?? def.explain}
       glyph={def.glyph}
       onActivate={onActivate}

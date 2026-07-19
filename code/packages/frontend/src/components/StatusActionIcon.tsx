@@ -1,30 +1,34 @@
 // The shared status/action icon (tables.mdx icon-columns / task_tabs.mdx §5/§6). It is the ONE visual
 // grammar every icon control column uses (Pin, Ignore, Transcribe, AI description, OCR), so the five read
 // as one system. A finished action reads in its own UNIQUE "done" color (blue pin, orange ignore, indigo
-// transcript, teal description, violet OCR). THREE states:
-//   • done — the action is complete / the toggle is ON → solid `doneColor` fill, WHITE glyph, and a subtle
-//            inner white ring (the "white outline" the product owner asked for on a filled icon).
-//   • could — an actionable candidate / the toggle is OFF-but-settable → WHITE background, a LIGHT-GREY
-//             outline and a darker-grey "pen" glyph. Clicking it performs the action (queue / toggle on).
-//   • na   — the task does not apply to this file → white fill, a very-thin very-light-grey edge, a faint
-//            grey glyph; inert.
-// The product owner's rule: the UNIQUE color appears ONLY when done — a not-done icon is uniformly grey
-// (light-grey outline + pen glyph on white), and the GLYPH SHAPE + the icon-header tell the columns apart.
+// transcript, teal description, violet OCR).
+//
+// JUST THE ICON — NO ROUNDED RECTANGLE (product owner, 2026-07-19). Earlier this rendered a filled/bordered
+// rounded-rectangle BOX with the glyph inside; the owner asked for the bare glyph like the V1 pin. So the
+// state now lives in the GLYPH itself — its color, and (for the Pin) whether it is filled — with no box,
+// border, background, or ring around it. THREE states:
+//   • done — complete / toggle ON → the glyph drawn in its unique `doneColor`. Pin (fillWhenDone) is a SOLID
+//            filled glyph; the others are a colored stroke (filling their inner detail would blot it out).
+//   • could — an actionable candidate / toggle OFF-but-settable → a light-grey OUTLINE glyph (fill none).
+//            Clicking it performs the action (queue / toggle on).
+//   • na   — the task does not apply to this file → a faint-grey glyph, inert.
+// The GLYPH SHAPE + the icon-header tell the columns apart; the unique color appears only when done.
 // It is a CONTROL CELL: it stops click propagation and never navigates the row.
-import type { ReactNode } from "react";
+import { cloneElement, isValidElement, type ReactNode } from "react";
 import type { TaskStatus } from "@lfb/shared";
 
-const COULD_EDGE = "#d1d5db"; // light-grey outline for an actionable not-done icon
-const COULD_GLYPH = "#4b5563"; // the darker-grey "pen" glyph for an actionable not-done icon
-const NA_EDGE = "#e5e7eb"; // very-thin very-light-grey hairline (inert)
-const NA_GLYPH = "#d1d5db";
-const DONE_RING = "inset 0 0 0 1.5px rgba(255,255,255,0.9)"; // the white outline on a filled icon
+const COULD_GLYPH = "#6b7280"; // grey outline for an actionable not-done icon (the "white / not-set" look)
+const NA_GLYPH = "#d1d5db"; // faint grey, inert
 
 export interface StatusActionIconProps {
   state: TaskStatus;
   glyph: ReactNode;
-  /** The solid fill for the "done" state (blue for transcribe, green for compress). */
+  /** The unique color for the "done" state (blue pin, orange ignore, …). For the three-state Pin the caller
+   *  overrides this per-row (blue = pinned here, red = decided but not on this machine — one_repo.mdx §4.9). */
   doneColor: string;
+  /** Pin only: draw the "done" glyph as a SOLID FILL (the dark-blue / red filled pin the owner described).
+   *  The other kinds keep a colored stroke so their inner detail (slash, captions bars, …) stays legible. */
+  fillWhenDone?: boolean;
   title: string;
   /** Fired on click for the actionable ("could") and completed ("done") states; "na" is inert. */
   onActivate?: () => void;
@@ -38,6 +42,7 @@ export function StatusActionIcon({
   state,
   glyph,
   doneColor,
+  fillWhenDone = false,
   title,
   onActivate,
   disabled = false,
@@ -45,14 +50,14 @@ export function StatusActionIcon({
   onMouseEnter,
   onMouseLeave,
 }: StatusActionIconProps) {
-  const box: React.CSSProperties =
-    state === "done"
-      ? { background: doneColor, border: "none", color: "#fff", boxShadow: DONE_RING }
-      : state === "could"
-        ? { background: "#fff", border: `1px solid ${COULD_EDGE}`, color: COULD_GLYPH }
-        : { background: "#fff", border: `1px solid ${NA_EDGE}`, color: NA_GLYPH };
-
   const inert = state === "na" || disabled;
+  const color = state === "done" ? doneColor : state === "could" ? COULD_GLYPH : NA_GLYPH;
+  const fill = state === "done" && fillWhenDone ? doneColor : "none";
+  // Color the glyph in place — no surrounding box. cloneElement injects the per-state stroke color and fill
+  // onto the lucide element the caller passed (its className still sets the size).
+  const painted = isValidElement(glyph)
+    ? cloneElement(glyph as React.ReactElement<{ color?: string; fill?: string }>, { color, fill })
+    : glyph;
 
   return (
     <span
@@ -69,10 +74,10 @@ export function StatusActionIcon({
         onClick={() => {
           if (!inert) onActivate?.();
         }}
-        style={{ width: size, height: size, ...box }}
-        className={`inline-flex items-center justify-center rounded-[3px] ${inert ? "cursor-default" : "cursor-pointer"}`}
+        style={{ width: size, height: size }}
+        className={`inline-flex items-center justify-center bg-transparent border-0 p-0 ${inert ? "cursor-default" : "cursor-pointer"}`}
       >
-        {glyph}
+        {painted}
       </button>
     </span>
   );
