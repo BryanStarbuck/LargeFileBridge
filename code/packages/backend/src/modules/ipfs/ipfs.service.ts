@@ -78,7 +78,12 @@ export async function addFile(absPath: string): Promise<string> {
     // fs.openAsBlob streams the file rather than buffering it whole into memory.
     const blob = await (fs as unknown as { openAsBlob(p: string): Promise<Blob> }).openAsBlob(absPath);
     const form = new FormData();
-    form.append("file", blob, absPath);
+    // Use the BASENAME, never the absolute path. Kubo's HTTP `add` treats a slashed multipart filename as a
+    // directory tree and WRAPS the file in one node per path segment, returning the WRAPPER-dir CID (which
+    // also embeds this machine's home path — non-portable across computers, and not `cat`-able as a file).
+    // A bare basename adds the single file and returns the FILE's own CID, exactly like the CLI
+    // (knowledge/ipfs.mdx §5.1). This is the CID that must be pinned, recorded, and fetched.
+    form.append("file", blob, path.basename(absPath));
     // `add` uploads the whole file; its duration scales with file size (a 1.4 GB video far exceeds the
     // 15s control-call cap). Disable the wall-clock timeout (timeoutMs: 0) so large media can finish —
     // the pin limiter bounds concurrency, so this can't stampede the daemon.
@@ -144,15 +149,133 @@ export async function pinRm(cid: string): Promise<void> {
   }
 }
 
+// ── CID canonicalization — the SAME block can wear different CID strings (knowledge/ipfs.mdx §5.1) ──
+// `ipfs pin ls` is base-SENSITIVE: a block pinned as CIDv0 (`Qm…`) is reported "not pinned" when the same
+// block is queried as its CIDv1 form (`bafy…`) — verified against a live daemon. So a RAW CID-string
+// compare against the pinset is a real defect: it goes BLIND to a pin merely because of its base encoding
+// (the "1255 invisible v0 pins" class). Every comparison of a CID against the pinset MUST canonicalize both
+// sides to ONE form (CIDv1 base32) first. This bridges the ENCODING axis (v0↔v1 of the SAME multihash). It
+// canNOT bridge the DAG-PROFILE axis (`--cid-version`/`--raw-leaves` change the multihash itself) — for that
+// the bytes must be re-hashed (see contentPinnedCid). Dependency-free so it stays fully local (charter).
+const B58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+const B32_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567"; // RFC 4648 lower, no padding (multibase 'b')
+
+function base58btcDecode(s: string): Uint8Array {
+  const bytes: number[] = [0];
+  for (const ch of s) {
+    let carry = B58_ALPHABET.indexOf(ch);
+    if (carry < 0) throw new Error(`bad base58 char: ${ch}`);
+    for (let j = 0; j < bytes.length; j++) {
+      carry += bytes[j]! * 58;
+      bytes[j] = carry & 0xff;
+      carry >>= 8;
+    }
+    while (carry) {
+      bytes.push(carry & 0xff);
+      carry >>= 8;
+    }
+  }
+  for (let k = 0; k < s.length && s[k] === "1"; k++) bytes.push(0); // leading-zero bytes
+  return Uint8Array.from(bytes.reverse());
+}
+
+function base32Encode(data: Uint8Array): string {
+  let bits = 0;
+  let value = 0;
+  let out = "";
+  for (const b of data) {
+    value = (value << 8) | b;
+    bits += 8;
+    while (bits >= 5) {
+      out += B32_ALPHABET[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) out += B32_ALPHABET[(value << (5 - bits)) & 31];
+  return out;
+}
+
+/**
+ * Normalize any CID to its canonical CIDv1 base32 string so two encodings of the SAME block compare equal
+ * (knowledge/ipfs.mdx §5.1). A CIDv0 is always base58btc(multihash) with an implied dag-pb (0x70) codec;
+ * we re-wrap it as v1 (0x01) + dag-pb (0x70) + multihash and base32-encode with the multibase 'b' prefix.
+ * Anything already CIDv1 (`bafy…`/`bafk…`) or unrecognized is returned unchanged (best-effort — never throws).
+ */
+export function canonicalCid(cid: string): string {
+  try {
+    if (!cid.startsWith("Qm")) return cid; // already CIDv1 (or a form we leave as-is)
+    const mh = base58btcDecode(cid);
+    const bytes = new Uint8Array(mh.length + 2);
+    bytes[0] = 0x01; // CIDv1
+    bytes[1] = 0x70; // dag-pb (a CIDv0 is always dag-pb)
+    bytes.set(mh, 2);
+    return "b" + base32Encode(bytes);
+  } catch (e) {
+    log.debug("ipfs", `canonicalCid passthrough for ${cid}: ${(e as Error).message}`);
+    return cid;
+  }
+}
+
+/** The local pinset as a Set of CANONICAL (CIDv1 base32) CIDs — the base-robust membership test the raw
+ *  `new Set(pins.map(p => p.cid))` was silently getting wrong (knowledge/ipfs.mdx §5.1). Best-effort. */
+export async function canonicalPinnedSet(): Promise<Set<string>> {
+  return new Set((await listPins()).map((p) => canonicalCid(p.cid)));
+}
+
 export async function isPinned(cid: string): Promise<boolean> {
   try {
-    const res = await rpc("pin/ls", { args: [cid], query: { type: "recursive" } });
-    const json = (await res.json()) as { Keys?: Record<string, unknown> };
-    return Boolean(json.Keys && json.Keys[cid]);
+    // pin/ls is base-SENSITIVE, so a single-CID query can miss a same-block pin recorded in another base.
+    // Compare CANONICALLY against the roots listing instead (knowledge/ipfs.mdx §5.1). Roots-only listing
+    // is the cheap control-call the reconcile already relies on.
+    const target = canonicalCid(cid);
+    return (await listPins()).some((p) => canonicalCid(p.cid) === target);
   } catch (e) {
     log.debug("ipfs", `isPinned check failed for ${cid}: ${(e as Error).message}`);
     return false;
   }
+}
+
+/** Compute a file's CID WITHOUT storing or pinning it (`add --only-hash`), under one add profile. Streams the
+ *  bytes to the daemon over loopback so it can hash them; nothing is written to the blockstore, nothing is
+ *  pinned, no network. `query` selects the profile (e.g. { "cid-version": "1" }). */
+async function addOnlyHash(absPath: string, query: Record<string, string>): Promise<string> {
+  const blob = await (fs as unknown as { openAsBlob(p: string): Promise<Blob> }).openAsBlob(absPath);
+  const form = new FormData();
+  // Basename, NOT the absolute path — a slashed filename makes Kubo wrap the file in a directory tree and
+  // return the wrapper CID instead of the file's own CID (see addFile / knowledge/ipfs.mdx §5.1).
+  form.append("file", blob, path.basename(absPath));
+  const res = await rpc("add", { query: { "only-hash": "true", ...query }, body: form, timeoutMs: 0 });
+  const lines = (await res.text()).trim().split("\n").filter(Boolean);
+  const last = JSON.parse(lines[lines.length - 1]!) as { Hash?: string };
+  if (!last.Hash) throw new Error("ipfs add --only-hash returned no CID");
+  return last.Hash;
+}
+
+/**
+ * Return the CID under which THIS FILE's exact bytes are ALREADY pinned on this node, or null — bridging the
+ * DAG-PROFILE axis that canonicalCid cannot (knowledge/ipfs.mdx §5.1). The same bytes hash to DIFFERENT
+ * multihashes under different add profiles, so a CID-string/pinset compare can never recognize a foreign-
+ * profile pin; only re-hashing can. We probe the two profiles IPFS realistically produces:
+ *   • our app standard — `--cid-version=1` (Kubo defaults raw-leaves=true) → `bafy…` (raw leaves);
+ *   • a legacy / manual `ipfs add` with no flags → CIDv0 dag-pb, no raw leaves → `Qm…`.
+ * For a MULTI-BLOCK file these are genuinely different blocks (parent nodes embed child CIDs of that version),
+ * which is exactly why the same movie can read "pinned" on the CLI yet "not pinned" to a naive check.
+ *
+ * EXPENSIVE: a full byte read+hash per profile (streamed over loopback). Callers MUST bound how often they
+ * invoke it — NEVER on a bulk scan/read hot path (that is why the scanner keeps its cheap manifest-CID
+ * shortcut and this is a targeted, on-demand probe).
+ */
+export async function contentPinnedCid(absPath: string): Promise<string | null> {
+  const pinned = await canonicalPinnedSet();
+  for (const query of [{ "cid-version": "1" }, { "cid-version": "0" }]) {
+    try {
+      const cid = await addOnlyHash(absPath, query);
+      if (pinned.has(canonicalCid(cid))) return cid;
+    } catch (e) {
+      log.debug("ipfs", `contentPinnedCid probe (${JSON.stringify(query)}) failed for ${absPath}: ${(e as Error).message}`);
+    }
+  }
+  return null;
 }
 
 // ── Reading the pinset (ipfs.mdx §6 — the scheduleTask's metadata-only read) ─

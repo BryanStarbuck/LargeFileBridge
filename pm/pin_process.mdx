@@ -165,6 +165,18 @@ For **every** known unit the pass visits, it always **reconciles** (no opt-in re
    were lost, and surface pinned-but-untracked CIDs as **import** candidates
    ([storage_local.mdx §9.5](./storage_local.mdx#95-the-ipfs-pinset-is-the-source-of-truth--pinned_by-is-a-stale-cache),
    [scan.mdx §2.1](./scan.mdx#21-the-15-minute-scheduletask-reads-the-ipfs-pinset-import-already-pinned)).
+   **The pinset compare is CANONICAL, and re-adds adopt an existing foreign-profile pin instead of
+   duplicating it.** One file's bytes can be pinned under several different CID strings (CIDv0 `Qm…` vs our
+   CIDv1 `bafy…`, and different `--raw-leaves`/`--cid-version` DAG profiles), and `ipfs pin ls` is
+   base-sensitive — so a raw string compare goes blind to a pin whose encoding differs from ours (the "CLI
+   says pinned, app says off" defect). Every pinset membership test canonicalizes to CIDv1 base32 first, and
+   when an already-tracked file looks unpinned the pass re-hashes it once to see whether the bytes are
+   already pinned under another profile and **adopts that CID** rather than re-adding a duplicate. Full rules
+   and the honest boundary (why we do NOT auto-hash undecided files on the hot path) live in
+   [knowledge/ipfs.mdx §5.1](../knowledge/ipfs.mdx#51-the-same-file-can-have-several-different-cids--never-compare-cid-strings-raw-locked-learned-from-a-defect).
+   Implemented in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` —
+   `canonicalCid()` / `canonicalPinnedSet()` / `contentPinnedCid()`; applied at the reconcile seams in
+   `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `runUnitPin()`.
 3. **Reconcile any incoming Sync List** — never trusted, always reconciled per
    [sync_list.mdx §5](./sync_list.mdx#5-trust--reconciliation-the-load-bearing-rule).
 4. **Write `status.yaml`** — last pin time, counts, errors — so the UI reflects the visit.

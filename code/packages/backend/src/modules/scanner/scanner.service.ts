@@ -26,7 +26,7 @@ import {
   type FileEventInput,
 } from "../storage/file-sidecar.service.js";
 import { readCommittedManifest } from "../pin/manifest.service.js";
-import { listPins } from "../ipfs/ipfs.service.js";
+import { listPins, canonicalCid } from "../ipfs/ipfs.service.js";
 import { compressInfo } from "../fs/badges.js";
 import { readYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import { computerUnitDir, unitConfigPath, unitStatusPath } from "../../shared/store/scopes.js";
@@ -111,9 +111,12 @@ export async function scanAll(
   // same pinset), build a CID Set, and reuse it across every repo's count rollup + external-state pass so
   // we never re-query the node per repo or per file (repo_tracking_scheme.mdx §3.3, PERFORMANCE). The daemon
   // being off is routine — best-effort, an empty pinset just means "nothing observed as already pinned."
+  // CANONICAL (CIDv1 base32) keys (knowledge/ipfs.mdx §5.1): `ipfs pin ls` is base-sensitive, so a raw
+  // string Set went blind to a block pinned as `Qm…` when the manifest recorded its `bafy…` form. Every
+  // membership test below canonicalizes the queried CID too.
   let pinset = new Set<string>();
   try {
-    pinset = new Set((await listPins()).map((p) => p.cid));
+    pinset = new Set((await listPins()).map((p) => canonicalCid(p.cid)));
   } catch (e) {
     log.debug("scan", `pinset fetch skipped (node unreachable?): ${(e as Error).message}`);
   }
@@ -154,7 +157,7 @@ export async function scanAll(
     }
     const isPinnedPath = (rel: string): boolean => {
       const cid = cidByPath.get(rel);
-      return cid != null && pinset.has(cid);
+      return cid != null && pinset.has(canonicalCid(cid)); // canonical: a `Qm…` pin of a `bafy…` CID counts
     };
 
     // (1) Roll the special-file counts + last_scan into .lfbridge/repo_storage.yaml (special_files.mdx §4).
@@ -462,7 +465,7 @@ function writeStatus(
 /** The cheap context `reconcileExternalState` reasons over — the ONE IPFS pinset fetched per scan, plus a
  *  manifest-backed path→CID lookup — so it never re-queries the node or re-reads the manifest per file. */
 export interface ExternalStateCtx {
-  pinset: Set<string>; // CIDs pinned on THIS computer's node (fetched once per scan)
+  pinset: Set<string>; // CANONICAL (CIDv1 base32) CIDs pinned on THIS computer's node (fetched once per scan)
   cidForPath: (relPath: string) => string | null; // repo-relative path → its committed-manifest CID (or null)
 }
 
@@ -482,7 +485,8 @@ export async function reconcileExternalState(
 ): Promise<void> {
   const name = file.name ?? path.basename(file.path);
   const cid = ctx.cidForPath(file.path);
-  const pinnedCid = cid != null && ctx.pinset.has(cid) ? cid : null;
+  // Canonical membership (knowledge/ipfs.mdx §5.1) — record the ORIGINAL manifest CID, test by canonical form.
+  const pinnedCid = cid != null && ctx.pinset.has(canonicalCid(cid)) ? cid : null;
   const looksCompressed = compressInfo(name).compressState === "done";
   if (!pinnedCid && !looksCompressed) return; // no external state to record for this file
 

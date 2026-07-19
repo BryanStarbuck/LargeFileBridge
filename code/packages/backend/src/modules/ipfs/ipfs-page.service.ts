@@ -40,7 +40,10 @@ interface TrackedInfo {
 
 const COMPUTER_MANIFEST = () => unitManifestPath(computerUnitDir());
 
-/** Build cid → TrackedInfo across every repo manifest and the computer-unit manifest. */
+/** Build cid → TrackedInfo across every repo manifest and the computer-unit manifest. Keyed by CANONICAL
+ *  (CIDv1 base32) CID (knowledge/ipfs.mdx §5.1): the pinset a pin arrives in may be `Qm…` while our manifest
+ *  recorded its `bafy…` form for the SAME block — a raw-string key wrongly labeled that tracked pin
+ *  "Untracked (import)". Every lookup below must canonicalize the queried CID the same way. */
 function buildTrackedIndex(): Map<string, TrackedInfo> {
   const index = new Map<string, TrackedInfo>();
 
@@ -58,7 +61,7 @@ function buildTrackedIndex(): Map<string, TrackedInfo> {
         // pins with a resolvable repo-relative path (a small, pinned subset), so the icon columns on the
         // pins table show the same done/not-done state as the repo file table (tables.mdx icon-columns).
         const analysis = base && f.path ? analysisOutputs(base, f.path) : [];
-        index.set(f.cid, {
+        index.set(ipfs.canonicalCid(f.cid), {
           repoId,
           unit: name,
           path: base ? path.join(base, f.path) : f.path || null,
@@ -78,10 +81,10 @@ function buildTrackedIndex(): Map<string, TrackedInfo> {
   try {
     const computer = readYaml(COMPUTER_MANIFEST(), ManifestSchema);
     for (const f of computer.files) {
-      if (!f.cid || index.has(f.cid)) continue;
+      if (!f.cid || index.has(ipfs.canonicalCid(f.cid))) continue;
       // A path that isn't absolute (e.g. the CID used as a placeholder key) means "no local path".
       const resolved = f.path && path.isAbsolute(f.path) ? f.path : null;
-      index.set(f.cid, {
+      index.set(ipfs.canonicalCid(f.cid), {
         repoId: null,
         unit: "computer",
         path: resolved,
@@ -129,14 +132,15 @@ export async function computeIpfsPage(): Promise<IpfsPageData> {
   const index = buildTrackedIndex();
 
   // Untracked pins get a best-effort size from the node (tracked pins already carry it in the manifest).
-  const untrackedCids = pins.filter((p) => !index.has(p.cid)).map((p) => p.cid);
+  // Match CANONICALLY (knowledge/ipfs.mdx §5.1) so a `Qm…` pin of a `bafy…` tracked CID isn't mislabeled.
+  const untrackedCids = pins.filter((p) => !index.has(ipfs.canonicalCid(p.cid))).map((p) => p.cid);
   const capped = untrackedCids.slice(0, UNTRACKED_STAT_CAP);
   const sizes = new Map<string, number | null>();
   const statted = await pool(capped, 8, (cid) => ipfs.objectSize(cid));
   capped.forEach((cid, i) => sizes.set(cid, statted[i]));
 
   const rows: IpfsPinRow[] = pins.map((p) => {
-    const info = index.get(p.cid);
+    const info = index.get(ipfs.canonicalCid(p.cid));
     if (info) {
       const tracked: IpfsTracked = info.path ? "pinned" : "path-less";
       return {
@@ -226,7 +230,7 @@ export async function importPins(opts: { cids?: string[]; all?: boolean }): Prom
 
   const index = buildTrackedIndex();
   const pinned = await ipfs.listPins();
-  const untracked = pinned.filter((p) => !index.has(p.cid));
+  const untracked = pinned.filter((p) => !index.has(ipfs.canonicalCid(p.cid))); // canonical (§5.1)
   const want = opts.all ? new Set(untracked.map((p) => p.cid)) : new Set(opts.cids ?? []);
   const toImport = untracked.filter((p) => want.has(p.cid));
   if (toImport.length === 0) return 0;
@@ -237,9 +241,9 @@ export async function importPins(opts: { cids?: string[]; all?: boolean }): Prom
   ensureComputerUnitDir();
   await updateYaml(COMPUTER_MANIFEST(), ManifestSchema, (m) => {
     m.unit = "computer";
-    const have = new Set(m.files.map((f) => f.cid).filter(Boolean));
+    const have = new Set(m.files.map((f) => f.cid).filter(Boolean).map((c) => ipfs.canonicalCid(c!)));
     toImport.forEach((p, i) => {
-      if (have.has(p.cid)) return;
+      if (have.has(ipfs.canonicalCid(p.cid))) return;
       m.files.push({
         path: p.cid, // placeholder key — a path-less tracked pin (ipfs.mdx §4)
         cid: p.cid,

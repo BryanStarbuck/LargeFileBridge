@@ -305,11 +305,15 @@ export function OneRepoPage() {
             state={boolStatus(pinned)}
             disabled={ipfsDown || blockedByNeverIpfs}
             title={
+              // This icon is the Add-to-IPFS DECISION (intent), not a live read of the node's pinset. A
+              // file's bytes can already be pinned on this node under a different CID encoding/profile
+              // (knowledge/ipfs.mdx §5.1) while this reads "off"; the live pinset truth is the IPFS page.
+              // So the copy states the DECISION, and never asserts a pin reality we didn't verify here.
               blockedByNeverIpfs
                 ? "Add to IPFS is blocked by Never-IPFS"
                 : pinned
-                  ? "Pinned over IPFS — click to unpin"
-                  : "Not pinned — click to pin over IPFS"
+                  ? "Set to sync over IPFS — click to stop syncing this file"
+                  : "Not set to sync — click to add this file to IPFS (see the IPFS page for the node's actual pins)"
             }
             extraHover={fileSummary(f)}
             // Two-axis write preserving the git-ignore axis (decision_toggles.mdx §2).

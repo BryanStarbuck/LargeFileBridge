@@ -234,6 +234,15 @@ machine really holds.
 Importing untracked pins into tracking (metadata-only — record the CID in the computer-unit manifest, never re-fetch or re-pin) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-page.service.ts` — `importPins()`
 
+> **Tracked-vs-Untracked is decided by a CANONICAL CID match, not a raw string compare.** A pin arrives from
+> `ipfs pin ls` in whatever base it was created (`Qm…` for a legacy/manual add, `bafy…` for ours), and
+> `pin ls` is base-sensitive — so keying the tracked index on the raw CID string wrongly listed a
+> *tracked* pin as **Untracked (import)** whenever its base differed from our manifest's. The tracked index
+> and every pin-row lookup canonicalize to CIDv1 base32 first (`buildTrackedIndex` / `computeIpfsPage`).
+> This only bridges the *encoding* of the SAME block; a genuinely different DAG profile (raw-leaves /
+> cid-version) is a different CID and legitimately still shows as Untracked. See
+> [knowledge/ipfs.mdx §5.1](../knowledge/ipfs.mdx#51-the-same-file-can-have-several-different-cids--never-compare-cid-strings-raw-locked-learned-from-a-defect).
+
 > Import is the **inverse** of the untrust rule: a `pinned_by: [this-computer]` claim is only ever
 > written for CIDs `ipfs pin ls` truly holds ([sync_list §5.1](./sync_list.mdx#51-local-claims-are-verified-not-believed)).
 > This page's Untracked rows are exactly the CIDs held-but-unclaimed; importing makes the claim honest.

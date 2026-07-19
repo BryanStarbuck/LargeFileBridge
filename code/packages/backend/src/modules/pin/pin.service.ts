@@ -139,7 +139,12 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCo
   // Learn from the filesystem which CIDs are REALLY pinned right now. The local IPFS pinset is the
   // source of truth; our manifest `pinned_by` is a stale cache we verify and refresh against it every
   // pin pass (storage.mdx §9.5). Read it once up front, and keep it current as we pin below.
-  const pinset = new Set((await ipfs.listPins()).map((p) => p.cid));
+  //
+  // CANONICAL membership (knowledge/ipfs.mdx §5.1): the pinset is keyed by CANONICAL (CIDv1 base32) CIDs so a
+  // block pinned as `Qm…` is not invisible to a `bafy…` manifest CID for the SAME block — `pin ls` is
+  // base-sensitive, so a raw string Set silently missed those. Always test membership as
+  // `pinset.has(ipfs.canonicalCid(cid))`.
+  const pinset = new Set((await ipfs.listPins()).map((p) => ipfs.canonicalCid(p.cid)));
 
   // Add + pin any new / changed / no-longer-pinned Add-to-IPFS-decided file — IN PARALLEL, bounded by the
   // global limiter (pin_process.mdx §4). Each task owns a distinct path key, so the shared `byPath` /
@@ -162,16 +167,36 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCo
         const existing = byPath.get(rel);
         // "Unchanged" means same bytes AND still really pinned. A size match alone is NOT enough — if
         // the pin was lost (GC, or an `ipfs pin rm` outside the app) we must re-pin so reality matches
-        // intent rather than trust the stale cache (storage.mdx §9.5).
-        const unchanged = existing?.cid && existing.size === st.size && pinset.has(existing.cid);
+        // intent rather than trust the stale cache (storage.mdx §9.5). Membership is CANONICAL so a
+        // `Qm…`-encoded pin of a `bafy…` manifest CID (same block) still counts (knowledge/ipfs.mdx §5.1).
+        const unchanged = existing?.cid && existing.size === st.size && pinset.has(ipfs.canonicalCid(existing.cid));
         if (unchanged) {
           setPinClaim(existing!, t.label, true);
           counts.skipped++; // eligible but already up-to-date + still pinned (§6 truthful "nothing changed")
           return;
         }
+        // FOREIGN-PROFILE ADOPTION (knowledge/ipfs.mdx §5.1). A PREVIOUSLY-TRACKED file whose recorded CID
+        // is no longer in the pinset may not be "pin lost" at all — its exact bytes can already be pinned
+        // under a DIFFERENT add profile (a legacy CIDv0 `ipfs add`, or a non-raw-leaves build) whose CID we
+        // never compute. canonicalCid can't bridge that (different multihash), so re-hash the bytes once and,
+        // if they ARE already pinned, ADOPT that CID instead of re-adding a duplicate pin of identical bytes.
+        // Bounded to already-tracked files that appear unpinned (never brand-new adds), so the extra read is
+        // paid only where we were about to re-upload the file anyway.
+        if (existing?.cid && existing.size === st.size) {
+          const already = await ipfs.contentPinnedCid(abs);
+          if (already) {
+            const canon = ipfs.canonicalCid(already);
+            pinset.add(canon);
+            existing.cid = already;
+            setPinClaim(existing, t.label, true);
+            counts.skipped++;
+            log.info("pin", `Adopted existing foreign-profile pin for ${rel} -> ${already} (no duplicate add).`);
+            return;
+          }
+        }
         try {
           const cid = await ipfs.addFile(abs); // add streams the bytes and pins recursively (pin=true)
-          pinset.add(cid);
+          pinset.add(ipfs.canonicalCid(cid));
           byPath.set(rel, {
             path: rel,
             cid,
@@ -211,9 +236,9 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCo
           if (abs === null) return; // ungrafted mapped dir — known-but-absent on this computer
           if (fs.existsSync(abs)) return; // already on disk here — nothing to fetch
           try {
-            if (!pinset.has(entry.cid)) {
+            if (!pinset.has(ipfs.canonicalCid(entry.cid))) {
               await ipfs.pinAdd(entry.cid); // hold a local copy first…
-              pinset.add(entry.cid);
+              pinset.add(ipfs.canonicalCid(entry.cid));
               counts.pinned++;
             }
             await ipfs.catToFile(entry.cid, abs); // …then write the bytes to the resolved local path
@@ -233,7 +258,7 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCo
   // pin pass) are dropped here. Peer claims are left untouched — we can only verify our own.
   for (const entry of byPath.values()) {
     if (!entry.cid) continue;
-    setPinClaim(entry, t.label, pinset.has(entry.cid));
+    setPinClaim(entry, t.label, pinset.has(ipfs.canonicalCid(entry.cid)));
   }
 
   const next: Manifest = ManifestSchema.parse({
@@ -706,7 +731,9 @@ function markUnitError(t: UnitTarget, msg: string): void {
  *  makes every manifest CID read as "not pinned here" so nothing is silently hidden from the pull prompt. */
 async function pinnedCidSet(): Promise<Set<string>> {
   try {
-    return new Set((await ipfs.listPins()).map((p) => p.cid));
+    // CANONICAL keys (knowledge/ipfs.mdx §5.1) so a same-block pin in another base is not read as "missing"
+    // and needlessly re-pulled. Callers MUST test membership as `pinset.has(ipfs.canonicalCid(cid))`.
+    return new Set((await ipfs.listPins()).map((p) => ipfs.canonicalCid(p.cid)));
   } catch (e) {
     log.warn("pin", `listPins failed (treating pinset as empty): ${(e as Error).message}`);
     return new Set();
@@ -756,7 +783,7 @@ export async function missingPinnedFromPeers(repoRoot: string): Promise<MissingP
     if (!entry.cid) continue; // no CID → nothing to pull
     const abs = path.join(repoRoot, entry.path);
     if (fs.existsSync(abs)) continue; // already on disk here → not missing
-    if (pinset.has(entry.cid)) continue; // already pinned on this node → bytes are here
+    if (pinset.has(ipfs.canonicalCid(entry.cid))) continue; // already pinned on this node → bytes are here
     out.push({
       path: entry.path,
       name: path.basename(entry.path),
@@ -810,9 +837,9 @@ export async function pullMissing(
         }
         const abs = path.join(repoRoot, entry.path);
         try {
-          if (!pinset.has(entry.cid)) {
+          if (!pinset.has(ipfs.canonicalCid(entry.cid))) {
             await ipfs.pinAdd(entry.cid); // fetch + hold the bytes locally (does NOT re-add / mint a new CID)
-            pinset.add(entry.cid);
+            pinset.add(ipfs.canonicalCid(entry.cid));
           }
           if (!fs.existsSync(abs)) {
             await ipfs.catToFile(entry.cid, abs); // write the pinned bytes to the working tree (a real copy)

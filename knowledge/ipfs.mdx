@@ -154,6 +154,79 @@ options, most relevant first:
   > the mutable, backbone-carried pointer. IPNS is the IPFS-native equivalent to keep in mind for server mode or for a
   > future where we want the list to travel over IPFS itself instead of git.
 
+### 5.1 The SAME file can have SEVERAL different CIDs — never compare CID strings raw (LOCKED, learned from a defect)
+
+**The tricky case.** A user reported that the CLI said a video was pinned while Large File Bridge showed
+its pin **off** — "our software is broken." It was a real disconnect, and the root cause is that **one
+file's bytes do not map to one CID.** The same bytes yield *different* CID strings along two independent
+axes:
+
+1. **Encoding axis — CIDv0 vs CIDv1 (same block).** A legacy or hand-run `ipfs add` (no flags) produces a
+   **CIDv0** (`Qm…`, base58btc). Our app adds with `--cid-version=1`, producing a **CIDv1** (`bafy…`,
+   base32). `Qm…` and its CIDv1 re-encoding are the **same block, two spellings**.
+2. **DAG-profile axis — a genuinely different multihash.** `--cid-version` and `--raw-leaves` change how the
+   DAG is *built*, so they change the hash. Kubo defaults `--cid-version=1` to **`raw-leaves=true`**; a bare
+   `ipfs add` uses dag-pb leaves. For a **multi-block** file even "v0 vs v1 with the same leaf setting"
+   differ, because each parent node embeds its children's CIDs *in that version*, cascading to a different
+   root.
+
+The motivating file made all three concrete — identical bytes, three CIDs:
+
+| How it was added | CID | Relationship |
+|---|---|---|
+| bare `ipfs add` (what was **pinned**) | `QmTo4Htjkqv…` | ≡ `bafybeicrbyzvjc…` (same block, v0↔v1) |
+| `--cid-version=1 --raw-leaves=false` | `bafybeibizir3z6…` | different DAG (v1 parents) |
+| `--cid-version=1` (app default, raw leaves) | `bafybeigoytoir7…` | different DAG (what the app looks for) |
+
+**Why the app went blind.** `ipfs pin ls` is **base-SENSITIVE**: querying a block pinned as `Qm…` by its
+`bafy…` form returns *"not pinned"* (verified against a live daemon — not a normalization Kubo does for
+you). So a raw `new Set(pins.map(p => p.cid))` + `set.has(ourCid)` silently missed every pin whose base
+differed from ours — the "invisible v0 pins" class.
+
+**How we handle it — two layers, and the honest boundary between them.**
+
+* **Layer 1 — canonicalize every CID before every pinset comparison (fixes the encoding axis, free).**
+  Normalize both sides to **CIDv1 base32** and compare *those*. This is dependency-free and local (a CIDv0
+  is `base58btc(multihash)` with an implied dag-pb codec; re-wrap as `0x01 0x70 <multihash>` and base32).
+  Implemented in code: `code/packages/backend/src/modules/ipfs/ipfs.service.ts`, function
+  **`canonicalCid()`** (and `canonicalPinnedSet()`). **Rule: any comparison of a CID against the pinset MUST
+  be written `pinset.has(ipfs.canonicalCid(cid))`, and any CID-keyed index MUST key on `canonicalCid(cid)`.**
+  Every seam that reads the pinset applies this: the pin pass reconcile
+  (`modules/pin/pin.service.ts` `runUnitPin` / `pinnedCidSet`), the scan's per-file pinned flag
+  (`modules/scanner/scanner.service.ts` `isPinnedPath` / `reconcileExternalState`), and the IPFS page's
+  tracked-vs-untracked split (`modules/ipfs/ipfs-page.service.ts` `buildTrackedIndex` / `computeIpfsPage` /
+  `importPins`). Locked test: `modules/ipfs/canonical-cid.spec.ts`.
+
+* **Layer 2 — content identity across DAG profiles requires RE-HASHING (canonicalCid cannot bridge it).**
+  Because a different profile is a *different multihash*, no string trick recognizes it — you must re-hash
+  the local bytes under each profile IPFS realistically produces (our v1 raw-leaves, and a legacy v0) and
+  test each canonicalized result against the pinset. Implemented in `ipfs.service.ts`,
+  function **`contentPinnedCid()`** (uses `add --only-hash`: hashes, never stores/pins, no network). This is
+  **expensive** (a full byte read+hash per profile), so it is used ONLY on a bounded, non-hot path: the pin
+  pass's **foreign-profile adoption** step (`pin.service.ts` `runUnitPin`) — when an *already-tracked* file
+  looks unpinned, we probe once and, if its bytes are already pinned under another profile, **adopt that CID
+  instead of re-adding a duplicate**. It is deliberately NOT run for brand-new adds or during a scan, so we
+  never pay a full-file hash on the hot path.
+
+* **Layer 0 — add the FILE, not a directory wrapper (a related defect found alongside this one).** Kubo's
+  HTTP `add` treats a **slashed multipart filename as a directory path** and wraps the file in one DAG node
+  per path segment, returning the **wrapper directory's** CID — not the file's. Passing the absolute path
+  (`/Users/you/…/movie.mp4`) as the filename therefore recorded a CID that (a) is a **directory**, so a peer
+  `cat` of it fails, and (b) **embeds this machine's home path**, so it is not even the same CID on another
+  computer — silently defeating cross-machine sync. The fix is to send only the **basename** as the
+  multipart filename, which returns the file's own CID exactly like the CLI. Implemented in `ipfs.service.ts`
+  — `addFile()` (and the `addOnlyHash` helper). Existing manifests that recorded a wrapper CID heal on the
+  next content change (or when the wrapper pin is lost) rather than all at once.
+
+**The honest boundary (what we still do NOT do, on purpose).** We do **not** auto-hash every *undecided*
+file on scan/page-load to discover foreign-profile pins — that would put full-file hashing on the read path
+this app is careful to keep cheap. Consequence: a file whose bytes are pinned only under a foreign profile
+and which the user has **not** decided to sync will still read as "not set to sync" on the repo page (its
+pin icon is the **decision/intent** toggle, not a live pinset read — see one_repo.mdx). The node's actual
+pins are surfaced authoritatively on the **IPFS page** (ipfs.mdx §4), where such a pin appears as
+**Untracked (pinned)** and can be imported. This is why the repo-row pin tooltip states the *decision*
+("set to sync" / "not set to sync") and never asserts a pin reality it did not verify.
+
 ---
 
 ## 6. Only-our-content — the non-negotiable rule
