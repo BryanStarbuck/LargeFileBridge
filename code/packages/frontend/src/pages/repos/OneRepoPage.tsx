@@ -15,7 +15,8 @@ import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
 import { RepoStatusPill } from "../../components/Pill.js";
-import { EntityKebab, type Action } from "../../components/menu/EntityMenu.js";
+import { EntityKebab, ActionsMore, type Action } from "../../components/menu/EntityMenu.js";
+import { useRepoActions } from "../../components/menu/RowKebabs.js";
 import { PageActions, producingActions } from "../../components/menu/PageActions.js";
 import { compressAllVideos, compressAllImages, gitIgnoreBig } from "../../components/menu/domainActions.js";
 import type { ActionScope } from "../../lib/pageActions.js";
@@ -323,6 +324,21 @@ export function OneRepoPage() {
     { id: "rescan", label: "Rescan", icon: <RefreshCw className="h-3.5 w-3.5" />, group: "Work", onSelect: rescanRepo },
   ];
 
+  // The page's "More ⌄" ENTITY menu (menus.mdx §4/§5.1, one_repo.mdx §3.1). It was specified but never
+  // mounted — the header only ever had tabs + gear + primary — so every repo-entity action (including
+  // Export Debug Information, debug.mdx §2.2) was unreachable from this page. It carries the SAME §5.1
+  // catalog as the repos-table row ⋮, minus "Open repo" (you are already here).
+  const debugTarget = useQuery({ queryKey: ["debugTarget"], queryFn: api.debugExportTarget });
+  const repoMoreActions = useRepoActions(
+    {
+      repoId,
+      name: detail?.name ?? "",
+      path: detail?.path ?? "",
+      pinned: detail?.pinned ?? false,
+    },
+    { omit: ["open"], debugPath: debugTarget.data ? (debugTarget.data.path ?? null) : undefined },
+  );
+
   const columns: LfbColumn<FileRow>[] = [
     // ── The five leading icon control columns (tables.mdx icon-columns). Immediately right of the row
     // checkbox on EVERY tab, narrow with tight padding and icon-only headers. Pin & Ignore are toggles;
@@ -572,8 +588,6 @@ export function OneRepoPage() {
       })
     : [];
 
-  const c = detail?.counts;
-
   // The header primary (one_repo.mdx §3.1). A scan that's overdue (or never run) takes precedence — you
   // can't trust the metrics until the repo is re-scanned, so the button becomes "Scan now". Otherwise it
   // is "View recommendation ›", opening the single most important pending metric's educate-and-fix popup
@@ -642,6 +656,8 @@ export function OneRepoPage() {
                 <ChevronRight className="h-4 w-4" strokeWidth={2.5} />
               </button>
             ) : null}
+            {/* The entity "More ⌄" menu (menus.mdx §4.1): the word More + a chevron — no ⋮, no border. */}
+            <ActionsMore actions={repoMoreActions} />
           </>
         }
       />
@@ -658,28 +674,8 @@ export function OneRepoPage() {
         />
       )}
 
-      {/* Summary counts — the compact IPFS-decision readout (the richer per-task view is the strip above). */}
-      {c && (
-        <div className="mb-1 text-sm text-black/70">
-          {c.pinned + c.pending} Pin ·{" "}
-          <span className={c.undecided > 0 ? "text-[var(--lfb-primary)] font-medium" : ""}>{c.undecided} Undecided</span> ·{" "}
-          {c.ignored} Ignore
-          {/* Undecided-but-already-pinned (green state, one_repo.mdx §4.9; "pinned" = pinned on THIS
-              computer by ANY local software — ipfs.mdx §1.1) — split out of Undecided so the app never
-              asks to pin a file whose bytes are already pinned on this node. */}
-          {c.pinnedForeign > 0 && (
-            <>
-              {" "}·{" "}
-              <span
-                className="text-green-700"
-                title="Already pinned on this computer's IPFS node by other IPFS software — which is fine. Large File Bridge just isn't managing their sync yet."
-              >
-                {c.pinnedForeign} Pinned locally
-              </span>
-            </>
-          )}
-        </div>
-      )}
+      {/* The old compact "N Pin · N Undecided · N Ignore · N Pinned locally" readout lived here. Removed —
+          the metrics strip above is this page's decision readout (task_tabs.mdx §2). */}
 
       <DataTable
         // Keyed by tab so switching re-applies the tab's default sort (task_tabs.mdx §7).

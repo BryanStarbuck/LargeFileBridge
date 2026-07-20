@@ -551,6 +551,49 @@ export function ActionsKebab({
   );
 }
 
+// The **More ⌄** presentation over a PREBUILT action list — what `ActionsKebab` is for `⋮`.
+// `EntityMore` below resolves its catalog from a PATH via an async EntityView fetch; a single-entity page
+// that already holds its entity (the One-repo page holds a RepoDetail) builds its catalog synchronously,
+// so the two cannot share a trigger. LOOK is identical to EntityMore and equally LOCKED (menus.mdx §4.1):
+// the word **More** + a down chevron, no ⋮ glyph, no border.
+export function ActionsMore({ actions, className }: { actions: Action[]; className?: string }) {
+  const [pos, setPos] = useState<MenuPos | null>(null);
+  const run = (fn: () => void | Promise<void>) => async () => {
+    try {
+      await fn();
+    } catch (e) {
+      clientLog.error("EntityMenu.action", e);
+    }
+  };
+  return (
+    <>
+      <button
+        aria-haspopup="menu"
+        aria-expanded={!!pos}
+        title="More actions"
+        onClick={(e) => {
+          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+          setPos({ x: r.right - 4, y: r.bottom + 4 });
+        }}
+        className={`inline-flex items-center gap-1 whitespace-nowrap px-1 py-1 text-sm text-[var(--lfb-primary)] hover:underline ${className ?? ""}`}
+      >
+        More <ChevronDown className="h-3.5 w-3.5" />
+      </button>
+      {pos && (
+        <MenuPortal pos={pos} onClose={() => setPos(null)}>
+          <MenuList
+            actions={actions}
+            run={(fn) => async () => {
+              setPos(null);
+              await run(fn)();
+            }}
+          />
+        </MenuPortal>
+      )}
+    </>
+  );
+}
+
 // ── Trigger 1: the row/entry ⋮ kebab for a file/dir PATH (menus.mdx §3) ─────────
 // Fetches the EntityView lazily when opened (file/dir catalog, §5.2/§5.3).
 export function EntityKebab({ path, className }: { path: string; className?: string }) {

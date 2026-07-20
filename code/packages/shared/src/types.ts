@@ -2155,6 +2155,31 @@ export interface CompanyCreateResult {
   hasRemote: boolean; // false ⇒ "no remote yet — nothing is reaching your other computers" (§11.2)
 }
 
+// ── Export Debug Information (debug.mdx) ────────────────────────────────────
+// Where a debug export WOULD land, resolved without running it — the Settings power section shows the
+// destination path before the user clicks (debug.mdx §2.1), and both surfaces disable themselves with
+// `reason` when there is nowhere legitimate to write (§3: a connected personal storage repo, no fallback).
+export interface DebugExportTarget {
+  available: boolean;
+  computer: string; // the device slug — identical to devices/<name>.yaml and to the path segment
+  path: string | null; // <personal repo>/debug/<computer>/debug.yaml
+  reason: string | null; // why it is unavailable (rendered inline / as the menu item's tooltip)
+  lastExportAt: string | null;
+}
+
+// What one export actually DID — the toast names all of it, and a zero-file export says zero
+// (debug.mdx §9.3, the never-a-silent-no-op rule).
+export interface DebugExportResult {
+  path: string;
+  computer: string;
+  scope: "computer" | "repo";
+  units: number; // repos walked
+  files: number; // total metric entries written (a file counts once per metric it qualifies for)
+  counts: Record<string, number>; // per-metric list lengths — always === metrics.<key>.length (§4.4)
+  errors: string[]; // units that failed; the export still wrote (§9.4)
+  durationMs: number;
+}
+
 // ── Generic API envelope for mutations ──────────────────────────────────────
 export interface Ok<T = unknown> {
   ok: true;

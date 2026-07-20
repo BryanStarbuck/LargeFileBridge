@@ -28,6 +28,8 @@ import type {
   SecuritySetupInput,
   SecuritySetupResult,
   MediaProbe,
+  DebugExportTarget,
+  DebugExportResult,
   MediaGrant,
   IpfsHealth,
   IpfsPageData,
@@ -470,4 +472,11 @@ export const api = {
   // element loads (Range-capable); probe → best-effort container/codec/dimensions.
   mediaGrant: (path: string) => unwrap<MediaGrant>(http.get("/media/grant", { params: { path } })),
   mediaProbe: (path: string) => unwrap<MediaProbe>(http.get("/media/probe", { params: { path } })),
+
+  // Export Debug Information (debug.mdx §12). `target` resolves WHERE the export would land without
+  // running it — the Settings section shows that path before the click and both surfaces disable
+  // themselves when no personal storage repo is connected (§2.1/§3).
+  debugExportTarget: () => unwrap<DebugExportTarget>(http.get("/debug/export/target")),
+  debugExport: (body: { scope: "computer" | "repo"; repoId?: string; invokedFrom: "settings" | "one_repo_more_menu" }) =>
+    unwrap<DebugExportResult>(http.post("/debug/export", body)),
 };

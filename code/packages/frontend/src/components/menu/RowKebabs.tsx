@@ -22,6 +22,7 @@ import {
   Captions,
   Sparkles,
   TextSelect,
+  FileCog,
 } from "lucide-react";
 import { HardDrive } from "lucide-react";
 import type { RepoRow, PeerRow, IpfsPinRow, StorageRow } from "@lfb/shared";
@@ -83,7 +84,19 @@ export function RepoGear({ repo }: { repo: RepoRow }) {
 }
 
 // ── Repo row / One-repo page (menus.mdx §5.1) ──────────────────────────────────
-export function RepoKebab({ repo }: { repo: RepoRow }) {
+// The catalog is built ONCE and used verbatim by BOTH the repos-table row ⋮ (RepoKebab) and the
+// View-one-repo page's More ⌄ (OneRepoPage) — that "same catalog, two triggers" rule is menus.mdx §5's
+// opening line. The One-repo page holds a RepoDetail, not a RepoRow, so the builder takes the minimal
+// shape both satisfy and accepts an `omit` list (the repo page omits "open" — you are already there).
+export interface RepoMenuEntity {
+  repoId: string;
+  name: string;
+  path: string;
+  pinned: boolean;
+  bookmarked?: boolean;
+}
+
+export function useRepoActions(repo: RepoMenuEntity, opts?: { omit?: string[]; debugPath?: string | null }): Action[] {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const refreshRepos = () => qc.invalidateQueries({ queryKey: ["repos"] });
@@ -123,6 +136,34 @@ export function RepoKebab({ repo }: { repo: RepoRow }) {
         } catch (e) {
           clientLog.error("RowKebabs.rescan", e);
           toast.error(e instanceof Error ? e.message : "Rescan failed");
+        }
+      },
+    },
+    {
+      // Export Debug Information (debug.mdx §2.2) — writes <personal repo>/debug/<computer>/debug.yaml so
+      // this computer's beliefs about every file can be diffed against another computer's dump (§1). Not
+      // destructive, so no confirm; disabled with the reason when no personal storage repo is connected (§3).
+      id: "export-debug",
+      label: "Export Debug Information",
+      group: "Work",
+      icon: <FileCog className="h-4 w-4" />,
+      disabled: opts?.debugPath === null,
+      title:
+        opts?.debugPath === null
+          ? "Connect your personal storage repo first — Large File Bridge saves the debug file there so your other computers can read it."
+          : (opts?.debugPath ?? undefined),
+      onSelect: async () => {
+        try {
+          const r = await api.debugExport({
+            scope: "repo",
+            repoId: repo.repoId,
+            invokedFrom: "one_repo_more_menu",
+          });
+          // Never a silent no-op (pin_process.mdx §6): name the count AND the path, and say zero when zero.
+          toast.success(`Debug information exported — ${r.files} entries → ${r.path}`);
+        } catch (e) {
+          clientLog.error("RowKebabs.exportDebug", e);
+          toast.error(e instanceof Error ? e.message : "Debug export failed");
         }
       },
     },
@@ -246,7 +287,12 @@ export function RepoKebab({ repo }: { repo: RepoRow }) {
     },
   ];
 
-  return <ActionsKebab actions={actions} />;
+  const omit = new Set(opts?.omit ?? []);
+  return actions.filter((a) => !omit.has(a.id));
+}
+
+export function RepoKebab({ repo }: { repo: RepoRow }) {
+  return <ActionsKebab actions={useRepoActions(repo)} />;
 }
 
 // ── Storage row / storage detail page (storage_settings.mdx §1) ────────────────

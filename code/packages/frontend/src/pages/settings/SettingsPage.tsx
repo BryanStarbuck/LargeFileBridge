@@ -213,7 +213,65 @@ export function SettingsPage() {
       <TranscriptionSettingsSection />
 
       <AiProvidersSection />
+
+      <PowerToolsSection />
     </div>
+  );
+}
+
+// ── Power tools (debug.mdx §2.1) — LAST section on the page, on purpose ──────────────────────────────
+// This is a diagnostics surface, not a preference: nothing above it should be pushed down by it. The
+// resolved destination path is shown BEFORE the click, because this file gets committed and pushed and a
+// surprise write into a git repo is never acceptable. With no personal storage repo connected the button
+// is disabled with the reason inline — there is deliberately NO fallback location (§3), since a debug.yaml
+// that cannot reach the user's other computers fails at the one job it has.
+function PowerToolsSection() {
+  const qc = useQueryClient();
+  const { data: target } = useQuery({ queryKey: ["debugTarget"], queryFn: api.debugExportTarget });
+  const run = useMutation({
+    mutationFn: () => api.debugExport({ scope: "computer", invokedFrom: "settings" }),
+    onSuccess: (r) => {
+      qc.invalidateQueries({ queryKey: ["debugTarget"] });
+      // Never a silent no-op (pin_process.mdx §6): name what and where, and say zero when zero.
+      toast.success(`Debug information exported — ${r.files} entries across ${r.units} repos → ${r.path}`);
+      if (r.errors.length) toast.warning(`${r.errors.length} repo(s) could not be read; see the errors: block in the file`);
+    },
+    onError: (e: Error) => { clientLog.error("Settings.debugExport", e); toast.error(e.message); },
+  });
+
+  return (
+    <Section
+      title="Power tools"
+      subtitle="Diagnostics for when files aren't syncing between your computers."
+      collapsible
+      defaultOpen={false}
+    >
+      <p className="text-sm text-black/70">
+        <strong>Export debug information</strong> — writes everything Large File Bridge believes about this
+        computer's files to a YAML file in your personal repo, so it can be compared against your other
+        computers.
+      </p>
+      {target?.available ? (
+        <p className="mt-2 break-all font-mono text-xs text-black/50">→ {target.path}</p>
+      ) : (
+        <p className="mt-2 text-xs text-[var(--lfb-bad)]">
+          {target?.reason ?? "Checking…"}{" "}
+          <Link to="/storages/$storageId" params={{ storageId: "personal" }} className="text-[var(--lfb-primary)]">
+            Set up personal storage →
+          </Link>
+        </p>
+      )}
+      {target?.lastExportAt && (
+        <p className="mt-1 text-xs text-black/50">Last exported: {new Date(target.lastExportAt).toLocaleString()}</p>
+      )}
+      <button
+        onClick={() => run.mutate()}
+        disabled={!target?.available || run.isPending}
+        className="mt-3 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:opacity-40"
+      >
+        {run.isPending ? "Exporting…" : "Export debug information"}
+      </button>
+    </Section>
   );
 }
 
