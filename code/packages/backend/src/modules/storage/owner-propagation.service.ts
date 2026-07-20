@@ -43,6 +43,7 @@ import {
   setRepoOwnerOverride,
   repoIdFromPath,
 } from "../store-model/units.service.js";
+import { withStorageGitLock } from "../git/git-lock.js";
 import { log } from "../../shared/logging.js";
 
 const OWNER_MAP = "owner_map.yaml"; // at the company sync-repo ROOT (repo_owner_propagation.mdx §2)
@@ -52,16 +53,12 @@ function declinesFile(): string {
   return path.join(resolveStateDir(), "company_mapping_declines.yaml");
 }
 
-// Serialize git work per company so two concurrent asserts/withdraws don't collide on the same working tree.
-// A local, best-effort chain — coarser than pin.service's storage lock (which is module-private) but enough
-// to keep this module's own writes ordered; a stray overlap with a pin cycle is tolerated by git's non-ff retry.
-const gitLocks = new Map<string, Promise<unknown>>();
-function withCompanyGitLock<T>(companyId: string, fn: () => Promise<T>): Promise<T> {
-  const prev = gitLocks.get(companyId) ?? Promise.resolve();
-  const next = prev.catch(() => {}).then(fn);
-  gitLocks.set(companyId, next.catch(() => {}));
-  return next;
-}
+// Serialize git work per company on THE SAME lock the pin/device cycle uses (storage_company.mdx §11.3).
+// This module used to keep its own private chain, which meant two independent locks guarded one working
+// tree — and two locks over one tree are not a lock: an ownership assertion could land in the middle of a
+// pin pass's merge and corrupt the index. The old comment conceded the overlap was "tolerated by git's
+// non-ff retry"; it is not something to tolerate, so both paths now queue behind one lock keyed by storage id.
+const withCompanyGitLock = withStorageGitLock;
 
 // ── assertions (write side) ──────────────────────────────────────────────────
 

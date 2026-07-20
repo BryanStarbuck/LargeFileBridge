@@ -10,7 +10,7 @@ import { formatBytes } from "@lfb/shared";
 import { api } from "@/api/client";
 import { Badges } from "@/components/fs/Badges";
 import { EntityMore } from "@/components/menu/EntityMenu";
-import { FlagSwitches, EntityHeaderMissing } from "./entityShared";
+import { FlagSwitches, EntityHeaderMissing, EntityRemoteOnly } from "./entityShared";
 import { TransferPill } from "@/components/Pill";
 import { StatusBanner } from "@/components/ui/StatusBanner";
 import { type Health } from "@/components/ui/health";
@@ -38,7 +38,17 @@ export function ViewOneFilePage() {
   if (!path) return <p className="text-black/60">No file selected.</p>;
   if (isLoading) return <SkeletonPage />;
   if (!v) return <p className="text-black/60">Could not load this file.</p>;
-  if (!v.exists) return <EntityHeaderMissing view={v} navigate={navigate} />;
+  // `exists:false` has TWO causes and they mean opposite things (files.mdx §2.1, LOCKED). A REMOTE-ONLY file
+  // is absent because another of the user's computers has it — nothing went wrong, so it gets the red "not on
+  // this computer yet" state with its single Pull it down primary. Only a genuinely-missing file gets §5's
+  // "no longer at that path" error card.
+  if (!v.exists) {
+    return v.presence === "remote-only" ? (
+      <EntityRemoteOnly view={v} />
+    ) : (
+      <EntityHeaderMissing view={v} navigate={navigate} />
+    );
+  }
 
   const primary = pickPrimary(v, decide);
 

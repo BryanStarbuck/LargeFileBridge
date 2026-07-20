@@ -218,12 +218,16 @@ what this spec locks is how it fits the resilience contract:
   push path with §6's always-push-when-ahead and the non-fast-forward retry, and takes the same per-storage
   Git lock as the timer workers (§3), so a nudge and a scheduled pass never run git on one working copy at
   once.
-* **It must resolve the SDL by ownership, not path prefix.** The mirror is written *on behalf of* a working
-  repo that lives nowhere near the SDL, so a root-prefix lookup finds no storage and the nudge silently
-  no-ops — a **silent** failure of exactly the kind §1 forbids, and the reason F8 is in the taxonomy at all.
+* **It must announce a path INSIDE the SDL, never the working repo's root.** Storage resolution is a
+  **root-prefix** lookup, and the mirror is written *on behalf of* a working repo that lives nowhere near
+  the SDL — announcing that repo's root would find no storage and the nudge would silently no-op, a
+  **silent** failure of exactly the kind §1 forbids, and the reason F8 is in the taxonomy at all. The
+  mirror step avoids it by announcing its **destination** under `<syncRepo>/repos/<repoUid>/`. Keep the
+  warning even though the trap is avoided: prefix resolution fails **quietly**, so every new caller must be
+  checked against this rule.
 
-The debounced nudge, and the storage-resolution trap it must avoid, are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/sync-trigger.service.ts` — `noteArtifactWritten()` / `flushArtifactSync()` (debounce + coalesce per storage; `storageIdForPath()` returns null for a working-repo path, so the mirror must announce the SDL it wrote into), called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo()`.
+The debounced nudge, and the storage-resolution trap it avoids, are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/sync-trigger.service.ts` — `noteArtifactWritten()` / `flushArtifactSync()` (debounce + coalesce per storage; `storageIdForPath()` resolves by root prefix and returns null for a working-repo path), called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo()` (announces `dst`, the SDL-side destination).
 
 ---
 
@@ -354,4 +358,10 @@ than an accident that happened to work; and the overdue signal (§7) makes the s
   is written on behalf of a working repo nowhere near the SDL, so a prefix lookup silently no-ops (a silent
   failure, which is why F8 belongs in the taxonomy). AC 7 added (old 7 → 8). Code: sync-trigger.service
   noteArtifactWritten/flushArtifactSync ← tracking-sync.service mirrorToSyncRepo.
+
+  2026-07-20 spec-vs-code correction. §6.1's fourth lock no longer reads as a live defect: mirrorToSyncRepo()
+  announces `dst` — the mirror destination INSIDE the SDL — so the root-prefix lookup resolves the owning
+  storage and the nudge fires. The trap is stated in the past/conditional and the warning is deliberately kept,
+  because prefix resolution's failure mode is a SILENT no-op (F8): any new caller must be handed a path under
+  the storage root it means.
 -->

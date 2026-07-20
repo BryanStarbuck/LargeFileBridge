@@ -221,7 +221,7 @@ input.
 | `path` | the manifest entry's repo-relative path (the file will **land** here) |
 | `size_bytes` | the manifest's recorded size — **never** a local `stat` |
 | `cid` | the manifest entry's CID; an entry with **no CID is not a candidate** (nothing to pull) |
-| `pinned_on` | the union of `pinned_by` **minus this computer** — the peers that already hold it |
+| `pinned_on` | the union of `pinned_by` **minus this computer** — the peers that already hold it. Same underlying list the file tables expose as **`FileRow.peers`**, which carries `pinned_by` **raw** (this computer included when it holds the file): one subtraction apart, never two different facts ([tables.mdx §4e](./tables.mdx#4e-remote-only-rows-in-a-file-table-locked-site-wide)) |
 | `recommend` | `{ ipfs: true, git_ignore: true }` — pin it here, and keep it out of Git |
 
 * **Absence is never a delete.** A file that drops out of a peer's manifest simply **stops being
@@ -361,4 +361,9 @@ These routes are served in code:
   the SAME manifest (the Local-Storage tracking one, §8.6) or a correct list is followed by a whole-batch
   failure. Code: todo-batch.engine recalcRepo() pull_down block ← pin.service missingPinnedFromPeers().
   AC 9 added.
+
+  2026-07-20 spec-vs-code reconciliation. §3.4's `pinned_on` and tables.mdx §4e's `FileRow.peers` describe the
+  SAME underlying manifest data and now say so explicitly: `FileRow.peers` carries `pinned_by` RAW (this
+  computer included when it holds the file); `pinned_on` is that list MINUS this computer. One subtraction
+  apart — not two different facts. Cross-linked from both sides.
 -->

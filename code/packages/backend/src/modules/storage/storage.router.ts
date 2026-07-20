@@ -15,6 +15,9 @@ import {
   setBookmark,
 } from "./storage.service.js";
 import { readStorageSettings, writeStorageSettings, getMappedDirsView, patchMappedDirs, getOwnedRepos } from "./storage-settings.service.js";
+// Org → company discovery (storage_company.mdx §10): a company IS a forge organization, read off the repos'
+// git remotes. Discovery is read-only; creation happens only from the explicit click below.
+import { discoverOrganizations, createCompanyStorages, setOrganizationDismissed } from "./company-discovery.service.js";
 import { placementView, clearPlacementCache } from "./artifact-placement.service.js";
 
 export const storagesRouter = Router();
@@ -55,6 +58,48 @@ storagesRouter.get("/placement", (req, res) => {
   try {
     res.json({ ok: true, data: placementView(p) });
   } catch (e) {
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// GET /api/storages/organizations — the forge organizations found on this computer, split into the ones the
+// user belongs to and the ones they have only cloned from (storage_company.mdx §10.1–§10.2). Registered
+// BEFORE /:id so "organizations" is not captured as a storage id. Read-only: it proposes, it never creates.
+// Bounded git work (one `git log -n 1` per unchecked repo, at the responsive core budget, cached) — awaited.
+storagesRouter.get("/organizations", async (_req, res) => {
+  try {
+    res.json({ ok: true, data: await discoverOrganizations() });
+  } catch (e) {
+    log.error("storage", `discoverOrganizations failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/storages/organizations/dismiss — remember that the user waved a proposed org away, so the same
+// proposal does not come back on the next scan (§10.3). Machine-local, and reversible (`dismissed:false`).
+storagesRouter.post("/organizations/dismiss", async (req, res) => {
+  const body = z.object({ org: z.string().min(1), dismissed: z.boolean().optional() }).safeParse(req.body ?? {});
+  if (!body.success) return res.status(400).json({ ok: false, error: "org required" });
+  try {
+    res.json({ ok: true, data: await setOrganizationDismissed(body.data.org, body.data.dismissed ?? true) });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/storages/companies — create one company storage per named org (§10.3). This is the ONLY path
+// that makes a directory on the user's disk for an org, and it runs only from the explicit "Create company
+// storages" click. Idempotent: an org some storage already claims is ADOPTED and its binding recorded,
+// never duplicated (which is how `ACT3ai` lands on the existing `act3_large_files_bridge`).
+storagesRouter.post("/companies", async (req, res) => {
+  const body = z.object({ orgs: z.array(z.string().min(1)).min(1) }).safeParse(req.body ?? {});
+  if (!body.success) return res.status(400).json({ ok: false, error: "orgs required" });
+  try {
+    const created = await createCompanyStorages(body.data.orgs);
+    clearPlacementCache(); // new storages exist — the next placement resolve must not use the stale index
+    res.json({ ok: true, data: { created } });
+  } catch (e) {
+    log.warn("storage", `create company storages failed: ${(e as Error).message}`);
     res.status(400).json({ ok: false, error: (e as Error).message });
   }
 });

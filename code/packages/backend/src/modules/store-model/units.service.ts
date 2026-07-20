@@ -30,7 +30,10 @@ import { resolveRepoOwner, checkIgnoreVerbose, type IgnoreRule } from "../git/gi
 // storage.service <-> units.service form a static import cycle used ONLY inside functions (getStorageRow is
 // called from ownerForRepoConfig, never at module-eval), which is safe under NodeNext ESM — same pattern the
 // storage.service <-> storage-settings.service pair documents.
-import { getStorageRow } from "../storage/storage.service.js";
+import { getStorageRow, listStorageIds } from "../storage/storage.service.js";
+// Peer device LABELS for a remote-only row (devices.mdx §6.9) — the id/name → nice-name index. Same
+// function-body-only usage as getStorageRow above, so the storage.service cycle stays safe.
+import { deviceLabelIndex, resolveDeviceLabel } from "../storage/devices.service.js";
 import { canonicalCid } from "../ipfs/ipfs.service.js";
 import { foreignPinByAbsPath } from "../ipfs/foreign-pin.service.js";
 import { analysisOutputs } from "../storage/tracking.service.js";
@@ -479,10 +482,34 @@ export function remoteOnlyRows(
       ocr: "na",
       analysisOnly: false,
       presence: "remote-only",
+      // The RAW join token for now — resolved to the user-facing nice name below, once for the whole repo.
       addedByDevice: peers[0] ?? null,
     });
   }
-  return out;
+  if (out.length === 0) return out; // no remote-only row → never pay for the registry read at all
+  // Name the peer (devices.mdx §6.9). A token the registry can't name and that is ID-SHAPED resolves to null,
+  // and the UI then says "another of your computers" — honest, still healthy, never a hex string in the
+  // user's face. Non-throwing: if the storages can't be listed, every row simply keeps its raw token.
+  let labels: Map<string, string>;
+  try {
+    labels = deviceLabelIndex(storageRootsForDeviceLabels());
+  } catch (e) {
+    log.warn("units", `remoteOnlyRows: device label index failed: ${(e as Error).message}`);
+    return out;
+  }
+  return out.map((r) => ({ ...r, addedByDevice: resolveDeviceLabel(r.addedByDevice, labels) }));
+}
+
+/** The storage roots whose travelling `devices/` registries can name a peer (devices.mdx §2). Only synced
+ *  storages carry a registry — a `local` storage never travels, so it can never hold another computer's
+ *  device file. Best-effort: an unreadable storage list yields no roots, not an exception. */
+function storageRootsForDeviceLabels(): string[] {
+  const roots: string[] = [];
+  for (const id of listStorageIds()) {
+    const row = getStorageRow(id);
+    if (row && row.type !== "local") roots.push(row.root);
+  }
+  return roots;
 }
 
 /**

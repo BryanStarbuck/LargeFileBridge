@@ -39,6 +39,7 @@ import { readStorageIndex } from "../storage/tracking.service.js";
 import { writeSelfDevice, resolveGraftedPath } from "../storage/devices.service.js";
 import { getStoragePinned, readMappedDirsForRoot, getGitBackboneRemote } from "../storage/storage-settings.service.js";
 import { GitBackbone, type GitCycleResult } from "../git/git.service.js";
+import { withStorageGitLock } from "../git/git-lock.js";
 // The sync-repo mirror: send (mirrorToSyncRepo, via writeRepoTrackingManifest), receive (reconcile), and the
 // per-entry merge that keeps a peer's pin claim alive (storage_company.mdx §8.4.2/§8.4.3/§8.6).
 import {
@@ -435,64 +436,13 @@ function resolveStorageAbs(root: string, rel: string, mappedKeys: Set<string>): 
 // A pass is a RECONCILIATION TO CURRENT STATE, not a work item: running it twice is never more correct than
 // running it once. So we keep at most ONE running + ONE queued per storage, and any further request while one
 // is already queued COLLAPSES into it and shares its promise.
-interface GitLockState {
-  /** The in-flight holder — resolves when the current pass settles. */
-  running: Promise<unknown>;
-  /** The single queued successor, if any. Further callers share this exact promise. */
-  queued: Promise<unknown> | null;
-}
-const storageGitLocks = new Map<string, GitLockState>();
-
-function withStorageGitLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
-  const state = storageGitLocks.get(id);
-
-  // Nothing running — take the lock immediately.
-  if (!state) {
-    const running = (async () => fn())();
-    const entry: GitLockState = { running, queued: null };
-    storageGitLocks.set(id, entry);
-    void running.then(
-      () => releaseStorageGitLock(id, entry),
-      () => releaseStorageGitLock(id, entry),
-    );
-    return running as Promise<T>;
-  }
-
-  // Something is queued already — collapse into it. The queued pass has not started, so it will observe
-  // everything this caller wanted synced. Returning its promise means N callers await ONE pass.
-  if (state.queued) return state.queued as Promise<T>;
-
-  // One is running, none queued — queue exactly one successor.
-  const queued = state.running.then(
-    () => fn(),
-    () => fn(), // a failed holder must not poison its successor
-  );
-  state.queued = queued;
-  return queued as Promise<T>;
-}
-
-/** Promote the queued pass (if any) to running when the current holder settles; else drop the lock entry. */
-function releaseStorageGitLock(id: string, entry: GitLockState): void {
-  if (storageGitLocks.get(id) !== entry) return; // superseded already
-  if (!entry.queued) {
-    storageGitLocks.delete(id);
-    return;
-  }
-  const promoted: GitLockState = { running: entry.queued, queued: null };
-  storageGitLocks.set(id, promoted);
-  void promoted.running.then(
-    () => releaseStorageGitLock(id, promoted),
-    () => releaseStorageGitLock(id, promoted),
-  );
-}
-
 /**
  * Pin one directory-based storage (personal / company / community) as a unit, placing each file through
  * this computer's device graft (`resolveStorageAbs` → devices.mdx §4). Repos pin as their own repo
  * units and the settings-only "local" storage has no bytes, so both are skipped. Byte work is gated by
  * the per-storage `pinned` opt-in (default OFF — charter), mirroring the repo/computer-unit gate
  * (pin_process.mdx §1): a not-opted-in storage is still known and visited, but nothing is added/pinned/
- * fetched. Its file list is the tracking index; its manifest is the SDL's `.lfbridge/manifest.yaml`.
+ * fetched. Its file list is the tracking index; its manifest is the SDL's root `manifest.yaml`.
  * The whole unit runs under the per-storage Git lock so it never races the device worker on the same repo.
  */
 export function pinStorageUnit(id: string): Promise<void> {
@@ -512,6 +462,17 @@ async function pinStorageUnitInner(id: string): Promise<void> {
   const gitRemote = getGitBackboneRemote(id);
   const gitBackbone = gitRemote ? await GitBackbone.resolve(id, gitRemote.remote) : null;
   const gitResult: GitCycleResult = { ran: gitBackbone !== null };
+  if (!gitBackbone) {
+    // NO SILENT NULLS (storage_company.mdx §11.2). The git-only cycle warns here; this path did not, so a
+    // storage with no resolvable backbone reported `ran:false` — indistinguishable from "not attempted" —
+    // while its text accumulated locally forever.
+    log.warn(
+      "pin",
+      `storage ${id} (${row.type}) has NO resolvable git backbone — its tracking text is written locally ` +
+        `but will NEVER be committed or pushed. ` +
+        `${gitRemote ? `The remote "${gitRemote.remote}" did not resolve to a working copy.` : `No dedicated repo is configured and ${root} has no .git directory.`}`,
+    );
+  }
   if (gitBackbone) {
     await gitBackbone.pull(gitResult).catch((e) => {
       gitResult.problem = `Git pull failed: ${(e as Error).message}`;
@@ -554,7 +515,7 @@ async function pinStorageUnitInner(id: string): Promise<void> {
       decisions,
       fetchMissing: true,
       resolveAbs: (rel) => resolveStorageAbs(root, rel, mappedKeys),
-      manifest: readCommittedManifest(root), // <root>/.lfbridge/manifest.yaml (same path convention as a repo)
+      manifest: readCommittedManifest(root), // <root>/manifest.yaml — an SDL has no .lfbridge/ (§0.4)
       status: UnitStatusSchema.parse({}),
       writeManifest: (m) => writeCommittedManifest(root, m),
       // Storage units have no status.yaml store yet — status is a no-op (the manifest + pins are still

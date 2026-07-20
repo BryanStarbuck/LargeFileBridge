@@ -17,11 +17,16 @@ const TITLE: Record<TaskStatus, string> = {
 
 export function CompressStatusIcon({
   state,
+  title,
   onActivate,
   onMouseEnter,
   onMouseLeave,
 }: {
   state: TaskStatus;
+  /** Override the tooltip when "na" has a DIFFERENT reason than "not a compressible media type" — a
+   *  remote-only row (storage_company.mdx §8.5) is `na` on a `.mp4`, where the default text is actively
+   *  wrong: the file IS compressible, its bytes just aren't on this computer yet. */
+  title?: string;
   onActivate?: () => void;
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
@@ -30,7 +35,7 @@ export function CompressStatusIcon({
     <StatusActionIcon
       state={state}
       doneColor={COMPRESS_DONE_GREEN}
-      title={TITLE[state]}
+      title={title ?? TITLE[state]}
       onActivate={onActivate}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}

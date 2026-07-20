@@ -1134,9 +1134,18 @@ is populated; its `Size` is the manifest's recorded size, not a `stat`.
 | **`Pending`** | **Only after the user acts.** A remote-only row is not "in transfer" merely by existing; it becomes `Pending` when a pull-down job is enqueued for it ([processing.mdx §4.6.1](./processing.mdx#461-a-pull_down-job-for-a-remote-only-row--the-path-locked)). |
 | Space / compression / git-ignore / analysis panels | **Never** — there are no local bytes to reclaim, compress, ignore, or analyze (§8.5). |
 
-**Sorting.** The tab's worst-first order (`missing`/`error` → `pending` → `undecided` → `pinned`, then Size
-desc) already ranks a remote-only row at the top: it reads `missing` locally. That is the intended
-prominence — the biggest bytes this computer is missing lead the table.
+**Sorting.** The tab's default order is **fewest peers first, then largest first** — `peers` ascending,
+`size` descending. The files with **no peer at all** (nothing else of yours holds them → *not backed up*)
+lead the table, biggest first.
+
+A remote-only row therefore does **NOT** float to the top today. By construction it has **≥1 peer** — a
+peer's pin is exactly what made the row exist — so it sorts **below** every zero-peer local row. That is
+consistent (the lead position belongs to the files at risk of being lost, not the files a peer is safely
+holding), and it is stated here plainly so no one reads a promise the table does not keep.
+
+**Open question (not built):** should a remote-only row instead lead the tab, on the argument that "bytes
+you are missing" is the more urgent ask than "bytes only you have"? Deciding it would mean adding a
+transfer-urgency key ahead of `peers`. Until that is decided and built, the order above is the behavior.
 
 **It is not an alarm.** A red remote-only row is a **healthy** state — *"available, not here yet"*, never
 *"lost"*. The IPFS tab must not escalate it into a node-health or data-loss warning; the only offer is
@@ -1144,6 +1153,9 @@ prominence — the biggest bytes this computer is missing lead the table.
 
 The panels' counts come from the same `RepoDetail` the tab already reads, composed in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` (appends the remote-only rows) and `computeRepoDetail()` (`taskMetrics`), with the pull-down list itself from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers()`.
+
+The tab's default sort is declared in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — `TASK_TABS.ipfs.defaultSort` (`[{ id: "peers", desc: false }, { id: "size", desc: true }]`).
 
 <!--
   This is the IPFS DASHBOARD / node control-panel spec (the left-bar LANDING page at /ipfs), distinct
@@ -1198,4 +1210,11 @@ The panels' counts come from the same `RepoDetail` the tab already reads, compos
   worst-first sort already floats it (it reads `missing`) — that's the intended prominence. It is a HEALTHY
   state, never escalated to a node-health/data-loss warning; only offer = pull it down (warnings §10.8.12a).
   AC 25 added.
+
+  2026-07-20 spec-vs-code correction. §21.1's "Sorting" paragraph was wrong: the repo IPFS tab does NOT sort by a
+  worst-first transfer-urgency key and does NOT float remote-only rows to the top. taskTabs.config.ts sorts the
+  ipfs tab by [{peers, asc}, {size, desc}] — zero-peer rows (not backed up) lead, biggest first — and a
+  remote-only row has ≥1 peer BY CONSTRUCTION, so it sorts BELOW them. The paragraph now describes the real sort,
+  says plainly that remote-only rows are not floated, and records "should they lead instead?" as an explicit open
+  question rather than as shipped behavior.
 -->

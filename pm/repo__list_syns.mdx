@@ -506,4 +506,8 @@ large_files:
   last-writer-COPIED and had ZERO callers. AC 11-13 added. Code: tracking-root.service normalizeRemote/
   repoUidFor → resolveStateSyncRepo (git.service normalizeRemoteKey is the shipping folding helper),
   tracking-sync.service reconcileFromSyncRepo (real per-entry mergeManifests union) ← pin.service pinRepoFolder + reconcileMirroredRepos from syncStorageTextInner/pinStorageUnitInner.
+  2026-07-20 spec-vs-code correction. §4.1 no longer reads as if the fold were still a last-writer copy with no
+  callers — both halves are fixed in code (real per-entry mergeManifests union; callers on both pin passes). The
+  non-existent `runStoragePin()` reference was replaced with the real callers: pinRepoFolder() and
+  pinStorageUnitInner()/syncStorageTextInner() via reconcileMirroredRepos().
 -->

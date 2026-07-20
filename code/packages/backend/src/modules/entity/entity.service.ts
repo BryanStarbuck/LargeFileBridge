@@ -11,6 +11,7 @@ import type {
   Decision,
   TransferStatus,
   FileFlags,
+  Manifest,
 } from "@lfb/shared";
 import {
   buildBadgeContext,
@@ -40,7 +41,11 @@ import {
   updateRepoConfig,
   repoIdFromPath,
   transferFor,
+  remoteOnlyRows,
 } from "../store-model/units.service.js";
+// The reconciled peer manifest — the ONLY thing that can tell "the file is gone" from "another of your
+// computers has it and this one doesn't yet" (files.mdx §2.1).
+import { readRepoTrackingManifest } from "../pin/manifest.service.js";
 import { log } from "../../shared/logging.js";
 import { resolveStateDir, ensureDir } from "../../config/state-dir.js";
 import { foreignPinByAbsPath } from "../ipfs/foreign-pin.service.js";
@@ -125,24 +130,33 @@ export async function buildEntityView(
   const flags: FileFlags = effectiveFlags(e.abs);
 
   if (!e.exists) {
+    // NOT-FOUND vs REMOTE-ONLY (files.mdx §2.1, LOCKED). `exists:false` has TWO very different causes, and
+    // conflating them turns the product's normal second-computer experience into an alarm: the file may be
+    // gone (something went wrong → §5's "no longer at that path" card), or another of the user's computers
+    // may simply have bytes this one hasn't pulled yet (nothing went wrong → the red "not on this computer
+    // yet" state whose one action is pull it down). The manifest is what tells the two apart, so consult it
+    // BEFORE reporting an all-null view.
+    const remote = remoteOnlyEntity(e.abs);
     return {
       kind: e.kind,
       name,
       path: e.abs,
       exists: false,
-      sizeBytes: null,
+      // Identity for a remote-only file comes from the MANIFEST — there is nothing here to stat (§2.1).
+      sizeBytes: remote?.sizeBytes ?? null,
       createdAt: null,
       modifiedAt: null,
       badges: [],
       flags,
-      repo: null,
-      decision: null,
-      transfer: null,
-      cid: null,
-      peers: [],
+      repo: remote?.repo ?? null,
+      decision: remote?.decision ?? null,
+      transfer: remote ? "pending" : null,
+      cid: remote?.cid ?? null,
+      peers: remote?.peers ?? [],
       compressible: null,
       compressState: null,
       rollup: null,
+      ...(remote ? { presence: "remote-only" as const, addedByDevice: remote.addedByDevice } : {}),
     };
   }
 
@@ -204,6 +218,49 @@ export async function buildEntityView(
     compressible: comp.compressible,
     compressState: comp.compressState,
     rollup: e.kind === "dir" && wantRollup ? await buildDirRollup(e.abs, match) : null,
+  };
+}
+
+/**
+ * Is this absent path a file another of the user's computers has (storage_company.mdx §8.5), and if so what
+ * does the manifest know about it? Returns null for a genuinely-missing file — the caller then renders the
+ * unchanged not-found card (files.mdx §5).
+ *
+ * The FOUR conditions a manifest entry must meet to be remote-only are NOT re-implemented here: the entry is
+ * handed to `remoteOnlyRows()` — the same composer the repo file list uses — as a one-entry manifest, so the
+ * page and the row can never disagree about what remote-only means, and the peer's device label is resolved
+ * through the same registry path (devices.mdx §6.9). One entry in means at most one row out, so this costs a
+ * single `existsSync`, not a walk of the whole manifest.
+ */
+function remoteOnlyEntity(
+  abs: string,
+): { repo: EntityView["repo"]; decision: Decision; cid: string | null; peers: string[]; sizeBytes: number; addedByDevice: string | null } | null {
+  const match = enclosingRepo(abs);
+  if (!match) return null; // outside every registered repo → no manifest could know it
+  const rel = path.relative(match.repoPath, abs);
+  let manifest: Manifest;
+  try {
+    manifest = readRepoTrackingManifest(match.repoPath);
+  } catch (e) {
+    // A corrupt/half-merged manifest is not evidence the file is gone — but it is not evidence a peer has it
+    // either, so we degrade to the plain not-found view rather than invent a pull offer.
+    log.warn("entity", `remote-only lookup failed for ${abs}: ${(e as Error).message}`);
+    return null;
+  }
+  const entry = manifest.files.find((f) => f.path === rel);
+  if (!entry) return null;
+  const cfg = getRepoConfig(match.folder);
+  const selfLabel = computerLabel();
+  const row = remoteOnlyRows(cfg, { ...manifest, files: [entry] }, [], match.repoPath, selfLabel)[0];
+  if (!row) return null;
+  return {
+    repo: { repoId: match.repoId, name: match.repoName, relPath: rel },
+    decision: row.decision,
+    cid: row.cid,
+    // Ship only OTHER computers as peers (ipfs.mdx §1.1) — same rule as the local branch below.
+    peers: row.peers.filter((p) => p !== selfLabel),
+    sizeBytes: row.sizeBytes,
+    addedByDevice: row.addedByDevice ?? null,
   };
 }
 

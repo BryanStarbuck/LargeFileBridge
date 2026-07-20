@@ -46,9 +46,25 @@ const DECISIONS: Decision[] = ["sync", "ignore", "undecided"];
 const decisionLabel = (d: Decision): string =>
   d === "sync" ? "Add to IPFS (pin)" : d[0].toUpperCase() + d.slice(1);
 
+// The ROW-level sentence for a remote-only row (one_repo.mdx §4.10) — the row tooltip AND the left-bar
+// hover-info text both read exactly this. `addedByDevice` is the peer's nice name from the travelling device
+// registry; when there is no usable label we say "another of your computers" and never an id
+// (devices.mdx §6.9).
+const remoteOnlyTooltip = (f: FileRow): string =>
+  `On ${f.addedByDevice ?? "another of your computers"} — not on this computer yet.`;
+
+// Why every task icon on a remote-only row is inert. Each of those icons is `na`, and `na` normally means
+// "this kind of file can't have one" — which is actively WRONG here: a remote-only .mp4 IS transcribable,
+// describable, OCR-able and compressible; its bytes simply aren't here. Without this the icons fall back to
+// the column's generic explanation and tell the user something untrue (one_repo.mdx §4.10).
+const ABSENT_BYTES_REASON = "The bytes aren't on this computer yet — pull it down first.";
+
 /** One-line summary of a file for the hover-info region (task_tabs.mdx §3) — name · size · kind · task state. */
 function fileSummary(f: FileRow): string {
   const name = f.path.slice(f.path.lastIndexOf("/") + 1);
+  // A remote-only row leads with WHERE it is: that sentence is the entire actionable content of the row,
+  // and it outranks any task state (which is `na` on all four axes anyway).
+  if (f.presence === "remote-only") return `${name} · ${formatBytes(f.sizeBytes)} · ${remoteOnlyTooltip(f)}`;
   const kind = mediaKindForName(name);
   const bits: string[] = [name, formatBytes(f.sizeBytes)];
   if (kind) bits.push(kind);
@@ -335,7 +351,8 @@ export function OneRepoPage() {
         const remoteOnly = f.presence === "remote-only";
         const state: TaskStatus = decided || foreignPinned || remoteOnly ? "done" : "could";
         const doneColor = missingHere || remoteOnly ? "#dc2626" : foreignPinned ? "#15803d" : undefined;
-        const onDevice = f.addedByDevice ? `On ${f.addedByDevice}` : "On another of your computers";
+        // One sentence, one source (§4.10) — the same text the row tooltip and hover-info use.
+        const onDevice = remoteOnlyTooltip(f);
         return (
           <TaskIconCell
             kind="pin"
@@ -409,8 +426,12 @@ export function OneRepoPage() {
       kind: "enum",
       accessor: (f) => f.transcribe ?? "na",
       filterOptions: ["could", "done", "na"],
+      // A remote-only row's `na` needs its OWN reason (§4.10) — the column's generic "not audio/video" would
+      // be a lie about a file that is perfectly transcribable once its bytes are here.
       cell: (f) => (
-        <TaskIconCell kind="transcribe" state={f.transcribe ?? "na"} extraHover={fileSummary(f)} onActivate={() => onTranscribeActivate(f)} />
+        <TaskIconCell kind="transcribe" state={f.transcribe ?? "na"}
+          title={f.presence === "remote-only" ? ABSENT_BYTES_REASON : undefined}
+          extraHover={fileSummary(f)} onActivate={() => onTranscribeActivate(f)} />
       ),
     },
     {
@@ -420,7 +441,9 @@ export function OneRepoPage() {
       accessor: (f) => f.describe ?? "na",
       filterOptions: ["could", "done", "na"],
       cell: (f) => (
-        <TaskIconCell kind="describe" state={f.describe ?? "na"} extraHover={fileSummary(f)} onActivate={() => onDescribeActivate(f)} />
+        <TaskIconCell kind="describe" state={f.describe ?? "na"}
+          title={f.presence === "remote-only" ? ABSENT_BYTES_REASON : undefined}
+          extraHover={fileSummary(f)} onActivate={() => onDescribeActivate(f)} />
       ),
     },
     {
@@ -430,7 +453,9 @@ export function OneRepoPage() {
       accessor: (f) => f.ocr ?? "na",
       filterOptions: ["could", "done", "na"],
       cell: (f) => (
-        <TaskIconCell kind="ocr" state={f.ocr ?? "na"} extraHover={fileSummary(f)} onActivate={() => onOcrActivate(f)} />
+        <TaskIconCell kind="ocr" state={f.ocr ?? "na"}
+          title={f.presence === "remote-only" ? ABSENT_BYTES_REASON : undefined}
+          extraHover={fileSummary(f)} onActivate={() => onOcrActivate(f)} />
       ),
     },
     {
@@ -443,7 +468,9 @@ export function OneRepoPage() {
         const name = f.path.slice(dir.length);
         return (
           <span
-            title={f.path}
+            // The ROW tooltip (one_repo.mdx §4.10): a remote-only row leads with "On {device} — not on this
+            // computer yet." above its path, so hovering the row's own name says where the file actually is.
+            title={f.presence === "remote-only" ? `${remoteOnlyTooltip(f)}\n${f.path}` : f.path}
             onMouseEnter={() => setHoverInfo(fileSummary(f))}
             onMouseLeave={() => setHoverInfo(null)}
           >
@@ -497,6 +524,9 @@ export function OneRepoPage() {
       cell: (f) => (
         <CompressStatusIcon
           state={f.compress ?? "na"}
+          // Same correction as the three analysis icons: the default `na` text ("Not a compressible media
+          // type") is wrong for a remote-only .mp4 — it IS one, its bytes just aren't here (§4.10).
+          title={f.presence === "remote-only" ? ABSENT_BYTES_REASON : undefined}
           onActivate={() => onCompressActivate(f)}
           onMouseEnter={() => setHoverInfo(fileSummary(f))}
           onMouseLeave={() => setHoverInfo(null)}

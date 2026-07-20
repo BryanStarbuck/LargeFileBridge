@@ -48,6 +48,9 @@ export interface Action {
   danger?: boolean;
   checked?: boolean; // toggle state (Flag group)
   disabled?: boolean;
+  // Why an item is disabled, as a native tooltip. A greyed item with no reason is a dead end — a remote-only
+  // file's analysis/destructive items MUST say "the bytes aren't on this computer yet" (files.mdx §2.1).
+  title?: string;
   onSelect: () => void | Promise<void>;
   // ── Page action-links row extras (page_actions.mdx §3) — ignored by the popover MenuList ──────────
   // A destructive/irreversible offer opens this confirm modal BEFORE running onSelect (never a one-click
@@ -231,6 +234,7 @@ export function MenuList({
                 key={a.id}
                 role="menuitem"
                 disabled={a.disabled}
+                title={a.title}
                 onClick={run(a.onSelect)}
                 className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm disabled:opacity-40 ${
                   a.danger ? "text-red-600 hover:bg-red-50" : "text-black hover:bg-slate-100"
@@ -259,6 +263,26 @@ interface Ctx {
 function buildActions(v: EntityView, ctx: Ctx): Action[] {
   const a: Action[] = [];
   const parent = v.path.replace(/[/\\][^/\\]*$/, "") || v.path;
+  // REMOTE-ONLY (storage_company.mdx §8.5, files.mdx §2.1): another of the user's computers has this file's
+  // bytes and this one does not. The catalog is unchanged in shape — same items, same groups — but every
+  // item that needs the BYTES is disabled and says why, and the one action that IS available is added. This
+  // gate is on PRESENCE, not on the filename: the old gate asked only "is this a video?", so a remote-only
+  // .mp4 was offered a transcription that would queue work with nothing to read, and a Move/Delete of a file
+  // this computer does not have.
+  const remoteOnly = v.presence === "remote-only";
+  const ABSENT_BYTES = "The bytes aren't on this computer yet — pull it down first.";
+  // Pull it down — the file's single action while remote-only. Pinning FETCHES the bytes over IPFS; once they
+  // land, the next scan makes this an ordinary local file and the whole catalog wakes up.
+  const pullDown = () => {
+    if (!v.repo) return;
+    api.pull(v.repo.repoId, [v.repo.relPath], { compress: false })
+      .then(() => {
+        toast.success("Pulled down");
+        refreshLists();
+        ctx.qc.invalidateQueries({ queryKey: ["entity", v.path] });
+      })
+      .catch((e) => { clientLog.error("EntityMenu.pull", e); toast.error(e.message); });
+  };
   // Copy actions ONLY copy — they never navigate (menus.mdx §3.3). copyText awaits the write and toasts
   // the real outcome (with an execCommand fallback), so a failed copy never claims success.
   const copy = (text: string, label: string) => async (): Promise<void> => { await copyText(text, label, "EntityMenu.copy"); };
@@ -327,6 +351,12 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
       a.push({ id: "rm-ipfs", label: "Remove from IPFS", group: "IPFS", icon: <DownloadCloud className="h-4 w-4" />,
         onSelect: () => ctx.decide.mutate("ignore") });
     }
+    // The remote-only file's ONE action (§8.5) — fetch the bytes this computer doesn't have yet.
+    if (remoteOnly && v.repo) {
+      a.push({ id: "pull-down", label: "Pull it down", group: "IPFS", icon: <DownloadCloud className="h-4 w-4" />,
+        title: `On ${v.addedByDevice ?? "another of your computers"} — not on this computer yet.`,
+        onSelect: pullDown });
+    }
 
     // Full decision submenu (flat) — only meaningful inside a repo.
     if (v.repo) {
@@ -344,18 +374,21 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
 
     // Work
     if (v.compressible && v.compressState !== "done" && !v.flags.noCompress) {
-      a.push({ id: "compress", label: "Compress…", group: "Work", icon: <Zap className="h-4 w-4" />, onSelect: compress });
+      a.push({ id: "compress", label: "Compress…", group: "Work", icon: <Zap className="h-4 w-4" />,
+        disabled: remoteOnly, title: remoteOnly ? ABSENT_BYTES : undefined, onSelect: compress });
     }
     // Create Transcription — audio/video only. Opens the UNIFIED batch popup (dialogs.mdx §5/§6.4) with this
     // one file as the sole checked candidate — the education + an explicit "Transcribe 1 file" confirm, never
     // a bare window.confirm. The SAME popup the Transcribable metric tile + the page action-links row open.
     if (mkind === "audio" || mkind === "video") {
       a.push({ id: "create-transcription", label: "Create Transcription", group: "Create", icon: <Captions className="h-4 w-4" />,
+        disabled: remoteOnly, title: remoteOnly ? ABSENT_BYTES : undefined,
         onSelect: () => openTranscribeBatch({ paths: [v.path] }) });
     }
     // Create AI description — image/video only. Same popup, provider/model-gated (dialogs.mdx §5/§6.4).
     if (mkind === "image" || mkind === "video") {
       a.push({ id: "create-description", label: "Create AI description", group: "Create", icon: <Sparkles className="h-4 w-4" />,
+        disabled: remoteOnly, title: remoteOnly ? ABSENT_BYTES : undefined,
         onSelect: () => openDescribeBatch({ paths: [v.path] }) });
     }
     // Create OCR text — image/video AND **PDF**, ALWAYS directly after Create AI description (ocr.mdx §8.2:
@@ -368,10 +401,13 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
     // and AI description (image/video) genuinely do not apply to a PDF, so they stay absent.
     if (mkind === "image" || mkind === "video" || isPdfName(v.name)) {
       a.push({ id: "create-ocr-text", label: "Create OCR text", group: "Create", icon: <TextSelect className="h-4 w-4" />,
+        disabled: remoteOnly, title: remoteOnly ? ABSENT_BYTES : undefined,
         onSelect: () => openOcrBatch({ paths: [v.path] }) });
     }
-    // Move… — guarded rename of the file (media_viewer.mdx §4.4). Explicit; relocates real bytes.
-    a.push({ id: "move", label: "Move…", group: "Work", icon: <Move className="h-4 w-4" />, onSelect: move });
+    // Move… — guarded rename of the file (media_viewer.mdx §4.4). Explicit; relocates real bytes — so there
+    // must BE bytes: a remote-only file has nothing here to rename.
+    a.push({ id: "move", label: "Move…", group: "Work", icon: <Move className="h-4 w-4" />,
+      disabled: remoteOnly, title: remoteOnly ? ABSENT_BYTES : undefined, onSelect: move });
   } else {
     // Directory
     a.push({ id: "view", label: "View directory", group: "Open", icon: <Folder className="h-4 w-4" />,
@@ -435,7 +471,10 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
   }
   // Delete… — RECOVERABLE (moves to LFBridge trash, never unlink — menus.mdx §5.3 / media_viewer.mdx §4.4).
   if (v.kind === "file") {
-    a.push({ id: "delete", label: "Delete…", group: "Danger", danger: true, icon: <Trash2 className="h-4 w-4" />, onSelect: del });
+    // Nothing here to trash for a remote-only file — and a "Delete" that could only ever fail is worse than
+    // one that explains itself (§8.5: its only action is pull it down).
+    a.push({ id: "delete", label: "Delete…", group: "Danger", danger: true, icon: <Trash2 className="h-4 w-4" />,
+      disabled: remoteOnly, title: remoteOnly ? ABSENT_BYTES : undefined, onSelect: del });
   }
 
   return a;

@@ -299,21 +299,25 @@ ownership assertion ([repo_owner_propagation.mdx](./repo_owner_propagation.mdx))
   (3) Failing that, by a **normalized comparison** — lowercased, non-alphanumerics stripped — of the slug
   against the row's `company_name`, its row `name`, and its root-derived slug. (4) No match → **create** the
   company row (§6) and bind it.
-* **The normalized name match is a best-effort bridge, not the design.** It exists because the binding is not
-  wired yet (below); the **explicit** binding is the correct answer and should win wherever it is present.
+* **The normalized name match is a best-effort bridge, not the design.** The **explicit** binding wins
+  wherever it is present; a match won by the fuzzy rules is **written back** as an explicit binding so the
+  heuristic runs once and the result becomes something the user can see, edit, and share.
 * **Renaming does not break the binding.** The friendly display name is user-editable
   ([storage_company.mdx §6](./storage_company.mdx#6-the-friendly-display-name)); the binding is to the org
   **slug**, so renaming `ACT3ai` to *"ACT3 AI"* leaves every repo still bound to the same storage row.
-* **Known gap (stated so it is not mistaken for done).** `ensureCompanyForOwner(slug)` is **cited above and in
-  [storage_company.mdx §5](./storage_company.mdx#5-repos-auto-derived-from-an-org-appear-as-this-company) but
-  does not exist in the code**, and `deriveOwnerForRemote()` returns **`companyId: null`** — so an
-  auto-derived company owner is today never joined to a discovered company storage row. This is the same
-  defect named in
-  [storage_company.mdx §8.7](./storage_company.mdx#87-four-smaller-defects-this-use-case-also-closes); closing
-  it is a precondition for §7.3's ownership lookup to resolve to anything.
+* **Known gap, narrowed (stated so it is not mistaken for done).** The resolver itself **exists**:
+  `ensureCompanyForOwner(slug)` implements all three rules above, including the write-back. What is **still
+  missing is the join at derivation time** — `deriveOwnerForRemote()` returns **`companyId: null`**, so the
+  owner block that the rest of the product reads is not yet attached to a company storage row, and every
+  consumer that needs the row has to call `ensureCompanyForOwner()` itself. Filling that `companyId` is the
+  remaining precondition for §7.3's ownership lookup to resolve without a second call. Same narrowing as
+  [storage_company.mdx §8.7](./storage_company.mdx#87-four-smaller-defects-this-use-case-also-closes).
 
-Deriving the owner and the best-effort company match that stands in for the binding until it is wired are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `deriveOwnerForRemote(remote, personalAccounts)` (returns `companyId: null` today — the gap) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `ownerMatchesCompany(owner, row)` (exact `companyId` for a manual override, normalized slug/name comparison for an auto owner), consumed by `getOwnedRepos(storageId)` in the same file.
+Resolving a slug to its company storage row (and recording the binding) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureCompanyForOwner()` (explicit `owner_slugs` claim → normalized name match → lone-company adoption, with write-back via `recordOwnerSlug()`).
+
+Deriving the owner (the step that still leaves `companyId` unjoined) and the best-effort match the settings page uses are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `deriveOwnerForRemote(remote, personalAccounts)` (returns `companyId: null` — the remaining gap) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `ownerMatchesCompany(owner, row)` (exact `companyId` for a manual override, normalized slug/name comparison for an auto owner), consumed by `getOwnedRepos(storageId)` in the same file.
 
 ---
 
@@ -462,8 +466,9 @@ Resolving the owning storage from the repo's remote before any containment test,
    company storage — matched by the manual override's exact id, else the row's explicit **org binding**, else a
    **normalized** slug/name comparison, else by **creating** the row (§6) — and the binding is to the **org
    slug**, so renaming the company's friendly display name never breaks it. The **known gap** is stated, not
-   hidden: `ensureCompanyForOwner(slug)` does not exist yet and `deriveOwnerForRemote()` returns
-   `companyId: null`, so an auto-derived company owner is not yet joined to a company storage row.
+   hidden — and it is narrower than it was: `ensureCompanyForOwner(slug)` **exists** and resolves the row, but
+   `deriveOwnerForRemote()` still returns `companyId: null`, so the owner block the product reads is not yet
+   joined to a company storage row.
 8c. **Ownership decides the sync-repo target, resolved REMOTE-ORG FIRST** (§7.3, authority
    [storage_company.mdx §8.4.2](./storage_company.mdx#842-the-company-sdl-is-the-sync-repo-and-the-mirror-is-on-by-default-locked)):
    the owning storage is the one the repo's **remote org** binds to, with **path containment only as the
@@ -524,4 +529,11 @@ Resolving the owning storage from the repo's remote before any containment test,
   OFF". Grouping (§7.1) unchanged, no bytes move. New AC 8b + 8c. Code: resolveOwnerDedicatedRepo
   (artifact-placement.service — today containment-first, which §7.3 corrects), parseRemoteOwner/
   deriveOwnerForRemote (git.service), resolveStateSyncRepo (tracking-root.service).
+
+  2026-07-20 spec-vs-code correction. §6.1's "Known gap" no longer claims ensureCompanyForOwner(slug) does not
+  exist — it DOES, in storage.service.ts, with three resolution rules (explicit company.owner_slugs claim →
+  normalized name match → a lone company storage adopting an unclaimed org) and heuristic write-back via
+  recordOwnerSlug(). The gap is narrowed to the real one: deriveOwnerForRemote() in git.service.ts still returns
+  companyId: null, so the owner block the rest of the product reads is not joined to a company storage row and
+  each consumer must call ensureCompanyForOwner() itself. AC 8b updated to match.
 -->

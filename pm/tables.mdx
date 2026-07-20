@@ -889,16 +889,23 @@ This section owns only what the **shared table** does with one.
   user cannot find is worse than a row they cannot act on.
 * **It filters like any other row, on the values it actually has.** Its **Pin (IPFS)** facet value is the
   ordinary one for its decision (§2.4.1) — usually **Pinned** (`sync`), or **Undecided** while this computer
-  has not decided. On the **Git-ignore** facet it is **N/A**, which per §2.4.1 is **not a facet value**: a
-  file with no local path has no `git check-ignore` answer, so the Git-ignore facet simply does not select
-  it, and its Ignore icon renders `na`. The **File type** facet (§2.10) works normally — `fileTypeForName()`
-  reads the manifest **name**, which a remote-only row has.
+  has not decided. On the **Git-ignore** axis it is an ordinary **Off** (`gitignore: false`) whose toggle is
+  **disabled with a reason on hover** — *"Not on this computer yet — pull it down first, then you can
+  git-ignore it."* There is no local path for `git check-ignore` to answer about, and writing a `.gitignore`
+  line for a path this working tree does not contain would be wrong; but **Off + disabled + a reason** beats a
+  blank `na`, because it says *why* rather than leaving the user to guess. It therefore filters as **Off** on
+  the Git-ignore facet like any other not-ignored row. The **File type** facet (§2.10) works normally —
+  `fileTypeForName()` reads the manifest **name**, which a remote-only row has.
 * **Search matches it.** Search is a substring over the **path**, and a remote-only row's `path` comes from
   the manifest. A file the user knows they pinned on their tower must be findable by name on their laptop —
   that is most of the point of showing the row.
 * **Sorting uses the manifest's values, and unknowns sort LAST.** `Size` and `CID` come from the manifest and
-  sort like any other row's. `Peers` counts the peers that hold it (never 0 — if no peer held it there would
-  be no row). **`Changed` is unknown** (there is no local `mtime` to read): it sorts **last** in either
+  sort like any other row's. **`FileRow.peers` carries the raw `pinned_by` list from the manifest** — every
+  device that claims the file, *this computer included* when it holds it. The `Peers` cell sorts on that
+  list's length; on a remote-only row it is never 0, because a non-self peer claim is one of the four
+  conditions that make the row exist. (Where a spec instead names **`pinned_on`** — the To-Do batch field,
+  [to_do_batches.mdx §3.4](./to_do_batches.mdx) — that is the **same list minus this computer**: the peers,
+  excluding self. Same data, one subtraction apart.) **`Changed` is unknown** (there is no local `mtime` to read): it sorts **last** in either
   direction and renders `—`, never a fabricated or epoch-zero date. In the icon columns' **On → Recommended →
   Off → N/A** order (§3.6) its `na` analysis icons sort last, exactly like any other N/A.
 * **It supplies no `rowHref` (§4d.1).** There is no local file to open, so its `rowHref` returns **`""`** —
@@ -915,6 +922,10 @@ The row's optional `presence` field, and the composer that appends manifest entr
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()`;
 the toggle, facets, search, sort, and `rowHref` that consume it are the unchanged shared surfaces in
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
+
+The remote-only row's `gitignore: false` value, and the disabled Ignore toggle with its hover reason, are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `remoteOnlyRows()` (sets `gitignore: false`) and
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — the `ignore` icon column (`disabled={locked || remoteOnly}` with the explanatory `title`).
 
 ---
 
@@ -1101,4 +1112,13 @@ Applied in code:
   sort the table." §2.2 and §3.5 move the common path OUT of those dropdowns onto always-visible
   rails/chips while KEEPING both icons for overflow + discovery. The charter line should be refreshed
   to match; it was not edited here because this change set is spec-only.
+
+  2026-07-20 spec-vs-code correction. §4e had two claims the code contradicts, and in both cases the CODE is
+  better: (1) a remote-only row's Git-ignore value is NOT "N/A — not a facet value" with an `na` icon —
+  remoteOnlyRows() sets `gitignore: false` (an ordinary Off) and OneRepoPage DISABLES the toggle with an
+  explanatory hover reason ("Not on this computer yet — pull it down first…"), which says WHY instead of
+  going blank; the spec now says "Off and disabled, with a reason on hover". (2) `FileRow.peers` is described
+  precisely: it carries the RAW `pinned_by` list (this computer included when it holds the file), while
+  to_do_batches.mdx §3.4's `pinned_on` is that same list MINUS this computer — same data, one subtraction
+  apart, now cross-referenced from both sides.
 -->

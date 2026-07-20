@@ -462,4 +462,8 @@ computer-scope list. IPNS and a file-backbone can both be enabled; they reconcil
   tracking-root.service normalizeRemote/repoUidFor → resolveStateSyncRepo (the shipping remote-folding
   helper today is git.service normalizeRemoteKey), tracking-sync.service reconcileFromSyncRepo called from
   pin.service pinRepoFolder / syncStorageTextInner+pinStorageUnitInner via reconcileMirroredRepos, after fetch+merge.
+  2026-07-20 spec-vs-code correction. §5.7's "handled in code" line cited `pin.service.ts — runStoragePin()`, a
+  function that does not exist. reconcileFromSyncRepo() is a real per-entry union merge (mergeManifests) and IS
+  called: from pinRepoFolder() on the repo pin pass, and from the SDL git cycle (pinStorageUnitInner() /
+  syncStorageTextInner()) via reconcileMirroredRepos(). Names corrected here and everywhere else in pm/.
 -->

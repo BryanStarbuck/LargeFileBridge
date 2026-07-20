@@ -607,4 +607,8 @@ without a file). Five of those six links existed while the product still deliver
   tracking-sync.service ensureSyncRepoMarker/mirrorToSyncRepo/reconcileFromSyncRepo, sync-trigger.service
   noteArtifactWritten, pin.service pinRepoFolder/pinStorageUnitInner/syncStorageTextInner/missingPinnedFromPeers/pullMissing, units.service
   composeFileRows, shared types FileRow.presence.
+  2026-07-20 spec-vs-code correction. The `pin.service.ts — runStoragePin()` reference was wrong (no such
+  function). reconcileFromSyncRepo() is a per-entry union merge over mergeManifests(), called from
+  pinRepoFolder() and from the SDL git cycle (pinStorageUnitInner() / syncStorageTextInner()) via
+  reconcileMirroredRepos().
 -->

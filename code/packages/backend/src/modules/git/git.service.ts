@@ -38,6 +38,13 @@ const UNION_MERGE_PATHS = [
   ".lfbridge/manifest.yaml", // legacy pre-migration shape
   ".lfbridge/decisions.yaml", // legacy pre-migration shape
   "owner_map.yaml", // company ownership assertions at the sync-repo root (repo_owner_propagation.mdx §2) — union-merged
+  // The mirrored per-repo tracking payload now rides in every company/Personal SDL under
+  // `repos/<repoUid>/` (storage_company.mdx §8.4.1). These entries are BARE FILENAMES with no slash, so git
+  // matches them at ANY depth — the mirror needs no pattern of its own. `history/<device>.txt` is a
+  // per-device append-only log; the `files/<rel>.yaml` sidecars are append-only event lists. Both union
+  // cleanly, and both would otherwise abort a company repo's whole backbone (storage_company.mdx §11.1).
+  "**/history/*.txt", // history/<device>.txt — append-only, per device, at any depth
+  "**/files/**/*.yaml", // the per-file sidecars — append-only event lists
 ];
 
 /** The SDL's travelling payload at its ROOT (artifact_placement_policy.mdx §0.1). Ignoring any of these is
@@ -61,6 +68,40 @@ const SDL_ROOT_PAYLOAD: ReadonlySet<string> = new Set([
  *  shape is safe to auto-resolve by dropping the file (see `autoResolveRepoStorageConflicts`). */
 function isRepoStorageYamlPath(p: string): boolean {
   return /(^|\/)repo_storage\.yaml$/.test(p);
+}
+
+/**
+ * How a conflicted path is resolved AUTOMATICALLY (storage_company.mdx §11.1).
+ *
+ * The rule that matters: *waiting for the customer to resolve a conflict means it never gets resolved.* A
+ * tracking repo stuck pending a human has stopped syncing, and a sync product that has stopped syncing is
+ * indistinguishable from one that was never installed. So every file LFB owns here has a defined automatic
+ * resolution, and a conflict in one file never blocks another.
+ *
+ *   • "regenerate" — a machine-generated CACHE whose authoritative copy is Local Storage. Neither side is
+ *     worth keeping, so drop it from the merge and let the next pass rebuild it.
+ *   • "ours" — a SELF-OWNED file (this device's own registry entry). Our copy wins; other devices' files are
+ *     untouched because they are different paths.
+ *   • "union" — an append-only list that should have union-merged via .gitattributes. Reaching a conflict
+ *     means the attribute was missing when the merge ran (a fresh clone, a mid-migration tree), so we
+ *     concatenate both sides rather than abort; the readers fold duplicates anyway (§8.4.3).
+ *   • null — no rule. Quarantined, never a reason to stop the backbone.
+ */
+export type ConflictResolution = "regenerate" | "ours" | "union" | null;
+
+export function resolutionFor(p: string): ConflictResolution {
+  const base = p.split("/").pop() ?? p;
+  // Regenerable caches — rebuilt from Local Storage on the next pass.
+  if (isRepoStorageYamlPath(p)) return "regenerate";
+  if (base === "files.yaml") return "regenerate";
+  // Self-owned: a device file is written only by the device it names.
+  if (/(^|\/)devices\/[^/]+\.yaml$/.test(p)) return "ours";
+  // Append-only lists (the .gitattributes union should have handled these; do it by hand if it didn't).
+  if (base === "manifest.yaml" || base === "decisions.yaml" || base === "owner_map.yaml") return "union";
+  if (base === "LargeFilesBridge_SyncList.yaml") return "union";
+  if (/(^|\/)files\/.+\.yaml$/.test(p)) return "union"; // per-file sidecars: event lists
+  if (/(^|\/)history\/[^/]+\.txt$/.test(p)) return "union";
+  return null;
 }
 
 export type RemoteKind = "local" | "url";
@@ -357,30 +398,32 @@ export class GitBackbone {
       const after = await this.git.revparse(["HEAD"]).catch(() => "");
       result.merged = before !== after;
     } catch (e) {
-      // A merge conflict simple-git could not auto-resolve. When EVERY conflicted path is a `repo_storage.yaml`
-      // — machine-generated Category-B tracking state that must never live in a git working tree in the first
-      // place (repo_tracking_scheme.mdx §1/§2: Local Storage is always the authoritative copy, which is exactly
-      // why it "can never merge-conflict" once it's out of git) — auto-resolve deterministically by dropping the
-      // file from the merge rather than keeping either side's stale content; Local Storage (or the next
-      // mirrorToSyncRepo() pass) regenerates it. This is the "regenerate" strategy: no side's committed value is
-      // worth preserving, so there is nothing to actually reconcile. Any OTHER conflicted path still aborts +
-      // surfaces, never a clobber (git_backbone.mdx §4.3).
+      // A merge conflict git could not auto-resolve. LFB resolves it ITSELF, per file — it never hands the
+      // user homework (storage_company.mdx §11.1). Before this, one unresolvable path aborted the merge and
+      // `commitAndPush` then refused to run, so a single conflicted file froze the storage's ENTIRE backbone
+      // forever: nothing merged, nothing committed, nothing pushed, every cycle repeating the same abort
+      // until a human ran git by hand. And because only `repo_storage.yaml` had a rule — applied solely when
+      // EVERY conflicted path was one — a lone sidecar in the same merge took the resolvable files down with
+      // it. The mirrored `repos/<repoUid>/` payload made that the common case rather than the rare one.
       const conflicts = await this.conflictedPaths();
-      if (conflicts.length > 0 && conflicts.every(isRepoStorageYamlPath)) {
-        const resolved = await this.autoResolveRepoStorageConflicts(conflicts);
-        if (resolved.length === conflicts.length) {
+      if (conflicts.length > 0) {
+        const { resolved, unresolved } = await this.resolveConflicts(conflicts);
+        if (unresolved.length === 0) {
           try {
-            await this.git.commit("LFB: auto-resolved repo_storage.yaml merge conflict (regenerated from Local Storage)");
+            await this.git.commit(`LFB: auto-resolved ${resolved.length} merge conflict(s)`);
             result.merged = true;
-            log.warn(
-              "git",
-              `${this.dir}: auto-resolved merge conflict by dropping regeneratable ${resolved.join(", ")} — Category-B tracking state never belongs in a git working tree (repo_tracking_scheme.mdx §1)`,
-            );
+            log.warn("git", `${this.dir}: auto-resolved merge conflict on ${resolved.join(", ")}`);
             return;
           } catch (e2) {
-            log.warn("git", `${this.dir}: failed to finalize auto-resolved repo_storage.yaml conflict: ${(e2 as Error).message}`);
-            // fall through to the abort-and-surface path below
+            log.warn("git", `${this.dir}: failed to finalize auto-resolved conflict: ${(e2 as Error).message}`);
           }
+        } else {
+          log.error(
+            "git",
+            `${this.dir}: ${unresolved.length} conflicted path(s) have no automatic resolution ` +
+              `(${unresolved.join(", ")}) — aborting this merge and surfacing them. Every OTHER file in this ` +
+              `repo keeps syncing on the next cycle.`,
+          );
         }
       }
       await this.git.merge(["--abort"]).catch(() => {});
@@ -399,30 +442,78 @@ export class GitBackbone {
   }
 
   /**
-   * Auto-resolve a merge conflict on one or more `repo_storage.yaml` paths (any depth — the top-level legacy
-   * shape and the `repos/<repoKey>/repo_storage.yaml` sync-repo mirror alike) by dropping the file from the
-   * merge (`git rm -f`) instead of keeping either side's content. Best-effort per path so one failure doesn't
-   * block resolving the rest; returns the subset actually resolved so the caller can tell whether ALL
-   * conflicts were handled (safe to finish the merge) or some remain (must still abort + surface).
+   * Resolve conflicted paths AUTOMATICALLY, one file at a time (storage_company.mdx §11.1).
+   *
+   * Each path is handled by what the file IS (`resolutionFor`), never by what else is in the same merge —
+   * that per-merge coupling is what used to let one unhandled sidecar discard the resolution of every other
+   * file. Returns both lists so the caller can finish the merge when nothing is left over, and name exactly
+   * what it could not handle when something is.
+   *
+   * Every action here is additive or regenerative. Nothing is force-reset, and no remote content is
+   * discarded except for caches this computer can rebuild from Local Storage (git_backbone.mdx §1).
    */
-  private async autoResolveRepoStorageConflicts(conflicted: string[]): Promise<string[]> {
+  private async resolveConflicts(conflicted: string[]): Promise<{ resolved: string[]; unresolved: string[] }> {
     const resolved: string[] = [];
+    const unresolved: string[] = [];
     for (const p of conflicted) {
+      const how = resolutionFor(p);
       try {
-        await this.git.rm(p);
+        if (how === "regenerate") {
+          // A machine-generated cache — drop it from the merge; the next pass rebuilds it from Local Storage.
+          await this.git.rm(p);
+        } else if (how === "ours") {
+          // Self-owned (this device's own file): keep our copy verbatim.
+          await this.git.raw(["checkout", "--ours", "--", p]);
+          await this.git.add(p);
+        } else if (how === "union") {
+          // Append-only list whose union attribute did not apply (fresh clone / mid-migration tree). Do the
+          // union by hand: concatenate both sides with the conflict markers stripped. Readers fold
+          // duplicates, so a superset is always safe and losing a line never is.
+          if (!(await this.unionMergeFile(p))) {
+            unresolved.push(p);
+            continue;
+          }
+        } else {
+          unresolved.push(p);
+          continue;
+        }
         resolved.push(p);
       } catch (e) {
         log.warn("git", `${this.dir}: failed to auto-resolve conflict on ${p}: ${(e as Error).message}`);
+        unresolved.push(p);
       }
     }
-    return resolved;
+    return { resolved, unresolved };
   }
 
   /**
-   * How many commits the working branch is AHEAD of its remote — `git rev-list --count origin/<branch>..HEAD`
-   * (git_backbone.mdx §6.1). A missing upstream ref (fresh repo, never pushed) or any rev-list failure returns 1
-   * so the caller still attempts a push to establish/repair the upstream rather than silently skipping it.
+   * Union two conflicted sides of an append-only file by stripping git's conflict markers and keeping BOTH
+   * bodies. Deduplicates identical lines so a repeated merge does not grow the file without bound. Returns
+   * false when the file cannot be read/written, so the caller can report it rather than assume success.
    */
+  private async unionMergeFile(rel: string): Promise<boolean> {
+    const abs = path.join(this.dir, rel);
+    try {
+      const raw = fs.readFileSync(abs, "utf8");
+      const kept: string[] = [];
+      const seen = new Set<string>();
+      for (const line of raw.split("\n")) {
+        if (/^(<{7}|={7}|>{7}|\|{7})/.test(line)) continue; // drop the markers, keep every side's content
+        // Keep blank lines and comments as-is; dedupe only meaningful, repeated content lines.
+        if (line.trim() === "" || !seen.has(line)) {
+          if (line.trim() !== "") seen.add(line);
+          kept.push(line);
+        }
+      }
+      fs.writeFileSync(abs, kept.join("\n"), "utf8");
+      await this.git.add(rel);
+      return true;
+    } catch (e) {
+      log.warn("git", `${this.dir}: union merge of ${rel} failed: ${(e as Error).message}`);
+      return false;
+    }
+  }
+
   private async aheadCount(branch: string): Promise<number> {
     try {
       const out = await this.git.raw(["rev-list", "--count", `origin/${branch}..HEAD`]);
@@ -462,7 +553,21 @@ export class GitBackbone {
       result.problem = result.problem ?? `Git commit failed: ${(e as Error).message}`;
       return;
     }
-    if (!(await this.hasOrigin())) return;
+    if (!(await this.hasOrigin())) {
+      // NO REMOTE — the highest-value silent fault in the backbone (storage_company.mdx §11.2). This used to
+      // `return` with no problem set and nothing logged, so a `git init`ed tracking repo committed forever
+      // and never pushed, and its cycle result was INDISTINGUISHABLE from a healthy repo with nothing to do.
+      // The user believes their computers are in sync while nothing has ever left this machine. Say it.
+      result.problem =
+        "This tracking repo has no git remote, so nothing is reaching your other computers. " +
+        "Add a remote in the storage's settings.";
+      log.warn(
+        "git",
+        `${this.dir}: committed locally but there is NO ORIGIN — nothing will reach the user's other ` +
+          `computers until a remote is configured for this storage.`,
+      );
+      return;
+    }
     const branch = await this.branch();
     // Deliver whatever the branch is ahead by — our fresh commit AND/OR a commit that was already local
     // and unpushed (foreign auto-commit, merge commit, or an earlier failed push). Never rely on our own
@@ -470,27 +575,40 @@ export class GitBackbone {
     if (!result.committed && (await this.aheadCount(branch)) === 0) {
       return; // truly nothing to send — not committed and not ahead
     }
-    try {
-      await this.git.push("origin", branch);
-      result.pushed = true;
-    } catch (e) {
-      // Likely a non-fast-forward reject: pull (fetch+merge) then push once more (git_backbone.mdx §6).
-      // LOG THE CAUSE (storage_personal.mdx §16.2(g) / §17.4.3): this error was previously captured and
-      // never read, so an auth failure and a routine NFF race were indistinguishable in the log — and if the
-      // retry then SUCCEEDED, the fact that anything went wrong vanished entirely.
-      log.warn("git", `push rejected (${classifyRemoteError(e as Error)}) — re-pulling and retrying once`);
-      const retry: GitCycleResult = { ran: true };
-      await this.pull(retry);
-      if (retry.conflicts?.length) {
-        result.conflicts = retry.conflicts;
-        result.problem = retry.problem;
-        return;
-      }
+    // THREE attempts with backoff (storage_personal.mdx §17.4.3, storage_company.mdx §11.4). A single retry
+    // loses to any peer that pushes twice while we are working — and on a shared company repo with several
+    // members that is an ordinary Tuesday, not an edge case. Each retry re-pulls first, so we are always
+    // pushing on top of the newest remote state; we never force.
+    const BACKOFF_MS = [0, 2000, 8000];
+    for (let attempt = 0; attempt < BACKOFF_MS.length; attempt++) {
+      if (BACKOFF_MS[attempt]! > 0) await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt]!));
       try {
         await this.git.push("origin", branch);
         result.pushed = true;
-      } catch (e2) {
-        result.problem = classifyRemoteError(e2 as Error);
+        result.problem = undefined; // a later success clears an earlier attempt's complaint
+        return;
+      } catch (e) {
+        const why = classifyRemoteError(e as Error);
+        const last = attempt === BACKOFF_MS.length - 1;
+        // LOG THE CAUSE (storage_personal.mdx §16.2(g)): previously this error was captured and never read,
+        // so an auth failure and a routine non-fast-forward race were indistinguishable in the log — and if
+        // a retry then succeeded, the fact that anything went wrong vanished entirely.
+        log.warn(
+          "git",
+          `${this.dir}: push rejected (${why}) — attempt ${attempt + 1}/${BACKOFF_MS.length}` +
+            (last ? "; giving up this cycle" : "; re-pulling and retrying"),
+        );
+        result.problem = why;
+        if (last) return;
+        // Re-pull before the next attempt. A conflict here is already auto-resolved per file by pull();
+        // if something truly unresolvable remains, stop and surface it rather than pushing blindly.
+        const retry: GitCycleResult = { ran: true };
+        await this.pull(retry);
+        if (retry.conflicts?.length) {
+          result.conflicts = retry.conflicts;
+          result.problem = retry.problem;
+          return;
+        }
       }
     }
   }

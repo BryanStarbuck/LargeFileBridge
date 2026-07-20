@@ -2,6 +2,7 @@
 // Local (settings/config), Personal, one row per Company, the Repos link (routes to the Repos tab, not a
 // long list), and the opted-in Communities. Each directory-based storage links to its detail page; a
 // detected-but-uninitialized candidate offers an Initialize action (writes storage.yaml + .lfbridge/).
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { HardDrive, FolderGit2, User, Building2, Users, Database } from "lucide-react";
@@ -88,6 +89,8 @@ export function StoragesPage() {
         />
       </div>
 
+      <OrganizationProposals />
+
       <DataTable
         tableId="storages"
         fillHeight={false}
@@ -104,6 +107,139 @@ export function StoragesPage() {
         empty={<p className="text-center text-black/60">No Personal / Company / Community storages found yet. Create a directory named <code>*_large_files_bridge</code> (or add a <code>storage.yaml</code>) under a scanner root, then reload.</p>}
       />
     </div>
+  );
+}
+
+// ── the org → company proposal section (storage_company.mdx §10.3) ───────────────────────────────────
+// A company storage IS a forge organization, and the repos already say which org they belong to — so this
+// section is Large File Bridge reading that off the disk and OFFERING it. It never creates anything on its
+// own: creating a company storage makes a real directory and runs `git init`, so it takes a deliberate
+// click. Unchecking a row before the click means no directory is ever made for it.
+function OrganizationProposals() {
+  const qc = useQueryClient();
+  const [showSkipped, setShowSkipped] = useState(false);
+  const [checked, setChecked] = useState<Record<string, boolean>>({});
+  const { data, isLoading } = useQuery({ queryKey: ["organizations"], queryFn: api.organizations });
+
+  const create = useMutation({
+    mutationFn: (orgs: string[]) => api.createCompanyStorages(orgs),
+    onSuccess: ({ created }) => {
+      const adopted = created.filter((c) => c.adopted).length;
+      toast.success(
+        `Large File Bridge set up ${created.length} company ${created.length === 1 ? "storage" : "storages"}` +
+          (adopted ? ` (${adopted} adopted an existing storage)` : ""),
+      );
+      // A brand-new company storage has no git remote yet, and staying quiet about that is the worst
+      // failure this product has (§11.2) — a repo that commits forever and never pushes looks healthy.
+      const noRemote = created.filter((c) => !c.hasRemote);
+      if (noRemote.length) {
+        toast.warning(
+          `${noRemote.length === 1 ? noRemote[0]!.name : `${noRemote.length} of them`} has no remote yet — nothing is reaching your other computers until you add one.`,
+        );
+      }
+      setChecked({});
+      qc.invalidateQueries({ queryKey: ["storages"] });
+      qc.invalidateQueries({ queryKey: ["organizations"] });
+    },
+    onError: (e: Error) => { clientLog.error("StoragesPage.createCompanies", e); toast.error(e.message); },
+  });
+
+  const dismiss = useMutation({
+    mutationFn: (org: string) => api.dismissOrganization(org, true),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["organizations"] }),
+    onError: (e: Error) => { clientLog.error("StoragesPage.dismissOrg", e); toast.error(e.message); },
+  });
+
+  if (isLoading || !data) return null;
+
+  // Proposals = orgs you belong to that no storage claims yet and that you have not waved away. An org an
+  // existing storage already claims was ADOPTED during discovery (its binding recorded), so it is reported
+  // rather than offered — that is how ACT3ai lands on the existing Act3 storage instead of a duplicate.
+  const proposals = data.organizations.filter((o) => !o.alreadyClaimed && !o.dismissed);
+  const adopted = data.organizations.filter((o) => o.alreadyClaimed);
+  if (proposals.length === 0 && data.skippedCount === 0) return null;
+
+  const selected = proposals.filter((o) => checked[o.slug]).map((o) => o.org);
+
+  return (
+    <section className="mb-4 rounded-lg border border-[var(--lfb-border)] p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="font-medium text-black">Organizations found in your repos</h2>
+          <p className="text-sm text-black/60">
+            A company storage is one organization. Large File Bridge read these from your repos&rsquo; git
+            remotes — no network, no forge account needed — and kept the ones you have actually committed to.
+          </p>
+        </div>
+        {proposals.length > 0 && (
+          <button
+            className="shrink-0 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:opacity-50"
+            disabled={selected.length === 0 || create.isPending}
+            onClick={() => create.mutate(selected)}
+          >
+            Create company storages{selected.length ? ` (${selected.length})` : ""}
+          </button>
+        )}
+      </div>
+
+      {proposals.length > 0 && (
+        <ul className="mt-3 divide-y divide-[var(--lfb-border)]">
+          {proposals.map((o) => (
+            <li key={o.slug} className="flex items-center gap-3 py-2">
+              <input
+                type="checkbox"
+                className="h-4 w-4"
+                checked={!!checked[o.slug]}
+                onChange={(e) => setChecked((c) => ({ ...c, [o.slug]: e.target.checked }))}
+              />
+              <span className="flex-1">
+                <span className="block font-medium text-black">
+                  {o.org} <span className="font-normal text-black/50">— {o.repoCount} {o.repoCount === 1 ? "repo" : "repos"} on this computer</span>
+                </span>
+                <span className="block font-mono text-xs text-black/50">{o.proposedRoot}</span>
+              </span>
+              <button
+                className="text-xs text-black/50 hover:text-black hover:underline"
+                title="Don't offer this organization again"
+                onClick={() => dismiss.mutate(o.org)}
+              >
+                Dismiss
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {adopted.length > 0 && (
+        <p className="mt-3 text-sm text-black/60">
+          Already set up:{" "}
+          {adopted.map((o, i) => (
+            <span key={o.slug}>
+              {i > 0 && ", "}
+              <span className="font-medium text-black/80">{o.org}</span> → {o.claimedByStorageName}
+            </span>
+          ))}
+        </p>
+      )}
+
+      {/* §10.2 — "say the number". A silent filter and a bug look identical, so the orgs the membership
+          test excluded are counted here and can be listed on demand. */}
+      {data.skippedCount > 0 && (
+        <p className="mt-3 text-sm text-black/60">
+          {data.skippedCount} {data.skippedCount === 1 ? "organization you've" : "organizations you've"} only
+          cloned from {data.skippedCount === 1 ? "was" : "were"} ignored — you have not committed to{" "}
+          {data.skippedCount === 1 ? "it" : "any of them"} on this computer.{" "}
+          <button className="text-[var(--lfb-primary)] hover:underline" onClick={() => setShowSkipped((v) => !v)}>
+            {showSkipped ? "Hide them" : "Show them"}
+          </button>
+          {showSkipped && (
+            <span className="mt-1 block font-mono text-xs text-black/50">
+              {data.skipped.map((o) => `${o.org} (${o.repoCount})`).join(" · ")}
+            </span>
+          )}
+        </p>
+      )}
+    </section>
   );
 }
 

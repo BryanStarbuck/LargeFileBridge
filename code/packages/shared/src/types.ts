@@ -1242,6 +1242,19 @@ export interface EntityView {
   // pass discovered are already pinned on this node under a foreign CID (foreign_pin_discovery.mdx §6).
   pinnedForeign?: boolean;
 
+  // Does this computer have the BYTES? Same axis (and same absent ⇒ "local" rule) as FileRow.presence
+  // (storage_company.mdx §8.5, files.mdx §2.1). A "remote-only" entity is one another of the user's
+  // computers pinned and this one does not have: its identity, size, CID and peers come from the reconciled
+  // MANIFEST, not from a statSync, and `exists` is false BECAUSE the bytes are elsewhere — which is a
+  // HEALTHY state, never the "no longer at that path" error. The View-One-File page branches on exactly
+  // this to choose the red "not on this computer yet" state (whose one action is pull it down) over §5's
+  // not-found card.
+  presence?: "local" | "remote-only";
+  // For a remote-only entity, the peer device that holds the bytes — the "{device}" in "On {device} — not on
+  // this computer yet". Resolved through the travelling device registry; null when there is no usable label,
+  // and the UI then says "another of your computers" (devices.mdx §6.9).
+  addedByDevice?: string | null;
+
   // Compression heuristic (directory.mdx §3.3) — drives the Compression card / rollup.
   compressible: "video" | "image" | null;
   compressState: "should" | "done" | null;

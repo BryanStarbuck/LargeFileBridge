@@ -46,6 +46,8 @@ import type {
   ProgressListResult,
   SessionActivityResult,
   StoragesPageData,
+  OrganizationDiscovery,
+  CompanyCreateResult,
   StorageDetail,
   ArtifactPlacementView,
   StorageIndexResult,
@@ -405,6 +407,15 @@ export const api = {
   // root; `dedicatedRepo` makes it a git repo whose artifacts are tracked+pinned (not git-ignored).
   createPersonalStorage: (dedicatedRepo: boolean) =>
     unwrap<StorageDetail>(http.post("/storages/personal/create", { dedicatedRepo })),
+  // Org → company discovery (storage_company.mdx §10). `organizations` READS the forge orgs off the repos'
+  // git remotes and says which ones the user actually belongs to; it never creates anything.
+  // `createCompanyStorages` is the "Create company storages" click — the only path that makes a directory,
+  // and idempotent (an org an existing storage already claims is adopted, not duplicated).
+  organizations: () => unwrap<OrganizationDiscovery>(http.get("/storages/organizations")),
+  createCompanyStorages: (orgs: string[]) =>
+    unwrap<{ created: CompanyCreateResult[] }>(http.post("/storages/companies", { orgs })),
+  dismissOrganization: (org: string, dismissed = true) =>
+    unwrap<{ dismissed: string[] }>(http.post("/storages/organizations/dismiss", { org, dismissed })),
   // Where a media file's derived artifacts (transcript / AI description) will land, and whether the
   // first-time setup wizard must run first (Transcribe.mdx §3.4–§3.5).
   placement: (path: string) => unwrap<ArtifactPlacementView>(http.get("/storages/placement", { params: { path } })),
