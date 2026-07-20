@@ -15,7 +15,7 @@ import { DESCRIBE_KIND_FILTERS } from "../../lib/describe.js";
 import { OCR_KIND_FILTERS, withOcrReady } from "../../lib/ocr.js";
 import { withModelReady } from "../../lib/transcribe.js";
 import type { WarningDef } from "../../components/ui/warnings/registry.js";
-import type { MetricId } from "./metricWarnings.js";
+import { gitIgnoreCandidates, type MetricId } from "./metricWarnings.js";
 
 // Scan staleness: a repo scanned longer ago than this (or never) wants a fresh scan before we trust its
 // metrics — the header primary becomes "Scan now" until it's re-scanned (one_repo.mdx §3.1 / scan.mdx §2.3).
@@ -134,9 +134,10 @@ export function buildPullDownWarning(detail: RepoDetail, repoId: string): Warnin
   };
 }
 
-/** Undecided files — the two-axis triage popup (Add to IPFS / git-ignore) over the actual undecided files
- *  (warnings.mdx §10.2.7). Null when nothing is undecided. This is the popup the "Undecided N" tile opens. */
-export function buildUndecidedWarning(detail: RepoDetail, repoId: string): WarningDef | null {
+/** Files with no IPFS decision yet — the triage popup the "Add to IPFS N" tile opens (warnings.mdx
+ *  §10.2.7). Still writes BOTH axes on Apply (a big file usually wants both), but it is now named and
+ *  scoped by the axis its tile counts. Null when nothing is undecided. */
+export function buildAddToIpfsWarning(detail: RepoDetail, repoId: string): WarningDef | null {
   const undecided = detail.counts.undecided;
   // Must mirror the backend count exactly (units.service.ts countDecisions): foreign-pinned rows are NOT
   // undecided-nag targets — their bytes are already pinned here (green state, one_repo.mdx §4.9).
@@ -206,6 +207,75 @@ export function buildUndecidedWarning(detail: RepoDetail, repoId: string): Warni
           ipfs: allNeverIpfs ? false : !!sel.checks.ipfs,
           gitignore: !!sel.checks.gitignore,
         });
+      },
+    },
+  };
+}
+
+/**
+ * Large files Git is still allowed to commit — the popup the "Git Ignore N" tile opens (one_repo.mdx
+ * §3.2.2, the charter's category-3 offer). The git-ignore HALF of what the old "Undecided" tile bundled,
+ * now its own tile with its own scoped list. Null when every candidate is already ignored.
+ *
+ * Its target list comes from `gitIgnoreCandidates()` — the SAME predicate `metricCount()` counts — so the
+ * number on the tile and the rows in the popup are the same set by construction.
+ *
+ * Apply writes BOTH axes (decision_toggles.mdx §2): sending the git-ignore axis alone would clobber a
+ * file's existing pin decision, so each file's current `decision` is preserved as the IPFS value.
+ */
+export function buildGitIgnoreWarning(detail: RepoDetail, repoId: string): WarningDef | null {
+  const files = gitIgnoreCandidates(detail);
+  if (files.length === 0) return null;
+  const n = files.length;
+  return {
+    id: "repo-files-not-git-ignored",
+    state: "warn",
+    scope: "file",
+    headline: `${n} large file${n === 1 ? " is" : "s are"} not git-ignored`,
+    sub: "Git-ignore them so Git never commits the big binaries — Large File Bridge syncs them over IPFS instead.",
+    popup: {
+      whatThisIs: `Large File Bridge found ${n} large file${n === 1 ? "" : "s"} in this repo that Git is still allowed to commit. Adding them to this repo's .gitignore keeps Git out of the big binaries; they still sync between your computers over IPFS. Review the list on the right and uncheck any you want Git to keep tracking.`,
+      whyItMatters: (
+        <ul className="list-disc space-y-0.5 pl-4">
+          <li>A committed big binary is in the repo's history forever — every clone pays for it, and it can't be removed without a rewrite.</li>
+          <li>Git-ignoring a file does NOT delete it: the bytes stay exactly where they are on disk.</li>
+          <li>Large File Bridge is how these files travel between your machines, so Git doesn't need to carry them.</li>
+        </ul>
+      ),
+      options: [
+        {
+          kind: "checkbox",
+          name: "ipfs",
+          label: "Also add them to IPFS (pin)",
+          helper: "back them up across your computers now that Git won't",
+          defaultChecked: false,
+        },
+      ],
+      canApply: () => true,
+      targets: files.map((f) => ({
+        id: f.path,
+        label: f.path,
+        name: basename(f.path),
+        sizeText: formatBytes(f.sizeBytes),
+        pathText: f.path,
+      })),
+      targetNoun: "file",
+      actionLabel: "Git-ignore",
+      progress: {
+        kind: (sel) => (sel.checks.ipfs ? "pin" : "ignore"),
+        target: detail.name,
+        doneLabel: (_sel, count) => `${count} file${count === 1 ? "" : "s"} git-ignored`,
+        invalidate: [["repo", repoId]],
+      },
+      apply: async (sel, checkedPaths) => {
+        // Two-axis write (decision_toggles.mdx §2): preserve each file's CURRENT pin decision unless the
+        // user opted into pinning here, so flipping git-ignore never clobbers the other axis.
+        const alsoPin = !!sel.checks.ipfs;
+        const byPath = new Map(detail.files.map((f) => [f.path, f]));
+        const pinning = checkedPaths.filter((p) => alsoPin || byPath.get(p)?.decision === "sync");
+        const notPinning = checkedPaths.filter((p) => !pinning.includes(p));
+        if (pinning.length) await api.setFileDecisions(repoId, pinning, { ipfs: true, gitignore: true });
+        if (notPinning.length) await api.setFileDecisions(repoId, notPinning, { ipfs: false, gitignore: true });
       },
     },
   };
@@ -465,8 +535,10 @@ export function buildCompressWarning(
  *  tiles fall back to re-tuning the view to their tab). Only the metrics with a real fix have one today. */
 export function buildMetricWarning(id: MetricId, detail: RepoDetail, repoId: string): WarningDef | null {
   switch (id) {
-    case "undecided":
-      return buildUndecidedWarning(detail, repoId);
+    case "addToIpfs":
+      return buildAddToIpfsWarning(detail, repoId);
+    case "gitIgnore":
+      return buildGitIgnoreWarning(detail, repoId);
     case "pullDown":
       return buildPullDownWarning(detail, repoId);
     case "transcribable":
@@ -495,8 +567,8 @@ export function topRecommendation(
   if (detail.ipfs === "unreachable") return { warning: buildIpfsDownWarning(detail, repoId) };
   const pull = buildPullDownWarning(detail, repoId);
   if (pull) return { metricId: "pullDown", warning: pull };
-  const undecided = buildUndecidedWarning(detail, repoId);
-  if (undecided) return { metricId: "undecided", warning: undecided };
+  const addToIpfs = buildAddToIpfsWarning(detail, repoId);
+  if (addToIpfs) return { metricId: "addToIpfs", warning: addToIpfs };
   // Then the content-work recommendations (task_tabs.mdx §2.7, ocr.mdx §12.3). The LOCKED worst-first order:
   //
   //   ipfs-down → pull-down → undecided → transcribe → describe → compress → ocr

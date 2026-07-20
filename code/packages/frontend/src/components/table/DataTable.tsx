@@ -31,6 +31,11 @@ interface DataTableProps<T> {
   searchKeys: (keyof T & string)[] | ((row: T) => string);
   getRowId: (row: T) => string;
   onRowClick?: (row: T) => void;
+  // The URL a row "is" (tables.mdx §4d). Supply it alongside `onRowClick` on any table whose rows
+  // navigate: ⌘/Ctrl-click, shift-click and middle-click then open it in a new tab/window the way a real
+  // link would, instead of being swallowed by the row's JS click handler. Same-tab clicks still go
+  // through `onRowClick`, so routing/state behaviour is unchanged.
+  rowHref?: (row: T) => string;
   itemNoun?: string;
   // The trailing per-row ⋮ kebab (menus.mdx §3) — EVERY table passes one so EVERY row has it. Returns
   // the row's kebab component (EntityKebab / RepoKebab / PeerKebab / PinKebab / a page-local kebab).
@@ -97,6 +102,7 @@ export function DataTable<T>({
   searchKeys,
   getRowId,
   onRowClick,
+  rowHref,
   itemNoun = "items",
   rowMenu,
   rightHeader,
@@ -725,7 +731,31 @@ export function DataTable<T>({
                 return (
                   <tr
                     key={row.id}
-                    onClick={() => onRowClick?.(row.original)}
+                    // Standard browser modified-click behaviour (tables.mdx §4d). A row navigates via JS,
+                    // not an <a href>, so ⌘-click / Ctrl-click / middle-click used to be SWALLOWED and
+                    // navigate in place — the opposite of what every other link on the web does. When the
+                    // table supplies `rowHref`, those clicks (and shift-click) open a new tab/window
+                    // instead, and the plain click keeps the in-page navigation.
+                    onClick={(e) => {
+                      const href = rowHref?.(row.original);
+                      if (href && (e.metaKey || e.ctrlKey)) {
+                        window.open(href, "_blank", "noopener,noreferrer");
+                        return;
+                      }
+                      if (href && e.shiftKey) {
+                        window.open(href, "_blank", "noopener,noreferrer");
+                        return;
+                      }
+                      onRowClick?.(row.original);
+                    }}
+                    // Middle-click (auxiliary button 1) → new background tab, same as a real link.
+                    onAuxClick={(e) => {
+                      if (e.button !== 1) return;
+                      const href = rowHref?.(row.original);
+                      if (!href) return;
+                      e.preventDefault();
+                      window.open(href, "_blank", "noopener,noreferrer");
+                    }}
                     style={{ height: ROW_H }}
                     className={`border-b border-[var(--lfb-border)] ${onRowClick ? "cursor-pointer hover:bg-slate-100" : ""}`}
                   >

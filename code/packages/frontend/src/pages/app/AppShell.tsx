@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { CurrentUser } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { Sidebar } from "../../components/layout/Sidebar.js";
+import { HoverInfoBridge } from "../repos/HoverInfoRegion.js";
 import { ScanProgressBar } from "../../components/ScanProgressBar.js";
 import { IpfsStatusBanner } from "../../components/IpfsStatusBanner.js";
 import { useSessionPing } from "../../lib/useSessionPing.js";
@@ -77,6 +78,11 @@ export function AppShell() {
           <Outlet />
         </div>
       </main>
+      {/* The ONE global hover-info bridge (non_intrusive_tooltip.mdx §6). Renders nothing; it forwards
+          whatever any page published via setHoverInfo() into the panel at the bottom of the left bar.
+          Mounted HERE, not per page, so every surface that uses the shared icon control columns — IPFS
+          pins, Storage detail, One-repo — actually has a consumer for what it publishes. */}
+      <HoverInfoBridge />
       <ScanProgressBar />
     </div>
   );

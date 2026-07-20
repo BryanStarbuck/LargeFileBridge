@@ -190,8 +190,17 @@ The charter's single **filter icon** stays — its job changes from *"the place 
 
 | Facet | Values (each a checkbox, all checked by default) | Source of truth |
 | --- | --- | --- |
-| **Pin (IPFS)** | ☑ **Pinned** (`sync`) · ☑ **Not pinned** (`ignore` — deliberately not pinned) · ☑ **Recommended** (the calc engine suggests pinning) · ☑ **Undecided** (never asked) | the decision ledger's IPFS axis ([decisions.mdx §7](./decisions.mdx)) |
+| **Pin (IPFS)** | ☑ **Pinned** (`sync`) · ☑ **Not pinned** (`ignore` — deliberately not pinned) · ☑ **Recommended** (the calc engine suggests pinning) · ☑ **Undecided** (the user has never been asked — the frozen `undecided` wire value, **not** the retired metric tile of that name) | the decision ledger's IPFS axis ([decisions.mdx §7](./decisions.mdx)) |
 | **Git-ignore** | ☑ **Git-ignored** · ☑ **Not git-ignored** · ☑ **Recommended** (the calc engine suggests ignoring) | **`git check-ignore`**, live ([decisions.mdx §1.1](./decisions.mdx), LOCKED) |
+
+> **The facet value `Undecided` survives the metric-tile split — they are different things (LOCKED).**
+> The One-repo metrics strip no longer has an **Undecided** tile: it split into two tiles, **Add to IPFS**
+> and **Git Ignore** (the latter also absorbed the old **Big, not git-ignored** tile). That is a change to
+> the *metric tiles*, **not** to this facet. The **Pin (IPFS)** facet keeps its **☑ Undecided** checkbox,
+> and the underlying `Decision` wire value **`undecided` is unchanged and still frozen**
+> ([decisions.mdx §7](./decisions.mdx)). *Undecided* remains a real state a row's pin axis can hold — "the
+> user has never been asked" — and a filter must be able to show or hide it. Read **☑ Undecided** here as
+> the facet value only; do **not** read it as a pointer to a metric tile that no longer exists.
 
 These match the **four-state toggle grammar** of the Pin and Ignore columns
 ([decision_toggles.mdx §1](./decision_toggles.mdx)) — a facet's values are exactly the states its
@@ -468,6 +477,11 @@ The §2.4 rule is not filter-only. **Pin and git-ignore are two sortable columns
   Their sort order follows the toggle grammar: **On → Recommended → Off → N/A** (the actionable states
   first), direction-flippable like any key.
 
+> **Not to be confused with [§4d](#4d-modified-click-on-a-row-opens-a-new-tab-locked-site-wide)** — the
+> modified-click / new-tab rule, which was drafted as "§3.6" before this number was taken. It lives at
+> **§4d** with the other site-wide `DataTable` behaviours (§4a–§4c); this number keeps its meaning
+> (sort obeys the axis split) because sibling specs already cite this anchor.
+
 ---
 
 ## 4. Persistence — sort + filter saved per user, per page (LOCKED)
@@ -683,21 +697,30 @@ kept **only** for the Sort / Filter / Columns dropdowns ([§3.1](#3-multi-level-
 where a bare icon would be ambiguous. The icon header is set via `LfbColumn.headerCell` in
 `.../table/types.ts` and rendered by the shared `TaskIconHeader`.
 
-### 4c.3 Hover fills the docked hover-info region and shows a title tooltip (LOCKED)
+### 4c.3 Hover fills the left-bar hover-info panel and shows a title tooltip (LOCKED)
 
 **People often don't understand these icons.** So hovering **either the column header icon OR any cell
 icon** does two things:
 
 * **(a) a native `title` tooltip** appears on the glyph (the quick "what is this"); and
-* **(b) the page's docked hover-info region** ([task_tabs.mdx §3](./task_tabs.mdx),
-  [non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)) fills with a **plain-English explanation** of
+* **(b) the hover-info panel at the BOTTOM OF THE LEFT BAR**
+  ([non_intrusive_tooltip.mdx §1 / §6](./non_intrusive_tooltip.mdx),
+  [left_bar.mdx §4.1](./left_bar.mdx#41-the-non-intrusive-hover-info-panel-sits-just-above-this-slot-locked),
+  [task_tabs.mdx §3](./task_tabs.mdx)) fills with a **plain-English explanation** of
   what that icon means — what an **IPFS pin** is, what **git-ignore** does, and what **transcription**,
   **AI description**, and **OCR** are. This is the primary teaching surface for the icon vocabulary: a
   non-expert hovers the Pin header and reads *"Pin = back this file up across your computers over IPFS,"*
   hovers OCR and reads *"OCR reads the text out of an image, video frame, or PDF page."*
 
-The per-kind explanation strings live beside the icon meta in the reusable task-icon kit
-(`TASK_ICON`), and hovering calls `setHoverInfo` on the docked region.
+**There is no docked hover-info region anywhere in the product** — the prose always lands in that one
+left-bar panel. This works on **every** page (hence the site-wide LOCK): the per-kind explanation strings
+live beside the icon meta in the reusable task-icon kit (`TASK_ICON`), hovering calls `setHoverInfo` to
+**publish** the text, `HoverInfoPanel` in the left bar **renders** it, and the single render-nothing
+`HoverInfoBridge` that connects them is mounted **once, globally, in the app shell** — not per page:
+
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo` / `setHoverDefault` / `useHoverDefault` / `HoverInfoBridge`;
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel`;
+mounted at `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell`.
 
 ### 4c.4 One shared visual grammar — StatusActionIcon: JUST THE GLYPH, no rounded rectangle (LOCKED)
 
@@ -775,6 +798,79 @@ Compress tab's own status column.
 
 ---
 
+## 4d. Modified-click on a row opens a new tab (LOCKED, site-wide)
+
+**This is a product-wide table rule. Every other spec cites it; none restates it.**
+
+A row in the house `DataTable` navigates through a **JavaScript click handler** (`onRowClick`), not an
+`<a href>`. That is fine for the plain click — it keeps TanStack Router routing and the page's in-memory
+state intact — but it **swallowed the standard browser behaviour every link on the web has**:
+
+* **⌘-click** on a Mac (**Ctrl-click** elsewhere) — navigated **in place** instead of opening a new tab.
+* **Shift-click** — navigated in place instead of opening a new window.
+* **Middle-click** — navigated in place instead of opening a background tab.
+
+Users do not experience a table row as "a JS handler"; they experience it as a link, and a link that
+ignores ⌘-click is broken. This was a direct complaint from the product owner about the **View-one-repo**
+files table: opening several files in tabs to compare them was impossible.
+
+### The rule (LOCKED)
+
+**Any table whose rows navigate MUST supply `rowHref(row)`** — the URL that row *is* (the same
+destination its plain click routes to). With `rowHref` present:
+
+| Gesture | Behaviour |
+| --- | --- |
+| **Plain click** (no modifier) | **Unchanged** — goes through `onRowClick`, so routing and in-page state behave exactly as before. |
+| **⌘-click / Ctrl-click** | Opens `rowHref` in a **new tab/window** (`noopener,noreferrer`). |
+| **Shift-click** | Opens `rowHref` in a **new tab/window** (`noopener,noreferrer`). |
+| **Middle-click** (auxiliary button `1`) | Opens `rowHref` in a **background tab**. |
+
+* **The plain-click path is untouched.** The modified gestures return early *before* `onRowClick` is
+  called, so nothing about ordinary navigation, selection, or state changes.
+* **This is additive, not a migration.** A table that supplies **no** `rowHref` keeps the exact old
+  behaviour — every gesture falls through to `onRowClick`. So adopting it is per-table and safe.
+* **`rowHref` and `onRowClick` must agree.** They are the same destination expressed two ways; a row whose
+  ⌘-click lands somewhere its plain click does not is a bug.
+* **Control cells still stop the click** — the bookmark toggle (§1), the icon control columns (§4c), and
+  the trailing `⋮` kebab ([menus.mdx §3](./menus.mdx)) stop propagation and are unaffected by this rule.
+
+Implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the `rowHref` prop, and the body `<tr>`'s `onClick` / `onAuxClick` handlers that branch on `metaKey` / `ctrlKey` / `shiftKey` / `button === 1` before falling through to `onRowClick`).
+First adopter:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (its `rowHref` for the files table).
+
+### 4d.1 Backlog — the tables that still need `rowHref` (HONEST STATUS)
+
+**Every table that uses the shared `DataTable` and navigates on row click now passes `rowHref`.** The
+adoption shipped together with the behaviour, so there is no half-built state to trip over:
+
+| Table | Page (code) | Row click goes to | `rowHref` |
+| --- | --- | --- | --- |
+| **One-repo files** | `pages/repos/OneRepoPage.tsx` | the file's viewer / properties page | ✅ done |
+| **Repos list** | `pages/repos/ReposPage.tsx` | `/repos/$repoId` | ✅ done |
+| **Storages list** | `pages/storages/StoragesPage.tsx` | `/storages/$storageId` | ✅ done |
+| **Storage detail files** | `pages/storages/StorageDetailPage.tsx` | `/file?path=…` | ✅ done |
+| **IPFS pins** | `pages/ipfs/IpfsPage.tsx` | `/file?path=…` | ✅ done |
+| **Devices** | `pages/devices/DevicesPage.tsx` | the device detail page | ✅ done |
+
+**A row with no destination returns the empty string, not a fabricated URL.** Three of these tables have
+rows that legitimately go nowhere — an uninitialized storage, an IPFS pin with no local path, a device
+with no stable id. Their `rowHref` returns `""` for those rows, which the shared handler treats as "no
+href": the modified click falls through to the ordinary click, exactly as the unmodified click already
+did. Never invent a route for a row that has no page.
+
+What remains open is only the two surfaces outside the shared component. Two adjacent surfaces are **outside** this table (they do not use the shared `DataTable`) and need the
+same treatment separately when they are brought in line: the **Full-paths** table
+([full_paths.mdx](./full_paths.mdx) — `pages/fs/FullPathsPage.tsx`, a raw `useReactTable` whose cells
+navigate on click) and the **File System** column browser
+([file_system.mdx](./file_system.mdx) — `pages/fs/FileSystemPage.tsx`, whose entries navigate on click).
+
+**The definition of done for this backlog** is that a grep for `onRowClick=` in
+`packages/frontend/src` returns **no** call site without a matching `rowHref=`.
+
+---
+
 ## 5. Acceptance criteria
 
 1. **Repos, the Full-paths files table, and Communities** each have a **leading ribbon bookmark
@@ -828,8 +924,8 @@ Compress tab's own status column.
     empty, and the shown columns keep the canonical order.
     They are **narrow with minimal padding** (`tight`/**`px-0.5`**, §4c.1); each **header is that column's
     icon**, not text, with the text label kept only for the Sort/Filter/Columns dropdowns (§4c.2). Hovering
-    the header icon **or** any cell icon shows a `title` tooltip **and** fills the docked hover-info region
-    with a plain-English explanation of that icon (§4c.3). All five render through the one **StatusActionIcon**
+    the header icon **or** any cell icon shows a `title` tooltip **and** fills the **left-bar hover-info
+    panel** with a plain-English explanation of that icon (§4c.3). All five render through the one **StatusActionIcon**
     grammar — **JUST THE GLYPH, no rounded rectangle** (§4c.4): done/on = the glyph in its unique color (Pin =
     solid FILLED, the other four = colored stroke); actionable = grey outline glyph (clickable); n/a = faint
     grey glyph (inert). The **Pin is three-state** — grey outline (not set) / blue filled (synced here) / red
@@ -839,6 +935,14 @@ Compress tab's own status column.
     **Decision**, **Decided by**, **Decided**, and **Status** columns are **removed** from file tables; the
     two decision axes still exist as data and are set via the Pin/Ignore icons. **The File System page is
     the one exclusion.**
+15. **Modified-click opens a new tab (§4d).** On any table that supplies `rowHref`, **⌘-click / Ctrl-click**
+    and **shift-click** open that row's URL in a **new tab/window** (`noopener,noreferrer`) and
+    **middle-click** opens it in a **background tab**, while a **plain click still routes through
+    `onRowClick`** unchanged. A table with no `rowHref` keeps the old behaviour (the rule is additive).
+    **Honest status (§4d.1): every shared-`DataTable` site supplies `rowHref`** — One-repo files, Repos,
+    Storages, Storage-detail files, IPFS pins, and Devices. Still open: Full-paths and the File System
+    column browser, which need the equivalent OUTSIDE the shared `DataTable`. Done = a grep for
+    `onRowClick=` in `packages/frontend/src` finds no call site lacking a `rowHref=`.
 
 ## 6. Tab-scoped column sets (LOCKED)
 
@@ -882,7 +986,8 @@ Applied in code:
   narrow icon columns after the select checkbox — Pin, Ignore, Transcribe, AI Description, OCR (exact
   order). tight/px-0.5 — icons sit TIGHT together, no wide whitespace (§4c.1). Header = the column's ICON not
   text (§4c.2, LfbColumn.headerCell); text label kept only for Sort/Filter/Columns dropdowns. Hover header OR
-  cell icon → native title tooltip + fills the docked hover-info region (setHoverInfo) with plain-English
+  cell icon → native title tooltip + fills the LEFT-BAR hover-info panel (setHoverInfo publishes,
+  HoverInfoPanel renders, global HoverInfoBridge in AppShell connects) with plain-English
   "what this icon means" (§4c.3). ONE shared StatusActionIcon grammar (§4c.4) = JUST THE GLYPH, NO ROUNDED
   RECTANGLE / box / ring (product owner 2026-07-19): done/on = glyph in its UNIQUE color (Pin = solid FILLED,
   others = colored stroke); actionable("could"/off) = grey outline glyph (clickable); na = faint grey glyph
@@ -897,6 +1002,30 @@ Applied in code:
   StatusActionIcon.tsx; table/taskIcons.tsx (TASK_ICON/TaskIconHeader/TaskStatusCell); types.ts
   (headerCell/tight); DataTable.tsx; OneRepoPage.tsx + taskTabs.config.ts; HoverInfoRegion.tsx (setHoverInfo);
   StorageDetailPage.tsx; IpfsPage.tsx.
+
+  MODIFIED-CLICK OPENS A NEW TAB (§4d, NEW, LOCKED, site-wide): DataTable rows navigate via a JS
+  onRowClick, not an <a href>, which SWALLOWED ⌘-click (Mac) / Ctrl-click / shift-click / middle-click —
+  they navigated in place instead of opening a new tab. Product-owner complaint, on the View-one-repo files
+  table. RULE: any table whose rows navigate MUST supply rowHref(row) = the URL the row IS; then ⌘/Ctrl-
+  click + shift-click → window.open(href,"_blank","noopener,noreferrer"), middle-click (onAuxClick button
+  1) → background tab, PLAIN click still falls through to onRowClick (routing/in-page state unchanged). No
+  rowHref = old behaviour, so this is ADDITIVE. Control cells (bookmark, the 5 icon cols, the ⋮ kebab) keep
+  stopping propagation. Code: table/DataTable.tsx (rowHref prop + the <tr> onClick/onAuxClick); first
+  adopter pages/repos/OneRepoPage.tsx.
+  §4d.1 BACKLOG (state it honestly, do NOT let it read as done): ONLY OneRepoPage passes rowHref today.
+  Still to do — ReposPage, StoragesPage, StorageDetailPage, IpfsPage, DevicesPage. Outside the shared
+  DataTable and needing the equivalent separately: FullPathsPage (raw useReactTable) + FileSystemPage
+  (column browser). DONE = grep onRowClick= in packages/frontend/src finds no site without rowHref=.
+  NUMBERING NOTE: this was drafted as "§3.6", but §3.6 was already "Sort obeys the axis split too" and
+  decision_toggles.mdx cites that anchor (#36-sort-obeys-the-axis-split-too-locked) — so it landed at §4d
+  with the other site-wide DataTable behaviours (§4a responsive / §4b Columns / §4c icon columns), and §3.6
+  carries a pointer to it. Other specs should cite §4d.
+  METRIC TILE RENAME (shipped): the One-repo tile "Describable" is now "AI Describable" (both letters
+  upper-case), and the "Undecided" tile NO LONGER EXISTS — it split into "Add to IPFS" + "Git Ignore", and
+  Git Ignore also absorbed the old "Big, not git-ignored" tile. Tile labels live in
+  pages/repos/metricWarnings.ts. This does NOT touch §2.4.1's Pin facet: the facet value ☑ Undecided stays,
+  and the Decision wire value `undecided` is UNCHANGED and still FROZEN (decisions.mdx §7) — only prose
+  tying that checkbox to the removed tile was corrected.
 
   CHARTER NOTE: CLAUDE.md's Tables rule still says the filter/sort icons "open a dropdown to filter /
   sort the table." §2.2 and §3.5 move the common path OUT of those dropdowns onto always-visible

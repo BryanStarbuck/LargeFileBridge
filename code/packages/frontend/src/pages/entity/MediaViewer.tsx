@@ -222,6 +222,26 @@ function ActionBar({
     queryFn: () => api.ocr(v.path),
     enabled: kind === "image" || kind === "video",
   });
+  // Existing AI description (ai_description.mdx §11) — drives the Describe / Re-describe label, exactly as
+  // `transcript` drives Transcribe and `ocrText` drives OCR. Same query key as band 6's AI-description
+  // column, so the bar and the column agree and share one fetch.
+  const { data: description } = useQuery({
+    queryKey: ["description", v.path],
+    queryFn: () => api.description(v.path),
+    enabled: kind === "image" || kind === "video",
+  });
+  const [describeBusy, setDescribeBusy] = useState(false);
+  // Generate (or regenerate) this file's AI description. Provider-gated inside runDescribeFile, which pops
+  // the credentials-missing dialog when no vision key resolves on this machine (ai_credentials.mdx §2).
+  const onDescribe = () => {
+    setDescribeBusy(true);
+    runDescribeFile(v.path, v.name, {
+      overwrite: !!description, // an existing description is only replaced on an explicit Re-describe
+      onDone: () => qc.invalidateQueries({ queryKey: ["description", v.path] }),
+      onSettled: () => setDescribeBusy(false),
+    });
+  };
+
   const [ocrBusy, setOcrBusy] = useState(false);
   // Read (or re-read) the text in this file. Gated through the shared readiness gate like every other OCR
   // entry point (ocr.mdx §6) — a pass-through in the common case, so the click still feels instant.
@@ -381,6 +401,20 @@ function ActionBar({
       key: "transcribe", priority: 60,
       bar: <Btn icon={<Captions className="h-4 w-4" />} label={label} onClick={run} disabled={transcribe.isPending} />,
       menu: [{ id: "transcribe", group: "Work", label, icon: <Captions className="h-4 w-4" />, disabled: transcribe.isPending, onSelect: run }],
+    });
+  }
+
+  // AI description — image + video (ai_description.mdx §11). This was MISSING from the action bar: the bar
+  // offered Transcribe and OCR but never the middle sibling, so on an image or a video the "More" menu had
+  // no way to generate an AI description at all — even though band 6 renders the description column right
+  // below it. The locked trio order is transcription → AI description → OCR at EVERY scale (ocr.mdx §8.2),
+  // so this sits between them: priority 58, under Transcribe (60) and over OCR (55).
+  if (kind === "image" || kind === "video") {
+    const label = describeBusy ? "Describing…" : description ? "Re-describe" : "Describe…";
+    items.push({
+      key: "describe", priority: 58,
+      bar: <Btn icon={<Sparkles className="h-4 w-4" />} label={label} onClick={onDescribe} disabled={describeBusy} />,
+      menu: [{ id: "describe", group: "Work", label, icon: <Sparkles className="h-4 w-4" />, disabled: describeBusy, onSelect: onDescribe }],
     });
   }
 

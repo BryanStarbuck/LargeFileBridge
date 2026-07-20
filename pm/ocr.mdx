@@ -83,7 +83,7 @@ the three now obliges adding it to all three.
 | **Transcription** analysis column in the viewer | **AI description** column | **Text (OCR)** column — §7 |
 | **Transcribe** task tab | **AI descriptions** task tab | **OCR** task tab — §11 |
 | 3-state **Transcribe** icon (`Captions`, blue) | 3-state **Describe** icon (`ScanText`, teal) | 3-state **OCR** icon (`TextSelect`, **violet**) — §11.2 |
-| `Transcribable` / `Transcribed` metrics | `Describable` / `Described` | **`OCRable` / `OCRed`** — §12 |
+| **Transcribable** / **Transcribed** metric tiles | **AI Describable** / **Described** | **OCRable** / **OCRed** — §12 |
 | Blue **"Transcribe ›"** header primary | Blue **"Describe ›"** | Blue **"OCR ›"** (ranked **last**) — §12.3 |
 | "What Can Be Transcribed" calc engine | "What Can Be AI-Described" | **"What Can Be OCR'd"** — §14 |
 | Model-download readiness (`withModelReady`) | Credential readiness (`withDescribeReady`) | **Engine readiness** (`withOcrReady`, ~always ready) — §6 |
@@ -92,6 +92,16 @@ the three now obliges adding it to all three.
 | 3-way placement radios ("transcripts") | same radios ("AI descriptions") | **same radios ("OCR text")** — §5.3 |
 | `FileRow.transcribe` · `TranscribeResult` | `FileRow.describe` · `DescribeResult` | **`FileRow.ocr` · `OcrResult`** — §18.1 |
 | `.transcription` artifact | `.ai_description` artifact | **`.ocr` artifact** — §5 |
+
+> **DECISION (LOCKED): OCR's metric pair stays "OCRable / OCRed".** The describe pair was renamed
+> **Describable → AI Describable** ([ai_description.mdx §12.1](./ai_description.mdx)) because that tile had to
+> say **WHO** does the describing — a hosted vision provider — so it could never be read as *"files that have
+> a description"*. **OCR has no such ambiguity to resolve: it is 100% local, with no provider and no actor to
+> name** (§4). Prefixing it would advertise a choice the user does not have and imply a provider that does not
+> exist. So the pair is **OCRable** (could) / **OCRed** (done), unchanged — and, like every metric label, it
+> renders **verbatim, never CSS-`capitalize`d**, because its casing is meaningful
+> ([ai_description.mdx §12.1](./ai_description.mdx)). The identifiers `ocrable` / `ocred` are likewise
+> untouched.
 
 **The two deliberate asymmetries** — and they are the whole personality of this feature:
 
@@ -660,18 +670,39 @@ default. If one is wanted, **`R`** ("read") is free in the media-viewer scope (a
 two affordances, which is exactly what the directive means by *"these triple-dot dropdown menus mean
 right-click on files or directories."*
 
-The **File** catalog ([menus.mdx §5.3](./menus.mdx)) gains **Create OCR text** in the **`Create`** group,
-directly **after** `Create Transcription` and `Create AI description` — the three are **always adjacent and
-always in that order**, at every scale, so the trio is learnable as one thing. Image/video only.
+The **File** catalog ([menus.mdx §5.3](./menus.mdx) — the OWNING spec for the menu itself) gains **Create OCR
+text** in the **`Create`** group, directly **after** `Create Transcription` and `Create AI description` — the
+three are **always adjacent and always in that order**, at every scale, so the trio is learnable as one thing.
 
 Like its siblings it **opens the unified popup** ([dialogs.mdx §6.4](./dialogs.mdx)) with **this one file as
 the sole checked candidate** — the education plus an explicit **"OCR 1 file"** confirm. It is **not** a
 silent one-click run; the menu is the same actions as the fast path, not a bypass
 ([menus.mdx §5.6](./menus.mdx)).
 
-* The item is **absent** (not disabled) for a non-image/-video file — the grammar the sibling items use.
+**Which of the trio appears, by file kind (LOCKED).** Each item is **absent** (never disabled) when it does
+not apply — the grammar the `Create` group uses throughout.
+
+| File kind | Create Transcription | Create AI description | **Create OCR text** |
+| --- | --- | --- | --- |
+| **Image** (`.png`, `.jpg`, `.heic`, …) | — | ✓ | **✓** |
+| **Video** (`.mp4`, `.mov`, …) | ✓ | ✓ | **✓** |
+| **Audio** (`.mp3`, `.wav`, …) | ✓ | — | — |
+| **PDF** (`.pdf`) | — | — | **✓** |
+| Anything else (text, archive, binary) | — | — | — |
+
+* **A PDF gets exactly one item: Create OCR text.** Transcription (audio + video) and AI description
+  (image + video) genuinely do not apply to a PDF, so they stay absent for it — but the OCR item must be
+  there, because a **PDF is a first-class OCR target** (§1.7.1).
+* **The gap this closed.** The trio used to be gated on **media kind only**, and a PDF has **no** media kind
+  — so opening the ⋮ / right-click menu on a PDF offered **nothing at all**, **no `Create` group whatsoever**,
+  even though the very same PDF was OCR-able from **every other surface**: the **OCR task tab** (§11), the
+  **OCRable metric tile** (§12.2), and the **Create OCR text page action-link** (§8.5). One surface silently
+  disagreeing with the other three is precisely the failure §0's all-three-or-none contract exists to prevent.
 * Right-click opens the identical menu, **isolated from the row underneath** ([menus.mdx §3.2](./menus.mdx))
   — it must never also trigger the row's cell-link navigation.
+
+Building the per-file `Create` group, including the PDF branch that makes **Create OCR text** appear for a PDF, is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions` (the `mkind === "image" || mkind === "video" || isPdfName(v.name)` guard on the `create-ocr-text` item), over the kind helpers `mediaKindForName` / `isPdfName` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/`.
 
 ### 8.3 A directory — the ⋮ kebab / right-click → **Create OCR text** (LOCKED)
 
@@ -955,7 +986,9 @@ Policy: [parallelization.mdx §3](./parallelization.mdx).
 
 [task_tabs.mdx §1](./task_tabs.mdx)'s per-repo tab strip becomes **All · IPFS · Compress · Transcribe · AI
 descriptions · OCR**. The OCR tab lists the repo's **image / video / PDF** files with the OCR status icon
-leading, plus the standard metrics strip (§12) and hover-info region, and it re-tunes the table from the same
+leading, plus the standard metrics strip (§12); hover prose goes to the **left-bar hover-info panel**
+([left_bar.mdx §4.1](./left_bar.mdx#41-the-non-intrusive-hover-info-panel-sits-just-above-this-slot-locked)),
+and it re-tunes the table from the same
 data-driven tab config the other five use ([task_tabs.mdx §7](./task_tabs.mdx)) — **no bespoke table**.
 Default sort is the shared **"could-first"** (the actionable rows), then **Size desc**.
 
@@ -1051,12 +1084,14 @@ changed is that the OCR icon now also rides on **every other** file table alongs
   **header is the same `TextSelect` glyph as the cells** — an **icon-only header**, not the truly header-less
   slot §11.2 described from when the OCR icon only appeared on its own tab; a plain-text `"OCR"` label is kept
   only for the Sort / Filter / Columns dropdowns ([tables.mdx §4c.2](./tables.mdx)). Hovering **the header
-  icon OR any cell icon** shows a native `title` tooltip **and** fills the page's **docked hover-info region**
+  icon OR any cell icon** shows a native `title` tooltip **and** fills the **hover-info panel at the bottom
+  of the left bar** ([non_intrusive_tooltip.mdx §1 / §6](./non_intrusive_tooltip.mdx),
+  [left_bar.mdx §4.1](./left_bar.mdx#41-the-non-intrusive-hover-info-panel-sits-just-above-this-slot-locked))
   with a plain-English explanation of what OCR is — *"OCR reads the text out of an image, video frame, or PDF
   page,"* so those words become searchable without opening the file ([tables.mdx §4c.3](./tables.mdx)).
 
-The shared icon-column block, its one visual grammar, the icon-only header, and the docked-hover explanation are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon` (the three-state box, violet `--lfb-ocr-done` for OCR's done fill); the reusable task-icon kit `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TASK_ICON` / `TaskIconHeader` / `TaskStatusCell` (the OCR row carries the `TextSelect` header glyph and the plain-English hover string); the column typing `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts` — `LfbColumn.headerCell` / `LfbColumn.tight`; the docked hover region `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo`; and the per-tab column order `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` + `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` (`columnIds` begin `pin`, `ignore`, `transcribe`, `describe`, `ocr`).
+The shared icon-column block, its one visual grammar, the icon-only header, and the hover explanation are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon` (the three-state box, violet `--lfb-ocr-done` for OCR's done fill); the reusable task-icon kit `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TASK_ICON` / `TaskIconHeader` / `TaskStatusCell` (the OCR row carries the `TextSelect` header glyph and the plain-English hover string); the column typing `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts` — `LfbColumn.headerCell` / `LfbColumn.tight`; the hover text is PUBLISHED by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo` and RENDERED by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel`, connected by the single global `HoverInfoBridge` mounted in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx`; and the per-tab column order `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` + `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` (`columnIds` begin `pinned`, `gitignore`, `transcribe`, `describe`, `ocr`).
 
 ---
 
@@ -1065,8 +1100,11 @@ The shared icon-column block, its one visual grammar, the icon-only header, and 
 ### 12.1 The metric pair
 
 `TaskMetrics` gains **`ocrable`** and **`ocred`**, mirroring `transcribable`/`transcribed` and
-`describable`/`described`, and rendered as panels named **`OCRable`** (could) and **`OCRed`** (done) —
-the [task_tabs.mdx §4.4/§4.5](./task_tabs.mdx) could/done naming convention:
+`describable`/`described`, and rendered as panels labelled **OCRable** (could) and **OCRed** (done) —
+the [task_tabs.mdx §4.4/§4.5](./task_tabs.mdx) could/done naming convention. These labels are **deliberately
+unprefixed** even though the describe tile now reads **AI Describable**: OCR is 100% local, so there is no
+actor to name (the DECISION recorded in §0). Like every metric label they render **verbatim, not CSS-
+`capitalize`d** ([ai_description.mdx §12.1](./ai_description.mdx)):
 
 * **`OCRable`** — image/video/PDF files with **no** `.ocr` artifact. **Clicking it opens the educate-and-fix
   popup** (§12.2); the panel is **amber-tinted** when > 0 (the "offer" health tint for task work,
@@ -1487,7 +1525,7 @@ the kind of asymmetry §0 exists to prevent. Do **not** quietly add `ocr` alongs
     violet** (`--lfb-ocr-done` `#7c3aed`), unique among the five; its **header is the `TextSelect` glyph**
     (an icon-only header, amending §11.2's "header-less" slot — the `"OCR"` label kept only for the
     Sort/Filter/Columns dropdowns); and hovering the header **or** a cell icon shows a `title` tooltip **and**
-    fills the docked hover-info region with *"OCR reads the text out of an image, video frame, or PDF page."*
+    fills the **left-bar hover-info panel** with *"OCR reads the text out of an image, video frame, or PDF page."*
     The per-repo **OCR task tab (with its `Large files only`-OFF default) is kept**.
 
 ---

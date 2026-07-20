@@ -39,9 +39,13 @@ Siblings this builds on and does not repeat:
   (video — because it carries an audio track — and audio), i.e. *which* files this engine may run over.
 * [Task tabs](./task_tabs.mdx) — the per-repo screen's **Transcribe tab**, where audio/video files are
   surfaced with a three-state **Transcribe status icon**; opening the tab filters the file table to
-  transcribable files and sorts the not-yet-transcribed ones to the top. The tab's **`Transcribable` metric
-  tile** opens the transcribe popup, and a blue **"Transcribe ›"** header primary appears when transcription
-  is the top recommendation (§9.1).
+  transcribable files and sorts the not-yet-transcribed ones to the top. The tab's **Transcribable** metric
+  tile opens the transcribe popup, and a blue **"Transcribe ›"** header primary appears when transcription
+  is the top recommendation (§9.1). The pair is **Transcribable / Transcribed** — the sibling of AI
+  description's **AI Describable / Described** ([ai_description.mdx §12.1](./ai_description.mdx), which owns
+  that naming rule) and OCR's **OCRable / OCRed** ([ocr.mdx §0](./ocr.mdx)). **Transcribable keeps its bare
+  name**: like OCR, transcription runs **locally** with no provider to name, so there is no "who does it"
+  ambiguity for the label to resolve.
 * [placement_radios.mdx](./placement_radios.mdx) · [repo_settings.mdx](./repo_settings.mdx) — where the
   **placement radio** that chooses the transcript's artifact root lives. This spec describes the resolved
   path *shape* (§3); those specs own *choosing the root* (§9.2 — cross-link only, not re-specified here).
@@ -714,7 +718,7 @@ The transcription REST surface (tools / read-transcript / file / batch / tree / 
     (Pin · Ignore · Transcribe · AI Description · OCR) on **every file-list table except the File System page**
     ([tables.mdx §4c](./tables.mdx#4c-the-icon-control-columns--pin--ignore--transcribe--ai-description--ocr-locked-site-wide)),
     not only the Transcribe tab; its header is the `Captions` icon itself (no title text), and hovering the
-    header or any cell fills the docked hover-info region with a plain-English "what transcription is"
+    header or any cell fills the left-bar hover-info panel with a plain-English "what transcription is"
     explanation. Its **done** fill is **indigo** (`--lfb-transcribe-done` `#4338ca`), **changed from the old
     blue (`--lfb-pin`)** so it no longer clashes with the blue **Pin** icon now that both lead every table side
     by side ([tables.mdx §4c.5](./tables.mdx#4c5-each-done-color-is-unique-locked)); the "could" edge and the
@@ -793,8 +797,8 @@ shared icon-control-column model this icon is **no longer confined to the Transc
 **every file-list table in the product** (except the File System page)
 ([tables.mdx §4c](./tables.mdx#4c-the-icon-control-columns--pin--ignore--transcribe--ai-description--ocr-locked-site-wide)),
 each rendered through the shared `StatusActionIcon` grammar, with hovering the header icon **or** any cell
-filling the **docked hover-info region** with a plain-English *"what transcription is"* explanation
-([tables.mdx §4c.3](./tables.mdx#4c3-hover-fills-the-docked-hover-info-region-and-shows-a-title-tooltip-locked)):
+filling the **left-bar hover-info panel** with a plain-English *"what transcription is"* explanation
+([tables.mdx §4c.3](./tables.mdx#4c3-hover-fills-the-left-bar-hover-info-panel-and-shows-a-title-tooltip-locked)):
 
 * **Done** — the file has a `.transcription` transcript (§3) → **solid indigo fill
   (`--lfb-transcribe-done` `#4338ca`), white glyph + inner white ring**. *(This "done" swatch was **blue**
@@ -838,7 +842,7 @@ before it, clicking `Transcribable` did nothing (it merely re-selected the Trans
 on); now it opens the popup and lets the user **start the transcription**.
 
 * **The blue "Transcribe ›" header primary.** When transcription is the repo's **top pending
-  recommendation**, the header primary button ([one_repo.mdx §3.1](./one_repo.mdx#31-header)) is a **blue**
+  recommendation**, the header primary button ([one_repo.mdx §3.1](./one_repo.mdx#31-header--two-rows-and-neither-of-them-wraps-locked)) is a **blue**
   (`--lfb-primary`) **"Transcribe ›"** (white text, trailing right chevron) — the verb-named variant of the
   smart header button. It opens the **same** transcribe popup the `Transcribable` tile opens. Its place in
   the worst-first order is **ipfs-down → pull-down → undecided → transcribe → describe → compress**

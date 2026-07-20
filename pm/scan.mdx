@@ -206,7 +206,7 @@ Starting the watcher when the backend boots and stopping it on shutdown is wired
 A repo's metric panels ([task_tabs.mdx §2](./task_tabs.mdx)) are only as trustworthy as its **last scan**.
 When a repo has **never been scanned**, or its **`lastScanAt` is older than 2 weeks**, we can't trust the
 counts, so re-scanning takes **precedence over every recommendation**: the One-repo header primary
-([one_repo.mdx §3.1](./one_repo.mdx#31-header)) becomes **"Scan now"** instead of "View recommendation".
+([one_repo.mdx §3.1](./one_repo.mdx#31-header--two-rows-and-neither-of-them-wraps-locked)) becomes **"Scan now"** instead of "View recommendation".
 Clicking it runs the same on-demand discovery worker (§2). When the scan lands, `lastScanAt` refreshes and
 the button flips back to "View recommendation".
 

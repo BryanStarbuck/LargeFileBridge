@@ -69,9 +69,11 @@ and then requires the **same** surface for every other warnable condition (§10+
 the launcher is the metric panel** (clicking it opens the popup, [task_tabs.mdx §2.6](./task_tabs.mdx)) —
 the old `RepoVerdict` `StatusBanner` there has been removed; other pages still launch the popup from the
 banner's blue **arrow button** (§3). The popup itself is identical either way; only what you press to open
-it differs. The undecided popup is built in
+it differs. This decision popup is built in
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
-`buildMetricWarning` (the `undecided` case).
+`buildAddToIpfsWarning()` (reached through `buildMetricWarning()`'s `addToIpfs` case). *(It was formerly
+the `undecided` case; the metric that opens it is now named **Add to IPFS** — [§11](#11-warnings-as-metric-panels--the-per-repo-task-tab-strip-locked).
+The `WarningDef` id is still `repo-files-need-decision`.)*
 
 > **Rule — every warning is a first-class, specified thing.** No warning ships as an ad-hoc string in
 > a page. Every warning is declared in the **warning registry** (§8), rendered by the shared
@@ -113,7 +115,8 @@ and uncommitted, under `~/T/_large_files_bridge/_do_batches/`.
    are **not** TO DO Batches and do **not** appear as To-Do slugs; they stay **page-local**, single-pane
    (§4, §10 file-scoped rule). The To Do page is only for **file-work bundles**.
 5. **The five batch categories map to warnable conditions:** `pull_down` (files pinned on a peer device
-   but absent here — a "pull them down" offer), `git_ignore` (big-but-not-git-ignored, §10.3.7),
+   but absent here — a "pull them down" offer), `git_ignore` (big-but-not-git-ignored — §10.2.7.1 at repo
+   scope, §10.3.7 at directory scope),
    `compress_video` / `compress_image` (§10.3.9–§10.5.*), and `pin` (an undecided eligible big file,
    §10.2.7). A `pull_down` batch may also carry a `transcribe` sub-action.
    *Batch → warning wiring served in code:*
@@ -1242,7 +1245,18 @@ Every repo answers "am I OK?" through one **RepoVerdict** banner on the One-Repo
 
 #### 10.2.7 N files need a decision (Add to IPFS and/or Add to git ignore) — `warn` (id: repo-files-need-decision)
 
-*Where shown:* One-Repo page banner, **worst-first cause #4**; Repos list shows the undecided count in brand color per row. **This is the canonical example that drives §0–§4 of this spec.**
+*Where shown:* One-Repo page, the **`Add to IPFS`** metric tile (the whole tile is the affordance — [§11](#11-warnings-as-metric-panels--the-per-repo-task-tab-strip-locked)), and the **"View recommendation ›"** header primary at **worst-first rank #3** (`ipfs-down → pull-down → add-to-IPFS → transcribe → describe → compress → ocr`); Repos list shows the undecided count in brand color per row. **This is the canonical example that drives §0–§4 of this spec.**
+
+> **Tile rename (SHIPPED — the number is unchanged).** The tile that opens this popup used to be called
+> **`Undecided`**. It is now **`Add to IPFS`** (`MetricId` `addToIpfs`), because a decision has always been
+> **two independent axes** and this popup always wrote **both** — one number could never say which axis was
+> outstanding. The count is **exactly** what `Undecided` showed: files with no pin decision, excluding rows
+> whose bytes another IPFS tool already pinned on this node (the foreign-pinned / green exclusion is
+> **UNCHANGED**). The git-ignore axis now has its own tile and its own popup (§10.2.7.1). The `WarningDef`
+> id is still `repo-files-need-decision`, and the frozen wire value `undecided` on the `Decision` enum is
+> **unchanged** — only the TILE was renamed ([decisions.mdx §7](./decisions.mdx)).
+> *Implemented in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` —
+> `MetricId` / `METRIC_CATALOG` / `metricCount()`; popup in `metricWarningDefs.tsx` — `buildAddToIpfsWarning()`.
 
 **(A) Detect it & all conditions.** `detail.counts.undecided > 0` (and no worse cause). A file is "undecided" when there is **no entry in `cfg.decisions[path]`** (`Decision` defaults to `"undecided"`); `countDecisions()` increments `undecided` for every such file, and `rollupStatus()` maps `undecided > 0` (when not error/pinning/behind) to `"needs_review"`. *Computed in:* frontend `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `RepoVerdict` undecided branch (lines 386–389), summary strip (line 256, undecided highlighted); list `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` undecided column (lines 122–123, `text-[var(--lfb-primary)]`); backend `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` decision default undecided (line 208), `countDecisions()` (lines 230–241), `rollupStatus()` `needs_review` (line 260).
 
@@ -1251,6 +1265,29 @@ Every repo answers "am I OK?" through one **RepoVerdict** banner on the One-Repo
 **(C) The fix.** Writes a decision **record** per checked file to the repo-level `decisions.yaml` ledger — in **Local Storage** at `~/T/_large_files_bridge/repos/<repoKey>/decisions.yaml` (shared across the user's computers via the company sync repo when enabled, never in the working repo — [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)) ([decisions.mdx §3/§4](./decisions.mdx)) — stamping `asked: true`, the two axes (`ipfs`, `gitignore`), `decided_by` (the authenticated allow-listed email), `decided_at`, and `sid` (the Storage ID) — then **reconciles** ([decisions.mdx §7](./decisions.mdx)): the IPFS axis is projected onto the machine-local `cfg.decisions[p]` frozen enum (`ipfs:true → "sync"`, `ipfs:false → "ignore"`; the `sync` literal is never renamed) and the git-ignore axis is applied through the [git_ignore.mdx](./git_ignore.mdx) engine. `PATCH /api/repos/:repoId/files {paths, ipfs?, gitignore?}`. **`paths` must be repo-RELATIVE** — the ledger and `cfg.decisions` are keyed by relative path and `composeFileRows()` reads them back by relative path, so the popup's `targets[].id` (what `apply` hands the write) is `f.path`, not the absolute path. *(Bugfix per §5.3.1 case 1: ids were absolute, so decisions landed under a key the detector never reads — the file stayed `undecided` and this banner persisted verbatim after a "fixed" toast.)* **Async (§5.2/§5.3):** from the warning popup the fix runs as a background job — the popup's `progress` metadata uses a `kind` reflecting the chosen axes ("pin" when IPFS is on, else "ignore"/"configure"), `target:` the repo name, `doneLabel:` "N files decided", and invalidates `["repo", repoId]`; on success `onWarningApplied` also runs `refetchUntilResolved` (§5.3.1 case 2) so the banner re-derives in a burst and leaves the page — **for good**, because the shared record is now the durable "we asked" state (§10.2.7 note) — as soon as the decisions are written. *Fix in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files`; `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `recordDecision()` / `reconcile()`; frontend `OneRepoPage.tsx` `RepoVerdict` `repo-files-need-decision` popup (two `kind:"checkbox"` options) + the relative-path `targets`, dispatched by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` `doApply()`.
 
 **Notes / gaps.** Ties to the charter category-rollup ("big files git-ignored but not tracked → nudge to decide") and is specified end-to-end in [decisions.mdx](./decisions.mdx). The blue-arrow bulk-decision popup is wired (per-row Decision dropdown / bulk menu remain as the in-table path, each also writing the shared ledger — [decisions.mdx §8](./decisions.mdx)). **Why it stops coming back:** the previous single-axis model had no way to record "reviewed — leave it," and decisions were machine-local so a teammate (or a re-scan on another computer) re-raised the banner; the shared, timestamped, both-off-capable record ([decisions.mdx §2/§4](./decisions.mdx)) is the durable, team-visible "already asked" state, so the warning leaves the page and **stays** gone across re-scans and across the team. **Follow-on state:** turning IPFS on moves these files to **"queued to transfer"** (§10.2.8), not the "not backed up" alarm (§10.2.6), thanks to that section's `cid != null` gate — so the "needs a decision" warning genuinely leaves the page instead of being swapped for a fresh yellow one (§5.3.1 case 3).
+
+#### 10.2.7.1 N large files are not git-ignored — `warn` (id: repo-files-not-git-ignored)
+
+*Where shown:* One-Repo page, the **`Git Ignore`** metric tile (`MetricId` `gitIgnore`) on the **All** tab. The tile is **not** shown on the IPFS tab — that tab is the IPFS axis only. This is the charter's **category-3 offer** ("big files that aren't a good idea to check in") rendered at repo scope; the directory-scope sibling is §10.3.7.
+
+> **Tile consolidation (SHIPPED).** The separate One-repo tile **`Big, not git-ignored`** (`MetricId`
+> `bigNotIgnored`) **no longer exists**; it is folded into **`Git Ignore`**. Precisely: the **backend field
+> `TaskMetrics.bigNotIgnored` still exists and is still computed** — it feeds the directory rollup
+> (§10.3.7 / §10.4.x). Only the **One-repo TILE** is gone.
+
+**(A) Detect it & all conditions.** A row qualifies when **Git is still allowed to commit it**: `!f.gitignore` (not already git-ignored) **and** `!f.gitignoreLocked` (not owned by a rule we refuse to rewrite — a pattern, or a non-root `.gitignore`; [git_ignore.mdx §5.5](./git_ignore.mdx)) **and** `!f.analysisOnly` (not one of the small analysis-only media admitted by scan rule 5 — those are never a checked-in-size problem, [scan.mdx §4.1](./scan.mdx)). `> 0` ⇒ amber tile + a non-null `WarningDef`; `0` ⇒ the light-green big-`0` all-clear.
+
+> **LOCKED — one predicate, so the number and the list can never disagree.** The tile's **count** and the
+> popup's **target list** are the **same function call**, not two parallel filters. Never re-derive either
+> one independently.
+> *Implemented in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` —
+> `gitIgnoreCandidates()`, consumed by `metricCount("gitIgnore")` and by `buildGitIgnoreWarning()`.
+
+**(B) The popup.** *What this is:* Large File Bridge found N large files in this repo that Git is still allowed to commit; adding them to the repo's `.gitignore` keeps Git out of the big binaries, and they still sync between your computers over IPFS. *Why it matters:* a committed big binary is in the repo's history **forever** — every clone pays for it and it can't be removed without a history rewrite; git-ignoring a file does **NOT** delete it (the bytes stay exactly where they are on disk); Large File Bridge is how these files travel between machines, so Git doesn't need to carry them. *Options — ONE checkbox:* **☐ "Also add them to IPFS (pin)"** (helper: "back them up across your computers now that Git won't"), defaulting **OFF** — this popup's job is the git-ignore axis; pinning is an **opt-in**. *Targets:* per-file checkboxes over `gitIgnoreCandidates()`, all checked by default; uncheck any file Git should keep tracking. *Action button:* **"Git-ignore"** (composed with the checked count per §4.4.1). `canApply` is always true.
+
+**(C) The fix.** Apply writes **BOTH axes** — never the git-ignore axis alone. Sending git-ignore by itself would clobber the file's existing pin decision, so each file's **current** `decision` is preserved as the IPFS value: files already `sync` (and, when the opt-in checkbox is on, all checked files) are written `{ipfs:true, gitignore:true}`; the rest are written `{ipfs:false, gitignore:true}`. Both writes go through the same two-axis ledger path as §10.2.7 ([decisions.mdx §3/§4](./decisions.mdx), [decision_toggles.mdx §2](./decision_toggles.mdx)) and the git-ignore axis is applied through the [git_ignore.mdx](./git_ignore.mdx) engine, which may only add an **exact anchored `/<rel>` line** to the repo-**root** `.gitignore`. Runs as a background job (`progress.kind` = `"pin"` when the opt-in is checked, else `"ignore"`; `doneLabel` "N files git-ignored"), invalidating `["repo", repoId]`. *Fix in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildGitIgnoreWarning()`; write endpoint `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files`.
+
+**Notes / gaps.** Rows whose ignore rule we refuse to rewrite (`gitignoreLocked`) are **excluded from the count**, not shown-and-disabled — the tile must never offer a number it cannot fix. The **⊘ Ignore** column in the files table reads `git check-ignore`, not the decisions ledger ([decisions.mdx §1.1](./decisions.mdx)) — this popup's count is derived from that same git-truth field, so the tile and the column always agree. **Follow-up (naming):** with a tile literally named **`Git Ignore`** now sitting next to one named **`Add to IPFS`**, the compact summary line's segment **"Ignore"** (which means *not pinned*, an IPFS-axis word) is a genuine collision — [one_repo.mdx §4.1](./one_repo.mdx) already recommends renaming it to **"Not pinned"**, and that rename should now be taken. *(That file is not owned by this spec — flagged here.)*
 
 #### 10.2.8 N files are queued to transfer — `warn` (id: repo-files-pending-transfer)
 
@@ -2762,36 +2799,61 @@ panels** above the files table, scoped to the active **task tab**
 ([task_tabs.mdx §2](./task_tabs.mdx#2-the-metrics-panels--the-what-could-be-done-boxes-locked)). This is a
 compact rendering of the same warning model this spec defines — not a new warning system.
 
-* **One panel = one warning/metric.** Each panel is a **terse label + a number + a right chevron (`›`)** —
-  e.g. `Undecided 5`, `Not backed up 3`, `Compressible videos 12`. **No description prose in the panel**;
-  the explanation appears in the **hover-info region** to the right of the strip
+* **One panel = one warning/metric.** Each panel is a **terse Title-Case label above a big number** — e.g.
+  `Add to IPFS 5`, `Git Ignore 4`, `Not Backed Up 3`, `Compressible Videos 12`. There is **NO chevron**:
+  the **whole panel is the button** ([task_tabs.mdx §2.1](./task_tabs.mdx#21-anatomy-of-one-panel-locked),
+  which governs panel anatomy and wins over any older chevron wording here). **No description prose in the
+  panel**; the explanation appears in the **hover-info region** to the right of the strip
   ([task_tabs.mdx §3](./task_tabs.mdx#3-the-hover-info-region--the-space-to-the-right-of-the-panels-locked),
   [non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)).
 * **Green-zero = nothing to do.** When a panel's count is **0**, it renders as a **light-green filled
   rounded rectangle with a big `0`** — the all-clear reassurance state. A count `> 0` is **health-tinted**
   (red = data at risk / owed; amber/accent = action needed).
-* **The chevron opens this spec's popup.** Clicking a panel's chevron opens the **educate-and-fix popup**
+* **The panel opens this spec's popup.** Clicking anywhere on a panel opens the **educate-and-fix popup**
   (§4 of this spec) for that warning, scoped to exactly the files the number counts — the two/three
   per-row action toggles, the media preview pane, the composed Apply label, all as already specified. A
   green-`0` panel opens the popup in its **all-clear** state.
 * **Which panels show is per active tab** ([task_tabs.mdx §4](./task_tabs.mdx#4-per-tab-tuning-locked--filter--columns--sort--metrics)):
   All shows every actionable metric; IPFS/Compress/Transcribe show only their task's metrics.
 
-The metric-panel strip and its chevron → popup wiring are rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricsStrip` / `MetricPanel` (each panel's chevron mounts the existing `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningArrowButton.tsx` — `WarningArrowButton`, resolved per metric in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts`).
+The metric-panel strip and its panel → popup wiring are rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricsStrip` / `MetricPanel` (the whole panel is the button; the popup it opens is resolved per metric in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildMetricWarning()`, with labels/counts from `.../metricWarnings.ts` — `METRIC_CATALOG` / `metricCount()`). Other pages still launch the identical popup from the banner's `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningArrowButton.tsx` — `WarningArrowButton`.
+
+**The two decision panels (SHIPPED).** The single panel `Undecided` **no longer exists**. It split along the
+two axes a decision has always had, into two adjacent panels that lead the **All** tab's strip:
+
+| Panel | `MetricId` | Counts | Opens | `WarningDef` id |
+|---|---|---|---|---|
+| `Add to IPFS` | `addToIpfs` | files with no pin decision, excluding rows another IPFS tool already pinned on this node (foreign-pinned/green exclusion **unchanged**) — exactly the old `Undecided` number | `buildAddToIpfsWarning()` (§10.2.7) | `repo-files-need-decision` (**unchanged**) |
+| `Git Ignore` | `gitIgnore` | large files Git is still allowed to commit — not already git-ignored, not owned by a rule we refuse to rewrite ([git_ignore.mdx §5.5](./git_ignore.mdx)), not an analysis-only scan-rule-5 row | `buildGitIgnoreWarning()` (§10.2.7.1) | `repo-files-not-git-ignored` (**new**) |
+
+The former separate panel **`Big, not git-ignored`** (`MetricId` `bigNotIgnored`) is **folded into `Git
+Ignore`** and no longer exists as its own tile. The **backend field `TaskMetrics.bigNotIgnored` still exists
+and is still computed** — it feeds the directory rollup; only the One-repo TILE is gone. The frozen wire
+value `"undecided"` on the `Decision` enum and the `Undecided` filter-facet value are **unchanged**
+([decisions.mdx §7](./decisions.mdx)), as is the compact summary line under the strip
+(`N Pin · N Undecided · N Ignore · N Pinned locally`).
+*Implemented in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` —
+`MetricId` / `METRIC_CATALOG` / `metricCount()` / `gitIgnoreCandidates()`; per-tab panel lists in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — `TASK_TABS[*].metrics`.
 
 ### 11.1 The task-work metric popups — transcribe / describe / compress (the metric-tile fix) (`warn`)
 
-Historically **only** the `undecided` and `pullDown` metric tiles had an educate-and-fix `WarningDef`; the
-`ipfs-down` condition rode the header primary. So clicking the **task** tiles — `Transcribable`,
-`Describable`, `Compressible Videos`, `Compressible Images` — resolved `null` and the tile **did nothing
+Historically **only** the decision tile (then called `Undecided`, now `Add to IPFS`) and `pullDown` had an
+educate-and-fix `WarningDef`; the `ipfs-down` condition rode the header primary. *(Since then `gitIgnore`
+has one too — `buildGitIgnoreWarning()`, §10.2.7.1 — so **every** decision tile now opens a scoped popup.)*
+So clicking the **task** tiles — `Transcribable`,
+`AI Describable`, `Compressible Videos`, `Compressible Images` — resolved `null` and the tile **did nothing
 useful** (it fell through to its `onOpen` fallback, which re-selects the tab the user is already on — a
 visible no-op), and no blue task-verb header primary ever showed. **This subsection catalogs the fix**: a
 `WarningDef` builder for every actionable task metric, so the tile opens the scoped popup and the header can
 name the work. These are **Improvable offers** (`warn`), never data-at-risk alarms — the popup is an *offer
 to start the work*, dismissible per §5.6. See [task_tabs.mdx §2.4.1](./task_tabs.mdx#241-every-actionable-metric-tile-opens-a-popup--the-transcribe--compress--describe-builders-the-fix-locked)
 (the fix) and [task_tabs.mdx §2.7](./task_tabs.mdx#27-the-per-metric-blue-header-primary--every-actionable-metric-can-be-the-recommendation-locked)
-(the worst-first header primary: **ipfs-down → pull-down → undecided → transcribe → describe → compress**).
+(the worst-first header primary, LOCKED: **ipfs-down → pull-down → add-to-IPFS → transcribe → describe →
+compress → ocr**). *Implemented in:*
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+`topRecommendation()`.
 
 All three builders live in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
@@ -2821,10 +2883,17 @@ the permission + provisioning UI, then **resumes** the batch. Runs async and in 
 *Fix in:* `metricWarningDefs.tsx` — `buildTranscribeWarning()` (`apply` → the enqueue used by
 `TranscribeBatchPopup`, gated by `withModelReady()` from `frontend/src/lib/transcribe.ts`).
 
-#### 11.1.2 Describable — image/video with no AI description — `warn` (id: repo-describable-work)
+#### 11.1.2 AI Describable — image/video with no AI description — `warn` (id: repo-describable-work)
 
-*Where shown:* One-repo page, the **AI descriptions** tab's `Describable` metric tile, and the blue
+*Where shown:* One-repo page, the **AI descriptions** tab's **`AI Describable`** metric tile, and the blue
 **"Describe ›"** header primary when description is the top pending recommendation.
+
+> **Tile label (SHIPPED).** The tile reads **`AI Describable`** — both letters of **AI** upper-case, one
+> space — so it is never mis-read as "files that already have a description". The paired done-tile is still
+> **`Described`**. Only the LABEL changed: the `MetricId` is still `describable`, the count is still
+> `TaskMetrics.describable`, and the `WarningDef` id is still `repo-describable-work`.
+> *Implemented in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` —
+> `METRIC_CATALOG.describable.label`.
 
 **(A) Detect it & all conditions.** The count is `RepoDetail.taskMetrics.describable` — image/video rows
 whose `FileRow.describe === "could"` (describable — image always, video only where a video-capable provider

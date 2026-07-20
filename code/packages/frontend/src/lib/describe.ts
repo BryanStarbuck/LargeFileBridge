@@ -60,6 +60,10 @@ export function runDescribeFile(
     onDone?: () => void;
     onNoProvider?: (reason: string) => void;
     onNeedsSetup?: (reason: string) => void;
+    /** Fires on EVERY terminal outcome — success, no_provider, needs_setup, or a thrown error. A caller
+     *  driving a busy/spinner state must use this, not `onDone`: a failed run never reaches `onDone` and
+     *  would leave the control stuck at "Describing…" forever (the same trap runOcrFile documents). */
+    onSettled?: () => void;
   },
 ): void {
   toast.promise(api.describeFile(path, { overwrite: opts?.overwrite, provider: opts?.provider }), {
@@ -78,10 +82,12 @@ export function runDescribeFile(
       } else {
         opts?.onDone?.();
       }
+      opts?.onSettled?.();
       return msgOne(r);
     },
     error: (e) => {
       clientLog.error("describe.file", e);
+      opts?.onSettled?.();
       return e instanceof Error ? e.message : "Description failed";
     },
   });

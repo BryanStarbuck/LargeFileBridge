@@ -182,20 +182,31 @@ The bottom account slot and its upward-expanding, permission-gated popup menu ar
 
 ### 4.1 The non-intrusive hover-info panel sits just above this slot (LOCKED)
 
-Directly **above** the account slot — between the scrolling nav list and the slot — the bar reserves a
-**fixed block of always-white space** for the **non-intrusive hover-info panel**
-([non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)). This is the out-of-the-way home for the
-explanations that used to float over content: hover a **code badge**, an **interesting-folder glyph**, or a
-**file/directory row**, and its meaning appears **here** instead of in a bubble that covers the row.
+Directly **above** the external product links (§4.2) and the account slot — between the scrolling nav list
+and them — the bar reserves a **fixed block of always-white space** for the **non-intrusive hover-info
+panel** ([non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)). This is **the app's one home** for
+out-of-the-way hover prose: explanations that would otherwise float over content, or be docked beside a
+page's content and steal width from it, appear **here**.
 
+* **What feeds it.** Hovering a **code badge**, an **interesting-folder glyph**, or a **file/directory
+  row** anywhere in the app — **and**, on the **View-One-Repo** page ([one_repo.mdx](./one_repo.mdx)), the
+  **metric tiles**, the **File cell**, the **five icon control columns** (Pin · Ignore · Transcribe ·
+  AI description · OCR) and the **Compress status icon**. The One-repo page previously showed that prose in
+  a region **docked** to the right of its metrics strip; that region is **deleted** (it forced the metric
+  tiles to wrap), and its content lands **here** instead. The bar gives up **no width** to host it — the
+  block was already reserved.
+* **The One-repo page keeps it populated.** With nothing hovered there, the panel shows the **active task
+  tab's default hint**, so it is **not blank** on that page. Elsewhere it is blank white at rest.
 * **Reserved height ≈ two nav-item rows.** The bar keeps that much space beneath the last nav item, and it
   stays **blank white at rest** — so the account slot **never jumps** when a hover starts or ends. (This is
   why the nav list is not a bare `flex-1` that eats all the space down to the slot; a fixed panel block is
   carved out above the slot.)
 * **Only what fits, never scrolls or grows.** The panel shows a stack of info blocks — a color-key block per
-  badge/color and an up-to-three-line detail block for a file/directory — and renders **only what fits** in
-  the reserved height; overflow is dropped, and the panel never pushes or overlaps the account slot.
-* The panel's content model, sections, and priority order are owned by
+  badge/color, an up-to-three-line detail block for a file/directory, and a **one-paragraph text block** of
+  free prose (the One-repo sources' kind, **line-clamped** rather than allowed to grow) — and renders
+  **only what fits** in the reserved height; overflow is dropped, and the panel never pushes or overlaps
+  the external links or the account slot.
+* The panel's content model, block kinds, sections, and priority order are owned by
   [non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx); this bar only **reserves the space and mounts the
   panel** in the right place.
 
@@ -214,9 +225,16 @@ that **opens in a new browser tab**, not an in-app route.
   * **ACT 3 Filmmaking** → `https://ACT3ai.com/`
 * **New tab, safely.** Each renders as a real `<a target="_blank" rel="noopener noreferrer">` — clicking
   opens the URL in a **new tab** and never navigates the app itself away.
-* **Placement.** The block sits in the gap between the last nav item and the account slot. It is a
-  normal-flow block above the account slot — it must **not** overlap the account slot and it shares the
-  region with the hover-info panel (§4.1) without crowding it.
+* **Placement.** The block sits in the gap between the last nav item and the account slot, **below** the
+  hover-info panel (§4.1) and **above** the account slot. It is a normal-flow block — it must **not**
+  overlap the account slot.
+* **Contention rule for this shared region (LOCKED).** The hover-info panel, these external links, and the
+  account slot stack in that order in one bottom region, so they compete for the same pixels. **The hover
+  panel's FIXED height is what protects the links and the account slot below it.** The panel is sized once
+  (~two nav-item rows) and **never grows to fit its content**: longer prose is **clamped and dropped**, not
+  expanded into. Consequently these links and the account slot **never move** no matter what the user
+  hovers — including the free-prose explanations the View-One-Repo page publishes. If a future hover source
+  needs more room, it **shortens its text**; it does **not** grow the panel.
 * **LEFT-ALIGNED, on the same grid as the nav items (LOCKED).** These links are **left-aligned exactly like
   the nav items above them** — same `mx-2` / `px-3` / `py-2` / `gap-2.5` geometry, same leading `h-4` icon
   slot — so **every label in the bar starts at the identical x**. They were previously **centered**, which
@@ -256,7 +274,9 @@ Rendering the external-links block from the yaml (new-tab anchors, left-aligned 
 
   The value lives in `pm/left_bar.yaml` (`sidebar_width`) and is applied by `Sidebar.tsx`; it is **not** a
   Tailwind `w-*` class, so it is not pinned to that scale's round numbers. **Variable-length content never
-  drives the width**: repo names and the account block **truncate** inside the bar rather than widen it. If a
+  drives the width**: repo names and the account block **truncate** inside the bar rather than widen it, and
+  the **hover-info panel's prose (§4.1) wraps and clamps inside these 200px** — it is **not** in the table
+  above and must **never** be measured into the width, however long a hovered explanation is. If a
   future label is longer than the ones above, re-measure and re-set the yaml — do not round up "to be safe".
 * Permission gates come from OpenAuthFederated claims (e.g. `role:admin`); a gated item is
   **hidden**, not disabled, when the claim is absent.
@@ -291,9 +311,13 @@ Resolving a nav item's lucide icon by name (unknown name renders nothing) is han
 7. The account slot sits at the bottom, is always signed-in (no anonymous state), and its popup
    expands upward.
 8. **Hover-info panel (§4.1):** a fixed block of **always-white space (~two nav-item rows tall)** sits
-   **directly above the account slot**, hosting the **non-intrusive hover-info panel**
-   ([non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)); it is blank white at rest, shows badge / folder
-   / row explanations on hover, shows **only what fits**, and **never** pushes or overlaps the account slot.
+   **directly above the external product links and the account slot**, hosting the **non-intrusive
+   hover-info panel** ([non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)). It is blank white at rest
+   (except on the **View-One-Repo** page, where it shows the **active task tab's default hint**); it shows
+   badge / folder / row explanations **and** the One-repo **metric-tile, File-cell, icon-control-column
+   (Pin · Ignore · Transcribe · AI description · OCR) and Compress-status-icon** explanations on hover; it
+   shows **only what fits**; and it **never** pushes or overlaps the external links or the account slot.
+   Its **fixed height is the guarantee** — longer prose **clamps**, never expands (§4.2 contention rule).
 9. **Pending-mapping badge (§3.3):** when a teammate has asserted that one or more of this computer's repos
    belong to a company, the **Storages** item shows a runtime **count badge** of pending company-mapping
    reviews and links to **`/company-mappings/review`** ([repo_owner_propagation.mdx §4](./repo_owner_propagation.mdx));
@@ -304,7 +328,9 @@ Resolving a nav item's lucide icon by name (unknown name renders nothing) is han
     leading `ExternalLink` icon, so every label in the bar starts at the identical x); each is an
     `<a target="_blank" rel="noopener noreferrer">` that
     opens in a **new tab** (never navigating the app away); the list comes from `pm/left_bar.yaml`
-    `external_links` (add/remove without a code change), and an empty list renders nothing.
+    `external_links` (add/remove without a code change), and an empty list renders nothing. They render
+    **below the hover-info panel (§4.1) and above the account slot**, and **never move** when a hover
+    publishes prose into that panel — the panel's fixed height is what protects them (§4.2).
 
 <!--
   This file is the styling/behavior spec; pm/left_bar.yaml is the content source of truth the
@@ -314,10 +340,18 @@ Resolving a nav item's lucide icon by name (unknown name renders nothing) is han
   A runtime-conditional "Processing" item (§3.1) is appended as the LAST top-nav item (after Settings,
   before the account slot) ONLY while background work runs, routing to /processing — runtime-injected by
   Sidebar.tsx (NOT a static yaml row; documented as a commented entry in left_bar.yaml). See processing.mdx.
-  §4.1: a FIXED block of always-white space (~2 nav-item rows) is reserved between the nav list and the
-  account slot to host the NON-INTRUSIVE hover-info panel (non_intrusive_tooltip.mdx) — blank at rest so the
-  account slot never jumps; HoverInfoPanel.tsx mounted by Sidebar.tsx between </nav> and the account div.
-  The nav list is therefore NOT a bare flex-1 down to the slot; the panel block is carved out above it.
+  §4.1: a FIXED block of always-white space (~2 nav-item rows, PANEL_H = 88) is reserved between the nav list
+  and the external links + account slot to host the NON-INTRUSIVE hover-info panel (non_intrusive_tooltip.mdx)
+  — blank at rest so the account slot never jumps; HoverInfoPanel.tsx mounted by Sidebar.tsx between </nav>
+  and the account div. The nav list is therefore NOT a bare flex-1 down to the slot; the panel block is
+  carved out above it. It is now the app's ONE home for hover prose: the View-One-Repo region that was DOCKED
+  beside the metrics strip is DELETED (it reserved >=25% of the row and forced the metric tiles to WRAP), so
+  the One-repo METRIC TILES, File cell, the five icon control columns (Pin/Ignore/Transcribe/AI description/
+  OCR) and the Compress status icon publish HERE (via setHoverInfo + the render-nothing <HoverInfoBridge>).
+  On that page the panel shows the active task tab's defaultHint at rest, so it is never blank there.
+  CONTENTION RULE (§4.2): hover panel → external links → account slot stack in one bottom region; the panel's
+  FIXED height is what protects the links and the slot — longer prose CLAMPS, the panel NEVER grows, so
+  nothing below it ever moves. Hover prose also never influences the 200px width (§5).
   §4.2: EXTERNAL PRODUCT LINKS — a block of OUTBOUND links (JFK Social.com → https://JFKSocial.com/, ACT 3
   Filmmaking → https://ACT3ai.com/) rendered between the bottom of the nav list and the account slot, evenly
   LEFT-ALIGNED on the nav grid (leading ExternalLink icon; they were centered — the only ragged rows in the

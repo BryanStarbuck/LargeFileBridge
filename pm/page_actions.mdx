@@ -16,7 +16,7 @@ This is the third and last of LFBridge's action surfaces, and it must not be con
 | Surface | Scope | Where | Owner spec |
 | --- | --- | --- | --- |
 | **Row `⋮` kebab** | **one** entity (the row) | last cell of each table row / right-click | [menus.mdx §3 / §5](./menus.mdx) |
-| **Entity `⋮` "more" menu** | **one** entity (the page's subject) | top-right of a single-entity page | [menus.mdx §4](./menus.mdx) |
+| **Entity "More ▾" menu** | **one** entity (the page's subject) | top-right of a single-entity page — the **word `More`** + a chevron, blue link text, **no `⋮`**, **no box** | [menus.mdx §4 / §4.1](./menus.mdx) |
 | **Page action-links row** | the **whole page's files** (or the checked subset) | a row directly **under the title** of a **list** page | **this file** |
 
 ## 0. Design reversal — links, not a dropdown (LOCKED)
@@ -49,13 +49,24 @@ is superseded.** Per the product owner:
 > great pop-up."*
 
 So clicking **Create Transcriptions** / **Create AI descriptions** now **opens the unified batch-confirm
-popup** ([dialogs.mdx §5](./dialogs.mdx)) — the **same** `WarningPopup` the `Transcribable` / `Describable`
-metric tile opens on the View-one-repo page ([task_tabs.mdx §5.1](./task_tabs.mdx)): the candidate list
+popup** ([dialogs.mdx §5](./dialogs.mdx)) — the **same** `WarningPopup` the **Transcribable** / **AI
+Describable** metric tile opens on the View-one-repo page ([task_tabs.mdx §5.1](./task_tabs.mdx)): the
+candidate list
 **checked by default**, a **Continue** into the checklist, uncheck anything, then a solid-blue **"Transcribe
 N files"** / **"Describe N files"** confirm. **This changes only WHERE the enqueue happens** — it moves from
 the link's click to the popup's Confirm. The three LOCKED rules below are otherwise **unchanged**: they now
 run at the popup's Apply. [dialogs.mdx](./dialogs.mdx) owns the popup contract and the scope→popup builders;
 this file owns the *row* that opens it.
+
+> **The metric tiles this row's popup is shared with have been renamed (kept current).** On the
+> View-one-repo metrics strip the tile formerly called **Describable** is now **AI Describable** (both
+> letters of *AI* upper-case, so the label names **who** describes), and the **Undecided** tile **no longer
+> exists** — it split into **Add to IPFS** and **Git Ignore**, the latter also absorbing the old **Big, not
+> git-ignored** tile. None of this changes this row: the action-links are unchanged, and the popup they
+> open is the same one those tiles open.
+> Tile labels live in code:
+> `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` — the metric
+> definitions (`"Add to IPFS"` · `"Git Ignore"` · `"Transcribable"` · `"AI Describable"` · `"OCRable"`).
 
 Siblings this builds on and does not repeat:
 
@@ -221,8 +232,8 @@ that becomes queue items — so the toast and the dock never disagree.
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────┐
-│  ‹ Repos  /  Our_Movies                                    ┌ ⟳ Pin now  ┐ ⋮ │ ← header: title + primary + entity ⋮
-│  ~/BGit/…/Our_Movies                                       └────────────┘   │
+│  ‹ Repos  /  Our_Movies                          ┌ ⟳ Pin now  ┐   More ▾    │ ← header: title + primary + entity
+│  ~/BGit/…/Our_Movies                             └────────────┘             │   "More ▾" menu (menus.mdx §4.1)
 │                                                                             │
 │  🎬 Create Transcriptions · ✨ Create AI descriptions · 🗜 Compress videos   │ ← ONE measured row, UNDER the title;
 │  · 🗜 Compress images · 🚫 Git ignore                        ⋯ More ▾        │   what fits stays inline, the rest
@@ -262,11 +273,19 @@ table's own control row). Its anatomy — LOCKED to match the sister-app `.q-act
 * **Items that make no sense for the current page/selection are omitted**, not shown disabled.
 
 **Placement vs. the header.** The page **title** (and any breadcrumb + the page's single **primary**
-button such as **Pin now** / **Index files**, plus the single-entity `⋮` "more" menu when present) stays
+button such as **Pin now** / **Index files**, plus the single-entity **More ▾** menu when present) stays
 in the [`PageHeader`](../code/packages/frontend/src/components/ui/PageHeader.tsx). The **action-links row is
 its own row directly under that title block** — not in the header's right-aligned slot. The primary button
 remains the page's one emphasised call-to-action in the header; the action-links row is the flat list of
 everything else.
+
+> **Two different `More ▾` controls can appear on one page — keep them straight.** The **header's**
+> **More ▾** is the **entity menu** ([menus.mdx §4.1](./menus.mdx)) — the single-entity page's action
+> catalog, now the **word `More` + a chevron in blue link text**, with **no leading `⋮`** and **no
+> bordered box**. This row's **More ▾** is the **overflow** for actions that did not fit (§3.1). They sit
+> at different altitudes (one entity vs. this page's whole file set) and hold different items; they must
+> never be merged. The **blue-text styling is deliberately shared** — the header's More and this row's
+> links are one family of quiet text affordances, distinct from the page's single boxed primary button.
 
 **Distinct from the `⋮` bulk menu.** The table's existing selection **`⋮` bulk menu** (set decision
 Add to IPFS (pin)/Ignore/Undecided across checked rows, [one_repo.mdx §4.4](./one_repo.mdx)) stays where it is, in the
@@ -323,7 +342,7 @@ page-level operations, now shown as inline links (they already run through the p
 
 Non-list pages (settings, sign-in, IPFS dashboard, single-file viewers, etc.) do **not** carry the
 page action-links row — their actions are page-specific controls documented in each page's own spec, and a
-single media file uses the **entity `⋮` menu** ([menus.mdx §4](./menus.mdx)) and the Media-Viewer action
+single media file uses the **entity "More ▾" menu** ([menus.mdx §4](./menus.mdx)) and the Media-Viewer action
 bar ([media_viewer.mdx](./media_viewer.mdx)), not this page row. (View-one-file's own header buttons —
 [files.mdx §7.1](./files.mdx) — are that page's local controls, not this shared row.)
 
@@ -448,8 +467,9 @@ The routes are mounted on the existing feature routers:
 6. **Notification (§2):** one toast, **"{N} files will have their Transcriptions created"** /
    **"… AI descriptions created"**, where **N is the eligible remainder** (the `willProcess` figure);
    nothing-eligible gives the honest "All {M} … already have … — nothing to do".
-7. The action-links row is **distinct** from the row `⋮` kebab, the entity `⋮` more-menu, and the
-   selection `⋮` bulk menu; it never duplicates their items, and it appears **only** on list pages (not on
+7. The action-links row is **distinct** from the row `⋮` kebab, the entity **More ▾** menu
+   ([menus.mdx §4.1](./menus.mdx) — word + chevron, blue text, no `⋮`, no box), and the selection `⋮` bulk
+   menu; it never duplicates their items, and it appears **only** on list pages (not on
    single-entity or settings pages), per the catalog (§4).
 8. Compress/git-ignore/delete links remain **explicit-click offers with a confirm step**
    ([menus.mdx §6.1](./menus.mdx)) and are **tinted red**; no page action compresses, converts,
@@ -457,8 +477,8 @@ The routes are mounted on the existing feature routers:
 9. The visual matches the sister-app reference (`~/BGit/all/marketing/ai/code/ui/Q/page_processing_queue.js`
    `.q-actions`): blue links, leading icon, `·` separators, hover underline, red tint for destructive.
 10a. **Producing actions open the batch popup (§0.1):** clicking **Create Transcriptions** / **Create AI
-    descriptions** opens the **same** unified batch-confirm popup the `Transcribable` / `Describable` metric
-    tile opens ([dialogs.mdx §5–§6](./dialogs.mdx)) — candidates checked by default, uncheck, a solid-blue
+    descriptions** opens the **same** unified batch-confirm popup the **Transcribable** / **AI Describable**
+    metric tile opens ([dialogs.mdx §5–§6](./dialogs.mdx)) — candidates checked by default, uncheck, a solid-blue
     **"Transcribe/Describe N files"** confirm — **not** a fire-and-forget enqueue+toast and **never** a
     `window.confirm`. The enqueue and the LOCKED toast (§2) fire on the popup's Confirm; Rules 1–3 and the
     first-time-storage gate are unchanged (they run at Apply). The link fetches its candidate list from the
@@ -471,12 +491,24 @@ The routes are mounted on the existing feature routers:
 
 <!--
   HUB spec for the THIRD action surface: the page action-links ROW rendered directly UNDER the page title
-  (whole-page/checked-subset), distinct from menus.mdx's row ⋮ kebab (one row) and entity ⋮ more-menu (one
-  entity) and the selection ⋮ bulk menu (decision on checked rows).
+  (whole-page/checked-subset), distinct from menus.mdx's row ⋮ kebab (one row) and the entity "More ▾"
+  more-menu (one entity) and the selection ⋮ bulk menu (decision on checked rows).
+
+  ENTITY TRIGGER LOOK (menus.mdx §4.1, LOCKED — reflected in the §3 diagram + §7 AC): the single-entity
+  header trigger is NO LONGER a boxed ⋮ — it is the WORD "More" + a down chevron in BLUE LINK TEXT, the
+  same family as this row's links (no ⋮ glyph, no bordered rounded rectangle). The ROW kebab keeps ⋮.
+  CAUTION: a page can now show TWO "More ▾" controls — the HEADER one (the entity catalog) and THIS row's
+  OVERFLOW one (§3.1). Different altitudes, different items, never merge them.
+
+  METRIC TILE RENAME (shipped, noted in §0.1): One-repo tile "Describable" → "AI Describable" (both letters
+  of AI upper-case); the "Undecided" tile is GONE — split into "Add to IPFS" + "Git Ignore", and Git Ignore
+  absorbed the old "Big, not git-ignored" tile. Labels in pages/repos/metricWarnings.ts. The action-links
+  row itself is unchanged; only the tile names it points at moved. The frozen Decision wire value
+  `undecided` is untouched.
 
   SECOND REVERSAL (§0.1, LOCKED): the two PRODUCING links (Create Transcriptions / Create AI descriptions)
   no longer enqueue-on-click+toast — they now OPEN THE UNIFIED BATCH-CONFIRM POPUP (dialogs.mdx §5-§6), the
-  SAME WarningPopup the Transcribable/Describable metric tile opens (task_tabs §5.1). Only WHERE the enqueue
+  SAME WarningPopup the Transcribable / "AI Describable" metric tile opens (task_tabs §5.1). Only WHERE the enqueue
   fires changed (link click → popup Confirm); Rules 1-3 + the storage-setup gate are unchanged (they run at
   Apply). pageActions.ts createTranscriptions/createDescriptions call openTranscribeBatch/openDescribeBatch
   (lib/batchPopup.ts), which fetch the NEW /plan preview endpoint and open the popup. NEW endpoints POST

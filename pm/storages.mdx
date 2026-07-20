@@ -482,7 +482,7 @@ a `StorageFileRow` has **no per-file pin or git-ignore decision** — that is a 
 **Pin and Ignore columns are omitted here** (they appear only on the one-repo files table, which is under a
 git repo). The **File System page shows none; this storage detail table shows the three analysis icons.**
 The full column model — the `tight` / `px-1` narrowness, the icon-only header, the hover `title` tooltip
-**and** docked hover-info fill, the shared three-state `StatusActionIcon` grammar, and each column's unique
+**and** left-bar hover-info fill, the shared three-state `StatusActionIcon` grammar, and each column's unique
 "done" color (Transcribe indigo `--lfb-transcribe-done`, AI Description teal `--lfb-describe-done`, OCR
 violet `--lfb-ocr-done`) — is **owned by [tables.mdx §4c](./tables.mdx#4c-the-icon-control-columns--pin--ignore--transcribe--ai-description--ocr-locked-site-wide)** and is not restated here.
 
@@ -499,7 +499,7 @@ violet `--lfb-ocr-done`) — is **owned by [tables.mdx §4c](./tables.mdx#4c-the
   content column reads (`T D V`) — the icon columns are its per-axis, actionable projection.
 
 Deriving each row's Transcribe / AI Description / OCR icon state from the file's `analysis[]` outputs plus the filename kind (via `analysisTaskStatuses`), and prepending the three analysis icon columns before the content columns, is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage` (the leading `transcribe` / `describe` / `ocr` columns only — no `pin` / `ignore` here), built from the reusable task-icon kit `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TASK_ICON` / `TaskIconHeader` / `TaskStatusCell`, each cell rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon`, marked `LfbColumn.tight` + `LfbColumn.headerCell` (`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts`) and filling the docked hover region via `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage` (the leading `transcribe` / `describe` / `ocr` columns only — no `pin` / `ignore` here), built from the reusable task-icon kit `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TASK_ICON` / `TaskIconHeader` / `TaskStatusCell`, each cell rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon`, marked `LfbColumn.tight` + `LfbColumn.headerCell` (`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts`) and publishing its hover explanation via `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo`, which the left-bar panel `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel` renders via the one global `HoverInfoBridge` mounted in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx`.
 
 ---
 
@@ -707,7 +707,7 @@ Populating the per-storage `stateSyncRepo` descriptor when it splits the page in
     Description / OCR status is DERIVED FROM each file's `analysis[]` outputs plus the filename kind** for
     applicability (Transcribe → audio/video, AI Description → image/video, OCR → image/video/PDF). The three
     render through the shared three-state `StatusActionIcon`, with an icon-only header and hover filling the
-    docked hover-info region, each in its unique done color (§7.2).
+    left-bar hover-info panel, each in its unique done color (§7.2).
 10. The Storages-page payload gains a per-storage **`stateSyncRepo`** descriptor (§10) — `configured`,
     `root`, `ownedRepoCount`, `remote` — non-null only for **company** and **Personal** storages, `null`
     for `local` and `community`; it extends `StorageRow` / `StoragesPageData` and is populated by
@@ -769,7 +769,7 @@ Populating the per-storage `stateSyncRepo` descriptor when it splits the page in
   Transcribe/AI-Description/OCR status DERIVED FROM each file's analysis[] outputs + filename kind for
   applicability (transcribe→audio/video, describe→image/video, OCR→image/video/PDF) via analysisTaskStatuses — the
   per-axis actionable projection of the same analysis[] the §6 "Analysis" content col reads. Shared
-  StatusActionIcon three-state grammar, icon-only header, hover fills docked hover-info; unique done colors per §4c.
+  StatusActionIcon three-state grammar, icon-only header, hover fills the LEFT-BAR hover-info panel; unique done colors per §4c.
   Code: StorageDetailPage leading transcribe/describe/ocr cols ONLY (no pin/ignore) via taskIcons.tsx
   (TASK_ICON/TaskIconHeader/TaskStatusCell) + StatusActionIcon.tsx, LfbColumn.tight/headerCell, setHoverInfo (HoverInfoRegion.tsx).
   Acceptance §8–§10 updated (+ §9a for the two facets, + §9b for the icon columns). Sibling detail specs: storage_local, storage_repo, storage_personal,

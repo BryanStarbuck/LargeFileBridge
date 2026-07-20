@@ -49,6 +49,15 @@ export function HoverInfoPanel() {
 }
 
 function Block({ block }: { block: HoverInfoBlock }) {
+  if (block.kind === "text") {
+    // Free prose (the One-repo metric/row explanations). Wrapped, not per-line truncated, and clamped to
+    // the reserved block height by the fit-or-drop pass above plus a hard line clamp here.
+    return (
+      <div className="py-0.5 text-[11px] leading-snug text-black/65" style={{ display: "-webkit-box", WebkitLineClamp: 5, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+        {block.text}
+      </div>
+    );
+  }
   if (block.kind === "detail") {
     return (
       <div className="py-0.5">

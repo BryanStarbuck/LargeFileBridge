@@ -267,9 +267,12 @@ and **not restated here**.
   ([tables.mdx §4c.2–§4c.3](./tables.mdx#4c2-the-header-is-the-same-icon-as-the-cells--an-icon-only-header-locked)):
   each column's **header is the same glyph as its cells** (icon-only; the text label `"Pin"` /
   `"Transcribe"` / `"AI Description"` / `"OCR"` is kept only for the Sort / Filter / Columns dropdowns),
-  and hovering the **header icon OR any cell icon** shows a native `title` tooltip **and** fills this
-  page's docked **hover-info region** with a plain-English explanation of that icon (what an **IPFS pin**
-  is, and so on).
+  and hovering the **header icon OR any cell icon** shows a native `title` tooltip **and** fills the
+  **hover-info panel at the bottom of the left bar**
+  ([non_intrusive_tooltip.mdx §1](./non_intrusive_tooltip.mdx), [§6](./non_intrusive_tooltip.mdx),
+  [left_bar.mdx §4.1](./left_bar.mdx#41-the-non-intrusive-hover-info-panel-sits-just-above-this-slot-locked))
+  with a plain-English explanation of that icon (what an **IPFS pin** is, and so on). **There is no docked
+  hover-info region anywhere in the product** — the explanation always lands in that one left-bar panel.
 
 The pinset table and its columns render in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsPage.tsx` — `IpfsPage` component
@@ -280,8 +283,11 @@ and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/tabl
 `TASK_ICON`, `TaskIconHeader`, `TaskStatusCell` (typed on `LfbColumn.headerCell` / `LfbColumn.tight` in
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts`); the analysis states come from the pin's `analysis: string[]` field built in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-page.service.ts` — `buildTrackedIndex` (via `analysisOutputs`).
 
-The docked hover-info region each icon fills on hover is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo`.
+Hovering an icon PUBLISHES its explanation; the left-bar panel RENDERS it; a global bridge connects the two, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo` (publishes into the module-level store; renders nothing);
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel` (the left-bar panel that actually renders the prose);
+and `HoverInfoBridge` (also in `HoverInfoRegion.tsx`), mounted **once, globally** in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell`, which forwards the store into the panel on **every** page.
 
 ---
 
@@ -1073,8 +1079,8 @@ The IPFS fault sites that must record to the trail (start-failure diagnosis, con
     shared *done* box (solid `--lfb-pin`, white glyph, inner ring) because every row is pinned (distinct from
     the **Pin type** column); **Transcribe / AI Description / OCR** derive done / could / na from the pin's
     `analysis[]` field (built in `ipfs-page.service.ts` `buildTrackedIndex`) plus the resolved filename kind,
-    with **path-less / untracked pins reading `na`**; each header is icon-only and its hover fills the docked
-    hover-info region. The **File System** page shows **none**.
+    with **path-less / untracked pins reading `na`**; each header is icon-only and its hover fills the
+    left-bar hover-info panel. The **File System** page shows **none**.
 
 ---
 

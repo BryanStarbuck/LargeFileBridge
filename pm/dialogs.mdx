@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Dialogs (in-app HTML modals only, and the one unified batch-confirm popup)
-description: The cross-cutting spec that owns TWO product-wide rules this whole app obeys. (1) NO NATIVE BROWSER DIALOGS — Large File Bridge never calls window.confirm / window.alert / window.prompt. Every confirmation, every warning, and every text prompt is one of OUR in-app HTML modals: ConfirmDialog for a yes/no confirm, PromptDialog for a single text input (e.g. a move-file destination path), a toast for a passive notice, and the pop-over configuration dialogs (Compress Inside, Git Ignore) where the dialog IS the confirm. The imperative call sites that used to `if (!window.confirm(...))` now `await confirmModal(...)` / `await promptModal(...)` — thin promise-returning helpers backed by ONE ModalHost mounted at the app root, so a click handler can await a real HTML modal without threading React state. This file catalogs every conversion site so none is missed. (2) THE UNIFIED BATCH-CONFIRM POPUP — the "great pop-up" the Transcribable / Describable metric tile opens on the View-one-repo page is the SINGLE surface every "Create Transcriptions" / "Create AI descriptions" entry point opens, everywhere: the metric tile, the blue Transcribe ›/Describe › header primary, the page action-links row on EVERY file-list page (File System, one repo, a directory, Full paths, Storage detail), and the directory/file ⋮ kebab / right-click menu item. It is WarningPopup fed a transcribe/describe WarningDef — a checked-by-default candidate list, a live "Transcribe N files" / "Describe N files" solid-blue confirm, the model/provider consent gate on Apply, background enqueue, and the Processing surface. No producing action is ever a fire-and-forget toast or a window.confirm again. Sibling of page_actions.mdx (the action-links row that opens the popup), menus.mdx (the ⋮ catalogs + the old §6.1 confirm rule), task_tabs.mdx §5.1/§5.2.1 (the metric → popup confirm flow this generalizes), warnings.mdx (the WarningPopup component + WarningDef model), transcribe_calc_engine.mdx §4 / describe_calc_engine.mdx §4 (the ~80% popup shape), compression.mdx §12 / git_ignore.mdx (the two pop-over configuration dialogs), and file_system.mdx (the FS hub that carries both).
+description: The cross-cutting spec that owns TWO product-wide rules this whole app obeys. (1) NO NATIVE BROWSER DIALOGS — Large File Bridge never calls window.confirm / window.alert / window.prompt. Every confirmation, every warning, and every text prompt is one of OUR in-app HTML modals: ConfirmDialog for a yes/no confirm, PromptDialog for a single text input (e.g. a move-file destination path), a toast for a passive notice, and the pop-over configuration dialogs (Compress Inside, Git Ignore) where the dialog IS the confirm. The imperative call sites that used to `if (!window.confirm(...))` now `await confirmModal(...)` / `await promptModal(...)` — thin promise-returning helpers backed by ONE ModalHost mounted at the app root, so a click handler can await a real HTML modal without threading React state. This file catalogs every conversion site so none is missed. (2) THE UNIFIED BATCH-CONFIRM POPUP — the "great pop-up" the Transcribable / "AI Describable" metric tile opens on the View-one-repo page is the SINGLE surface every "Create Transcriptions" / "Create AI descriptions" entry point opens, everywhere: the metric tile, the blue Transcribe ›/Describe › header primary, the page action-links row on EVERY file-list page (File System, one repo, a directory, Full paths, Storage detail), and the directory/file ⋮ kebab / right-click menu item. It is WarningPopup fed a transcribe/describe WarningDef — a checked-by-default candidate list, a live "Transcribe N files" / "Describe N files" solid-blue confirm, the model/provider consent gate on Apply, background enqueue, and the Processing surface. No producing action is ever a fire-and-forget toast or a window.confirm again. Sibling of page_actions.mdx (the action-links row that opens the popup), menus.mdx (the ⋮ catalogs + the old §6.1 confirm rule), task_tabs.mdx §5.1/§5.2.1 (the metric → popup confirm flow this generalizes), warnings.mdx (the WarningPopup component + WarningDef model), transcribe_calc_engine.mdx §4 / describe_calc_engine.mdx §4 (the ~80% popup shape), compression.mdx §12 / git_ignore.mdx (the two pop-over configuration dialogs), and file_system.mdx (the FS hub that carries both).
 ---
 
 # LargeFileBridge — Dialogs (in-app HTML modals only, and the one unified batch-confirm popup)
@@ -327,9 +327,19 @@ The producing actions — **Create Transcriptions** and **Create AI descriptions
 places. **All four now open the §5 popup.** None is a `window.confirm`, and none is a fire-and-forget
 enqueue+toast anymore.
 
+> **Metric-tile names (kept current).** The One-repo metrics strip tile formerly called **Describable** is
+> now **AI Describable** — both letters of *AI* upper-case, so the label says **who** does the describing
+> and is never read as "this file is describable by you". The strip's decision tiles changed too: the
+> **Undecided** tile no longer exists — it split into **Add to IPFS** and **Git Ignore**, and **Git
+> Ignore** also absorbed the old **Big, not git-ignored** tile. Whichever tile the user clicks, the popup
+> contract in this file is unchanged.
+> Tile labels live in code:
+> `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` — the metric
+> definitions (`label: "Add to IPFS"` · `"Git Ignore"` · `"Transcribable"` · `"AI Describable"` · `"OCRable"`).
+
 | Entry point | Where | Opens |
 | --- | --- | --- |
-| **Metric tile** — `Transcribable` / `Describable` | View-one-repo page, metrics strip | the popup (already — [task_tabs.mdx §2.4.1/§5.1](./task_tabs.mdx)) |
+| **Metric tile** — **Transcribable** / **AI Describable** / **OCRable** | View-one-repo page, metrics strip | the popup (already — [task_tabs.mdx §2.4.1/§5.1](./task_tabs.mdx)) |
 | **Header primary** — blue **Transcribe ›** / **Describe ›** | View-one-repo header | the popup (already — [task_tabs.mdx §2.7](./task_tabs.mdx)) |
 | **Page action-link** — **Create Transcriptions** / **Create AI descriptions** | the action-links row on **every** file-list page (File System, one repo, a directory, Full paths, Storage detail — [page_actions.mdx §4](./page_actions.mdx)) | **the popup (NEW — §6.1)** |
 | **⋮ kebab / right-click menu** — **Create Transcriptions** / **Create AI descriptions** | a directory or file entity menu ([menus.mdx §5.2/§5.3](./menus.mdx)) | **the popup (NEW — §6.4)** |
@@ -414,7 +424,10 @@ mechanics; this file owns what the popup does once opened.
    disagree.
 6. **A global popup host (§5.3)** lets the action-links row and the ⋮ / right-click menu open the same
    popup the metric tile opens.
-7. **All four entry points open the one popup (§6):** the metric tile, the header primary (already), and —
+7. **All four entry points open the one popup (§6):** the metric tile (**Transcribable** / **AI
+   Describable** / **OCRable** — the tile formerly named *Describable* is now **AI Describable**, and there
+   is no **Undecided** tile; it split into **Add to IPFS** + **Git Ignore**), the header primary (already),
+   and —
    NEW — the **Create Transcriptions** / **Create AI descriptions** page action-link and ⋮ / right-click
    menu item. No producing action is a fire-and-forget toast or a `window.confirm`.
 8. **The page action-link change is scope-preserving (§6.1):** the only change is that the enqueue+toast
@@ -462,6 +475,11 @@ mechanics; this file owns what the popup does once opened.
       moves from click to Confirm; Rules 1-3 + storage-setup gate unchanged), ⋮/right-click menu item (NEW,
       §6.4 — EntityMenu buildActions() new create-transcriptions/create-descriptions items in dir+file
       groups). FS (§7): popup scope = deepest open column / selected row, downward-only (file_system §5.1).
+  METRIC TILE RENAME (shipped, §6 note): One-repo tile "Describable" → "AI Describable" (both letters of AI
+  upper-case — the label must say WHO describes). The "Undecided" tile is GONE: split into "Add to IPFS" +
+  "Git Ignore", and Git Ignore also absorbed the old "Big, not git-ignored" tile. Labels live in
+  pages/repos/metricWarnings.ts. Popup contract unchanged by any of it. NOTE: the Decision WIRE value
+  `undecided` is untouched and still frozen — only the TILE went away.
   Keep in sync with page_actions.mdx (the row — enqueue moves to Confirm), menus.mdx (§5.2/§5.3 catalogs +
   §6.1 confirm rule now points here), task_tabs.mdx §5.1/§5.2.1 (the flow generalized), warnings.mdx
   (WarningPopup/WarningDef), transcribe_calc_engine.mdx §4 / describe_calc_engine.mdx §4 (~80% popup),

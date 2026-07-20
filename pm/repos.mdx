@@ -360,6 +360,17 @@ Each row's four counts are the whole point of the page — they let the user dec
 needs attention: **Undecided > 0** means there are files to triage; **Pending > 0** means bytes are
 owed in or out; **Peers = 0** means nothing is backing this repo up.
 
+> **The list's `Undecided` COLUMN is not the removed one-repo TILE.** On the per-repo screen the metric
+> tile named `Undecided` no longer exists — it split into the two tiles **`Add to IPFS`** and **`Git
+> Ignore`**, one per decision axis ([warnings.mdx §11](./warnings.mdx), [one_repo.mdx](./one_repo.mdx)).
+> **Nothing on THIS page changed:** column 5 is still `Undecided`, still `counts.undecided`, still
+> accent-highlighted, still deep-links to the one-repo files table filtered to the **`Undecided` filter
+> facet value** — which is a **frozen wire value** and was **not** renamed ([decisions.mdx §7](./decisions.mdx)).
+> The one-repo `Add to IPFS` tile counts **the same number** this column shows (files with no pin decision,
+> excluding rows another IPFS tool already pinned on this node), so the two surfaces still agree.
+> *Column in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` —
+> the `undecided` `LfbColumn`; *the one-repo tiles in:* `.../pages/repos/metricWarnings.ts` — `METRIC_CATALOG`.
+
 > **These counts include git-ignored media of *any* size.** The scan's payload rule
 > ([scan.mdx §4.1](./scan.mdx#41-what-counts-as-a-candidate--the-payload-rule-locked)) treats every
 > git-ignored video/audio/image as a large file **regardless of the 100 MB threshold** — so a repo of
@@ -370,7 +381,9 @@ owed in or out; **Peers = 0** means nothing is backing this repo up.
 > **But these counts EXCLUDE `analysisOnly` rows.** The scan also surfaces small, not-git-ignored media
 > (rule 5, [scan.mdx §4.1](./scan.mdx)) so the analysis tabs can OCR / describe / transcribe them — but a
 > 200 KB icon is **not** a large-file decision the user owes. Those rows never enter Undecided / Pending /
-> Ignore ([one_repo.mdx §4.1](./one_repo.mdx)); they surface only when a file table's **Large files only**
+> Ignore ([one_repo.mdx §4.1](./one_repo.mdx)) — and, for the same reason, they are excluded from the
+> per-repo **`Git Ignore`** tile's candidate set ([warnings.mdx §10.2.7.1](./warnings.mdx)); they surface
+> only when a file table's **Large files only**
 > toggle is turned off ([tables.mdx §2.9](./tables.mdx)). This keeps the repos-list counts honest — a repo
 > full of small images does not read as hundreds of pending decisions.
 
@@ -413,7 +426,7 @@ user exactly where they meant to go instead of opening the repo and re-filtering
 | **Path** | The [File System](./directories.mdx) browser revealed at that repo path. |
 | **Pinned** | The repo's files table filtered to **transfer = pinned**. |
 | **Pending** | The repo's files table filtered to **Pending**. |
-| **Undecided** | The repo's files table filtered to **Undecided** (the triage queue). |
+| **Undecided** | The repo's files table filtered to the **`Undecided`** value of the Pin (IPFS) facet (the triage queue). *(The facet value keeps this name — it is a frozen wire value; only the per-repo metric TILE was renamed to `Add to IPFS`, §4.1.)* |
 | **Ignored** | The repo's files table with the **Pin (IPFS)** facet showing **only `Not pinned`** — i.e. every other value of that facet unchecked ([tables.mdx §2.4.1](./tables.mdx#241-the-two-facets-fixed-vocabulary-locked)). This is the **IPFS axis** (*deliberately not pinned*, stored decision value `ignore`) — it is **not** git-ignore, and there is no "decision" facet to filter on ([tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked)). The **Git-ignore** facet is left untouched (all-checked). |
 | **Peers** | [Peers](./left_bar.mdx) filtered to this repo (which of your computers pin it). |
 | **Last pin** | The repo page (its status strip / recent activity). |
@@ -616,6 +629,9 @@ is its **reference implementation**. In short:
   page: "Bookmarked only" is a SINGLE promoted checkbox and the ONLY bookmark filter (no yes/no facet,
   §8.4); Status is the ONLY rail facet and must declare its six RepoStatus values (§3.2.2); the four
   counts are INTEGERS filtered by a numeric ≥ threshold, never facets, and col 6 "Ignored" is a count —
+  col 5 "Undecided" STAYS on this page (it is the list COLUMN, not the removed one-repo metric TILE; that
+  tile split into "Add to IPFS" + "Git Ignore" — warnings.mdx §11 — and the "undecided" wire value and
+  filter-facet value are frozen, decisions.mdx §7) —
   the per-file Pin (IPFS) / Git-ignore facets live on one_repo, not here (§3.2). The Ignored cell deep-
   links to the Pin (IPFS) facet showing only "Not pinned" (the IPFS axis), NOT git-ignore (§5.1). The
   leading bookmark toggle (§8) — solid-yellow/gray-outline

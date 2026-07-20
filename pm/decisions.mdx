@@ -72,18 +72,27 @@ us: the user hand-edits it, and a single **pattern** line (e.g. `**/videos/**`) 
 files that this ledger has never heard of.
 
 Therefore, everywhere the product **displays or counts** git-ignored state — the ⊘ toggle
-([decision_toggles.mdx §1.0](./decision_toggles.mdx)), the *big-files-not-ignored* metric, the To-Do
+([decision_toggles.mdx §1.0](./decision_toggles.mdx)), the per-repo **`Git Ignore`** metric tile and the
+popup it opens ([warnings.mdx §10.2.7.1](./warnings.mdx)), the To-Do
 batches — the value is read from **`git check-ignore`**, never folded out of this ledger. This ledger
 supplies **provenance only** (`decided_by`, `decided_at`) plus the team-shared intent record.
 
 > **Why this is LOCKED:** a ledger-sourced flag reports **"not ignored" for files git plainly ignores**
 > (any repo whose `.gitignore` predates LFBridge has *zero* ledger events, so **every** row reads OFF).
 > That is a visible falsehood about the user's own filesystem, and it also over-counts the
-> *big-files-not-ignored* metric, nagging the user to ignore files that are **already** ignored.
+> `Git Ignore` metric, nagging the user to ignore files that are **already** ignored.
 
 Reading the git-ignore state from git when composing file rows is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
 `composeFileRows()` and `computeTaskMetrics()` (the `bigNotIgnored` count).
+
+> **Note on `bigNotIgnored`.** The **backend field `TaskMetrics.bigNotIgnored` still exists and is still
+> computed** here — it feeds the **directory rollup**. What no longer exists is the One-repo metric **tile**
+> of that name, which folded into **`Git Ignore`**. The tile's number and its popup's list both come from a
+> single frontend predicate over the git-sourced `FileRow.gitignore` / `gitignoreLocked` / `analysisOnly`
+> fields, so the count and the list can never disagree:
+> `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` —
+> `gitIgnoreCandidates()`.
 
 **The two axes are surfaced as two checkboxes** ([warnings.mdx §4.3](./warnings.mdx), option kind
 `checkbox`) — never a radio group — in the popup, the bulk actions, and the per-file menu:
@@ -103,7 +112,12 @@ generic popup's "a required radio must be picked" gate does **not** apply — th
 only two optional checkboxes; see [warnings.mdx §5.2](./warnings.mdx).)
 
 The two-checkbox options and the both-off-is-valid Apply gate are declared where the warning is built, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `RepoVerdict` `repo-files-need-decision` popup (`options` = two `kind:"checkbox"` entries; `canApply` returns true regardless of the boxes).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildAddToIpfsWarning()`, the `repo-files-need-decision` popup (`options` = two `kind:"checkbox"` entries; `canApply` returns true regardless of the boxes). It is opened by the **`Add to IPFS`** metric tile ([warnings.mdx §11](./warnings.mdx)).
+
+The **git-ignore axis alone** has its own scoped entry point — the **`Git Ignore`** tile's popup — which
+carries **one** opt-in checkbox (**☐ Also add them to IPFS (pin)**, default **OFF**) and still writes
+**both** axes so flipping git-ignore never clobbers an existing pin decision:
+`.../pages/repos/metricWarningDefs.tsx` — `buildGitIgnoreWarning()` (id `repo-files-not-git-ignored`).
 
 ---
 
@@ -362,6 +376,24 @@ a decision is recorded, LFB reconciles:
   * no record → leave `undecided` (the file stays in the triage queue).
   The frozen literal `sync` is **never renamed** — this spec only *feeds* that map from the richer ledger;
   the pin engine still reads the enum ([storage_local.mdx §9](./storage_local.mdx), pin.service `sync`).
+
+> **`"undecided"` is a FROZEN wire value — do NOT "clean it up" (LOCKED).** The per-repo metric **tile**
+> once named `Undecided` no longer exists; it split into the tiles **`Add to IPFS`** and **`Git Ignore`**,
+> one per axis ([warnings.mdx §11](./warnings.mdx#11-warnings-as-metric-panels--the-per-repo-task-tab-strip-locked)).
+> **That was a LABEL change on one screen and nothing else.** All of the following are **UNCHANGED** and
+> must stay unchanged:
+> * the `Decision` enum value **`"undecided"`** on disk and on the wire, and `counts.undecided`;
+> * the **`Undecided`** value on the Pin (IPFS) rail facet ([decision_toggles.mdx §3](./decision_toggles.mdx))
+>   and the `Undecided` **column** on the Repos list ([repos.mdx §4.1](./repos.mdx));
+> * the compact per-repo summary line **`N Pin · N Undecided · N Ignore · N Pinned locally`**;
+> * the `WarningDef` id **`repo-files-need-decision`** for the popup the `Add to IPFS` tile opens.
+>
+> A rename of any of these would silently re-triage every already-decided file on every computer. The new
+> `Git Ignore` tile's popup (`repo-files-not-git-ignored`) writes through this **same** ledger and this
+> **same** reconciliation — it is a scoped entry point, not a second decision model.
+> *Tile labels in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` —
+> `METRIC_CATALOG`; *the frozen enum in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` —
+> `reconcile()`.
 * **git-ignore axis → the working tree.** For each folded record with `gitignore: true`, ensure the file
   is git-ignored via the existing engine ([git_ignore.mdx](./git_ignore.mdx)) — anchored, idempotent,
   skip-already-ignored. The record's `gitignore: true` is the durable "already decided to ignore" memory,
@@ -450,7 +482,9 @@ inspect is barely better than none. Every place a decision is shown, its provena
 
 * **The files table Pin / Ignore icon cells** ([one_repo.mdx §4.3.1/§4.8](./one_repo.mdx)) gain a
   **non-intrusive tooltip** ([non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)), also filled into
-  the docked hover-info region: *"Add to IPFS + git-ignored · decided by bob@acme.com · Jul 12, 2:32 PM"*.
+  the **hover-info panel at the bottom of the left bar**
+  ([left_bar.mdx §4.1](./left_bar.mdx#41-the-non-intrusive-hover-info-panel-sits-just-above-this-slot-locked)):
+  *"Add to IPFS + git-ignored · decided by bob@acme.com · Jul 12, 2:32 PM"*.
   A tiny person/clock glyph marks a file whose decision was made by **someone else on the team** (vs. you),
   so a reviewer can spot others' choices. (The provenance moved here from its own **Decided by** / **Decided**
   columns, which are removed from the file table, [one_repo.mdx §4.3.1](./one_repo.mdx); the data is intact.)

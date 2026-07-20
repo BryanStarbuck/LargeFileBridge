@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Non-intrusive Tooltips (the bottom-of-left-bar hover-info panel)
-description: A dedicated, out-of-the-way HOVER-INFO panel pinned to the BOTTOM of the left bar, directly ABOVE the account slot (the signed-in name/email lines). Instead of a floating tooltip that covers whatever the user is pointing at, hovering an important thing — a code badge (R/r·S·C/c·i·I), an interesting-folder glyph, or a file/directory row — publishes its explanation into this fixed panel, so the meaning appears WITHOUT occluding content. The panel occupies a RESERVED block of always-white space kept under the nav list — roughly the height of TWO nav-item rows — that stays white when nothing is hovered (so the account slot never jumps). Its content is a stack of INFO BLOCKS of two kinds: (1) CODE-KEY blocks — the same rounded-rectangle colored letter chip shown in the list, followed by its 1-3 word NAME and one short line of meaning; an entity with several codes stacks one code block per code. (2) A DETAIL block — up to THREE lines of extra information about the hovered file/directory (name, size, path, modified…), OUTSIDE the color keys. Blocks are grouped into two sections — "about this file/directory" and "what the codes mean" — and the panel shows ONLY WHAT FITS in the reserved height (top-priority blocks first; overflow is dropped, never scrolled, never grown, the account slot never pushed). This REPLACES the floating portal tooltip for these left-bar-adjacent surfaces (a native title/aria-label stays for accessibility). Sibling of left_bar.mdx (the bar that reserves the space and renders the panel above the account slot), directories.mdx §3.5.1 (the badge explanations that now surface here), file_system.mdx §1-§3 (the interesting-folder color key), and git_ignore.mdx (the new I git-ignored badge that explains itself here).
+description: A dedicated, out-of-the-way HOVER-INFO panel pinned to the BOTTOM of the left bar, directly ABOVE the external product links and the account slot (the signed-in name/email lines). Instead of a floating tooltip that covers whatever the user is pointing at — or a region docked beside a page's content that steals width from it — hovering an important thing publishes its explanation into this ONE fixed panel, so the meaning appears WITHOUT occluding or displacing content. Sources: a code badge (R/r·S·C/c·i·I), an interesting-folder glyph, a file/directory row, and — since the docked hover-info region was deleted — the View-One-Repo METRIC TILES, the File cell, the five icon control columns (Pin · Ignore · Transcribe · AI description · OCR) and the Compress status icon. The panel occupies a RESERVED block of always-white space kept under the nav list — roughly the height of TWO nav-item rows (PANEL_H = 88) — that stays white when nothing is hovered (so the account slot never jumps). Its content is a stack of INFO BLOCKS of three kinds: (1) CODE-KEY blocks — the same rounded-rectangle colored letter chip shown in the list, followed by its 1-3 word NAME and one short line of meaning; an entity with several codes stacks one code block per code. (2) A DETAIL block — up to THREE lines of extra information about the hovered file/directory (name, size, path, modified…), OUTSIDE the color keys, each line individually truncated. (3) A TEXT block — one WRAPPED paragraph of free prose, line-clamped to 5 lines; this is what the One-repo sources publish. The panel shows ONLY WHAT FITS in the reserved height (top-priority blocks first; overflow is dropped, never scrolled, never grown, the account slot never pushed). This REPLACES the floating portal tooltip for these left-bar-adjacent surfaces (a native title/aria-label stays for accessibility). Sibling of left_bar.mdx (the bar that reserves the space and renders the panel above the external links and account slot), one_repo.mdx / task_tabs.mdx (the metric tiles and task tabs that now feed it), directories.mdx §3.5.1 (the badge explanations that surface here), file_system.mdx §1-§3 (the interesting-folder color key), and git_ignore.mdx (the I git-ignored badge that explains itself here).
 ---
 
 # LargeFileBridge — Non-intrusive Tooltips (the left-bar hover-info panel)
@@ -25,8 +25,10 @@ Siblings this builds on and does not repeat:
 * [file_system.mdx §1–§3](./file_system.mdx) — the interesting-folder color key (brown/blue/outline). A
   hovered tinted glyph explains its color here.
 * [git_ignore.mdx](./git_ignore.mdx) — the new **`I` git-ignored** badge, one of the codes explained here.
-* [Task tabs](./task_tabs.mdx) — the per-repo screen renders this tooltip content as a **docked side
-  region** to the right of the metrics panels (§6 here), instead of a floating bubble.
+* [Task tabs](./task_tabs.mdx) / [one_repo.mdx](./one_repo.mdx) — the per-repo screen's **metric tiles**,
+  **File cell**, **icon control columns** and **Compress status icon** publish into **this same panel**
+  (§6 here). They used to publish into a region **docked** beside the metrics strip; that region is
+  **deleted** — it reserved ≥25% of the row width and forced the metric tiles to wrap.
 
 ---
 
@@ -62,6 +64,16 @@ moving off clears it (a short debounce prevents flicker between adjacent chips):
 * **A file or directory row** — hovering the row (not a specific chip) shows the **detail block** for that
   entity (§3.2) **followed by** a code-key block for **each** badge the entity carries. This is the "hover a
   directory or item, and if there's more information we might want to display it" case.
+* **A View-One-Repo metric tile** — the metric tiles are deliberately terse (label + number only), so the
+  tile's prose explanation lands here as a **text block** (§3.2.1) rather than crowding the strip
+  ([one_repo.mdx §3.2](./one_repo.mdx), [task_tabs.mdx](./task_tabs.mdx)).
+* **A View-One-Repo file row's File cell** — publishes a one-paragraph **summary of that file** as a text
+  block.
+* **The five icon control columns — Pin · Ignore · Transcribe · AI description · OCR** — hovering (or
+  keyboard-focusing) **either the column's icon header OR any cell icon** publishes a plain-English
+  explanation of that task here (§6).
+* **The Compress status icon** — the Compress tab's own three-state content icon publishes the same
+  file summary as the File cell.
 
 > **This replaces the floating tooltip for these surfaces (LOCKED).** The old portal tooltip
 > ([directories.mdx §3.5.1](./directories.mdx)) covered content; for badges and folder glyphs the
@@ -72,6 +84,10 @@ moving off clears it (a short debounce prevents flicker between adjacent chips):
 
 Each hoverable element registers itself as a source via one shared hook, in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoContext.tsx` — `useHoverInfoSource(payload)` (returns `{ onMouseEnter, onMouseLeave, onFocus, onBlur }` that set/clear the app-level hover state), consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/fs/Badges.tsx` — `Badges` (per chip) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FsRow` (the row + the folder glyph).
+
+The One-repo sources use the **imperative** form of the same publish path — they are not one element but
+dozens of tiles, cells and icons — in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo(text)` / `setHoverInfo(null)` (a tiny module-level store) and `HoverInfoBridge` (renders nothing; mounted once by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricsStrip`) which forwards the store into the provider via `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/useHoverInfoPublisher.ts` — `useHoverInfoPublisher()`.
 
 ---
 
@@ -105,9 +121,28 @@ of those color keys."* Typical lines: the **name**, the **size** (and, for a dir
 "12 videos • 3 GB"), and the **modified date** or the **absolute path** (middle-truncated). This is the
 **"about this file/directory"** section, and it renders **above** the code keys for a row hover.
 
+### 3.2.1 Text block — one wrapped paragraph of free prose (LOCKED)
+
+The third block kind. Where a **detail block** is a small set of short facts (each line **individually
+truncated**), a **text block** is **one paragraph of free prose that WRAPS** across the panel's width. It
+exists because the One-repo sources (§2 — metric tiles, File cell, the five icon control columns, the
+Compress status icon) publish a **sentence**, not a list of fields, and truncating a sentence to one line
+would destroy it.
+
+* **Wrapped, not truncated.** The prose flows onto as many lines as it needs.
+* **Line-clamped at 5 lines**, *on top of* the panel's fit-or-drop pass (§3.3). The clamp is what keeps a
+  long sentence from ever reaching for more room; the fit-or-drop pass is the outer guarantee. Together
+  they mean a text block **cannot grow the panel and cannot move the account slot** — the locked promise of
+  §1 is unchanged by this new kind.
+* It is published as a **single-block payload** (`{ blocks: [{ kind: "text", text }] }`), so it never
+  competes with code-key or detail blocks for the reserved height.
+
+The three block kinds and the text block's wrapped, clamped rendering are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoContext.tsx` — `HoverInfoBlock` (the `"code" | "detail" | "text"` union) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `Block` (the `kind === "text"` branch, 5-line clamp).
+
 ### 3.3 Only what fits (LOCKED)
 
-* The reserved height (~two nav rows) bounds the panel. Blocks are laid out **in priority order** and the
+* The reserved height (**~two nav rows**, `PANEL_H = 88`) bounds the panel. Blocks are laid out **in priority order** and the
   first block that would exceed the height — and every block after it — is **not rendered**. There is **no
   scrollbar** and the panel **does not expand**.
 * **Priority order** (so the most useful survive truncation):
@@ -115,12 +150,14 @@ of those color keys."* Typical lines: the **name**, the **size** (and, for a dir
      entity.
   2. On a **row hover**: the **detail block** first, then the entity's code-key blocks (most-significant
      code first — the badge order R → I, [directories.mdx §3.5](./directories.mdx)).
+  3. On a **One-repo source hover** (metric tile, File cell, icon column, Compress icon): a **single text
+     block** (§3.2.1) — nothing else competes, and the 5-line clamp bounds it before fit-or-drop needs to.
 * Because the panel treats each block as an independent unit and shows **only what fits**, a busy entity
   with many codes may show just some of them — that is intended; the rest are simply not shown rather than
   scrolled or crammed.
 
 The block list, the two sections, the priority order, and the fit-or-drop layout (measure the reserved height, render blocks until the next would overflow, never scroll/grow) are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel` (builds the ordered `blocks[]` from the active `HoverInfo` payload; the fit-or-drop pass), with the payload shape in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoContext.tsx` — `HoverInfo` / `HoverInfoBlock` (`{ kind: "code", chip, name, line } | { kind: "detail", title, lines }`).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel` (builds the ordered `blocks[]` from the active `HoverInfo` payload; the fit-or-drop pass), with the payload shape in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoContext.tsx` — `HoverInfo` / `HoverInfoBlock` (`{ kind: "code", chip, name, line } | { kind: "detail", title, lines } | { kind: "text", text }`).
 
 ---
 
@@ -135,9 +172,13 @@ chip to a row cleanly swaps the content.
   payload avoids needless re-renders.
 * A brief **clear debounce** (≈120 ms) keeps the panel from flickering blank while the pointer crosses the
   1-px gap between two adjacent chips.
+* **There are deliberately TWO contexts — do not "simplify" them into one (LOCKED).** The main context's
+  value **changes on every payload**, so an *imperative* publisher that consumed it would re-render every
+  time it published — and re-publish — forever. The provider therefore also exposes a **setter-only
+  context with a STABLE identity**: **publishers read the setter context; readers read the main one.**
 
-The provider, the single-slot hover state, and the clear debounce are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoContext.tsx` — `HoverInfoProvider` / `useHoverInfo()` (read) / `useHoverInfoSource()` (write), mounted at the app root in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/main.tsx`.
+The provider, the single-slot hover state, the setter-only context, and the clear debounce are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoContext.tsx` — `HoverInfoProvider` / `useHoverInfo()` (read) / `useHoverInfoSource()` (declarative write) / `HoverInfoSetterContext` (the stable setter-only context), mounted at the app root in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/main.tsx`, with the imperative reader in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/useHoverInfoPublisher.ts` — `useHoverInfoPublisher()`.
 
 ---
 
@@ -149,8 +190,10 @@ The provider, the single-slot hover state, and the clear debounce are implemente
 2. **Never intrusive (§1/§2):** the panel **never scrolls, never grows, never pushes or overlaps** the
    account slot; explanations that used to float over content (badge / folder-glyph tooltips) now appear
    **here** instead of a bubble, while a `title`/`aria-label` remains for accessibility.
-3. **Hover sources (§2):** hovering (or focusing) a **code badge**, an **interesting-folder glyph**, or a
-   **file/directory row** populates the panel; leaving clears it (debounced against flicker).
+3. **Hover sources (§2):** hovering (or focusing) a **code badge**, an **interesting-folder glyph**, a
+   **file/directory row**, a **View-One-Repo metric tile**, a **File cell**, any of the **five icon control
+   columns** (header icon or cell icon) or the **Compress status icon** populates the panel; leaving clears
+   it (debounced against flicker).
 4. **Code-key blocks (§3.1):** each shows the **exact rounded-rectangle letter chip** from the list plus its
    **name** and one short line; an entity with several codes **stacks one block per code**.
 5. **Detail block (§3.2):** hovering a file/directory row shows **up to three lines** of extra info about it
@@ -159,61 +202,119 @@ The provider, the single-slot hover state, and the clear debounce are implemente
    height are **dropped** (no scrollbar, no growth); a busy entity may show only some of its codes.
 7. **Single source of truth:** the chips and names come from the **same** `BADGE_META` / folder-color tokens
    the list uses ([directories.mdx §3.5.1](./directories.mdx)), so the panel and the list can never drift.
+8. **Text block (§3.2.1):** the One-repo sources publish **one wrapped paragraph** (not per-line truncated),
+   **line-clamped at 5 lines** on top of fit-or-drop, so it can never grow the panel or move the account slot.
+9. **No docked region (§6):** there is **no** hover-info region docked beside the View-One-Repo metrics
+   strip. The metrics strip gets the **full page width** and the metric tiles **never wrap** onto a second
+   row.
+10. **Never blank on the One-repo page (§6):** with nothing hovered, the panel shows the **active task tab's
+    default hint**; hovering a source swaps it, leaving restores the hint, and navigating away clears it.
+11. **Two contexts (§4):** publishers read the **stable setter-only** context and readers read the main one —
+    an imperative publisher must never subscribe to the payload it writes.
 
-## 6. Docked variant — the hover-info region (LOCKED)
+## 6. The One-repo page publishes here — there is no docked region (LOCKED)
 
-The same non-intrusive tooltip **content model** can be rendered as a **persistent docked region** instead
-of a floating bubble. The per-repo screen ([one_repo.mdx](./one_repo.mdx)) does this: to the **right of the
-metrics-panel strip** ([task_tabs.mdx §3](./task_tabs.mdx#3-the-hover-info-region--the-space-to-the-right-of-the-panels-locked))
-sits a **hover-info region** that shows the tooltip text for **whatever the user is currently hovering** —
-a **metric panel**, a **table row**, a **tooltip target** (pill/badge/status icon), or an **action link**.
+**Only the LOCATION changed; the content model did not.** The View-One-Repo screen
+([one_repo.mdx](./one_repo.mdx)) used to render this tooltip content in a **hover-info region DOCKED to the
+right of the metrics strip**. **That region is deleted.** It reserved **≥25% of the row width**, which
+forced the metric tiles to **wrap onto a second row** — unacceptable: **the tiles must never wrap.** The
+prose now goes to the **one** place the app already reserves for non-intrusive hover text: **this panel**,
+at the bottom of the left bar, directly above the **JFK Social / ACT 3 Filmmaking** external links and the
+account slot ([left_bar.mdx §4.1](./left_bar.mdx)).
 
-* **Why docked.** The metric panels are deliberately terse (label + number only). Rather than crowd them
-  with prose or cover the row under a floating bubble, the explanation appears in **one fixed place** the
-  eye learns to glance at.
-* **Same content, same restraint.** It obeys the same rules this spec defines — plain, short, no
-  interaction-blocking — it is just *positioned* rather than *floated*.
-* **Default state.** When nothing is hovered it shows a short **hint for the active tab** (e.g.
-  *"Transcribe: audio and video files with no transcript yet. Hover a file for details."*).
+The keep-and-move summary:
+
+* **Kept — the content model.** A **terse tile, its prose explanation elsewhere.** The metric tiles stay
+  label + number only; the sentence that explains them still lives somewhere fixed the eye learns to glance
+  at. Same restraint — plain, short, never interaction-blocking.
+* **Kept — the default state.** When **nothing** is hovered the panel shows a short **hint for the active
+  task tab** (e.g. *"Transcribe: audio and video files with no transcript yet. Hover a file for details."*),
+  so on the One-repo page the panel is **not blank**.
+* **Moved — the destination.** From a docked region that **took page width** to the left bar's **already
+  reserved** fixed block, which takes **none**.
+
+**The sources feeding this panel from the One-repo page** are the **metric tiles**, the **File cell**, the
+**five icon control columns** (**Pin · Ignore · Transcribe · AI description · OCR**) and the **Compress
+status icon** — all listed in §2, all publishing a **text block** (§3.2.1).
+
+**The publish API at the call sites is unchanged.** Every existing caller keeps working: `setHoverInfo(text)`
+on mouseenter, `setHoverInfo(null)` on leave, held in a **tiny module-level store** — no context needed at
+the call site.
+
+**TWO INPUTS, ONE OUTPUT (LOCKED).** The store takes two separate inputs: **`setHoverInfo(text)`** — what is
+hovered **right now** (`null` clears it) — and **`setHoverDefault(hint)` / `useHoverDefault(hint)`** — what
+the panel shows when **nothing** is hovered. A page registers its at-rest hint with `useHoverDefault` for as
+long as it is mounted; on the One-repo page `MetricsStrip` does this with the **active task tab's**
+`defaultHint`, and it clears on unmount so stale text never lingers after navigating away.
+
+**The bridge is mounted ONCE, GLOBALLY, in the app shell — deliberately NOT per page (LOCKED).** A single
+**render-nothing** component — **`HoverInfoBridge`** — forwards the store (the hovered text, or at rest the
+active page's default hint) into the app-wide provider the panel reads.
+
+* **Why it moved.** It used to be mounted **inside `MetricsStrip`**, which meant **only the One-repo page
+  ever had a consumer**. Every other table that uses the shared icon control columns (§6.1 — the IPFS pins
+  table, the Storage detail table, …) published hover text into a store **nobody was listening to**, so
+  hovering those icons **explained nothing**. One global mount makes the panel work on **every** page —
+  which is why §6.1's teaching rule can be stated site-wide.
+
+Implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo()` (the module-level store), `setHoverDefault()` / `useHoverDefault()` (the at-rest hint) and `HoverInfoBridge` (renders nothing; forwards the store + `defaultHint` into the provider), mounted **once** at `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell`, using `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/useHoverInfoPublisher.ts` — `useHoverInfoPublisher()` and rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel` / `Block`. The One-repo per-tab at-rest hint is registered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricsStrip` calling `useHoverDefault(defaultHint)`.
 
 ### 6.1 It also explains the five icon control columns (LOCKED)
 
-Every file table now leads with **five icon control columns** — **Pin · Ignore · Transcribe · AI
-Description · OCR** ([tables.mdx §4c](./tables.mdx)) — whose headers and cells are bare icons rather than
-words. **People often don't understand these icons**, so hovering (or keyboard-focusing) **either the
-column's icon header OR any cell icon** publishes a **plain-English explanation** into this docked region
-(in addition to a native `title` tooltip on the glyph): what an **IPFS pin** is, what **git-ignore** does,
-and what **transcription**, **AI description**, and **OCR** are. This is the primary teaching surface for
-the icon vocabulary — the docked region is exactly the *"display what that means over there"* home for the
-new icon columns, the same role it already plays for the code badges. The per-kind explanation strings live
-beside the icon meta (`TASK_ICON`, [tables.mdx §4c.3](./tables.mdx)); hovering an icon calls the same
-`setHoverInfo` these panels/rows already use.
+Every file table leads with **five icon control columns** — **Pin · Ignore · Transcribe · AI description ·
+OCR** ([tables.mdx §4c](./tables.mdx)) — whose headers and cells are bare icons rather than words.
+**People often don't understand these icons**, so hovering (or keyboard-focusing) **either the column's icon
+header OR any cell icon** publishes a **plain-English explanation** into **this left-bar panel** (in addition
+to a native `title` tooltip on the glyph): what an **IPFS pin** is, what **git-ignore** does, and what
+**transcription**, **AI description**, and **OCR** are. This is the primary teaching surface for the icon
+vocabulary — the panel is exactly the *"display what that means over there"* home for the icon columns, the
+same role it already plays for the code badges. The per-kind explanation strings live beside the icon meta
+(`TASK_ICON`, [tables.mdx §4c.3](./tables.mdx)); hovering an icon calls the same `setHoverInfo` the metric
+tiles and rows use.
 
 Publishing the icon-column explanation on hover is wired in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TaskIconHeader` /
-`TaskStatusCell` (each calls `setHoverInfo` with the kind's explanation), rendered into
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `HoverInfoRegion`.
-
-Rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `HoverInfoRegion` (subscribes to a small `useHoverInfo()` context that panels, rows, tooltips, and action links publish to on hover/focus).
+`TaskStatusCell` (each calls `setHoverInfo` with the kind's explanation), forwarded to the left-bar panel by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `HoverInfoBridge`,
+which is mounted **globally** in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell`, so this works on every table on every page, not just One-repo.
 
 <!--
-  The NON-INTRUSIVE hover-info panel pinned to the BOTTOM of the left bar, directly ABOVE the account slot
-  (left_bar.mdx §4). Replaces the FLOATING portal tooltip for code badges + interesting-folder glyphs (a
-  title/aria stays for a11y). User's ask: reserve ~TWO nav-item rows of ALWAYS-WHITE space under the nav;
-  blank white at rest so the account slot never jumps; show ONLY WHAT FITS (drop overflow, never scroll,
-  never grow, never push the account slot).
-  CONTENT (§3): ordered INFO BLOCKS in two sections — "about this file/directory" (a DETAIL block, up to
-  THREE lines: name/size/rollup/modified/path, OUTSIDE the color keys) and "what the codes mean" (CODE-KEY
+  The NON-INTRUSIVE hover-info panel pinned to the BOTTOM of the left bar, directly ABOVE the external
+  product links + the account slot (left_bar.mdx §4.1/§4.2). Replaces the FLOATING portal tooltip for code
+  badges + interesting-folder glyphs (a title/aria stays for a11y). User's ask: reserve ~TWO nav-item rows
+  of ALWAYS-WHITE space under the nav (PANEL_H = 88); blank white at rest so the account slot never jumps;
+  show ONLY WHAT FITS (drop overflow, never scroll, never grow, never push the account slot). Those
+  guarantees are UNCHANGED and LOCKED.
+  §6 REWRITTEN — THERE IS NO DOCKED VARIANT ANY MORE. The One-repo region docked to the RIGHT of the metrics
+  strip is DELETED: it reserved >=25% of the row width and forced the metric tiles to WRAP (they must never
+  wrap). Only the LOCATION changed — the content model (terse tile + prose explanation living elsewhere, and
+  the at-rest tab defaultHint) is kept. One-repo SOURCES now feeding THIS panel: metric tiles, the File cell,
+  the five icon control columns (Pin · Ignore · Transcribe · AI description · OCR — §6.1) and the Compress
+  status icon.
+  PUBLISH API UNCHANGED at the call sites: setHoverInfo(text) on mouseenter / setHoverInfo(null) on leave,
+  held in a tiny MODULE-LEVEL store in pages/repos/HoverInfoRegion.tsx; the render-nothing <HoverInfoBridge
+  defaultHint> (mounted ONCE, by MetricsStrip.tsx) forwards it into the app-wide HoverInfoProvider via
+  components/hoverinfo/useHoverInfoPublisher.ts, publishes the tab's defaultHint at rest, and clears on
+  unmount.
+  CONTENT (§3): ordered INFO BLOCKS — "about this file/directory" (a DETAIL block, up to THREE lines:
+  name/size/rollup/modified/path, each line individually TRUNCATED) and "what the codes mean" (CODE-KEY
   blocks: the exact rounded-rect letter chip + 1-3 word name + one short line; ONE block per code, stacked
-  when an entity has several). Priority: badge/glyph hover → that code first then siblings; row hover →
-  detail first then codes (badge order R→I). Fit-or-drop in HoverInfoPanel.tsx.
+  when an entity has several), PLUS the NEW THIRD KIND: a TEXT block (§3.2.1) = ONE WRAPPED paragraph of free
+  prose, line-clamped to 5 LINES on top of fit-or-drop, published as a single-block payload by the One-repo
+  sources. Priority: badge/glyph hover → that code first then siblings; row hover → detail first then codes
+  (badge order R→I); One-repo hover → the single text block. Fit-or-drop in HoverInfoPanel.tsx.
   STATE (§4): one app-level context holds the single currently-hovered payload; sources set on enter / clear
   on leave via useHoverInfoSource(payload); ≈120ms clear debounce. HoverInfoProvider/useHoverInfo/
   useHoverInfoSource in components/hoverinfo/HoverInfoContext.tsx (payload HoverInfo / HoverInfoBlock =
-  {kind:"code",chip,name,line} | {kind:"detail",title,lines}); provider mounted in main.tsx; panel rendered
-  by Sidebar.tsx between </nav> and the account slot; sources = Badges.tsx (per chip) + FsRow (row + folder
-  glyph) in FileSystemPage.tsx. Chips/names reuse BADGE_META + folder-color tokens (directories.mdx §3.5.1)
-  so panel & list never drift. Keep consistent with left_bar.mdx §4, directories.mdx §3.5.1, file_system.mdx
-  §1-§3, git_ignore.mdx (the I badge).
+  {kind:"code",chip,name,line} | {kind:"detail",title,lines} | {kind:"text",text}); provider mounted in
+  main.tsx; panel rendered by Sidebar.tsx between </nav> and the account slot; sources = Badges.tsx (per
+  chip) + FsRow (row + folder glyph) in FileSystemPage.tsx + the One-repo set above.
+  DO NOT "SIMPLIFY" THE TWO CONTEXTS: HoverInfoProvider also exposes HoverInfoSetterContext — the SETTER
+  ALONE with a STABLE identity. The main context's value changes on every payload, so an imperative
+  publisher consuming it would re-render and re-publish forever. Publishers read the setter context;
+  readers read the main one.
+  Chips/names reuse BADGE_META + folder-color tokens (directories.mdx §3.5.1) so panel & list never drift.
+  Keep consistent with left_bar.mdx §4.1/§4.2, one_repo.mdx §3.2, task_tabs.mdx, directories.mdx §3.5.1,
+  file_system.mdx §1-§3, git_ignore.mdx (the I badge).
 -->

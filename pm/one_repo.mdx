@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — One repo
-description: The per-repo screen (route /repos/$repoId) a Repos-table row opens. Top region shows the repo's settings, pin progress, and status (per-repo pinning on/off, IPFS pin status, peers, last pin, Pin now). Below it is one TanStack Table — one row per large git-ignored file — where the user makes the core decision: Add to IPFS (pin) / Ignore / Undecided. The table has the standard search + icon-only filter/sort control row over an always-visible facet rail carrying TWO separate facets — Pin (IPFS) and Git-ignore, never merged and never named "Decision" (tables.mdx §2.4) — plus a Pin-decision column (the IPFS axis's per-row one-of-N editor, where "Ignore" means deliberately-not-pinned, NOT git-ignored) with per-row and bulk actions, per-file transfer status, size, CID, and which peers hold each file. Defines the summary counts, the FileRow type, the decision model, bulk actions, Pin-now, and empty/loading states.
+description: The per-repo screen (route /repos/$repoId) a Repos-table row opens. The header is two rows — the repo name (never wrapped, never squeezed) plus the width-measured task-tab strip and the smart "View recommendation ›" / "Scan now" primary on row one, and the repo's absolute directory path on its own full-width, never-wrapping row beneath. Under it the metrics strip runs the FULL page width on ONE row that never wraps (the hover-explanation moved to the left-bar hover-info panel), leading with the TWO decision tiles — Add to IPFS and Git Ignore — which replaced the single Undecided tile and absorbed "Big, not git-ignored". Below that is one TanStack Table — one row per large git-ignored file — where the user makes the core decision: Add to IPFS (pin) / Ignore / Undecided. The table has the standard search + icon-only filter/sort control row over an always-visible facet rail carrying TWO separate facets — Pin (IPFS) and Git-ignore, never merged and never named "Decision" (tables.mdx §2.4) — five leading icon control columns, per-row and bulk actions, size, CID, and which peers hold each file; ⌘-click / middle-click a row opens its viewer in a new tab. Defines the summary counts, the FileRow type, the decision model, bulk actions, Pin-now (an action-link, no longer the header primary), and empty/loading states.
 ---
 
 # LargeFileBridge — One repo
@@ -9,7 +9,8 @@ The **One repo** screen is where the work happens. You reach it by clicking a re
 [Repos](./repos.mdx) page; it opens that repo at `/repos/$repoId`. It has two jobs:
 
 1. **Show this repo's settings, progress, and status** — is per-repo pinning on? are the files pinned?
-   which of your computers hold them? when did it last pin? — and let you **Pin now**.
+   which of your computers hold them? when did it last pin? — and let you **Pin now** (an action-link
+   in the page action-links row; it is no longer the header primary, §3.1).
 2. **Let you decide, file by file, what LFBridge should move** — the core interaction. For every
    large git-ignored file the repo contains, you choose **Add to IPFS (pin)** (the `sync` decision
    value), **Ignore**, or leave it **Undecided**. Most of the user's time here is spent scanning
@@ -20,11 +21,14 @@ The One-repo screen is rendered in code:
 
 This spec builds on the siblings and does not repeat them:
 
-* [Task tabs](./task_tabs.mdx) — the **All / IPFS / Compress / Transcribe / AI descriptions** tab strip this
-  screen's header now carries (§3.1 here). Selecting a tab re-tunes the metrics strip, the visible table
-  columns, the default sort, and the row filter; that whole system — including the metrics panels, the
-  hover-info region, the per-metric popup + blue header-primary behavior, and the three-state
-  Transcribe / Compress / Describe status icons — is defined there and only summarized here.
+* [Task tabs](./task_tabs.mdx) — the **All / IPFS / Compress / Transcribe / AI descriptions / OCR** tab
+  strip this screen's header now carries (§3.1 here) — **six** tabs, width-measured, with the ones that
+  don't fit moving into a trailing overflow chevron ([task_tabs.mdx §1.4](./task_tabs.mdx#14-the-overflow-chevron--the-repo-name-never-loses-locked)).
+  Selecting a tab re-tunes the metrics strip, the visible table columns, the default sort, and the row
+  filter; that whole system — including the metrics panels, the per-metric popup + blue header-primary
+  behavior, and the three-state Transcribe / Compress / Describe status icons — is defined there and only
+  summarized here. The **explanation** text those tiles and icons publish is rendered by the **left-bar
+  hover-info panel**, not by any region on this page (§3.2).
 * [Repos](./repos.mdx) — the list this screen drills into; defines the LOCKED vocabulary
   **Repo → Large file → Decision** (§1 there), the `RepoStatus` enum, and the per-repo counts.
 * [pin_process.mdx](./pin_process.mdx) — the **pin process** the Pin-now button triggers:
@@ -85,30 +89,39 @@ export type TransferStatus =
 
 ## 2. Layout
 
-Three regions stacked in the content column: the **header** (repo identity + the "View recommendation" /
-"Scan now" primary, §3.1), the **status/settings strip**, and the **files table** with its control row.
+Three regions stacked in the content column: the **header** (two rows — repo identity + tabs + the "View
+recommendation" / "Scan now" primary on row one, the absolute path on its own full-width row, §3.1), the
+**metrics strip** (full page width, one row, never wraps, §3.2), and the **files table** with its control
+row. The **hover explanation** for anything on this page appears in the **left bar's** hover-info panel
+(bottom-left, above the external links and the account slot) — there is **no** hover region beside the
+tiles any more (§3.2).
 
 ```
 ┌────────────┬───────────────────────────────────────────────────────────────────────────┐
-│            │  ‹ Repos / Our_Movies    ▦All ⌂IPFS ▤Compress ⌯Transcribe   ⚙  ┌──────────┐ │ ← task tabs (right of center)
-│  LEFT BAR  │  ~/BGit/…/Our_Movies                                          │View rec ›│ │
-│            │                                                               └──────────┘ │
-│ Repos      ├───────────────────────────────────────────────────────────────────────────┤
-│ Peers      │  ┌Undecided┐ ┌Pull Down┐ ┌ Not  ┐   hover-info text (≥25% width)…         │ ← metrics strip + hover region (task_tabs.mdx §2–§3)
-│            │  │    5    │ │    0    │ │Backed│                                          │   narrow tiles (as wide as widest word),
-│            │  └─────────┘ └─────────┘ │ Up 3 │                                          │   Title-Case label over big number, NO banner
-│            │                          └──────┘                                          │
-│ Scans      ├───────────────────────────────────────────────────────────────────────────┤
-│ Settings   │  search…                            Sort: [1 Size ↓]        ⇅   ⛛   ⋮bulk │ ← control row (columns/sort tuned per active tab)
+│            │  ‹ Repos                                                                  │
+│  LEFT BAR  │  Our_Movies       ▦All ⌂IPFS ▤Compress ⌯Transcribe ⌗AI desc ⌸OCR ⌄ ⚙ ┌────┐│ ← row 1: name (never wraps) ·
+│            │  ~/BGit/Bryan_git/Movies/Our_Movies/2026/renders/final                └View││   width-measured tabs + ⌄ overflow
+│ Repos      │  ▲ row 2 = the absolute path: FULL width, ONE line, ellipsized, tooltip rec││   (task_tabs.mdx §1.4) · primary
+│ Peers      ├───────────────────────────────────────────────────────────────────────────┤
+│            │  ┌Add to┐ ┌ Git  ┐ ┌Pull ┐ ┌ Not  ┐ ┌Compr.┐ ┌Transc┐ ┌  AI  ┐            │ ← metrics strip (task_tabs.mdx §2)
+│            │  │ IPFS │ │Ignore│ │Down │ │Backed│ │Videos│ │ribabl│ │Descr.│            │   FULL page width, ONE row,
+│ Scans      │  │  5   │ │  12  │ │  0  │ │Up  3 │ │  12  │ │  71  │ │  40  │            │   flex-nowrap — NEVER wraps.
+│ Settings   │  └──────┘ └──────┘ └─────┘ └──────┘ └──────┘ └──────┘ └──────┘            │   The 2 decision tiles LEAD + adjoin.
+│            ├───────────────────────────────────────────────────────────────────────────┤
+│            │  search…                            Sort: [1 Size ↓]        ⇅   ⛛   ⋮bulk │ ← control row (columns/sort per tab)
 │            │  Pin (IPFS) ☑Pinned ☑Not pinned ☑Recommended ☑Undecided                    │ ← facet rail — TWO facets, never one
 │            │  Git-ignore ☑Git-ignored ☑Not git-ignored ☑Recommended                     │   (tables.mdx §2.2/§2.4)
 │            ├───────────────────────────────────────────────────────────────────────────┤
 │            │  ☐ 📌 ⊘ ⌯ 👁 🔤  File               Size   Peers  Changed                   │ ← 5 leading icon cols
 │            │  ☐ ● ● ● ○ ○   render/final_4k.mov  8.2GB  3      2h ago                 ⋮ │   Pin Ign Trn Desc OCR
 │            │  ☐ ○ ○ ● ○ ○   render/take_07.mov   6.1GB  0      5m ago               ⚠ ⋮ │
-│  [account] │  ☐ ○ ● · · ·   scratch/proxy.mp4    220MB  0      1d ago                 ⋮ │ ← trailing ⋮ = row kebab (file catalog)
-│            ├───────────────────────────────────────────────────────────────────────────┤
-│            │  173 files                                     page 1 / 1        [500 ▾]     │
+│┌──────────┐│  ☐ ○ ● · · ·   scratch/proxy.mp4    220MB  0      1d ago                 ⋮ │ ← trailing ⋮ = row kebab (file catalog)
+││hover-info││ ├──────────────────────────────────────────────────────────────────────────┤   ⌘/Ctrl/middle-click a row → new tab
+││ panel    ││ │  173 files                                    page 1 / 1        [500 ▾]     │
+│└──────────┘│ └──────────────────────────────────────────────────────────────────────────┘
+│ JFK Social │ ← the hover explanation for a tile / row / icon lands in the LEFT BAR panel (§3.2),
+│ ACT 3 Film │   the reserved white block above the external links and the account slot.
+│ [account]  │
 └────────────┴───────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -119,34 +132,57 @@ Three regions stacked in the content column: the **header** (repo identity + the
   not-backed-up, pending) reads off its own **narrow metric tile** — a small Title-Case label over a big
   number — and **clicking the tile opens that condition's educate-and-fix popup**
   ([task_tabs.mdx §2.4](./task_tabs.mdx), [warnings.mdx §4](./warnings.mdx)). **Every actionable tile opens a
-  popup now — not just Undecided and Pull-down.** The task tiles (`Transcribable`, `Describable`,
-  `Compressible Videos`, `Compressible Images`) each got a `WarningDef` builder, so clicking one opens the
-  scoped popup and **lets the user start that work** (transcribe / describe / compress) instead of the old
-  no-op that merely re-selected the current tab
+  popup now — not just the decision tiles and Pull-down.** The task tiles (`Transcribable`, `AI Describable`,
+  `Compressible Videos`, `Compressible Images`, `OCRable`) each got a `WarningDef` builder, so clicking one
+  opens the scoped popup and **lets the user start that work** (transcribe / describe / compress / OCR)
+  instead of the old no-op that merely re-selected the current tab
   ([task_tabs.mdx §2.4.1](./task_tabs.mdx#241-every-actionable-metric-tile-opens-a-popup--the-transcribe--compress--describe-builders-the-fix-locked)).
-  The hover-info region to the
-  right keeps ≥25% width and the tiles wrap into balanced rows rather than squeeze it ([task_tabs.mdx §3.1](./task_tabs.mdx)).
+  **The strip takes the full page width and never wraps** — no region is docked beside it and nothing is
+  reserved to its right; the explanation goes to the **left-bar hover-info panel** (§3.2,
+  [task_tabs.mdx §3](./task_tabs.mdx#3-the-explanation-goes-to-the-left-bar-hover-info-panel-locked)).
   IPFS-down no longer raises a page banner here — it becomes the **top recommendation**, so the header
   primary shows a **red "View recommendation ›"** that opens the one-click *Start IPFS* popup (§3.1); it
-  also stays reflected in the per-row pin toggles (§3.2).
+  also stays reflected in the per-row pin toggles (§4.5.1).
 * The files table is the same flat, chromeless TanStack `DataTable` house style as everywhere else.
 
 ---
 
-## 3. Header + status/settings strip
+## 3. Header + metrics strip
 
-### 3.1 Header
+### 3.1 Header — TWO rows, and neither of them wraps (LOCKED)
 
-* **Breadcrumb** — `‹ Repos / <repo name>`; the repo name is the title, the absolute **path** shown
-  muted beneath it.
-* **Task tabs** (a little **right of center**, between the breadcrumb and the right-hand buttons) — the
-  **All / IPFS / Compress / Transcribe / AI descriptions** strip ([task_tabs.mdx §1](./task_tabs.mdx#1-the-tab-strip-locked)).
-  **All** is the default. Selecting a tab re-tunes the **metrics-panel strip**, the **visible table
-  columns**, the **default sort**, and **which files the table shows** — all client-side, no refetch, no
-  mutation. Everything below the header in §3.2 / §4 is presented *through* the active tab; the tab system,
-  its metrics panels, the hover-info region, and the three-state Transcribe / Compress / **Describe** status
-  icons are defined in [task_tabs.mdx](./task_tabs.mdx).
-* **Header primary — "View recommendation" / "Scan now"** (top-right, the SAME button on all four tabs).
+The header is **two rows**, and the split is the point:
+
+```
+row 1 │ Our_Movies            ▦All ⌂IPFS ▤Compress ⌯Transcribe ⌗AI descriptions ⌄  ⚙  [View recommendation ›]
+row 2 │ ~/BGit/Bryan_git/Movies/Our_Movies/2026/renders/final_delivery/master
+        ▲ the absolute path — its OWN full-width row, ONE line, ellipsized, full text in the tooltip
+```
+
+* **Row 1 — the repo name + the actions slot.** The repo **name is the biggest, boldest text on the page**
+  and never wraps; it truncates with the full name on hover. **Its sizing priority is inverted from the old
+  layout:** the **title is sized to its content** (capped at **50%** of the row) and the **actions slot takes
+  the remainder and shrinks first**. That ordering is what lets the tab strip **overflow into its chevron**
+  ([task_tabs.mdx §1.4](./task_tabs.mdx#14-the-overflow-chevron--the-repo-name-never-loses-locked)) instead
+  of crushing the repo name — with the old `flex-1` title the actions slot won every pixel it asked for and
+  the name was the thing that shrank.
+* **Row 2 — the absolute directory path, on its OWN full-width row (the fix).** It is deliberately **not**
+  nested inside row 1's left column. **The bug:** the path was rendered as the header's `subtitle` *inside*
+  the left column, sharing one flex row with a `shrink-0` actions slot (tabs + gear + primary); that squeezed
+  it into a narrow box, so it **wrapped over several lines** while the right half of the row sat empty. **Now**
+  it gets the full page width: **one line, ellipsized, full text in the `title` tooltip** — it never wraps.
+* **Breadcrumb** — `‹ Repos` sits above row 1 and returns to the [Repos](./repos.mdx) list.
+* **Task tabs** (in row 1's actions slot, a little **right of center**, between the name and the right-hand
+  buttons) — the **All / IPFS / Compress / Transcribe / AI descriptions / OCR** strip — **six** tabs
+  ([task_tabs.mdx §1](./task_tabs.mdx#1-the-tab-strip-locked)). **All** is the default. The strip is
+  **width-measured**: whatever doesn't fit moves — always taking from the **right** — into a trailing
+  **down-chevron overflow menu**, which renders **only** when something actually overflows
+  ([task_tabs.mdx §1.4](./task_tabs.mdx#14-the-overflow-chevron--the-repo-name-never-loses-locked)).
+  Selecting a tab re-tunes the **metrics strip**, the **visible table columns**, the **default sort**, and
+  **which files the table shows** — all client-side, no refetch, no mutation. Everything below the header in
+  §3.2 / §3.3 / §4 is presented *through* the active tab; the tab system, its metrics panels, and the three-state
+  Transcribe / Compress / **Describe** status icons are defined in [task_tabs.mdx](./task_tabs.mdx).
+* **Header primary — "View recommendation" / "Scan now"** (top-right, the SAME button on all six tabs).
   This one smart button replaces the old always-`Pin now` primary. It surfaces the single next thing to
   do, so a non-expert never has to guess which panel to open:
   * **"Scan now"** (leading `Search` icon) — shown **only** when the repo is **scan-stale**: it has never
@@ -161,9 +197,12 @@ Three regions stacked in the content column: the **header** (repo identity + the
     **worst-first across the full task set**:
 
     ```
-    ipfs-down → pull-down → undecided → transcribe → describe → compress
-      (bad)      (bad)       (warn)      (warn)        (warn)     (warn)
+    ipfs-down → pull-down → add-to-IPFS → transcribe → describe → compress → ocr
+      (bad)      (bad)        (warn)        (warn)      (warn)     (warn)    (warn)
     ```
+
+    (The third link is the **Add to IPFS** tile — the decision metric that used to be called *Undecided*,
+    §3.2.2.)
 
     **The button's label names the recommendation** ([task_tabs.mdx §2.7](./task_tabs.mdx#27-the-per-metric-blue-header-primary--every-actionable-metric-can-be-the-recommendation-locked)):
     the three **integrity** conditions keep the generic **"View recommendation ›"** ("here's what's wrong —
@@ -174,10 +213,11 @@ Three regions stacked in the content column: the **header** (repo identity + the
     | Top pending recommendation | Label | Fill |
     | --- | --- | --- |
     | IPFS engine down / peer-pinned files not here | **View recommendation ›** | **red** (`--lfb-bad`) |
-    | Files need a decision | **View recommendation ›** | **blue** (`--lfb-primary`) |
+    | Files with no pin decision (the **Add to IPFS** tile) | **View recommendation ›** | **blue** (`--lfb-primary`) |
     | Audio/video with no transcript | **Transcribe ›** | **blue** (`--lfb-primary`) |
     | Image/video with no AI description | **Describe ›** | **blue** (`--lfb-primary`) |
     | Video/image that could be compressed | **Compress ›** | **blue** (`--lfb-primary`) |
+    | Image/video/PDF whose text hasn't been read | **OCR ›** | **blue** (`--lfb-primary`) |
 
     The button tints **red** (`--lfb-bad`) only when the top recommendation is a Broken (`bad`) state
     (IPFS-down, pull-down), brand-**blue** (`--lfb-primary`) otherwise. A **"Transcribe ›"** / **"Describe ›"**
@@ -199,7 +239,7 @@ Three regions stacked in the content column: the **header** (repo identity + the
   first (push out every `sync`-decision file this machine has that peers lack, fetch every `sync`-decision
   file peers have that this machine lacks), then LFBridge continues the pass over every other known unit in
   the background ([pin_process.mdx §2/§3](./pin_process.mdx)). It never changes any decision, flips this
-  repo's IPFS-pinning toggle on (§3.2), and must **never** be a silent no-op — its toast reports what
+  repo's IPFS-pinning toggle on (§3.3), and must **never** be a silent no-op — its toast reports what
   happened, not a fixed "complete"
   ([pin_process.mdx §6](./pin_process.mdx#6-never-a-silent-no-op--report-truthfully-locked-learned-from-a-defect)).
   Handled in code: `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` —
@@ -212,7 +252,7 @@ Three regions stacked in the content column: the **header** (repo identity + the
   Transcriptions · Create AI descriptions · Compress videos · Compress images · Git ignore · Pin now ·
   Rescan** ([page_actions.mdx §4](./page_actions.mdx)) — Pin now moved here from the header primary. The two
   producing actions (**Create Transcriptions** / **Create AI descriptions**) **open the unified batch-confirm
-  popup** — the **same** "great pop-up" the `Transcribable` / `Describable` metric tile opens
+  popup** — the **same** "great pop-up" the `Transcribable` / `AI Describable` metric tile opens
   ([dialogs.mdx §5–§6](./dialogs.mdx), [task_tabs.mdx §5.1](./task_tabs.mdx)): a candidate list checked by
   default, uncheck, then a solid-blue **"Transcribe/Describe N files"** confirm. They still obey the LOCKED
   scope / skip-already-done / background-queue rules ([page_actions.mdx §1](./page_actions.mdx)) — with no
@@ -220,15 +260,129 @@ Three regions stacked in the content column: the **header** (repo identity + the
   "{N} files will have their Transcriptions created" toast fire on the popup's **Confirm**
   ([page_actions.mdx §0.1](./page_actions.mdx)), never on the link's click and never as a `window.confirm`.
   Rendered by `PageActions` ([page_actions.mdx §3](./page_actions.mdx)).
-* **`⋮` "more" menu** (top-right, next to the header primary) — because this page **is one repo**, it carries the
-  **repo entity menu**: the same catalog as a Repos-table row's kebab
+* **The "more" menu** (top-right, next to the header primary) — on a single-entity page it renders as the
+  word **More** plus a **down chevron**, with **no** leading `⋮` glyph and **no** bordered rounded rectangle
+  ([menus.mdx §4.1](./menus.mdx) owns that presentation — this page does not restate it). Because this page
+  **is one repo**, it carries the **repo entity menu**: the same catalog as a Repos-table row's kebab
   ([menus.mdx §4 / §5.1](./menus.mdx#4-the-entity--more-menu--single-entity-pages)) — Open in File
   System · View pinned on IPFS · Rescan · Pin now · Git ignore · Toggle Pinned · Repo
   settings… · Copy path · **Remove repo (unregister)** (destructive, last, never deletes local bytes).
   *Open repo* is omitted (you are already here). Pin now — no longer the header primary — appears in both
-  the page action-links row and this `⋮` more menu so the catalog stays complete.
+  the page action-links row and this **More ⌄** menu so the catalog stays complete.
 
-### 3.2 Status / settings strip
+The two-row header — the content-sized title that never loses, and the path on its own full-width line — is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/PageHeader.tsx` — `PageHeader`
+(row 1's title is `min-w-0 max-w-[50%] shrink truncate whitespace-nowrap`, so it is sized to its content
+and capped at half the row while the actions slot shrinks first; row 2's path is
+`mt-0.5 w-full truncate whitespace-nowrap` — its own full-width one-line row, ellipsized, with the full
+text in the `title` tooltip).
+The tab strip inside row 1's actions slot, and the overflow chevron that absorbs whatever does not fit, are rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/TaskTabs.tsx` — `TaskTabs`.
+
+### 3.2 The metrics strip never wraps — and the explanation lives in the left bar (LOCKED)
+
+Beneath the header sits the **metrics-panel strip** — the active tab's "what could be done" tiles
+([task_tabs.mdx §2](./task_tabs.mdx#2-the-metrics-panels--the-what-could-be-done-boxes-locked)). Two rules
+govern how it occupies the page, and they replace the old width-budget arrangement:
+
+* **The strip gets the FULL page width and is exactly ONE row.** The tiles are laid out `flex-nowrap` with
+  every tile `shrink-0`, so **the strip can never break onto a second line**. On a pathologically narrow
+  window the row **scrolls horizontally** rather than wrapping.
+* **There is no docked hover-info region on this page any more.** The region that used to sit to the
+  **right** of the tiles is **removed**. It reserved **≥25%** of the row width for prose, which is exactly
+  what forced the tiles to flow onto a balanced second row; deleting the reservation deletes the wrapping.
+
+**Where the explanation went — the left-bar hover-info panel.** The tiles stay deliberately terse (a label
+over a number, no prose), so the words still have to live somewhere. They go to the **non-intrusive
+hover-info panel at the BOTTOM OF THE LEFT BAR** — the reserved white block above the **JFK Social** /
+**ACT 3 Filmmaking** external links and the account/login slot
+([left_bar.mdx](./left_bar.mdx), [non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)).
+
+* **Every hover source on this page still publishes the same way.** The metric tiles, the **File** cell, the
+  **five icon control columns** (Pin · Ignore · Transcribe · AI Description · OCR, §4.3), and the **Compress**
+  status icon all call the identical `setHoverInfo(text)` on enter and `setHoverInfo(null)` on leave — the
+  publish API did not change, so no call site was rewritten.
+* **One render-nothing component forwards it — mounted GLOBALLY in the app shell, not by this page.**
+  `HoverInfoBridge` renders no markup and simply forwards the current text into the app-wide
+  `HoverInfoProvider` that the left-bar panel reads. **It used to be mounted inside `MetricsStrip`**, which
+  meant **only this page had a consumer**: every other table that uses the shared icon control columns
+  ([tables.mdx §4c](./tables.mdx) — the IPFS pins table, the Storage detail table, …) published hover text
+  into a store **nobody was listening to**, so hovering those icons explained nothing. Mounting the one
+  bridge in the app shell makes the panel work on **every** page.
+* **At rest the panel shows the active tab's `defaultHint`** — the per-tab one-liner declared in
+  `TASK_TABS` ([task_tabs.mdx §7](./task_tabs.mdx)) — so the block is never a blank hole while the user's
+  pointer is idle. **This at-rest hint is registered separately** from the bridge: `MetricsStrip` calls
+  **`useHoverDefault(hint)`** for as long as it is mounted (and it clears on unmount, so stale text never
+  lingers after navigating away). Two inputs — *hovered now* (`setHoverInfo`) and *at rest*
+  (`setHoverDefault` / `useHoverDefault`) — one output panel.
+
+The full-width, never-wrapping strip is rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricsStrip`
+(the `flex w-full flex-nowrap … overflow-x-auto` row of `shrink-0` `MetricPanel`s).
+The hover text is published and forwarded in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` —
+`setHoverInfo()` (the module-level publish API), `setHoverDefault()` / `useHoverDefault()` (the at-rest
+hint, called by `MetricsStrip`) and `HoverInfoBridge` (the render-nothing forwarder, mounted ONCE globally
+in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell`), into
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/useHoverInfoPublisher.ts` —
+`useHoverInfoPublisher` and rendered by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` —
+`HoverInfoPanel` (the `"text"` block kind).
+
+#### 3.2.1 Metric tile labels carry meaningful casing — and `Describable` is now `AI Describable` (LOCKED)
+
+* **`Describable` → `AI Describable`** (both letters of **AI** upper-case, one space). The tile must say
+  **who does the describing**, so it is never misread as *"files that have a description."* The paired
+  done-tile is still **`Described`**. The **`MetricId` `describable` is unchanged** — this is a label
+  change only.
+* **Labels are no longer CSS-`capitalize`d.** The catalog stores **the exact string to render**, because
+  labels like **"Add to IPFS"**, **"AI Describable"** and **"OCRable"** carry casing that a `capitalize`
+  rule would fight.
+
+Implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` —
+`METRIC_CATALOG` (`describable.label`), rendered verbatim by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricPanel`.
+
+#### 3.2.2 The Undecided tile is gone — two decision tiles, one per axis (LOCKED)
+
+**Why it had to split.** A decision has **always been two independent axes** — **Add to IPFS** and
+**git-ignore** ([decisions.mdx](./decisions.mdx)) — and the triage popup always wrote **both**. So a single
+`Undecided` number could never tell the user **which axis was outstanding**. It is now two tiles, each with
+its own count and its own scoped popup:
+
+| Tile | `MetricId` | Counts | Opens |
+| --- | --- | --- | --- |
+| **Add to IPFS** | `addToIpfs` | Files with **no pin decision**, **excluding** rows whose bytes another IPFS tool already pinned on this node (`pinnedForeign`, §4.9). This is **exactly** the number the old `Undecided` tile showed. | `buildAddToIpfsWarning` — the renamed **two-axis triage popup** (its Apply still writes both axes; a big file usually wants both). |
+| **Git Ignore** | `gitIgnore` | Large files **Git is still allowed to commit**: not already git-ignored, not owned by a rule we refuse to rewrite ([git_ignore.mdx §5.5](./git_ignore.mdx)), and not a small `analysisOnly` row. | `buildGitIgnoreWarning` — the **new** git-ignore popup. Its Apply writes **BOTH** axes, so flipping git-ignore **never clobbers an existing pin decision**. |
+
+* **The old `bigNotIgnored` tile ("Big, not git-ignored") is FOLDED INTO "Git Ignore"** and **no longer
+  exists as its own `MetricId`.** One question, one tile.
+* **INVARIANT (LOCKED): the Git Ignore tile's count and its popup's target list come from ONE shared
+  predicate — `gitIgnoreCandidates()`.** The number on the tile and the rows in the popup are therefore the
+  **same set by construction**; they can never disagree. Any future surface that asks *"which files is Git
+  still allowed to commit?"* calls that predicate rather than re-deriving the filter.
+* **On the All tab the two decision tiles LEAD and sit ADJACENT** — they are two axes of **one** question,
+  so they read as a pair. **On the IPFS tab only `Add to IPFS` appears** (that tab is the pin axis only,
+  [task_tabs.mdx §1.3.1](./task_tabs.mdx)).
+* **The worst-first header-recommendation chain now reads** `ipfs-down → pull-down → add-to-IPFS →
+  transcribe → describe → compress → ocr` (§3.1, [task_tabs.mdx §2.7](./task_tabs.mdx)).
+* **The FROZEN wire value `"undecided"` on the Decision enum is UNCHANGED.** Only the metric **tile** named
+  *Undecided* is gone. Nobody may "clean up" `decision: "undecided"`, the Pin (IPFS) facet's **Undecided**
+  value, or the `Decided by` facet's **Undecided** value — those are the data model (§1,
+  [decisions.mdx §7](./decisions.mdx)), not the tile.
+* **The compact summary line under the strip is also unchanged** — it still reads
+  `N Pin · N Undecided · N Ignore · N Pinned locally` (§4.1).
+
+Implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` — `MetricId`,
+`METRIC_CATALOG`, `metricCount()` and `gitIgnoreCandidates()` (the shared predicate);
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+`buildAddToIpfsWarning()`, `buildGitIgnoreWarning()`, `buildMetricWarning()`, `topRecommendation()`; the
+per-tab tile lists in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — `TASK_TABS`.
+
+### 3.3 Status / settings strip
 
 A single horizontal strip of the repo's live status (read) and its one per-repo setting:
 
@@ -256,7 +410,7 @@ control row as [Repos §3](./repos.mdx) — including **header-click sort** (cli
 sort; click again to toggle asc ↔ desc; [Repos §3.1](./repos.mdx)).
 
 **Height — bounded (the content-below exception).** Unlike Repos, this page renders content **beneath**
-the files table — the **Repo details** disclosure (§3.2 status strip, now a click-away disclosure at
+the files table — the **Repo details** disclosure (§3.3 status strip, now a click-away disclosure at
 the bottom of the page). Because something sits **below** the table, it is the **exception** to the
 site-wide full-page-height rule ([Repos §3.3.1](./repos.mdx), [charter Tables rule](../CLAUDE.md)): the
 table keeps a **bounded** height (it does **not** expand to fill the viewport) so the Repo-details
@@ -274,7 +428,8 @@ whenever it is > 0.
 > as *"Undecided"* would make every repo look like it has hundreds of pending decisions. So the summary
 > counts, the repos-list counts ([repos.mdx §4.1](./repos.mdx)), and the large-file scan totals all count
 > only the non-`analysisOnly` candidates. The `analysisOnly` rows appear only when **Large files only** is
-> turned off (§4.2), and only the analysis metrics (`OCRable`, `Describable`, `Transcribable`) count them.
+> turned off (§4.2), and only the analysis metrics (`OCRable`, `AI Describable`, `Transcribable`) count
+> them. The **Git Ignore** tile excludes them too — a thumbnail is never a "bad idea to check in" (§3.2.2).
 
 > **These counts also exclude foreign-pinned rows from `Undecided` — the 4th fix in the pin-truth saga
 > (2026-07-19).** An undecided file whose bytes are **already pinned on this node** under a foreign CID
@@ -283,14 +438,16 @@ whenever it is > 0.
 > not pinned, CLI says pinned" defect again (a `charlie-kirk` repo showed **76 Undecided** of which **69**
 > were already pinned). Those rows are counted apart as `RepoCounts.pinnedForeign` and the summary line
 > appends **`· 69 Pinned locally`** (green) when > 0, so they never silently vanish from the readout —
-> "pinned" means pinned on THIS computer by ANY local software ([ipfs.mdx §1.1](./ipfs.mdx)). The same exclusion applies to the `Undecided` metric tile ([task_tabs.mdx §2.5](./task_tabs.mdx)),
+> "pinned" means pinned on THIS computer by ANY local software ([ipfs.mdx §1.1](./ipfs.mdx)). The same
+> exclusion applies to the **`Add to IPFS`** metric tile — the tile that replaced `Undecided` and counts
+> exactly this number (§3.2.2, [task_tabs.mdx §2.5](./task_tabs.mdx)) —
 > the triage popup's target list, the repos-list `Undecided` column, the `needs_review` rollup, and the
 > to-do batch engine's `pin` recommendation (it recommends only the still-owed git-ignore axis for them).
 > Counted in code:
 > `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
 > `countDecisions` and `computeTaskMetrics` (popup filter mirrored in
 > `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
-> `buildUndecidedWarning`; batch seam in
+> `buildAddToIpfsWarning` — the renamed two-axis triage popup, §3.2.2; batch seam in
 > `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts`).
 
 **Every segment is a quick filter on the Pin (IPFS) facet — and only that facet.** All three counts read
@@ -322,9 +479,12 @@ click the user sees which Pin chips went dark and can re-check them without hunt
 
 > **The richer, tab-scoped surface is the metrics-panel strip** ([task_tabs.mdx §2](./task_tabs.mdx#2-the-metrics-panels--the-what-could-be-done-boxes-locked)),
 > which sits above the control row and shows the **active tab's** "what could be done" panels (each a terse
-> label + number + right chevron → its warning popup; a light-green big-`0` when nothing is to be done),
-> with the **hover-info region** to its right ([task_tabs.mdx §3](./task_tabs.mdx#3-the-hover-info-region--the-space-to-the-right-of-the-panels-locked)).
+> label + number, **no chevron** — the whole tile is the affordance; a light-green big-`0` when nothing is
+> to be done). It runs the **full page width on one row and never wraps**, and its explanation text goes to
+> the **left-bar hover-info panel** (§3.2, [task_tabs.mdx §3](./task_tabs.mdx#3-the-explanation-goes-to-the-left-bar-hover-info-panel-locked)).
 > This one-line summary is the compact IPFS-decision readout; the metrics strip is the per-task overview.
+> Note the deliberate overlap: the strip's **Add to IPFS** tile counts the same files this line calls
+> **Undecided** (§3.2.2) — the tile is named for the axis, the line for the state.
 
 ### 4.2 Control row — LOCKED
 
@@ -388,8 +548,8 @@ provenance columns, and the transfer **Status** column are **removed** (§4.3.1)
 
 The five icon columns are **narrow with minimal padding** (the DataTable `tight` flag → `px-1`), each with
 an **icon-only header** (a plain-text label is kept only for the Sort/Filter/Columns dropdowns), and
-hovering **the header icon or any cell icon** both shows a `title` tooltip and fills the docked hover-info
-region with a plain-English explanation ([tables.mdx §4c.2–§4c.3](./tables.mdx)). All five share the one
+hovering **the header icon or any cell icon** both shows a `title` tooltip and fills the **left-bar
+hover-info panel** (§3.2) with a plain-English explanation ([tables.mdx §4c.2–§4c.3](./tables.mdx)). All five share the one
 **`StatusActionIcon`** grammar with **unique done colors** (Pin blue, Ignore orange, Transcribe indigo, AI
 Description teal, OCR violet — [tables.mdx §4c.4–§4c.5](./tables.mdx)).
 
@@ -402,7 +562,7 @@ from the file table**:
   now the per-row IPFS-axis control; setting the axis is a click on the icon, not a select. (A labelled
   one-of-N editor still lives off-table in the file kebab's *Set pin ▸* submenu, [menus.mdx §5.3](./menus.mdx).)
 * **Decided by** and **Decided (when)** — the provenance **columns** are removed; *who decided and when*
-  now surfaces **on hover** (the docked hover-info region and the file page, §4.8).
+  now surfaces **on hover** (the left-bar hover-info panel, §3.2, and the file page, §4.8).
 * **Status** (the transfer pill) — dropped from the file table; the **Pin** icon's state already tells the
   user whether a file is pinned, and the richer transfer detail lives on the file's View-one-file page and
   the IPFS pins table ([ipfs_ui.mdx](./ipfs_ui.mdx)).
@@ -452,6 +612,21 @@ Per-cell targets (all resolve to the row target above unless noted):
 | **Peers** | Same as the row (peers detail lives on the file page / [Peers](./left_bar.mdx)). |
 | **CID** | **Copies** the CID (click-to-copy); does not navigate away; stops propagation. |
 | **`⋮`** | Opens the **file action menu** — never navigates (§4.3); stops propagation. |
+
+**⌘-click / Ctrl-click / shift-click / middle-click opens the row in a NEW TAB (LOCKED).** A row navigates
+via **JS**, not an `<a href>`, so those modified clicks used to be **swallowed** and navigate **in place** —
+the opposite of what every other link on the web does. The house `DataTable` now takes an optional
+**`rowHref(row)`**, and this table supplies it: **the same viewer route the row click uses**, as a URL. With
+it present, ⌘/Ctrl-click, shift-click and middle-click open that URL in a **new tab/window**, while a plain
+click still routes **in-page** through `onRowClick` — so routing and view state are unchanged. The rule
+itself is owned by **[tables.mdx §4d](./tables.mdx)**; this page is one of its adopters. (It sits at §4d,
+not §3.6, because §3.6 already means "Sort obeys the axis split too" and other specs cite that anchor.)
+
+Implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`
+(the `rowHref` prop; the row's `onClick` modifier branches and its `onAuxClick` middle-click branch), and
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
+(`rowHref`, building `<viewerRouteForName(name)>?path=<abs>`).
 
 Row-click navigation — routing each file to its viewer (`/image` · `/video` · `/audio`) or the
 properties page (`/file`) by kind, on the file's absolute path — is handled in code:
@@ -556,7 +731,7 @@ better than none:
 
 * **Hover the Pin or Ignore icon** (the two leading decision icons, §4.3 — the old standalone *Decision*
   cell is gone, §4.3.1) → a non-intrusive tooltip ([non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)),
-  also filled into the docked hover-info region: *"Add to IPFS + git-ignored · decided by bob@acme.com ·
+  also published to the left-bar hover-info panel (§3.2): *"Add to IPFS + git-ignored · decided by bob@acme.com ·
   Jul 12, 2:32 PM"*. A small person/clock glyph marks a file decided by **someone else on the team** (vs.
   you), so others' choices are visible at a glance. **Provenance moved from its own columns to the icon
   hover** — the *Decided by* and *Decided* columns are removed (§4.3.1), but the *who/when* data is intact
@@ -671,12 +846,16 @@ recorded foreign-pin index via `foreignPinByAbsPath`), fed by
 
 ## 6. Acceptance criteria
 
-1. The screen opens at `/repos/$repoId` from a [Repos](./repos.mdx) row click; the header shows the
-   `‹ Repos / <name>` breadcrumb, the absolute path, and a **Pin now** button that **prioritizes this
-   repo (pinned first) and then runs the full pin pass**
-   ([pin_process.mdx §2/§3](./pin_process.mdx)), never
-   changes a decision, and is never a silent no-op (reports what it actually did).
-2. The **status/settings strip** shows Pin (the one editable per-repo on/off toggle), Status pill,
+1. The screen opens at `/repos/$repoId` from a [Repos](./repos.mdx) row click. The header is **two rows**:
+   row 1 = the `‹ Repos` breadcrumb above the **repo name** (biggest/boldest text; **never wraps**, sized to
+   its content and capped at **50%** of the row) with the width-measured **tab strip**, the **gear**, and the
+   smart header primary in the actions slot (which **shrinks first**); row 2 = the **absolute directory
+   path** on its **own full-width row**, **one line, ellipsized, full text in the tooltip** — it never wraps
+   (§3.1). **Pin now is NOT a header button** — it lives in the page action-links row (and the **More ⌄**
+   menu) and still **prioritizes this repo (pinned first) then runs the full pin pass**
+   ([pin_process.mdx §2/§3](./pin_process.mdx)), never changes a decision, and is never a silent no-op
+   (reports what it actually did).
+2. The **status/settings strip** (§3.3) shows Pin (the one editable per-repo on/off toggle), Status pill,
    Peers, Last pin, and IPFS node health; when the node is unreachable, Pin now is disabled.
 3. The **summary counts** line reads `N Pin · N Undecided · N Ignore` (recommended: `N Not pinned` for
    the third, §4.1); each segment is a quick-filter that sets the **Pin (IPFS)** facet to that one value
@@ -714,32 +893,63 @@ recorded foreign-pin index via `foreignPinByAbsPath`), fed by
    state; the LOCKED transfer-status pill mapping (§4.6) now applies only on the file page and the IPFS pins
    table. An Add-to-IPFS (pin) file with Peers = 0 still renders the **Peers** count red.
 9. Empty / all-decided / loading / node-unreachable states render per §5.
-10. The header carries a top-right **`⋮` "more" menu** = the **repo** entity catalog
-    ([menus.mdx §5.1](./menus.mdx#51-repo)), with *Open repo* omitted and *Pin now* also present as the
-    primary button (§3.1). Each files-table **data cell is a deep link** per §4.7 (File/Size/Changed →
+10. The header carries a top-right **"more" menu**, rendered as the word **More** + a **down chevron** with
+    **no** leading `⋮` glyph and **no** bordered rounded rectangle ([menus.mdx §4.1](./menus.mdx)) = the
+    **repo** entity catalog ([menus.mdx §5.1](./menus.mdx#51-repo)), with *Open repo* omitted and *Pin now*
+    present in it **and** in the action-links row (it is **not** the header primary, §3.1). Each files-table
+    **data cell is a deep link** per §4.7 (File/Size/Changed →
     View one file; Peers → Peers filtered to the file; CID copies); the row **`⋮` kebab** (and
     right-click) opens the **file** catalog ([menus.mdx §5.3](./menus.mdx#53-file)) and never navigates,
     with compress/convert/ignore gated behind an explicit-click confirm.
-11. The header carries the **task tab strip** (right of center) — **All** (default) / **IPFS** / **Compress**
-    / **Transcribe** / **AI descriptions** ([task_tabs.mdx](./task_tabs.mdx)); selecting a tab re-tunes the
+11. The header carries the **task tab strip** (right of center) — **six** tabs: **All** (default) / **IPFS**
+    / **Compress** / **Transcribe** / **AI descriptions** / **OCR** ([task_tabs.mdx](./task_tabs.mdx));
+    selecting a tab re-tunes the
     metrics-panel strip, the visible columns, the default sort, and the row filter client-side. **All** is
     metrics-forward (light-green big-`0` panels when nothing is to be done); the **Transcribe** tab shows the
     three-state Transcribe status icon, the **Compress** tab the Compress status icon, and the **AI
-    descriptions** tab the three-state Describe status icon; the hover-info region right of the panels shows
-    contextual text for whatever is hovered.
+    descriptions** tab the three-state Describe status icon. The strip is **width-measured**: tabs that don't
+    fit move (from the **right**) into a trailing **down-chevron overflow menu** that renders **only** when
+    something overflows, and the **active** tab is always kept visible
+    ([task_tabs.mdx §1.4](./task_tabs.mdx#14-the-overflow-chevron--the-repo-name-never-loses-locked)).
+11a. **The metrics strip takes the FULL page width, is ONE row, and NEVER wraps** (`flex-nowrap`, `shrink-0`
+    tiles; horizontal scroll on a pathologically narrow window). There is **no hover-info region beside the
+    tiles** — that ≥25% reservation, and the balanced second row it forced, are **gone**. Every hover source
+    (metric tile, **File** cell, the five icon control columns, the **Compress** status icon) publishes via
+    the same `setHoverInfo(text)`, and `HoverInfoBridge` forwards it to the **left-bar hover-info panel** —
+    the reserved white block above the JFK Social / ACT 3 Filmmaking links and the account slot — which
+    shows the active tab's `defaultHint` at rest (§3.2).
+11b. **Two decision tiles, not one "Undecided" tile** (§3.2.2): **Add to IPFS** (`addToIpfs`; files with no
+    pin decision, excluding foreign-pinned rows — exactly the old Undecided number; opens
+    `buildAddToIpfsWarning`) and **Git Ignore** (`gitIgnore`; large files Git may still commit — not
+    git-ignored, not rule-locked, not `analysisOnly`; opens the new `buildGitIgnoreWarning`, whose Apply
+    writes **both** axes so an existing pin decision is never clobbered). The old **`bigNotIgnored`** tile is
+    **folded into Git Ignore** and no longer exists. The Git Ignore tile's **count and its popup's target
+    list come from the one shared `gitIgnoreCandidates()` predicate**, so they can never disagree. On **All**
+    the two tiles **lead and sit adjacent**; on **IPFS** only **Add to IPFS** shows. The frozen wire value
+    `"undecided"` and the `N Pin · N Undecided · N Ignore · N Pinned locally` summary line are **unchanged**.
+11c. **The metric tile reads `AI Describable`, not `Describable`** (both letters of AI upper-case, one
+    space); the paired done-tile is still `Described` and the `MetricId` `describable` is unchanged. Tile
+    labels are **not** CSS-`capitalize`d — the catalog stores the exact string, because "Add to IPFS",
+    "AI Describable" and "OCRable" carry meaningful casing (§3.2.1).
 12. **The header primary is labeled per metric** and resolves worst-first **ipfs-down → pull-down →
-    undecided → transcribe → describe → compress** (§3.1): the integrity trio keeps **"View recommendation
-    ›"** (red for `bad`, blue otherwise), the task trio names the verb — **"Transcribe ›"**, **"Describe ›"**,
-    **"Compress ›"** (blue) — and each opens the same educate-and-fix popup its metric tile opens. **Every
-    actionable metric tile opens a popup** and lets the user start the work (not only Undecided / Pull-down);
+    add-to-IPFS → transcribe → describe → compress → ocr** (§3.1): the integrity trio keeps **"View
+    recommendation ›"** (red for `bad`, blue otherwise), the task set names the verb — **"Transcribe ›"**,
+    **"Describe ›"**, **"Compress ›"**, **"OCR ›"** (blue) — and each opens the same educate-and-fix popup
+    its metric tile opens. **Every actionable metric tile opens a popup** and lets the user start the work
+    (not only the decision tiles / Pull-down);
     the transcribe/describe applies are model/consent-gated, interposing then resuming.
+12a. **⌘-click / Ctrl-click / shift-click / middle-click a files-table row opens its viewer in a NEW
+    tab/window** — the `DataTable` `rowHref(row)` this page supplies (the same route the plain row click
+    uses); a plain click still routes in-page. Owning rule:
+    [tables.mdx §4d](./tables.mdx#4d-modified-click-on-a-row-opens-a-new-tab-locked-site-wide) (§4.7) —
+    **not** §3.6, which means "Sort obeys the axis split too".
 13. **The five leading icon control columns** ([tables.mdx §4c](./tables.mdx)) — **Pin · Ignore · Transcribe
     · AI Description · OCR**, in that order right of the select checkbox — lead the table on **every** tab
     (§4.3): narrow (`tight`/`px-1`), **icon-only headers** (text label kept only for Sort/Filter/Columns
     dropdowns), each rendered through the shared **`StatusActionIcon`** with **unique done colors** (Pin blue,
     Ignore orange, Transcribe indigo, AI Description teal, OCR violet). Hovering the header icon **or** any
-    cell icon shows a `title` tooltip **and** fills the docked hover-info region with a plain-English
-    explanation of the icon (§4.3, §4.8). The **Pin decision**, **Decided by**, **Decided**, and **Status**
+    cell icon shows a `title` tooltip **and** fills the **left-bar hover-info panel** with a plain-English
+    explanation of the icon (§3.2, §4.3, §4.8). The **Pin decision**, **Decided by**, **Decided**, and **Status**
     columns are removed (§4.3.1); the two decision axes remain as data, set via the Pin/Ignore icons.
 
 <!--
@@ -749,8 +959,39 @@ recorded foreign-pin index via `foreignPinByAbsPath`), fed by
   transfer-status pill colors (§4.6, now shown on the file page + IPFS pins table, NOT this file table);
   the standard control row (search left; icon-only sort/filter right); pagination default 500 with the
   count shown. Clicking the Pin icon (the per-row IPFS control) never deletes local bytes.
+  HEADER (§3.1, LOCKED): TWO rows. Row 1 = repo NAME (biggest/boldest, never wraps, sized to CONTENT and
+  capped at 50%) + the actions slot (tabs · gear · primary) which takes the remainder and SHRINKS FIRST —
+  that inversion is what lets the tab strip overflow instead of crushing the name. Row 2 = the absolute
+  path on its OWN full-width row, ONE line, ellipsized, tooltip carries the full text. (BUG FIXED: the path
+  used to be the subtitle INSIDE row 1's left column beside a shrink-0 actions slot, so it wrapped over
+  several lines while the right half sat empty.) PIN NOW IS NOT A HEADER BUTTON — action-links row + the
+  More menu; the header primary is "View recommendation ›" / "Scan now" / the per-metric verb. The
+  single-entity "more" button renders as the word More + a down chevron, NO ⋮ glyph, NO bordered box
+  (menus.mdx §4.1 owns it). SIX tabs: All · IPFS · Compress · Transcribe · AI descriptions · OCR.
+  METRICS STRIP (§3.2, LOCKED): FULL page width, ONE row, NEVER wraps (flex-nowrap + shrink-0 tiles;
+  overflow-x scroll is the only escape). The docked hover-info region to the RIGHT is DELETED — its ≥25%
+  width reservation was what forced the balanced second row. The explanation now goes to the LEFT-BAR
+  hover-info panel (the reserved white block above the JFK Social / ACT 3 links and the account slot):
+  every source still calls setHoverInfo(text) and a render-nothing HoverInfoBridge forwards it into the
+  app-wide HoverInfoProvider; at rest it shows the active tab's defaultHint.
+  DECISION TILES (§3.2.2, LOCKED): the "Undecided" TILE is GONE, split into TWO tiles — Add to IPFS
+  (addToIpfs = files with no pin decision, minus foreign-pinned = exactly the old number, opens
+  buildAddToIpfsWarning) and Git Ignore (gitIgnore = large files Git may still commit: !gitignore &&
+  !gitignoreLocked && !analysisOnly, opens the NEW buildGitIgnoreWarning whose Apply writes BOTH axes so a
+  pin decision is never clobbered). The old bigNotIgnored tile is FOLDED IN and no longer exists as a
+  MetricId. INVARIANT: the tile count and the popup's target list share ONE predicate,
+  gitIgnoreCandidates(), so they can never disagree. All tab = the two tiles LEAD and are ADJACENT; IPFS
+  tab = Add to IPFS only. Worst-first chain: ipfs-down → pull-down → add-to-IPFS → transcribe → describe →
+  compress → ocr. THE WIRE VALUE "undecided" IS UNCHANGED — only the TILE is gone; do not "clean up" the
+  Decision enum, the Pin facet's Undecided value, or the summary line (N Pin · N Undecided · N Ignore ·
+  N Pinned locally), all of which stand.
+  TILE LABELS (§3.2.1): "Describable" → "AI Describable" (MetricId `describable` unchanged); labels are NOT
+  CSS-capitalized — METRIC_CATALOG stores the exact string ("Add to IPFS", "AI Describable", "OCRable").
+  ROW MODIFIED-CLICK (§4.7): DataTable's optional rowHref(row) makes ⌘/Ctrl-click, shift-click and
+  middle-click open a NEW TAB; plain click still routes in-page. Owning rule = tables.mdx §4d (NOT §3.6,
+  which is "Sort obeys the axis split too" and is cited by other specs — never renumber it).
   ICON COLUMNS (tables.mdx §4c, §4.3/§4.3.1, LOCKED): the table LEADS every tab with FIVE narrow icon control
-  columns after the select checkbox — Pin·Ignore·Transcribe·AI Description·OCR — icon-only headers, docked
+  columns after the select checkbox — Pin·Ignore·Transcribe·AI Description·OCR — icon-only headers, left-bar
   hover-info explanation, shared StatusActionIcon, UNIQUE done colors (Pin blue, Ignore orange, Transcribe
   indigo, AI Description teal, OCR violet). REMOVED from this file table: the "Pin decision" select column,
   the Decided by + Decided provenance columns, and the transfer Status column. The two decision axes still

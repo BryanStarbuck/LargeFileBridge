@@ -184,6 +184,8 @@ export function ReposPage() {
         searchKeys={(r) => `${r.name} ${r.path}`}
         getRowId={(r) => r.repoId}
         onRowClick={(r) => navigate({ to: "/repos/$repoId", params: { repoId: r.repoId } })}
+        // ⌘/Ctrl/middle-click opens the row's destination in a new tab, like any link (tables.mdx §4d).
+        rowHref={(r) => `/repos/${encodeURIComponent(r.repoId)}`}
         // Gear → per-repo settings, sitting just left of the ⋮ kebab (repo_settings.mdx §1).
         rowMenu={(r) => (
           <>

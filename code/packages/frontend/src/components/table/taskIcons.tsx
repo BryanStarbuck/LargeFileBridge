@@ -3,7 +3,7 @@
 // same on View-One-Repo, the Storage file table, and the IPFS pins table (the File System page is the one
 // exclusion). Each kind owns a glyph, a UNIQUE "done" color, a readable label, and a plain-English
 // explanation. People often don't know what these icons mean, so hovering the header OR any cell fills the
-// docked hover-info region (HoverInfoRegion / setHoverInfo) with that explanation — in addition to the
+// left-bar hover-info panel (setHoverInfo, forwarded by HoverInfoBridge) with that explanation — in addition to the
 // native title tooltip.
 import type { ReactNode } from "react";
 import { Pin, CircleSlash, Captions, ScanText, TextSelect } from "lucide-react";

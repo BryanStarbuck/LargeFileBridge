@@ -100,8 +100,14 @@ A file is a candidate when **all** hold:
 Absence of a `.ai_description` is the whole test — a file that already has one never appears (mirroring the
 [transcribe engine's absence test](./transcribe_calc_engine.mdx#2-what-counts-as-can-be-transcribed-locked)
 and the [page-action skip-already-done rule](./page_actions.mdx#1-scope--skip-already-done--background-queue-locked)).
-A file described by **any** earlier path (the viewer button, a kebab, the metric popup, a prior slug) is
-therefore already excluded.
+A file described by **any** earlier path (the viewer button, a kebab, the **AI Describable** metric tile's
+popup, a prior slug) is therefore already excluded.
+
+> **Naming.** This engine's candidate set is exactly what the one-repo **AI Describable** metric tile counts
+> (the tile that used to read plain "Describable"; the label names WHO does the describing —
+> [ai_description.mdx §12.1](./ai_description.mdx)). **Only the label changed**: the MetricId `describable`,
+> the field `TaskMetrics.describable`, and this engine's identifiers are all unchanged. Where this spec uses
+> "describable" in running prose it means the *property* (an image or a video), not the tile's label.
 
 Deciding "describable and not yet described" (artifact existence check via the same kind-resolved placement resolver the feature uses — so it looks under `.lfbridge/` in a working repo and at the **root** in a dedicated LFB file repo (SDL), never a hard-coded `.lfbridge` join; [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)) is to be implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/describe-scan.engine.ts` — `isUndescribed(file)` (reuses `analysisOutputs()` from `storage/tracking.service.ts` — the same `.ai_description`-presence check that lights the storage-table indicator and the Describe status icon, [ai_description.mdx §2.2/§11.2](./ai_description.mdx)).

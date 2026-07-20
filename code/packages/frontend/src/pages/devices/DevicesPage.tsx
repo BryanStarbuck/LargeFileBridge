@@ -188,6 +188,9 @@ export function DevicesPage() {
         onRowClick={(d) => {
           if (d.id) navigate({ to: "/device/$deviceId", params: { deviceId: d.id } });
         }}
+        // ⌘/Ctrl/middle-click opens the row's destination in a new tab (tables.mdx §4d). A row with no
+        // stable id has no page, so it has no href either.
+        rowHref={(d) => (d.id ? `/device/${encodeURIComponent(d.id)}` : "")}
         itemNoun="devices"
         loading={isLoading}
         // Only peers.yaml entries can be "removed"; self and registry rows are not forgettable here.

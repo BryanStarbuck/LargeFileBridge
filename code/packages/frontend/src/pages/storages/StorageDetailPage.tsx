@@ -193,6 +193,8 @@ export function StorageDetailPage() {
         searchKeys={(f) => f.path}
         getRowId={(f) => f.path}
         onRowClick={(f) => s && navigate({ to: "/file", search: { path: `${s.root}/${f.path}` } })}
+        // ⌘/Ctrl/middle-click opens the row's destination in a new tab, like any link (tables.mdx §4d).
+        rowHref={(f) => (s ? `/file?path=${encodeURIComponent(`${s.root}/${f.path}`)}` : "")}
         itemNoun="files"
         loading={isLoading}
         empty={<p className="text-center text-black/60">No large files indexed yet. Click <b>Index files</b> to scan this storage.</p>}

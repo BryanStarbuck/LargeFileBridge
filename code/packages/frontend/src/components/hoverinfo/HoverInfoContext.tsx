@@ -22,7 +22,11 @@ export type HoverInfoBlock =
       name: string;
       line?: string;
     }
-  | { kind: "detail"; title: string; lines: string[] };
+  | { kind: "detail"; title: string; lines: string[] }
+  // A free-prose block — one WRAPPED paragraph, not truncated per line. This is what the One-repo
+  // metric tiles / table rows publish now that their explanation lives here instead of in a region
+  // docked beside the metrics strip (one_repo.mdx §3.2, non_intrusive_tooltip.mdx §6).
+  | { kind: "text"; text: string };
 
 export interface HoverInfo {
   blocks: HoverInfoBlock[];
@@ -35,12 +39,23 @@ interface HoverInfoCtx {
 
 const Ctx = createContext<HoverInfoCtx | null>(null);
 
+/**
+ * The SETTER alone, on its own context with a STABLE identity. `Ctx`'s value changes on every payload, so
+ * a publisher that consumed it would re-render (and re-publish) every time it published — an infinite
+ * loop. Imperative publishers (useHoverInfoPublisher) read this one instead and never re-render on reads.
+ */
+export const HoverInfoSetterContext = createContext<((info: HoverInfo | null) => void) | null>(null);
+
 const CLEAR_DEBOUNCE_MS = 120;
 
 export function HoverInfoProvider({ children }: { children: ReactNode }) {
   const [info, setInfo] = useState<HoverInfo | null>(null);
   const value = useMemo<HoverInfoCtx>(() => ({ info, setInfo }), [info]);
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+  return (
+    <HoverInfoSetterContext.Provider value={setInfo}>
+      <Ctx.Provider value={value}>{children}</Ctx.Provider>
+    </HoverInfoSetterContext.Provider>
+  );
 }
 
 /** Read the single active hover payload (the panel uses this). Returns null when nothing is hovered. */

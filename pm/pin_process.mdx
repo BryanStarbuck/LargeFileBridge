@@ -73,7 +73,7 @@ runs first*, never in *what gets covered*:
 | --- | --- | --- | --- |
 | **Scheduled** — 15-min scheduleTask | launchd/cron ([storage_local.mdx §13](./storage_local.mdx#13-the-background-pin-process--the-transparency-contract)) | Full pass | Natural order |
 | **Session catch-up** — > 48h stale | a returning web session ([sessions.mdx §3](./sessions.mdx)) | Full pass | Natural order |
-| **Manual — "Pin now" on a repo** | the repo page / row kebab / bulk ([one_repo.mdx §3.1](./one_repo.mdx#31-header)) | **Full pass** | **That repo first (priority §3)**, then the rest |
+| **Manual — "Pin now" on a repo** | the repo page / row kebab / bulk ([one_repo.mdx §3.1](./one_repo.mdx#31-header--two-rows-and-neither-of-them-wraps-locked)) | **Full pass** | **That repo first (priority §3)**, then the rest |
 
 The load-bearing rule the button must honor: **a manual Pin now on one repo prioritizes that repo but
 still runs the full pass.** It does the user's repo first (so their result is immediate) and then keeps

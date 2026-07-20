@@ -243,6 +243,7 @@ export function OneRepoPage() {
     else if (id === "transcribable" || id === "transcribed") setActiveTab("transcribe");
     else if (id === "describable" || id === "described") setActiveTab("ai-descriptions");
     else if (id === "ocrable" || id === "ocred") setActiveTab("ocr");
+    // addToIpfs / gitIgnore / pullDown / pending all act on the IPFS + decision axes.
     else setActiveTab("ipfs");
   };
 
@@ -636,6 +637,14 @@ export function OneRepoPage() {
           const abs = `${detail.path}/${f.path}`;
           const name = f.path.slice(f.path.lastIndexOf("/") + 1);
           navigate({ to: viewerRouteForName(name), search: { path: abs } });
+        }}
+        // The same destination as a URL, so ⌘-click / middle-click open it in a new tab like any link
+        // (tables.mdx §4d).
+        rowHref={(f) => {
+          if (!detail?.path) return "";
+          const abs = `${detail.path}/${f.path}`;
+          const name = f.path.slice(f.path.lastIndexOf("/") + 1);
+          return `${viewerRouteForName(name)}?path=${encodeURIComponent(abs)}`;
         }}
         // Trailing ⋮ kebab — the file entity menu (menus.mdx §3), same catalog as View-one-file.
         rowMenu={(f) => (detail?.path ? <EntityKebab path={`${detail.path}/${f.path}`} /> : null)}

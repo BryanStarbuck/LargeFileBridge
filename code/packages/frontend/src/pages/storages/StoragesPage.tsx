@@ -96,6 +96,9 @@ export function StoragesPage() {
         searchKeys={(s) => `${s.name} ${s.root} ${s.companyName ?? ""} ${s.communityId ?? ""}`}
         getRowId={(s) => s.id}
         onRowClick={(s) => s.initialized && navigate({ to: "/storages/$storageId", params: { storageId: s.id } })}
+        // ⌘/Ctrl/middle-click opens the row's destination in a new tab, like any link (tables.mdx §4d).
+        // An uninitialized storage has no page, so it has no href either — the row stays inert.
+        rowHref={(s) => (s.initialized ? `/storages/${encodeURIComponent(s.id)}` : "")}
         itemNoun="storages"
         loading={isLoading}
         empty={<p className="text-center text-black/60">No Personal / Company / Community storages found yet. Create a directory named <code>*_large_files_bridge</code> (or add a <code>storage.yaml</code>) under a scanner root, then reload.</p>}

@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Use-Case Tour — AI descriptions behave symmetrically to transcription (tab, metric tile, header primary, folder describe, placement, threshold)
-description: The end-to-end scenario tour that proves AI-DESCRIPTION PARITY — every place transcription appears in Large File Bridge, AI description appears the same way, mirrored point-for-point. It walks a photo/video repo and touches each mirrored surface in turn: the media viewer's two analysis tabs (Transcription · AI description) with their ✓ presence markers and default-tab rule; the per-repo task tab strip's fifth "AI descriptions" tab sitting beside Transcribe with its own describable/described metric tiles; the describable metric tile as this page's only warning surface — clicking it opens the same educate-and-fix popup a transcribable tile opens; the blue "Describe ›" header primary that mirrors "Transcribe ›" (and "Compress ›"); running a bulk describe on a whole folder of images via the "Create AI descriptions" page action (the describe_calc_engine bulk discovery, mirror of the transcribe calc engine) that background-queues jobs on the Processing page; the generated .ai_description artifacts landing exactly where the AI-descriptions placement radio points (hidden .lfbridge/ / next to the file / company sync repo), mirroring transcript placement; the three-state Describe status icon (filled blue = described · orange-edge = describable · light-grey = N/A) mirroring the Transcribe status icon; and an AI description being a first-class durable CONTENT artifact (Category A) — the only Category-A content an image-only repo ever produces, committed into the repo's .lfbridge/ exactly like a transcript, while LFB's tracking state always stays in Local Storage. Each step names the transcription surface it mirrors, states what LargeFileBridge does, shows the on-disk artifact, and what we DOUBLE-CHECK. Sibling of ai_description.mdx (the feature), describe_calc_engine.mdx (the bulk-discovery engine mirroring transcribe_calc_engine.mdx), Transcribe.mdx (the mirror feature), task_tabs.mdx (the tab + metric tiles + status icons + header primary), warnings.mdx (the educate-and-fix popup), placement_radios.mdx + artifact_placement_policy.mdx (where the content artifact lands; tracking state always in Local Storage), page_actions.mdx + processing.mdx + job_queue.mdx (the folder describe and its background jobs), and media_viewer.mdx (the two-tab analysis panel).
+description: The end-to-end scenario tour that proves AI-DESCRIPTION PARITY — every place transcription appears in Large File Bridge, AI description appears the same way, mirrored point-for-point. It walks a photo/video repo and touches each mirrored surface in turn: the media viewer's two analysis tabs (Transcription · AI description) with their ✓ presence markers and default-tab rule; the per-repo task tab strip's fifth "AI descriptions" tab sitting beside Transcribe with its own "AI Describable" / "Described" metric tiles; the AI Describable metric tile as this page's only warning surface — clicking it opens the same educate-and-fix popup a transcribable tile opens; the blue "Describe ›" header primary that mirrors "Transcribe ›" (and "Compress ›"); running a bulk describe on a whole folder of images via the "Create AI descriptions" page action (the describe_calc_engine bulk discovery, mirror of the transcribe calc engine) that background-queues jobs on the Processing page; the generated .ai_description artifacts landing exactly where the AI-descriptions placement radio points (hidden .lfbridge/ / next to the file / company sync repo), mirroring transcript placement; the three-state Describe status icon (filled blue = described · orange-edge = describable · light-grey = N/A) mirroring the Transcribe status icon; and an AI description being a first-class durable CONTENT artifact (Category A) — the only Category-A content an image-only repo ever produces, committed into the repo's .lfbridge/ exactly like a transcript, while LFB's tracking state always stays in Local Storage. Each step names the transcription surface it mirrors, states what LargeFileBridge does, shows the on-disk artifact, and what we DOUBLE-CHECK. Sibling of ai_description.mdx (the feature), describe_calc_engine.mdx (the bulk-discovery engine mirroring transcribe_calc_engine.mdx), Transcribe.mdx (the mirror feature), task_tabs.mdx (the tab + metric tiles + status icons + header primary), warnings.mdx (the educate-and-fix popup), placement_radios.mdx + artifact_placement_policy.mdx (where the content artifact lands; tracking state always in Local Storage), page_actions.mdx + processing.mdx + job_queue.mdx (the folder describe and its background jobs), and media_viewer.mdx (the two-tab analysis panel).
 ---
 
 # LargeFileBridge — AI-Description Parity Tour (everything transcription does, description does the same)
@@ -30,7 +30,7 @@ This spec builds on the siblings and does not repeat them:
   described," the point-for-point mirror of [transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx).
 * [Transcribe.mdx](./Transcribe.mdx) — **the mirror feature**; every step below cites the transcription
   surface it parallels.
-* [task_tabs.mdx](./task_tabs.mdx) — the per-repo **AI descriptions tab** (§11), the **describable/described
+* [task_tabs.mdx](./task_tabs.mdx) — the per-repo **AI descriptions tab** (§11), the **AI Describable / Described
   metric tiles** (§2, §4.5), the **three-state Describe status icon** (§5.2), and the blue **header primary**
   (§1.1).
 * [warnings.mdx](./warnings.mdx) — the **educate-and-fix popup** a metric tile opens.
@@ -51,7 +51,7 @@ Every row below is a surface transcription owns; the tour proves the AI-descript
 | --- | --- | --- | --- |
 | Media-viewer tab | **Transcription** tab (audio+video), ✓ when present | **AI description** tab (image+video), ✓ when present | §2 |
 | Per-repo task tab | **Transcribe** tab | **AI descriptions** tab (5th, beside Transcribe) | §3 |
-| Metric tile → popup | **Transcribable** tile opens educate-and-fix popup | **Describable** tile opens the same popup | §4 |
+| Metric tile → popup | **Transcribable** tile opens educate-and-fix popup | **AI Describable** tile opens the same popup | §4 |
 | Blue header primary | **"Transcribe ›"** | **"Describe ›"** | §5 |
 | Bulk folder action | **Create Transcriptions** → jobs | **Create AI descriptions** → jobs | §6 |
 | Bulk-discovery engine | transcribe calc engine | describe calc engine | §6 |
@@ -67,7 +67,7 @@ Every row below is a surface transcription owns; the tour proves the AI-descript
 | --- | --- | --- | --- |
 | **2** | Media-viewer **AI description** tab | Transcription tab | Image shows only the AI-description tab (no transcript tab); a video shows both; ✓ appears when content exists. |
 | **3** | Per-repo **AI descriptions** task tab | Transcribe tab | The 5th tab re-tunes the strip/columns/sort/filter to description work. |
-| **4** | **Describable** metric tile → popup | Transcribable tile | Clicking the tile opens the educate-and-fix popup; the tiles are the page's only warning surface. |
+| **4** | **AI Describable** metric tile → popup | Transcribable tile | Clicking the tile opens the educate-and-fix popup; the tiles are the page's only warning surface. |
 | **5** | Blue **"Describe ›"** header primary | "Transcribe ›" | The smart header primary recommends describing when that's the top task. |
 | **6** | **Create AI descriptions** on a folder | Create Transcriptions | Bulk describe of `stills/` background-queues `describe` jobs on Processing. |
 | **7** | `.ai_description` placement | `.transcription` placement | Artifacts land exactly where the AI-descriptions radio points. |
@@ -117,15 +117,21 @@ shows transcribe tiles.
 
 ---
 
-## 4. STEP — the "Describable" metric tile opens the educate-and-fix popup (mirror: the Transcribable tile)
+## 4. STEP — the "AI Describable" metric tile opens the educate-and-fix popup (mirror: the Transcribable tile)
 
-**What the user does.** On the AI descriptions tab, the metrics strip shows two tiles — **Describable** and
+**What the user does.** On the AI descriptions tab, the metrics strip shows two tiles — **AI Describable** and
 **Described** — mirroring Transcribe's **Transcribable** / **Transcribed**. `photo-lib` has 214 un-described
-images, so the **Describable** tile reads a health-tinted **`214`**; the user clicks it.
+images, so the **AI Describable** tile reads a health-tinted **`214`**; the user clicks it.
+
+> **Why the tile names the actor.** The "could" tile reads **AI Describable**, not bare "Describable", so it
+> says **WHO** does the describing and can never be misread as *"files that have a description"*
+> ([ai_description.mdx §12.1](./ai_description.mdx), which owns the rule). The done-tile stays **Described**.
+> Only the user-facing label changed — the MetricId `describable`, `TaskMetrics.describable`, and the
+> WarningDef id `repo-describable-work` are unchanged.
 
 **What LFB does — the tile IS the warning surface, and it opens the shared popup.** On the One-repo page the
 metric tiles **replace the warning banner** ([task_tabs.mdx §2.6](./task_tabs.mdx)) — clicking the
-**Describable** tile opens that metric's **educate-and-fix popup** ([warnings.mdx](./warnings.mdx)), the same
+**AI Describable** tile opens that metric's **educate-and-fix popup** ([warnings.mdx](./warnings.mdx)), the same
 educate-and-fix dialog the **Transcribable** tile opens. The popup educates (*"AI descriptions make these
 images searchable and re-findable without opening them; generating one uploads the file to your configured
 vision provider"* — honest about the one network path, [ai_description.mdx §7](./ai_description.mdx)) and
@@ -139,7 +145,7 @@ Confirm. It must **not** describe the set inline in one HTTP request; an inline 
 Processing and dies on a long list or a network blip ([ai_description.mdx §12.4](./ai_description.mdx)).
 
 **What we double-check (Step 4):**
-* The **Describable** / **Described** tiles mirror **Transcribable** / **Transcribed**; clicking Describable
+* The **AI Describable** / **Described** tiles mirror **Transcribable** / **Transcribed**; clicking **AI Describable**
   opens the **same** educate-and-fix popup surface (no separate banner), health-tinted when > 0 and
   green-zero when 0.
 * The popup's **Confirm enqueues** (op `describe`, background queue) and the files then appear on the
@@ -255,7 +261,7 @@ but reads as a **status**, not a decision ([decision_toggles.mdx](./decision_tog
 | State | Look | Meaning | Transcribe mirror |
 | --- | --- | --- | --- |
 | **Described** | **filled blue** | a `done` `.ai_description` exists | filled-blue "transcribed" |
-| **Describable** | **orange edge / 99%-white** | image/video with no description yet | orange-edge "could be transcribed" |
+| **Could be AI-described** | **orange edge / 99%-white** | image/video with no description yet | orange-edge "could be transcribed" |
 | **N/A** | **thin light-grey edge** | audio or a non-describable file | grey "not applicable" |
 
 So an image row that has been described shows filled blue; an un-described still shows the orange edge; an
@@ -330,8 +336,10 @@ committed `.lfbridge/` (while leaving Category-B tracking untouched in Local Sto
    when present, else first-with-content — the mirror of [media_viewer.mdx §6](./media_viewer.mdx).
 2. **Task tab.** The per-repo **AI descriptions** tab sits beside **Transcribe** and re-tunes the metrics
    strip, columns, sort, and filter (image+video) to description work, mirroring the Transcribe tab.
-3. **Metric tile + popup.** **Describable** / **Described** tiles mirror **Transcribable** / **Transcribed**;
-   clicking **Describable** opens the same educate-and-fix popup ([warnings.mdx](./warnings.mdx)); the tile
+3. **Metric tile + popup.** **AI Describable** / **Described** tiles mirror **Transcribable** / **Transcribed**;
+   clicking **AI Describable** opens the same educate-and-fix popup (the tile names the actor so it is never
+   read as "files that have a description", [ai_description.mdx §12.1](./ai_description.mdx); identifiers
+   unchanged) ([warnings.mdx](./warnings.mdx)); the tile
    is health-tinted when > 0 and green-zero when 0.
 4. **Header primary.** The blue **"Describe ›"** header primary mirrors **"Transcribe ›"** / **"Compress ›"**
    and surfaces when description is the repo's top task.
@@ -361,7 +369,7 @@ committed `.lfbridge/` (while leaving Category-B tracking untouched in Local Sto
   / placement / status icon / durable content artifact. S2 VIEWER TABS (mirror Transcription tab): image shows ONLY
   AI description tab, video shows BOTH, ✓ = content exists, default-tab prefers Transcription. S3 per-repo AI
   DESCRIPTIONS task tab (5th, beside Transcribe, task_tabs §11) re-tunes strip/columns/sort/filter to
-  image+video. S4 DESCRIBABLE metric tile (mirror Transcribable) IS the warning surface -> opens same
+  image+video. S4 "AI DESCRIBABLE" metric tile (LABEL ONLY; ids describable/described unchanged; mirror Transcribable) IS the warning surface -> opens same
   educate-and-fix popup (warnings.mdx); green-zero when 0. S5 blue "Describe ›" header primary mirrors
   "Transcribe ›"/"Compress ›". S6 CREATE AI DESCRIPTIONS folder action (ai_description §5.1) mirrors Create
   Transcriptions: describe_calc_engine (mirror transcribe_calc_engine) computes eligible (image/video, no

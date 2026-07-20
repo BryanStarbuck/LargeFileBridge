@@ -52,7 +52,7 @@ rounded square holding its glyph, in one of **four** states:
 | --- | --- | --- | --- | --- |
 | **OFF** | **white** | **thin (1px) medium-grey** line (`--lfb-toggle-off-edge` `#9ca3af`) | glyph in medium-grey | Decision is **off** — this axis is *not* applied (not pinned / not git-ignored). |
 | **ON** | **medium-dark orange** (`--lfb-decision-on` `#c2410c`), **no edge** | *none* | glyph in **white** | Decision is **on** — this axis **is** applied (pinned / git-ignored). |
-| **RECOMMENDED** | white | **dashed** orange (`--lfb-decision-on`, 1px dashed) | glyph in orange | A **calc engine suggests turning this on**, but the user has **not decided** yet ([to_do_batch_calc_engine.mdx](./to_do_batch_calc_engine.mdx)). This is the visual for **Undecided-but-recommended**. |
+| **RECOMMENDED** | white | **dashed** orange (`--lfb-decision-on`, 1px dashed) | glyph in orange | A **calc engine suggests turning this on**, but the user has **not decided** yet ([to_do_batch_calc_engine.mdx](./to_do_batch_calc_engine.mdx)). This is the visual for **Undecided-but-recommended**. *("Undecided" here is the decision **state** — the frozen `undecided` wire value — not the retired metric tile of that name, §7.1.)* |
 | **N/A** | *(not rendered — no box at all)* | — | — | The axis does not apply here (e.g. the git-ignore toggle on a file that is **not** under a repo, §4). |
 
 The **RECOMMENDED** state is what makes the toggles teach: after a scan, a file the To-Do Batch Calc
@@ -242,7 +242,8 @@ Deciding whether a given path is under a repo (and which repo's `.gitignore` an 
 The [One-repo](./one_repo.mdx) file table renders the two toggles as the **first two of the five leading
 icon control columns** ([tables.mdx §4c](./tables.mdx)) — **Pin** then **Ignore**, immediately right of the
 row-select checkbox, ahead of Transcribe · AI Description · OCR — each a narrow (`tight`/`px-1`) icon column
-with an **icon-only header** and a **hover explanation** in the docked hover-info region
+with an **icon-only header** and a **hover explanation** in the **left-bar hover-info panel**
+([left_bar.mdx §4.1](./left_bar.mdx#41-the-non-intrusive-hover-info-panel-sits-just-above-this-slot-locked))
 ([tables.mdx §4c.2–§4c.3](./tables.mdx)). They render through the **shared `StatusActionIcon`** (Pin's ON
 fill blue, Ignore's orange, §1) instead of any per-page toggle rendering, so Pin/Ignore speak the same
 visual language as the three analysis icons beside them.
@@ -253,8 +254,8 @@ visual language as the three analysis icons beside them.
 > as is the transfer **Status** column ([tables.mdx §4c](./tables.mdx)). The **Pin** and **Ignore** icon
 > cells now carry both decision axes in full — a click sets that axis exactly as before (§2). **The two
 > axes still exist as data** (the team-shared ledger, [decisions.mdx](./decisions.mdx)) and provenance still
-> exists — *who/when* now surfaces **on hover** ([one_repo.mdx §4.8](./one_repo.mdx), the docked hover-info
-> region and the file page) rather than as its own column. Only the *columns* are retired; no data or axis
+> exists — *who/when* now surfaces **on hover** ([one_repo.mdx §4.8](./one_repo.mdx), the left-bar
+> hover-info panel and the file page) rather than as its own column. Only the *columns* are retired; no data or axis
 > is lost.
 
 The row still expresses the **two axes directly** as toggles:
@@ -283,7 +284,11 @@ The row still expresses the **two axes directly** as toggles:
   **The four-state toggle grammar (§1) is what the facet values are.** OFF / ON / RECOMMENDED map onto
   each facet's values one-for-one — the Pin facet splits ON/OFF into the axis's own words (`Pinned` /
   `Not pinned`, and its OFF-with-no-record case is `Undecided`), the Git-ignore facet into
-  `Git-ignored` / `Not git-ignored`. So a chip on the rail and a box on a row say the same word. **N/A is
+  `Git-ignored` / `Not git-ignored`. So a chip on the rail and a box on a row say the same word.
+  **The rail's `Undecided` facet value is UNCHANGED** by the metric-tile split (§7.1): the tile named
+  `Undecided` is gone, the facet value of that name is not — it is a frozen wire value, and the new
+  **`Add to IPFS`** tile counts exactly the rows this facet value selects (minus rows another IPFS tool
+  already pinned on this node). **N/A is
   not a facet value** ([tables.mdx §2.4.1](./tables.mdx#241-the-two-facets-fixed-vocabulary-locked)): a row
   where the axis does not apply (§4) renders no box and is not a value anyone can filter for.
 * **The two columns can never share a facet or a sort key**, because they read from **two different
@@ -361,6 +366,35 @@ This makes the popup and the row toggles **one model**: the same `DecisionToggle
 single-axis write, whether the user flips it on a table row or inside the popup — extended in the popup
 with the third **Compress** action axis.
 
+### 7.1 The two decision popups — one per axis (LOCKED)
+
+The per-repo metrics strip used to carry a **single** tile, `Undecided`, opening a **single** popup that set
+both axes at once. That tile is **gone**. Because a decision has always been **two independent axes** (§1),
+the tile split so each axis has its **own** tile and its **own scoped popup**
+([warnings.mdx §11](./warnings.mdx#11-warnings-as-metric-panels--the-per-repo-task-tab-strip-locked)):
+
+| Tile | Popup | Popup-level option checkboxes | Apply writes |
+| --- | --- | --- | --- |
+| **`Add to IPFS`** | `repo-files-need-decision` (§10.2.7) — the same two-axis triage popup as before, renamed | **☑ Add them to IPFS** · **☑ Add to git ignore** — both default **ON**; **both-off is a valid, sticky "reviewed — leave it"** | both axes, as chosen |
+| **`Git Ignore`** | `repo-files-not-git-ignored` (§10.2.7.1) — **new** | **☐ Also add them to IPFS (pin)** — a single opt-in, default **OFF** | **both axes**, always |
+
+* **Both popups write BOTH axes. Never one.** This is the §2 invariant restated at popup scope: a write
+  that carried only the git-ignore axis would **clobber** whatever pin decision the file already had. The
+  `Git Ignore` popup therefore preserves each file's **current** pin decision as the IPFS value — files
+  already `sync` stay pinned, files that aren't stay unpinned — unless the user ticks the opt-in, which
+  pins every checked file.
+* **These are popup-level options, not per-row toggles.** In these two popups the axes are the popup's
+  **option checkboxes** applying to every checked subject; the subject rows carry only their own
+  include/exclude checkbox. The per-row three-axis grammar above (§7) is the batch/compress popup shape.
+* **The `Git Ignore` tile's count and its popup's list are ONE predicate** — never two parallel filters, so
+  the number and the list can never disagree.
+  *Implemented in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` —
+  `gitIgnoreCandidates()`; popups in `.../pages/repos/metricWarningDefs.tsx` — `buildAddToIpfsWarning()` /
+  `buildGitIgnoreWarning()`.
+* **Nothing about the stored values changed.** `sync` / `ignore` / `undecided` remain **frozen wire values**
+  ([decisions.mdx §7](./decisions.mdx#7-reconciliation--folding-the-shared-ledger-onto-this-computer-locked)),
+  as does the **`Undecided`** value on the Pin (IPFS) rail facet (§3). Only the metric **tile** was renamed.
+
 ---
 
 ## 8. Acceptance criteria
@@ -396,7 +430,7 @@ with the third **Compress** action axis.
    Sort splits the same way (a **Pin** key and an **Ignore** key, never a combined one), ordered
    **On → Recommended → Off → N/A**.
 10. **Pin + Ignore render as the first two of the five leading icon control columns** ([tables.mdx §4c](./tables.mdx),
-    §5): narrow (`tight`/`px-1`), **icon-only headers**, hover explanation in the docked hover-info region,
+    §5): narrow (`tight`/`px-1`), **icon-only headers**, hover explanation in the left-bar hover-info panel,
     all through the shared **`StatusActionIcon`** with **unique ON colors — Pin blue (`--lfb-pin`), Ignore
     orange (`--lfb-decision-on`)** (§1 color reconciliation). The old **Decision** select column, the
     **Decided by** and **Decided** provenance columns, and the transfer **Status** column are **removed from

@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Cell Navigation, Row "⋮" Menus & Entity "More" Menus
-description: The cross-cutting interaction spec that every table screen and every single-entity screen references instead of restating. Three linked conventions. (1) CELL NAVIGATION — clicking a cell in any TanStack table navigates to the most specific relevant screen for THAT cell (a count cell → the child list pre-filtered to that slice; a path cell → the File System browser at that path; a peers cell → Peers filtered to that entity), so the table is a set of deep links, not just whole-row navigation. (2) The ROW "⋮" KEBAB — the trailing, right-aligned per-row action menu present on every table; it drops down the actions for the ENTITY that row represents (repo, directory, file, or peer — or a pinned CID with no local entity, §5.5). The glyph is ALWAYS the vertical ⋮ (three dots up-and-down), never the horizontal ⋯. (3) The ENTITY "MORE" (⋮) MENU — on a single-entity page (view one repo / view one file / view one directory), the SAME action set appears as a top-right "more" button, because the page IS one entity. Defines the per-entity action catalogs (repo / directory / file / peer) once — LOCKED — with their grouping, destructive-action separation, permission gates, and the charter guardrails (never compress/convert/ignore/delete without an explicit user click; local files are never deleted by an unpin/untrack). Cross-links repos.mdx, one_repo.mdx, directories.mdx, ipfs.mdx, repo_settings.mdx, settings.mdx, and the operation taxonomy in webapp.mdx §11.
+description: The cross-cutting interaction spec that every table screen and every single-entity screen references instead of restating. Three linked conventions. (1) CELL NAVIGATION — clicking a cell in any TanStack table navigates to the most specific relevant screen for THAT cell (a count cell → the child list pre-filtered to that slice; a path cell → the File System browser at that path; a peers cell → Peers filtered to that entity), so the table is a set of deep links, not just whole-row navigation. (2) The ROW "⋮" KEBAB — the trailing, right-aligned per-row action menu present on every table; it drops down the actions for the ENTITY that row represents (repo, directory, file, or peer — or a pinned CID with no local entity, §5.5). The glyph is ALWAYS the vertical ⋮ (three dots up-and-down), never the horizontal ⋯. (3) The ENTITY "MORE" MENU — on a single-entity page (view one repo / view one file / view one directory), the SAME action set appears as a top-right "more" button, because the page IS one entity. That button's LOOK is LOCKED (§4.1): it is the WORD "More" plus a down chevron, styled as blue text like the page action-links row beside it — NO leading ⋮ triple-dot and NO bordered rounded rectangle. The vertical ⋮ stays the ROW kebab's identity alone, so the two affordances never look alike. Defines the per-entity action catalogs (repo / directory / file / peer) once — LOCKED — with their grouping, destructive-action separation, permission gates, and the charter guardrails (never compress/convert/ignore/delete without an explicit user click; local files are never deleted by an unpin/untrack). Cross-links repos.mdx, one_repo.mdx, directories.mdx, ipfs.mdx, repo_settings.mdx, settings.mdx, and the operation taxonomy in webapp.mdx §11.
 ---
 
 # LargeFileBridge — Cell Navigation, Row "⋮" Menus & Entity "More" Menus
@@ -13,13 +13,13 @@ This file defines the three interactions those shapes share, **once**, so no oth
 1. **Cell navigation** — a click on a *cell* goes somewhere specific (§2).
 2. **The row `⋮` kebab** — every table row's trailing per-row action menu (§3). **Right-clicking the
    row (or a file/dir entry anywhere) opens the same menu** (§3.1).
-3. **The entity `⋮` "more" menu** — the same actions, top-right, on a single-entity page (§4). The
+3. **The entity "More ▾" menu** — the same actions, top-right, on a single-entity page (§4). The
    two single-entity pages are [files.mdx](./files.mdx) (**View one file**) and
    [directories.mdx](./directories.mdx) (**View one directory**).
 
 The rule that ties them together: **a table cell is a deep link, and the row's `⋮` (or a right-click,
-or the page's top-right `⋮`) is that same entity's action menu.** Clicking *data* navigates; clicking
-`⋮` (or right-clicking) *acts*.
+or the page's top-right **More ▾**) is that same entity's action menu.** Clicking *data* navigates;
+clicking `⋮` / **More ▾** (or right-clicking) *acts*.
 
 Siblings that reference this file (and must not redefine these conventions):
 
@@ -39,7 +39,7 @@ Siblings that reference this file (and must not redefine these conventions):
 | --- | --- |
 | **Cell link** | A table cell that, when clicked, **navigates** to the most specific screen for that cell's value (§2). Not every cell links; the ones that do are listed per table. |
 | **Row `⋮` kebab** | The trailing, right-aligned control on **every** table row. It opens the **entity action menu** (§3) for the entity that row represents. It is a control column — it **never** triggers cell navigation or row navigation. |
-| **Entity `⋮` "more" menu** | On a **single-entity page**, the top-right `⋮` button that opens the **same** action menu as that entity's row kebab (§4). "The page is one entity, so the page has that entity's menu." |
+| **Entity "More ▾" menu** | On a **single-entity page**, the top-right **More ▾** button that opens the **same** action menu as that entity's row kebab (§4). "The page is one entity, so the page has that entity's menu." Its look is LOCKED in §4.1: the **word "More"** + a down chevron, blue link text — **never** a `⋮` glyph and **never** a bordered box. |
 | **Entity** | The thing a row or page is *about*: a **repo**, a **directory**, a **file**, or a **peer**. Each entity has exactly **one** LOCKED action catalog (§5), used by both its row kebab and its page's more-menu. |
 | **Action** | One menu item. Either **navigates** (opens a screen), **mutates** (does work — always through the progress dock + charter guardrails, §6), or **copies** (path / CID to clipboard). |
 
@@ -91,9 +91,14 @@ The trailing control column that carries every row's ⋮ kebab is rendered by th
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the `rowMenu` trailing cell).
 
 > **Orientation (LOCKED).** The kebab is always the **vertical** three-dot glyph **`⋮`** — three dots
-> stacked **up-and-down**, never the horizontal **`⋯`**. This holds for every trigger: the row kebab,
-> the right-click menu's affordance, and the single-entity page's "more" button (§4). One glyph,
-> everywhere.
+> stacked **up-and-down**, never the horizontal **`⋯`**. This holds for the **row** kebab and for the
+> right-click menu's affordance. **This rule is unchanged.**
+>
+> **The `⋮` is the ROW kebab's identity, and only the row kebab's.** The single-entity page's
+> trigger is **not** a `⋮` — it is the word **More** + a chevron (§4.1). Two different affordances at
+> two different altitudes (one row vs. the whole page) must **look** different; when both were a `⋮`
+> in a box, they read as the same control. **Do not "unify" them** — the row keeps `⋮`, the page keeps
+> **More ▾**.
 
 * **Placement.** Last column, fixed narrow width, right-aligned, no header label. It stays pinned as
   the row's other cells navigate — clicking `⋮` opens a menu, it does **not** open the row.
@@ -198,19 +203,19 @@ The menu's copy actions (Copy path / Copy CID), which only copy and never naviga
 
 ---
 
-## 4. The entity `⋮` "more" menu — single-entity pages
+## 4. The entity "More ▾" menu — single-entity pages
 
 A page that shows **one** entity — the [One repo](./one_repo.mdx) page, the **View one file** page
-([files.mdx](./files.mdx)), the **View one directory** page ([directories.mdx](./directories.mdx)), or
-a selected entry in the [File System](./directories.mdx) browser — carries a **top-right `⋮` "more"
-button**. Opening it shows the **same catalog** as that entity's row kebab — because the page *is* that
-entity.
+([files.mdx](./files.mdx)), the **View one directory** page ([directories.mdx](./directories.mdx)), the
+[media viewers](./media_viewer.mdx), or a selected entry in the [File System](./directories.mdx)
+browser — carries a **top-right "More ▾" button**. Opening it shows the **same catalog** as that
+entity's row kebab — because the page *is* that entity.
 
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
-│  ‹ Repos  /  Our_Movies                          ┌────────────┐  ┌───┐ │
-│  ~/BGit/…/Our_Movies                             │ ⟳ Pin now  │  │ ⋮ │ │ ← entity "more" menu
-│                                                  └────────────┘  └───┘ │
+│  ‹ Repos  /  Our_Movies                          ┌────────────┐        │
+│  ~/BGit/…/Our_Movies                             │ ⟳ Pin now  │ More ▾ │ ← entity "More" menu
+│                                                  └────────────┘        │
 └───────────────────────────────────────────────────────────────────────┘
                                                                     │
                               ┌─────────────────────────────────────▼──┐
@@ -233,8 +238,39 @@ entity.
   definition (§5) — they never drift. If an action makes no sense at the page altitude (e.g. "Open" when
   you are already on the page), it is simply **omitted/disabled**, not a different list.
 
-The single-entity page's top-right ⋮ "more" button, rendering the same catalog as the row kebab, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `EntityMore` component.
+The single-entity page's top-right **More ▾** button, rendering the same catalog as the row kebab, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `EntityMore` function.
+
+### 4.1 What the "More" button LOOKS like (LOCKED)
+
+Every page that renders the single-entity trigger — **View one file** ([files.mdx](./files.mdx)), the
+**media viewers** ([media_viewer.mdx](./media_viewer.mdx)), **View one directory**
+([directories.mdx](./directories.mdx)), and the one-repo page — renders the **same** button, and it looks
+like this:
+
+* **It is the WORD `More`, followed by a down chevron (`▾`).** Label first, chevron second.
+* **It is styled as blue link text** — the same treatment as the **page action-links row** sitting right
+  beside it ([page_actions.mdx §3](./page_actions.mdx)): link color, no fill, underline on hover. The two
+  read as one family of text affordances in the same corner of the page.
+
+Two negatives are **LOCKED**, and each has a reason:
+
+* **NO leading `⋮` triple-dot.** The word *More* already says what the control is; a glyph in front of it
+  is redundant. Worse, **the vertical `⋮` is the ROW kebab's identity** (§3) — the per-row control that
+  acts on one row. Putting the same glyph on the page-level trigger made **two different affordances at
+  two different altitudes look alike**, which is exactly the confusion §3's orientation rule exists to
+  prevent. One glyph, one meaning: `⋮` = *this row*.
+* **NO bordered rounded rectangle around it.** The button is text, not a boxed control. A border would
+  make it compete with the page's single emphasised **primary** button (e.g. **View recommendation ›** /
+  **Pin now**), which is the one control in that corner that is *supposed* to look like a button
+  ([one_repo.mdx §3.1](./one_repo.mdx)). Chrome is reserved for the primary; **More ▾** is quiet.
+
+**The contrast is deliberate — do not unify them.** The **row kebab stays the vertical `⋮`** (§3, still
+LOCKED) and the **page trigger stays the word More + chevron**. They open the *same* catalog (§5); they
+are *not* the same control, and their looks must keep saying so.
+
+The word-plus-chevron, blue-text, border-less trigger is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `EntityMore` function (renders `More` + a `ChevronDown`, `text-[var(--lfb-primary)] hover:underline`, no border/ring class).
 
 ---
 
@@ -294,6 +330,7 @@ The directory action catalog (its Open / Work / Flag groups and the Never IPFS /
 | Work | **Pin now** | mutate | Queue this one file's transfer (`pin` op). Only meaningful when its decision is `sync` (Add to IPFS (pin)). |
 | Create | **Create Transcription** | mutate | Audio/video only. Opens the **unified batch-confirm popup** ([dialogs.mdx §5/§6.4](./dialogs.mdx)) with **this one file** as the sole checked candidate — the education + an explicit **"Transcribe 1 file"** confirm, model-gated + background-enqueued. The **same** popup the directory item and the Transcribable tile open, never a bare `window.confirm` (§6.1). |
 | Create | **Create AI description** | mutate | Image/video only. Same popup for this one file ([dialogs.mdx §5/§6.4](./dialogs.mdx)) — a **"Describe 1 file"** confirm, provider/model-gated. |
+| Create | **Create OCR text** | mutate | Image, video, **and PDF** ([ocr.mdx §1.7.1](./ocr.mdx)). Same popup for this one file — an **"OCR 1 file"** confirm. **No provider gate** — OCR is 100% local ([ocr.mdx §4](./ocr.mdx)). |
 | Work | **Compress…** | mutate | Video/image only, **explicit click** (charter §6.1); `compress` op. Hidden when **Do not compress** is on. |
 | Work | **Convert to compressible…** | mutate | PNG→JPEG etc., **after the alpha/functionality safety checks** (charter; warn before converting, §6.1). |
 | Work | **Git ignore** | mutate | Shown only when the file is big and **not** already git-ignored. Opens the **Git Ignore pop-over dialog** ([git_ignore.mdx](./git_ignore.mdx)) for this one file (no Recursive checkbox — files have no subtree); Apply writes one anchored line `/​<repo-rel path>` (§6.1). |
@@ -327,6 +364,44 @@ The file action catalog (Add/Remove IPFS, the three-state pin submenu, Compress,
 
 The **Set pin ▸** submenu's rename (today built as the `Decision` group's `Set decision ▸` item) is to be implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the submenu's group + labels; its `setDecision` payload values are unchanged).
+
+#### 5.3.1 The **Create** group — the locked trio, and which kinds get which (LOCKED)
+
+The **Create** group is the file catalog's producing block. It holds **exactly three items, always in
+this order** — the same order they appear in at every other scale (the metric tiles, the task tabs, the
+page action-links row), so the trio is learnable as **one** thing ([ocr.mdx §8.2](./ocr.mdx)):
+
+**Create Transcription → Create AI description → Create OCR text.**
+
+Each item appears **only for the kinds it applies to**. The eligibility is fixed:
+
+| File kind | Create Transcription | Create AI description | Create OCR text |
+| --- | --- | --- | --- |
+| **Audio** | ✅ | — | — |
+| **Video** | ✅ | ✅ | ✅ |
+| **Image** | — | ✅ | ✅ |
+| **PDF** | — | — | ✅ |
+| Anything else | — | — | — |
+
+**PDF was a real gap, and this table exists so it cannot reopen.** A PDF has **no media kind** — it is
+neither image nor video nor audio — so the eligibility tests, which were all written as *"is this file's
+media kind image or video?"*, matched **nothing** for it. The consequence was not a missing item but a
+**missing group**: right-clicking a PDF, or opening a PDF's **More ▾** menu, offered **no Create group at
+all**. Meanwhile a PDF is a **first-class OCR target** ([ocr.mdx §1.7.1](./ocr.mdx)) and was already
+reachable from **every other surface** — the **OCR** task tab, the **OCRable** metric tile, and the page
+action-links row. The menu was the one place that disagreed with the rest of the product about what a PDF
+is.
+
+**Transcription and AI description stay absent for a PDF**, and that is correct, not an oversight: a PDF
+has no audio to transcribe, and describing a document's *pixels* is not what the AI-description feature
+is for. Only **OCR** admits the PDF.
+
+All three items open the **unified batch-confirm popup** ([dialogs.mdx §5/§6.4](./dialogs.mdx)) with this
+one file as the sole checked candidate — never a bare `window.confirm`, never a fire-and-forget toast
+(§6.1).
+
+The three Create items and their per-kind eligibility (including the PDF branch that admits OCR alone) are built in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the `mediaKindForName()` tests for transcribe/describe, and the `mkind === "image" || mkind === "video" || isPdfName(v.name)` test for `create-ocr-text`), with `isPdfName()` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/media.ts`.
 
 ### 5.4 Peer (a user's other computer)
 
@@ -515,10 +590,15 @@ Whether a file earns the pin **`P`** badge (and Never IPFS suppressing it) is co
    action catalog** (§5) for that row's entity, as a grouped popover with destructive items separated
    last; it is a control column and never opens the row. **Right-clicking the same entity opens the same
    menu** (§3.1).
-3. Every **single-entity page** (view one repo / file / directory; the File System selection) has a
-   **top-right `⋮` "more" menu** rendering the **same catalog** as that entity's row kebab (§4); the one
-   most-common action may also be a visible primary button. The file/directory pages are
+3. Every **single-entity page** (view one repo / file / directory; the media viewers; the File System
+   selection) has a **top-right "More ▾" menu** rendering the **same catalog** as that entity's row kebab
+   (§4); the one most-common action may also be a visible primary button. The file/directory pages are
    [files.mdx](./files.mdx) / [directories.mdx](./directories.mdx).
+3b. **The More button's look (§4.1, LOCKED):** on every page that renders it, the single-entity trigger is
+   the **word `More` + a down chevron**, styled as **blue link text** like the page action-links row beside
+   it — with **no leading `⋮` triple-dot** and **no bordered rounded rectangle**. The **row kebab is still
+   the vertical `⋮`** (§3): the two triggers open the same catalog but must not look alike, and neither may
+   be "unified" into the other.
 4. The **two sticky flags** — **Never IPFS** and **Do not compress** — are persistent per-entity
    toggles on both files and directories (§6.6): Never IPFS hides "Add to IPFS", forbids `sync`, and
    suppresses the `P` badge; Do not compress suppresses the `C` badge/offer; neither deletes or alters
@@ -556,6 +636,13 @@ Whether a file earns the pin **`P`** badge (and Never IPFS suppressing it) is co
    ([dialogs.mdx §5/§6.4](./dialogs.mdx)) scoped to that entity (a directory's subtree, or the single file as
    the sole checked candidate), the **same** popup the metric tile and the page action-links row open. Never
    a fire-and-forget toast.
+9b. **The Create trio and PDF (§5.3.1, LOCKED):** the file catalog's **Create** group is exactly **Create
+   Transcription → Create AI description → Create OCR text**, in that order, each shown only for its kinds
+   per the §5.3.1 table: audio → transcription; video → all three; image → description + OCR; **PDF → OCR
+   only**. Regression to guard: right-clicking (or opening **More ▾** on) a **`.pdf`** shows a **Create**
+   group containing **Create OCR text** — previously a PDF got **no Create group at all**, even though the
+   OCR tab, the **OCRable** tile, and the page action-links row all treated it as a valid OCR target
+   ([ocr.mdx §1.7.1](./ocr.mdx)). Transcription and AI description stay **absent** for a PDF by design.
 10. **No native browser dialogs (§6.1, [dialogs.mdx](./dialogs.mdx)):** every menu confirm is a
     **`ConfirmDialog`** and every value prompt (Move…) a **`PromptDialog`** — `window.confirm` /
     `window.alert` / `window.prompt` appear **nowhere**; imperative handlers `await confirmModal(...)` /
@@ -563,18 +650,37 @@ Whether a file earns the pin **`P`** badge (and Never IPFS suppressing it) is co
 
 <!--
   HUB spec for three shared interactions: (1) cell navigation (data cells are deep links), (2) the row
-  ⋮ kebab (per-row entity actions, distinct from the header ⋮ bulk menu), (3) the entity ⋮ more-menu on
-  single-entity pages (same catalog as the row kebab). Kebab glyph is ALWAYS vertical ⋮, never ⋯, on
-  every trigger. LOCKED: the per-entity action catalogs (repo/directory/file/peer) + the pin catalog
+  ⋮ kebab (per-row entity actions, distinct from the header ⋮ bulk menu), (3) the entity "More ▾"
+  more-menu on single-entity pages (same catalog as the row kebab). ROW kebab glyph is ALWAYS vertical ⋮,
+  never ⋯ — but that is the ROW's identity ONLY.
+  §4.1 (NEW, LOCKED) THE "MORE" BUTTON'S LOOK: on every EntityMore page (View one file, the media viewers,
+  View one directory, one repo) the trigger is the WORD "More" + a down chevron, styled as BLUE TEXT like
+  the page action-links row next to it (page_actions §3). TWO LOCKED NEGATIVES: (a) NO leading ⋮ triple-dot
+  — the word says it, and ⋮ is the ROW kebab's identity (§3), so reusing it made two affordances at two
+  altitudes look alike; (b) NO bordered rounded rectangle — chrome is reserved for the page's single
+  PRIMARY button (View recommendation › / Pin now), More ▾ is quiet. The ROW kebab (§3) is UNCHANGED and
+  stays ⋮ — do NOT "unify" the two. Code: EntityMenu.tsx EntityMore (More + ChevronDown, text-[var(--lfb-
+  primary)] hover:underline, no border/ring).
+  LOCKED: the per-entity action catalogs (repo/directory/file/peer) + the pin catalog
   (§5.5, for pinned-CID rows with no local entity) live HERE and nowhere else — table/entity specs
   reference §5, never restate
   it. Charter guardrails (§6) are load-bearing: explicit-click-only for compress/convert/ignore; LFB
   never deletes local bytes on remove/untrack; local-only fingerprinting; hidden (not disabled) gated
   items; only-our-content IPFS. When adding a table, give it a cell-link map (link back to §2) and the
   ⋮ kebab; when adding an entity, add a catalog to §5 and both surfaces get it for free.
+  §5.3.1 (NEW, LOCKED) THE CREATE TRIO + PDF: the file catalog's Create group is EXACTLY three items in a
+  FIXED order — Create Transcription → Create AI description → Create OCR text (same order at every scale,
+  ocr.mdx §8.2). Per-kind eligibility table (so the gap can't reopen): audio = transcription; video = all
+  three; image = description + OCR; PDF = OCR ONLY; everything else = none. THE BUG THIS FIXES: a PDF has NO
+  mediaKindForName, and every eligibility test was "kind is image or video?", so a PDF matched nothing and
+  the menu rendered NO CREATE GROUP AT ALL — while the OCR tab, the OCRable tile, and the action-links row
+  all already treated a PDF as a first-class OCR target (ocr.mdx §1.7.1). Transcription + AI description
+  stay ABSENT for a PDF ON PURPOSE (no audio; describing a document's pixels isn't the feature). Code:
+  EntityMenu.tsx buildActions() — the `mkind === "image" || mkind === "video" || isPdfName(v.name)` branch
+  for create-ocr-text; isPdfName() from packages/shared/src/media.ts.
   §5.2/§5.3 add a "Create" group: Create Transcriptions + Create AI descriptions on the DIRECTORY and FILE
   catalogs — both open the UNIFIED BATCH-CONFIRM POPUP (dialogs.mdx §5/§6.4), scoped to the dir subtree or
-  the single file (as the sole checked candidate); the SAME popup the Transcribable/Describable metric tile
+  the single file (as the sole checked candidate); the SAME popup the Transcribable / "AI Describable" metric tile
   + the page action-links row open, never a fire-and-forget toast. Built via EntityMenu buildActions() →
   openTranscribeBatch/openDescribeBatch (lib/batchPopup.ts).
   §6.1 NO NATIVE BROWSER DIALOGS (dialogs.mdx): every menu confirm = ConfirmDialog, every value prompt

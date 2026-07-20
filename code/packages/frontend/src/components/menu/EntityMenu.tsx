@@ -10,6 +10,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import {
   MoreVertical,
+  ChevronDown,
   FolderOpen,
   FileText,
   Folder,
@@ -27,7 +28,7 @@ import {
   TextSelect,
 } from "lucide-react";
 import type { EntityView, Decision } from "@lfb/shared";
-import { mediaKindForName, viewerRouteForName } from "@lfb/shared";
+import { mediaKindForName, viewerRouteForName, isPdfName } from "@lfb/shared";
 import { api } from "@/api/client";
 import { patchEntityBadges } from "@/lib/patchEntityBadges";
 import { openTranscribeBatch, openDescribeBatch, openOcrBatch } from "@/lib/batchPopup";
@@ -357,10 +358,15 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
       a.push({ id: "create-description", label: "Create AI description", group: "Create", icon: <Sparkles className="h-4 w-4" />,
         onSelect: () => openDescribeBatch({ paths: [v.path] }) });
     }
-    // Create OCR text — image/video only, ALWAYS directly after Create AI description (ocr.mdx §8.2: the three
-    // siblings are adjacent and in the same order at every scale, so the trio is learnable as one thing).
-    // Same popup, "OCR 1 file" confirm. No provider gate — OCR is 100% local (ocr.mdx §4).
-    if (mkind === "image" || mkind === "video") {
+    // Create OCR text — image/video AND **PDF**, ALWAYS directly after Create AI description (ocr.mdx §8.2:
+    // the three siblings are adjacent and in the same order at every scale, so the trio is learnable as one
+    // thing). Same popup, "OCR 1 file" confirm. No provider gate — OCR is 100% local (ocr.mdx §4).
+    //
+    // PDF was the gap: a PDF has no `mediaKindForName`, so this menu offered a PDF NOTHING at all — no
+    // Create group whatsoever — even though a PDF is a first-class OCR target (ocr.mdx §1.7.1) reachable
+    // from every other surface (the OCR tab, the tile, the action-links row). Transcription (audio/video)
+    // and AI description (image/video) genuinely do not apply to a PDF, so they stay absent.
+    if (mkind === "image" || mkind === "video" || isPdfName(v.name)) {
       a.push({ id: "create-ocr-text", label: "Create OCR text", group: "Create", icon: <TextSelect className="h-4 w-4" />,
         onSelect: () => openOcrBatch({ paths: [v.path] }) });
     }
@@ -518,20 +524,25 @@ export function EntityKebab({ path, className }: { path: string; className?: str
 }
 
 // ── Trigger 2: the single-entity page "more" button (menus.mdx §4) ─────────────
+// LOOK (LOCKED, menus.mdx §4.1): the word **More** followed by a down chevron — nothing else. NO leading
+// ⋮ triple-dot glyph (the word already says what it is, and the ⋮ is the ROW kebab's identity — reusing it
+// here made two different things look alike), and NO bordered rounded rectangle around it. It reads as the
+// same blue text affordance as the page action-links row, which is what sits next to it.
 export function EntityMore({ path }: { path: string }) {
   const [pos, setPos] = useState<MenuPos | null>(null);
   return (
     <>
       <button
         aria-haspopup="menu"
+        aria-expanded={!!pos}
         title="More actions"
         onClick={(e) => {
           const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
           setPos({ x: r.right - 4, y: r.bottom + 4 });
         }}
-        className="rounded-md border border-[var(--lfb-border)] p-2 hover:bg-slate-100"
+        className="inline-flex items-center gap-1 whitespace-nowrap px-1 py-1 text-sm text-[var(--lfb-primary)] hover:underline"
       >
-        <MoreVertical className="h-4 w-4" />
+        More <ChevronDown className="h-3.5 w-3.5" />
       </button>
       {pos && <EntityMenuAt path={path} pos={pos} onClose={() => setPos(null)} />}
     </>

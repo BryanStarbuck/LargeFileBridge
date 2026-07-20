@@ -394,6 +394,8 @@ export function IpfsPage() {
             searchKeys={(p) => `${p.file ?? ""} ${p.path ?? ""} ${p.cid} ${p.unit ?? ""}`}
             getRowId={(p) => p.cid}
             onRowClick={(p) => p.path && navigate({ to: "/file", search: { path: p.path } })}
+            // ⌘/Ctrl/middle-click opens the row's destination in a new tab (tables.mdx §4d).
+            rowHref={(p) => (p.path ? `/file?path=${encodeURIComponent(p.path)}` : "")}
             // Every row gets a ⋮ (menus.mdx §3): a resolvable pin → the file catalog; an untracked /
             // path-less pin → the pin catalog (§5.5: Copy CID · Import · Unpin).
             rowMenu={(p) => (p.path ? <EntityKebab path={p.path} /> : <PinKebab pin={p} />)}

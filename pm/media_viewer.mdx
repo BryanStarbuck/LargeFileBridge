@@ -250,7 +250,8 @@ items overflow into **More** first, so the most important actions stay visible t
 mirror row measures each button's natural width off-screen and a `ResizeObserver` tracks the available
 width, so the fit is recomputed whenever the window (or the button set) changes — no layout thrash. The
 priority order, highest → lowest: **IPFS primary** (100) · **Compress** (90) · **Open** (85) ·
-**Open folder** (75) · **Transcribe** (60) · **Copy path** (40) · **View properties** (30) · **Move**
+**Open folder** (75) · **Transcribe** (60) · **AI description** (58) · **OCR** (55) · **Copy path** (40) ·
+**View properties** (30) · **Move**
 (20). The trailing **More** menu always holds the overflow **plus** the sticky **extras** that are never
 buttons: **Never publish via IPFS** (flag toggle), **Do not compress** (flag toggle), **Copy CID**
 (when a CID exists), and **Delete…** (danger). "Open raw" is no longer its own button — it is the
@@ -260,6 +261,23 @@ The width-measuring overflow bar (fit the highest-priority buttons, fold the res
 handled in code:
 
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/OverflowActionBar.tsx` — `OverflowActionBar` (with the `fit()` greedy solver + `MoreButton`)
+
+> **The analysis trio sits together, in the locked order (LOCKED).** **Transcribe (60) → AI description (58)
+> → OCR (55)** are adjacent priorities on purpose: the trio's order is
+> **transcription → AI description → OCR at every scale** ([ocr.mdx §8.2](./ocr.mdx)), so the bar reads the
+> same way the ⋮ `Create` group does, and when the row narrows they fold into **More** as a group rather than
+> interleaving with unrelated actions.
+>
+> **The bug this closed.** The bar previously offered **Transcribe** and **OCR** but **never the middle
+> sibling** — so on an image or a video there was **no way at all**, from the bar *or* its **More** menu, to
+> generate an AI description, even though band 6 renders the **AI description** column directly below it
+> (§6). One surface silently carrying two of the three is exactly what the trio contract forbids.
+>
+> **Two different "More" surfaces on this page — do not conflate them.** (1) The **action bar's trailing
+> More menu** (band 3, this section) holds the *overflow* of this bar plus its sticky extras. (2) The
+> **top-right `EntityMore` button** on the single-entity page header carries the **complete catalog** for the
+> file and is styled per [menus.mdx §4.1](./menus.mdx) — the **word "More" plus a down chevron**, with **no
+> `⋮` glyph and no bordered rectangle**. They are separate controls with separate contents.
 
 ### 4.2 The shared actions (all three types)
 
@@ -279,6 +297,17 @@ handled in code:
   ([os_open.mdx](./os_open.mdx)). The label is not clickable.
 * **Transcribe / Re-transcribe** — audio + video only; runs Whisper locally
   ([Transcribe.mdx](./Transcribe.mdx)). Also reachable as the Transcription tab's Generate button (§6).
+  In flight it reads **Transcribing…** and is disabled.
+* **Describe… / Re-describe** — **image + video only**; generates the file's **AI description**
+  ([ai_description.mdx](./ai_description.mdx)). The label follows the same three-state pattern as its two
+  siblings: **Describe…** when no description exists · **Re-describe** when one already does · **Describing…**
+  (disabled) while a run is in flight. It reads the existing description from **the same
+  `["description", <path>]` query** band 6's AI-description column uses, so the bar and the column always
+  agree and share **one** fetch. It is **provider-gated**: the run opens the credentials-missing dialog when
+  no vision key resolves on this machine ([ai_credentials.mdx §2](./ai_credentials.mdx)). An existing
+  description is **only ever overwritten by an explicit Re-describe** — never by a plain Describe.
+* **OCR… / Re-run OCR** — **image + video only**; reads the on-screen text locally
+  ([ocr.mdx §8.1](./ocr.mdx)). **OCR'ing…** (disabled) while in flight. No provider gate — OCR is 100% local.
 * **Copy path** · **View properties** (`/file`) · **↷ Move** (§4.5).
 * **In the More menu:** **Never publish via IPFS** (the `neverIpfs` sticky flag — forbids the
   Add-to-IPFS (pin) decision), **Do not compress** (the `noCompress` sticky flag), **Copy CID**, and **🗑 Delete…**
@@ -292,7 +321,8 @@ The set is **customized by type** — the actions that only make sense for one m
 | --- | --- | --- | --- | --- |
 | ⚡ Compress | ✓ | — | ✓ | Charter compresses **video** (primary) and **image** (secondary); audio is out of scope, so no Compress on the audio player. |
 | Transcribe / Re-transcribe | — | ✓ | ✓ | Whisper, local; also the Transcription tab's Generate (§6). Not shown for images. |
-| AI description (Generate) | ✓ | — | ✓ | Image + video only, in the AI-description tab (§6, [ai_description.mdx](./ai_description.mdx)). |
+| **AI description — Describe… / Re-describe** | **✓** | **—** | **✓** | **Priority 58, between Transcribe and OCR (§4.1). Provider-gated; also the AI-description column's Generate (§6, [ai_description.mdx](./ai_description.mdx)). Absent for audio — audio is transcription's job.** |
+| **OCR — OCR… / Re-run OCR** | **✓** | **—** | **✓** | **Priority 55. 100% local, no key ([ocr.mdx §8.1](./ocr.mdx)). Absent for audio — nothing on screen to read.** |
 | Fit ↔ 100% / zoom | ✓ | — | — | Image-only viewer control (click the image). |
 | Play / pause / scrub | — | ✓ | ✓ | Native `<video>` / `<audio>` transport — audio and video only. |
 | Open (in browser · on Mac) · Open folder · Copy path · View properties · Move · Delete · IPFS | ✓ | ✓ | ✓ | The shared set (§4.2) — every type. |
@@ -328,10 +358,22 @@ Moving (guarded rename) and deleting (recoverable move-to-trash, never `unlink`)
 ### 4.6 Where the action bar is built
 
 Building the priority-ordered `BarItem[]` (IPFS primary · Compress · Open + Open-folder compounds ·
-Transcribe · Copy path · View properties · Move) plus the More `extras` (Never publish via IPFS · Do not
-compress · Copy CID · Delete), and rendering them through the overflow bar, is handled in code:
+Transcribe · **AI description** · OCR · Copy path · View properties · Move) plus the More `extras` (Never
+publish via IPFS · Do not compress · Copy CID · Delete), and rendering them through the overflow bar, is
+handled in code:
 
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` (with `IpfsPrimary` / `OpenCompound`) rendering `OverflowActionBar`
+
+The bar's **AI-description** item — the image+video guard, priority 58, the Describe… / Re-describe / Describing… label, and the shared `["description", path]` read — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` (the `describe` `BarItem` and its `onDescribe` handler)
+
+**The `onSettled` contract (LOCKED — a spinner-safety rule, not a detail).** The launcher
+`runDescribeFile()` takes an **`onSettled`** callback that fires on **EVERY terminal outcome** — success,
+`no_provider`, `needs_setup`, **and a thrown error**. **Any caller driving a busy / spinner state MUST clear
+it from `onSettled`, never from `onDone`:** `onDone` fires only on success, so a refused or failed run would
+leave the control stuck reading **"Describing…"**, disabled, forever — with no way to retry short of a
+reload. This mirrors the identical, already-documented rule for `runOcrFile`.
+Implemented in code: `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/describe.ts` — `runDescribeFile` (`opts.onSettled`, called in both the `success` and `error` arms).
 
 The `Open` / `Open folder` "in browser · on {label}" compound control is handled in code:
 
@@ -449,8 +491,24 @@ file-list action-links row ([page_actions.mdx §0](./page_actions.mdx)).
    **Copy CID**, **Delete…**) — into a trailing **More** menu; the lowest-priority items overflow first.
    **Open** and **Open folder** are compound "in browser · on {label}" controls, the **on {label}** half
    present only on localhost ([os_open.mdx](./os_open.mdx)). Image + video additionally show **Compress**;
-   audio shows neither Compress nor AI description. The top-right `⋮` menu renders the full File catalog
+   audio shows neither Compress nor AI description. The top-right **More** button — the word **More** plus a
+   down chevron, **no `⋮`, no bordered rectangle** ([menus.mdx §4.1](./menus.mdx)) — is a **separate control**
+   from the action bar's trailing More menu and renders the full File catalog
    ([menus.mdx §5.3](./menus.mdx)) verbatim.
+3a. **The analysis trio is complete and adjacent on the bar (§4.1–§4.3).** An **image** and a **video** each
+   offer **all three** producing actions in the locked order **Transcribe (60, video only) → Describe… (58)
+   → OCR… (55)**; an **audio** file offers **Transcribe only**. The **AI-description item must be present**
+   for image + video — its earlier absence (bar offered Transcribe and OCR but not the middle sibling) meant
+   an AI description could not be generated from this page's bar or its More menu at all. The label reads
+   **Describe…** / **Re-describe** / **Describing…** (disabled in flight), mirroring its two siblings; an
+   existing description is overwritten **only** by an explicit **Re-describe**; the item and band 6's
+   AI-description column read the **same `["description", path]` query**, so they never disagree; and a run
+   with no vision key opens the credentials-missing dialog rather than failing silently
+   ([ai_credentials.mdx §2](./ai_credentials.mdx)).
+3b. **No stuck spinner.** Every busy state driven by `runDescribeFile()` clears from **`onSettled`**, which
+   fires on **all** terminal outcomes (success, `no_provider`, `needs_setup`, thrown error) — never from
+   `onDone`, which would strand a refused run at a disabled **"Describing…"** forever (§4.6). Same rule as
+   `runOcrFile`.
 4. The **property grid** (band 4) shows the type-appropriate facts: Size · Modified · Created · Repo ·
    Peers · Decision · Badges for all; **Dimensions + Codec + Compress** for image/video; **Duration** for
    audio. Unknown cells show `—`; the grid never exceeds ~3 rows.
@@ -483,4 +541,17 @@ file-list action-links row ([page_actions.mdx §0](./page_actions.mdx)).
   Action-button row = a promotion of catalog items (IPFS primary, repo chip, compress-state chip, codec
   chip), never new actions. Sibling/fallback: files.mdx (properties-first /file). When the File catalog
   changes it changes in menus.mdx and these pages inherit it.
+  ACTION-BAR ANALYSIS TRIO (§4.1-§4.3, LOCKED, BUG FIXED): the band-3 overflow bar offered Transcribe(60)
+  and OCR(55) but NEVER the middle sibling AI DESCRIPTION -> on an image/video there was NO way from the bar
+  or its More menu to generate a description, though band 6 renders the description column right below it.
+  Fixed: `describe` BarItem at priority 58 for image+video (MediaViewer.tsx ActionBar, onDescribe), label
+  Describe… / Re-describe / Describing…(disabled), reads the SAME ["description", path] query band 6 uses
+  (one fetch, no disagreement), provider-gated inside runDescribeFile (credentials dialog; ai_credentials §2),
+  overwrite ONLY on explicit Re-describe. Locked trio order transcription -> AI description -> OCR at EVERY
+  scale (ocr.mdx §8.2). onSettled CONTRACT: runDescribeFile fires onSettled on EVERY terminal outcome
+  (success/no_provider/needs_setup/throw) — busy/spinner state MUST clear from onSettled, NOT onDone, or a
+  failed run sticks at "Describing…" forever (same rule as runOcrFile). TWO DIFFERENT "More" SURFACES on this
+  page — don't conflate: (1) the action bar's TRAILING More = this bar's overflow + sticky extras; (2) the
+  top-right EntityMore = full File catalog, styled word "More" + down chevron, no ⋮, no bordered rect
+  (menus.mdx §4.1).
 -->

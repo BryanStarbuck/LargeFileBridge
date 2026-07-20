@@ -39,10 +39,10 @@ Siblings this builds on and does not repeat:
   is told to add one. AI description's **provider-readiness gate** (§10) is the mirror of transcription's
   heavyweight-model gate, but credential-gated rather than download-gated.
 * [describe_calc_engine.mdx](./describe_calc_engine.mdx) — the on-demand **"What Can Be AI-Described" calc
-  engine** that feeds the **describable** metric (§12) and the To-Do **describe slugs**; the exact mirror of
+  engine** that feeds the **AI Describable** metric (§12) and the To-Do **describe slugs**; the exact mirror of
   [transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx).
 * [task_tabs.mdx](./task_tabs.mdx) — the per-repo screen's **AI descriptions tab** (§11), the three-state
-  **Describe status icon** (§11.2), and the **describable/described metric panels** whose click opens the
+  **Describe status icon** (§11.2), and the **AI Describable / Described metric panels** whose click opens the
   describe educate-and-fix popup (§12). Authoritative for the tab strip, the metric panels, and the status
   icon grammar; this file supplies the describe-specific mirror of each.
 * [one_repo.mdx](./one_repo.mdx) — the per-repo header where the blue **"Describe ›"** recommendation
@@ -73,7 +73,7 @@ surface to one obliges adding it to the other.
 | **Create Transcriptions** page action-link — [Transcribe.mdx §2.5](./Transcribe.mdx) | **Create AI descriptions** page action-link — §5.1 |
 | **Transcribe** task tab — [task_tabs.mdx §4.4](./task_tabs.mdx) | **AI descriptions** task tab — §11 |
 | Three-state **Transcribe status icon** (`Captions`) — [task_tabs.mdx §5](./task_tabs.mdx) | Three-state **Describe status icon** (`ScanText`) — §11.2 |
-| **`transcribable` / `transcribed`** metric pair + educate-and-fix popup — [task_tabs.mdx §2/§5.1](./task_tabs.mdx) | **`describable` / `described`** metric pair + popup — §12 |
+| **Transcribable / Transcribed** metric pair + educate-and-fix popup — [task_tabs.mdx §2/§5.1](./task_tabs.mdx) | **AI Describable / Described** metric pair + popup — §12 (labels; the identifiers stay `describable` / `described`) |
 | Blue **"Transcribe ›"** header recommendation — [one_repo.mdx §3.1](./one_repo.mdx) | Blue **"Describe ›"** header recommendation — §12.3 |
 | **"What Can Be Transcribed" calc engine** — [transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx) | **"What Can Be AI-Described" calc engine** — [describe_calc_engine.mdx](./describe_calc_engine.mdx) |
 | Permission-gated **heavyweight-model provisioning** (`withModelReady`) — [transcribe_engine.mdx §3](./transcribe_engine.mdx) | Provider/credential-gated **readiness flow** (`withDescribeReady`) — §10 |
@@ -1073,6 +1073,23 @@ carries an **AI descriptions** tab — the mirror of the **Transcribe** tab
 for the tab strip, the metric panels, and the status-icon grammar; this section is the describe-specific
 mirror.
 
+> **The media viewer's action bar carries AI description too (LOCKED).** On the View-one-file page the
+> band-3 **overflow action bar** now includes a **Describe… / Re-describe / Describing…** item for **image +
+> video**, at **priority 58 — between Transcribe (60) and OCR (55)**, the locked trio order
+> ([media_viewer.mdx §4.1–§4.3](./media_viewer.mdx), [ocr.mdx §8.2](./ocr.mdx)). This closes a real gap: the
+> bar offered Transcribe and OCR but **never the middle sibling**, so there was no way from that bar — or its
+> **More** menu — to generate a description, even though the AI-description column renders directly below it
+> (§1). The bar item and that column read the **same `["description", path]` query**, so they always agree.
+> Note the two distinct surfaces on that page: the **action bar's trailing More menu** (this bar's overflow)
+> is **not** the page's top-right **More** button, which carries the full File catalog
+> ([menus.mdx §4.1/§5.3](./menus.mdx)).
+>
+> **`runDescribeFile()` busy-state rule (LOCKED).** Any caller driving a spinner must clear it from
+> **`onSettled`** — which fires on **every** terminal outcome (success, `no_provider`, `needs_setup`, thrown
+> error) — and **never** from `onDone`, which fires on success only and would strand the control at a
+> disabled "Describing…" after a refusal. Mirrors the same rule for `runOcrFile`. Implemented in code:
+> `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/describe.ts` — `runDescribeFile`.
+
 ### 11.1 The tab (LOCKED)
 
 * **Filter:** **describable** files only — **images and videos**
@@ -1084,7 +1101,7 @@ mirror.
   tabs (the product owner's rule for the Transcribe icon applies identically here).
 * **Default sort:** **could-describe first** (the warm "not yet" rows), then **Size desc** — most
   work-to-do at the top, exactly like the Transcribe tab.
-* **Metrics:** `Describable` (could) · `Described` (done) — §12.
+* **Metrics:** **AI Describable** (could) · **Described** (done) — §12.
 
 ### 11.2 The three-state Describe status icon (LOCKED)
 
@@ -1144,37 +1161,67 @@ that the Describe icon now also rides on **every other** file table alongside it
 * **Icon-only header + hover teaching.** The column **header is the same `ScanText` glyph as the cells**
   (no text word); a plain-text `"AI Description"` label is kept only for the Sort / Filter / Columns
   dropdowns ([tables.mdx §4c.2](./tables.mdx)). Hovering **the header icon OR any cell icon** shows a native
-  `title` tooltip **and** fills the page's **docked hover-info region** with a plain-English explanation of
+  `title` tooltip **and** fills the **hover-info panel at the bottom of the left bar**
+  ([non_intrusive_tooltip.mdx §1 / §6](./non_intrusive_tooltip.mdx),
+  [left_bar.mdx §4.1](./left_bar.mdx#41-the-non-intrusive-hover-info-panel-sits-just-above-this-slot-locked))
+  with a plain-English explanation of
   **what an AI description is** — that a vision model wrote a searchable, hyper-detailed prose account of what
   the image or video shows, so the file can be found and understood without opening it
   ([tables.mdx §4c.3](./tables.mdx)).
 
-The shared icon-column block, its one visual grammar, the icon-only header, and the docked-hover explanation are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon` (the three-state box, teal `--lfb-describe-done` for describe's done fill); the reusable task-icon kit `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TASK_ICON` / `TaskIconHeader` / `TaskStatusCell` (the describe row carries the header glyph and the plain-English hover string); the column typing `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts` — `LfbColumn.headerCell` / `LfbColumn.tight`; the docked hover region `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo`; and the per-tab column order `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` + `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` (`columnIds` begin `pin`, `ignore`, `transcribe`, `describe`, `ocr`).
+The shared icon-column block, its one visual grammar, the icon-only header, and the hover explanation are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon` (the three-state box, teal `--lfb-describe-done` for describe's done fill); the reusable task-icon kit `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TASK_ICON` / `TaskIconHeader` / `TaskStatusCell` (the describe row carries the header glyph and the plain-English hover string); the column typing `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts` — `LfbColumn.headerCell` / `LfbColumn.tight`; the hover text is PUBLISHED by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo` and RENDERED by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel`, connected by the single global `HoverInfoBridge` mounted in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx`; and the per-tab column order `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` + `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` (`columnIds` begin `pinned`, `gitignore`, `transcribe`, `describe`, `ocr`).
 
 ---
 
-## 12. The describable / described metric pair, the popup, and the "Describe ›" header primary (LOCKED)
+## 12. The AI Describable / Described metric pair, the popup, and the "Describe ›" header primary (LOCKED)
 
 ### 12.1 The metric pair (LOCKED)
 
-The AI descriptions tab's metrics panel shows the **describable / described** pair — the mirror of
-**transcribable / transcribed** ([task_tabs.mdx §2](./task_tabs.mdx)):
+The AI descriptions tab's metrics panel shows the **AI Describable / Described** pair — the mirror of
+**Transcribable / Transcribed** ([task_tabs.mdx §2](./task_tabs.mdx)):
 
-* **`Describable`** — how many image/video files in this repo **could** be AI-described but have no
+* **AI Describable** — how many image/video files in this repo **could** be AI-described but have no
   `.ai_description` yet (the "could" count; **green big-zero** when none, per the task-tab metric grammar).
-* **`Described`** — how many already have a description (the "done" count).
+* **Described** — how many already have a description (the "done" count).
+
+**Why the tile says "AI Describable" and not "Describable" (LOCKED).** The tile must say **WHO does the
+describing**. Bare "Describable" is read by a first-time user as *"files that have a description"* — the
+opposite of what it counts, and easy to confuse with the paired done-tile. Naming the actor (an AI vision
+provider, §3) makes the tile unambiguous at a glance and matches the done-tile pairing **AI Describable →
+Described**. The exact string is **`AI Describable`**: both letters of **AI** upper-case, one space, then
+**Describable**.
+
+> **Only the LABEL changed — never the identifiers.** The MetricId **`describable`**, the backend field
+> **`TaskMetrics.describable`**, and the WarningDef id **`repo-describable-work`** are **UNCHANGED**. Do not
+> rename them to match the label; they are wire/API symbols that other specs, saved table views, and the
+> To-Do batch registry key off. The rename is user-facing text only.
+
+**Metric labels are NOT CSS-`capitalize`d.** The metric catalog stores the **exact string to render** and the
+tile prints it verbatim, because several labels carry **meaningful casing** — **"AI Describable"**, **"Add to
+IPFS"**, **"OCRable"** — that a blanket text transform would fight. A multi-word label wraps **inside** the
+tile; the strip itself never wraps ([one_repo.mdx §3.2](./one_repo.mdx)).
 
 Both panels are health-tinted and, at zero-work, show the calm green-zero state
 ([task_tabs.mdx §2.2](./task_tabs.mdx)). The counts are the repo-level rollup of the per-row `describe`
 state (§11.2), carried on `RepoDetail.taskMetrics`.
 
+The tile's user-facing label (and the rule that labels render verbatim, not `capitalize`d) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` — `METRIC_CATALOG.describable.label` (`"AI Describable"`), rendered as-is by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricPanel`.
+
 The paired metric fields are handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `TaskMetrics.describable` / `TaskMetrics.described` (added alongside `transcribable` / `transcribed`), rolled up in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail`.
 
+> **Where the tile lives now.** On the View-One-Repo page the metric tiles **no longer wrap**, and the tile's
+> hover explanation is **no longer** a region docked beside the strip — it now fills the **panel at the bottom
+> of the left bar** ([one_repo.mdx §3.2](./one_repo.mdx),
+> [non_intrusive_tooltip.mdx §6](./non_intrusive_tooltip.mdx), which own that behavior). Sitting alongside
+> **AI Describable** are the tiles the old **"Undecided"** tile split into — **Add to IPFS** and **Git
+> Ignore** — a second reason labels must render with their own casing.
+
 ### 12.2 The metric → popup → Confirm → Processing flow (LOCKED)
 
-Clicking the **`Describable`** metric panel opens the **describe educate-and-fix popup** — the exact mirror
+Clicking the **AI Describable** metric panel opens the **describe educate-and-fix popup** — the exact mirror
 of the transcribe popup ([task_tabs.mdx §5.1](./task_tabs.mdx)), an ~80%-of-screen list because the file
 lists are long:
 
@@ -1200,7 +1247,7 @@ lists are long:
 > the solid-blue "N files" confirm, the background enqueue, and the Processing watch are **identical**.
 
 The describe metric popup (~80% modal, default-checked list, "Describe N files" apply → enqueue) is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — the `describable` panel's `onOpen` (opens the popup gated by `withDescribeReady()` from `lib/describe.ts`) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `DescribeBatchPopup` (the shared list + Apply, mirror of `TranscribeBatchPopup`).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `handle()`, which opens `m.warning.popup` in a `WarningPopup` whenever the metric HAS a popup (the panel's `onOpen` is only the FALLBACK for a metric with no popup — it is wired in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` to `openMetric(id)`, which just re-tunes the view to that task tab). The describe popup's own content — the default-checked list, the Videos/Images kind filters, and the Apply that enqueues — is built in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildDescribeWarning`, and rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `WarningPopup`.
 
 ### 12.3 The blue "Describe ›" header recommendation (LOCKED)
 
@@ -1218,7 +1265,7 @@ The describe recommendation's contribution to the header primary is handled in c
 
 ### 12.4 The popup Apply ENQUEUES — never runs descriptions inline (LOCKED)
 
-Every describe popup Confirm — the **Describable metric tile** (§12.2), the blue **"Describe ›" header
+Every describe popup Confirm — the **AI Describable metric tile** (§12.2), the blue **"Describe ›" header
 primary** (§12.3), and the unified batch popup ([dialogs.mdx §5](./dialogs.mdx)) — commits by **enqueuing
 the checked files onto the background queue** (`POST /api/describe/enqueue`, op `describe`,
 [job_queue.mdx](./job_queue.mdx)) and **returning immediately**. It is the exact mirror of the transcribe
@@ -1282,7 +1329,7 @@ never be silently swept into the batch.
   changes the server-side narrowing (scope, drop-unsupported, drop-already-done all still happen upstream,
   §12.5). A filtered-out file is simply not in the confirmed set.
 
-**Where it applies.** Every describe popup: the **Describable metric tile** (§12.2), the blue **"Describe ›"
+**Where it applies.** Every describe popup: the **AI Describable metric tile** (§12.2), the blue **"Describe ›"
 header primary** (§12.3), and the unified batch popup from the page action-links row and the ⋮ / right-click
 menu ([dialogs.mdx §5–§6](./dialogs.mdx)) — they are the one same popup, so they all carry the one same
 filter. The transcribe popup carries the **same mechanism** with **its** kinds (audio / video) — the
@@ -1577,12 +1624,15 @@ external-provider opt-in).
     control column to the LEFT of `File`, and default-sorts **could-first**. The icon's three states —
     **done** (blue fill, `.ai_description` exists), **could** (warm red/orange edge), **not applicable** —
     match the Transcribe/Compress grammar; state comes from the new `FileRow.describe`.
-12. **Metric pair, popup, header primary (§12):** the tab shows the **`Describable` / `Described`** metric
-    pair (green big-zero at no-work); clicking `Describable` opens the **~80%** educate-and-fix popup
+12. **Metric pair, popup, header primary (§12):** the tab shows the **AI Describable / Described** metric
+    pair (green big-zero at no-work); clicking **AI Describable** opens the **~80%** educate-and-fix popup
     (default-checked list, solid-blue **"Describe N files"** → background `describe` jobs on Processing,
     self-clearing as files complete); the per-repo header can surface a blue **"Describe ›"** recommendation
-    primary (worst-first, opening the same popup). The metric fields are `TaskMetrics.describable` /
-    `TaskMetrics.described`.
+    primary (worst-first, opening the same popup). The "could" tile's user-facing label is exactly
+    **`AI Describable`** — it names WHO describes, so it is never misread as "files that have a description"
+    (§12.1) — and it renders **verbatim, not CSS-`capitalize`d**. The identifiers behind it are
+    **unchanged**: MetricId `describable`, `TaskMetrics.describable` / `TaskMetrics.described`, WarningDef id
+    `repo-describable-work`.
 13. **Placement is shared (§13):** a `.ai_description` lands via the **same** placement policy and the
     **same 3-way placement radios** as a `.transcription` ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx),
     [placement_radios.mdx](./placement_radios.mdx), [repo_settings.mdx](./repo_settings.mdx)); a repo's one
@@ -1608,7 +1658,7 @@ external-provider opt-in).
     the Storage detail table, and the IPFS pins table — **except the File System page**. Its **done fill is
     teal** (`--lfb-describe-done` `#0d9488`), unique among the five; its **header is the `ScanText` glyph**,
     not text (the `"AI Description"` label kept only for the Sort/Filter/Columns dropdowns); and hovering the
-    header **or** a cell icon shows a `title` tooltip **and** fills the docked hover-info region with a
+    header **or** a cell icon shows a `title` tooltip **and** fills the **left-bar hover-info panel** with a
     plain-English "what an AI description is" explanation. The per-repo **AI descriptions task tab is kept**.
 
 <!--
@@ -1617,8 +1667,10 @@ external-provider opt-in).
   (§9: viewer/file+dir ⋮/repo kebab/storage), Actions▾ "Create AI descriptions" page action (§5.1), AI
   descriptions TASK TAB (§11, mirror task_tabs §4.4), 3-state DESCRIBE STATUS ICON `ScanText` leading/
   header-less to the LEFT of File (§11.2, blue done / red-orange could / grey n-a; FileRow.describe), the
-  describable/described METRIC PAIR + ~80% educate-and-fix popup "Describe N files" (§12, mirror task_tabs
-  §2/§5.1; TaskMetrics.describable/described), blue "Describe ›" HEADER PRIMARY (§12.3, one_repo topRecommendation),
+  "AI Describable"/"Described" METRIC PAIR + ~80% educate-and-fix popup "Describe N files" (§12, mirror task_tabs
+  §2/§5.1; LABEL ONLY = "AI Describable" — names WHO describes so it isn't read as "has a description", rendered
+  verbatim NOT css-capitalize; identifiers UNCHANGED: MetricId describable, TaskMetrics.describable/described,
+  WarningDef repo-describable-work; METRIC_CATALOG.describable.label in metricWarnings.ts), blue "Describe ›" HEADER PRIMARY (§12.3, one_repo topRecommendation),
   the "What Can Be AI-Described" CALC ENGINE (describe_calc_engine.mdx, mirror transcribe_calc_engine.mdx),
   the PROVIDER-READINESS GATE withDescribeReady (§10, mirror withModelReady — but credential-gated NOT
   download-gated; confirmed→proceed / offered→re-open replay), shared launcher lib/describe.ts (mirror

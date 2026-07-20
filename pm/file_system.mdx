@@ -411,7 +411,7 @@ Git ignore · Track / Pin this directory**
   right-pinned **`More ▾`** menu ([page_actions.mdx §3.1](./page_actions.mdx)) — never a second row.
 * **The producing pair opens the batch confirm popup (LOCKED — [dialogs.mdx §5–§6](./dialogs.mdx)).**
   **Create Transcriptions** / **Create AI descriptions** do **not** enqueue-on-click or fire a
-  `window.confirm`; each opens the **same** "great pop-up" the `Transcribable` / `Describable` metric tile
+  `window.confirm`; each opens the **same** "great pop-up" the **Transcribable** / **AI Describable** metric tile
   opens on the View-one-repo page ([task_tabs.mdx §5.1](./task_tabs.mdx)) — the candidate list **checked by
   default**, uncheck anything, then a solid-blue **"Transcribe N files"** / **"Describe N files"** confirm
   that runs the model/provider gate, background-enqueues, and shows the Processing surface. The popup is
@@ -592,7 +592,7 @@ The directory/file entity menu's producing items opening the scoped batch popup 
     [decision_toggles.mdx](./decision_toggles.mdx) / [directories.mdx §3.6](./directories.mdx).
 14. **Producing pair opens the batch popup (§5 / §5.3):** **Create Transcriptions** / **Create AI
     descriptions** — from the action-links row, a right-click, or the ⋮ kebab — open the **same** batch
-    confirm popup the `Transcribable` / `Describable` metric tile opens ([dialogs.mdx §5–§6](./dialogs.mdx)):
+    confirm popup the **Transcribable** / **AI Describable** metric tile opens ([dialogs.mdx §5–§6](./dialogs.mdx)):
     candidate list checked by default, uncheck, a solid-blue **"Transcribe/Describe N files"** confirm,
     model/provider gate on Apply, background enqueue, Processing surface. **Never** a fire-and-forget toast
     and **never** a `window.confirm`. The scope follows the **deepest open column** (row action) or the
@@ -639,7 +639,7 @@ The directory/file entity menu's producing items opening the scoped batch popup 
        per-mount rollup, Windows/Linux discovery, server-mode via vendor APIs.
    (3) ACTION-LINKS ROW (§5): delegates ALL behavior to page_actions.mdx (visible links row under the title,
        NOT the old Actions ▾ dropdown). PRODUCING PAIR (Create Transcriptions / Create AI descriptions) opens
-       the UNIFIED BATCH POPUP (dialogs.mdx §5-§6 — the same WarningPopup the Transcribable/Describable metric
+       the UNIFIED BATCH POPUP (dialogs.mdx §5-§6 — the same WarningPopup the Transcribable/"AI Describable" metric
        tile opens), NOT a fire-and-forget toast / window.confirm; scoped to the deepest open column (§5.1).
        §5.3: right-click / ⋮ kebab on a sub-dir row opens the popup over that row's subtree (dir catalog,
        menus §5.2); on a file row, over that one file (file catalog, menus §5.3). All via EntityMenu
