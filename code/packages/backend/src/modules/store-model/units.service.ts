@@ -42,6 +42,7 @@ import { resolveStorageType } from "../storage/storage-type.service.js";
 import { repoStateDir } from "../storage/tracking-root.service.js";
 import { mergeManifests } from "../storage/manifest-merge.js";
 import { readYaml, updateYaml, writeYaml } from "../../shared/store/yaml-store.js";
+import { bumpTopics, repoTopic, REPOS_TOPIC } from "../events/state-events.service.js";
 import {
   reposRoot,
   repoUnitDir,
@@ -93,11 +94,44 @@ export async function updateRepoConfig(
 ): Promise<RepoUnitConfig> {
   return updateYaml(unitConfigPath(repoUnitDir(folder)), RepoUnitConfigSchema, mutate);
 }
+/**
+ * The topics a write to `folder` invalidates (storage_company.mdx §8.9).
+ *
+ * TWO repo topics are emitted on purpose, because a repo has TWO names and the two sides of the stream know
+ * different ones. The server thinks in `folder` (the state-root directory, e.g. `charlie-kirk`); the browser
+ * only ever holds `repoId` (sha1 of the absolute path — it is what is in the URL). Publishing only the
+ * server's name would mean no client could ever match a bump, and the stream would be a perfectly healthy
+ * pipe that delivers nothing — the same class of silent break as the path-vs-remote key in §8.4.1.
+ *
+ * Resolving the id is best-effort: a repo whose config is unreadable still bumps its folder topic and the
+ * list topic, so a notification is degraded, never lost.
+ */
+function repoTopicsFor(folder: string): string[] {
+  const topics = [repoTopic(folder), REPOS_TOPIC];
+  try {
+    const p = getRepoConfig(folder).repo.path;
+    if (p) topics.push(repoTopic(repoIdFromPath(p.replace(/^~(?=\/|$)/, process.env.HOME || "~"))));
+  } catch {
+    // Unreadable config — the folder topic above still fires. Never fail a write over a notification.
+  }
+  return topics;
+}
+
+// Both writers BUMP the repo's topics after the write lands (storage_company.mdx §8.9): these two files are
+// what the One-Repo page's rows and metrics are composed from, so a change here is exactly the moment an
+// open page has gone stale. The bump is fire-and-forget and cannot throw (state-events swallows subscriber
+// faults), so it can never fail the write that just succeeded.
 export function writeRepoStatus(folder: string, status: UnitStatus): void {
   writeYaml(unitStatusPath(repoUnitDir(folder)), { ...status });
+  bumpTopics(repoTopicsFor(folder));
 }
 export function writeRepoManifest(folder: string, manifest: Manifest): void {
   writeYaml(unitManifestPath(repoUnitDir(folder)), { ...manifest });
+  bumpTopics(repoTopicsFor(folder));
+}
+/** Exported so other write paths (the reconcile fold) publish the SAME topic set — one repo, one answer. */
+export function repoBumpTopics(folder: string): string[] {
+  return repoTopicsFor(folder);
 }
 
 // ── Computer unit reads/writes (storage.mdx §8; pin_process.mdx §2 — part of every full pass) ──

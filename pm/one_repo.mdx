@@ -895,6 +895,55 @@ Composing remote-only rows — appending reconciled manifest entries that have n
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`, with the metric counts in
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` — `metricCount()` / `gitIgnoreCandidates()`.
 
+### 4.11 The file list refreshes itself when the server changes (LOCKED)
+
+§4.10 gives this page the ability to **show** a file that lives on another computer. That ability is worth
+nothing if the row only appears after the user presses ⌘R. The remote-only row is created by a
+**background** event — the SDL's backbone pull, then the per-entry reconcile
+([storage_company.mdx §8.4.3](./storage_company.mdx#843-receiving-is-a-merge-never-a-copy-locked)) — and
+background events do not, by themselves, reach a page that is already open. This page's react-query key
+`["repo", repoId]` never refetched, so the laptop sat on a stale table while the row it was waiting for
+already existed on disk one process away.
+
+**The diagnosis in one line:** the most important row in the product arrived, and the page it belongs on
+did not find out.
+
+So this page **subscribes**. The rule and the machinery are LOCKED in
+[storage_company.mdx §8.9](./storage_company.mdx#89-the-page-must-learn-not-be-reloaded-locked) — that is
+the authority for the revision bus, the NDJSON transport, and the no-polling guarantee. This section
+states only what **this page** subscribes to and what the user sees.
+
+* **Topics: `repo:<folder>` for the repo on screen, plus `repos`.** The first covers everything this
+  table reads — manifest writes, scan-status writes, decision writes, and the reconcile fold that creates
+  remote-only rows. The second covers the header/left-bar context that this page renders alongside the
+  table. It subscribes to **nothing else**: a bump for a different repo must not re-read this one.
+* **A bump invalidates `["repo", repoId]` — and nothing broader.** The page then re-reads through its
+  ordinary detail endpoint, which is also what refreshes `pinnedHere` from the live pinset (§4.9). The
+  stream itself **never carries rows**; there stays exactly one code path that composes a `FileRow`
+  ([storage_company.mdx §8.9.3](./storage_company.mdx#893-a-bump-invalidates-query-keys--it-never-carries-rows)).
+* **What the user sees: the row simply appears.** With View One Repo open on the laptop, the reconcile
+  lands and — within seconds, with no reload — the red remote-only row for
+  `videos/2079054276320440416.mp4` is in the table, the `Pull down` tile increments, and `Add to IPFS`
+  increments while this computer is undecided. Sort, filter, search, selection, and scroll position are
+  **preserved** across the refresh: this is a re-read of the same list, not a remount. A row that arrives
+  outside the current filter stays hidden and the **count** still moves, so the user is never told
+  "nothing happened" when something did.
+* **The reverse direction too.** A pull that completes in the background, a decision toggled from the
+  To-Do tab, or a scan finishing all bump the same topic — so the icons and metrics on this page track
+  the server without the user hunting for a refresh button.
+* **No polling, and no timer fallback.** This page keeps `refetchIntervalInBackground: false`
+  ([performance.mdx Aspect 6](./performance.mdx)). If the stream cannot be established, the page behaves
+  **exactly as it does today** — correct data, refreshed on navigation or manual reload. It **never**
+  falls back to an interval.
+
+Subscribing this page to its topics and invalidating `["repo", repoId]` on a bump is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/useLiveRefresh.ts` — `useLiveRefresh()`, consumed by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`, over the shared reader
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/streamNdjson.ts` — `streamNdjson()`.
+
+The server-side bumps this page listens for are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/events/state-events.service.ts` — `bumpTopic()`, called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileMirroredRepos()` and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `writeRepoManifest()` / `writeRepoStatus()`.
+
 ---
 
 ## 5. Empty & loading states

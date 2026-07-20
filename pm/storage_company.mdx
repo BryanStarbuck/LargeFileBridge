@@ -590,6 +590,146 @@ first three are **fixed** — the rule each one now states is the standing rule;
   real gap for a company storage that maps source directories (§1.1) — but it is not on this file's path
   from the Tower to the laptop.
 
+### 8.9 The page must LEARN, not be reloaded (LOCKED)
+
+§8.2's acceptance narrative says *"opening View One Repo shows the row."* That sentence hides an
+assumption that does not survive contact with a real user: **the page is usually already open.** The
+laptop sits there with `charlie-kirk` on screen while the backbone pull lands, `reconcileMirroredRepos()`
+folds the Tower's manifest in, and a remote-only row comes into existence on the server — and the browser
+shows the same table it showed a minute ago, because the One-Repo query key `["repo", repoId]` has no
+reason to refetch. The user presses ⌘R and the row appears. **That reload is the product asking the user
+to do the sync's job.**
+
+**The diagnosis in one line:** a page that is silently stale is indistinguishable from a sync that is
+broken — and the user, having no way to tell them apart, concludes the second one.
+
+So this use case is not complete at "reconcile writes the row." It is complete when **an open page learns
+that the server changed and re-reads on its own, within seconds, without a poll.**
+
+#### 8.9.1 Every server-side write that changes a page bumps a topic revision
+
+The backend keeps an **in-process revision bus**: a monotonic counter per **topic**, where a topic names
+the slice of state a page reads — `repo:<folder>` for one repo, `repos` for the repo list, `storages` for
+the storage tree. Any write that changes what a page would show **bumps** its topic.
+
+| Bump site | What just changed | Topic(s) bumped |
+| --- | --- | --- |
+| The reconcile fold at the end of a git-backbone pull (§8.4.3) | a peer's manifest merged in — remote-only rows may now exist | `repo:<folder>` per affected repo, `repos` |
+| A manifest write (a pin recorded, a CID learned) | the file's pin/CID facts | `repo:<folder>` |
+| A scan status write | candidates, sizes, badges | `repo:<folder>`, `repos` |
+| A decision write (`decisions.yaml`) | the pin / ignore axes, and every metric derived from them | `repo:<folder>` |
+
+The bus is **in-process and unpersisted on purpose** — it carries "something changed", never the change
+itself. A client that misses a bump loses nothing but latency: its next read is still authoritative, and
+`currentRevisions()` on connect lets a reconnecting client notice it fell behind and re-read once. **We
+never ship state over the bus, only the fact that state moved.**
+
+Bumping a topic when server state changes is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/events/state-events.service.ts` — `bumpTopic()` / `subscribe()` / `currentRevisions()`.
+
+The reconcile fold that bumps a repo's topic after a backbone pull is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileMirroredRepos()`.
+
+The manifest / scan-status writes that bump the same topic are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `writeRepoManifest()` / `writeRepoStatus()`.
+
+#### 8.9.2 The stream is authenticated NDJSON — NOT SSE (LOCKED)
+
+Bumps reach the browser over **`GET /api/events/stream`**: one JSON object **per line**, `Content-Type:
+application/x-ndjson`, flushed immediately.
+
+* **`hello`** on connect, carrying `currentRevisions()` so the client can tell at once whether it missed
+  anything while disconnected.
+* **`bump`** events carrying `{topic, revision}` — the topic name and its new counter, nothing more.
+* **A periodic heartbeat**, so a connection that has silently died is **detectable**. A stream with no
+  traffic and no heartbeat is indistinguishable from a stream with nothing to say — and the failure mode
+  of that ambiguity is a page that is stale forever while believing it is live.
+
+**Why not Server-Sent Events.** `EventSource` **cannot set an `Authorization` header**. Every `/api` call
+in this app carries a `Bearer` token and passes through the allow-list gate
+([authentication.mdx](./authentication.mdx)); an SSE endpoint would have to accept the token in a query
+string or accept no token at all, and **an event channel that bypasses the allow-list is a hole in the
+one rule the product's security model rests on** ([security.mdx](./security.mdx)). A `fetch()` with the
+Bearer header plus a `ReadableStream` reader gives us streaming *and* the existing auth.
+
+**This transport is not new.** The Full Paths table already streams NDJSON over an authed `fetch` for
+exactly this reason ([performance.mdx Aspect 2](./performance.mdx)). We reuse the same reader rather than
+inventing a second push channel — **one streaming transport in the product, used twice.**
+
+The event-stream endpoint is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/events/events.router.ts` — the `GET /api/events/stream` handler.
+
+The Bearer-authed NDJSON reader it reuses is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/streamNdjson.ts` — `streamNdjson()`.
+
+#### 8.9.3 A bump invalidates query keys — it never carries rows
+
+On the client, a bumped topic maps to the react-query keys that read it, and those keys are
+**invalidated**. The page then re-reads through its **normal** endpoint, with its normal auth, its normal
+shape, and its normal loading behavior.
+
+* **The stream is a doorbell, not a delivery truck.** It never carries `FileRow`s. Two code paths that
+  can both produce a row are two code paths that can disagree about one — and this product has already
+  paid for that lesson twice (§8.6, two manifests that must not disagree). There is **one** way a row
+  reaches the screen: the page's own read.
+* **Invalidate narrowly.** A `repo:<folder>` bump invalidates that repo's key, not `["repos"]` and not
+  `["fs"]` — broad invalidation is the T4 theme this app has been dismantling all along
+  ([performance.mdx P-08/P-17](./performance.mdx)).
+* **Coalesce.** A backbone pull can bump a topic several times in a second; the client debounces so the
+  page re-reads **once**, not per bump.
+
+The subscribe-and-invalidate hook is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/useLiveRefresh.ts` — `useLiveRefresh()`.
+
+#### 8.9.4 This does NOT reopen background polling (LOCKED)
+
+[performance.mdx](./performance.mdx) LOCKS **no background polling** — `refetchIntervalInBackground:
+false`, and P-07 exists because a global 5-second poll ran on every page forever. Nothing here weakens
+that rule; **this is the mechanism that lets it hold.**
+
+* **Polling asks "did anything change?" N times a minute and is wrong N−1 times.** The stream is silent
+  until something actually changed, so a laptop with an idle page does **zero** work — strictly less than
+  today, not more.
+* **One stream per browser tab, not one per query.** Ten subscribed keys share the single connection.
+* **A hidden tab is still quiet.** The connection persists (it costs nothing while idle), but a bump for
+  a page the user cannot see defers its re-read until the tab is visible again — the same instinct
+  `refetchIntervalInBackground: false` encodes.
+* **The stream is never a fallback for polling, and polling is never a fallback for the stream** (§8.9.5).
+
+#### 8.9.5 If the stream is unavailable, we degrade to TODAY — never to a poll
+
+The stream **auto-reconnects with backoff** after a dropped connection, a backend restart, or a laptop
+waking from sleep; on reconnect the `hello` revisions tell it whether to re-read immediately.
+
+If it cannot be established at all, the page behaves **exactly as it does today**: correct data, refreshed
+on navigation or manual reload. That is the honest degradation — the user loses *latency*, never
+*correctness*. **What we must never do is fall back to a timer**, because a fallback poll is a poll that
+ships: it would run on the machines where the stream is flakiest, forever, and quietly reintroduce the
+exact cost P-07 removed.
+
+#### 8.9.6 Freshness on boot and on page load — the bump has to have something to announce
+
+A revision bus only helps if something on the server is **actually** pulling. Today the SDL's backbone
+cycle runs on the device worker's timer, so a laptop opened after two days shows two-day-old peer state
+for as long as it takes the next tick to come around — and the user is looking at the page *right now*.
+
+So **opening a page checks freshness**: if the owning storage's git backbone has not run within its
+staleness window, LFB runs the backbone cycle plus `reconcileMirroredRepos()` **in the background**, and
+the reconcile's own bump (§8.9.1) is what tells the already-open page to re-read. The page never blocks
+on it, and the trigger is **debounced and single-flighted** — ten tabs opening at once cause one cycle.
+
+This is deliberately modeled on the **existing** stale-scan trigger, which already solves this shape of
+problem for scanning; we copy the pattern rather than invent a second freshness policy.
+
+Triggering a stale storage backbone cycle + reconcile on boot / page load is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/backbone-freshness.service.ts` — `maybeSyncBackbone()`, modeled on `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scan-job.ts` — `maybeTriggerStaleScan()`.
+
+#### 8.9.7 What this adds to the acceptance narrative
+
+§8.2 step 1 reads *"opening View One Repo shows the row."* It now also reads: **a View One Repo page that
+was already open when the reconcile landed shows the row too, within seconds, with no reload.** The
+per-page rendering rules are unchanged ([one_repo.mdx §4.11](./one_repo.mdx)) — only the *arrival* is new.
+
 ---
 
 ## 9. Acceptance criteria

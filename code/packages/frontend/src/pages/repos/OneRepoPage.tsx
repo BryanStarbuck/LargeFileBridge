@@ -5,6 +5,7 @@
 // table is unchanged; the old status strip lives in a collapsed "Repo details" disclosure below it.
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useLiveRefresh, repoTopic } from "../../lib/useLiveRefresh.js";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
 import { RefreshCw, Settings, ChevronLeft, Archive, ChevronRight, Search } from "lucide-react";
 import { toast } from "sonner";
@@ -121,6 +122,13 @@ export function OneRepoPage() {
     queryKey: ["repo", repoId],
     queryFn: () => api.repo(repoId),
   });
+
+  // LIVE REFRESH (one_repo.mdx §4.11, storage_company.mdx §8.9). While this page is open, a backbone pull
+  // on the server can reconcile another of the user's computers' manifests and produce new remote-only rows.
+  // Without this the page keeps showing the old list until someone reloads — indistinguishable, from the
+  // user's chair, from a sync that is simply broken. A bump on this repo's topic invalidates ["repo",
+  // repoId] and nothing broader, so the row appears on its own and sort/filter/scroll are preserved.
+  useLiveRefresh([repoTopic(repoId)], [["repo", repoId]]);
 
   const setDecision = useMutation({
     mutationFn: ({ paths, decision }: { paths: string[]; decision: Decision }) =>

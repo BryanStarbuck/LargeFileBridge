@@ -783,6 +783,60 @@ The pub/sub bridge that delivers optimistic per-entity badge patches to the stre
 - **Stale-while-revalidate** at both layers: the backend index serves cached listings instantly and
   refreshes in the background; React Query keeps `staleTime` non-zero so navigation is instant.
 
+### Aspect 6a — Event-driven freshness is NOT polling (LOCKED)
+
+"No background polling" says how a page must **not** stay fresh; it never said how a page **does** stay
+fresh. The gap showed up as a real defect: a One-Repo page open while a git-backbone pull reconciled a
+peer's manifest kept rendering the old table, because `["repo", repoId]` had no reason to refetch. The
+user's only recovery was ⌘R.
+
+The wrong fix is obvious and cheap: put an interval back. **That is P-07 returning under a new name** —
+a timer that asks "did anything change?" on every open tab forever and is wrong nearly every time it asks.
+
+The right fix is to **invert the question**. The backend keeps an in-process **revision bus**: every
+server-side write that changes what a page shows bumps a monotonic counter for a **topic**
+(`repo:<folder>`, `repos`, `storages`). The browser holds **one** authenticated NDJSON stream —
+`GET /api/events/stream`, `hello` + `bump {topic, revision}` + heartbeat — and a bump invalidates only
+the react-query keys that read that topic.
+
+| | Polling (P-07) | Event stream |
+| --- | --- | --- |
+| Work when nothing changes | N requests/minute × every open tab | **zero** |
+| Requests per subscribed key | one timer each | one shared connection for all |
+| Latency to a real change | up to one interval | ~immediate |
+| Wrong-answer rate | N−1 of N asks | none — it only speaks when something moved |
+
+So this **strengthens** the locked rule rather than carving an exception out of it:
+
+- **`refetchIntervalInBackground: false` stands, and no `refetchInterval` is added anywhere.** An idle
+  page now does **strictly less** work than it does today, not more.
+- **A bump is a doorbell, not a delivery truck** — it carries `{topic, revision}` and never rows, so
+  there is still exactly one code path that produces a row (the page's own read, P-08/P-17's optimistic
+  patching unaffected).
+- **Invalidate narrowly** — a `repo:<folder>` bump touches that repo's key, never `["repos"]` or
+  `["fs"]`. Broad invalidation is T4 itself.
+- **NDJSON over an authed `fetch`, not `EventSource`** — for the exact reason given in Aspect 2:
+  `EventSource` cannot set the `Authorization` header, so SSE would bypass the allow-list gate. This
+  reuses the **same** reader the Full Paths stream already uses — one streaming transport, used twice.
+- **Degrade to today, never to a timer.** The stream reconnects with backoff; if it cannot be
+  established the page falls back to *navigation/manual reload* — correctness kept, latency lost. A
+  fallback poll would run precisely on the machines where the stream is flakiest, which is how P-07
+  would quietly ship again.
+
+The product rule this serves is LOCKED in
+[storage_company.mdx §8.9](./storage_company.mdx#89-the-page-must-learn-not-be-reloaded-locked), with the
+per-page behavior in [one_repo.mdx §4.11](./one_repo.mdx).
+
+The revision bus and its subscription fan-out are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/events/state-events.service.ts` — `bumpTopic()` / `subscribe()` / `currentRevisions()`, exposed by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/events/events.router.ts` — the `GET /api/events/stream` handler.
+
+The client subscription that maps a bumped topic to query keys and invalidates them (no interval, debounced, one connection per tab) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/useLiveRefresh.ts` — `useLiveRefresh()`, over the existing reader `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/streamNdjson.ts` — `streamNdjson()`.
+
+The on-demand freshness trigger that gives the bus something to announce (a stale storage backbone cycle + reconcile, debounced and single-flighted) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/backbone-freshness.service.ts` — `maybeSyncBackbone()`, modeled on `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scan-job.ts` — `maybeTriggerStaleScan()`.
+
 ### Aspect 7 — Scaling / server mode
 
 - **Cursor/limit on the stream** — the backend already caps at 5000; expose a `?limit`/`?after`

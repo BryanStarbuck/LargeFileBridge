@@ -35,6 +35,8 @@ import { clientLogRouter } from "./modules/clientlog/clientlog.router.js";
 import { tableViewsRouter } from "./modules/store-model/table-views.router.js";
 import * as ipfs from "./modules/ipfs/ipfs.service.js";
 import { reconcileWorkerSchedules, ensureDeviceWorkerDefaultOn } from "./modules/schedule/schedule.service.js";
+import { eventsRouter } from "./modules/events/events.router.js";
+import { syncBackboneOnBoot } from "./modules/storage/backbone-freshness.service.js";
 import { startWatchdog } from "./modules/schedule/watchdog.service.js";
 import { acquireSingleInstanceLock } from "./shared/single-instance.js";
 import { startWatcher, stopWatcher } from "./modules/watcher/watcher.service.js";
@@ -81,6 +83,16 @@ async function bootstrapState(): Promise<void> {
     startWatchdog();
   } catch (e) {
     log.warn("main", `pin watchdog failed to start: ${(e as Error).message}`);
+  }
+  // Fetch + reconcile every storage's backbone ONCE at boot (storage_company.mdx §8.9). The app that has
+  // just been opened should show what the user's other computers already know on its FIRST page, not its
+  // second. Deliberately NOT awaited: boot must never wait on the network. This is also the belt to the
+  // watchdog's braces — the trigger that had failed silently on the traced machine was a launchd job, and a
+  // chain whose only trigger is a timer has one silent point of failure.
+  try {
+    syncBackboneOnBoot();
+  } catch (e) {
+    log.warn("main", `boot backbone sync failed to start: ${(e as Error).message}`);
   }
 }
 
@@ -213,6 +225,7 @@ async function main(): Promise<void> {
 
   app.use("/api/auth", authRouter);
   app.use("/api/health", healthRouter);
+  app.use("/api/events", eventsRouter); // the live state-event stream — pages learn, they are not reloaded (storage_company.mdx §8.9)
   app.use("/api/progress", progressRouter); // the progress dock's server-side job set (webapp.mdx §12)
   app.use("/api/security", securityRouter); // first-run allow-list (unauthenticated; loopback-guarded)
   app.use("/api/repos", reposRouter);

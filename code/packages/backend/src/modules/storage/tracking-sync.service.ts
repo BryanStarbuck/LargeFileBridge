@@ -20,6 +20,7 @@ import { mergeManifests } from "./manifest-merge.js";
 export { mergeManifests } from "./manifest-merge.js";
 import { resolveOwnerDedicatedRepo } from "./artifact-placement.service.js";
 import { noteArtifactWritten } from "../pin/sync-trigger.service.js";
+import { bumpTopics } from "../events/state-events.service.js";
 import { log } from "../../shared/logging.js";
 
 // Machine-local files under `repos/<repoKey>/` that must NOT travel to the sync repo.
@@ -213,7 +214,7 @@ export async function reconcileMirroredRepos(sdlRoot: string): Promise<number> {
   let folded = 0;
   try {
     // LAZY import — units.service → repo-storage.service → (here) is a cycle if imported statically.
-    const { listRepoFolders, getRepoConfig, getRepoManifest, writeRepoManifest } = await import(
+    const { listRepoFolders, getRepoConfig, getRepoManifest, writeRepoManifest, repoBumpTopics } = await import(
       "../store-model/units.service.js"
     );
     const { readRepoTrackingManifest } = await import("../pin/manifest.service.js");
@@ -230,6 +231,11 @@ export async function reconcileMirroredRepos(sdlRoot: string): Promise<number> {
         ensureSyncRepoMarker(repoPath, cfg.repo.remote ?? null, cfg.sync_repo?.enabled);
         if (!reconcileFromSyncRepo(repoPath)) continue;
         folded++;
+        // A fold is THE moment a peer's file becomes visible here (storage_company.mdx §8.9). Bump the
+        // repo's topic explicitly rather than relying on the `writeRepoManifest` below to do it: that call
+        // is wrapped in its own try/catch, and a page that stays stale because the notification rode on the
+        // one step that failed is the exact silent-staleness this bus exists to eliminate.
+        bumpTopics(repoBumpTopics(folder));
         // §8.6 — the merge must land in BOTH manifests. The reconcile above writes Local Storage (what the
         // Pull-down list and the mirror read); the One-Repo FILE ROWS read the unit manifest. Updating only
         // one leaves the user with a Pull-down count that no row explains, or a row that cannot be pulled.

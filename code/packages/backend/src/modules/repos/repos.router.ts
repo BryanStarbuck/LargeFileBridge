@@ -28,6 +28,7 @@ import { ensureSyncRepoMarker } from "../storage/tracking-sync.service.js";
 import { resolveOwnerDedicatedRepo } from "../storage/artifact-placement.service.js";
 import { repoUidFor } from "../storage/repo-identity.js";
 import { getStorageRow } from "../storage/storage.service.js";
+import { maybeSyncBackbone } from "../storage/backbone-freshness.service.js";
 import { assertCompanyOwnership, withdrawCompanyOwnership } from "../storage/owner-propagation.service.js";
 import { track } from "../progress/progress.registry.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
@@ -261,6 +262,12 @@ reposRouter.get("/:repoId", async (req, res) => {
     // Freshness self-heal on page load (>4h stale → background scan). Non-blocking + single-flight, so it
     // never delays the detail response and coalesces harmlessly if a scan is already running.
     maybeTriggerStaleScan(`One-repo detail loaded (${folder})`);
+    // The SECOND freshness axis (storage_company.mdx §8.9). The scan above answers "is this disk state
+    // current?"; this answers "has another of the user's computers told us something we haven't folded in
+    // yet?" — the axis that decides whether a peer's file is a row at all. Also non-blocking + single-
+    // flight. Without it the only trigger is a launchd timer, and a launchd job that cannot start fails
+    // silently forever.
+    maybeSyncBackbone(`One-repo detail loaded (${folder})`);
     const detail: RepoDetail = await repoDetailWithPins(folder);
     // Augment with the peer-pinned-but-missing set so the §10.8.12 "pull them down" warning has data.
     // Best-effort at the router (computeRepoDetail is sync + shared): a down/slow IPFS never blocks the page.
